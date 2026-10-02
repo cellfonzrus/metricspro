@@ -1,0 +1,65 @@
+name: vision-health-guard
+
+# The camera self-heal's own proof, run as a gate (index §49, owner 2026-10-02).
+#
+# WHY A GATE AND NOT A FILE. backend/harness_ci_pipefail_lock.py puts it plainly: "a harness nothing
+# executes is not a gate, it is a file, and it will rot unnoticed" — which is how
+# harness_activation_bucketing sat red on main for three weeks. That applies with particular force
+# here, because the thing this harness protects is the platform's ability to notice when something
+# has quietly stopped working. A watchdog whose own proof nobody runs is the joke telling itself.
+#
+# WHAT IT PINS. backend/app/modules/vision/health.py decides, unattended and on a schedule, whether
+# to touch a customer's Google account. One branch read two ways is the real risk and the harness
+# pins it from both sides:
+#   * calling a DEAD grant retryable turns a weekly outage into a loop of refresh attempts against
+#     somebody's Google account, and tells nobody; and
+#   * calling a TRANSIENT 503 "revoked" wakes a person at 3am to re-authorise something that would
+#     have healed by itself.
+# It also pins that a dead grant suppresses the event-silence finding (one cause, one alert), that
+# an offline store PC is never given a phantom remote fix, and that the alert key still distinguishes
+# WHICH problems are live so a new fault at noon is not swallowed by the morning's dedupe.
+#
+# DEPENDENCY-FREE, like the lineage and org-scope guards: health.py imports only `datetime`, the
+# package __init__s on its path are docstrings, and the harness is stdlib. No pip install, seconds
+# to run. That is also what lets the pipefail lock's second rule ("every harness CI runs can
+# actually import in the job that runs it") pass without a wheel list.
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/modules/vision/health.py"
+      - "backend/harness_vision_health.py"
+      - ".github/workflows/vision-health-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/modules/vision/health.py"
+      - "backend/harness_vision_health.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vision-health-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every step runs under `bash -eo pipefail` (GitHub's explicit-bash shell). Without this, the default
+# `bash -e` has NO pipefail, so `python3 harness_x.py | tee …` passed even when the harness failed —
+# every lock in this repo was silently unenforced until 2026-09-24. Locked by
+# backend/harness_ci_pipefail_lock.py.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  vision-health-guard:
+    name: Camera self-heal decisions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run vision health guard
+        working-directory: backend
+        run: python3 harness_vision_health.py | tee "$GITHUB_STEP_SUMMARY"

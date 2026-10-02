@@ -79,6 +79,14 @@ accident. Self-registering crons; late is amber, properly overdue is red.
 
 Self-scheduling (mig 971), per-org cadence, and it watches itself.
 
+### CI's own guard on the gates
+
+`harness_ci_pipefail_lock.py` enforces two rules nobody has to remember: every workflow that runs a
+harness runs it under `pipefail` (without it, `python3 harness_x.py | tee …` passed while the
+harness failed — every lock in the repo was silently unenforced until 2026-09-24), and every harness
+CI runs can actually *import* in the job that runs it. A new harness must be run by some workflow or
+explicitly registered as debt, and that register may only shrink.
+
 ---
 
 ## Not covered — stated plainly, because a registry that lists only successes is marketing
@@ -86,7 +94,7 @@ Self-scheduling (mig 971), per-org cadence, and it watches itself.
 | Gap | Consequence | Status |
 |---|---|---|
 | **The analyzer reports no achieved frame rate.** `detect_fps` is a single global flag. | An overloaded store PC degrades silently — 6/s → 5.4 → 4.4 — and nothing says so. The counts just drift low. | Open. Raised 2026-08-29. |
-| **CI runs no tests.** `security.yml` is the only PR workflow and every scan step is `continue-on-error` by design. | ~1,100 harness checks run on a developer's machine and nowhere else. A regression reaches `main` unopposed. | Open. |
+| **Most harnesses are not run by CI.** 422 on disk, **90** run by a workflow, **332** registered as debt in `harness_unrun_pending.txt` — including 13 of the 14 vision harnesses. | A registered-as-debt harness is a file, not a gate. `harness_activation_bucketing` sat red on `main` for three weeks this way. | Open, and *measured* — `harness_ci_pipefail_lock.py` fails the build when a new harness is neither run nor registered, so the debt can only shrink. `harness_vision_health.py` is run by `vision-health-guard.yml`. |
 | **`prove_deposit_recon_nav.mjs` is red on `main`.** A spent PR-scoped snapshot that now compares `main` against itself. | A permanently-red proof trains people to ignore red proofs. | Open — needs retiring or generalising. |
 | **Pub/Sub push health cannot be repaired from here.** The subscription lives in the customer's own Google Cloud. | Detected and escalated; never auto-fixed. | By design, not a gap to close. |
 
