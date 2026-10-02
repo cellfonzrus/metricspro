@@ -196,10 +196,13 @@ def declared_components(closing_row):
     bill_payment_cash}.
 
     The report shows the components BESIDE the chosen basis so "why is this 0?" is answerable on the
-    screen rather than only in a docstring, and they come from `expected_cash` (hence from
-    `deposit_recon.cash_for_basis`) rather than from arithmetic written here a second time.
+    screen rather than only in a docstring, and the SPLIT itself is `deposit_recon.cash_components`
+    (§47.9) — the same one DM Verify dereferences — rather than arithmetic written here a second time.
     """
-    return {b: expected_cash(closing_row, b) for b in ENVELOPE_BASES}
+    from . import deposit_recon          # function-level: keeps this module's import list empty
+    r = closing_row or {}
+    return deposit_recon.cash_components(declared_total_cash(r), _f(r.get("epay_on_cash")),
+                                         bases=ENVELOPE_BASES)
 
 
 def count_fields(expected, counted, tolerance=0.0):

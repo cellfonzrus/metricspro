@@ -223,6 +223,29 @@ def cash_for_basis(t_cash: float, epay_cash: float, basis: str) -> float:
     return 0.0
 
 
+# The three bases that HAVE a formula. 'manual' is deliberately excluded: it is a tenant-added bucket
+# whose cash_for_basis value is 0.0, which is not a split of anything.
+DERIVED_BASES = ("total_cash", "store_cash", "bill_payment_cash")
+
+
+def cash_components(t_cash: float, epay_cash: float, bases=None) -> dict:
+    """PURE: the figure for EVERY basis at once, keyed by basis key — the cash SPLIT of one drawer.
+
+    `{"total_cash": the whole drawer, "store_cash": register cash with bill payments excluded,
+      "bill_payment_cash": the bill-payment cash}`, each from `cash_for_basis` above, so a caller that
+    needs to SHOW the split never writes `t_cash - epay_cash` itself.
+
+    WHY THIS EXISTS (owner 2026-10-02, index §47.9). Two surfaces showed the drawer under the name
+    "Store cash" while the rest of the platform already defines store cash as the NET figure
+    (`closing/deposit-categories`, `closing/cash-config`, the submit-flow explainer: *"Store cash is
+    total cash minus bill-payment cash by definition"*). The owner asked for the drawer to be named
+    what it is and the net figure to stand beside it — and a surface that shows three figures must not
+    be the place that decides what the third one is. So the split has ONE home, here, beside the
+    formulas; `envelope_report.declared_components` and `/closing/summary` both dereference it.
+    """
+    return {b: cash_for_basis(t_cash, epay_cash, b) for b in (bases or DERIVED_BASES)}
+
+
 def expected_deposit(t_cash: float, epay_cash: float, basis: str,
                       expenses_amt: float = 0.0, bill_amt: float = 0.0, other_amt: float = 0.0,
                       include_expenses: bool = False, include_bill_payments: bool = False,

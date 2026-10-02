@@ -880,6 +880,72 @@ check("O10. no-epay row -> totals.epay_on_cash/cc are 0.0 (present, numeric, not
       roll_o4["totals"]["epay_on_cash"] == 0.0 and roll_o4["totals"]["epay_on_cc"] == 0.0,
       str((roll_o4["totals"].get("epay_on_cash"), roll_o4["totals"].get("epay_on_cc"))))
 
+# ═══ P. THE CASH IS NAMED FOR WHAT IT IS (OWNER 2026-10-02 — "Store cash in DM Verify is the total
+#      cash in the store, need one more field which shows the store cash — which is total store cash -
+#      epay cash as declared by the users") ════════════════════════════════════════════════════════
+# The day-1 `store_cash` column holds the WHOLE drawer for a modern row (create_row folds the
+# bill-payment cash into it) and EXCLUDES it for a pre-mig103 row (where legacy `epay_cash` carries it
+# separately) — so one column, two meanings, and DM Verify rendered it under one name. The endpoint now
+# serves both figures under names that say which is which, from `deposit_recon.cash_components`:
+#     total_store_cash = the whole drawer  = epay_cash + store_cash  (era-robust, both eras)
+#     store_cash_net   = that, less the DECLARED bill-payment cash (epay_on_cash — era-aware)
+# These are DERIVED and ADDITIVE: every legacy field above stays byte-identical, and money_recon's
+# closing_cash now READS total_store_cash rather than repeating its expression.
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="named_modern", t_cash=1002.0, t_credit=0.0, store_cash=1002.0,
+                              epay_cash=0.0, epay_cc=0.0, epay_on_cash=230.0, epay_on_credit=0.0,
+                              epay_on_acima=0.0)]
+rp = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+tp = rp["stores"][0]["totals"]
+check("P1. totals.total_store_cash is the WHOLE drawer (1002), bill payments inside it",
+      tp["total_store_cash"] == 1002.0, str(tp.get("total_store_cash")))
+check("P2. totals.store_cash_net is the drawer LESS the declared bill-pay cash (1002 - 230 = 772)",
+      tp["store_cash_net"] == 772.0, str(tp.get("store_cash_net")))
+check("P3. the two plus the bill-pay cash reconcile: net + billpay == total",
+      round(tp["store_cash_net"] + tp["epay_on_cash"], 2) == tp["total_store_cash"],
+      str((tp["store_cash_net"], tp["epay_on_cash"], tp["total_store_cash"])))
+check("P4. the per-basis split rides along, keyed by basis (one column per basis on screen)",
+      tp["cash_split"] == {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0},
+      str(tp.get("cash_split")))
+check("P5. the legacy store_cash field is UNTOUCHED (additive only — every other reader is safe)",
+      tp["store_cash"] == 1002.0, str(tp["store_cash"]))
+rep_p = rp["stores"][0]["reps"][0]
+check("P6. each REP row carries the same split (the per-rep table names the drawer too)",
+      rep_p["_cash_split"] == {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0},
+      str(rep_p.get("_cash_split")))
+
+# A pre-mig103 legacy row: the drawer is store_cash + the REAL legacy epay_cash, so the total must
+# INCLUDE the bill-payment cash the old column kept outside it — the half of the rename that would
+# have been silently wrong had the screen simply relabelled `store_cash` as a total.
+st2 = fresh_store(); wire(st2)
+st2["daily_closing"] = [dc_row(id="named_legacy", t_cash=None, t_credit=None, t_ext_cc=None,
+                               t_gift=None, t_store_acct=None, t_zelle=None, t_acima=None,
+                               store_cash=80.0, store_cc=20.0, epay_cash=30.0, epay_cc=5.0,
+                               other_account=0.0)]
+tl = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)["stores"][0]["totals"]
+check("P7. legacy row: the drawer is 80 + 30 = 110, NOT the 80 the old column reported as 'Store cash'",
+      tl["total_store_cash"] == 110.0, str(tl.get("total_store_cash")))
+check("P8. legacy row: the net is 110 - 30 = 80 (which is what that era's store_cash column meant)",
+      tl["store_cash_net"] == 80.0, str(tl.get("store_cash_net")))
+
+# An all-bill-pay drawer: the net is 0 and that 0 is REAL. And bill-pay over the drawer never goes
+# negative (cash_for_basis floors it) — a DM must never be shown a negative drawer.
+st3 = fresh_store(); wire(st3)
+st3["daily_closing"] = [dc_row(id="named_allepay", t_cash=100.0, t_credit=0.0, store_cash=100.0,
+                               epay_cash=0.0, epay_cc=0.0, epay_on_cash=100.0, epay_on_credit=0.0,
+                               epay_on_acima=0.0)]
+t3 = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)["stores"][0]["totals"]
+check("P9. a drawer that is ALL bill-pay cash reads total 100 / net 0 (the B-559 case)",
+      (t3["total_store_cash"], t3["store_cash_net"]) == (100.0, 0.0),
+      str((t3.get("total_store_cash"), t3.get("store_cash_net"))))
+st4 = fresh_store(); wire(st4)
+st4["daily_closing"] = [dc_row(id="named_over", t_cash=50.0, t_credit=0.0, store_cash=50.0,
+                               epay_cash=0.0, epay_cc=0.0, epay_on_cash=80.0, epay_on_credit=0.0,
+                               epay_on_acima=0.0)]
+t4 = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)["stores"][0]["totals"]
+check("P10. bill-pay cash over the drawer floors the net at 0, never negative",
+      t4["store_cash_net"] == 0.0, str(t4.get("store_cash_net")))
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:

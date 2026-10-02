@@ -417,6 +417,8 @@ on:
       - "backend/harness_closing_filter_contract.py"
       - "backend/app/modules/closing/router.py"
       - "backend/harness_envelope_report.py"
+      - "frontend/src/components/DailyClosingVerify.tsx"
+      - "backend/harness_dmverify_parity.py"
       - "backend/app/modules/closing/deposit_recon.py"
       - "frontend/src/app/(platform)/closing/envelope-report/page.tsx"
       - "backend/harness_browser_sweep_kinds.py"
@@ -603,6 +605,9 @@ jobs:
       - name: Run the envelope-receipt proof (the basis split, the short/over truth table and the envelope_short chargeback contract — owner 2026-09-02 / 2026-10-02, index §47)
         working-directory: backend
         run: python3 harness_envelope_report.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the deposit-recon pure math + cash-split proof (cash_for_basis and cash_components — the one home every cash-basis surface dereferences, index §47.9)
+        working-directory: backend
+        run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -717,6 +722,10 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the DM-Verify parity proof (the real /closing/summary over the in-memory client — filters, range mode, the era-aware ePay breakdown, and the named cash figures in both column eras — owner 2026-07-28 / 2026-10-02, index §47.9)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_dmverify_parity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with

@@ -1390,13 +1390,38 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             totals_original = dict(totals)
             _verified_overlay.apply_overlay(totals, _ver)
 
+        # THE CASH SPLIT, with each figure NAMED FOR WHAT IT IS (owner 2026-10-02, index §47.9).
+        # Owner: *"Store cash in DM Verify is the total cash in the store, need one more field which
+        # shows the store cash — which is total store cash - epay cash as declared by the users"*.
+        # `store_cash` (the day-1 column) holds the WHOLE drawer for a mig103+ row — create_row folds
+        # the bill-payment cash into it — while the rest of the platform already defines store cash as
+        # the NET figure (`closing/deposit-categories`, `closing/cash-config`, the submit-flow
+        # explainer). DM Verify was the one surface calling the drawer "Store cash". Both figures are
+        # now served under names that say which is which, and neither is derived here: the split is
+        # `deposit_recon.cash_components`, the same one the envelope receipt dereferences (§47.8).
+        # The drawer is `epay_cash + store_cash` — the SAME expression money_recon's `closing_cash`
+        # uses below (which now reads this key instead of repeating it), era-robust in both column
+        # eras and the invariant `verified_overlay` preserves, so this is correct AFTER the overlay too.
+        def _name_the_cash(tt):
+            if not tt:
+                return
+            split = deposit_recon.cash_components(
+                round(_f(tt.get("epay_cash")) + _f(tt.get("store_cash")), 2),
+                _f(tt.get("epay_on_cash")))
+            tt["total_store_cash"] = split["total_cash"]      # the whole drawer, bill payments inside
+            tt["store_cash_net"] = split["store_cash"]        # register cash, bill payments excluded
+            tt["cash_split"] = split                          # keyed by basis, for a per-basis column
+        _name_the_cash(totals)
+        _name_the_cash(totals_original)
+
         # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
         # Shortage = declared LESS than B2B (money unaccounted). epay-vs-portal is wired but
         # pending the ePay Daily Transactions Report sweep.
         bm = b2b_money.get(code) if code else None
         money_recon = None
         if bm is not None:
-            closing_cash = round(totals["epay_cash"] + totals["store_cash"], 2)   # cash collected
+            closing_cash = totals["total_store_cash"]   # cash collected — the whole drawer (§47.9),
+                                                         # which IS round(epay_cash + store_cash, 2)
             closing_credit = round(totals["store_cc"] + totals["epay_cc"], 2)      # credit declared
             # Declared ePay = the reps' ePay-on-cash + ePay-on-credit split (the DM overlay corrects these
             # when verified). The legacy epay_cash/epay_cc are hard-zeroed for modern rows, so the old
@@ -1461,8 +1486,13 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         out_reps = []
         for rp, (dt, g) in zip(reps, _rep_computed):
             ct_display, rc_display = _rep_custom_displays(rp)
+            # The same split, per rep row (owner 2026-10-02, §47.9) — `dt["cash"]` is that rep's whole
+            # drawer (store_cash + epay_cash, era-robust) and `_epay_display` is their era-aware
+            # bill-payment cash, so the rep table can name the drawer and show the net beside it.
+            _rp_epay = _row_epay_display(rp)
             out_reps.append({**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture")),
-                             "_tenders": dt, "_gate": g, "_epay_display": _row_epay_display(rp),
+                             "_tenders": dt, "_gate": g, "_epay_display": _rp_epay,
+                             "_cash_split": deposit_recon.cash_components(dt["cash"], _rp_epay["cash"]),
                              "_custom_tenders_display": ct_display, "_custom_counts_display": rc_display,
                              "_expense_lines": exp_lines_by_row.get(rp.get("id"), [])})
 

@@ -362,6 +362,81 @@ def main():
     check("the screen renders a column per SERVER option, spelling no basis key",
           "basisCols" in pcode and "r.declared?.[b.key]" in pcode, True)
 
+    # ── THE CASH IS NAMED FOR WHAT IT IS (owner 2026-10-02, index §47.9) ───────────────────────
+    # Owner: "Store cash in DM Verify is the total cash in the store, need one more field which shows
+    # the store cash - which is total store cash - epay cash as declared by the users". The day-1
+    # `store_cash` column holds the WHOLE drawer for a mig103+ row and EXCLUDES the bill-payment cash
+    # for a pre-mig103 one — one column, two meanings — while the rest of the platform already defines
+    # store cash as the NET figure. A surface that has to show both must not be the place that decides
+    # what either one is, so the SPLIT has one home beside the formulas and every surface reads it.
+    print("\nI1. the cash split has ONE home, and every surface dereferences it")
+    check("deposit_recon.cash_components is the split, and it IS cash_for_basis",
+          all(DR.cash_components(1002.0, 230.0)[b] == DR.cash_for_basis(1002.0, 230.0, b)
+              for b in DR.DERIVED_BASES), True)
+    check("...covering every basis that has a formula, and no 'manual'",
+          sorted(DR.cash_components(1002.0, 230.0)), sorted(DR.DERIVED_BASES))
+    check("the envelope receipt dereferences it (not its own loop over expected_cash)",
+          "deposit_recon.cash_components(" in read(
+              os.path.join(HERE, "app", "modules", "closing", "envelope_report.py")), True)
+    check("/closing/summary dereferences it too — one derivation, two screens",
+          rsrc.count("deposit_recon.cash_components(") >= 2, True)
+    # THE LOCK: nobody re-derives the net. An AST scan for "a cash total MINUS something ePay" —
+    # comments and docstrings legitimately explain the formula (that is where the one home is named),
+    # so the scan is over expressions, not text. The bill-pay recon's own `declared - processor`
+    # variances are a different question and do not match (their LEFT side is the ePay figure).
+    def net_derivations_in(src):
+        out = []
+        for n in ast.walk(ast.parse(src)):
+            if not (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Sub)):
+                continue
+            left = (ast.get_source_segment(src, n.left) or "").lower()
+            right = (ast.get_source_segment(src, n.right) or "").lower()
+            if "epay" in right and any(w in left for w in ("t_cash", "store_cash", "total", "drawer")):
+                out.append(ast.get_source_segment(src, n))
+        return out
+
+    def net_derivations(path):
+        return net_derivations_in(read(path))
+
+    _closing = os.path.join(HERE, "app", "modules", "closing")
+    check("the ONE home derives the net, and it is cash_for_basis",
+          net_derivations(os.path.join(_closing, "deposit_recon.py")), ["_f(t_cash) - _f(epay_cash)"])
+    for mod in ("router.py", "envelope_report.py", "verified_overlay.py", "pickup_actual.py"):
+        check("`closing/%s` does not derive the net itself" % mod,
+              net_derivations(os.path.join(_closing, mod)), [])
+    check("...and money_recon reads the named drawer instead of repeating its expression",
+          'closing_cash = totals["total_store_cash"]' in rsrc, True)
+
+    print("\nI2. DM Verify names the drawer and shows the net beside it")
+    dmv = read(os.path.join(os.path.dirname(HERE), "frontend", "src", "components",
+                            "DailyClosingVerify.tsx"))
+    dmv_code = re.sub(r"(?m)^\s*(//|\*|/\*).*$", "", dmv)
+    dmv_code = re.sub(r"\{/\*.*?\*/\}", "", dmv_code, flags=re.S)
+    # THE RULE, stated as what must NOT be on the screen: the raw `store_cash` field is the column
+    # with two meanings (the drawer for a modern row, the net for a legacy one), so DM Verify must
+    # never RENDER it — every figure it shows comes from the server's named keys. Spelled as the
+    # render expressions themselves so the rule cannot be satisfied by the phrase existing elsewhere
+    # in the file (which is exactly how a looser first cut of this check failed to bite).
+    _raw_renders = [x for x in ("fmt(t.store_cash)", "fmt(r.store_cash)", "=> r.store_cash ",
+                                "r.totals?.store_cash ", "r.totals_original.store_cash",
+                                "totals_original ? r.totals_original.store_cash")
+                    if x in dmv_code]
+    check("DM Verify renders the two-meaning `store_cash` column NOWHERE: %s" % (_raw_renders or "none"),
+          _raw_renders, [])
+    check("the drawer is labelled as a TOTAL and read from the named key",
+          '"Total store cash" value={fmt(t.total_store_cash)}' in dmv_code, True)
+    check("the net figure has its own column, read from the server's named key",
+          '"Store cash" value={fmt(t.store_cash_net)}' in dmv_code, True)
+    check("the per-rep table reads the server's split, not the raw column",
+          "_cash_split?.total_cash" in dmv_code and "_cash_split?.store_cash" in dmv_code, True)
+    check("the screen derives NEITHER figure itself",
+          [x for x in ("- t.epay_on_cash", "- r.epay_on_cash", "-t.epay_on_cash")
+           if x in dmv_code.replace(" ", " ")], [])
+    check("the DM's correction field is named for what it corrects (the cash TOTAL)",
+          'Lbl t="Total store cash"' in dmv_code, True)
+    check("...and prefills from the drawer, so a legacy store's DM is not shown the net as a total",
+          "t.total_store_cash ?? t.store_cash" in dmv_code, True)
+
     # ── I. armed negative controls ──────────────────────────────────────────────────────────────
     print("\nJ. CONTROLS — each rule goes RED with the defect patched back in")
     check("CONTROL: the pre-fix handler's sentinel would be caught",
@@ -395,6 +470,23 @@ def main():
            ER.expected_cash({"t_cash": 1002.0}, "store_cash")), (0.0, 1002.0))
     check("CONTROL: a reader that starts reading an undeclared column → RED",
           "dm_epay_cash" not in ER.CLOSING_COLUMNS)
+    # The naming rules, armed with the label and the derivation exactly as they stood on 2026-10-01.
+    # The naming rules, armed against the screen exactly as it stood before this change.
+    _shipped_tile = '<Stat label="Store cash" value={fmt(t.store_cash)} />'
+    check("CONTROL: the shipped tile rendered the two-meaning column → RED",
+          [x for x in ("fmt(t.store_cash)",) if x in _shipped_tile] != [])
+    check("CONTROL: ...and it is not the named drawer the rule requires",
+          '"Total store cash" value={fmt(t.total_store_cash)}' not in _shipped_tile)
+    check("CONTROL: a screen deriving the net itself → RED",
+          [x for x in ("- t.epay_on_cash",) if x in "{fmt(t.store_cash - t.epay_on_cash)}"] != [])
+    check("CONTROL: the scan SEES a caller that sneaks the subtraction back in",
+          net_derivations_in('x = totals["store_cash"] - totals["epay_on_cash"]'),
+          ['totals["store_cash"] - totals["epay_on_cash"]'])
+    check("CONTROL: ...and leaves the bill-pay recon's own declared-vs-processor variance alone",
+          net_derivations_in("v = closing_epay - pos_billpay"), [])
+    check("CONTROL: the legacy column read as a total is WRONG for a legacy row, and the split says so",
+          DR.cash_components(round(80.0 + 30.0, 2), 30.0),
+          {"total_cash": 110.0, "store_cash": 80.0, "bill_payment_cash": 30.0})
 
     print("\n" + "=" * 96)
     print("RESULT: %d passed, %d failed" % (_p, _f))

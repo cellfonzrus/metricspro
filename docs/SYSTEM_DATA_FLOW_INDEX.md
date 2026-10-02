@@ -5399,7 +5399,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
-| `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
+| `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (carries `totals_original`, and the NAMED cash figures `totals.total_store_cash` / `store_cash_net` / `cash_split` + per-rep `_cash_split`, all from `deposit_recon.cash_components` — §47.9), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit, §47.9 |
 | `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
@@ -14618,8 +14618,8 @@ helper never breaks a money report. An unresolved uid is **absent** from the map
 
 ### 47.3 Lock
 
-`backend/harness_envelope_receipt_basis.py` — **90 checks** (52 at 2026-10-01, +38 for the wiring class
-in §47.8), stdlib, DB-free, run by
+`backend/harness_envelope_receipt_basis.py` — **111 checks** (52 at 2026-10-01, +38 for the wiring class
+in §47.8, +21 for the naming class in §47.9), stdlib, DB-free, run by
 `carrier-vocab-guard`. Fails the build on: a second basis formula; a basis key or label spelled on the
 screen or in the router; the default drifting off the historical figure; an unknown basis folding to
 `manual`; the legacy `store_cash` fallback being lost; the count math leaving `count_fields`;
@@ -14793,6 +14793,54 @@ owner-gated.
 **LOCK:** §47.3's harness, sections H1–H3 (+38 checks), with armed controls that patch back the shipped
 select list and the bare `expected_cash(crow)` call. Proof of the money math:
 `harness_envelope_report.py` section A0 reproduces the owner's defect and pins the fix.
+
+### 47.9 "Store cash" meant two different things — name the drawer, show the net beside it (owner 2026-10-02; fixed)
+
+Owner: *"Store cash in DM Verify is the total cash in the store, need one more field which shows the
+store cash - which is total store cash - epay cash as declared by the users; the current store cash in
+DM verify change name to total store cash and where ever that is derived change the name there too and
+introduce the store cash column along side for proper reporting"*.
+
+**THE CLASS: one column, two meanings, and one of them had the wrong name.** `daily_closing.store_cash`
+is a day-1 column whose meaning CHANGED with mig 103: for a modern row `create_row` folds the
+bill-payment cash INTO it (so it is the whole drawer), while for a pre-mig103 row the legacy
+`epay_cash` column carried that money separately (so it is the net). Meanwhile the rest of the platform
+had already settled the vocabulary the other way — `closing/deposit-categories` ("Store cash = total
+cash minus bill-payment cash"), `closing/cash-config` ("Store cash only, excludes the bill-payment
+portion"), the submit-flow explainer, and §47.1's own basis table. **DM Verify was the one surface
+calling the drawer "Store cash"**, and it had no net column at all.
+
+**ONE FACT, ONE HOME.** A surface that has to show the drawer AND the net must not be the place that
+decides what either one is, so the SPLIT now lives beside the formulas:
+`deposit_recon.cash_components(t_cash, epay_cash)` → `{total_cash, store_cash, bill_payment_cash}`,
+each value `cash_for_basis` itself.
+
+| fact | home | callers |
+|---|---|---|
+| the split of one drawer, keyed by basis | `deposit_recon.cash_components` (over `cash_for_basis`, §47.1) | `envelope_report.declared_components` (§47.8) · `/closing/summary` per store **and** per rep |
+| the drawer, as a payload key | `totals.total_store_cash` = `round(epay_cash + store_cash, 2)` — era-robust in BOTH column eras, and the invariant `verified_overlay` preserves | DM Verify tiles/table/export; `money_recon`'s `closing_cash` now READS it instead of repeating the expression |
+| the net register cash | `totals.store_cash_net` (and `cash_split` for a per-basis column) | DM Verify's new **Store cash** column |
+
+**WHAT THE RENAME WOULD HAVE GOT WRONG ON ITS OWN.** Simply relabelling `store_cash` as "Total store
+cash" is correct for a modern row and **wrong for a pre-mig103 one**, where that column excludes the
+bill-payment cash the legacy column held. Pinned both ways in `harness_dmverify_parity.py` section P:
+modern (t_cash 1002, epay_on_cash 230) → total 1002 / net 772; legacy (store_cash 80, epay_cash 30) →
+total **110** / net 80. The DM's own correction field (`dm_store_cash`) corrects the cash TOTAL — that
+is what `verified_overlay` lands it on — so it is named "Total store cash" and now prefills from the
+drawer rather than from the two-meaning column.
+
+**ADDITIVE.** Every existing payload field keeps its value, including the raw `store_cash`; the stored
+`dm_store_cash` key is unchanged; no migration. What changed is which figures the screen RENDERS and
+what they are called.
+
+**LOCK** (§47.3's harness, sections I1–I2, 90 → **111 checks**): `cash_components` is the split and IS
+`cash_for_basis`; the envelope receipt and `/closing/summary` both dereference it; an AST scan proves
+**exactly one** place in the closing module derives "a cash total minus something ePay"
+(`deposit_recon`'s own `_f(t_cash) - _f(epay_cash)`) and the router, the receipt, the overlay and
+`pickup_actual` derive none; DM Verify renders the two-meaning `store_cash` field **nowhere**, names
+the drawer, shows the net, and derives neither. Armed controls patch the shipped tile back in and go
+red. The bill-pay recon's own `declared − processor` variances are a different question and are proven
+*not* to match the scan.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 
