@@ -291,7 +291,10 @@ def _p_closing_envelope_outstanding(client, org_id, ctx):
     since = (now - timedelta(days=ENVELOPE_LOOKBACK_DAYS)).date().isoformat()
     try:
         rows = (client.schema("commcalc").table("daily_closing")
-                .select("id,close_date,store_code,employee_name,store_cash,epay_cash")
+                # The drawer's era rule lives in envelope_report; this hand-spelled list feeds it,
+                # so it carries both eras' columns (owner bug 2026-10-02).
+                .select("id,close_date,store_code,employee_name,"
+                        "t_cash,store_cash,epay_cash,epay_on_cash")
                 .eq("org_id", org_id).gte("close_date", since).limit(20000).execute().data) or []
     except Exception:
         return []
@@ -331,7 +334,11 @@ def _p_closing_envelope_outstanding(client, org_id, ctx):
             return 0.0
 
     def _net(r):
-        gross = _num(r.get("store_cash")) + _num(r.get("epay_cash"))
+        # THE DRAWER, from the one home (owner bug 2026-10-02): this alert used to spell the
+        # pre-mig-103 sum itself, which agreed with a mig-103+ row's `t_cash` only because
+        # `create_row` zeroes the legacy columns — an invariant nothing held it to.
+        from app.modules.closing import envelope_report as _er
+        gross = _er.declared_total_cash(r)
         return _env.net_row(gross, r.get("id"), exp_by_row, wd_by_row) if _env is not None else gross
 
     unc_cut = (now - timedelta(days=max(unc_days, 0))).date().isoformat()

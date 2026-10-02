@@ -161,6 +161,138 @@ check("E7 a negative POS figure is clamped, never treated as a credit to the env
       BN.net_store_day([row("a", 100.0)], pos_billpay_cash=-50.0)["rows"]["a"]["net"] == 100.0)
 
 
+# ══ G. THE DECLARED SOURCE (owner bug report 2026-10-02, mig 1038) ═══════════════════════════════
+# OWNER: "cash pick up 258 short but 258 is epay cash which appears on the next report for epay
+# pick up ... this cash pick up report should not show anything short since 15 is declared as store
+# cash and 258 as epay and the total is 273 — cash pick up should only show the cash from sales and a
+# column for total cash".
+#
+# That is the SAME overlap section A exists for, reported again because the 2026-09-08 switch was
+# never turned on — and described with the DECLARED figures, which that directive ruled out as the
+# amount. So the source is now a per-org choice, and this section pins that choosing 'declared':
+#   • resolves the owner's own store-day exactly (the regression below);
+#   • still caps each envelope at its own cash, so the 147-row condition is visible, not netted away;
+#   • still reports when the POS does not back the declaration, so the caution that made the POS the
+#     original choice is not quietly dropped;
+#   • changes NOTHING for an org on the default source.
+print("\n== G. the DECLARED source — the owner's 2026-10-02 report ==")
+check("G0 'pos' is the default source, so mig 1038 changes no org's numbers on its own",
+      BN.NET_SOURCE_DEFAULT == "pos" and BN.normalize_net_source(None) == "pos"
+      and BN.normalize_net_source("") == "pos")
+check("G0b an unreadable source word degrades to the behaviour that shipped, never to the new one",
+      BN.normalize_net_source("declaredd") == "pos" and BN.normalize_net_source("POS") == "pos"
+      and BN.normalize_net_source("DECLARED") == "declared")
+
+# THE REGRESSION — B-2612 / 2026-09-03, the exact store-day the owner reported.
+g = BN.net_store_day([row("kashif", 273.0, 258.0)], pos_billpay_cash=None, source="declared")
+check("G1 REGRESSION B-2612 2026-09-03: the envelope offers the $15.00 of sales cash, not $273.00",
+      g["rows"]["kashif"]["net"] == 15.0, g["rows"]["kashif"])
+check("G1b and the $258.00 the bill-pay screen collects is what came out",
+      g["rows"]["kashif"]["billpay_netted"] == 258.0 and g["basis"] == "declared")
+check("G1c so the DM collecting $15.00 is LEVEL, where before it read $258.00 short",
+      abs(g["rows"]["kashif"]["net"] - 15.0) < 0.005)
+check("G1d the whole drawer is still reported beside it — the owner asked for both figures",
+      g["rows"]["kashif"]["gross"] == 273.0)
+
+check("G2 the declared source resolves a store-day the POS has no figure for — where 'pos' nets "
+      "nothing at all and the envelope stays short",
+      g["basis"] == "declared"
+      and BN.net_store_day([row("kashif", 273.0, 258.0)], pos_billpay_cash=None)["basis"] == "none")
+
+# The 147-row August condition: a declaration BIGGER than the drawer. The cap must bite and be said.
+g3 = BN.net_store_day([row("a", 0.0, 891.0)], source="declared")
+check("G3 a declaration bigger than the whole drawer nets only the drawer — never below zero",
+      g3["rows"]["a"]["net"] == 0.0 and g3["rows"]["a"]["billpay_netted"] == 0.0)
+check("G3b and it is FLAGGED, so the 27%-of-August condition stays visible on the declared source",
+      g3["rows"]["a"]["declared_exceeds_cash"] is True)
+g3b = BN.net_store_day([row("a", 100.0, 400.0)], source="declared")
+check("G3c partially: $400 declared against a $100 drawer nets $100 and flags it",
+      g3b["rows"]["a"]["net"] == 0.0 and g3b["rows"]["a"]["billpay_netted"] == 100.0
+      and g3b["rows"]["a"]["declared_exceeds_cash"] is True)
+
+# A declaration is each rep's OWN — it is never allocated across the store-day's reps.
+g4 = BN.net_store_day([row("a", 500.0, 100.0), row("b", 500.0, 0.0)], source="declared")
+check("G4 each rep's declaration comes out of their OWN envelope, never spread across the day",
+      g4["rows"]["a"]["net"] == 400.0 and g4["rows"]["b"]["net"] == 500.0)
+check("G4b nothing is 'unallocated' on this source — there is nothing to allocate",
+      g4["unallocated"] == 0.0)
+
+# The POS caution survives the switch of source.
+g5 = BN.net_store_day([row("a", 500.0, 100.0)], pos_billpay_cash=400.0, source="declared")
+check("G5 the declared figure is what nets, even when a POS figure exists",
+      g5["rows"]["a"]["billpay_netted"] == 100.0 and g5["rows"]["a"]["net"] == 400.0)
+check("G5b but the POS DISAGREEING is reported — $100 declared against $400 from the POS",
+      g5["pos_disagrees"] is True and g5["pos_gap"] == -300.0, (g5["pos_disagrees"], g5["pos_gap"]))
+check("G5c and the DM is told so in words, not only in a field",
+      "not backed by the sales data" in (BN.envelope_note(g5, "a") or ""), BN.envelope_note(g5, "a"))
+g6 = BN.net_store_day([row("a", 500.0, 100.0)], pos_billpay_cash=100.0, source="declared")
+check("G6 agreement is not flagged as disagreement",
+      g6["pos_disagrees"] is False and g6["pos_gap"] == 0.0)
+check("G6b and with NO POS figure the gap is None — 'nobody checked', never 'it agrees'",
+      g["pos_gap"] is None and g["pos_disagrees"] is False)
+
+check("G7 the switch still outranks the source: netting off nets nothing on either source",
+      BN.net_store_day([row("a", 273.0, 258.0)], enabled=False, source="declared")["basis"] == "off"
+      and BN.net_store_day([row("a", 273.0, 258.0)], enabled=False,
+                           source="declared")["rows"]["a"]["net"] == 273.0)
+check("G8 the arithmetic ties on this source too: gross − netted == net",
+      all(abs(v["gross"] - v["billpay_netted"] - v["net"]) < 0.005
+          for res in (g, g3, g3b, g4, g5) for v in res["rows"].values()))
+check("G9 the default source is byte-identical to what mig 989 shipped — section A's own case",
+      BN.net_store_day([row("a", 1000.0, 600.0)], pos_billpay_cash=400.0, source="pos")
+      == BN.net_store_day([row("a", 1000.0, 600.0)], pos_billpay_cash=400.0))
+
+
+# ══ H. THE VOCABULARY HAS ONE HOME — AND THE DATABASE CANNOT OUTGROW IT ══════════════════════════
+# The house rule: one fact, one home, dereferenced — and locked so it cannot un-wire. These two
+# CHECK constraints are the only copies of these words outside this module, and this section fails
+# the build the moment they disagree, exactly as harness_envelope_receipt_basis.py does for mig 1036.
+print("\n== H. the basis vocabulary is tied to the migrations' CHECK constraints ==")
+_m1038 = open("../database/migrations/1038_pickup_billpay_net_source.sql").read()
+_m1039 = open("../database/migrations/1039_cash_pickup_amount_basis.sql").read()
+for _src_word in BN.NET_SOURCES:
+    check(f"H1 mig 1038's CHECK admits {_src_word!r}", f"'{_src_word}'" in _m1038)
+check("H1b and admits nothing else — the CHECK lists exactly NET_SOURCES",
+      sorted(set(__import__("re").findall(r"'([a-z_]+)'(?=[,)\s])",
+             _m1038.split("CHECK (pickup_billpay_net_source IN (")[1].split(")")[0] + ")")))
+      == sorted(BN.NET_SOURCES))
+for _b in BN.PICKUP_BASES:
+    check(f"H2 mig 1039's CHECK admits {_b!r}", f"'{_b}'" in _m1039)
+check("H2b and admits nothing else — the CHECK lists exactly PICKUP_BASES",
+      sorted(set(__import__("re").findall(r"'([a-z_]+)'",
+             _m1039.split("amount_basis IN (")[1].split(")")[0])))
+      == sorted(BN.PICKUP_BASES))
+check("H3 mig 1039 does NOT backfill — absence is never turned into a claim somebody made",
+      "UPDATE commcalc.cash_pickup" not in _m1039 and "SET amount_basis" not in _m1039)
+check("H4 and the column stays NULLABLE, which is how an un-recorded basis is spelled",
+      "amount_basis IS NULL" in _m1039 and "NOT NULL" not in _m1039.split("ADD COLUMN IF NOT EXISTS amount_basis")[1].split(";")[0])
+check("H5 mig 1038 leaves the money-touching statements COMMENTED — choosing a source is not "
+      "switching the netting on",
+      "-- INSERT INTO commcalc.cash_pickup_config" in _m1038
+      and "\nINSERT INTO commcalc.cash_pickup_config" not in _m1038)
+check("H6 every basis a config can produce is a basis the vocabulary has",
+      set(BN.basis_allowed("pos")) | set(BN.basis_allowed("declared"))
+      | set(BN.basis_allowed("pos", enabled=False)) <= set(BN.PICKUP_BASES))
+check("H6b and the two sources cannot produce each other's basis",
+      "declared" not in BN.basis_allowed("pos") and "pos" not in BN.basis_allowed("declared"))
+
+# ══ CONTROLS: each new rule must FAIL when the thing it protects is broken ════════════════════════
+print("\n== I. armed controls — a broken version of each new rule is caught ==")
+check("I1 control: netting the declared figure WITHOUT the envelope floor would report "
+      "negative cash in the bag (so G3's cap is load-bearing)",
+      (0.0 - 891.0) < 0 and g3["rows"]["a"]["net"] == 0.0)
+check("I2 control: a source that silently fell back to 'pos' would leave the owner's store-day "
+      "un-netted — G1 would then read $273.00",
+      BN.net_store_day([row("kashif", 273.0, 258.0)], pos_billpay_cash=None,
+                       source="pos")["rows"]["kashif"]["net"] == 273.0)
+check("I3 control: were the gap computed when no POS figure exists, G6b would read 258.0 instead "
+      "of None",
+      g["pos_gap"] is None)
+check("I4 control: the vocabulary tie really can fail — a word absent from the module is absent "
+      "from the CHECK too",
+      "'drawer'" not in _m1039 and "drawer" not in BN.PICKUP_BASES)
+
+
 print("\n== F. RULE TWO — no carrier / tenant / processor literal in the rule ==")
 _src = open("app/modules/closing/billpay_netting.py").read()
 import io as _io, tokenize as _tok                                          # noqa: E402

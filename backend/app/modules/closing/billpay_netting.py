@@ -26,14 +26,55 @@ WHAT COUNTS AS "THE POS FIGURE" is the caller's business (see `closing/router` �
 bill-pay leg first, the processor leg second, both already-shared resolutions). This module only takes
 the number and splits it honestly.
 
-THREE STATES, NEVER TWO. An envelope's basis is one of:
-    'pos'   a POS figure existed for that store-day and was netted out
-    'none'  no POS figure for that store-day — NOTHING is netted, and the caller says so
-    'off'   the tenant has not switched netting on (RULE TWO: per-org config, house default off)
+FOUR STATES, NEVER TWO. An envelope's basis is one of:
+    'pos'       a POS figure existed for that store-day and was netted out
+    'declared'  the rep's OWN declared bill-pay cash was netted out of their own envelope
+    'none'      no POS figure for that store-day — NOTHING is netted, and the caller says so
+    'off'       the tenant has not switched netting on (RULE TWO: per-org config, house default off)
 Subtracting a fabricated zero and calling it netted is the silent-zero defect this codebase keeps
 paying for; 'none' exists so the DM is told the envelope is un-netted rather than shown a number that
 merely looks reconciled.
+
+WHY 'declared' EXISTS TOO (owner bug report 2026-10-02). The owner reported B-2612 / 2026-09-03 as a
+defect: the drawer was $273, the rep declared $258 of it as bill-pay cash and the DM collected the
+remaining $15, and Cash Pickup called that $258 SHORT — the same overlap this module was built for,
+still visible because the 2026-09-08 switch has never been turned on. The report described the
+DECLARED figures ("15 is declared as store cash and 258 as epay"), which is a different source from
+the 2026-09-08 "as CALCULATED BY THE POS". Both are now sources this one mechanism can net by, chosen
+per org by config (`cash_pickup_config.pickup_billpay_net_source`, mig 1038) — never by a second
+code path, and never by a branch on a tenant's name (RULE TWO).
+
+The caution that made the POS the original choice still stands and is not hidden by the new source:
+on the declared source each envelope is still capped at its own cash (`declared_exceeds_cash` says
+when that cap bit), and whenever a POS figure is ALSO available the result reports whether the POS
+agrees (`pos_disagrees` / `pos_gap`), so a declaration the POS does not back is visible instead of
+merely trusted.
 """
+
+# The vocabulary of "which cash this envelope's amount is", in ONE place. The DB CHECK on
+# `commcalc.cash_pickup.amount_basis` (mig 1039) is tied to this tuple by
+# `backend/harness_billpay_netting.py`, so the database cannot hold a word this module has no
+# behaviour for.
+PICKUP_BASES = ("off", "none", "declared", "pos")
+# Which SOURCE a tenant can choose. 'pos' is the house default, so an org that has not chosen behaves
+# exactly as it did before mig 1038 existed.
+NET_SOURCES = ("pos", "declared")
+NET_SOURCE_DEFAULT = "pos"
+
+
+def normalize_net_source(v):
+    """One of NET_SOURCES, defaulting to 'pos' — an unreadable config word must never silently
+    change which cash a DM is told to collect, so it degrades to the behaviour that shipped."""
+    v = str(v or "").strip().lower()
+    return v if v in NET_SOURCES else NET_SOURCE_DEFAULT
+
+
+def basis_allowed(source, enabled=True):
+    """The bases a given config CAN produce — the fail-closed check for a basis a caller claims a
+    stored pickup row used (see `cash_pickup.amount_basis`, mig 1039)."""
+    if not enabled:
+        return ("off",)
+    return ("declared",) if normalize_net_source(source) == "declared" else ("none", "pos")
 
 
 def _f(v) -> float:
@@ -47,13 +88,16 @@ def _r2(v) -> float:
     return round(v + 0.0, 2)
 
 
-def net_store_day(rows, pos_billpay_cash=None, enabled=True):
+def net_store_day(rows, pos_billpay_cash=None, enabled=True, source=NET_SOURCE_DEFAULT):
     """Net one STORE-DAY's POS bill-pay cash across that day's envelopes.
 
     `rows`   [{'key': hashable, 't_cash': float, 'epay_on_cash': float}] — one entry per rep envelope.
     `pos_billpay_cash`  the POS-calculated bill-pay CASH for this store-day, or None when there is
              no POS figure for it (a missing feed, an unmapped store — not a zero).
     `enabled`  the tenant's netting switch.
+    `source`   which figure to net BY — 'pos' (the default, the 2026-09-08 directive) or 'declared'
+             (the rep's own declared bill-pay cash, the 2026-10-02 report). With 'declared' a POS
+             figure is still used, when one is given, to report whether the POS agrees.
 
     Returns {'basis', 'pos_cash', 'declared_cash', 'netted_total', 'unallocated', 'rows': {key: {...}}}
     where each row carries `gross`, `billpay_netted`, `net`, `declared_billpay` and
@@ -66,7 +110,8 @@ def net_store_day(rows, pos_billpay_cash=None, enabled=True):
     that store-day than anybody declared holding.
     """
     out = {"basis": "off", "pos_cash": None, "declared_cash": 0.0, "netted_total": 0.0,
-           "unallocated": 0.0, "rows": {}}
+           "unallocated": 0.0, "source": normalize_net_source(source),
+           "pos_disagrees": False, "pos_gap": None, "rows": {}}
     items = []
     for r in (rows or []):
         k = r.get("key")
@@ -87,11 +132,36 @@ def net_store_day(rows, pos_billpay_cash=None, enabled=True):
 
     if not enabled:
         return _finish("off")
-    if pos_billpay_cash is None:
+
+    if pos_billpay_cash is not None:
+        out["pos_cash"] = _r2(max(0.0, _f(pos_billpay_cash)))
+
+    # ── SOURCE 'declared' — each rep's own declaration, out of their own envelope ────────────────
+    # No allocation to do: a declaration already belongs to exactly one rep, so there is nothing to
+    # split and nothing to spill. The envelope is still the floor (no negative cash in a bag), and
+    # the cap biting is what `declared_exceeds_cash` reports — the 27%-of-August case the POS source
+    # exists for stays VISIBLE here rather than being netted away.
+    if out["source"] == "declared":
+        declared_sum = 0.0
+        for it in items:
+            t = _r2(min(it["declared"], it["gross"]))
+            out["rows"][it["key"]] = {
+                "gross": _r2(it["gross"]), "billpay_netted": t, "net": _r2(it["gross"] - t),
+                "declared_billpay": _r2(it["declared"]),
+                "declared_exceeds_cash": it["declared"] > it["gross"] + 0.005,
+            }
+            out["netted_total"] = _r2(out["netted_total"] + t)
+            declared_sum = _r2(declared_sum + it["declared"])
+        if out["pos_cash"] is not None:
+            out["pos_gap"] = _r2(declared_sum - out["pos_cash"])
+            out["pos_disagrees"] = abs(out["pos_gap"]) > 0.005
+        out["basis"] = "declared"
+        return out
+
+    if out["pos_cash"] is None:
         return _finish("none")
 
-    pos = max(0.0, _f(pos_billpay_cash))
-    out["pos_cash"] = _r2(pos)
+    pos = out["pos_cash"]
 
     # Weights: the reps' OWN declared bill-pay share first — it is the only signal for who handled the
     # bill payments — then the cash they hold, then an even split. The declaration decides the SPLIT,
@@ -153,6 +223,18 @@ def envelope_note(res, row_key):
     if basis == "none":
         return ("No POS bill-pay figure for this store-day, so nothing was netted out — this envelope "
                 "still includes any bill-pay cash.")
+    if basis == "declared":
+        if row["billpay_netted"] <= 0:
+            return None
+        s = (f"${row['billpay_netted']:,.2f} of bill-pay cash, as declared on this closing, is "
+             f"collected on the bill-pay screen and has been taken out of this envelope.")
+        if row["declared_exceeds_cash"]:
+            s += (" The declared bill-pay cash was MORE than the whole drawer, so only the drawer "
+                  "was taken out.")
+        if res.get("pos_disagrees"):
+            s += (f" The POS figure for this store-day differs by ${abs(res['pos_gap']):,.2f}, so this "
+                  "declaration is not backed by the sales data.")
+        return s
     if row["billpay_netted"] > 0:
         s = (f"${row['billpay_netted']:,.2f} of POS bill-pay cash is collected on the bill-pay screen "
              f"and has been taken out of this envelope.")

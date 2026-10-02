@@ -98,16 +98,17 @@ def _f(v):
 # starts to, or if this module reads a row key this tuple does not declare.
 CLOSING_COLUMNS = (
     "id", "close_date", "store_code", "store_name", "store_address", "employee_name",
-    "t_cash",            # the canonical declared drawer (declared_total_cash)
-    "store_cash",        # the legacy day-1 fallback for t_cash (NOT the net store-cash basis)
-    "epay_on_cash",      # the bill-payment (ePay) cash INSIDE t_cash — the basis split's whole input
+    "t_cash",            # the canonical declared drawer (declared_total_cash) — mig-103+ rows only
+    "store_cash",        # the legacy pre-mig-103 drawer, BILL PAY EXCLUDED (not the net basis)
+    "epay_cash",         # the legacy pre-mig-103 bill-pay cash, REAL and SEPARATE in that era
+    "epay_on_cash",      # the mig-103+ bill-payment cash INSIDE t_cash — the basis split's input
     "envelope_picture", "remarks",
 )
 # What every caller actually passes to `.select(...)`, so the query and this tuple cannot drift apart.
 CLOSING_SELECT = ",".join(CLOSING_COLUMNS)
 # The three the basis math cannot work without; the harness asserts each is in CLOSING_COLUMNS and
 # that a row fetched with ONLY those columns still produces three DIFFERENT, correct bases.
-BASIS_INPUT_COLUMNS = ("t_cash", "store_cash", "epay_on_cash")
+BASIS_INPUT_COLUMNS = ("t_cash", "store_cash", "epay_cash", "epay_on_cash")
 
 ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
 ENVELOPE_BASIS_DEFAULT = "total_cash"
@@ -177,13 +178,86 @@ def normalize_envelope_basis(b):
     return b if b in ENVELOPE_BASES else ENVELOPE_BASIS_DEFAULT
 
 
-def declared_total_cash(closing_row):
-    """The row's whole declared drawer: `t_cash` (canonical tender column) falling back to legacy
-    `store_cash`, the SAME rule _cash_position_core applies. Kept as its own function because the
-    legacy fallback is a property of the ROW, not of any basis."""
+# ── THE TWO ERAS OF ONE DRAWER (owner bug report 2026-10-02, Cash Pickup) ──────────────────────────
+# A closing row spells "how much cash was in the drawer, and how much of it was bill payments" in one
+# of TWO ways, and WHICH way is a property of the row, not of the reader:
+#
+#   mig-103+ (`t_cash` is present)   `t_cash` IS the whole drawer, bill payments included — the form's
+#                                    own field is "Total cash in store including Bill Payments" (owner
+#                                    2026-09-02). `epay_on_cash` is the bill-pay SUBSET inside it, and
+#                                    `create_row` zeroes the legacy `epay_cash`/`epay_cc` columns so
+#                                    nothing is counted twice.
+#   pre-mig-103 (`t_cash` is NULL)   `store_cash` and `epay_cash` are two REAL, SEPARATE amounts whose
+#                                    SUM is the drawer, and `epay_on_cash` does not exist at all.
+#
+# Measured live 2026-10-02: 89 rows carry no `t_cash`, 78 of those carry `epay_cash` > 0 and NONE of
+# them carries `epay_on_cash`; and no row has `t_cash` together with `epay_cash` > 0. So the two eras
+# never overlap and the era test below is exact, not a heuristic.
+#
+# THE CLASS THIS FIXES: that era rule was re-derived by hand at five call sites (the pickup envelope,
+# the bill-pay envelope, the cash-recon declared figure, the per-tender display, the envelope-short
+# alert), three of which answered only for ONE era — so a pre-mig-103 bill-pay envelope read $0.00
+# while $172 of bill-pay cash sat in it. The rule now lives HERE, once, and every caller reads it.
+# The columns mig 103 introduced. They move as a BLOCK — live 2026-10-02: no row carries `t_cash`
+# without `t_credit`, no row carries another `t_*` without `t_cash`, and no row carries
+# `epay_on_cash` without `t_cash` — so "any of these is present" is one era test, not several. It is
+# spelled here because three modules were each testing the era their own way (`has_t` over the seven
+# tender columns here, a bare `t_cash` check there), and two tests for one fact is the divergence the
+# house rules call a defect.
+TENDER_COLUMNS = ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima")
+# The bill-pay SUBSET columns of that era. Part of the era test, not just of the split: a row that
+# carries one of these is a mig-103+ row whatever else was left out of the query.
+MODERN_BILLPAY_COLUMNS = ("epay_on_cash", "epay_on_credit", "epay_on_acima")
+MODERN_COLUMNS = TENDER_COLUMNS + MODERN_BILLPAY_COLUMNS
+
+
+def is_modern_row(closing_row):
+    """Is this a mig-103+ row, rather than a pre-mig-103 one?
+
+    ANY mig-103 column present answers yes. A row fetched with only SOME of them (e.g.
+    CLOSING_SELECT, which needs `t_cash` and `epay_on_cash`) still answers correctly, and a row
+    carrying a bill-pay subset column but no tender column — which no live row does, but which the
+    receipt's own fixtures exercise — is correctly read as modern rather than having its
+    `epay_on_cash` ignored as if the column did not exist in its era.
+    """
     r = closing_row or {}
-    v = _f(r.get("t_cash"))
-    return v if v else _f(r.get("store_cash"))
+    return any(r.get(k) is not None for k in MODERN_COLUMNS)
+
+
+def declared_total_cash(closing_row):
+    """The row's WHOLE declared drawer, bill payments included, in either era (see above).
+
+    mig-103+ -> `t_cash`, falling back to legacy `store_cash` (the day-1 rule, unchanged).
+    pre-mig-103 -> `store_cash` + `epay_cash`, because in that era those are two separate amounts,
+    not a figure and its subset.
+
+    BYTE-IDENTICAL to the previous rule for every mig-103+ row — the fallback is the same one, and
+    live 2026-10-02 no row has `t_cash` set together with `epay_cash` > 0. What changes is the
+    pre-mig-103 rows: they stop understating the drawer by their whole bill-pay leg (78 live rows,
+    one of them by $744.00).
+    """
+    r = closing_row or {}
+    v = _f(r.get("t_cash")) or _f(r.get("store_cash"))
+    if is_modern_row(r):
+        return v
+    return round(v + _f(r.get("epay_cash")), 2)
+
+
+def declared_billpay_cash(closing_row):
+    """How much of that drawer the rep declared as BILL-PAYMENT cash, in either era.
+
+    mig-103+ -> `epay_on_cash` (the subset column). pre-mig-103 -> the legacy `epay_cash`, which in
+    that era is the real separate bill-pay amount already inside `declared_total_cash`'s sum. The
+    same subset-of-the-drawer meaning in both eras, so every caller can subtract it from
+    `declared_total_cash` without knowing which era it is holding.
+
+    This is where the 2026-10-02 bug-report class lived: five call sites read `epay_on_cash` raw, a
+    column no pre-mig-103 row has, so all 89 of those rows declared $0.00 of bill-pay cash.
+    """
+    r = closing_row or {}
+    if is_modern_row(r):
+        return _f(r.get("epay_on_cash"))
+    return _f(r.get("epay_cash"))
 
 
 def expected_cash(closing_row, basis=ENVELOPE_BASIS_DEFAULT):
@@ -194,7 +268,7 @@ def expected_cash(closing_row, basis=ENVELOPE_BASIS_DEFAULT):
     """
     from . import deposit_recon          # function-level: keeps this module's import list empty
     r = closing_row or {}
-    return deposit_recon.cash_for_basis(declared_total_cash(r), _f(r.get("epay_on_cash")),
+    return deposit_recon.cash_for_basis(declared_total_cash(r), declared_billpay_cash(r),
                                         normalize_envelope_basis(basis))
 
 
@@ -208,7 +282,7 @@ def declared_components(closing_row):
     """
     from . import deposit_recon          # function-level: keeps this module's import list empty
     r = closing_row or {}
-    return deposit_recon.cash_components(declared_total_cash(r), _f(r.get("epay_on_cash")),
+    return deposit_recon.cash_components(declared_total_cash(r), declared_billpay_cash(r),
                                          bases=ENVELOPE_BASES)
 
 

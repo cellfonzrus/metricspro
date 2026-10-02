@@ -39,10 +39,18 @@ def _f(v):
 
 
 # ── declared bill-pay cash movement ─────────────────────────────────────────────────────────────
+from . import envelope_report      # pure module, pure import: the era rule for a declared figure
+
+
 def declared_billpay_by_store_day(closing_rows):
-    """PURE: daily_closing rows ({store_code, close_date, epay_on_cash}) → the reps' declared
-    ePay-on-cash per (store, day): {store_code: {day: amount}}. Blank store → '?' (excluded from
-    codes downstream, same convention as _cash_position_core)."""
+    """PURE: daily_closing rows → the reps' declared bill-pay CASH per (store, day):
+    {store_code: {day: amount}}. Blank store → '?' (excluded from codes downstream, same convention
+    as _cash_position_core).
+
+    The per-row figure is `envelope_report.declared_billpay_cash`, the one home for it (owner bug
+    2026-10-02). This function used to read `epay_on_cash` raw, so every pre-mig-103 row contributed
+    $0.00 to its store's bill-pay position while its legacy `epay_cash` leg held the real amount —
+    the same defect the bill-pay envelope list carried, in the store-level total beneath it."""
     out = {}
     for r in closing_rows or []:
         r = r or {}
@@ -51,7 +59,7 @@ def declared_billpay_by_store_day(closing_rows):
         if not dday:
             continue
         out.setdefault(code, {}).setdefault(dday, 0.0)
-        out[code][dday] = round(out[code][dday] + _f(r.get("epay_on_cash")), 2)
+        out[code][dday] = round(out[code][dday] + envelope_report.declared_billpay_cash(r), 2)
     return out
 
 

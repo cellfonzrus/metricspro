@@ -401,13 +401,19 @@ def _row_display_tenders(r: dict) -> dict:
     A pre-mig103 sheet_upload row (no t_* at all) falls back to the legacy store_cash/store_cc/
     epay_cash/epay_cc/other_account split — the EXACT SAME fallback create_row already applies at
     write time (see POST /row above) — so this is a pure read-time re-derivation, not new math."""
-    has_t = any(r.get(k) is not None for k in
-                ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima"))
+    # The era test is `envelope_report.is_modern_row` — the ONE home for it (owner bug 2026-10-02);
+    # this tuple used to be spelled here and a narrower version of it in two other places.
+    has_t = envelope_report_mod.is_modern_row(r)
     if has_t:
-        return {"cash": _f(r.get("t_cash")), "credit": _f(r.get("t_credit")), "ext_cc": _f(r.get("t_ext_cc")),
+        return {"cash": envelope_report_mod.declared_total_cash(r),
+                "credit": _f(r.get("t_credit")), "ext_cc": _f(r.get("t_ext_cc")),
                 "gift": _f(r.get("t_gift")), "store_acct": _f(r.get("t_store_acct")),
                 "zelle": _f(r.get("t_zelle")), "acima": _f(r.get("t_acima"))}
-    return {"cash": round(_f(r.get("store_cash")) + _f(r.get("epay_cash")), 2),
+    # The legacy drawer rule is NOT re-derived here: `envelope_report.declared_total_cash` is the one
+    # home for "how much cash did this row declare" in BOTH eras (owner bug 2026-10-02), and it gives
+    # exactly this sum for a pre-mig-103 row. The credit leg keeps its own sum — there is no basis math
+    # on credit and so no shared home to read.
+    return {"cash": envelope_report_mod.declared_total_cash(r),
             "credit": round(_f(r.get("store_cc")) + _f(r.get("epay_cc")), 2),
             "ext_cc": 0.0, "gift": 0.0, "store_acct": 0.0,
             "zelle": _f(r.get("other_account")), "acima": 0.0}
@@ -428,12 +434,16 @@ def _row_epay_display(r: dict) -> dict:
     sheet_upload row has no epay_on_* columns at all; its legacy epay_cash/epay_cc columns hold a
     REAL, separate value instead (already added into store_cash/store_cc's own total there — see
     _row_display_tenders' fallback branch), so surfacing them unchanged is correct for that era too."""
-    has_t = any(r.get(k) is not None for k in
-                ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima"))
+    # The era test is `envelope_report.is_modern_row` — the ONE home for it (owner bug 2026-10-02);
+    # this tuple used to be spelled here and a narrower version of it in two other places.
+    has_t = envelope_report_mod.is_modern_row(r)
+    # The CASH leg of this split is `envelope_report.declared_billpay_cash` — the one home for "how
+    # much of the drawer was bill payments" in either era (owner bug 2026-10-02). The credit leg has
+    # no basis math and so no shared home; its era branch reads the same `has_t` test.
     if has_t:
-        return {"cash": _f(r.get("epay_on_cash")),
+        return {"cash": envelope_report_mod.declared_billpay_cash(r),
                 "cc": round(_f(r.get("epay_on_credit")) + _f(r.get("epay_on_acima")), 2)}
-    return {"cash": _f(r.get("epay_cash")), "cc": _f(r.get("epay_cc"))}
+    return {"cash": envelope_report_mod.declared_billpay_cash(r), "cc": _f(r.get("epay_cc"))}
 
 
 @router.get("/submissions")
@@ -4081,7 +4091,9 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
             addr = meta.get("address") or (reps[0].get("store_address") if reps else None) or (reps[0].get("store_name") if reps else None)
             for r in reps:
                 emp = (r.get("employee_name") or "").strip()
-                dcash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
+                # ONE home for the declared drawer, both eras (owner bug 2026-10-02) — this site
+                # used to spell the pre-mig-103 sum itself and read a mig-103+ row's drawer as 0.
+                dcash = envelope_report_mod.declared_total_cash(r)
                 dcred = _f(r.get("store_cc")) + _f(r.get("epay_cc"))
                 repb = _rep_b2b(day, code, emp) if (code and day and day["has_data"]) else None
                 if repb is None:
@@ -5466,7 +5478,9 @@ async def _run_cash_unpicked_alerts(org_id=None):
             continue
         cutoff = (today - _td(days=days)).isoformat()
         # closings older than the cutoff whose cash hasn't been marked picked up
-        closings = (c.schema("commcalc").table("daily_closing").select("store_code,close_date,store_cash,epay_cash")
+        # Counts store-days, never dollars (see the loop below) — so it asks for no cash column at
+        # all rather than a hand-spelled pair that reads like an era rule it does not have.
+        closings = (c.schema("commcalc").table("daily_closing").select("store_code,close_date")
                     .eq("org_id", oid).lte("close_date", cutoff).gte("close_date", (today - _td(days=days + 14)).isoformat())
                     .execute().data) or []
         picks = {(p.get("store_code") or "", str(p.get("close_date"))) for p in
@@ -5602,9 +5616,16 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         client, org_id, date_from=(_pu_dates[0] if _pu_dates else None),
         date_to=(_pu_dates[-1] if _pu_dates else None))
 
+    # The basis a pickup written NOW would carry (mig 1039), so each stored row can say whether its
+    # own amount still answers the question this screen is asking. Read once for the whole list.
+    _amount_basis_now = pickup_amount_basis(client, org_id)
+
     out, emp_options = [], set()
     for r in rows:
-        cash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
+        # THE DRAWER, from the one home that knows both eras (owner bug 2026-10-02). This line used
+        # to spell the pre-mig-103 sum, which happens to equal a mig-103+ row's `t_cash` only because
+        # `create_row` zeroes the legacy columns — an invariant this screen was silently relying on.
+        cash = envelope_report_mod.declared_total_cash(r)
         cash = _envelope.net_row(cash, r.get("id"), _exp_by_row, _wd_by_row)
         if cash <= 0 and not r.get("envelope_picture"):
             continue
@@ -5663,6 +5684,11 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "deposit_flagged": bool(p.get("deposit_flagged")) if p else False,
             "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
             "pickup_id": p.get("id") if p else None,
+            # mig 1039 — WHICH cash the stored `amount` is, worded by the one reader
+            # (`pickup_amount_basis` writes it, `pickup_basis_label` reads it). A row from before the
+            # column existed says so rather than being read as a claim nobody made.
+            "amount_basis": (pickup_basis_label(p.get("amount_basis"), _amount_basis_now)
+                             if p else None),
             # mig 949 (owner 2026-09-04): the ACTUAL cash the DM took from the envelope, beside
             # the declared figure, + variance/short-over-match (envelope-report truth table via
             # pickup_actual.row_variance). All None when no actual was recorded — honest absence.
@@ -5724,6 +5750,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # subtracting a fabricated zero and calling it reconciled is the defect class this file exists to
     # avoid. RULE TWO: off unless the tenant switches it on.
     _net_on = billpay_netting_enabled(client, org_id)
+    _net_src = billpay_net_source(client, org_id)
     # The POS bill-pay figure is fetched whether or not NETTING is on, because the equipment/
     # accessory column below needs it either way (owner 2026-09-08: the split should come from the
     # POS, not the employee's declaration, even though the envelope keeps showing the whole drawer).
@@ -5751,13 +5778,16 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     for r in rows:
         _k = ((r.get("store_code") or ""), str(r.get("close_date") or "")[:10],
               (r.get("employee_name") or ""))
-        _decl_bp[_k] = _f(r.get("epay_on_cash"))
+        # The rep's declared bill-pay cash, from the one home — both eras (owner bug 2026-10-02).
+        _decl_bp[_k] = envelope_report_mod.declared_billpay_cash(r)
     for e in out:
         _sd = ((e.get("store_code") or ""), str(e.get("close_date") or "")[:10])
         _by_sd.setdefault(_sd, []).append(e)
     for _sd, _envs in _by_sd.items():
         _pos_bp = None
-        if _net_on and _bp_cash:
+        # Fetched whether the source is 'pos' or 'declared': on the declared source it is what lets
+        # the result say the POS does not back a declaration, instead of merely trusting it.
+        if _bp_cash:
             try:
                 _pos_bp = _bp_cash.get((_bp_key(_sd[0]), _sd[1]))
             except Exception:
@@ -5768,33 +5798,46 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             [{"key": id(e), "t_cash": e.get("cash"),
               "epay_on_cash": _decl_bp.get((_sd[0], _sd[1], e.get("employee_name") or ""), 0.0)}
              for e in _envs],
-            pos_billpay_cash=_pos_bp, enabled=True)
+            pos_billpay_cash=_pos_bp, enabled=True, source=_net_src)
         for e in _envs:
             _row = _res["rows"].get(id(e)) or {}
             e["cash_gross"] = _row.get("gross", e.get("cash"))
             e["billpay_netted"] = _row.get("billpay_netted", 0.0) if _net_on else 0.0
             e["billpay_basis"] = _res["basis"] if _net_on else "off"
+            e["billpay_net_source"] = _net_src
             e["billpay_source"] = _bp_src if (_net_on and _res["basis"] == "pos") else None
             e["billpay_declared"] = _row.get("declared_billpay", 0.0)
             e["billpay_declared_exceeds_cash"] = bool(_row.get("declared_exceeds_cash"))
+            # On the declared source, whether the POS backs the declaration (mig 1038). None when
+            # there is no POS figure for the store-day — "nobody checked", never "it agrees".
+            e["billpay_pos_disagrees"] = (bool(_res.get("pos_disagrees"))
+                                          if _res.get("pos_gap") is not None else None)
+            e["billpay_pos_gap"] = _res.get("pos_gap")
             e["billpay_note"] = billpay_netting.envelope_note(_res, id(e)) if _net_on else None
             if _net_on:
                 e["cash"] = _row.get("net", e.get("cash"))
-            # OWNER REFINEMENT 2026-09-08: "cash pick up is still showing the total cash — let it be
-            # like that, just add another column for cash sales equip/acc which is total cash minus
-            # epay cash." So the envelope amount STAYS the whole drawer (netting stays off) and this
-            # is a DISPLAY split beside it: what of the drawer is equipment/accessory sales rather
-            # than bill payments. Uses the POS figure when there is one, else the rep's declaration,
-            # and says which — an equipment figure derived from a number nobody checked should not
-            # look like one that was.
+            # ── THE TWO FIGURES THE OWNER ASKED FOR ───────────────────────────────────────────
+            # OWNER REFINEMENT 2026-09-08: "add another column for cash sales equip/acc which is
+            # total cash minus epay cash."
+            # OWNER BUG REPORT 2026-10-02: "cash pick up should only show the cash from sales and a
+            # column for total cash" — the same two figures, and the newer message says which of
+            # them is the one being collected. So they are named for what they ARE, once:
+            #   cash_gross  the TOTAL cash — the whole declared drawer, bill payments included
+            #   cash_sales  the SALES cash — that drawer less the bill-pay cash collected on the
+            #               bill-pay screen (the 2026-09-08 "equip/acc" figure, under the owner's
+            #               newer word for it; ONE key, because one fact with two names is the
+            #               divergence the house rules forbid)
+            # WHICH of the two is the amount in `cash` stays the tenant's switch (mig 989), and
+            # `cash_sales_basis` always says which figure the sales cash was derived from, so a
+            # number nobody checked never looks like one that was.
             _gross = _f(e.get("cash_gross") if e.get("cash_gross") is not None else e.get("cash"))
             if _res["basis"] == "pos":
                 _bp_used, _bp_basis = _f(_row.get("billpay_netted")), "pos"
             else:
                 _bp_used = _f(_row.get("declared_billpay"))
                 _bp_basis = "declared" if _bp_used else "none"
-            e["cash_equip_acc"] = round(max(0.0, _gross - _bp_used), 2)
-            e["cash_equip_acc_basis"] = _bp_basis
+            e["cash_sales"] = round(max(0.0, _gross - _bp_used), 2)
+            e["cash_sales_basis"] = _bp_basis
             e["cash_billpay_used"] = round(_bp_used, 2)
 
     out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
@@ -5903,7 +5946,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                                    for e in out
                                                    if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
             # The equipment/accessory split (§23m), totalled the same way the column shows it.
-            "total_cash_equip_acc": round(sum(_f(e.get("cash_equip_acc")) for e in out), 2),
+            "total_cash_sales": round(sum(_f(e.get("cash_sales")) for e in out), 2),
             "not_closed": not_closed,
             # Per-store cash-on-hand, AS OF `_as_of` (the Day-mode date, or Range-mode's end date) --
             # closes the loop between the Store Cash on Hand report and the actual pickup action.
@@ -6335,21 +6378,36 @@ class RecordDepositIn(LaxModel):
 # the sibling commcalc.billpay_pickup table (see 942_billpay_pickup.sql for why a sibling table,
 # not a kind column: the UNIQUE upsert key is load-bearing and a missed kind filter would leak
 # billpay rows into the general cash movement — the sibling table is fail-closed by construction).
-def _cash_declared_for_envelope(client, org_id, cdate, store, emp):
-    """The general envelope's system-declared cash: store_cash + epay_cash (the mig-034 snapshot
-    definition — the FULL cash, ePay included)."""
-    dc = (client.schema("commcalc").table("daily_closing").select("store_cash,epay_cash")
+def _declared_closing_row(client, org_id, cdate, store, emp):
+    """The ONE row read behind both declared_fn helpers below, with the ONE column list the pure
+    module declares (`envelope_report.CLOSING_SELECT`). Spelled once so neither helper can ask for a
+    column the other needs — the §47.8 defect class: an unselected column reads as $0.00 and is
+    indistinguishable from a store that took no cash."""
+    dc = (client.schema("commcalc").table("daily_closing")
+          .select(envelope_report_mod.CLOSING_SELECT)
           .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
           .eq("employee_name", emp).limit(1).execute().data) or []
-    return (_f(dc[0].get("store_cash")) + _f(dc[0].get("epay_cash"))) if dc else None
+    return dc[0] if dc else None
+
+
+def _cash_declared_for_envelope(client, org_id, cdate, store, emp):
+    """The general envelope's system-declared cash: the WHOLE declared drawer, bill payments included
+    (the mig-034 snapshot definition), via `envelope_report.declared_total_cash` — the one home that
+    knows both the mig-103+ and the pre-mig-103 spelling of that drawer."""
+    row = _declared_closing_row(client, org_id, cdate, store, emp)
+    return envelope_report_mod.declared_total_cash(row) if row else None
 
 
 def _billpay_declared_for_envelope(client, org_id, cdate, store, emp):
-    """The billpay envelope's system-declared amount: the rep's declared ePay-on-cash split."""
-    dc = (client.schema("commcalc").table("daily_closing").select("epay_on_cash")
-          .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
-          .eq("employee_name", emp).limit(1).execute().data) or []
-    return _f(dc[0].get("epay_on_cash")) if dc else None
+    """The billpay envelope's system-declared amount: the rep's declared bill-pay-on-cash split, via
+    `envelope_report.declared_billpay_cash`.
+
+    OWNER BUG 2026-10-02 (the same class as the report that prompted it): this read `epay_on_cash`
+    RAW, a column that does not exist on a pre-mig-103 row — so all 89 of those rows declared $0.00 of
+    bill-pay cash while 78 of them carry a real `epay_cash` leg (one of them $744). The era rule now
+    comes from the one home instead of being absent here."""
+    row = _declared_closing_row(client, org_id, cdate, store, emp)
+    return envelope_report_mod.declared_billpay_cash(row) if row else None
 
 
 def _record_deposit_impl(payload: RecordDepositIn, org_id: str, table: str, declared_fn):
@@ -6425,11 +6483,19 @@ class ConfirmPickupIn(LaxModel):
 
 
 async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str,
-                               cfg_table: str, kind_label: str, fallback_cfg_table=None):
+                               cfg_table: str, kind_label: str, fallback_cfg_table=None,
+                               amount_basis_fn=None):
     """Shared pickup-confirmation writer + notify — see confirm_pickup's docstring for the flow."""
     if isinstance(payload, dict):    # direct/harness callers pass plain dicts — coerce, same keys
         payload = ConfirmPickupIn(**payload)
     client = sb()
+    # ── WHICH CASH THIS AMOUNT IS (owner bug 2026-10-02, mig 1039) ───────────────────────────────
+    # `amount` is a SNAPSHOT of what the screen offered, and until now the row recorded no statement
+    # of which cash that was — so the day a tenant switches the bill-pay netting on or off, every
+    # historical pickup silently changes meaning and no stored row can be read back honestly. Exactly
+    # the class mig 1036 just closed for a stored envelope count. Resolved ONCE here, server-side,
+    # from the config actually in force rather than from anything the client claims.
+    _basis = amount_basis_fn(client, org_id) if amount_basis_fn else None
     top_date = _date(payload.date or payload.close_date)
     items = payload.items or []
     if not items:
@@ -6460,6 +6526,8 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
                "store_name": it.get("store_name"), "employee_name": (it.get("employee_name") or ""),
                "amount": amt, "picked_up": True, "picked_up_by": dm, "picked_up_at": _now(),
                "note": (it.get("note") or "").strip() or None}
+        if _basis:
+            row["amount_basis"] = _basis
         # OWNER 2026-09-04 ("one more column is needed actual cash picked from envelope"):
         # `actual_amount` per item = the ACTUAL cash the DM physically took, stored in mig-949
         # actual_picked_amount beside the declared snapshot (`amount`). The key is written ONLY
@@ -6483,14 +6551,23 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
         try:
             client.schema("commcalc").table(table).upsert(
                 row, on_conflict="org_id,close_date,store_code,employee_name").execute()
-        except Exception:
-            # pre-990 schema (no envelope_opened column): retry without it so the pickup — and the
-            # mig-949 count that matters most — still records. The mig-201 product_mrc precedent.
-            # The flag is a statement ABOUT the count, never a substitute for it, so dropping it
-            # loses no money figure. Re-raised if the write fails for any other reason.
-            if "envelope_opened" not in row:
+        except Exception as _e:
+            # A schema older than one of the OPTIONAL statement columns: retry without the ones the
+            # error names, so the pickup — and the mig-949 count that matters most — still records.
+            # The mig-201 product_mrc precedent. Each of these is a statement ABOUT the amount, never
+            # a substitute for it, so dropping one loses no money figure. Re-raised if the write
+            # fails for any other reason.
+            #   envelope_opened  pre-990 schema
+            #   amount_basis     pre-1039 schema (the basis then reads as NULL, which
+            #                    `pickup_amount_basis` words as "not recorded" — never as a guess)
+            _drop = [k for k in ("envelope_opened", "amount_basis") if k in row and k in str(_e)]
+            if not _drop:
                 raise
-            row.pop("envelope_opened", None)
+            for _k in _drop:
+                row.pop(_k, None)
+                if _k == "amount_basis":
+                    print("WARN cash_pickup.amount_basis not stored (run migration 1039): "
+                          f"{str(_e)[:160]}")
             client.schema("commcalc").table(table).upsert(
                 row, on_conflict="org_id,close_date,store_code,employee_name").execute()
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
@@ -6515,7 +6592,8 @@ async def confirm_pickup(payload: ConfirmPickupIn, org_id: str = ORG_ID):
     item 2), a batch can span multiple days — each item's OWN `close_date` (if sent) wins, so a
     multi-day selection is never mis-stamped with one shared date."""
     return await _confirm_pickup_impl(payload, org_id, "cash_pickup",
-                                      "cash_pickup_config", "Cash pickup")
+                                      "cash_pickup_config", "Cash pickup",
+                                      amount_basis_fn=pickup_amount_basis)
 
 
 @router.post("/billpay-pickup")
@@ -6656,7 +6734,10 @@ def _billpay_position_core(client, org_id, as_of, store_list, emp_list, ks):
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
 
     dq = (client.schema("commcalc").table("daily_closing")
-          .select("store_code,employee_name,close_date,epay_on_cash")
+          # The declared bill-pay figure's era rule needs the row's tender/legacy columns, not
+          # `epay_on_cash` alone — hand-spelling this list is what made the pre-mig-103 rows read
+          # $0.00 here (owner bug 2026-10-02).
+          .select("store_code,employee_name,close_date,t_cash,epay_cash,epay_on_cash")
           .eq("org_id", org_id).lte("close_date", as_of))
     if store_list:
         dq = dq.in_("store_code", store_list)
@@ -6746,14 +6827,20 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
 
     out, emp_options = [], set()
     for r in rows:
-        cash = _f(r.get("epay_on_cash"))
+        # The declared bill-pay CASH from the one home, so a pre-mig-103 envelope stops reading $0.00
+        # (owner bug 2026-10-02 — 78 live rows carry a real legacy `epay_cash` leg this page missed).
+        cash = envelope_report_mod.declared_billpay_cash(r)
         # OWNER 2026-09-02 #2: "in the billpayment pick, add another column for bill payment on
         # credit card" — the rep's declared ePay-on-credit split, shown beside the cash envelope.
         # A credit-only closing (bill payments taken on card, none in cash) now shows as a
         # DISPLAY row too (there is no physical cash to pick up — the UI renders no checkbox and
         # `ready` counts only cash envelopes), so the day's declared bill-pay total is complete
         # for the POS cross-check below.
-        credit = _f(r.get("epay_on_credit"))
+        # Same era rule on the credit leg: `epay_on_credit` is the mig-103+ column, the legacy
+        # `epay_cc` is the pre-mig-103 one. There is no basis math on credit, so it has no shared
+        # home to read — the era test is the row's own `t_cash`, exactly as in `declared_billpay_cash`.
+        credit = (_f(r.get("epay_on_credit")) if envelope_report_mod.is_modern_row(r)
+                  else _f(r.get("epay_cc")))
         code = r.get("store_code") or ""
         p = pick_by.get((code, (r.get("employee_name") or ""), str(r.get("close_date"))))
         if cash <= 0 and credit <= 0 and not p:
@@ -6908,6 +6995,86 @@ def _pos_tenders_for_days(client, org_id, days):
         except Exception:
             pass
     return out
+
+
+def pickup_amount_basis(client, org_id) -> str:
+    """WHICH cash a Cash Pickup `amount` written RIGHT NOW is — one of `billpay_netting.PICKUP_BASES`
+    (mig 1039, owner bug 2026-10-02).
+
+    'off'       netting is not on, so the amount is the whole declared drawer
+    'declared'  the drawer less the rep's own declared bill-pay cash
+    'pos'       the drawer less the POS-calculated bill-pay cash
+    Read from the config in force, not from the client: the screen computed the amount from this same
+    config moments earlier, and a basis a caller could assert is a basis a caller could get wrong.
+    The per-store-day 'none' case (netting on, no POS figure, nothing netted) is NOT asserted here —
+    that envelope's amount equals the drawer, and the row says 'pos' meaning "the POS source was in
+    force", which is what a reader needs to interpret it.
+    """
+    if not billpay_netting_enabled(client, org_id):
+        return "off"
+    return billpay_net_source(client, org_id)
+
+
+_PICKUP_BASIS_WORDS = {
+    "off": "total cash (bill payments included)",
+    "none": "total cash — no POS bill-pay figure for that store-day, so nothing was netted",
+    "declared": "sales cash (the rep's declared bill-pay cash netted out)",
+    "pos": "sales cash (the POS-calculated bill-pay cash netted out)",
+}
+
+
+def pickup_basis_label(basis, in_force=None):
+    """PURE: how a stored pickup basis reads on a screen — and how a MISSING one reads.
+
+    A row written before mig 1039 recorded nothing, so it is worded as un-recorded, never backfilled
+    into a claim somebody made (the house rule: absence is never a guess; see mig 1036's
+    `counted_basis`).
+
+    `in_force` is the basis a pickup written NOW would use (`pickup_amount_basis`). When it differs
+    from the row's own, the row is STALE: its stored `amount` — and therefore the variance measured
+    against it — answers a question the screen is no longer asking. That is REPORTED, never
+    recomputed: re-scoring a stored amount against today's basis would rewrite what the DM was
+    actually asked to collect, which is the money-rewriting this file exists to refuse. The same
+    rule mig 1036 applies to a stored envelope count.
+    """
+    b = str(basis or "").strip().lower()
+    recorded = b in billpay_netting.PICKUP_BASES
+    if not recorded:
+        b = "off"
+    out = {"basis": b, "recorded": recorded,
+           "label": (_PICKUP_BASIS_WORDS[b] if recorded else
+                     "total cash (not recorded — collected before the basis was stored)")}
+    f = str(in_force or "").strip().lower()
+    if f in billpay_netting.PICKUP_BASES and f != b:
+        out["in_force"] = f
+        out["stale"] = True
+        out["stale_note"] = (
+            f"This was collected on {_PICKUP_BASIS_WORDS[b].split(' (')[0]}"
+            + ("" if recorded else ", as far as can be told — the basis was not recorded")
+            + f"; the pickup screen now works on {_PICKUP_BASIS_WORDS[f].split(' (')[0]}. "
+              "Any variance beside it was measured against what the DM was asked for at the time.")
+    else:
+        out["in_force"] = f or b
+        out["stale"] = False
+    return out
+
+
+def billpay_net_source(client, org_id) -> str:
+    """WHICH figure this tenant nets the bill-pay cash by — `billpay_netting.NET_SOURCES`, house
+    default 'pos' (mig 1038, owner bug 2026-10-02).
+
+    RULE TWO: a per-org config row, never a code branch. ADAPTIVE: a database without mig 1038, or a
+    config read that fails, gives 'pos' — exactly the behaviour mig 989 shipped — because an
+    unreadable config must never change which cash a DM is told to collect.
+    """
+    try:
+        rows = (client.schema("commcalc").table("cash_pickup_config")
+                .select("pickup_billpay_net_source").eq("org_id", org_id).limit(1)
+                .execute().data) or []
+        return billpay_netting.normalize_net_source(rows[0].get("pickup_billpay_net_source")
+                                                    if rows else None)
+    except Exception:
+        return billpay_netting.NET_SOURCE_DEFAULT
 
 
 def billpay_netting_enabled(client, org_id) -> bool:

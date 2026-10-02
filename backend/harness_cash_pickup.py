@@ -697,9 +697,9 @@ check("11t. the checkbox is wired to the count requirement on screen too, so the
       and "disabled={" in _confirm_btn and "busy" in _confirm_btn
       and "!selectedKeys.length" in _confirm_btn
       and "openedNoCount.length > 0" in _confirm_btn)
-check("11u. and the equip/acc column renders its BASIS, so a POS-calculated split never looks like "
-      "one derived from a rep's own declaration (owner 2026-09-08)",
-      "Cash sales equip/acc" in _pg and "cash_equip_acc_basis" in _pg
+check("11u. and the sales-cash column renders its BASIS, so a POS-calculated split never looks like "
+      "one derived from a rep's own declaration (owner 2026-09-08, renamed 2026-10-02)",
+      "Cash from sales" in _pg and "cash_sales_basis" in _pg
       and "'POS'" in _pg and "'DECLARED'" in _pg)
 
 
@@ -749,7 +749,7 @@ check("12e. the uncounted one is REPORTED, so the total is readable rather than 
 check("12f. an envelope not picked up at all is in neither bucket",
       r12["collected_actual_envelopes"] + r12["collected_actual_missing"] == r12["collected"] == 2)
 check("12g. the equipment/accessory split is totalled too",
-      r12["total_cash_equip_acc"] == 1000.0, str(r12["total_cash_equip_acc"]))
+      r12["total_cash_sales"] == 1000.0, str(r12["total_cash_sales"]))
 # NOBODY counted anything -> the total must be an honest zero-with-no-coverage, not a big shortfall.
 st["cash_pickup"] = [
     {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-07-25", "employee_name": "Jane Rep",
@@ -782,6 +782,169 @@ check("12l. the footer never absorbs an uncounted envelope",
       "if (e.actual_picked_amount == null) { missingCount++; continue }" in _src_pg)
 check("12m. 'Collected' is relabelled 'Collected (declared)' so it cannot be read as the counted one",
       "Collected (declared)" in _src_pg and "Actually picked" in _src_pg)
+
+# ══ 13. TOTAL CASH AND CASH FROM SALES — OWNER BUG REPORT 2026-10-02 ═════════════════════════════
+# OWNER, verbatim: "the column in daily closing is updated but the cash pick up should show total
+# store cash and sales cash, right now it shows for 2612 0903 cash pick up 258 short but 258 is epay
+# cash which appears on the next report for epay pick up, this cash pick up report should not show
+# anything short since 15 is declared as store cash and 258 as epay and the total is 273 — cash pick
+# up should only show the cash from sales and a column for total cash".
+#
+# Reproduced against live data first: B-2612 / 2026-09-03 / Kashif — daily_closing t_cash 273.00,
+# epay_on_cash 258.00; cash_pickup amount 273.00, actual_picked_amount 15.00 → variance −258.00,
+# exactly the bill-pay cash the bill-pay screen collects. The fixture below is that store-day.
+print("\n== 13. the two cash figures the owner asked for, on the real endpoint ==")
+st = fresh_store(); wire(st)
+st["stores"] = [{"org_id": HOUSE, "store_code": "B-2612", "address": "2612 Broadway",
+                 "market": "NY", "is_active": True}]
+st["daily_closing"] = [
+    dc_row(id="k1", store_code="B-2612", store_name="2612 Broadway", close_date="2026-09-03",
+           employee_name="Kashif", t_cash=273.0, store_cash=273.0, epay_cash=0.0,
+           epay_on_cash=258.0),
+]
+st["cash_pickup"] = [
+    {"org_id": HOUSE, "store_code": "B-2612", "close_date": "2026-09-03",
+     "employee_name": "Kashif", "amount": 273.0, "actual_picked_amount": 15.0, "picked_up": True},
+]
+r13 = cr.closing_pickups(date="2026-09-03", org_id=HOUSE)
+e13 = r13["envelopes"][0]
+check("13a. BOTH figures are on the envelope — the owner asked for the sales cash AND a column for "
+      "the total",
+      e13.get("cash_sales") == 15.0 and e13.get("cash_gross") == 273.0,
+      f"sales={e13.get('cash_sales')} total={e13.get('cash_gross')}")
+check("13b. and the sales cash says WHICH figure it was derived from, so a number taken from a "
+      "rep's declaration never looks like a POS-calculated one",
+      e13.get("cash_sales_basis") == "declared", str(e13.get("cash_sales_basis")))
+check("13c. the drawer is read through the ONE home, so it is the whole drawer either era",
+      e13["cash_gross"] == cr.envelope_report_mod.declared_total_cash(st["daily_closing"][0]))
+check("13d. the totals carry the sales-cash figure under its own name",
+      r13["total_cash_sales"] == 15.0, str(r13.get("total_cash_sales")))
+check("13e. with the netting switch OFF the amount collected is still the drawer — turning it on is "
+      "money-touching and stays the owner's call (mig 989/1038)",
+      e13["cash"] == 273.0 and e13["billpay_basis"] == "off")
+
+# The SAME store-day with the tenant's switch on and the declared source chosen (mig 1038).
+st["cash_pickup_config"] = [{"org_id": HOUSE, "pickup_nets_pos_billpay_cash": True,
+                             "pickup_billpay_net_source": "declared"}]
+r13b = cr.closing_pickups(date="2026-09-03", org_id=HOUSE)
+e13b = r13b["envelopes"][0]
+check("13f. REGRESSION: with the switch on and the declared source, the envelope asks for the "
+      "$15.00 of sales cash — not $273.00",
+      e13b["cash"] == 15.0, str(e13b["cash"]))
+# THE STORED ROW IS NOT REWRITTEN. This pickup's $273.00 was recorded when the drawer was what the
+# DM was asked for, so its variance against the $15.00 counted is still −$258.00 — that IS what
+# happened, and re-scoring it against today's basis would rewrite what a DM was asked to collect.
+# What the screen owes the reader is the STATEMENT that the basis has changed, which is what mig 1039
+# exists for. Every pickup recorded from here on carries the netted amount and reads level (13f).
+check("13g. the stored pickup's own variance is NOT silently re-scored — $273.00 is what the DM was "
+      "asked for that day and −$258.00 is what happened",
+      e13b["pickup_variance"] == -258.0 and e13b["pickup_variance_status"] == "short",
+      f"{e13b['pickup_variance']} / {e13b['pickup_variance_status']}")
+check("13g2. instead the row SAYS its basis is no longer the one in force, so nobody reads that "
+      "−$258.00 as a shortage of sales cash",
+      e13b["amount_basis"]["stale"] is True and e13b["amount_basis"]["in_force"] == "declared"
+      and "measured against what the DM was asked for" in e13b["amount_basis"]["stale_note"],
+      str(e13b["amount_basis"]))
+check("13g3. and a row whose basis MATCHES the one in force is not flagged stale",
+      cr.pickup_basis_label("declared", "declared")["stale"] is False
+      and cr.pickup_basis_label("off", "off")["stale"] is False)
+check("13g4. control: were 'stale' hard-coded false, 13g2 would read the −$258.00 with no "
+      "explanation at all",
+      cr.pickup_basis_label(None, "declared")["stale"] is True
+      and cr.pickup_basis_label(None, "off")["stale"] is False)
+check("13h. and the whole drawer is STILL shown beside it — nothing was hidden to make it balance",
+      e13b["cash_gross"] == 273.0 and e13b["billpay_netted"] == 258.0)
+check("13i. the basis is named on the row, so the screen can say which cash this is",
+      e13b["billpay_basis"] == "declared" and e13b["billpay_net_source"] == "declared")
+check("13j. the default source leaves this store-day un-netted (no POS figure) and SAYS so, rather "
+      "than netting a fabricated zero",
+      (lambda: (st["cash_pickup_config"].__setitem__(0, {"org_id": HOUSE,
+                "pickup_nets_pos_billpay_cash": True, "pickup_billpay_net_source": "pos"}),
+                cr.closing_pickups(date="2026-09-03", org_id=HOUSE)["envelopes"][0])[1])()
+      ["billpay_basis"] == "none")
+
+# ── WHICH CASH A STORED PICKUP IS (mig 1039) ──────────────────────────────────────────────────────
+st["cash_pickup_config"] = [{"org_id": HOUSE, "pickup_nets_pos_billpay_cash": True,
+                             "pickup_billpay_net_source": "declared"}]
+check("13k. the basis a pickup written RIGHT NOW would record comes from the config in force, "
+      "server-side — not from anything the client asserts",
+      cr.pickup_amount_basis(cr.sb(), HOUSE) == "declared")
+st["cash_pickup_config"] = []
+check("13l. and with no config at all it is 'off' — the drawer, which is what the amount then is",
+      cr.pickup_amount_basis(cr.sb(), HOUSE) == "off")
+check("13m. a stored row that recorded no basis is read as UN-RECORDED, never backfilled into a "
+      "claim somebody made (the mig-1036 rule, same house rule)",
+      cr.pickup_basis_label(None)["recorded"] is False
+      and "not recorded" in cr.pickup_basis_label(None)["label"]
+      and cr.pickup_basis_label(None)["basis"] == "off")
+check("13n. every basis the vocabulary has is worded, and a word it does not have degrades rather "
+      "than raising",
+      all(cr.pickup_basis_label(b)["recorded"] and cr.pickup_basis_label(b)["label"]
+          for b in cr.billpay_netting.PICKUP_BASES)
+      and cr.pickup_basis_label("drawer")["recorded"] is False)
+check("13o. the pickup list READS the stored basis back, so a span of history can be interpreted "
+      "after a source change",
+      r13["envelopes"][0]["amount_basis"] is not None
+      and r13["envelopes"][0]["amount_basis"]["recorded"] is False)
+check("13p. an envelope nobody has picked up carries no basis at all — there is no amount yet to "
+      "have a basis",
+      cr.closing_pickups(date="2026-09-03", org_id=HOUSE, employee="nobody")["envelopes"] == [])
+
+# ── THE PRE-MIG-103 ERA (the sibling the same report exposed) ──────────────────────────────────────
+# A closing row from before mig 103 spells the drawer as store_cash + epay_cash, two REAL separate
+# amounts, and has no epay_on_cash at all. Live 2026-10-02: 89 such rows, 78 of them with epay_cash
+# > 0 (one $744.00). Every site that read `epay_on_cash` raw reported $0.00 of bill-pay cash for
+# them, and every site that read `t_cash` alone reported a $0.00 drawer.
+st2 = fresh_store(); wire(st2)
+st2["stores"] = [{"org_id": HOUSE, "store_code": "B-652", "address": "652 Elm",
+                  "market": "NY", "is_active": True}]
+st2["daily_closing"] = [
+    {"org_id": HOUSE, "id": "L1", "close_date": "2026-07-01", "store_code": "B-652",
+     "store_name": "652 Elm", "employee_name": "Sunethri", "t_cash": None,
+     "store_cash": 10.0, "epay_cash": 744.0, "envelope_picture": None},
+]
+r14 = cr.closing_pickups(date="2026-07-01", org_id=HOUSE)
+check("13q. a pre-mig-103 envelope's TOTAL cash is the whole $754.00 drawer, not the $10.00 the "
+      "`t_cash` column does not hold",
+      r14["envelopes"] and r14["envelopes"][0]["cash_gross"] == 754.0,
+      str(r14["envelopes"][0]["cash_gross"] if r14["envelopes"] else None))
+check("13r. and its SALES cash is $10.00 — the legacy `epay_cash` leg is recognised as bill-pay "
+      "cash, where it used to read $0.00 and make the whole drawer look like sales",
+      r14["envelopes"][0]["cash_sales"] == 10.0 and r14["envelopes"][0]["cash_billpay_used"] == 744.0,
+      f"sales={r14['envelopes'][0]['cash_sales']} billpay={r14['envelopes'][0]['cash_billpay_used']}")
+check("13s. the bill-pay envelope for that same row is $744.00, not the $0.00 it reported before",
+      cr.envelope_report_mod.declared_billpay_cash(st2["daily_closing"][0]) == 744.0)
+
+# ── CONTROLS ──────────────────────────────────────────────────────────────────────────────────────
+check("13t. control: the mig-103+ era is UNCHANGED by the era rule — the drawer is still `t_cash`",
+      cr.envelope_report_mod.declared_total_cash(
+          {"t_cash": 273.0, "store_cash": 273.0, "epay_cash": 0.0}) == 273.0)
+check("13u. control: were the era test dropped, 13q would read $10.00 (the bare `store_cash`) and "
+      "13r would read $754.00 of sales cash",
+      cr.envelope_report_mod.declared_total_cash({"t_cash": None, "store_cash": 10.0,
+                                                  "epay_cash": 744.0}) != 10.0)
+
+# ── THE SCREEN SAYS BOTH, AND SAYS WHICH IS BEING COLLECTED ───────────────────────────────────────
+_pg13 = open("../frontend/src/app/(platform)/closing/pickup/page.tsx").read()
+check("13v. both columns are on the page under the owner's own words",
+      "'Cash from sales'" in _pg13 and "'Total cash'" in _pg13)
+check("13w. and the page marks WHICH of the two is the amount being collected, so a DM never has to "
+      "guess which number to count against",
+      "COLLECTING" in _pg13 and "const collecting = " in _pg13)
+check("13x. the page does not re-derive the netting rule — it compares the server's own amount",
+      "e.cash_sales) < 0.005" in _pg13 and "pickup_nets" not in _pg13)
+check("13y. the basis badge rides the sales-cash column (POS vs declared vs no bill-pay)",
+      "cash_sales_basis" in _pg13 and "'POS'" in _pg13 and "'DECLARED'" in _pg13)
+check("13z. and the export carries both figures, which is collected, and the recorded basis",
+      "'Cash from sales'" in _pg13 and "'Collecting'" in _pg13
+      and "'Recorded basis (collected)'" in _pg13)
+check("13aa. the old single-name key is gone from the page — one fact, one name",
+      "cash_equip_acc" not in _pg13)
+check("13ab. and a pickup recorded on a basis the screen no longer uses SAYS so beside its "
+      "variance, rather than the variance being re-scored or left unexplained",
+      "amount_basis?.stale" in _pg13 and "collected on " in _pg13
+      and "stale_note" in _pg13)
+
 
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
