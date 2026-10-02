@@ -19,6 +19,15 @@
 // `useUnsavedGuard.ts`). `backend/harness_row_save_lock.py` fails the build if an employee-record
 // editor writes around this module.
 //
+// A 2xx IS NOT PROOF (owner report 2026-10-02, index §19.37). A save is counted as saved only when
+// the server's own reply shows every field it was sent, holding the value it was sent: each slice
+// declares `echo` (request key → the key of the reply that carries the STORED value), `runRowSave`
+// checks it with `notPersisted`, and a field the server names as not written (`NOT_SAVED_KEYS`, e.g.
+// `update_employee`'s `pay_fields_ignored`) or did not echo back fails the slice by name. Before this,
+// any 2xx was "Saved …" — so a 200 whose gate had dropped `pay_rate` read as a saved rate.
+// `backend/harness_row_save_lock.py` §8 fails the build if a slice stops declaring its echo, if the
+// engine stops checking it, or if the backend gains a not-written key this list does not read.
+//
 // Pure module: no imports, erasable TypeScript only (the node proof `frontend/prove_row_save.mjs`
 // loads it as is).
 
@@ -31,6 +40,8 @@ export interface RowWrite {
   path: string
   method: RowMethod
   body: Record<string, unknown>
+  /** request key → reply key carrying the stored value (copied from the slice; see `notPersisted`). */
+  echo: Readonly<Record<string, string>>
 }
 
 /** A slice of a row = the fields ONE endpoint persists, and how to build that endpoint's request. */
@@ -42,6 +53,10 @@ export interface RowSlice<R = any, C = any> {
   fields: readonly string[]
   /** The request that saves this slice. Return null when the slice does not apply to this row. */
   build: (row: R, ctx: C) => { path: string; method: RowMethod; body: Record<string, unknown> } | null
+  /** PROOF OF PERSISTENCE: for every key `build` can put in the request body, the key of the SERVER'S
+   *  REPLY that carries the value actually stored. A request key with no entry here can never be
+   *  confirmed, so it fails the save (index §19.37). */
+  echo: Readonly<Record<string, string>>
   /** Server-owned values to fold back after a successful save (e.g. a consent timestamp). */
   reseat?: (response: any, row: R) => Partial<R> | null | undefined
 }
@@ -77,7 +92,7 @@ export function planRowSave<R, C>(row: R, snap: R | null | undefined, slices: re
   const out: RowWrite[] = []
   for (const s of dirtySlices(row, snap, slices)) {
     const b = s.build(row, ctx)
-    if (b) out.push({ slice: s.key, label: s.label, path: b.path, method: b.method, body: b.body })
+    if (b) out.push({ slice: s.key, label: s.label, path: b.path, method: b.method, body: b.body, echo: s.echo })
   }
   return out
 }
@@ -105,21 +120,79 @@ export function rebaseRows<R>(prev: readonly R[], snapOf: (r: R) => R | null | u
   })
 }
 
+export interface NotKept { field: string; why: string }
+
 export interface RowSaveResult {
   saved: { slice: string; label: string; response: any }[]
-  failed: { slice: string; label: string; error: string }[]
+  failed: { slice: string; label: string; error: string; notKept?: NotKept[] }[]
+}
+
+/** Reply keys through which a server says "I accepted this call but did NOT write these fields" (a
+ *  200, deliberately: the rest of the body was written). Each must be read here, or the UI reports a
+ *  dropped field as saved. The lock (§8) derives the backend's keys from `storeops/router.py` and fails
+ *  if one is missing from this list. */
+export const NOT_SAVED_KEYS = ['pay_fields_ignored'] as const
+
+const _shown = (v: unknown) => (v === null || v === undefined || v === '' ? 'nothing' : String(v))
+const _norm = (v: unknown) => (v === null || v === undefined ? '' : typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v).trim())
+
+/** Does the stored value equal the sent one? null / undefined / '' are equal (the `fieldChanged` rule);
+ *  numbers compare as numbers (17 sent, 17.0 stored). */
+export function sameStoredValue(sent: unknown, stored: unknown): boolean {
+  const a = _norm(sent), b = _norm(stored)
+  if (a === b) return true
+  if (a === '' || b === '') return false
+  const x = Number(a), y = Number(b)
+  return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 1e-9
+}
+
+/** THE CHECK: which fields of this request did the server NOT persist as sent? Empty = proved saved.
+ *  A field is not persisted when the reply (1) names it in a NOT_SAVED_KEYS list, (2) does not carry
+ *  its echo key at all, (3) carries a different stored value, or (4) the slice gave no echo key for it. */
+export function notPersisted(w: RowWrite, response: unknown): NotKept[] {
+  const out: NotKept[] = []
+  const reply = response && typeof response === 'object' ? (response as Record<string, unknown>) : null
+  const dropped = new Set<string>()
+  for (const k of NOT_SAVED_KEYS) {
+    const v = reply ? reply[k] : null
+    if (Array.isArray(v)) for (const f of v) dropped.add(String(f))
+  }
+  const echo = w.echo || {}
+  for (const field of Object.keys(w.body || {})) {
+    const key = Object.prototype.hasOwnProperty.call(echo, field) ? echo[field] : null
+    if (dropped.has(field) || (key && dropped.has(key))) {
+      out.push({ field, why: 'the server refused to write it (pay is restricted for your role)' })
+    } else if (!key) {
+      out.push({ field, why: 'nothing in the reply can confirm it was saved' })
+    } else if (!reply || !Object.prototype.hasOwnProperty.call(reply, key)) {
+      out.push({ field, why: 'the server did not confirm it' })
+    } else if (!sameStoredValue(w.body[field], reply[key])) {
+      out.push({ field, why: `the server stored ${_shown(reply[key])}, not ${_shown(w.body[field])}` })
+    }
+  }
+  return out
 }
 
 /** Run every planned write. Each slice is its own endpoint, so one failing never stops the others
- *  (a tenant missing an optional migration must not lose a pay save to a lunch-config 500). */
+ *  (a tenant missing an optional migration must not lose a pay save to a lunch-config 500). A slice is
+ *  SAVED only when the reply proves every field persisted (`notPersisted` is empty) — a 2xx alone is
+ *  not proof (§19.37). */
 export async function runRowSave(writes: readonly RowWrite[], send: (w: RowWrite) => Promise<any>): Promise<RowSaveResult> {
   const res: RowSaveResult = { saved: [], failed: [] }
   for (const w of writes) {
+    let response: unknown
     try {
-      const response = await send(w)
-      res.saved.push({ slice: w.slice, label: w.label, response })
+      response = await send(w)
     } catch (e: any) {
       res.failed.push({ slice: w.slice, label: w.label, error: String(e?.message || e) })
+      continue
+    }
+    const notKept = notPersisted(w, response)
+    if (notKept.length) {
+      res.failed.push({ slice: w.slice, label: w.label, notKept,
+                        error: notKept.map(n => `${n.field}: ${n.why}`).join('; ') })
+    } else {
+      res.saved.push({ slice: w.slice, label: w.label, response })
     }
   }
   return res
