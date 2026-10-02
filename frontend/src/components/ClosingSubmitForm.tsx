@@ -89,7 +89,11 @@ function draftHasContent(d: Draft | null): boolean {
 }
 
 // The API payloads this form reads (only the fields it uses).
-type StoreOpt = { sfid?: string; store_code?: string; store_address?: string; store_name?: string; market?: string }
+// `closing_source` (owner 2026-10-02, mig 1035): who produces this store's daily closing. The picker
+// already fetched it, so the form knows BEFORE a rep fills anything in — the backend refuses a
+// submission for a feed-derived store, and letting someone count an envelope and type seven tender
+// figures only to be told that is a worse outcome than saying so up front.
+type StoreOpt = { sfid?: string; store_code?: string; store_address?: string; store_name?: string; market?: string; closing_source?: string }
 type TenderDef = { tender_key: string; label?: string; recon_class?: string }
 type CountDef = { field_key: string; label?: string }
 type Employee = { id?: string | number; name?: string; email?: string; home_store?: string }
@@ -464,6 +468,10 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     [emps])
 
   const storeIdx = stores.findIndex(s => (f.sfid && s.sfid === f.sfid) || (!f.sfid && f.store_code && s.store_code === f.store_code))
+  // The picked store takes its closing from the sales feed — nobody submits here. A store with no
+  // `closing_source` at all (an older backend, or the migration not run) reads as rep entry, so this
+  // is a no-op for every tenant that has not switched a store over.
+  const feedDerived = storeIdx >= 0 && stores[storeIdx]?.closing_source === 'b2b_derived'
   const total = tdefs
     ? tdefs.reduce((a, d) => a + (parseFloat(tv[d.tender_key] || '') || 0), 0)
     : MONEY_KEYS.reduce((a, k) => a + (parseFloat(f[k] as string) || 0), 0)
@@ -704,8 +712,20 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           </div>
         )}
 
+        {feedDerived && (
+          <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>🧾 Nothing to submit for this store</div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>
+              This store’s daily closing is taken from the sales feed automatically, so there is no form
+              to fill in. Cash pickup, envelopes and the closing reports all carry on as usual once the
+              day is written. If that is wrong, a tenant admin can switch the store back to rep entry in
+              Store Setup → Daily closing.
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16 }}>
-          <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy || photoUploading} onClick={submit}>
+          <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy || photoUploading || feedDerived} onClick={submit}>
             {busy ? '⏳ Submitting…' : photoUploading ? '📤 Uploading photo…' : retry ? '🔁 Re-submit count' : '✅ Submit closing'}
           </button>
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}

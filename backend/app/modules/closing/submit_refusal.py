@@ -41,6 +41,17 @@ PURE: no I/O, no framework import. The router turns a `Refusal` into the HTTP er
 # preceded it, and `refused = true` is what every counter filters on.
 REFUSED_COLUMNS = ("refused", "refusal_code", "refusal_detail")
 
+from . import closing_source as _closing_source
+
+#: Codes whose SENTENCE is owned by ANOTHER registry; only the HTTP status is declared here. The
+#: router MUST pass that registry's own text as `message=` — retyping it here would be the second
+#: copy CLAUDE.md forbids ("one fact, one home, dereferenced — never copied"). The entry below holds
+#: that registry's store-less rendering as the fallback, itself dereferenced, so there is still
+#: exactly one place the words exist. Locked by harness_closing_submit_refusal §A/§H.
+DELEGATED_MESSAGE = {
+    "closing_source_not_rep": "closing.closing_source.refusal_message",
+}
+
 #: code -> (http_status, the sentence the submitter reads)
 #: The message is the submitter-facing copy; `detail` carries anything store-specific. No database,
 #: table or hosting name may appear in either (index §19.38).
@@ -74,6 +85,10 @@ REFUSALS = {
     "expense_line_invalid": (
         400, "An expense line is incomplete. Give every line a category, an amount and a "
              "description, then resubmit."),
+    # The store is not on rep entry, so there is nothing for a person to submit for it
+    # (owner 2026-10-02, mig 1035 — `closing/closing_source`). DELEGATED: the words are that
+    # module's, dereferenced, so the two registries can never drift apart.
+    "closing_source_not_rep": (409, _closing_source.refusal_message(None)),
 }
 
 
@@ -81,13 +96,17 @@ class Refusal(Exception):
     """A refused submit. `code` must be a key of REFUSALS; `detail` is the specific circumstance
     (which date, which store) and is recorded for management, never a stand-in for the message."""
 
-    def __init__(self, code: str, detail: str = "", message_suffix: str = ""):
+    def __init__(self, code: str, detail: str = "", message_suffix: str = "", message: str = ""):
         if code not in REFUSALS:
             raise KeyError(f"unknown closing refusal code {code!r} — declare it in "
                            f"closing/submit_refusal.REFUSALS")
         self.code = code
         self.status, base = REFUSALS[code]
         self.detail = " ".join(str(detail or "").split())
+        # `message` is for a DELEGATED code only: the owning registry renders the store-specific
+        # sentence and we carry it through. Any other code answers with the words declared above.
+        if message and code in DELEGATED_MESSAGE:
+            base = str(message).strip()
         self.message = (base + (" " + message_suffix.strip() if message_suffix else "")).strip()
         super().__init__(self.message)
 

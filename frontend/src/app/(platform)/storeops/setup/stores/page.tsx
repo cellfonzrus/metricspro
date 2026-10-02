@@ -9,6 +9,19 @@ import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField } fro
 import LeasePanel from './LeasePanel'
 import SalesTaxRateLink from '@/components/SalesTaxRateLink'
 
+type ClosingSrcCfg = {
+  org_default: string
+  house_default: string
+  labels: Record<string, string>
+  sources: string[]
+  store_overrides: { store_code: string; source: string; updated_at?: string; updated_by?: string }[]
+}
+
+const CLOSING_SRC_LABEL: Record<string, string> = {
+  rep_entry: 'Sales reps submit it',
+  b2b_derived: 'Derived from the sales feed',
+}
+
 export default function StoreSetupPage() {
   const [stores, setStores] = useState<any[]>([])
   const [origStores, setOrigStores] = useState<Record<string, any>>({})
@@ -18,24 +31,37 @@ export default function StoreSetupPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [upBusy, setUpBusy] = useState(false)
-  const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '', timezone: '' })
+  // `closing_source: ''` = follow the company default. The owner's "selected at the time of setting up
+  // the store" is this field: the choice is made on the ADD row, not only after the store exists.
+  const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '', timezone: '', closing_source: '' })
   // Lease & Insurance (owner 2026-09-03, mig 946): per-store expandable panel — landlord, rent
   // rails/ACH, escalation, rent-due, insurance, lease/COI docs. Server-gated (management only).
   const [leaseOpen, setLeaseOpen] = useState<Record<string, boolean>>({})
   const [markets, setMarkets] = useState<string[]>([])   // RULE THREE dropdown options (GET /storeops/markets)
+  // DAILY CLOSING SOURCE (owner 2026-10-02, mig 1035): who produces this store's daily closing —
+  // its sales reps type it, or it is derived from the sales feed. Chosen here at store setup and
+  // changeable at any time; the backend holds ONE registry (closing/closing_source.py) that the
+  // submit endpoint, the deadline alert, the stale-store check and the closing picker all read, so
+  // this screen is the only place the answer is SET and nothing re-derives it.
+  const [srcCfg, setSrcCfg] = useState<ClosingSrcCfg | null>(null)
+  const [srcBusy, setSrcBusy] = useState<Record<string, boolean>>({})
 
   async function loadAll() {
     setLoading(true)
     try {
-      const [s, mk] = await Promise.all([
+      const [s, mk, cs] = await Promise.all([
         // 2026-08-06: GET /stores now defaults to active-only (the disabled-T-store picker-leak fix)
         // — this page manages/re-enables stores, so it MUST keep seeing inactive ones.
         api('/api/v1/storeops/stores?include_inactive=true').catch(() => []),
         api('/api/v1/storeops/markets').catch(() => ({ markets: [] })),
+        // Never fails this page: a tenant on a deploy without migration 1035 gets null and the
+        // column falls back to the house default (reps submit), which is what the backend resolves too.
+        api('/api/v1/closing/source-config').catch(() => null),
       ])
       const sList = (s || []).map((x: any) => ({ ...x }))
       setStores(sList)
       setMarkets(mk?.markets || [])
+      setSrcCfg(cs || null)
       setOrigStores(Object.fromEntries(sList.map((x: any) => [x.id, { ...x }])))
       setRowMsg({})
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
@@ -114,11 +140,64 @@ export default function StoreSetupPage() {
     if (!newStore.store_code.trim()) { setMsg('Store code is required.'); return }
     setMsg('')
     try {
-      await api('/api/v1/storeops/stores', { method: 'POST', body: JSON.stringify({ ...newStore, monthly_target: Number(newStore.monthly_target) || 0 }) })
+      const { closing_source, ...storeBody } = newStore
+      await api('/api/v1/storeops/stores', { method: 'POST', body: JSON.stringify({ ...storeBody, monthly_target: Number(newStore.monthly_target) || 0 }) })
+      // The store's own daily-closing setting, written right after the store exists (it is keyed by
+      // store_code, so it cannot be set before). Left blank, the store simply follows the company
+      // default and no override row is created — so adding a store is unchanged for anyone who
+      // ignores this field.
+      if (closing_source) {
+        try {
+          await api('/api/v1/closing/source-config', { method: 'PUT', body: JSON.stringify({ store_code: newStore.store_code.trim(), source: closing_source }) })
+        } catch (err: any) {
+          // Never report the store as fully added when half of it failed.
+          setMsg(`Added ${newStore.store_code}, but its daily-closing setting was NOT saved (${err?.message || err}). Set it on the store's row below.`)
+          setNewStore({ store_code: '', address: '', market: '', monthly_target: '', timezone: '', closing_source: '' })
+          await loadAll()
+          return
+        }
+      }
       setMsg(`Added ${newStore.store_code}`)
-      setNewStore({ store_code: '', address: '', market: '', monthly_target: '' })
+      setNewStore({ store_code: '', address: '', market: '', monthly_target: '', timezone: '', closing_source: '' })
       await loadAll()
     } catch (err: any) { setMsg('Add failed: ' + (err?.message || err)) }
+  }
+
+  // ---- daily closing source (per store, over the org default) ----
+  const srcOf = (code: string) => {
+    const ov = (srcCfg?.store_overrides || []).find(o => (o.store_code || '').toUpperCase() === (code || '').toUpperCase())
+    return ov ? ov.source : (srcCfg?.org_default || 'rep_entry')
+  }
+  const srcIsOverride = (code: string) =>
+    (srcCfg?.store_overrides || []).some(o => (o.store_code || '').toUpperCase() === (code || '').toUpperCase())
+
+  // `value` is '' for "follow the company default" (clears the override), else a source key.
+  async function saveClosingSource(rowId: any, code: string, value: string) {
+    if (!code) return
+    const key = `src-${code}`
+    setSrcBusy(b => ({ ...b, [key]: true }))
+    try {
+      const body = value ? { store_code: code, source: value } : { store_code: code, clear: true }
+      await api('/api/v1/closing/source-config', { method: 'PUT', body: JSON.stringify(body) })
+      const cs = await api('/api/v1/closing/source-config')
+      setSrcCfg(cs || null)
+      flashRow(`store-${rowId}`, '✓ closing source saved')
+    } catch (err: any) {
+      flashRow(`store-${rowId}`, '✗ ' + (err?.message || 'closing source not saved'), 5000)
+    } finally { setSrcBusy(b => ({ ...b, [key]: false })) }
+  }
+
+  async function saveOrgClosingSource(value: string) {
+    const key = 'src-org'
+    setSrcBusy(b => ({ ...b, [key]: true }))
+    setMsg('')
+    try {
+      await api('/api/v1/closing/source-config', { method: 'PUT', body: JSON.stringify({ source: value }) })
+      const cs = await api('/api/v1/closing/source-config')
+      setSrcCfg(cs || null)
+      setMsg(`Company default for new stores: ${value === 'b2b_derived' ? 'derived from the sales feed' : 'sales reps submit it'}.`)
+    } catch (err: any) { setMsg('Could not save the company default: ' + (err?.message || err)) }
+    finally { setSrcBusy(b => ({ ...b, [key]: false })) }
   }
 
   // ---- bulk STORE setup ----
@@ -175,6 +254,33 @@ export default function StoreSetupPage() {
 
       {loading ? <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div> : (
         <>
+          {/* Daily closing source — the COMPANY DEFAULT (owner 2026-10-02). Every store follows this
+              unless its own row below says otherwise. Switching a store to the feed means nobody
+              there submits a closing: it is written from the sales feed each night, and cash pickup,
+              the envelope report and every closing report then run on it exactly as they do today. */}
+          <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>🧾 Daily closing source</div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: 'var(--text2)' }}>Company default:</span>
+              <select style={{ ...sel, width: 240 }} value={srcCfg?.org_default || 'rep_entry'}
+                disabled={!!srcBusy['src-org']}
+                onChange={e => saveOrgClosingSource(e.target.value)}
+                title="What a store does when its own setting below is left on the company default">
+                {(srcCfg?.sources || ['rep_entry', 'b2b_derived']).map(v =>
+                  <option key={v} value={v}>{srcCfg?.labels?.[v] || CLOSING_SRC_LABEL[v] || v}</option>)}
+              </select>
+              {srcBusy['src-org'] && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Saving…</span>}
+            </div>
+            <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '8px 0 0' }}>
+              A store set to <strong>sales reps submit it</strong> works exactly as it does today — a rep
+              fills in the Daily Closing form. A store set to <strong>derived from the sales feed</strong>
+              {' '}takes no submission at all: its closing is written from the sales feed, and everything
+              that follows a closing (cash pickup, envelopes, DM verify, the closing reports) runs on it
+              unchanged. If the feed has not landed for a day, nothing is written and the day is reported
+              as missing — it is never filled in with zeros.
+            </p>
+          </div>
+
           {/* Add store */}
           <div className="card" style={{ padding: 14, marginBottom: 14 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>➕ Add store</div>
@@ -186,6 +292,16 @@ export default function StoreSetupPage() {
                 {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
               </select>
               <input style={{ ...sel, width: 120 }} type="number" placeholder="Monthly target" value={newStore.monthly_target} onChange={e => setNewStore({ ...newStore, monthly_target: e.target.value })} />
+              <select style={{ ...sel, width: 200 }} value={newStore.closing_source}
+                onChange={e => setNewStore({ ...newStore, closing_source: e.target.value })}
+                title="Who produces this store's daily closing — blank follows the company default">
+                <option value="">
+                  Daily closing: company default ({srcCfg?.labels?.[srcCfg?.org_default || 'rep_entry']
+                    || CLOSING_SRC_LABEL[srcCfg?.org_default || 'rep_entry']})
+                </option>
+                {(srcCfg?.sources || ['rep_entry', 'b2b_derived']).map(v =>
+                  <option key={v} value={v}>Daily closing: {srcCfg?.labels?.[v] || CLOSING_SRC_LABEL[v] || v}</option>)}
+              </select>
               <button className="btn btn-primary" onClick={addStore}>➕ Add</button>
             </div>
           </div>
@@ -209,7 +325,7 @@ export default function StoreSetupPage() {
           <div className="table-wrapper">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Store code', 'Address', 'Market', 'Time zone', 'Monthly target', 'Active', ''].map(h =>
+                {['Store code', 'Address', 'Market', 'Time zone', 'Monthly target', 'Daily closing', 'Active', ''].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -233,6 +349,22 @@ export default function StoreSetupPage() {
                         <input style={{ ...sel, width: 120 }} type="number" title="Net profit target ($) — the P&L goal" placeholder="Net profit $" value={s.net_profit_target ?? ''} onChange={ev => setStore(s.id, { net_profit_target: ev.target.value })} />
                       </div>
                     </td>
+                    {/* Daily closing source — blank = follow the company default, so an admin can
+                        change the default once without this column pinning every store to the old value. */}
+                    <td style={cell}>
+                      <select style={{ ...sel, width: 200 }}
+                        value={srcIsOverride(s.store_code) ? srcOf(s.store_code) : ''}
+                        disabled={!s.store_code || !!srcBusy[`src-${s.store_code}`]}
+                        onChange={ev => saveClosingSource(s.id, s.store_code, ev.target.value)}
+                        title="Who produces this store's daily closing — auto-saves immediately">
+                        <option value="">
+                          Company default ({srcCfg?.labels?.[srcCfg?.org_default || 'rep_entry']
+                            || CLOSING_SRC_LABEL[srcCfg?.org_default || 'rep_entry']})
+                        </option>
+                        {(srcCfg?.sources || ['rep_entry', 'b2b_derived']).map(v =>
+                          <option key={v} value={v}>{srcCfg?.labels?.[v] || CLOSING_SRC_LABEL[v] || v}</option>)}
+                      </select>
+                    </td>
                     <td style={cell}>
                       <input type="checkbox" checked={!!s.is_active} disabled={!!rowBusy[key]}
                         onChange={ev => toggleStoreActive(s, ev.target.checked)} title="Auto-saves immediately" />
@@ -251,7 +383,7 @@ export default function StoreSetupPage() {
                   </tr>
                   {leaseOpen[key] && (
                     <tr>
-                      <td colSpan={7} style={{ padding: '0 8px 10px', borderBottom: '1px solid var(--border)' }}>
+                      <td colSpan={8} style={{ padding: '0 8px 10px', borderBottom: '1px solid var(--border)' }}>
                         <LeasePanel storeCode={s.store_code} />
                       </td>
                     </tr>

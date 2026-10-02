@@ -680,6 +680,38 @@ check("H8c the screen words no code the server cannot raise",
       detail=str(_extra))
 
 
+# ── H9. A DELEGATED SENTENCE STAYS DELEGATED ─────────────────────────────────────────────────────
+#  PR #349 gave a store a "daily closing source" and refused a rep's submit on a feed-derived store.
+#  Its sentence is owned by closing/closing_source.refusal_message, which names the store and where
+#  to change it. Routing that refusal through _refuse must NOT fork the words into a second copy:
+#  the registry declares only the STATUS and dereferences the owning module for the fallback, and
+#  the router passes that module's own rendering as `message=`. CLAUDE.md: one fact, one home.
+from app.modules.closing import closing_source as _cs
+
+print("\n== H9. the delegated sentence has ONE home ==")
+_DELEGATED = "closing_source_not_rep"
+check("H9a the delegated code is declared, and declared AS delegated",
+      _DELEGATED in sr.REFUSALS and _DELEGATED in sr.DELEGATED_MESSAGE)
+_SRC_REFUSAL = open(os.path.join(os.path.dirname(ROUTER_PATH), "submit_refusal.py")).read()
+_CREATE_SRC = "\n".join(_lines[_create.lineno - 1:(_create.end_lineno or _create.lineno)])
+check("H9b submit_refusal retypes none of the owning module's words — it dereferences them",
+      "refusal_message" in _SRC_REFUSAL and "sales feed" not in _SRC_REFUSAL,
+      detail="a literal copy of the sentence appeared in the registry")
+check("H9c the registry's fallback IS the owning module's rendering",
+      sr.message_for(_DELEGATED) == _cs.refusal_message(None))
+check("H9d create_row passes the owning module's store-specific rendering, not its own words",
+      "_closing_src.refusal_message(" in _CREATE_SRC and f'"{_DELEGATED}"' in _CREATE_SRC)
+check("H9e the store-specific rendering reaches the submitter",
+      sr.Refusal(_DELEGATED, message=_cs.refusal_message("B-117")).message
+      == _cs.refusal_message("B-117")
+      and sr.Refusal(_DELEGATED).message == _cs.refusal_message(None))
+check("H9f a NON-delegated code cannot have its words overridden",
+      sr.Refusal("identity_missing", message="anything at all").message
+      == sr.message_for("identity_missing"))
+check("H9g the delegated refusal answers 409 and is still audited as a refusal, never a try",
+      sr.status_for(_DELEGATED) == 409
+      and not sr.is_real_try(sr.audit_row("o", "2026-10-02", {}, _DELEGATED)))
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED:", FAIL)

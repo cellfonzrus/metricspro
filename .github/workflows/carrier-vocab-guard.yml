@@ -32,7 +32,7 @@ name: carrier-vocab-guard
 # (core/setup_notice.SetupNoticeMiddleware) recognises and neutralizes for a non-super-admin; the boundary is
 # registered innermost and the report builder dereferences it; the two customer sentences are equal. DB-free; stdlib.
 #
-# THE INFRA-NAMES AXIS (index §19.38, owner 2026-10-02: "hide database names from the users") runs inside the guard
+# THE INFRA-NAMES AXIS (index §19.39, owner 2026-10-02: "hide database names from the users") runs inside the guard
 # itself: no schema-qualified table, table / view identifier, environment-variable name or hosting vendor in rendered
 # frontend copy or a backend message-keyed string (registries DERIVED from database/migrations, the lineage registry,
 # config.Settings and the code's env reads); runtime database errors reach a non-super-admin as setup_notice.SYSTEM_NOTICE.
@@ -173,7 +173,7 @@ on:
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "frontend/src/**"
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
-      - "database/migrations/**"   # index §19.38 — the infra-names lock derives its table / schema registry from them
+      - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/harness_account_expenses_one_home.py"
       - "backend/app/modules/account/analysis.py"
       - "backend/app/modules/account/statement_engine.py"
@@ -430,7 +430,7 @@ on:
     paths:
       - "frontend/src/**"
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
-      - "database/migrations/**"   # index §19.38 — the infra-names lock derives its table / schema registry from them
+      - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/app/modules/commcalc/report_kinds.py"
   workflow_dispatch:
 
@@ -456,7 +456,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
-      - name: Run carrier vocabulary guard (+ the POS vocabulary axis, index §26.10, + the setup-internals axis, §19.36, + the infra-names axis, §19.38)
+      - name: Run carrier vocabulary guard (+ the POS vocabulary axis, index §26.10, + the setup-internals axis, §19.36, + the infra-names axis, §19.39)
         working-directory: backend
         run: python3 harness_carrier_vocab_guard.py | tee "$GITHUB_STEP_SUMMARY"
       - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)
@@ -619,6 +619,17 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_royalty_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.39 — WHO PRODUCES A STORE'S DAILY CLOSING (owner 2026-10-02, mig 1035). A tenant can
+      # take a store off rep submissions and have the day derived from the sales feed instead. The fact
+      # has ONE registry (closing/closing_source.py, pure) and the four callers that used to assume a
+      # rep types it must keep dereferencing it: the submit endpoint, the closing picker, the
+      # missing-closing deadline alert and the stale-store attention provider. Both stdlib-only, DB-free.
+      - name: Run the closing-source proof (resolve precedence; the rep path's own tender columns; a missing feed reported, never written as a clean zero; idempotent re-runs)
+        working-directory: backend
+        run: python3 harness_closing_source.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the closing-source lock (one registry, one read, one resolver, one writer, four dereferencing callers, house default unchanged — index §19.39)
+        working-directory: backend
+        run: python3 harness_closing_source_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE ONE-DOMAIN PROOF (index §40) loads the REAL next.config.ts through Next's own config loader, validates the
   # routes with Next's own loadCustomRoutes and evaluates requests with Next's own matchers: a production request on the
@@ -692,6 +703,12 @@ jobs:
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.39 — the closing-source DERIVATION SWEEP over the REAL router functions
+      # (_derive_closing_day / closing_stores) against the in-memory client. It imports the app, so it
+      # runs here rather than in the dependency-free guard job above.
+      - name: Run the closing-source sweep proof (the feed's day written as a real closing; a rep's row never overwritten; idempotent; a missing feed reported; dry run)
+        working-directory: backend
+        run: python3 harness_closing_source_sweep.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend

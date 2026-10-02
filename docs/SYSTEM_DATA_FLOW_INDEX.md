@@ -3382,6 +3382,31 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   envelope reads `uncounted` and there is no variance to reconcile yet. The mechanism is not the gap —
   the counting is.
 
+- **Daily closing SOURCE — reps submit it, or it is derived from the sales feed (owner directive
+  2026-10-02, mig `1035`):** *"the admin should be able to check a box to input daily closing by sales
+  reps for all stores or pull b2b data from directly into daily closing … derived via the permission
+  selected at the time of setting up the store - it could be changed later at any time by the tenant
+  admin, all other features like cash pick up etc will stay as they are."* ONE registry
+  `closing/closing_source.py` (pure: `resolve`, `expects_rep_submission`/`is_derived`, `derivable`,
+  `derive_row`, `changed_fields`, `plan_day`) over `commcalc.closing_source_config` (org default +
+  per-store override, house default `rep_entry` so an un-opted tenant is byte-identical). ONE read
+  (`router._closing_source_rows`) and ONE resolver (`_closing_source`/`_closing_source_map`) that the
+  four callers which used to ASSUME a rep now dereference: the submit endpoint (409 with the reason and
+  where to change it), `closing_stores` (each picker option carries `closing_source`),
+  `_run_closing_missing_alerts` (a derived store has nobody to nag) and
+  `attention_providers._p_closing_stale_stores` (a derived store's gap is reported as
+  `closing_derivation_stale` — the derivation not having run — not as "selling but not submitting").
+  The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due`) takes
+  the day's money + counts from the SHARED `_b2b_day` / `_b2b_counts_by_store` (no second derivation)
+  and writes a REAL `daily_closing` row marked `source='b2b_derived'` through ONE writer
+  (`_derive_write`), which is why cash pickup, envelopes, deposit accountability, the five-stage chain
+  and DM verify all keep working untouched. A missing feed or an unsplit tender total is REPORTED
+  (`skipped[].reason` = `no_feed` / `no_tender_split`), never written as a $0 close; a rep's existing row
+  is kept (`kept_manual`); re-runs are idempotent. Config on the EXISTING Store Setup page
+  (`/storeops/setup/stores` — a company default plus a per-store column that can follow it). Proofs
+  `harness_closing_source.py` + `harness_closing_source_sweep.py`; lock
+  `harness_closing_source_lock.py`. See §19.39.
+
 - **Closing entry-quality coaching (owner directive 2026-09-02, mig `937`):** "a training walkthru
   for an employee if their data is not entered correctly for a second day in a row". Detection is
   PURE (`closing/entry_quality.py`, proof `harness_closing_entry_quality.py`): signals
@@ -5483,6 +5508,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash — see §47), `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`); pure: `closing/envelope_report.py` (`normalize_envelope_basis`, `expected_cash`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
+| `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
@@ -5531,6 +5557,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`; `B-2778` / `Cellular Services` reported, address unknown |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
+| **Where does THIS store's daily closing come from — a rep typing it, or the sales feed?** (and therefore: is a store with no closing row a person who didn't submit, or a derivation that didn't run?) | `commcalc.closing_source_config` (mig `1035`): `store_code IS NULL` = the org default, a row per store = the override; house default `rep_entry` | ONE registry `closing/closing_source.py` (`resolve`, `expects_rep_submission`, `is_derived`, `derivable`, `derive_row`, `plan_day` — pure); ONE read `closing/router._closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, dereferenced by the submit endpoint, `closing_stores`, `_run_closing_missing_alerts` and `attention_providers._p_closing_stale_stores`; lock `harness_closing_source_lock.py`, proofs `harness_closing_source.py` + `harness_closing_source_sweep.py` (§19.39) |
 | **Did the server actually STORE what an employee-row Save sent?** (vs a 2xx whose gate dropped a field) | the endpoint's reply: `update_employee`'s `UPDATE … RETURNING` row + `pay_fields_ignored`; the lunch / face configs' saved columns | `frontend/src/lib/rowSave.ts::notPersisted` (`NOT_SAVED_KEYS`, `sameStoredValue`) over each slice's `echo` in `lib/employeeRowSlices.ts`, applied by `runRowSave`; lock `harness_row_save_lock.py` §8, proof `prove_row_save.mjs` §V (§19.37) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
@@ -5690,6 +5717,60 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.39 **WHO PRODUCES A STORE'S DAILY CLOSING — reps type it, or it is DERIVED from the sales feed
+(owner directive 2026-10-02, mig `1035`).** Owner: *"the admin should be able to check a box to input daily closing
+by sales reps for all stores or pull b2b data from directly into daily closing in case the tenant does not want to
+have people submit daily closing, so it is derived via the permission selected at the time of setting up the store -
+it could be changed later at any time by the tenant admin, all other features like cash pick up etc will stay as they
+are a following action / reports after the data gets populated."*
+**THE CLASS, NOT THE INSTANCE.** The platform had exactly ONE answer to "who produces a `commcalc.daily_closing`
+row" — a rep, by hand — and four callers each assumed it independently: the submit endpoint accepted any rep's
+submission for any store; `_run_closing_missing_alerts` nagged every store with no row by the deadline; the
+`closing_stale_stores` attention provider called a store with sales and no row "selling but not submitting"; the
+closing form offered every store in the picker.
+**THE DESIGN FIX (one fact, one home, dereferenced).** `closing/closing_source.py` is the ONE registry: two values
+(`rep_entry` \| `b2b_derived`), `HOUSE_DEFAULT = rep_entry`, `normalize` (an unknown string can never decide how a
+store closes its books), `resolve` (per-store override → org default → house), `source_map`,
+`expects_rep_submission` / `is_derived`, `derivable`, `derive_row`, `changed_fields`, `plan_day` — **pure, no I/O**,
+which is what makes the proof DB-free. ONE read (`closing/router._closing_source_rows`), ONE resolver
+(`_closing_source` / `_closing_source_map`); the four callers above dereference it and the lock
+(`backend/harness_closing_source_lock.py`) FAILS THE BUILD if any stops, if a second config read appears, or if the
+literal source values are spelled outside the registry.
+**"ALL OTHER FEATURES STAY AS THEY ARE" IS THE CONSTRUCTION, not a promise.** A derived closing is a REAL
+`commcalc.daily_closing` row marked `source='b2b_derived'`, so cash pickup, the envelope report, deposit
+accountability, the five-stage chain (§48), DM verify and the P&L bookings read it exactly as they read a rep's —
+none of them learns a new vocabulary or gains a second code path. **No duplicate derivation:** the money and counts
+come from `_b2b_day` / `_b2b_counts_by_store`, the SAME unified B2B aggregate the close gate and money recon already
+use (§16), read ONCE per day; the tender columns are written by the REP path's own formulas, so no consumer can tell
+the rows apart except by `source`.
+**WHAT IS REPORTED, NEVER WRITTEN AS A ZERO.** `derivable` refuses two cases with a reason carried out through
+`plan_day` → the endpoint's `skipped[]`: `no_feed` (the feed has no rows for that store-day) and `no_tender_split`
+(sales landed but every line is in the feed's unclassified bucket, so cash-vs-card is unknown — the flag
+`_b2b_day.tenders_available` already raises for the close gate). A $0 close would manufacture a clean day out of a
+missing feed. A rep-submitted row for a store LATER switched to derived is kept and reported as `kept_manual` — the
+sweep never overwrites a human's declaration, because that declaration is the count of an envelope that exists. The
+feed's unclassified 'other' dollars are recorded on the row (`daily_closing.derived_other`) rather than folded into
+a tender they are not. `employee_name` stays NULL: inventing a name would put a phantom person on the envelope
+report and the entry-quality coaching.
+**IDEMPOTENT.** `changed_fields` compares money at 2 dp, so a re-run over an unchanged feed writes nothing; a changed
+feed UPDATEs the same row and never inserts a second (the mig-502 duplicate-closing class, from the derivation side).
+**CONFIG, NEVER CODE (RULE TWO).** `commcalc.closing_source_config` (mig `1035`) — `store_code IS NULL` is the org
+default, a row per store is the override; the org-default-plus-override shape is the one `envelope_payout_config`
+(mig 507) already uses. Nothing was added to `storeops.stores`, so changing the org default needs no fan-out write.
+A `CHECK` pins the vocabulary at the database. **The house default is rep entry in the module AND in the migration's
+seed, so every tenant that never opens the screen is byte-identical** (proved: `plan_day` with no config derives
+nothing and leaves every store to its reps).
+**THE SCREEN.** Store Setup (`/storeops/setup/stores`) — a company default card plus a per-store **Daily closing**
+column whose blank option means "follow the company default", so changing the default once does not pin every store
+to the old value; auto-saves through `PUT /closing/source-config`. No new screen. The closing form reads
+`closing_source` off the picker it already fetches and tells a rep there is nothing to submit *before* they count an
+envelope, rather than letting the backend 409 them afterwards.
+**PROOFS.** `backend/harness_closing_source.py` (the pure registry, stdlib-only, DB-free) ·
+`backend/harness_closing_source_sweep.py` (the REAL `_derive_closing_day` / `closing_stores` over the in-memory
+client: the feed's day written as a real closing, the rep-entry store untouched, idempotent re-runs, a human's row
+kept, a missing feed reported, `dry_run` writing nothing) · `backend/harness_closing_source_lock.py` (the lock). All
+three run in `.github/workflows/carrier-vocab-guard.yml`.
 
 §19.38 **A DATABASE OR HOSTING NAME IN CUSTOMER-FACING COPY — the §19.36 home, extended to the class it named (owner 2026-10-02; fixed).**
 Owner: *"hide database names from the users"*. §19.36 removed MIGRATION names and named what it left unlocked: env-var
@@ -11719,20 +11800,32 @@ WHOSE name a closing carries; it now returns a declared refusal code instead of 
   envelope photo", each try row says `turned away`, and a store-day that was only ever refused reads **"never
   counted"** instead of "0 attempts" and always qualifies for `only_review=true`.
 
+**#349's REFUSAL JOINED THE REGISTRY, it did not sit beside it (merge 2026-10-02).** `§19.39` gave a store a
+daily-closing SOURCE and refused a rep's submit on a feed-derived store with its own
+`raise HTTPException(409, closing_source.refusal_message(...))` — a ninth refusal path storing nothing, the exact
+class this section fixes. It now goes through `_refuse` as `closing_source_not_rep` and is audited like the other
+eight. Its SENTENCE stays owned by `closing_source.refusal_message` (it names the store and where to change it):
+`submit_refusal.DELEGATED_MESSAGE` declares the code delegated, the registry **dereferences** that module for the
+status and the store-less fallback, and `_refuse(..., message=)` carries the store-specific rendering through —
+so the words exist in ONE place. A non-delegated code cannot have its words overridden. Checked by **§H9** (7
+checks), which fails the build if the registry ever retypes those words or the router stops passing them.
+
 **MIGRATION 1037 — SURFACED FOR OWNER APPROVAL, NOT APPLIED.** Additive columns + the index widening + a
 dedup-key recompute that refuses rather than merging anything ambiguous. No amount column is read or written.
 
-**Lock: `backend/harness_closing_submit_refusal.py` — 108 checks, DB-free.** §A–C pure (registry complete, no
+**Lock: `backend/harness_closing_submit_refusal.py` — 115 checks, DB-free.** §A–C pure (registry complete, no
 storage name in submitter copy, the whitespace divergence gone), §D the REGRESSION (each refusal path through the
 real `create_row`: no closing stored AND exactly one audited reason — before the fix every one of those found
 zero rows), §E the money point, §F the Management Review view, §G degrade pre-migration, **§H the WIRING LOCKS
 that fail the build**: no submit validation may raise `HTTPException` directly, every code raised must be
 declared and every declared code must be raised, the router may spell no dedup key, the try counter must
 dereference `_real_attempt_count`, the migration's SQL must be `dedup_key.SQL_EXPR` verbatim, and the screen must
-have words for every code. Verified to BITE: re-inlining one `raise HTTPException` turns ten checks red.
+have words for every code, and **§H9** that a delegated sentence keeps one home. Verified to BITE:
+re-inlining one `raise HTTPException` turns ten checks red; §H9b caught a literal copy of #349's sentence in a
+code comment during the merge itself.
 `harness_closing_closer_pick.py` B5 was updated to pin the new shape (still a 403 carrying the reason).
 
-**OPEN — reported, not fixed.** Which of the eight refusals Abid actually hit cannot be known: the refusals that
+**OPEN — reported, not fixed.** Which of the nine refusals Abid actually hit cannot be known: the refusals that
 predate this fix left nothing behind, which is the defect. `require_photo_if_cash` being on org-wide makes the
 photo gate the likeliest. From the next refusal on, the answer is on the Management Review screen.
 

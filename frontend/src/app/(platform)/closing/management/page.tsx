@@ -225,6 +225,7 @@ const REFUSAL_WORDS: Record<string, string> = {
   expense_description_required: 'an expense had no description',
   expense_line_invalid: 'an expense line was incomplete',
   identity_missing: 'no store or no employee name',
+  closing_source_not_rep: 'the store takes its closing from the sales feed',
 }
 
 function lastTry(g: any) { return g.tries?.[g.tries.length - 1] || {} }

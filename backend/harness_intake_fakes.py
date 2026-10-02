@@ -223,7 +223,11 @@ class FakeDB:
                                        "received_date", "days_in_stock", "as_of_date", "source", "raw_row",
                                        "on_hand", "off_hand_as_of", "status", "quantity", "total_cost", "category",
                                        "updated_at", "created_at"],
-            "store_mapping": ["id", "org_id", "store_code", "store_address", "market", "is_active"],
+            # salesforce_id = the SFID the closing form and _store_resolver key on (mig 029) — it was
+            # missing from this declaration, so a harness driving a real function that selects it hit a
+            # false 42703 (added 2026-10-02 with the closing-source sweep proof).
+            "store_mapping": ["id", "org_id", "store_code", "store_address", "market", "is_active",
+                              "salesforce_id"],
             "stores": ["id", "org_id", "store_code", "address", "market", "is_active", "entity_id", "timezone", "phone"],   # phone = mig 003
             "store_aliases": ["id", "org_id", "alias", "store_code", "note", "source", "confidence"],
             "rep_aliases": ["id", "org_id", "alias", "canonical"],
