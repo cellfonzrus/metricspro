@@ -4223,6 +4223,9 @@ as a market-grant keyset member; ambiguity fails closed):
   they are dropped. The pre-fix HR row had one 💾 per slice; pressing Lunch left typed rates unsent. Lock
   `backend/harness_row_save_lock.py`, proof `frontend/prove_row_save.mjs`; the StoreOps setup grids are the ratchet
   `frontend/row_save_pending.txt`.
+  **A 2xx is not proof (§19.37, 2026-10-02):** each slice declares `echo` (the reply keys carrying the stored
+  values) and `rowSave.runRowSave` counts a slice saved only when `notPersisted` finds nothing — a field the server
+  names in `pay_fields_ignored`, leaves out, or stored differently fails the save by name. Lock §8 of the same harness.
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
@@ -5152,7 +5155,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
-| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
+| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
@@ -5338,7 +5341,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /hr/compensation` (pay-gated: `pay_rate`/`base_salary`/`total_comp`/`annualized` stripped; commission stays — commcalc's own gate domain) | `hr/router.py:334` | §14 |
 | `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
 | `GET /storeops/employees` (roster; pay-gated 2026-09-10 — a `select("*")` that shipped every `pay_rate`/`pay_amount`; `pay_basis` kept) | `storeops/router.py:201` | §14 DM sweep |
-| `PATCH /storeops/employees/{id}`, `PUT /storeops/employees/{id}/lunch-config`, `PUT /storeops/employees/{id}/face-config` — browser callers from a row editor build the request ONLY in `frontend/src/lib/employeeRowSlices.ts` and send it through `lib/rowSave.ts::planRowSave` (one Save per row, every edited slice; no endpoint changed) | `storeops/router.py::update_employee` / `set_employee_lunch_config` / `set_employee_face_config` | §19.35 |
+| `PATCH /storeops/employees/{id}`, `PUT /storeops/employees/{id}/lunch-config`, `PUT /storeops/employees/{id}/face-config` — browser callers from a row editor build the request ONLY in `frontend/src/lib/employeeRowSlices.ts` and send it through `lib/rowSave.ts::planRowSave` (one Save per row, every edited slice; no endpoint changed); a slice is saved only when its reply proves every field stored (`rowSave.notPersisted` over the slice's `echo` + `NOT_SAVED_KEYS` = `pay_fields_ignored`) | `storeops/router.py::update_employee` / `set_employee_lunch_config` / `set_employee_face_config` | §19.35, §19.37 |
 | `GET /storeops/employees?all_company=true` (**ROSTER REACH** 2026-09-13 — resolves `core.scope.roster_keyset`, not the reporting span; never returns an empty roster) | `storeops/router.py:201` → `_roster_keyset_for:7744` | §29 |
 | `GET /storeops/employees/visible` (dashboard picker; store/market resolution converged onto the SAME `roster_keyset` 2026-09-13 — reach ladder unchanged) | `storeops/router.py:8087` | §29 |
 | `GET /core/grant-universe` → `scheduling.roster_reach`/`roster_stores`/`roster_why` (why THIS login's employee picker is bounded) | `core/router.py` (`_grant_universe`) | §29 |
@@ -5451,7 +5454,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 |--------|--------------------|-----------------|
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
-| **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) |
+| **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
+| **Did the server actually STORE what an employee-row Save sent?** (vs a 2xx whose gate dropped a field) | the endpoint's reply: `update_employee`'s `UPDATE … RETURNING` row + `pay_fields_ignored`; the lunch / face configs' saved columns | `frontend/src/lib/rowSave.ts::notPersisted` (`NOT_SAVED_KEYS`, `sameStoredValue`) over each slice's `echo` in `lib/employeeRowSlices.ts`, applied by `runRowSave`; lock `harness_row_save_lock.py` §8, proof `prove_row_save.mjs` §V (§19.37) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
 | **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
@@ -5678,6 +5682,48 @@ carrier report header is spelled; the flowchart's `carrier_id` / `connector_id` 
 name a page renders from a field NOT named `target_table` / `source_table` / `table`; a backend string reaching a
 client through a helper's argument or a non-message key (the §19.36 emission finder's reach); DB data rows that
 carry an identifier (e.g. the System Schematic's lineage rows — data, never rewritten); the word "env var" itself.
+
+§19.37 **A 2xx IS NOT PROOF — an employee-row save counts only what the server's reply shows it STORED (owner
+report 2026-10-02, Vzone, second time: "Pay is updated"; the data said otherwise).** **Evidence (live, read-only,
+2026-10-02):** Vzone `f4f1c16e…` E240 / E277 / E278 / E279 still `pay_rate = 0`, `pay_basis = 'hourly'`; no
+`pay_rate` / `pay_basis` / `pay_amount` row in `storeops.payroll_change_log` for ANY org since 2026-09-29. `core.access_log`
+answers why: after #325 merged (2026-09-29 18:47 UTC) the Vzone org received **35 requests in total, all 19:04:01–19:05:39
+UTC that day (onboarding / POS pages), and none since** — no roster read (`GET /storeops/employees`), no
+`PATCH /storeops/employees/{id}`, from anyone. The Vzone admin login (`ss@1313global.us`, an admin in four tenants)
+has since worked in Cellfonz R Us, NY LOGISTICS and Luxelink (roster reads in those three; roles edits), and has sent
+**no employee PATCH to any tenant** since 2026-09-29 18:34 UTC; no PATCH to employee 238/240/277/278/279 exists in any
+org, at any status. **Root cause of the report: not code — no save of the Vzone rates has reached the server since
+#325 shipped**; the rates must be entered in Vzone and saved (the owner's steps are in the PR). **What the trace DID
+find (fixed here, the class asked about):** `rowSave.runRowSave` counted ANY 2xx as "saved", and
+`storeops/router.py::update_employee` deliberately answers **200** when its pay-visibility gate drops pay fields
+from a mixed body (it writes the rest and names them in `pay_fields_ignored`). Nothing read that key. So on Roles &
+Access, a caller below the org's pay line who typed Pay $/hr in the ✏️ Edit panel and pressed Save got
+**"Saved details for …"**, and the typed rate became the row's last-saved snapshot — on screen until the next load.
+(HR → Employees & Pay was not exposed: its pay slice is all-gated, so the same caller gets a 403, already shown.)
+**The class:** a save reports success from the HTTP status, not from what was stored. **The design fix (one home,
+dereferenced):** every slice in `frontend/src/lib/employeeRowSlices.ts` declares `echo` (request key → the key of
+the endpoint's REPLY that carries the stored value: the PATCH's `UPDATE … RETURNING` row, the lunch / face configs'
+saved columns); `frontend/src/lib/rowSave.ts::notPersisted` fails a field the reply names in `NOT_SAVED_KEYS`
+(`pay_fields_ignored`), does not carry, holds a different value for, or has no echo key for; `runRowSave` counts a
+slice saved ONLY when that is empty, otherwise reports it failed BY FIELD ("details NOT saved (pay_rate: the server
+refused to write it …)") and the row stays visibly unsaved. The read-back IS the reply: the stored row the UPDATE
+returned, folded back by `commitSaved`. Every caller is on the engine (HR → Employees & Pay, Roles & Access). **No
+endpoint changed** — the 200-with-names contract was sound, the client ignored it. **Siblings checked:**
+`bulk_payscale` (POST `/employees/bulk-payscale`, manager-gated, returns `updated` + per-row `errors`, which HR's
+upload message shows — not this class); the three StoreOps grids (`storeops/admin`, `storeops/employees`,
+`storeops/setup/employees`, ratchet `row_save_pending.txt`) send no pay field and no gated field, so nothing is
+dropped with a 200 there (their success is still status-based — moving them onto the engine retires that);
+`PATCH /hr/employees/{id}` delegates to `update_employee` (same reply) and has no browser caller. **Reported, not
+fixed here (another class, owner decision):** `POST /storeops/employees`, `POST /storeops/employees/bulk` and
+`POST /hr/employees` write `pay_rate` with NO pay gate at all (create paths), unlike the PATCH and bulk-payscale —
+rule 4 says pay writes are gated server-side. **Lock:** `backend/harness_row_save_lock.py` §8 (CI job *One row, one
+save*) — every `EMP_*_SLICE` declares an `echo` whose reply keys are exactly its `fields`; `RowSlice.echo` is
+required; `runRowSave` calls `notPersisted` before its single `.saved.push`; every `…_ignored` reply key in
+`storeops/router.py` / `hr/router.py` is in `NOT_SAVED_KEYS`; every slice user runs `runRowSave`; planted controls
+7g–7j. Run against `main` it fails 9 checks (8b ×5, 8c, 8d, 8f, 8h). **Proof:** `frontend/prove_row_save.mjs` §V
+(62 checks total): the owner's exact case — admin, hourly, E278 `pay_rate` 0 → 18 — plans one PATCH with 18, the
+reply shows 18 stored, saved and clean; the gate-drop reply was "Saved details" under the transcribed pre-fix engine
+and is now "details NOT saved (pay_rate …)"; a 200 that kept 0, and a bare `{ok:true}`, are not saved.
 
 §19.36 **A MIGRATION NAME IN CUSTOMER-FACING COPY — "setup isn't finished" has ONE home (owner 2026-09-29; fixed).**
 Owner, on Admin → Display Labels (*"Needs migration 068_ui_label_override.sql. Edits show on the next sidebar load."*):
@@ -14917,3 +14963,90 @@ Each rule carries an armed control.
 
 **No migration. No money moved. No money math touched** — every figure the chain shows is a date, a name
 or a count. Index: §48.
+
+## 49. THE CAMERAS WENT DARK AND NOTHING SAID SO — registering vision with the machinery that already existed (owner 2026-10-02)
+
+Owner: *"the cameras are not working live any more — set up a mechanism to check every day if they
+working and if they are not working trouble shoot autonomously and initiate a fix … Anything which is
+automated in the system should have this mechanism already built in and the index and the registry
+updated with what mechanisms are in place to keep the system working healthy."*
+
+### 49.1 The gap was never detection
+
+`GET /vision/status` has answered the whole question since mig `900`: whether Google is linked, when
+its token last worked, how many events arrived, how many cameras are assigned, whether a store PC is
+alive. It had simply **never run on its own**. It answers when somebody opens Vision → Settings, so
+the first thing to notice a dark estate was a person wondering why a chart was flat — and on the
+first estate that took weeks.
+
+Nor was the machinery missing. `register_provider()` has put module faults in the admin attention
+popup for months; `control_box_api._provider_specs` turns any registered provider into a
+super-admin lamp *"with no code change and no migration here"*; mig `971`'s self-scheduling daily
+system check already walks every org and evaluates those lamps, hourly tick, per-org cadence, and
+carries a lamp about its own last run. **Vision had never registered.** That is the whole finding,
+and it is why `docs/SELF_HEALING_REGISTRY.md` now exists: a module absent from that register is
+almost certainly a module nothing is watching.
+
+### 49.2 What was added, and how little of it is new
+
+| Piece | What it is |
+|---|---|
+| `app/modules/vision/health.py` | The judgement, pure: `(snapshot, now) → findings`. No DB, no network, no clock. |
+| `app/modules/vision/attention.py` | Six lines of wiring. One `register_provider` call buys the popup item **and** the control-box lamp **and** daily evaluation. |
+| `/vision/health` | The same assessment on demand, so an operator who just changed something need not wait a day. |
+| `/vision/health/run-due` | The repair half, which the attention framework deliberately will not do: a provider is cheap and read-only (it runs on every login popup), so it may report a rejected token and must not go and retry it. |
+| mig `1034` | Self-registers that repair job on every boot. No human-pasted SQL — mig 950's lesson. |
+
+### 49.3 The loop, and the rule that keeps it honest
+
+```
+assess  →  auto-fix what is genuinely fixable  →  RE-ASSESS  →  escalate only what survived
+```
+
+The re-assess is load-bearing: escalating off the first look reports problems the fix just resolved;
+skipping the alert because a fix ran hides the ones it did not.
+
+**Auto-fix is two actions and the shortness is the design.** `retry_token` — a refresh that failed
+on a 5xx or a timeout, where asking once more *is* the fix. `resync_devices` — the real repair when
+a camera was renamed or re-homed in the Google Home app. Everything else escalates naming the thing
+a **person** must do: re-authorising Google, publishing an OAuth consent screen, powering on a store
+PC, drawing a counting line.
+
+`events_stopped` deliberately has **no** auto-fix, and that absence is the point. The cause is almost
+always the Pub/Sub push subscription, which lives in the customer's own Google Cloud. Re-listing
+devices would "do something" and change nothing — and a monitor that runs a fix unable to address
+the cause reports a repair it never made. The rule is now written into the registry: *never claim a
+repair you cannot make.*
+
+This is operational self-healing, the data-health monitor's class. It is **not** the auto-fix
+pipeline: nothing here deploys code, and `fix_pipeline.py`'s Phase-1 rule is untouched.
+
+### 49.4 The diagnosis this exists for
+
+While an OAuth consent screen sits in **Testing**, Google expires every refresh token after **seven
+days**. An estate goes dark weekly, on the dot, with an error that reads like a random Google
+outage — so it gets reconnected, and dies again the next week, forever. `health.assess` separates
+that from a genuine revocation by the gap between `token_issued_at` and `last_error_at` and says
+both halves out loud: reconnect now, **and** publish the consent screen or this recurs every seven
+days. `GET /vision/status` now returns both timestamps for that reason alone.
+
+The other finding worth naming is `entrances_without_line`: a camera flagged as an entrance with no
+counting line builds no gate, counts nobody and reports **zero** — which is indistinguishable from a
+day when nobody came in. Counting entrances that *do* have a line (`_entrances_with_line`) is what
+turns that silence into "4 entrances counting nobody".
+
+### 49.5 Lock
+
+`backend/harness_vision_health.py` — **59 checks**, stdlib, DB-free. §B exists because one branch
+read two ways is the real risk: calling a dead grant retryable turns a weekly outage into a loop of
+refresh attempts against a customer's Google account, and calling a transient 503 "revoked" wakes
+somebody at 3am to re-authorise something that would have healed itself. Both directions are pinned.
+The build fails when: a grant that died inside 8 days stops being diagnosed as the Testing expiry; a
+200-day-old `invalid_grant` starts being; a dead grant becomes auto-retryable; a dead grant stops
+suppressing the event-silence finding (one cause, one alert); the silence threshold widens past a
+working day; an offline store PC is given a phantom remote fix; auto-fixes stop de-duplicating; or
+the alert key stops distinguishing *which* problems are live, so a new fault arriving at noon is
+never reported. Five mutations armed, all caught.
+
+**No money math touched.** Every figure is a timestamp, a count or a lamp. Registry:
+`docs/SELF_HEALING_REGISTRY.md`. Index: §49.

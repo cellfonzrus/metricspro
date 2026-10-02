@@ -12,6 +12,9 @@
 // except one tightening, the platform's existing rule "you may not write a figure you may not see"
 // (index §14 DM sweep): `pay_rate` is sent only when the roster read actually carried it.
 //
+// Every slice declares `echo` — which key of the endpoint's REPLY carries the stored value of each
+// request key — so `rowSave.runRowSave` counts a slice as saved only when the reply proves it (§19.37).
+//
 // Pure module: only erasable `import type`, no runtime imports (the node proof loads it as is).
 import type { RowSlice } from './rowSave'
 
@@ -28,6 +31,9 @@ export const EMP_PAY_SLICE: RowSlice<any, EmpPayCtx> = {
   key: 'pay',
   label: 'pay',
   fields: ['pay_rate', 'pay_basis', 'pay_amount', 'termination_date'],
+  // The PATCH replies with the stored row (PostgREST UPDATE … RETURNING), and names any pay field its
+  // pay-visibility gate dropped in `pay_fields_ignored` — both read by rowSave.notPersisted (§19.37).
+  echo: { pay_rate: 'pay_rate', pay_basis: 'pay_basis', pay_amount: 'pay_amount', termination_date: 'termination_date' },
   build: (row, ctx) => {
     if (!idOk(row)) return null
     const body: Record<string, unknown> = {}
@@ -57,6 +63,7 @@ export const EMP_LUNCH_SLICE: RowSlice<any, unknown> = {
   key: 'lunch',
   label: 'lunch',
   fields: ['lunch_deduction_enabled', 'lunch_deduction_minutes'],
+  echo: { enabled: 'lunch_deduction_enabled', minutes: 'lunch_deduction_minutes' },
   build: (row) => {
     if (!idOk(row)) return null
     const enabled = row.lunch_deduction_enabled === true ? true : row.lunch_deduction_enabled === false ? false : null
@@ -75,6 +82,7 @@ export const EMP_FACE_SLICE: RowSlice<any, unknown> = {
   key: 'face',
   label: 'face recognition',
   fields: ['face_recognition_enabled', 'face_consent_status'],
+  echo: { enabled: 'face_recognition_enabled', consent: 'face_consent_status' },
   build: (row) => {
     if (!idOk(row)) return null
     const enabled = row.face_recognition_enabled === true ? true : row.face_recognition_enabled === false ? false : null
@@ -97,6 +105,7 @@ export const EMP_DETAILS_SLICE: RowSlice<any, unknown> = {
   key: 'details',
   label: 'details',
   fields: ['name', 'home_store', 'role', 'phone', 'is_active', 'pay_rate'],
+  echo: { name: 'name', home_store: 'home_store', role: 'role', phone: 'phone', is_active: 'is_active', pay_rate: 'pay_rate' },
   build: (row) => {
     if (!idOk(row)) return null
     const body: Record<string, unknown> = {
@@ -114,6 +123,7 @@ export const EMP_EMAIL_SLICE: RowSlice<any, unknown> = {
   key: 'email',
   label: 'email',
   fields: ['email'],
+  echo: { email: 'email' },
   build: (row) => idOk(row)
     ? { path: empPath(row), method: 'PATCH', body: { email: String(row.email || '').trim() || null } }
     : null,

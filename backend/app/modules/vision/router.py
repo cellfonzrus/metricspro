@@ -37,6 +37,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response
 from app.core.config import settings
 from app.core.crypto import encrypt, decrypt
 from app.core.database import get_supabase
+from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.modules.vision import activity as A
 from app.modules.vision import behavior as B
@@ -44,6 +45,7 @@ from app.modules.vision import busy as BUSY
 from app.modules.vision import config as C
 from app.modules.vision import enrollment as EN
 from app.modules.vision import google_sdm as G
+from app.modules.vision import health as HLTH
 from app.modules.vision import heatmap as H
 from app.modules.vision import ingest as I
 from app.modules.vision import onboarding as O
@@ -349,6 +351,17 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
     """The one call the Vision settings page opens with: every gate, and what is on the other side of
     it. Built so an operator can see WHY nothing is being recorded without reading five pages."""
     caller = _require_caller(authorization, x_active_org)
+    return _status_payload(org_id, caller)
+
+
+def _status_payload(org_id: str, caller=None) -> dict:
+    """The same snapshot, without the auth check.
+
+    Split out because the DAILY HEALTH RUN needs it and has no user to authenticate — it is woken by
+    pg_cron with a shared secret. Keeping one builder means the thing the monitor judges is exactly
+    the thing the settings page shows, so an operator can never be looking at a greener picture than
+    the one that decided whether to alert them."""
+    caller = caller or {}
     cfg = _cfg(org_id)
     cams = _rows("vision_camera", org_id)
     agents = _rows("vision_edge_agent", org_id)
@@ -370,6 +383,11 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
             "google_account": (cred or {}).get("google_account"),
             "last_ok_at": (cred or {}).get("last_ok_at"),
             "last_error": (cred or {}).get("last_error"),
+            # Both of these exist for health.assess(): the gap between them is what separates
+            # "the consent screen is still in Testing, so this dies every seven days" from a
+            # one-off revocation. Without the pair, the weekly outage reads as random.
+            "last_error_at": (cred or {}).get("last_error_at"),
+            "token_issued_at": (cred or {}).get("token_issued_at"),
         },
         "homes": {
             "claimed": len(_rows("vision_structure", org_id)),
@@ -383,6 +401,11 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
             "enabled": sum(1 for c in cams if c.get("enabled")),
             "unassigned": sum(1 for c in cams if not (c.get("store_code") or "").strip()),
             "entrances": sum(1 for c in cams if c.get("is_entrance")),
+            # THE SILENT ZERO, made countable. An entrance with no counting line builds no gate and
+            # reports zero people — indistinguishable from a day nobody came in. Counting the ones
+            # that DO have a line is what lets the daily check say "4 entrances counting nobody"
+            # instead of leaving it to somebody to notice a flat chart.
+            "entrances_with_line": _entrances_with_line(org_id, cams),
             "audio_on": sum(1 for c in cams if c.get("audio_enabled")),
         },
         "edge_agents": {
@@ -397,6 +420,151 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
             "pending": sum(1 for c in consents if c.get("status") == C.CONSENT_PENDING),
         },
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# HEALTH — the platform checks its own cameras daily, fixes what it can, and escalates the rest
+#
+# WHY THIS EXISTS. /vision/status has always known everything below. What it never did was run on
+# its own, so the first thing that noticed dark cameras was a person wondering why a report was
+# empty — and on this estate that took weeks. Owner, 2026-10-02: "check every day if they are
+# working, and if they are not, troubleshoot autonomously and initiate a fix".
+#
+# THE LOOP, which is deliberately the data-health monitor's (docs/DATA_HEALTH_MONITOR.md) rather
+# than a second invented one:
+#     assess -> auto-fix what is genuinely fixable -> RE-ASSESS -> escalate only what survived
+#
+# The re-assess is the part that keeps it honest. Escalating from the first assessment would alert
+# on problems the fix just resolved; skipping the alert after a fix would hide problems it did not.
+# What is left after the repair attempt is what a human actually needs to know about.
+#
+# AUTO-FIX IS TWO ACTIONS AND THEY ARE BOTH CHEAP AND IDEMPOTENT — see health.py for why the list is
+# short. Nothing here re-authorises, publishes a consent screen, or restarts a store PC: those need
+# a person, and a monitor that pretended otherwise would report "fixed" over a shop still counting
+# nobody.
+@router.get("/health")
+def vision_health(org_id: str = ORG_ID, authorization: str = Header(default=""),
+                  x_active_org: str = Header(default="")):
+    """What is wrong with this tenant's cameras right now, and what to do about each thing.
+
+    The same assessment the daily run makes, on demand, so an operator who has just changed
+    something does not have to wait until tomorrow to see whether it worked."""
+    _require_caller(authorization, x_active_org)
+    findings = HLTH.assess(_status_payload(org_id))
+    return {"checked_at": _iso(_now()), "severity": HLTH.worst(findings),
+            "healthy": not findings, "findings": findings}
+
+
+def _vision_health_once(org_id: str) -> dict:
+    """Check one tenant, fix what is fixable, re-check, escalate what survived.
+
+    Best-effort at every stage, and that is a design choice rather than laziness: a monitor that can
+    throw is a monitor that stops running and never says it stopped."""
+    out = {"org_id": org_id, "fixed": [], "alerted": False}
+    try:
+        before = HLTH.assess(_status_payload(org_id))
+    except Exception as e:                                       # noqa: BLE001
+        return {**out, "error": str(e)[:200]}
+    out["found"] = [f["code"] for f in before]
+
+    for action in HLTH.auto_actions(before):
+        try:
+            if action == "retry_token":
+                # A refresh that failed on a 5xx or a timeout. Asking once more IS the fix, and the
+                # client caches a good token, so a success here heals every later call this tick.
+                _sdm_client(org_id).access_token()
+                out["fixed"].append("retry_token")
+            elif action == "resync_devices":
+                _sync_cameras_core(org_id, actor="auto:health-monitor")
+                out["fixed"].append("resync_devices")
+        except Exception as e:                                   # noqa: BLE001
+            out.setdefault("fix_errors", []).append(f"{action}: {str(e)[:160]}")
+
+    # RE-ASSESS BEFORE ESCALATING. Alerting off the first assessment would report problems the fix
+    # just resolved; skipping the alert because a fix ran would hide the ones it did not. What
+    # survives the repair attempt is what a person actually needs to hear about.
+    try:
+        after = HLTH.assess(_status_payload(org_id)) if out["fixed"] else before
+    except Exception:                                            # noqa: BLE001
+        after = before
+    out["remaining"] = [f["code"] for f in after]
+    out["severity"] = HLTH.worst(after)
+    out["healed"] = sorted(set(out["found"]) - set(out["remaining"]))
+    out["findings"] = after
+    return out
+
+
+async def _vision_health_escalate(org_id: str, result: dict):
+    """Tell somebody — once a day, and only about what is still broken."""
+    after = result.get("findings") or []
+    if not after:
+        return False
+    try:
+        from app.modules.closing.router import _send_alert   # lazy: avoids an import cycle
+        icon = {"down": "🔴", "degraded": "🟠"}.get(HLTH.worst(after), "🔧")
+        healed = result.get("healed") or []
+        text = ("MetricsPro checked the cameras and found the following.\n\n"
+                + HLTH.summarise(after)
+                + (("\n\nAlready fixed automatically before this alert: " + ", ".join(healed))
+                   if healed else "")
+                + "\n\nThis check runs once a day. You will not be told again today unless "
+                  "something new breaks.")
+        ref = HLTH.alert_ref(org_id, after, _now().date().isoformat())
+        await _send_alert(sb(), org_id, "connector",
+                          f"{icon} Cameras: {after[0]['title']}", text, ref)
+        return True
+    except Exception as e:                                       # noqa: BLE001
+        result["alert_error"] = str(e)[:200]
+        return False
+
+
+@router.post("/health/run-due")
+async def vision_health_run_due(x_notify_secret: str = Header(default="")):
+    """THE DAILY SELF-HEAL, for every tenant with the module on. pg_cron entrypoint (migration 1034).
+
+    Reuses NOTIFY_RUN_SECRET like the other scheduled sweeps, so there is no new env var and no new
+    auth path to get wrong."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    try:
+        orgs = (sb().table("vision_config").select("org_id")
+                .eq("enabled", True).execute().data) or []
+    except Exception as e:                                       # noqa: BLE001
+        raise HTTPException(500, f"could not list tenants: {str(e)[:160]}")
+
+    results = []
+    for row in orgs:
+        oid = row.get("org_id")
+        if not oid:
+            continue
+        r = _vision_health_once(oid)
+        if r.get("findings"):
+            r["alerted"] = await _vision_health_escalate(oid, r)
+        r.pop("findings", None)                 # the summary is in the alert; keep the response small
+        results.append(r)
+    return {"ran_at": _iso(_now()), "tenants": len(results), "results": results}
+
+
+def _entrances_with_line(org_id: str, cams) -> int:
+    """How many entrance cameras have an ACTIVE counting line drawn.
+
+    Counts zones rather than trusting a flag, because the flag an operator sets ("this is an
+    entrance") and the thing that makes counting work (a line across the doorway) are different
+    acts, and the whole estate once had the first without the second."""
+    try:
+        zones = _rows("vision_zone", org_id) or []
+    except Exception:
+        return 0
+    lined = {z.get("camera_id") for z in zones
+             if (z.get("kind") == "line") and z.get("is_active", True)}
+    return sum(1 for c in cams if c.get("is_entrance") and c.get("id") in lined)
+
+
+def _entrance_line_gap(org_id: str) -> int:
+    """Entrances counting nobody. Used by the health check and by the Counting Lines badge."""
+    cams = _rows("vision_camera", org_id) or []
+    entrances = sum(1 for c in cams if c.get("is_entrance"))
+    return max(0, entrances - _entrances_with_line(org_id, cams))
 
 
 def _event_health(org_id: str) -> dict:
@@ -1126,15 +1294,26 @@ def put_structures(body: StructuresIn, org_id: str = ORG_ID,
 @router.post("/cameras/sync")
 def sync_cameras(org_id: str = ORG_ID, authorization: str = Header(default=""),
                  x_active_org: str = Header(default="")):
-    """Pull the device list from Google and reconcile it into core.vision_camera.
+    """Pull the device list from Google and reconcile it into core.vision_camera."""
+    caller = _require_caller(authorization, x_active_org)
+    _require_settings(caller)
+    out = _sync_cameras_core(org_id, actor=caller.get("email") or "system")
+    out["cameras"] = _visible_cameras(org_id, authorization)
+    return out
+
+
+def _sync_cameras_core(org_id: str, actor: str = "system") -> dict:
+    """The reconcile itself, with no caller.
+
+    Extracted so the daily health run can re-sync a tenant whose device list came back empty — the
+    actual fix when a camera was renamed or re-homed in the Google Home app. Read-only at Google.
 
     ADDITIVE ONLY. A device that disappears from Google is marked offline, never deleted — a camera
     unplugged for a week must not take its store's traffic history with it, and the operator's store
     assignment / zone drawings must survive the outage. New devices arrive DISABLED for analytics
     until an operator assigns them to a store, which is what stops a camera someone adds at home from
     quietly joining a store's numbers."""
-    caller = _require_caller(authorization, x_active_org)
-    _require_settings(caller)
+
     cfg = _cfg(org_id)
     _require_module(cfg)
     client = _sdm_client(org_id)
@@ -1199,14 +1378,13 @@ def sync_cameras(org_id: str = ORG_ID, authorization: str = Header(default=""),
         ).eq("org_id", org_id).eq("provider", "google_sdm").execute()
     except Exception:
         pass
-    _audit(org_id, caller.get("email"), "camera_sync", None,
+    _audit(org_id, actor, "camera_sync", None,
            {"found": len(devices), "added": added, "updated": updated,
             "skipped_unclaimed_homes": skipped_homes})
     return {"found": len(devices), "added": added, "updated": updated,
             "offline": len(known) - len(seen & set(known)),
             "skipped": sum(skipped_homes.values()),
-            "skipped_homes": skipped_homes,
-            "cameras": _visible_cameras(org_id, authorization)}
+            "skipped_homes": skipped_homes}
 
 
 def _visible_cameras(org_id, authorization):
@@ -2704,3 +2882,35 @@ def retention_purge(body: PurgeIn, org_id: str = ORG_ID, authorization: str = He
     _require_settings(caller)
     dry = not bool(getattr(body, "confirm", False))
     return R.purge(get_supabase(), org_id, dry_run=dry, actor=caller.get("email"))
+
+
+def ensure_vision_health_cron():
+    """Self-register the DAILY camera self-heal job so nobody has to run SQL by hand — the mig
+    922 / 940 / 950 / 956 / 971 pattern, verbatim.
+
+    A camera watchdog is the LAST automation that may depend on somebody remembering to schedule it:
+    its entire job is to notice what nobody is looking at. NON-FATAL by design — a missing secret,
+    the RPC not present (mig 1034 not applied yet), or pg_cron/pg_net absent just means
+    auto-scheduling is skipped; boot still succeeds, the attention lamp still lights, and
+    POST /vision/health/run-due still works by hand."""
+    url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+    secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+    if not url or not secret:
+        return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not configured"
+    try:
+        res = sb().schema("core").rpc("ensure_vision_health_cron",
+                                      {"p_url": url, "p_secret": secret}).execute()
+        return getattr(res, "data", None) or "ok"
+    except Exception as e:                                       # noqa: BLE001
+        return f"skipped: {str(e)[:160]}"
+
+
+# ── Attention providers (registered on import; no NEEDS CORE, no main.py change) ─────────────────
+# Guarded exactly like crm/attention.py and storevisit/attention_providers.py: a failure to register
+# must never stop the Vision router itself from mounting. Registering here is what gives vision a
+# lamp on the super-admin control box and an item in the admin attention popup, evaluated by the
+# EXISTING self-scheduling daily system check (mig 971) — no new cron, no new table, no new board.
+try:
+    from app.modules.vision import attention as _vision_attention   # noqa: E402,F401
+except Exception:
+    pass

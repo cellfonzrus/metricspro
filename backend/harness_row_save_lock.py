@@ -34,7 +34,12 @@ WHAT THIS LOCK FAILS ON
   4. a second copy of the "is this field edited" comparison outside rowSave.ts;
   5. a PATCH slice that names a field the backend's `EMP_FIELDS` does not accept (it would be dropped by
      `update_employee` and the "Saved" message would lie), or lunch/face bodies the endpoints do not read;
-  6. the node proof not being run by a workflow.
+  6. the node proof not being run by a workflow;
+  8. (§19.37, owner report 2026-10-02 — "a 2xx is not proof") a slice without an `echo` (the reply keys
+     that prove each field was stored), an engine whose `runRowSave` counts a slice as saved without
+     checking `notPersisted` first, a backend "accepted but not written" reply key (`…_ignored`) that
+     rowSave.NOT_SAVED_KEYS does not read, a slice user that reports results without `runRowSave`, or a
+     proof without the persistence section.
 
 Run against the tree before the fix, it fails on (1) naming `hr/page.tsx` and `admin/roles/page.tsx`:
     ROW_SAVE_ROOT=<a checkout of main> python3 backend/harness_row_save_lock.py
@@ -215,6 +220,64 @@ for f in sorted(os.listdir(wf_dir)) if os.path.isdir(wf_dir) else []:
 check("6a frontend/prove_row_save.mjs exists", read("prove_row_save.mjs") is not None)
 check("6b a workflow runs node prove_row_save.mjs", re.search(r"run:.*\bnode\s+prove_row_save\.mjs", wf_text) is not None)
 
+print("8. a save counts only what the server shows it stored (§19.37)")
+engine_src = files.get(ENGINE) or ""
+
+
+def echo_ok(block):
+    """The slice declares `echo: {req: 'reply', …}` and its reply keys are exactly its `fields`."""
+    em = re.search(r"\becho:\s*\{([^}]*)\}", block)
+    fm = re.search(r"fields:\s*\[([^\]]*)\]", block)
+    if not em or not fm:
+        return False, "no `echo: {…}` (or no fields)"
+    replies = set(re.findall(r":\s*'([a-z_]+)'", em.group(1)))
+    fields = set(re.findall(r"'([a-z_]+)'", fm.group(1)))
+    return replies == fields, f"echo reply keys {sorted(replies)} != fields {sorted(fields)}"
+
+
+slice_names = re.findall(r"export const (EMP_[A-Z_]+_SLICE)\b", home_src or "")
+check("8a the home defines slices", len(slice_names) >= 5, slice_names)
+for name in slice_names:
+    ok, why = echo_ok(slice_block(name))
+    check(f"8b {name} declares an echo covering exactly its fields", ok, why)
+check("8c RowSlice.echo is REQUIRED (not optional)",
+      re.search(r"interface RowSlice\b.*?\n\s*echo:\s*Readonly", engine_src, re.S) is not None
+      and not re.search(r"\becho\?\s*:", engine_src), "make `echo` a required member of RowSlice")
+
+
+def engine_verifies(src):
+    m = re.search(r"export async function runRowSave\(.*?\n}\n", src, re.S)
+    if not m:
+        return False
+    body = m.group(0)
+    i_check, i_push = body.find("notPersisted("), body.find(".saved.push(")
+    return i_check != -1 and i_push != -1 and i_check < i_push and src.count(".saved.push(") == 1
+
+
+check("8d runRowSave checks notPersisted BEFORE counting a slice saved (and is the only place that does)",
+      engine_verifies(engine_src))
+nsk = re.search(r"export const NOT_SAVED_KEYS\s*=\s*\[([^\]]*)\]", engine_src)
+not_saved_keys = set(re.findall(r"'([a-z_]+)'", nsk.group(1))) if nsk else set()
+IGNORED_KEY = re.compile(r"""(?:\[\s*["']([a-z_]+_ignored)["']\s*\]\s*=|["']([a-z_]+_ignored)["']\s*:)""")
+
+
+def ignored_keys(src):
+    return {a or b for a, b in IGNORED_KEY.findall(src)}
+
+
+backend_keys = set()
+for rel in ("backend/app/modules/storeops/router.py", "backend/app/modules/hr/router.py"):
+    backend_keys |= ignored_keys(read(rel, ROOT) or "")
+check("8e the backend's not-written keys were found (update_employee's pay_fields_ignored)",
+      "pay_fields_ignored" in backend_keys, sorted(backend_keys))
+check("8f rowSave.NOT_SAVED_KEYS reads every backend not-written key", backend_keys <= not_saved_keys,
+      f"missing {sorted(backend_keys - not_saved_keys)} — a field the server drops with a 200 would read as saved")
+for rel, t in sorted(users.items()):
+    check(f"8g {rel} runs its plan through runRowSave", "runRowSave(" in t)
+proof_src = read("prove_row_save.mjs") or ""
+check("8h the proof carries the persistence section (owner case + gate-drop reproduction)",
+      "oldRunRowSave" in proof_src and "'V2 " in proof_src and "'V6 " in proof_src)
+
 print("7. planted controls (the detectors are not vacuous)")
 check("7a a direct PATCH is detected", employee_record_writes(
     "await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify(b) })") == [1])
@@ -229,6 +292,14 @@ check("7e a subset plan is rejected", _sub is not None and not re.fullmatch(
     r"[A-Z][A-Z0-9_]*_ROW_SLICES", [a.strip() for a in _sub.group(1).split(",")][2]))
 check("7f the old private isDirty copy is detected",
       COPY.search("return fields.some(f => String(row[f] ?? '') !== String(orig[f] ?? ''))") is not None)
+
+check("7g a slice without an echo is detected", not echo_ok("export const X = {\n  fields: ['a'],\n  build: () => null,\n}\n")[0])
+check("7h an echo that misses a field is detected", not echo_ok("fields: ['a', 'b'],\n  echo: { a: 'a' },")[0])
+check("7i the pre-§19.37 engine (any 2xx = saved) is detected", not engine_verifies(
+    "export async function runRowSave(writes, send) {\n  for (const w of writes) {\n"
+    "    try { res.saved.push({ response: await send(w) }) } catch (e) {}\n  }\n}\n"))
+check("7j a new backend not-written key is found", ignored_keys('out["email_fields_ignored"] = x') == {"email_fields_ignored"}
+      and ignored_keys('return {"role_ignored": r}') == {"role_ignored"})
 
 print()
 for p in PASS:
