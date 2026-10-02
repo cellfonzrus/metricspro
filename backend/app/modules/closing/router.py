@@ -31,6 +31,7 @@ from . import entry_quality
 from . import pickup_actual as _pickup_actual
 from . import closer_resolution
 from . import billpay_netting
+from . import closing_source as _closing_src
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -717,6 +718,14 @@ def closing_stores(org_id: str = ORG_ID):
         row = dict(by_code[winner])
         row["aliases"] = sorted(c for c in codes if c != winner)
         out.append(row)
+
+    # ── WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035). The picker carries each
+    #    option's source off the ONE registry, so the form can tell a rep up front that a store takes
+    #    its closing from the sales feed instead of letting them fill the whole form and hit a 409.
+    #    Resolved from a SINGLE config read for the whole list. ──
+    _srcmap = _closing_source_map(client, org_id, [str(r.get("store_code") or "") for r in out])
+    for r in out:
+        r["closing_source"] = _srcmap.get(str(r.get("store_code") or ""), _closing_src.HOUSE_DEFAULT)
 
     out.sort(key=lambda s: str(s.get("store_address") or ""))
     return out
@@ -1939,6 +1948,13 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # ── WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035) — dereference the registry,
+    #    never assume a rep. A store the tenant put on the sales feed takes no submission: accepting
+    #    one would put a second, hand-typed row beside the derived one and double the store's declared
+    #    cash in every recon downstream (the mig-502 duplicate class, from the other direction).
+    #    Refused with the reason and where to change it — never a bare 403. ──
+    if not _closing_src.expects_rep_submission(_closing_source(client, org_id, body.get("store_code"))):
+        raise HTTPException(409, _closing_src.refusal_message(body.get("store_code")))
     # Robustness (owner-reported 2026-08-19 — Ali "Cellfonz ru ma" + Rashika "Cellfonz r us": the
     # envelope photo wasn't accepted and the app bounced to the main page). The envelope image can now
     # ride the submit as a RAW data-url and be uploaded server-side here — not only as a pre-uploaded
@@ -5294,9 +5310,17 @@ async def _run_closing_missing_alerts(org_id=None):
         closed = {(r.get("store_code") or "") for r in
                   ((c.schema("commcalc").table("daily_closing").select("store_code")
                     .eq("org_id", oid).eq("close_date", today).execute().data) or [])}
+        # WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035) — dereference the registry.
+        # A store on the sales feed has NOBODY to nag: "the closing was not submitted by the deadline"
+        # would be a false accusation against a store the tenant deliberately took off submissions.
+        # Its own failure mode (the feed never landed) is reported by the derivation sweep's
+        # `skipped[].reason` and by the stale-store attention provider, not by this alert.
+        _srcmap = _closing_source_map(c, oid, [str(s.get("store_code") or "") for s in stores])
         for s in stores:
             sc = s.get("store_code")
             if not sc or sc in closed:
+                continue
+            if not _closing_src.expects_rep_submission(_srcmap.get(str(sc), _closing_src.HOUSE_DEFAULT)):
                 continue
             res = await _send_alert(
                 c, oid, "closing_missing",
@@ -9639,6 +9663,256 @@ def record_envelope_withdrawal(payload: RecordEnvelopeWithdrawalIn, org_id: str 
             pass
 
     return {"ok": True, "withdrawal": saved, "sibling_call": sibling}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# WHERE A STORE'S DAILY CLOSING COMES FROM (owner directive 2026-10-02, mig 1035, index §19.39)
+#
+# Owner: *"the admin should be able to check a box to input daily closing by sales reps for all stores
+# or pull b2b data from directly into daily closing in case the tenant does not want to have people
+# submit daily closing, so it is derived via the permission selected at the time of setting up the
+# store - it could be changed later at any time by the tenant admin, all other features like cash pick
+# up etc will stay as they are a following action / reports after the data gets populated."*
+#
+# ONE REGISTRY (`closing/closing_source.py`), ONE READ (`_closing_source_rows`), ONE RESOLVER
+# (`_closing_source` / `_closing_source_map`). Every caller that used to ASSUME a rep types the closing
+# now dereferences it — the submit endpoint, the missing-closing deadline alert, the
+# `closing_stale_stores` attention provider and the closing form's store picker. The lock
+# (`backend/harness_closing_source_lock.py`) fails the build if any of them stops.
+#
+# "All other features stay as they are" is not a promise, it is the construction: a derived closing is
+# a REAL `commcalc.daily_closing` row (marked `source='b2b_derived'`), so cash pickup, the envelope
+# report, deposit accountability, the five-stage chain, DM verify and the P&L bookings read it exactly
+# as they read a rep's — none of them learns a new vocabulary or gains a second code path.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _closing_source_rows(client, org_id: str) -> list:
+    """THE ONE READ of `commcalc.closing_source_config`. A missing table (pre-mig-1035) or a failed
+    read returns `[]`, which `closing_source.resolve` folds to the house default — rep entry
+    everywhere, byte-identical to the behaviour before this feature existed. It never raises, because
+    a config read must not be able to take the closing form down."""
+    try:
+        return (client.schema("commcalc").table("closing_source_config")
+                .select("id,store_code,source,updated_at,updated_by")
+                .eq("org_id", org_id).limit(5000).execute().data) or []
+    except Exception as e:
+        print(f"WARN closing_source_config read failed (defaulting to rep entry): {e}")
+        return []
+
+
+def _closing_source(client, org_id: str, store_code=None) -> str:
+    """THE RESOLVER — one store's closing source. Per-store override → org default → house default."""
+    return _closing_src.resolve(_closing_source_rows(client, org_id), store_code)
+
+
+def _closing_source_map(client, org_id: str, store_codes) -> dict:
+    """The batch resolver — `{store_code: source}` from ONE config read, for a sweep or a store list."""
+    return _closing_src.source_map(_closing_source_rows(client, org_id), store_codes)
+
+
+@router.get("/source-config")
+def get_closing_source_config(store_code: str = "", org_id: str = ORG_ID):
+    """The tenant's daily-closing source: the org default, every per-store override, and (when
+    `store_code` is given) the effective answer for that one store. Readable by anyone who can open the
+    closing form — the form itself uses it to tell a rep there is nothing to submit."""
+    require_org(org_id)
+    rows = _closing_source_rows(sb(), org_id)
+    return {
+        "sources": list(_closing_src.SOURCES),
+        "labels": dict(_closing_src.LABELS),
+        "house_default": _closing_src.HOUSE_DEFAULT,
+        "org_default": _closing_src.resolve(rows, None),
+        "store_overrides": [{"store_code": r.get("store_code"),
+                             "source": _closing_src.normalize(r.get("source")),
+                             "updated_at": r.get("updated_at"), "updated_by": r.get("updated_by")}
+                            for r in rows if str(r.get("store_code") or "").strip()],
+        "effective": _closing_src.resolve(rows, store_code or None) if store_code else None,
+        "store_code": store_code or None,
+    }
+
+
+class PutClosingSourceIn(LaxModel):
+    store_code: Any = None     # blank / omitted → the ORG DEFAULT row
+    source: Any = None         # 'rep_entry' | 'b2b_derived'
+    clear: Any = False         # with a store_code: drop the override so the store follows the org default
+
+
+@router.put("/source-config")
+def put_closing_source_config(payload: PutClosingSourceIn, org_id: str = ORG_ID,
+                              authorization: str = Header(default="")):
+    """Set the org default or ONE store's override. Gated to the same 'closing' settings area as the
+    tender / count-field config (a market-scoped caller must not be able to switch off a store's
+    closing submissions). The owner's *"could be changed later at any time by the tenant admin"* is
+    this endpoint — nothing about the setting is write-once."""
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Changing a store's daily-closing source is permission-restricted.")
+    code = str(payload.store_code or "").strip() or None
+    rows = _closing_source_rows(client, org_id)
+    if payload.clear:
+        if not code:
+            raise HTTPException(400, "The org default cannot be cleared — set it to a source instead.")
+        try:
+            (client.schema("commcalc").table("closing_source_config").delete()
+             .eq("org_id", org_id).eq("store_code", code).execute())
+        except Exception as e:
+            print(f"WARN closing source override clear failed (org {org_id}, store {code}): {e}")
+            raise HTTPException(400, "Could not clear this store's daily-closing setting. The setting "
+                                     "is not available on this tenant yet — contact support.")
+        return {"ok": True, "store_code": code, "cleared": True,
+                "source": _closing_src.resolve([r for r in rows if r.get("store_code") != code], code)}
+    raw = str(payload.source or "").strip().lower()
+    if raw not in _closing_src.SOURCES:
+        raise HTTPException(400, f"source must be one of {', '.join(_closing_src.SOURCES)}")
+    row = {"org_id": org_id, "store_code": code, "source": raw, "updated_at": _now(),
+           "updated_by": _caller_email(client, authorization)}
+    found = [r for r in rows
+             if (str(r.get("store_code") or "").strip().upper() or None) == (code.upper() if code else None)]
+    try:
+        if found:
+            (client.schema("commcalc").table("closing_source_config").update(row)
+             .eq("org_id", org_id).eq("id", found[0]["id"]).execute())
+        else:
+            client.schema("commcalc").table("closing_source_config").insert(row).execute()
+    except Exception as e:
+        print(f"WARN closing source save failed (org {org_id}, store {code}): {e}")
+        raise HTTPException(400, "Could not save the daily-closing setting. The setting is not "
+                                 "available on this tenant yet — contact support.")
+    return {"ok": True, "store_code": code, "source": raw, "scope": "store" if code else "org_default"}
+
+
+# ── The derivation sweep ─────────────────────────────────────────────────────────────────────────
+def _derive_closing_day(client, org_id: str, date: str, dry_run: bool = False) -> dict:
+    """Write (or refresh) the derived `daily_closing` rows for ONE day's b2b-derived stores.
+
+    The money and the counts come from `_b2b_day` — the SAME aggregate the close gate and the money
+    recon already use, read ONCE for the day. The row body is built by the pure
+    `closing_source.derive_row`, so what a derived closing contains is proved without a database
+    (`backend/harness_closing_source.py`).
+
+    IDEMPOTENT, and honest about what it did NOT do:
+      · a store whose feed carried nothing, or carried sales with no cash/card split, is SKIPPED and
+        REPORTED (`skipped[].reason`) — never written as a $0 close, which would manufacture a clean
+        day out of a missing feed;
+      · a re-run whose feed is unchanged reports `unchanged` and writes nothing;
+      · a row a REP submitted (or a sheet upload created) for a store later switched to derived is
+        left alone and reported as `kept_manual` — the sweep never overwrites a human's declaration,
+        because that declaration is the physical count of an envelope that exists.
+    """
+    from . import deposit_accountability as _da_src
+    day = _b2b_day(client, org_id, date)
+    by_store = day.get("by_store") or {}
+    counts = day.get("counts") or {}
+    stores = (client.schema("storeops").table("stores").select("store_code,address,is_active")
+              .eq("org_id", org_id).execute().data) or []
+    codes = _da_src.expected_store_codes(stores)
+    plan = _closing_src.plan_day(_closing_source_rows(client, org_id), codes, by_store, counts)
+    addr = {(s.get("store_code") or "").strip(): s.get("address") for s in stores}
+    sfid_of = {}
+    for r in ((client.schema("commcalc").table("store_mapping")
+               .select("salesforce_id,store_code").eq("org_id", org_id).execute().data) or []):
+        c = (r.get("store_code") or "").strip()
+        if c and not sfid_of.get(c):
+            sfid_of[c] = (r.get("salesforce_id") or "").strip()
+    existing = {}
+    if plan["derive"]:
+        for r in ((client.schema("commcalc").table("daily_closing").select("*")
+                   .eq("org_id", org_id).eq("close_date", date)
+                   .in_("store_code", plan["derive"]).execute().data) or []):
+            existing.setdefault((r.get("store_code") or "").strip(), []).append(r)
+    now = _now()
+    wrote, updated, unchanged, kept_manual = [], [], [], []
+    for code in plan["derive"]:
+        body = _closing_src.derive_row(org_id, code, date, by_store.get(code), counts.get(code),
+                                       {"store_address": addr.get(code),
+                                        "sfid": sfid_of.get(code) or None}, now_iso=now)
+        rows_here = existing.get(code) or []
+        mine = [r for r in rows_here
+                if r.get("derived_at") or r.get("source") == _closing_src.DERIVED_ROW_SOURCE]
+        theirs = [r for r in rows_here if id(r) not in {id(m) for m in mine}]
+        if theirs:
+            kept_manual.append({"store_code": code, "rows": len(theirs),
+                                "sources": sorted({str(r.get("source") or "manual") for r in theirs})})
+            continue
+        if mine:
+            diff = _closing_src.changed_fields(mine[0], body)
+            if not diff:
+                unchanged.append(code)
+                continue
+            if not dry_run:
+                _derive_write(client, org_id, body, row_id=mine[0].get("id"))
+            updated.append({"store_code": code, "changed": diff})
+            continue
+        if not dry_run:
+            _derive_write(client, org_id, body)
+        wrote.append(code)
+    return {"date": date, "org_id": org_id, "dry_run": bool(dry_run),
+            "b2b_has_data": bool(day.get("has_data")),
+            "derived_stores": len(plan["derive"]), "rep_entry_stores": len(plan["rep_submits"]),
+            "wrote": wrote, "updated": updated, "unchanged": unchanged,
+            "kept_manual": kept_manual, "skipped": plan["skipped"]}
+
+
+def _derive_write(client, org_id, body, row_id=None):
+    """Insert / update ONE derived row, tolerating a not-yet-run migration the way every other writer
+    in this module does: if `derived_other` / `derived_at` are absent (mig 1035 unapplied), drop those
+    two keys and retry, so a derived closing still lands with its money intact."""
+    def _go(b):
+        if row_id:
+            return (client.schema("commcalc").table("daily_closing").update(b)
+                    .eq("org_id", org_id).eq("id", row_id).execute())
+        return client.schema("commcalc").table("daily_closing").insert(b).execute()
+    try:
+        return _go(body)
+    except Exception as e:
+        if "derived_other" in str(e) or "derived_at" in str(e):
+            return _go({k: v for k, v in body.items() if k not in ("derived_other", "derived_at")})
+        raise
+
+
+def _yesterday_iso() -> str:
+    return (datetime.fromisoformat(_biz_today_iso()) - timedelta(days=1)).date().isoformat()
+
+
+@router.post("/derive-day")
+def derive_closing_day(date: str = "", dry_run: bool = False, org_id: str = ORG_ID,
+                       authorization: str = Header(default="")):
+    """Derive one day's closings for this tenant's b2b-derived stores (manual / backfill).
+    `dry_run=true` reports exactly what WOULD be written without writing anything."""
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Deriving daily closings is permission-restricted.")
+    return _derive_closing_day(client, org_id, (date or "").strip() or _yesterday_iso(), dry_run=dry_run)
+
+
+@router.post("/derive-due")
+def derive_closing_due(date: str = "", x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (NOTIFY_RUN_SECRET) — derive YESTERDAY's closings for every tenant that has
+    at least one store on the feed-derived source. Idempotent: a second run over an unchanged feed
+    writes nothing. A tenant with no derived store is never even read."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    d = (date or "").strip() or _yesterday_iso()
+    try:
+        orgs = sorted({r.get("org_id") for r in
+                       ((client.schema("commcalc").table("closing_source_config")
+                         .select("org_id,source").eq("source", _closing_src.SOURCE_B2B_DERIVED)
+                         .limit(5000).execute().data) or []) if r.get("org_id")})
+    except Exception as e:
+        # §19.38 — the reason goes to the server log, never into a message a person could read.
+        print(f"WARN closing derivation sweep could not read the closing-source setting: {e}")
+        return {"date": d, "orgs": 0, "results": [],
+                "note": "The daily-closing source setting could not be read, so nothing was derived."}
+    results = []
+    for oid in orgs:
+        try:
+            results.append(_derive_closing_day(client, oid, d))
+        except Exception as e:
+            print(f"closing derivation failed for org {oid} on {d} (non-fatal): {e}")
+            results.append({"org_id": oid, "date": d, "error": str(e)[:300]})
+    return {"date": d, "orgs": len(orgs), "results": results}
 
 
 # ── Universal admin-attention contributions (2026-07-26 settings audit) ─────────────────────────────

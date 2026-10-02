@@ -168,20 +168,52 @@ def _p_closing_stale_stores(client, org_id, ctx):
     stale = sorted(s for s in sold_stores if s not in closed_stores)
     if not stale:
         return []
-    eg = ", ".join(stale[:5]) + (f" +{len(stale) - 5} more" if len(stale) > 5 else "")
+    # WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035) — dereference the registry rather
+    # than assuming a rep. "Selling but not submitting" is the wrong DIAGNOSIS for a store the tenant
+    # put on the sales feed: nobody there was ever supposed to submit, so the real fault is that the
+    # derivation sweep has not written the day (POST /closing/derive-due). Both are still reported —
+    # the recon is equally blind either way — but each under the cause an admin can actually act on.
+    try:
+        from .router import _closing_source_map
+        from . import closing_source as _cs
+        srcmap = _closing_source_map(client, org_id, stale)
+    except Exception:
+        srcmap, _cs = {}, None
+    if _cs is not None:
+        derived = sorted(s for s in stale if _cs.is_derived(srcmap.get(s, _cs.HOUSE_DEFAULT)))
+        stale = [s for s in stale if s not in set(derived)]
+    else:
+        derived = []
     from app.modules.commcalc import report_labels as _report_labels
     pos = _report_labels.pos_term(client, org_id)   # the tenant's POS name in copy — never a vendor spelled here
-    return [{
-        "group": "other", "key": "closing_stale_stores", "severity": "warning",
-        "label": "Stores selling but not submitting daily closings",
-        "detail": (f"{len(stale)} store(s) had {pos} sales in the last {n_days} day(s) but no "
-                  f"daily closing submission in that window — cash/tender recon has been blind for "
-                  f"them: {eg}. Check that the store is actually able to close (kiosk/app access, an "
-                  f"assigned closer) or that its store code matches what the {pos} sales feed uses "
-                  f"(Store Mapping)."),
-        "count": len(stale), "deep_link": "/closing/management",
-        "deep_link_label": "Open Management Review",
-    }]
+    out = []
+    if stale:
+        eg = ", ".join(stale[:5]) + (f" +{len(stale) - 5} more" if len(stale) > 5 else "")
+        out.append({
+            "group": "other", "key": "closing_stale_stores", "severity": "warning",
+            "label": "Stores selling but not submitting daily closings",
+            "detail": (f"{len(stale)} store(s) had {pos} sales in the last {n_days} day(s) but no "
+                      f"daily closing submission in that window — cash/tender recon has been blind for "
+                      f"them: {eg}. Check that the store is actually able to close (kiosk/app access, an "
+                      f"assigned closer) or that its store code matches what the {pos} sales feed uses "
+                      f"(Store Mapping)."),
+            "count": len(stale), "deep_link": "/closing/management",
+            "deep_link_label": "Open Management Review",
+        })
+    if derived:
+        eg = ", ".join(derived[:5]) + (f" +{len(derived) - 5} more" if len(derived) > 5 else "")
+        out.append({
+            "group": "other", "key": "closing_derivation_stale", "severity": "warning",
+            "label": "Feed-derived stores with no closing written",
+            "detail": (f"{len(derived)} store(s) take their daily closing from the {pos} sales feed and "
+                      f"had sales in the last {n_days} day(s), but no closing was written for them: "
+                      f"{eg}. Nobody at these stores submits a closing, so this is the automatic daily "
+                      f"closing not having run, or the sales feed landing without a cash/card split. "
+                      f"Check the store's daily closing setting in Store Setup."),
+            "count": len(derived), "deep_link": "/storeops/setup/stores",
+            "deep_link_label": "Open Store Setup",
+        })
+    return out
 
 
 # ── Envelope cash that nobody has closed the loop on (owner 2026-09-07) ──────────────────────────
