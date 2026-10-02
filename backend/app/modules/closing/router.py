@@ -10088,6 +10088,79 @@ def derive_closing_day(date: str = "", dry_run: bool = False, org_id: str = ORG_
     return _derive_closing_day(client, org_id, (date or "").strip() or _yesterday_iso(), dry_run=dry_run)
 
 
+MAX_DERIVE_BACKFILL_DAYS = 400
+
+
+def _derive_date_span(start: str, end: str) -> list:
+    """The inclusive list of ISO days from `start` to `end`, oldest first — the ONE place a backfill
+    span is turned into days, so the endpoint below has no date arithmetic of its own.
+
+    Refuses rather than guesses: an unparseable bound, an end before its start, or a span longer than
+    `MAX_DERIVE_BACKFILL_DAYS` raises. An unbounded backfill is not a kindness — it is a sweep nobody
+    can predict the cost of, and a reversed range silently returning zero days would read as "there
+    was nothing to do" when the caller simply typed the bounds the wrong way round.
+    """
+    try:
+        d0 = datetime.fromisoformat(str(start).strip()[:10]).date()
+        d1 = datetime.fromisoformat(str(end).strip()[:10]).date()
+    except Exception:
+        raise HTTPException(400, "Give both dates as YYYY-MM-DD.")
+    if d1 < d0:
+        raise HTTPException(400, "The end date is before the start date.")
+    span = (d1 - d0).days + 1
+    if span > MAX_DERIVE_BACKFILL_DAYS:
+        raise HTTPException(400, f"That is {span} days. Backfill at most {MAX_DERIVE_BACKFILL_DAYS} "
+                                 f"days at a time.")
+    return [(d0 + timedelta(days=i)).isoformat() for i in range(span)]
+
+
+@router.post("/derive-range")
+def derive_closing_range(start: str = "", end: str = "", dry_run: bool = False, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    """Backfill derived closings across a span of days — the retroactive form of `/derive-day`.
+
+    It runs the SAME `_derive_closing_day` sweep once per day, oldest first; there is no second
+    derivation of the money and no second set of rules about what a derived closing contains. So
+    every honesty property of the one-day sweep holds for a backfill unchanged: a day whose feed
+    carried nothing for a store is skipped and reported, a rep's own row is never overwritten, and a
+    re-run over the same span writes nothing because each day's row already matches its feed.
+
+    The response is per-day COUNTS plus a totals block, not the full row bodies — a 120-day backfill
+    with 11 stores is 1,320 decisions, and a caller needs to see the shape of what happened and which
+    days did nothing, not every field of every row. `dry_run=true` reports the whole span without
+    writing anything, which is the sane first run of any backfill.
+    """
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Deriving daily closings is permission-restricted.")
+    days = _derive_date_span(start or _yesterday_iso(), end or _yesterday_iso())
+    per_day, totals = [], {"wrote": 0, "updated": 0, "unchanged": 0, "kept_manual": 0, "skipped": 0}
+    days_with_feed, failed = 0, []
+    for d in days:
+        try:
+            r = _derive_closing_day(client, org_id, d, dry_run=dry_run)
+        except Exception as e:
+            # One bad day never costs the rest of the span — it is named instead.
+            print(f"closing derivation backfill failed for org {org_id} on {d} (non-fatal): {e}")
+            failed.append({"date": d, "error": str(e)[:300]})
+            continue
+        if r.get("b2b_has_data"):
+            days_with_feed += 1
+        counts = {"wrote": len(r.get("wrote") or []), "updated": len(r.get("updated") or []),
+                  "unchanged": len(r.get("unchanged") or []),
+                  "kept_manual": len(r.get("kept_manual") or []),
+                  "skipped": len(r.get("skipped") or [])}
+        for k in totals:
+            totals[k] += counts[k]
+        per_day.append({"date": d, "b2b_has_data": bool(r.get("b2b_has_data")),
+                        "reasons": sorted({s.get("reason") for s in (r.get("skipped") or [])
+                                           if s.get("reason")}), **counts})
+    return {"org_id": org_id, "start": days[0], "end": days[-1], "days": len(days),
+            "dry_run": bool(dry_run), "days_with_feed": days_with_feed,
+            "totals": totals, "failed": failed, "per_day": per_day}
+
+
 @router.post("/derive-due")
 def derive_closing_due(date: str = "", x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (NOTIFY_RUN_SECRET) — derive YESTERDAY's closings for every tenant that has
