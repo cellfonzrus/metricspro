@@ -123,6 +123,43 @@ SELECT '00000000-0000-0000-0000-000000000001', 'B-1115', '1115 Liberty Ave', 'LI
 -- Expect: INSERT 0 1
 
 
+-- ─── STEP 2b — 60TH: the SAME defect on a third store, found by sweeping the class ───
+-- NOT in the original report. `storeops.stores` carries B-60TH at '1 S 60th St, Philadelphia';
+-- `store_mapping` already holds the SAME physical store under code `B-1` at '1 S 60th street'.
+-- The roster ADDRESS already collapses onto B-1's spelling through step 4 (leading number '1',
+-- unambiguous — no other mapping address starts with a bare '1'), but the CODE 'B-60TH'
+-- resolves to itself, so the store has two identities exactly like 1800 and 1115.
+--
+-- THIS IS REAL MONEY, measured live 2026-10-02: `commcalc.store_expenses` has 15 rows keyed
+-- 'B-60TH' totalling $11,949.67 (August 2026 — rent, salaries, utilities), while every sales
+-- row carries '1 S 60th street' (raw_sales 7,805 / daily_sales_feed 4,758 rows). So the costs
+-- sit on one identity and the revenue on the other — the 1800/1115 shape again.
+--
+-- The store_expenses path matters here and is NOT the resolver: `coa.store_code_to_address`
+-- builds its code→address map from `store_mapping` ALONE and never consults `store_aliases`.
+-- So an alias row would NOT fix the expense side; the mapping row is required.
+--
+-- SAFETY, verified against live data: `store_companies` maps '1 S 60th street' to ONE company
+-- (be0e68c7-…), and there is no `store_companies` row for 'B-60TH', so the merge crosses no
+-- legal entity. `salesforce_id` is left NULL — B-1 already claims this store's door
+-- (0018000001YAWE9AAP), so no door becomes ambiguous. Two codes pointing at one address is the
+-- same deliberate shape as the kept 1800GreatNeckRd row above; `store_code_to_address` is keyed
+-- BY CODE, so both codes simply map to the one address. Measured: resolution of every other
+-- mapped address is unchanged.
+--
+-- market 'PA' from storeops.stores; city/state left NULL, matching B-1's existing row rather
+-- than guessing a spelling.
+INSERT INTO commcalc.store_mapping (org_id, store_code, store_address, market, is_active)
+SELECT '00000000-0000-0000-0000-000000000001', 'B-60TH', '1 S 60th street', 'PA', true
+ WHERE NOT EXISTS (
+   SELECT 1 FROM commcalc.store_mapping
+    WHERE org_id = '00000000-0000-0000-0000-000000000001'
+      AND store_code = 'B-60TH');
+-- Expect: INSERT 0 1
+-- After this: resolver('B-60TH') = '1 S 60th street' AND
+--             store_code_to_address['B-60TH'] = '1 S 60th street' — both paths, one key.
+
+
 -- ─── STEP 3 — attach the two dealer doors (this is the money step) ───────────────────
 -- Until now every raw_mi row on these doors booked COMPANY-WIDE because no mapping row
 -- claimed them: $6,527.04 in August and $8,943.62 in September. After this, each store's
@@ -189,6 +226,9 @@ SELECT salesforce_id, count(*) AS rows_claiming_it
 --   UPDATE commcalc.store_mapping SET salesforce_id = NULL
 --    WHERE org_id = '00000000-0000-0000-0000-000000000001'
 --      AND salesforce_id IN ('0013t00001Y15oMAAR', '0018000000eXGzwAAG');
+--   -- step 2b (remove the 60TH row; its expenses split from its sales again):
+--   DELETE FROM commcalc.store_mapping
+--    WHERE org_id = '00000000-0000-0000-0000-000000000001' AND store_code = 'B-60TH';
 --   -- step 2 (remove the 1115 row; its two spellings split again):
 --   DELETE FROM commcalc.store_mapping
 --    WHERE org_id = '00000000-0000-0000-0000-000000000001' AND store_code = 'B-1115';
