@@ -2794,7 +2794,25 @@ def filter_options(org_id: str = ORG_ID):
     except Exception as e:
         print(f"WARN core filter_options canonical vocabulary union failed: {e}")
         market_list = sorted(markets)
-    store_list = sorted(({"store": k, "market": v} for k, v in stores.items()), key=lambda x: x["store"])
+    # ONE OPTION PER PHYSICAL STORE (owner 2026-10-02, after the B-2778 → B-1598 merge: "if they
+    # are merged it will show only one"). The two-source fold above unions RAW SPELLINGS, so a
+    # roster row with no address contributed its bare CODE while the mapping row contributed the
+    # ADDRESS of the SAME store — measured live that day: 58 options for 31 stores, 27 offered
+    # twice. Which spellings are one store has ONE home (`build_market_index.code_groups`, whose
+    # own comment says a resolver treating them as two "makes a picker offer the same store
+    # twice"); `GET /core/markets` already dereferences it for the GRANT picker and this endpoint
+    # did not. It does now, through the canonical composer — the store twin of org_market_options.
+    # The fold is DISPLAY-only and additive: a spelling the index cannot bind survives verbatim as
+    # its own option, so nothing becomes unselectable.
+    try:
+        from app.core import scope as _cscope
+        store_list = [{"store": o["store"], "market": o["market"] or stores.get(o["store"]),
+                       "also_known_as": o["also_known_as"]}
+                      for o in _cscope.org_store_options(client, org_id, present=list(stores))]
+    except Exception as e:                      # options never blank a working page
+        print(f"WARN core filter_options canonical store fold failed: {e}")
+        store_list = sorted(({"store": k, "market": v} for k, v in stores.items()),
+                            key=lambda x: x["store"])
     rep_list = [
         ({"id": nm, "label": nm, "sublabel": em} if em else {"id": nm, "label": nm})
         for nm, em in sorted(reps.items(), key=lambda kv: kv[0].lower())

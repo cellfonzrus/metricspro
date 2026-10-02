@@ -382,6 +382,94 @@ ok("F8 NO migration repeats the repair — one path, not two (the duplicate rule
         if "store_mapping_identity" in f or "store_identity_repair" in f],
    "a migration re-writing these rows would drift from the runbook")
 
+# ── §G  THE REPAIR MUST NOT STRAND A BARE STORE CODE ON THE FEED PATH ───────────────────────────
+# Reported 2026-10-02 as "the sales feed's '2778 Ephraim Ave' stops matching after the merge".
+# MEASURED against the real resolver over every distinct store string the house feeds carry: that
+# claim is FALSE — the alias step resolves it, before and after, and NO feed address changed.
+# What the measurement DID find is a different, real regression one step further in: the literal
+# store CODE 'B-2778' resolved only because the placeholder row indexed the code AS AN ADDRESS, so
+# repairing the row took the code's only match away. A resolver that works because a row is broken
+# is the defect; this pins the explicit code step that replaces it.
+print("\n§G  closing's feed resolver — a bare store_code resolves on its own merits")
+try:
+    from app.modules.closing.router import _addr_resolver as _feed_resolver
+
+    class _FeedClient:
+        """Serves the three vocabularies the way `_addr_resolver._read` reads them."""
+
+        def __init__(self, tables):
+            self.tables, self._s, self._k = tables, None, None
+
+        def schema(self, s):
+            self._s = s
+            return self
+
+        def table(self, t):
+            self._k = (self._s, t)
+            return self
+
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a):
+            return self
+
+        def limit(self, n):
+            return self
+
+        def execute(self):
+            return _Res(list(self.tables.get(self._k, [])))
+
+    # Live shape 2026-10-02: the closed store is on the storeops MASTER (address never recorded);
+    # its successor lives only in store_mapping. That asymmetry is what the tie-break reads.
+    _MASTER = [{"store_code": "B-2778", "address": None}]
+    _ALIAS = [{"store_code": "B-1598", "alias": "2778 Ephraim Ave"},
+              {"store_code": "B-1598", "alias": "2778 Mount Ephraim Ave"}]
+    _REPAIRED = [{"store_code": "B-2778", "store_address": "1598 Mount Ephraim Ave"},
+                 {"store_code": "B-1598", "store_address": "1598 Mount Ephraim Ave"}]
+    _BROKEN = [{"store_code": "B-2778", "store_address": "B-2778"},
+               {"store_code": "B-1598", "store_address": "1598 Mount Ephraim Ave"}]
+
+    def _r(mapping):
+        return _feed_resolver(_FeedClient({("commcalc", "store_mapping"): mapping,
+                                           ("storeops", "stores"): _MASTER,
+                                           ("commcalc", "store_aliases"): _ALIAS}), ORG)
+
+    _after, _before = _r(_REPAIRED), _r(_BROKEN)
+    ok("G1 the reported claim is FALSE — the feed's alias spelling resolves after the repair",
+       _after("2778 Ephraim Ave") == "B-1598", _after("2778 Ephraim Ave"))
+    ok("G2 ...and resolved identically before it, so the repair changed nothing there",
+       _before("2778 Ephraim Ave") == _after("2778 Ephraim Ave"))
+    ok("G3 the merged address resolves to the code the store MASTER knows, not to whichever row "
+       "came back first \u2014 two codes at one address is now an ordinary shape, so row order must "
+       "not decide it",
+       _after("1598 Mount Ephraim Ave") == "B-2778", _after("1598 Mount Ephraim Ave"))
+    _rev = _feed_resolver(_FeedClient({("commcalc", "store_mapping"): list(reversed(_REPAIRED)),
+                                       ("storeops", "stores"): list(reversed(_MASTER)),
+                                       ("commcalc", "store_aliases"): _ALIAS}), ORG)
+    ok("G3b ...and reversing every row set does not change one answer",
+       all(_rev(x) == _after(x) for x in ("1598 Mount Ephraim Ave", "2778 Ephraim Ave",
+                                          "B-2778", "B-1598", "2778 Mount Ephraim Ave")))
+    _nomaster = _feed_resolver(_FeedClient({("commcalc", "store_mapping"): _REPAIRED,
+                                            ("storeops", "stores"): [],
+                                            ("commcalc", "store_aliases"): _ALIAS}), ORG)
+    ok("G3c with NO master row to prefer, the tie-break is alphabetical, still deterministic",
+       _nomaster("1598 Mount Ephraim Ave") == "B-1598", _nomaster("1598 Mount Ephraim Ave"))
+    ok("G4 THE REAL REGRESSION, now fixed — a bare store_code resolves to itself",
+       _after("B-2778") == "B-2778", _after("B-2778"))
+    ok("G5 ...and not only the repaired one: a code that NEVER had a placeholder row resolves too, "
+       "which is what proves the fix is the class and not the instance",
+       _after("B-1598") == "B-1598" and _before("B-1598") == "B-1598")
+    ok("G6 matching a code is case-insensitive, like every other step",
+       _after("b-2778") == "B-2778")
+    ok("G7 ADDITIVE — an explicit alias still outranks the code step",
+       _r([{"store_code": "2778 Ephraim Ave", "store_address": "9 Decoy St"}])(
+           "2778 Ephraim Ave") == "B-1598")
+    ok("G8 an unknown string still resolves to None (no new false positives)",
+       _after("Not A Store At All") is None)
+except ImportError as _e:                 # the closing router needs the backend's deps
+    print("  SKIP §G — closing router not importable here (%s)" % _e)
+
 print("\n%d checks passed, %d failed" % (PASSED[0], len(FAILED)))
 if FAILED:
     for f in FAILED:

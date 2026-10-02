@@ -8372,6 +8372,16 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
     return out
 
 
+def _better_code(candidate, current, master_codes) -> bool:
+    """Deterministic winner when two store_codes claim one address or one street number: the code
+    the store MASTER (`storeops.stores`) knows wins, else the alphabetically-first. Used so a feed
+    row never lands on a different code just because the rows came back in a different order."""
+    cm, mm = candidate in master_codes, current in master_codes
+    if cm != mm:
+        return cm
+    return candidate < current
+
+
 def _addr_resolver(client, org_id):
     """A store-name/address → store_code resolver, shared by the B2B and X-report tender aggregations.
 
@@ -8392,14 +8402,27 @@ def _addr_resolver(client, org_id):
       1. an EXPLICIT `commcalc.store_aliases` row — an admin has confirmed this spelling IS this store
          (the Store-Matching screen writes these; mig 988 seeds the X-report's names). Outranks every
          heuristic, exactly as it does in `commcalc.router._store_code_resolver`.
-      2. the storeops MASTER address.
-      3. the store_mapping address (the house canon, and where the LUX-* twins live).
-      4. an unambiguous leading street-number.
+      2. the string IS a known store_code (see below).
+      3. the storeops MASTER address.
+      4. the store_mapping address (the house canon, and where the LUX-* twins live).
+      5. an unambiguous leading street-number.
 
-    Steps 2-4 are unchanged in kind; only their ORDER and the master source are new, and a store whose
-    two sources agree resolves identically either way."""
+    Steps 3-5 are unchanged in kind; only their ORDER and the master source are new, and a store whose
+    two sources agree resolves identically either way.
+
+    STEP 2 ADDED 2026-10-02, and WHY it was missing for so long. This resolver only ever matched a
+    bare store CODE by accident: a `store_mapping` row whose `store_address` held the code itself
+    (the §13d placeholder DEFECT) indexed that code as an address, so `'B-2778'` resolved — until
+    the §13d repair gave that row a real address and the string resolved to None. The feed string
+    was never the problem; the resolver's reliance on a broken row was. A store_code is the
+    identity the rest of the platform WRITES (`coa.store_resolver` has had "the raw string IS a
+    store_code" in its own chain all along), so it is matched here explicitly rather than left to
+    depend on a data defect that is now, correctly, gone. Additive: it can only resolve a string
+    that resolved to None before, since every earlier step still runs first."""
     alias_to_code, so_addr_to_code, addr_to_code = {}, {}, {}
     num_to_code, num_counts = {}, {}
+
+    master_codes = set()
 
     def _idx(rows, code_col, addr_col, target):
         for r in rows or []:
@@ -8407,11 +8430,20 @@ def _addr_resolver(client, org_id):
             addr = (r.get(addr_col) or "").strip()
             if not (code and addr):
                 continue
-            target.setdefault(addr.lower(), code)
+            # TWO CODES AT ONE ADDRESS is now an ordinary shape, not a defect: §13d merges a closed
+            # store onto its successor's address, so both codes carry it. Row order must not decide
+            # which one a feed row lands on, so the winner is the code the store MASTER knows (the
+            # identity the rest of the platform writes — the same survivor rule `/closing/stores`
+            # uses to collapse twins), then the alphabetically-first, deterministically.
+            cur = target.get(addr.lower())
+            if cur is None or _better_code(code, cur, master_codes):
+                target[addr.lower()] = code
             nk = _num_key(addr)
             if nk:
                 num_counts[nk] = num_counts.get(nk, 0) + 1
-                num_to_code.setdefault(nk, code)
+                cur_n = num_to_code.get(nk)
+                if cur_n is None or _better_code(code, cur_n, master_codes):
+                    num_to_code[nk] = code
 
     def _read(schema, table, cols):
         try:
@@ -8420,17 +8452,30 @@ def _addr_resolver(client, org_id):
         except Exception:
             return []   # a missing/unreadable source costs precision, never an exception in a recon
 
-    _idx(_read("commcalc", "store_aliases", "store_code,alias"), "store_code", "alias", alias_to_code)
-    _idx(_read("storeops", "stores", "store_code,address"), "store_code", "address", so_addr_to_code)
-    _idx(_read("commcalc", "store_mapping", "store_code,store_address"),
-         "store_code", "store_address", addr_to_code)
+    alias_rows = _read("commcalc", "store_aliases", "store_code,alias")
+    master_rows = _read("storeops", "stores", "store_code,address")
+    mapping_rows = _read("commcalc", "store_mapping", "store_code,store_address")
+    master_codes |= {(r.get("store_code") or "").strip() for r in master_rows
+                     if (r.get("store_code") or "").strip()}
+    _idx(alias_rows, "store_code", "alias", alias_to_code)
+    _idx(master_rows, "store_code", "address", so_addr_to_code)
+    _idx(mapping_rows, "store_code", "store_address", addr_to_code)
+    # Step 2: every store_code either vocabulary knows, lowercased -> the code as written. The store
+    # MASTER wins a case/spacing collision, for the same reason it wins the twin collapse above.
+    code_to_code = {}
+    for rowset, col in ((mapping_rows, "store_code"), (alias_rows, "store_code"),
+                        (master_rows, "store_code")):
+        for r in rowset or []:
+            c = (r.get(col) or "").strip()
+            if c:
+                code_to_code[c.lower()] = c
 
     def resolve(store_str):
         s = (store_str or "").strip()
         if not s:
             return None
         low = s.lower()
-        for m in (alias_to_code, so_addr_to_code, addr_to_code):
+        for m in (alias_to_code, code_to_code, so_addr_to_code, addr_to_code):
             c = m.get(low)
             if c:
                 return c
