@@ -23,9 +23,25 @@ POSTURE
   · Unresolved uid -> ABSENT from the map (never a guess, never a fabricated name). A caller that gets
     nothing back shows what it showed before.
 """
+import re
+
 from app.core.database import get_supabase
 
 _NAME_COLS = "auth_id,full_name,email"
+
+# A CANONICAL ACTOR UUID, and nothing else, is a thing to look up. Several actor columns in this
+# codebase are MIXED by history: `envelope_count.counted_by` holds a UUID since §47 and the retired
+# 'management' sentinel before it, while `daily_closing_verification.verified_by`,
+# `cash_pickup.picked_up_by` and `handed_to` have always held a person's NAME ('Rana', 'Ismail').
+# Asking the resolver about a name is harmless but pointless; the thing that must never happen is a
+# name being replaced or mangled on its way to the screen. So the UUID test lives HERE, next to the
+# resolver, rather than being re-guessed by each caller (§19.34's one-home rule applied to display).
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def is_actor_uid(v):
+    """PURE: True when `v` is a canonical actor UUID — the only shape worth resolving."""
+    return bool(_UUID.match(str(v or "").strip()))
 
 
 def actor_names(uids, org_id, client=None):
@@ -61,3 +77,16 @@ def name_for(uid, names):
     if not u:
         return None
     return (names or {}).get(u) or u
+
+
+def resolve_actor_names(values, org_id, client=None):
+    """{value: display} for a MIXED list of actor values: each UUID resolved to a person, each
+    already-human string mapped to ITSELF, untouched.
+
+    This is what a report with several actor columns of different vintages should call — it resolves
+    in ONE batched read (only the UUIDs are looked up) and guarantees a name is never altered. A UUID
+    that does not resolve maps to itself, the `name_for` posture, so nothing ever renders as None.
+    """
+    vals = [str(v).strip() for v in (values or []) if str(v or "").strip()]
+    names = actor_names([v for v in vals if is_actor_uid(v)], org_id, client=client)
+    return {v: (names.get(v) or v) for v in vals}

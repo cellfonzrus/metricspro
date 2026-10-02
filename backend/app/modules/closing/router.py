@@ -5674,11 +5674,21 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     if date:
         closed = {(r.get("store_code") or "") for r in rows if r.get("store_code")}
         _worked_display = _who_worked_display_by_store(client, org_id, date)
+        # WHICH STORES WERE EXPECTED TO FILE is ONE rule, and it now lives in
+        # deposit_accountability.expected_store_codes — dereferenced here and by the five-stage
+        # accountability chain (§48), so "this store did not file" cannot mean two different things
+        # on two screens. The predicate/sets below are exactly the ones this loop applied inline
+        # before; `_expected_codes` is byte-identical to the old filter chain (proved by
+        # harness_accountability_chain.py §A against a replica of the original inline logic).
+        from . import deposit_accountability as _da_exp
+        _expected_codes = set(_da_exp.expected_store_codes(
+            store_rows,
+            keyset_ok=(None if ks is None else (lambda c, a: in_keyset(ks, c, a))),
+            store_set=store_set, market_set=market_set,
+            market_of=(lambda c: sm_market.get(c, ""))))
         for s in store_rows:
             code = s.get("store_code") or ""
-            if not code or code in closed or s.get("is_active") is False:
-                continue
-            if ks is not None and not in_keyset(ks, code, s.get("address")):
+            if not code or code in closed or code not in _expected_codes:
                 continue
             # STORE FILTER — owner bug report 2026-09-07: "the data gets lost when the store is
             # picked and the filter does not work as a proper filter", and earlier "result screen
@@ -5692,11 +5702,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             # B-60TH, B-6149, B-6507, B-723, B-2778 and two non-store roster entries), so picking one
             # produced an empty envelope list beside a full straggler list. Filtered, this list now
             # ANSWERS the question instead: that store did not submit a closing.
-            if store_set and code.upper() not in store_set:
-                continue
             mk = (s.get("market") or "").strip() or sm_market.get(code, "")
-            if market_set and mk and mk.casefold() not in market_set:
-                continue
             wd = _worked_display.get(code, {"worked": [], "source": "none", "summary": "no worked-signal recorded"})
             not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk,
                                "worked": wd["worked"], "worked_source": wd["source"], "worked_summary": wd["summary"]})
@@ -7257,6 +7263,123 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
     return {"start": start, "end": end, "rows": out, "summary": summary,
             "by_dm": dm_rows, "dm_summary": dm_summary,
             "can_confirm": _bp.can_see_cash_recon(authorization or "", org_id, client)}
+
+
+@router.get("/accountability-chain")
+def accountability_chain(date: str = "", start: str = "", end: str = "", stores: str = "",
+                         market: str = "", stuck: str = "",
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE FIVE-STAGE ACCOUNTABILITY CHAIN over a date range (owner 2026-10-02): per (store, day),
+    whether each of Daily Closing / DM verified / Cash pickup / Cash handover / Management review is
+    done, WITH its date and WHO did it — plus `stuck_at`, the first stage that is not done.
+
+    NO NEW DERIVATION. Every stage fact is read from the home that already records it, and the two
+    middle stages come from `deposit_accountability.day_accountability`'s own day rows (the same
+    function the green-day board runs) rather than a second walk of the pickup tables. The SPINE is
+    `expected_store_codes × date_span` — the same "which stores were expected to file" rule the
+    cash-pickup screen's `not_closed` straggler list uses — because a store that filed nothing has no
+    row to key on and can only be reported against a list of stores that should have filed.
+
+    Keyset-scoped like every closing report (a DM sees their own span). Pure math:
+    `closing/deposit_accountability.stage_chain`; proof `backend/harness_accountability_chain.py`."""
+    from . import deposit_accountability as _da
+    require_org(org_id)
+    client = sb()
+    if date:
+        start = end = date
+    if not (start and end):
+        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
+    start, end = _date(start), _date(end)
+    if not (start and end):
+        raise HTTPException(400, "valid dates required (YYYY-MM-DD)")
+    if start > end:
+        start, end = end, start
+    days = _da.date_span(start, end)
+    # The same 62-day bound the deposit-accountability board carries — this reads the SAME pickup
+    # rows plus three cheap range reads, so there is no reason for a second, different cap.
+    if len(days) > 62:
+        raise HTTPException(400, "range too large — 62 days max")
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    store_rows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores")
+                  .select("store_code,address,market,is_active")
+                  .eq("org_id", org_id).execute().data) or [])
+    smeta = {s.get("store_code"): s for s in store_rows if s.get("store_code")}
+    # The THREE STANDARD FILTERS go through their ONE resolver each (the mig-? filter contract,
+    # harness_closing_filter_contract: an endpoint that ACCEPTS a standard filter must APPLY it, and
+    # must not rebuild the set inline — a hand-rolled set is how the spellings diverged in the first
+    # place). Both return None for "no filter", which every `if store_set and ...` below reads as off.
+    store_set = _resolve_store_filter(stores)
+    market_set = _resolve_market_filter(market, None)
+    expected = _da.expected_store_codes(
+        store_rows, keyset_ok=(None if ks is None else (lambda c, a: in_keyset(ks, c, a))),
+        store_set=store_set, market_set=market_set)
+    expected_keys = [(c, d) for d in days for c in expected]
+
+    def _range(schema, table, cols):
+        try:
+            return (client.schema(schema).table(table).select(cols).eq("org_id", org_id)
+                    .gte("close_date", start).lte("close_date", end)
+                    .limit(100000).execute().data) or []
+        except Exception as e:                       # a pre-migration column / absent table
+            print(f"WARN accountability chain {table} unavailable: {e}")
+            return []
+
+    closings = _range("commcalc", "daily_closing", "store_code,close_date,employee_name,submitted_at,created_at")
+    vers = _range("commcalc", "daily_closing_verification", "store_code,close_date,verified,verified_by,verified_at,note")
+    counts = _range("commcalc", "envelope_count", "store_code,close_date,counted_by,counted_at,status")
+    day_rows, _sum = _da.day_accountability(_accountability_pickup_rows(client, org_id, start, end))
+
+    rows, summary = _da.stage_chain(expected_keys, closings, vers, day_rows, counts)
+    # KEYSET + FILTERS applied to the FINAL rows too: a store-day can enter the chain by carrying an
+    # artefact even when it is not in `expected` (an inactive store that filed anyway), and such a row
+    # must still obey the viewer's span and the screen's filters before it is shown.
+    def _visible(r):
+        code = r.get("store_code") or ""
+        meta = smeta.get(code, {})
+        if ks is not None and not in_keyset(ks, code, meta.get("address")):
+            return False
+        if store_set and code.upper() not in store_set:
+            return False
+        if market_set:
+            mk = (meta.get("market") or "").strip()
+            if mk and mk.casefold() not in market_set:
+                return False
+        return True
+    rows = [r for r in rows if _visible(r)]
+    _stuck = {x.strip().lower() for x in stuck.split(",") if x.strip()}
+    if _stuck:
+        rows = [r for r in rows if str(r.get("stuck_at") or "").lower() in _stuck]
+    for r in rows:
+        meta = smeta.get(r["store_code"], {})
+        r["store_name"] = meta.get("address") or r["store_code"]
+        r["market"] = meta.get("market")
+    # WHO, AS A PERSON. Most of these columns hold a NAME already (verified_by 'Rana',
+    # picked_up_by, handed_to); `envelope_count.counted_by` holds an actor UUID since §47 and the
+    # legacy sentinel before it. core.actors is the ONE uid->person join (§47.2) and
+    # `resolve_actor_names` leaves a non-UUID string exactly as it is, so a name is never mangled
+    # and a UUID is never shown raw.
+    try:
+        from app.core import actors as _actors
+        _uids = [b for r in rows for st in r["stages"] for b in (st.get("by") or [])]
+        _uids += [b for r in rows for st in r["stages"] for b in (st.get("confirmed_by") or [])]
+        _disp = _actors.resolve_actor_names(_uids, org_id, client=client)
+        for r in rows:
+            for st in r["stages"]:
+                st["by"] = [_disp.get(b, b) for b in (st.get("by") or [])]
+                if st.get("confirmed_by"):
+                    st["confirmed_by"] = [_disp.get(b, b) for b in st["confirmed_by"]]
+    except Exception as _ae:
+        print(f"WARN accountability chain actor names unavailable: {_ae}")
+    # Recomputed over the VISIBLE rows (keyset consistency — never a count the viewer cannot see).
+    summary = _da.chain_summary(rows)
+    return {"start": start, "end": end, "days": len(days), "rows": rows, "summary": summary,
+            # The stage vocabulary, served from the pure module so the screen spells no stage key
+            # and no stage label (the §47 basis-selector posture).
+            "stages": _da.stage_catalog(),
+            "stores_expected": len(expected)}
 
 
 class MgmtConfirmIn(LaxModel):

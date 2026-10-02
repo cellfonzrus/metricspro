@@ -346,6 +346,9 @@ on:
       - "backend/harness_dm_verify_range_cost.py"
       - "backend/harness_screen_link_guard.py"
       - "backend/harness_envelope_receipt_basis.py"
+      - "backend/harness_accountability_chain.py"
+      - "backend/app/modules/closing/deposit_accountability.py"
+      - "backend/app/core/actors.py"
       - "backend/app/core/actors.py"
       - "backend/app/modules/closing/envelope_report.py"
       - "frontend/src/lib/carrier-scope.ts"
@@ -554,6 +557,9 @@ jobs:
       - name: Run the envelope-receipt basis + counted-by lock (one basis vocabulary dereferenced from deposit_recon; the counter is the real actor shown as a person — index §47)
         working-directory: backend
         run: python3 harness_envelope_receipt_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
+        working-directory: backend
+        run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"

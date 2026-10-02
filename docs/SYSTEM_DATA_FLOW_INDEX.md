@@ -5407,6 +5407,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
+| `GET /closing/accountability-chain` (**THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN** — per (store, day): Daily Closing / DM verified / Cash pickup / Cash handover / Management review, each `done`+`at`+`by`, plus `stuck_at`; keyset-scoped, 62-day cap, standard `stores`/`market` filters through their one resolver each) | `closing/router.py` (`accountability_chain`); pure `closing/deposit_accountability.py` (`expected_store_codes`, `date_span`, `stage_chain`, `chain_summary`, `stage_catalog`) dereferencing `day_accountability`; names via `core/actors.py` (`is_actor_uid`/`resolve_actor_names`); screen `/closing/accountability` | §48 |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report |
 | `GET /portout-fraud` (THE DAILY FRAUD REPORT: port-in activations that ported OUT again inside the configured window, with the accessory sold alongside each one; composes `line_class.activation_class` (is it a port-in), `event_sales.line_feed_state` (did it stay — the retention report's own derivation), `_is_accessory`/`_is_setup_fee` (the Sales Report's own accessory dollar) and the retention report's own bounded `raw_mi` loader; pure `portout_fraud.py`; READ-ONLY, `books_to == []`; the headline carries `undecidable` + `coverage_pct` beside `flagged`) | `commcalc/router.py` (`get_portout_fraud`, beside `/dlar-vs-platform`; rules via `_portout_rules`) | §19.32 — the daily fraud report |
@@ -5570,6 +5571,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
 | Bill-pay cash pending remittance (per store) | `daily_closing.epay_on_cash` (DM `dm_epay_cash` winning) − `billpay_pickup.amount` (picked_up) | `_billpay_position_core` → `billpay_pickup.billpay_position` (`GET /closing/billpay-pickups` by_store; mig `942`) |
 | Deposit-accountability GREEN day | ≥1 picked-up envelope AND all accounted: (`disposition='deposited'` AND `deposit_slip_path` set) OR (`disposition='handed_to_mgmt'` AND `mgmt_confirmed`) | `deposit_accountability.day_accountability` → `GET /closing/deposit-accountability` (mig `943`) |
+| Cash-chain STAGE DONE (per store-day, 5 stages) | `closing`: ≥1 `daily_closing` row · `dm_verify`: a verification row with `verified` · `pickup`: EVERY envelope picked up · `handover`: every picked envelope has a disposition · `mgmt_review`: ≥1 `envelope_count` row | `deposit_accountability.stage_chain` → `GET /closing/accountability-chain` (§48) |
+| Cash-chain STUCK AT | the FIRST stage, in chain order, that is not done (NULL = fully accounted) | `deposit_accountability.stage_chain` → `GET /closing/accountability-chain` (§48) |
+| Store-days a closing is EXPECTED from | active store, in the viewer's keyset, passing the screen's store/market filters × every day in the range — a roster fact, NOT a staffing fact (§48.5) | `deposit_accountability.expected_store_codes` × `date_span` → `GET /closing/accountability-chain`, and `not_closed` on `GET /closing/pickups` |
 | Actual cash picked from envelope (variance vs declared, per pickup) | `cash_pickup`/`billpay_pickup.actual_picked_amount` (mig `949`; NULL = not recorded, never 0) vs the declared `amount` snapshot; short/over/match = `envelope_report.count_fields` (the mig-936 truth table, reused) | `pickup_actual.row_variance` → `GET /closing/pickups`/`/billpay-pickups` variance fields + accountability day chips; RELIEVES `_cash_position_core` (→ mig-938 BS store-cash) ONLY under `cash_pickup_config.pickup_actual_relieves_cash` (default false = declared, byte-identical; `pickup_actual.outflow_amount`) |
 | POS-beside-declared status (pickup pages) | store-day declared vs POS (X-report cash / processor bill pay — billpay declared base = `epay_on_cash`+`epay_on_credit` since mig `944`), $1 tolerance; honest `no_pos_data` gaps | `deposit_accountability.pos_next_to` ← `_pos_tenders_for_days`/`_pos_billpay_for_days` (`GET /closing/pickups`, `GET /closing/billpay-pickups`) |
 | Declared-vs-POS bill-pay mismatch (per store-day) | `daily_closing.epay_on_cash+epay_on_credit` vs the mig-939 processor feed | `billpay_pickup.billpay_pos_mismatch` (`GET /closing/cash-recon-management`) |
@@ -14728,3 +14732,116 @@ text only) spelling `ePay` or `VidaPay`, a mix of log lines and genuine reader-f
 (`asset/router.py`). Some are chart-of-accounts names that may be deliberate house data and some are
 copy that should resolve through `report_labels.carrier_term`; separating the two is a judgement call per
 site, not a sweep, so it is **reported, not touched**. Deciding it needs the owner.
+
+## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
+
+> Owner: *"we need to see in a daily report or date range report for the following / Daily Closing done
+> or not with dates and by who / DM verified or not with dates and by who / CAsh pick with dates and by
+> who / Cash Handover with dates and by who / managment review with dates and by who"*
+
+`GET /closing/accountability-chain` → **Cash Accountability Chain** (`/closing/accountability`). One row
+per **(store, day)**, five stage cells, each carrying `done` / `at` / `by`, plus `stuck_at` — the first
+stage not yet done.
+
+### 48.1 Not one new fact is derived
+
+Every stage reads the actor + timestamp **its own home already records**. The report is a composition,
+not a derivation, which is why it cannot drift from the screens it summarises:
+
+| stage | done when | `by` / `at` from |
+|---|---|---|
+| `closing` **Daily Closing** | ≥1 `daily_closing` row for the store-day | `employee_name` / **latest** `submitted_at` |
+| `dm_verify` **DM verified** | a `daily_closing_verification` row with `verified` truthy | `verified_by` / `verified_at` |
+| `pickup` **Cash pickup** | **every** envelope on the day is picked up | `picked_up_by` / `picked_up_at` |
+| `handover` **Cash handover** | every picked envelope has a disposition (deposited, or handed to mgmt) | `handed_to` or `'bank deposit'` / `deposited_at`, **plus** `mgmt_confirmed_by` / `_at` as the receipt pair |
+| `mgmt_review` **Management review** | ≥1 `envelope_count` row for the store-day | `counted_by` / `counted_at` (§47) |
+
+Stages 3 and 4 are read off **`deposit_accountability.day_accountability`'s own day rows** — the same
+function the green-day board runs — rather than a second walk of the pickup tables, so the chain and the
+board can never disagree about what happened to an envelope. `day_accountability`'s envelope dict gained
+`picked_up_at` and `deposited_at` (additive; no existing consumer read those keys, no existing value
+changed).
+
+**`at` is the LATEST submission, deliberately.** A store-day is not filed until its last rep has filed;
+reporting the earliest would call a half-finished day done at its first row's timestamp.
+
+### 48.2 The spine — what makes "or not" answerable
+
+A store that filed **nothing** has no row to key on, so it can only be reported as missing against a list
+of stores that *should* have filed. That rule already existed, **inline**, in the cash-pickup screen's
+`not_closed` straggler list: *an ACTIVE store, passing the viewer's keyset and the screen's store/market
+filters, with no `daily_closing` row for the date.* It is now
+**`deposit_accountability.expected_store_codes`**, and both callers dereference it — "this store did not
+file" must not be able to mean two different things on two screens. The chain's spine is that function ×
+`date_span(start, end)`.
+
+A store-day **not** in the spine that carries an artefact anyway (an inactive store that filed) is still
+reported, never silently dropped.
+
+| fact | home | callers |
+|---|---|---|
+| which stores owe a closing | **`deposit_accountability.expected_store_codes`** | `GET /closing/pickups` (`not_closed`), the chain |
+| what happened to an envelope | `deposit_accountability.day_accountability` | the green-day board, the chain |
+| the stage vocabulary (keys, order, wording) | `deposit_accountability.STAGE_KEYS` / `STAGE_LABELS` / `stage_catalog()` | served as `stages`; **the screen spells no stage key and no stage label** |
+| a UUID vs an already-human name | **`core.actors.is_actor_uid` / `resolve_actor_names`** | the chain (mixed-vintage actor columns) |
+
+### 48.3 Where the owner's five names land
+
+Stated so it can be corrected in one line rather than guessed at twice. **"Cash Handover"** is the DM's
+disposition — the cash leaving their hands, to the bank or to management — and management's **receipt
+handshake** (mig-943 `mgmt_confirmed`, the thing the GREEN rule already waits for) rides in that same cell
+as its second actor pair, because confirming receipt completes a handover rather than being a separate
+step. **"Management review"** is the Management Envelope Receipt (§47) — management counting the envelope
+and recording short/over. Both facts are on every row either way, so if the owner means `mgmt_confirmed`
+by "management review", it is a change of which cell shows it, never a change of what is read.
+
+### 48.4 Mixed-vintage actor columns — a name is never mangled
+
+Live data, 2026-10-02: `verified_by` holds DM **names** (`Rana` 331, `Ismail` 268), `picked_up_by` and
+`handed_to` likewise; `envelope_count.counted_by` holds an actor **UUID** since §47 and the retired
+`'management'` sentinel before it. So `core.actors` gained `is_actor_uid` and `resolve_actor_names`: only
+UUIDs are sent to the resolver, an already-human string maps to **itself**, and an unresolved UUID maps to
+itself rather than `None`. The UUID test lives next to the resolver so each caller does not re-guess it.
+
+### 48.5 WHAT THE FIRST RUN SHOWS — measured, read-only, on the owner's org
+
+HOUSE `00000000-…-0001`, **2026-09-01 → 2026-09-10**: 29 stores × 10 days = **290 store-days**, of which
+**0 are fully accounted**.
+
+| stage | done | missing | store-days stuck here |
+|---|---|---|---|
+| Daily Closing | 188 | **102** | 102 |
+| DM verified | 128 | **162** | 61 |
+| Cash pickup | 133 | **157** | 16 |
+| Cash handover | **16** | **274** | **110** |
+| Management review | **1** | **289** | 1 |
+
+The chain breaks hardest at **handover**: `cash_pickup` holds 764 rows and **640 of them have no
+disposition at all** — the DM collected the cash and the system never recorded where it went.
+`envelope_count` holds **one row in the entire org**, carrying the legacy `'management'` sentinel, so
+management review has effectively never been performed. The furthest any store-day got in that window:
+**B-117 2026-09-04** — filed by Rohit 09-04, verified by Rana 09-07, picked up by Rana **09-12**, handed
+over by Rajiv **09-26**, never reviewed.
+
+**A LIMITATION, STATED.** The expectation rule is inherited, not invented: *every active store owes a
+closing every day in the range.* The platform has no notion of a holiday, a closure or a day a store was
+not staffed, so some portion of those 102 missing closings will be days a store was legitimately shut.
+The report is therefore honest about **what was recorded**, and the denominator is a roster fact rather
+than a staffing fact. Narrowing it would mean a new "was this store open" source, which does not exist
+yet and is not invented here.
+
+### 48.6 Lock
+
+`backend/harness_accountability_chain.py` — **106 checks**, stdlib, DB-free, run by `carrier-vocab-guard`.
+§A is a **byte-identity** section: a replica of the original inline `not_closed` filter chain is the
+oracle across ten filter combinations, so the extraction is *proven* not to have changed that live screen
+rather than asserted to. The rest fails the build when: a verification row's mere existence counts as
+verified; the earliest rather than latest submission is reported; an unpicked envelope is ignored so a
+1-of-2 day reads as collected; `undisposed` is treated as handed over (which would hide the 640-row gap);
+a store-day absent from the spine vanishes from a "done or not" report; the endpoint re-derives an
+envelope's state, drops its org scope or its keyset, or stops dereferencing `day_accountability`,
+`expected_store_codes`, `stage_catalog` or `core.actors`; or the screen hardcodes a stage key or label.
+Each rule carries an armed control.
+
+**No migration. No money moved. No money math touched** — every figure the chain shows is a date, a name
+or a count. Index: §48.

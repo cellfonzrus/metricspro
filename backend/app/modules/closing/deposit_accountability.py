@@ -165,6 +165,13 @@ def day_accountability(pickup_rows):
                 # rollup below folds the rows that are ACTUALLY ON SCREEN (post-keyset), rather
                 # than re-reading the pickup tables and risking a different population.
                 "picked_up_by": r.get("picked_up_by"),
+                # WHEN it was collected / banked (mig 034 / 089). Added 2026-10-02 for the
+                # five-stage chain, which reads its pickup and handover timestamps off THESE
+                # envelopes rather than re-walking the pickup tables — so the chain and this board
+                # can never disagree about when an envelope moved. Additive: no existing consumer
+                # reads these keys, and no value already here changed.
+                "picked_up_at": r.get("picked_up_at"),
+                "deposited_at": r.get("deposited_at"),
                 # mig 990 — the DM's statement that they opened and counted this envelope
                 "envelope_opened": _envelope_opened(r),
                 # mig 949 — the DM's actual count at pickup (None = not recorded, never fake 0)
@@ -371,3 +378,277 @@ def pickup_deposit_line(pickup_rows):
             "flagged": bool(r.get("deposit_flagged")), "deposited_at": r.get("deposited_at"),
         })
     return out
+
+
+# ── WHICH STORE-DAYS A CLOSING IS EXPECTED FROM — one home (owner 2026-10-02) ───────────────────
+# "Daily Closing done or not" needs the DENOMINATOR: a store that filed nothing has no row to key
+# on, so it can only be reported as missing against a list of stores that SHOULD have filed.
+#
+# That rule already existed, inline, in the cash-pickup screen's `not_closed` straggler list
+# (router.py, owner bug reports 2026-08-06 / 2026-09-07): an ACTIVE store, passing the viewer's
+# keyset and the screen's store/market filters, that has no `daily_closing` row for the date. Both
+# that list and the accountability chain now DEREFERENCE this function, because "this store did not
+# file" must not be able to mean two different things on two screens (the duplicate defect the index
+# rules forbid). The filters arrive as already-resolved predicates/sets so this stays PURE — the
+# caller owns the I/O, exactly as it did before.
+def expected_store_codes(store_rows, keyset_ok=None, store_set=None, market_set=None,
+                         market_of=None):
+    """PURE: the store codes a closing is expected from, in `store_rows` order.
+
+    · a blank `store_code`, or `is_active is False`, is never expected (the roster holds non-store
+      entries and closed stores);
+    · `keyset_ok(code, address)` — the viewer's span (None ⇒ no keyset restriction);
+    · `store_set` — UPPERCASE codes the screen is filtered to (falsy ⇒ no filter);
+    · `market_set` — casefolded market names the screen is filtered to (falsy ⇒ no filter);
+      a store with a BLANK market is never excluded by a market filter (it has nothing to compare,
+      and dropping it would hide a store rather than report it) — the pre-existing `and mk` posture.
+    · `market_of(code)` — fallback market when the roster row's own is blank.
+    """
+    out = []
+    for s in store_rows or []:
+        s = s or {}
+        code = (s.get("store_code") or "")
+        if not code or s.get("is_active") is False:
+            continue
+        if keyset_ok is not None and not keyset_ok(code, s.get("address")):
+            continue
+        if store_set and code.upper() not in store_set:
+            continue
+        mk = (s.get("market") or "").strip() or ((market_of or (lambda _c: ""))(code) or "")
+        if market_set and mk and mk.casefold() not in market_set:
+            continue
+        out.append(code)
+    return out
+
+
+def date_span(start, end):
+    """PURE: every ISO date from start..end inclusive. The chain's spine is (expected store × day),
+    so the days have to be enumerated rather than taken from whatever rows happen to exist."""
+    from datetime import date as _date, timedelta as _td
+    try:
+        a, b = _date.fromisoformat(str(start)[:10]), _date.fromisoformat(str(end)[:10])
+    except ValueError:
+        return []
+    if a > b:
+        a, b = b, a
+    return [(a + _td(days=i)).isoformat() for i in range((b - a).days + 1)]
+
+
+# ── THE FIVE-STAGE ACCOUNTABILITY CHAIN (owner 2026-10-02) ──────────────────────────────────────
+# Owner, verbatim: "we need to see in a daily report or date range report for the following /
+#   Daily Closing done or not with dates and by who / DM verified or not with dates and by who /
+#   CAsh pick with dates and by who / Cash Handover with dates and by who / managment review with
+#   dates and by who"
+#
+# NOT ONE NEW FACT IS DERIVED HERE. Every stage reads the actor + timestamp its own home already
+# records, and the two middle stages are read off `day_accountability`'s OWN day rows rather than
+# re-walking the pickup tables — so the chain and the green-day board can never disagree about what
+# happened to an envelope:
+#
+#   stage        done when                                   by / at come from
+#   closing      ≥1 daily_closing row for the store-day      employee_name / submitted_at
+#   dm_verify    a verification row with verified truthy      verified_by / verified_at
+#   pickup       every envelope on the day is picked up       picked_up_by / picked_up_at   (day row)
+#   handover     every picked envelope has a disposition      handed_to|'bank' / deposited_at,
+#                (deposited, or handed to management)         plus mgmt_confirmed_by / _at
+#   mgmt_review  ≥1 envelope_count row for the store-day      counted_by / counted_at
+#
+# WHERE THE OWNER'S FIVE NAMES LAND, stated so it can be corrected in one line rather than guessed
+# at twice: "Cash Handover" is the DM's disposition — the cash leaving their hands, to the bank or to
+# management — and management's RECEIPT handshake (mig-943 mgmt_confirmed, the thing the GREEN rule
+# already waits for) is carried in that same cell as its second actor pair, because confirming
+# receipt completes a handover rather than being a separate step. "Management review" is the
+# Management Envelope Receipt (§47) — management counting the envelope and recording short/over.
+# Both facts are on every row either way, so if the owner means mgmt_confirmed by "management
+# review", it is a change of which cell shows it, never a change of what is read.
+STAGE_KEYS = ("closing", "dm_verify", "pickup", "handover", "mgmt_review")
+STAGE_LABELS = {
+    "closing": "Daily Closing",
+    "dm_verify": "DM verified",
+    "pickup": "Cash pickup",
+    "handover": "Cash handover",
+    "mgmt_review": "Management review",
+}
+# The screen renders these; it spells no stage key and no stage label of its own (the §47 posture).
+def stage_catalog():
+    """PURE: [{key, label}] in chain order — the selector/column vocabulary, served by the API."""
+    return [{"key": k, "label": STAGE_LABELS[k]} for k in STAGE_KEYS]
+
+
+def _names(vals):
+    """Distinct, blank-dropped, order-stable — several reps file one store-day, several DMs can
+    collect it. Returns a list; the caller joins for display."""
+    out = []
+    for v in vals or []:
+        s = str(v or "").strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def _cell(done, at=None, by=None, detail="", **extra):
+    c = {"done": bool(done), "at": at or None, "by": by or [], "detail": detail}
+    c.update(extra)
+    return c
+
+
+def _max(a, b):
+    """The later of two timestamps, treating blank as absent (string ISO compare — the same
+    posture day_accountability already uses for the latest confirmation)."""
+    a, b = str(a or ""), str(b or "")
+    return (a if a >= b else b) or None
+
+
+def stage_chain(expected_keys, closing_rows, verification_rows, day_rows, count_rows):
+    """PURE: → (rows, summary). One row per (store_code, day) with the five stage cells.
+
+    `expected_keys` is the SPINE — an iterable of (store_code, day) from `expected_store_codes` ×
+    `date_span`. A store-day with no artefact at all still appears, reading "closing not done",
+    which is the whole point of "done or not"; and any store-day carrying an artefact is added even
+    when it is not in `expected_keys` (an inactive or out-of-roster store that filed anyway is a
+    real thing to see, never silently dropped).
+
+    `day_rows` are `day_accountability`'s own rows — pass them straight through.
+    """
+    chain = {}
+
+    def slot(code, day):
+        k = (str(code or "").strip() or "?", str(day or "")[:10])
+        if not k[1]:
+            return None
+        return chain.setdefault(k, {"closing": [], "ver": None, "day": None, "counts": []})
+
+    for code, day in expected_keys or []:
+        slot(code, day)
+    for r in closing_rows or []:
+        s = slot((r or {}).get("store_code"), (r or {}).get("close_date"))
+        if s is not None:
+            s["closing"].append(r)
+    for r in verification_rows or []:
+        s = slot((r or {}).get("store_code"), (r or {}).get("close_date"))
+        if s is not None:
+            # one verification row per store-day by design; last write wins, as the upsert does
+            s["ver"] = r
+    for r in day_rows or []:
+        s = slot((r or {}).get("store_code"), (r or {}).get("day"))
+        if s is not None:
+            s["day"] = r
+    for r in count_rows or []:
+        s = slot((r or {}).get("store_code"), (r or {}).get("close_date"))
+        if s is not None:
+            s["counts"].append(r)
+
+    rows = []
+    for (code, day), g in sorted(chain.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        rows.append(_chain_row(code, day, g))
+    return rows, chain_summary(rows)
+
+
+def _chain_row(code, day, g):
+    crs, ver, dayr, cnts = g["closing"], g["ver"], g["day"], g["counts"]
+
+    # 1. DAILY CLOSING — the rep's filing. `at` is the LATEST submission of the day: a store-day is
+    #    not filed until its last rep has filed, and reporting the earliest would call a
+    #    half-finished day done at its first row's timestamp.
+    c_at = None
+    for r in crs:
+        c_at = _max(c_at, (r or {}).get("submitted_at") or (r or {}).get("created_at"))
+    closing = _cell(bool(crs), c_at, _names((r or {}).get("employee_name") for r in crs),
+                    ("%d row(s)" % len(crs)) if crs else "no closing filed", rows=len(crs))
+
+    # 2. DM VERIFIED — a verification row whose `verified` is truthy. A row that exists but is not
+    #    verified is NOT done, and says so, rather than being counted by its mere existence.
+    v_ok = bool(ver and ver.get("verified"))
+    dm_verify = _cell(v_ok, (ver or {}).get("verified_at"),
+                      _names([(ver or {}).get("verified_by")]),
+                      "verified" if v_ok else ("row present, not verified" if ver else "not verified"),
+                      note=(ver or {}).get("note") or None)
+
+    # 3/4. PICKUP + HANDOVER — read off day_accountability's envelopes, never re-derived.
+    envs = (dayr or {}).get("envelopes") or []
+    picked = [e for e in envs if e.get("state") != "unpicked"]
+    unpicked = [e for e in envs if e.get("state") == "unpicked"]
+    p_at, pickers = None, []
+    for e in picked:
+        p_at = _max(p_at, e.get("picked_up_at"))
+        pickers.append(e.get("picked_up_by"))
+    pickup = _cell(bool(picked) and not unpicked, p_at, _names(pickers),
+                   ("%d of %d envelope(s) picked up" % (len(picked), len(envs))) if envs
+                   else "no envelope recorded",
+                   envelopes=len(envs), picked=len(picked), unpicked=len(unpicked))
+
+    # A picked envelope is HANDED OVER once its disposition is recorded — deposited at the bank, or
+    # handed to management. `undisposed` is precisely "the DM still holds it", which is the gap the
+    # live data shows on most pickups.
+    undisposed = [e for e in picked if e.get("state") == "undisposed"]
+    handed = [e for e in picked if str(e.get("disposition") or "").strip().lower() == "handed_to_mgmt"]
+    deposited = [e for e in picked if str(e.get("disposition") or "").strip().lower() == "deposited"]
+    h_at, receivers = None, []
+    for e in handed:
+        h_at = _max(h_at, e.get("mgmt_confirmed_at"))
+        receivers.append(e.get("handed_to"))
+    for e in deposited:
+        h_at = _max(h_at, e.get("deposited_at"))
+    conf_at, confirmers = None, []
+    for e in picked:
+        if e.get("mgmt_confirmed"):
+            conf_at = _max(conf_at, e.get("mgmt_confirmed_at"))
+            confirmers.append(e.get("mgmt_confirmed_by"))
+    handover = _cell(
+        bool(picked) and not undisposed, h_at,
+        _names(receivers + (["bank deposit"] if deposited else [])),
+        ("%d handed, %d deposited, %d still with the DM" % (len(handed), len(deposited), len(undisposed)))
+        if picked else "nothing picked up to hand over",
+        handed=len(handed), deposited=len(deposited), undisposed=len(undisposed),
+        # The RECEIPT handshake the GREEN rule waits for — the handover's second actor pair.
+        confirmed_rows=len(confirmers), confirmed_by=_names(confirmers), confirmed_at=conf_at,
+        missing_slip=(dayr or {}).get("missing_slip_rows") or 0,
+        green=bool((dayr or {}).get("green")))
+
+    # 5. MANAGEMENT REVIEW — the Management Envelope Receipt (§47): management counted it.
+    m_at, counters, statuses = None, [], []
+    for r in cnts:
+        m_at = _max(m_at, (r or {}).get("counted_at"))
+        counters.append((r or {}).get("counted_by"))
+        st = str((r or {}).get("status") or "").strip().lower()
+        if st:
+            statuses.append(st)
+    mgmt_review = _cell(bool(cnts), m_at, _names(counters),
+                        (", ".join(sorted(set(statuses))) if statuses else "counted")
+                        if cnts else "not reviewed",
+                        counts=len(cnts), statuses=sorted(set(statuses)))
+
+    stages = {"closing": closing, "dm_verify": dm_verify, "pickup": pickup,
+              "handover": handover, "mgmt_review": mgmt_review}
+    # WHERE IT IS STUCK — the first stage in chain order that is not done. One word per store-day,
+    # so a 30-day board answers "what is holding this up" without reading five columns.
+    stuck = next((k for k in STAGE_KEYS if not stages[k]["done"]), None)
+    return {
+        "store_code": code, "day": day,
+        "stages": [dict(stages[k], key=k, label=STAGE_LABELS[k]) for k in STAGE_KEYS],
+        "stuck_at": stuck, "stuck_label": STAGE_LABELS.get(stuck) if stuck else None,
+        "stages_done": sum(1 for k in STAGE_KEYS if stages[k]["done"]),
+        "complete": stuck is None,
+    }
+
+
+def chain_summary(rows):
+    """PURE: per-stage done counts + the stuck histogram, over exactly the rows handed in (so a
+    keyset-filtered board's summary can never count a store-day the viewer cannot see)."""
+    rows = rows or []
+    by_stage = {}
+    for i, k in enumerate(STAGE_KEYS):
+        done = sum(1 for r in rows if (r.get("stages") or [{}] * 5)[i].get("done"))
+        by_stage[k] = {"key": k, "label": STAGE_LABELS[k], "done": done,
+                       "missing": len(rows) - done}
+    stuck = {}
+    for r in rows:
+        if r.get("stuck_at"):
+            stuck[r["stuck_at"]] = stuck.get(r["stuck_at"], 0) + 1
+    return {
+        "store_days": len(rows),
+        "complete_days": sum(1 for r in rows if r.get("complete")),
+        "by_stage": [by_stage[k] for k in STAGE_KEYS],
+        "stuck_at": [{"key": k, "label": STAGE_LABELS[k], "store_days": stuck.get(k, 0)}
+                     for k in STAGE_KEYS if stuck.get(k)],
+    }
