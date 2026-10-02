@@ -568,7 +568,7 @@ export default function ExpensesPage() {
             title="Fill the Employee Salaries row from worked hours (actual where clocked, else scheduled) × pay rate">
             {salaryBusy ? '…' : '↻ Salaries from hours'}</button>
           <button className="btn" onClick={fillCommission} disabled={commissionBusy || loading}
-            title="Fill the Employee Commission row from calculated rep commissions (rep_commissions) per store">
+            title="Fill the Employee Commission row from calculated rep commissions, per store">
             {commissionBusy ? '…' : '↻ Commission from calc'}</button>
           <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text2)', cursor: 'pointer' }}
             title="Save automatically ~1s after each edit">
@@ -684,7 +684,7 @@ export default function ExpensesPage() {
       )}
       {commissionFrom && !loading && (
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fef9f0', borderLeft: '4px solid #f59e0b', fontSize: 13 }}>
-          🧮 <b>Employee Commission auto-filled from calculated commissions</b> for {period} (rep_commissions total payout, summed per store).
+          🧮 <b>Employee Commission auto-filled from calculated commissions</b> for {period} (calculated rep commission total payout, summed per store).
           Edit to override or hit <b>↻ Commission from calc</b> to re-pull. Save All to keep.
         </div>
       )}

@@ -1127,7 +1127,7 @@ async def dispatch(body: PayrollDispatchIn, authorization: str = Header(default=
 
     from app.modules.notify.channels.email_resend import send_email, is_configured
     if not is_configured():
-        raise HTTPException(400, "email is not configured (RESEND_API_KEY unset) — cannot send statements")
+        raise HTTPException(400, "Email sending isn't set up yet — cannot send statements. Contact support to switch it on.")
 
     sent, failed = [], []
     for email, g in groups.items():

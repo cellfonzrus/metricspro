@@ -773,7 +773,7 @@ COMMISSION_LINE_FEED_SHAPES = {
         "amount": "amount", "label": "payment_type", "period": "period", "date": "payment_date",
         "stream": STREAM_COMMISSION, "label_classified": True,
         "note": ("Per-payment-row feed keyed by the mobile number (and IMEI beside it). Each row's "
-                 "label is classified through the org's own payment_categories config, so only what "
+                 "label is classified through the org's own payment-category settings, so only what "
                  "the platform already calls Commission is counted."),
     },
     "subscriber_residual": {

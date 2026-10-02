@@ -229,8 +229,8 @@ def start(body: ImpersonationStartIn, request: Request, org_id: str = ORG_ID, au
     # into a session that silently still acts as themselves — refuse instead of confusing them.
     from app.core.tenant_middleware import _enabled as _mw_enabled
     if not _mw_enabled():
-        raise HTTPException(503, "Viewing the app as an employee needs tenant enforcement to be on "
-                                 "(MULTI_TENANT_ENFORCE). Ask your operator to enable it.")
+        raise HTTPException(503, "Viewing the app as an employee needs server-side tenant enforcement "
+                                 "to be on. Ask your operator to enable it.")
     target_id = str(body.target or body.target_auth_id or "").strip()
     if not target_id:
         raise HTTPException(400, "Choose the employee you want to view the app as.")

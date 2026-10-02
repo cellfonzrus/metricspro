@@ -57,6 +57,7 @@ Primary code homes:
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
 | 19.31 | **One activation count · Feed vs Transactions** | "How many new activations, and says who? What does the carrier's report claim against what the store's transactions say, and what accounts for every difference — a counting definition, a stale feed slice, or nothing?" |
 | 19.32 | **Daily port-out fraud report** | "Which port-in activations ported out again before they paid for themselves, how much was sold alongside them, and — said in the same breath — how many could we not decide about at all?" |
+| 19.37 | **No database / hosting names in customer copy** | "Why does a page / toast / tooltip / API message say `raw_comp_report`, `commcalc.store_mapping`, `RESEND_API_KEY` or \"Railway\" — and what stops the next one?" |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
@@ -5008,6 +5009,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| *(no table added)* — the §19.37 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.37) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
 | Actor columns stamped by `router._caller_uid` — `installment_category_rule.updated_by` (**UUID**, mig 245), `plan_installment_schedule.updated_by` + `plan_installment_schedule_audit.changed_by` (mig 210), `commission_org_config.updated_by` (mig 201), `discrepancy_results.appealed_by` (mig 947), `commission_payout_ledger.recorded_by` (mig 267), `ingest_store_guard.updated_by` / `ingest_store_quarantine.decided_by` (mig 280), `targets.updated_by` (mig 006), `financing_target.updated_by` (mig 272) — **who did this: a uid or NULL, never a sentinel** (§19.34) | the plan-installment / category / matcher / payout-config / expected-commission editors, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, the ingest-guard + targets + financing-target saves — all via ONE helper `_caller_uid` (`_mpc_who` / `_xc_who` / `_agency_who` dereference it) | the UI through ONE display rule `frontend/src/lib/actor.ts::actorLabel` (NULL / legacy `'web'` → "system"); lock `harness_actor_uid_lock.py` |
 | `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
@@ -5195,6 +5197,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| **Every JSON response** (no route added) — a MESSAGE-key value carrying a RUNTIME database / hosting error (`setup_notice.SYSTEM_INTERNAL`: duplicate key, violates … constraint, permission denied for table, an error dict `'code': '23505'`, `postgrest…APIError`, a `*.supabase.co` host) reaches a non-super-admin as `SYSTEM_NOTICE` from that sentence on; data rows never read; the original to the server log | `core/setup_notice.SetupNoticeMiddleware` (unchanged registration) | §19.37 |
 | **Every JSON response** (no route added) — a MESSAGE-key value (`detail`, `note`, `hint`, `error`, … — `setup_notice.MESSAGE_KEYS`, never a data row / list) carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; data cells are never read; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
@@ -5446,6 +5449,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.37) |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
@@ -5606,6 +5610,74 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.37 **A DATABASE OR HOSTING NAME IN CUSTOMER-FACING COPY — the §19.36 home, extended to the class it named (owner 2026-10-02; fixed).**
+Owner: *"hide database names from the users"*. §19.36 removed MIGRATION names and named what it left unlocked: env-var
+names, hosting vendors, raw table names in tooltips (the ePay sweep checkboxes said `→ raw_comp_report`).
+**The class, not the instance:** an internal STORAGE or INFRASTRUCTURE identifier reached rendered copy or an API
+message — a schema-qualified table (`storeops.manual_hours entries — …`, `commcalc.store_mapping`), a bare table /
+view identifier (`raw_sales`, `raw_mi`, `rep_commissions`, `carrier_commission`, `store_mapping`), a table the API
+sends as DATA rendered as it came (`{r.target_table}`, `<code>{sb.table}</code>`, `count of ${s.table}`), an
+environment-variable name (`RESEND_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `WHATSAPP_*`, `ANTHROPIC_API_KEY`,
+`VISION_AUDIO_ENABLED`), a hosting vendor ("on Railway", "Supabase", "Postgres 42501"), and — at run time — the
+database's own error text interpolated into a message (`detail=f"save failed: {e}"` → "duplicate key value violates
+unique constraint …", `{'code': '23505', 'details': 'Key (org_id, code)=…'}`).
+**Checked first and reused (duplicate gate):** §19.36's whole mechanism — `core/setup_notice.py` (same module, same
+`MESSAGE_KEYS`, same `neutralize` walk that never enters data lists, same `SetupNoticeMiddleware` boundary, same
+super-admin gate `core.router._require_super_admin`), the same lock file and CI job (`harness_carrier_vocab_guard.py`,
+`carrier-vocab-guard.yml`), the same display-copy extractor (`display_copy`), the same comment / `detail=` handling
+(`_setup_code`), the same NAV-verified super-admin excusals (`SETUP_SUPER_ADMIN_PAGES` + the operator tree) and the same
+backend emission finder (`setup_emissions` judged under `is_message_key`). The vocabulary is DERIVED, never listed:
+tables / views / schemas from every `CREATE` in `database/migrations` plus `data_lineage_registry.all_ingest_tables()`
+(the ONE place code names a feed table); env names from `config.Settings` fields + every `os.getenv` / `os.environ` /
+`_env` read in `backend/app` + every `process.env` read in `frontend/src`. A feed's plain name follows the existing
+report-kind registry labels (`report_kinds.HOUSE_KINDS`) and the MA pull registry's display names (`report_pull.py`) —
+no new vocabulary was invented.
+
+| Side | Home | What it does |
+|---|---|---|
+| backend | `app/core/setup_notice.py` — **`SYSTEM_INTERNAL`** (runtime DB / hosting error by SHAPE: duplicate key / violates … constraint / null value in column / permission denied for table / invalid input syntax / value too long / statement timeout / deadlock / SQLSTATE / an error-dict `'code': '23505'` / `postgrest…APIError` / a `*.supabase.co` · `*.railway.app` · `*.vercel.app` host), **`is_system_internal`**, **`SYSTEM_NOTICE`** ("Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."); `neutralize_text` replaces the first such sentence AND the rest of the text (the error's `details` / `hint` tail) — a setup hint keeps precedence (→ `SETUP_NOTICE`); `_MARKERS` carries the new shapes | the runtime boundary — the only part that cannot be reworded at source; data rows still never read |
+| frontend | `frontend/src/lib/sourceLabels.ts` — **`sourceLabel(table)`**: a feed's plain name ("MI & ATU report", "monthly sales upload", "Comprehensive comp report", "calculated rep commissions" …); an unknown table still never prints as an identifier (`raw_` dropped, underscores → spaces) | every page that names a feed in copy, or renders a `target_table` / `source_table` / `table` the API sent |
+| both | words reworded AT SOURCE — 80 frontend sites in 43 files (+ the new `lib/sourceLabels.ts`), 83 backend message strings in 37 modules | see the PR's before/after table |
+
+**Swept (frontend):** accounts (+ companies, device-purchases), closing auto-import setup, commcalc commission-explain /
+-import / -ledger (incl. the MA feed availability line that printed table keys) / reports / payout-plans /
+payout-schedules / plan-installments / planMatch / commissionExport / accessory-definition / gp-category-map / kpi /
+exec-mtd / sales-report / expenses / whatif / schematic / vip / epay sweep tooltips / connectors / daily-commission /
+report-mappings / upload / ma-upload / ma-handsets / ma-overview-recon / ingest-guard / email-imports /
+inventory-sold-recon / device-cost-recon (+ its export column) / UploadTracePanel / ShowsIn, onboarding intake
+stage 2, pos onboarding, notify (email + WhatsApp setup), payroll Actual-Hours drill-down, vision settings, the
+training flowchart (carrier implementation), the Roles editor help text (`rbac.ts`).
+**Swept (backend):** the closing / pay-visibility 403s (`storeops.tenants.*_roles` → "the … roles in the company
+settings"), Google-sheet / email / WhatsApp / field-encryption / vision "not configured" errors (env names → "isn't
+set up yet — contact support"), Store Mapping messages in the commission engine, closing health checks, attention
+items, payout-accrual / plan-options / what-if / labour-coverage / MA-overview notes, the upload-path refusals
+(`commcalc.{table}` → "this report's destination"), failure-log `remediation` texts that a tenant admin reads on
+`/failures` (Railway / `core.failure_log` / `storeops.tenants.money_guard_config`), the AI token-rate reasons.
+**Excused by name (verified, stale FAILS):** the §19.36 super-admin pages and the operator console; plus
+`INFRA_SUPER_ADMIN_PAGES` = `/admin/tenants` (Super Admin Toolbox — its tenant-isolation switches ARE env vars; verified
+platform-only at every NAV occurrence). Reviewed backend allow (`INFRA_BACKEND_ALLOW`): the identity-outage
+`failure_log` row in `core/tenant_middleware.py` — written under the PLATFORM org, its remediation names the
+`IDENTITY_BACKEND_503` break-glass on purpose (`harness_identity_backend_503` pins it).
+**Lock** `harness_carrier_vocab_guard.py` §INFRA (`infra_guard`, run by `main()` beside §SETUP; CI
+`carrier-vocab-guard.yml`, whose paths now include `database/migrations/**`): (R1) the registries derive non-empty;
+(1) frontend — an identifier of the four classes in any display segment (string literal, JSX text, prose line, a lone
+`<code>TOKEN</code>`), or a `target_table` / `source_table` / `table` field rendered without `sourceLabel()`, FAILS
+outside the excusals; (2) backend — every string emitted under a MESSAGE key is read AFTER the boundary
+(`neutralize_text`) and FAILS if it still names one; (IW1–IW4) `neutralize_text` dereferences `is_system_internal`,
+the prefilter carries its markers, every `sourceLabels.ts` key is a registered table, the scan dereferences
+`display_copy`; boundary S1–S7 DB-free (a PostgREST duplicate-key dict in `detail` → lead sentence + `SYSTEM_NOTICE`,
+logged, super admin sees it; seven runtime shapes; setup precedence; the app's own "Duplicate store code" /
+"Permission denied: your role…" untouched; data rows saying "duplicate key…" / `raw_mi` / "Supabase" byte-identical);
+P4–P5 performance (a 5 MB body whose rows carry those words is never parsed; each static scan < 30 s); controls
+I1–I18 (I1 = the shipped `→ raw_comp_report` tooltip put back → RED; I6 = ALL-CAPS carrier codes `ATU_MI` / `TWP_ALL` /
+`BYOD_ACT` / `MA_TX` → GREEN; I7 = identifiers used as code → GREEN; I10 = a super-admin page → GREEN; I14 = a hint the
+boundary replaces whole → GREEN; I15 = a table name as DATA under a non-message key → GREEN).
+**Not covered (stated, not hidden):** column names shown as prose (no derivable registry — a column is also how a
+carrier report header is spelled; the flowchart's `carrier_id` / `connector_id` were reworded by hand); a table
+name a page renders from a field NOT named `target_table` / `source_table` / `table`; a backend string reaching a
+client through a helper's argument or a non-message key (the §19.36 emission finder's reach); DB data rows that
+carry an identifier (e.g. the System Schematic's lineage rows — data, never rewritten); the word "env var" itself.
 
 §19.36 **A MIGRATION NAME IN CUSTOMER-FACING COPY — "setup isn't finished" has ONE home (owner 2026-09-29; fixed).**
 Owner, on Admin → Display Labels (*"Needs migration 068_ui_label_override.sql. Edits show on the next sidebar load."*):

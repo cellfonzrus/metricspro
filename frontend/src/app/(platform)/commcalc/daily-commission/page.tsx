@@ -7,6 +7,7 @@ import { actorLabel } from '@/lib/actor'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // DAILY COMMISSION — accrued (expected) commission per rep per day, cash advanced against it, and the
 // balance. The commission side of the Envelope Expense/Payout package (owner 2026-08-04), with the
@@ -690,7 +691,7 @@ export default function DailyCommissionPage() {
                 </table>
               )}
               <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10 }}>
-                Read from <b>{drill.components?.source_table || '—'}</b>. Recomputed at {String(drill.computed_at || '').slice(0, 19).replace('T', ' ')}.
+                Read from <b>{sourceLabel(drill.components?.source_table) || '—'}</b>. Recomputed at {String(drill.computed_at || '').slice(0, 19).replace('T', ' ')}.
               </div>
             </div>
           )}

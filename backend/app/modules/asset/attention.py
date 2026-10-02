@@ -169,7 +169,7 @@ def _p_asset_market_gap(client, org_id, ctx):
                   f"out of every market-filtered asset report (Charges Dashboard, RMA, Aging, "
                   f"Owed-Weekly) — or use the new \"(no market)\" filter option on any of those "
                   f"reports to see them directly. Fix: 1) open Settings → Stores and confirm/set the "
-                  f"market for that store (the dropdown there edits commcalc.store_mapping directly "
+                  f"market for that store (the dropdown there edits Store Mapping directly "
                   f"— a Store-Matching alias does NOT fix this); if the store isn't listed there at "
                   f"all, create it in StoreOps first with its address spelled like VIP's file "
                   f"(matching now tolerates case/spacing and common St/Street, Ave/Avenue, Rd/Road, "

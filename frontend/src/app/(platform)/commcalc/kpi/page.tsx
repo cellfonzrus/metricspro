@@ -196,7 +196,7 @@ export default function KPIPage() {
       ) : count === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
           {view === 'store'
-            ? 'No store KPI data — the Store DLAR (raw_dlar_store) is empty for this period.'
+            ? 'No store KPI data — the Store KPI report (DLAR) is empty for this period.'
             : 'No rep KPI data — import the DLAR report and run the calculation.'}
         </div>
       ) : view === 'rep' ? (

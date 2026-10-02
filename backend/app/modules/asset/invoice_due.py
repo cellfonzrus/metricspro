@@ -367,7 +367,7 @@ def invoice_due_filter_options(authorization: str = Header(default=""), org_id: 
         rows = (client.schema("commcalc").table("vip_invoices")
                 .select("status,location").eq("org_id", org_id).limit(20000).execute().data) or []
     except Exception as e:
-        return {"available": False, "note": f"vip_invoices not readable yet ({str(e)[:160]}). "
+        return {"available": False, "note": f"Distributor invoices not readable yet ({str(e)[:160]}). "
                                             "Has the VIP Wireless Workbook been uploaded? "
                                             "(migration 008 must also be applied.)"}
     statuses = sorted({r["status"] for r in rows if r.get("status")})
@@ -391,7 +391,7 @@ def invoice_due_list(status: str = "", date_from: str = "", date_to: str = "", s
     try:
         invoices = _fetch_invoices(client, org_id, statuses, date_from, date_to, stores, invoice_number)
     except Exception as e:
-        return {"available": False, "note": f"vip_invoices not readable yet ({str(e)[:160]}). "
+        return {"available": False, "note": f"Distributor invoices not readable yet ({str(e)[:160]}). "
                                             "Has the VIP Wireless Workbook been uploaded? "
                                             "(migration 008 must also be applied.)", "rows": []}
     if not invoices:

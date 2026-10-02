@@ -325,7 +325,7 @@ def build_inputs_full(client, org_id, period):
             if not start:
                 # FAIL CLOSED, WITH THE REASON. No start date and no taxed sale to discover one
                 # from ⇒ book nothing rather than claim a balance from an unknown date.
-                stm["reason"] = ("no accrual start: account_config.sales_tax_accrual_start is unset "
+                stm["reason"] = ("no accrual start: the sales-tax accrual start date is not set in account settings "
                                  "and no sale line carrying tax was found for this org")
                 meta["sales_tax_payable"] = stm
             else:

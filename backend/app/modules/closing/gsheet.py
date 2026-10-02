@@ -31,7 +31,7 @@ def fetch_values(sheet_id: str, tab: str | None = None) -> tuple[list[list], str
     message if the SA key is missing or the sheet isn't shared with the service account."""
     info = sa_info()
     if not info:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is not set on the server.")
+        raise RuntimeError("The Google service-account key is not installed on the server yet — contact support.")
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
 

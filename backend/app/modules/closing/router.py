@@ -6877,8 +6877,8 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     if not _bp.can_see_cash_recon(authorization or "", org_id, client):
         raise HTTPException(403, "This screen is restricted to market managers and above "
                                  "(owner directive 2026-09-02). Employees and district managers "
-                                 "are gated out; an admin can widen storeops.tenants."
-                                 "cash_recon_visible_roles if your role should have access.")
+                                 "are gated out; an admin can widen the cash-recon visible roles in the "
+                                 "company settings if your role should have access.")
     if date:
         start = end = date
     if not (start and end):
@@ -7411,8 +7411,8 @@ def deposit_mgmt_confirm(payload: MgmtConfirmIn, org_id: str = ORG_ID,
     if not _bp.can_see_cash_recon(authorization or "", org_id, client):
         raise HTTPException(403, "Confirming receipt of handed-over cash is restricted to market "
                                  "managers and above (owner directive 2026-09-02); an admin can "
-                                 "widen storeops.tenants.cash_recon_visible_roles if your role "
-                                 "should have access.")
+                                 "widen the cash-recon visible roles in the company settings if "
+                                 "your role should have access.")
     store = (payload.store_code or "").strip()
     cdate = _date(payload.close_date or payload.date)
     if not (store and cdate):
@@ -7580,7 +7580,7 @@ def closing_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_I
     if not (cfg.get("sheet_id") or "").strip():
         raise HTTPException(400, "Set the Google sheet id first.")
     if gsheet.sa_info() is None:
-        raise HTTPException(400, "GOOGLE_SERVICE_ACCOUNT_JSON is not set on the server.")
+        raise HTTPException(400, "The Google service-account key is not installed on the server yet — contact support.")
     background_tasks.add_task(_do_closing_sweep, org_id)
     return {"status": "started"}
 
@@ -7647,13 +7647,13 @@ def closing_readiness(org_id: str = ORG_ID):
     so_n = _rc_count(client, "storeops", "stores", org_id)
     if sm_n == 0 and so_n == 0:
         issues.append({"code": "no_stores", "severity": "critical",
-                       "message": "No stores found in StoreOps or commcalc.store_mapping \u2014 create "
+                       "message": "No stores found in StoreOps or Store Mapping \u2014 create "
                                   "stores under StoreOps \u2192 Admin \u2192 Stores first; nothing else "
                                   "in Daily Closing can resolve a store until this exists."})
     elif sm_n == 0 and (so_n or 0) > 0:
         issues.append({"code": "no_store_mapping", "severity": "warning",
                        "message": f"{so_n} store(s) in StoreOps but none yet mirrored into "
-                                  "commcalc.store_mapping (the table the sales/X-report recon resolves stores "
+                                  "Store Mapping (what the sales/X-report recon resolves stores "
                                   "against) \u2014 this self-heals the next time each store is saved in "
                                   "StoreOps Admin; re-save a store if this persists."})
 
@@ -7661,7 +7661,7 @@ def closing_readiness(org_id: str = ORG_ID):
     feed_n = _rc_count(client, "commcalc", "daily_sales_feed", org_id)
     if raw_n == 0 and feed_n == 0:
         issues.append({"code": "no_sales_source", "severity": "critical",
-                       "message": f"No {_pos} sales data has ever landed in raw_sales or daily_sales_feed \u2014 "
+                       "message": f"No {_pos} sales data has ever landed (monthly sales upload or daily sales feed) \u2014 "
                                   "money/count recon and the \u2018who worked\u2019 check will stay "
                                   "recon-pending for every day. Check the daily email-import mapping (a "
                                   "*Sales* \u2192 sales rule on this tenant's mailbox under Email Imports) "
@@ -7680,8 +7680,8 @@ def closing_readiness(org_id: str = ORG_ID):
     dc_n = _rc_count(client, "commcalc", "daily_closing", org_id)
     if dc_n == 0:
         issues.append({"code": "no_closings_yet", "severity": "info",
-                       "message": "No daily_closing rows yet \u2014 reps haven't submitted via "
-                                  "/closing/submit, and/or the Google-sheet auto-import (Closing \u2192 "
+                       "message": "No daily closings yet \u2014 reps haven't submitted one on "
+                                  "Daily Closing, and/or the Google-sheet auto-import (Closing \u2192 "
                                   "Auto-Import) isn't configured for this tenant yet."})
 
     from . import tender_config, count_config
@@ -7942,7 +7942,7 @@ def put_tender_basis(client, org_id, value):
     try:
         res = client.schema("storeops").table("tenants").update({"closing_tender_basis": v}).eq("org_id", org_id).execute()
         if not (res.data or []):
-            return {"error": "this company has no storeops.tenants row — the basis could not be saved (set the company up first)"}
+            return {"error": "this company's settings record is missing — the basis could not be saved (set the company up first)"}
     except Exception as e:
         return {"error": f"the basis could not be saved (storeops.tenants.closing_tender_basis — mig 1012): {str(e)[:160]}"}
     back = tender_basis(client, org_id)
@@ -9123,7 +9123,7 @@ def _push_expense_category_pl(client, org_id, period, category_id, category_name
                 .eq("org_id", org_id).eq("status", "approved").eq("category_id", category_id)
                 .execute().data) or []
     except Exception as e:
-        return {"pushed": False, "note": f"closing_expense read failed: {e}"}
+        return {"pushed": False, "note": f"Closing expenses could not be read: {e}"}
     by_store = {}
     for r in rows:
         cd = str(r.get("close_date") or "")

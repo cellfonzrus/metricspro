@@ -240,8 +240,8 @@ def _require_module(cfg, feature=None):
                                  "enables it in Vision → Settings.")
     if feature and not C.feature_enabled(cfg, feature):
         if feature in ("audio_analytics", "behavior_scoring") and cfg.get("audio_kill_switch"):
-            raise HTTPException(403, "Voice transcript analytics is disabled for this deployment "
-                                     "(VISION_AUDIO_ENABLED is not set on the server).")
+            raise HTTPException(403, "Voice transcript analytics is switched off on the server for this "
+                                     "deployment.")
         raise HTTPException(403, f"The '{feature.replace('_', ' ')}' feature is turned off for this "
                                  "company.")
 

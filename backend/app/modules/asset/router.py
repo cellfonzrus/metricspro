@@ -167,7 +167,7 @@ def _stage_and_swap_ledger(client, org_id: str, rows: list[dict]) -> str:
         swapped = data.get("rows_swapped")
     if swapped is not None and int(swapped) != len(rows):
         raise RuntimeError(
-            f"asset_ledger swap row-count mismatch: staged {len(rows)}, swapped {swapped}"
+            f"Asset ledger replace row-count mismatch: staged {len(rows)}, swapped {swapped}"
         )
     return "staged_swap"
 

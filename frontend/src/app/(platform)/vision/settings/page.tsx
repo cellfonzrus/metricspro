@@ -172,7 +172,7 @@ export default function VisionSettingsPage() {
         {cfg.audio_kill_switch ? (
           <div style={{ fontSize: 13.5, color: 'var(--text2)' }}>
             🔒 <b>Disabled for this deployment.</b> Voice capture is switched off at the server
-            (<code>VISION_AUDIO_ENABLED</code> is not set), so it is off for every company regardless of
+            for this deployment, so it is off for every company regardless of
             the settings here. Turning it on is a deliberate server change, not a checkbox — most of the
             states these stores operate in require every party to a recorded conversation to consent.
           </div>
@@ -382,9 +382,9 @@ export default function VisionSettingsPage() {
               {apiBase()}/api/v1/vision/google/events
             </code>
             Enable <b>authentication</b> on the subscription and pick a service account — the
-            endpoint refuses anything that is not signed by it. Then set{' '}
-            <code>VISION_PUBSUB_AUDIENCE</code> and <code>VISION_PUBSUB_SA_EMAIL</code> on the API
-            server to match. Both unset means every push is refused, which is deliberate.
+            endpoint refuses anything that is not signed by it. Then send support the subscription&apos;s
+            audience and the service account&apos;s email so the server is set to match. Until both are
+            set every push is refused, which is deliberate.
           </div>
         </Section>
       )}

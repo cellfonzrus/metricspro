@@ -17,6 +17,7 @@ import { servedAudience } from '../_lib/payoutAudience'
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import AutoCalcNotice from '../_lib/AutoCalcNotice'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 interface Rep {
   epay_salesperson: string
@@ -70,7 +71,7 @@ const PLAN_BASIS: Record<string, string> = {
   pct_price_over_cost: '% (price−cost)', flat: 'flat bonus',
 }
 const INST_REASON_LABEL: Record<string, string> = {
-  paid: 'Paid', no_mi_match: 'Held — dealer not paid (no raw_mi row)',
+  paid: 'Paid', no_mi_match: `Held — dealer not paid (not on the ${sourceLabel('raw_mi')})`,
   line_inactive: 'Held — line inactive', residual_not_received: 'Held — residual not received',
   activation_payment_missing: 'Held — no first-month payment', withheld: 'Held',
   held_stored: 'Held — stored row (see rep explain)',
@@ -725,8 +726,8 @@ export default function ReportsPage() {
                           rather than sale lines, so the sale-triggered modal cannot itemize it. It gets its
                           own labelled row instead of being displayed under that modal's story. */}
                       {showResidRow && (
-                        <tr title="Paid by the residual (raw_mi) engine — per-device detail is on the full explain page">
-                          <td>Multi‑month installments (residual · raw_mi)</td>
+                        <tr title={`Paid by the residual engine (${sourceLabel('raw_mi')}) — per-device detail is on the full explain page`}>
+                          <td>Multi‑month installments (residual · {sourceLabel('raw_mi')})</td>
                           <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(instResid)}</td>
                         </tr>
                       )}
@@ -1359,7 +1360,7 @@ export default function ReportsPage() {
                         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
                           <span>Stored by last Calculate — Plan: <b>{fmt(explainRec.plan_comm)}</b></span>
                           <span>Sale installments: <b>{fmt(explainRec.installment_comm_sale)}</b></span>
-                          <span>Residual (raw_mi): <b>{fmt(explainRec.residual_installment_comm)}</b></span>
+                          <span>Residual ({sourceLabel('raw_mi')}): <b>{fmt(explainRec.residual_installment_comm)}</b></span>
                           <span>Total: <b style={{ color: 'var(--accent)' }}>{fmt(explainRec.total_payout)}</b></span>
                         </div>
                         {drifted && (

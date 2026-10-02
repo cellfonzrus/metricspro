@@ -35,8 +35,8 @@ from app.core.base_url import base_url
 
 # One message, used by both the HTTP (503) and the plain-exception variants.
 BLOCKED_MESSAGE = (
-    "Browser/portal sweeps do not run on the user-facing API service "
-    "(SERVICE_ROLE=api). Trigger this on the sweeps worker."
+    "Browser/portal sweeps do not run on this server — they run on the "
+    "sweeps worker. Trigger this on the sweeps worker, or contact support."
 )
 
 # Roles that identify the user-facing API service, where browsers must NOT launch.

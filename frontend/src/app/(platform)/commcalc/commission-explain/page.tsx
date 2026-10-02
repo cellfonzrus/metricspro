@@ -13,6 +13,7 @@ import { multimonthOffered, useMultimonthStatus } from '../_lib/multimonth'
 import { servedAudience, servedCarrierView } from '../_lib/payoutAudience'
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib/googleRatings'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // "How was this commission calculated" — READ-ONLY per-rep drill-down. Shows the two engines that can
 // pay a non-Boost (Total/Luxelink) rep: the Commission PLAN component (which plan attached, via which
@@ -31,7 +32,7 @@ const BASIS: Record<string, string> = {
   pct_price_over_cost: '% (price−cost)', flat: 'flat bonus',
 }
 const REASON_LABEL: Record<string, string> = {
-  paid: 'Paid', no_mi_match: 'Held — dealer not paid (no raw_mi row)',
+  paid: 'Paid', no_mi_match: `Held — dealer not paid (not on the ${sourceLabel('raw_mi')})`,
   line_inactive: 'Held — line inactive', residual_not_received: 'Held — residual not received',
   activation_payment_missing: 'Held — no first-month payment', withheld: 'Held',
   held_stored: 'Held — stored row (see rep explain)',
@@ -405,7 +406,7 @@ export default function CommissionExplainPage() {
                   {(multimonthOffered(mmStatus) || !!data.reconciliation.installment_comm_sale) && (
                     <span>Sale installments: <b>{fmt(data.reconciliation.installment_comm_sale)}</b></span>)}
                   {(multimonthOffered(mmStatus) || !!data.reconciliation.residual_installment_comm) && (
-                    <span>Residual (raw_mi): <b>{fmt(data.reconciliation.residual_installment_comm)}</b></span>)}
+                    <span>Residual ({sourceLabel('raw_mi')}): <b>{fmt(data.reconciliation.residual_installment_comm)}</b></span>)}
                   <span>Total payout: <b style={{ color: 'var(--accent)' }}>{fmt(data.reconciliation.total_payout)}</b></span>
                 </div>
               </div>
@@ -651,7 +652,7 @@ function DeviceCard({ d }: { d: any }) {
       </div>
       <table style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
         <thead><tr style={{ background: 'var(--surface2)' }}>
-          {['Month', 'Device — Rate plan', 'Pay period', 'Status', 'Paid', 'Held', 'MRC', 'raw_mi match', 'Reason'].map(h =>
+          {['Month', 'Device — Rate plan', 'Pay period', 'Status', 'Paid', 'Held', 'MRC', `${sourceLabel('raw_mi')} match`, 'Reason'].map(h =>
             <th key={h} style={{ textAlign: 'left', padding: '3px 6px', color: 'var(--text2)', fontSize: 10 }}>{h}</th>)}
         </tr></thead>
         <tbody>

@@ -32,6 +32,11 @@ name: carrier-vocab-guard
 # (core/setup_notice.SetupNoticeMiddleware) recognises and neutralizes for a non-super-admin; the boundary is
 # registered innermost and the report builder dereferences it; the two customer sentences are equal. DB-free; stdlib.
 #
+# THE INFRA-NAMES AXIS (index §19.37, owner 2026-10-02: "hide database names from the users") runs inside the guard
+# itself: no schema-qualified table, table / view identifier, environment-variable name or hosting vendor in rendered
+# frontend copy or a backend message-keyed string (registries DERIVED from database/migrations, the lineage registry,
+# config.Settings and the code's env reads); runtime database errors reach a non-super-admin as setup_notice.SYSTEM_NOTICE.
+#
 # THE POS VOCABULARY AXIS (index §26.10, 2026-09-20) runs inside the guard itself: the POS vendor names
 # are DERIVED from the seeds (report_term pos_system, pos_profile, HOUSE_KINDS.applies_to_pos) and may
 # not appear in frontend copy, as a bare literal in a page, in the backend payload modules' strings or
@@ -168,6 +173,7 @@ on:
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "frontend/src/**"
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
+      - "database/migrations/**"   # index §19.37 — the infra-names lock derives its table / schema registry from them
       - "backend/harness_account_expenses_one_home.py"
       - "backend/app/modules/account/analysis.py"
       - "backend/app/modules/account/statement_engine.py"
@@ -419,6 +425,7 @@ on:
     paths:
       - "frontend/src/**"
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
+      - "database/migrations/**"   # index §19.37 — the infra-names lock derives its table / schema registry from them
       - "backend/app/modules/commcalc/report_kinds.py"
   workflow_dispatch:
 
@@ -444,7 +451,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
-      - name: Run carrier vocabulary guard (+ the POS vocabulary axis, index §26.10, + the setup-internals axis, §19.36)
+      - name: Run carrier vocabulary guard (+ the POS vocabulary axis, index §26.10, + the setup-internals axis, §19.36, + the infra-names axis, §19.37)
         working-directory: backend
         run: python3 harness_carrier_vocab_guard.py | tee "$GITHUB_STEP_SUMMARY"
       - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)

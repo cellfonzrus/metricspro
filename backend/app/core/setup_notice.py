@@ -33,6 +33,19 @@ THE DESIGN — one fact, one home, applied at the boundary every caller already 
   • `report_registry.build_payload` — the one outbound report builder (mail / WhatsApp) — calls
     `neutralize` too, under the same key rules.
 
+THE SIBLING CLASS — DATABASE / HOSTING NAMES (owner 2026-10-02: "hide database names from the users", index
+§19.37). The same boundary carries a second detector, `SYSTEM_INTERNAL`: the RUNTIME error text of the database /
+its REST layer / the hosting stack, interpolated into a message at run time (`detail=f"save failed: {e}"`) —
+"duplicate key value violates unique constraint …", "permission denied for table …", "null value in column …",
+an error dict `{'code': '23505', …}`, a `postgrest.exceptions.APIError`, a `*.supabase.co` host. Such a sentence
+(and the rest of the text after it — the error is the tail: `'details': 'Key (org_id, code)=…'`) becomes the ONE
+plain `SYSTEM_NOTICE` for a caller who is not the super admin. Not-applied errors (42P01 / 42703 / PGRST2xx /
+"relation … does not exist") stay with `SETUP_INTERNAL` → `SETUP_NOTICE`. STATIC names in the backend's own
+strings (a `commcalc.store_mapping`, a `raw_sales`, an env var `RESEND_API_KEY`, "Railway") are NOT rewritten
+here — the boundary cannot tell a descriptive note from an error, so they are reworded AT SOURCE, and the lock
+(`harness_carrier_vocab_guard.py` §INFRA) fails the build on any message-keyed string that still names one after
+this boundary has run.
+
 WHAT IS NOT HERE. Code comments, docstrings, log lines and harnesses keep their migration numbers.
 `/openapi.json`, `/docs`, `/redoc`, `/health` pass verbatim. The lock is `harness_carrier_vocab_guard.py`
 §SETUP (CI `carrier-vocab-guard.yml`).
@@ -45,6 +58,8 @@ import re
 import sys
 
 SETUP_NOTICE = "This feature isn't switched on for your company yet. Contact support to enable it."
+# The sibling sentence (§19.37): a runtime database / hosting error. Says what the customer can do, names nothing.
+SYSTEM_NOTICE = "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."
 
 # ── WHERE: the message-shaped keys (the ONLY values the boundary reads) ─────────────────────────────────
 # Measured 2026-09-29 over every backend string SETUP_INTERNAL matches (the lock re-measures each build):
@@ -95,13 +110,42 @@ def is_setup_internal(text) -> bool:
     return isinstance(text, str) and bool(text) and SETUP_INTERNAL.search(text) is not None
 
 
+# ── WHAT (the sibling, §19.37): a RUNTIME database / hosting error interpolated into a message ─────────
+# By SHAPE — the database's own error sentences, its error-dict repr, its client's exception names, the hosting
+# hosts. Never a bare word a customer's message may hold ("duplicate", "permission", "denied", "Postgres" alone).
+SYSTEM_INTERNAL = re.compile("|".join([
+    r"\bduplicate\s+key\s+value\b",
+    r"\bviolates\s+(?:unique|foreign\s+key|check|not-null|exclusion)\s+constraint\b",
+    r"\bviolates\s+row-level\s+security\b",
+    r"\bnull\s+value\s+in\s+column\b",
+    r"\bpermission\s+denied\s+for\s+(?:table|schema|relation|sequence|function|view|database)\b",
+    r"\binvalid\s+input\s+(?:syntax|value)\s+for\s+(?:type|enum)\b",
+    r"\bvalue\s+too\s+long\s+for\s+type\b",
+    r"\bout\s+of\s+range\s+for\s+type\b",
+    r"\bcanceling\s+statement\s+due\s+to\s+statement\s+timeout\b",
+    r"\bdeadlock\s+detected\b",
+    r"\bSQLSTATE\b",
+    r"""['"]code['"]\s*:\s*['"](?:\d{2}[0-9A-Z]{3}|PGRST\d{3})['"]""",               # {'code': '23505', …}
+    r"\b(?:postgrest|psycopg2?|supabase)(?:\.[a-z_]+)*\.(?:\w*Error|\w*Exception)\b",  # postgrest.exceptions.APIError
+    r"\bAPIError\(",
+    r"\b[\w-]+\.(?:supabase\.co|railway\.app|vercel\.app)\b",                         # a hosting host
+]), re.I)
+
+
+def is_system_internal(text) -> bool:
+    """True when `text` carries a runtime database / hosting error a customer must not see (§19.37)."""
+    return isinstance(text, str) and bool(text) and SYSTEM_INTERNAL.search(text) is not None
+
+
 _SENTENCE = re.compile(r"(?<=[.!?])\s+(?=\S)")
 
 
 def neutralize_text(text):
-    """Every sentence of `text` that carries a setup hint becomes SETUP_NOTICE (once); every other
-    sentence is kept. Text without a hint is returned unchanged (the same object)."""
-    if not is_setup_internal(text):
+    """Every sentence of `text` that carries a setup hint becomes SETUP_NOTICE (once); a sentence that carries a
+    runtime database / hosting error becomes SYSTEM_NOTICE and ENDS the text (the error is the tail — its `details`
+    / `hint` sentences follow it); every other sentence is kept. Text with neither is returned unchanged (the
+    same object)."""
+    if not (is_setup_internal(text) or is_system_internal(text)):
         return text
     out, noticed = [], False
     for part in _SENTENCE.split(text):
@@ -109,10 +153,14 @@ def neutralize_text(text):
             if not noticed:
                 out.append(SETUP_NOTICE)
                 noticed = True
+        elif is_system_internal(part):
+            out.append(SYSTEM_NOTICE)
+            noticed = True
+            break
         else:
             out.append(part)
     if not noticed:                                  # the hint spanned a sentence break — whole text
-        return SETUP_NOTICE
+        return SYSTEM_NOTICE if is_system_internal(text) and not is_setup_internal(text) else SETUP_NOTICE
     return " ".join(out)
 
 
@@ -165,7 +213,12 @@ def neutralize(payload):
 # json encoding of that body costs), no parse, the SAME bytes object returned.
 _MARKERS = (b".sql", b"mig", b"sql editor", b"supabase", b"pgrst", b"42p01", b"42703", b"does not exist",
             b"could not find the", b"schema cache", b"not applied", b"not yet applied", b"not been applied",
-            b"not created", b"not yet created", b"not been created")
+            b"not created", b"not yet created", b"not been created",
+            # §19.37 — SYSTEM_INTERNAL's shapes (lower-case; the window is lower-cased before the search)
+            b"duplicate key", b"violates ", b"null value in column", b"permission denied for", b"invalid input",
+            b"too long for type", b"out of range for type", b"statement timeout", b"deadlock detected", b"sqlstate",
+            b"'code'", b'\\"code\\"', b"postgrest", b"psycopg", b"apierror", b"railway.app",
+            b"vercel.app")
 _KEY_AT = re.compile(rb'"(?:' + b"|".join(re.escape(k.encode()) for k in sorted(MESSAGE_KEYS)) + rb')"')
 _MIGKEY_TOKENS = (b'migration"', b'migrations"', b'migrations_missing"')
 _MIGKEY_PREFIX = re.compile(rb"[a-z_]*")

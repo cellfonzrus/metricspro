@@ -20,6 +20,7 @@
 // node — which is what tools/commission-export-proof.mjs exercises.
 import type { ExportColumn, ExportPayload } from '@/lib/export'
 import type { StandardFilterValue } from '@/lib/standard-filters'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 export type CommissionTab = 'breakdown' | 'individual' | 'compensation'
 
@@ -218,7 +219,7 @@ function individualSheets(r: CommissionRow, i: CommissionExportInput): ExportPay
     const mmRows = i.multimonthRowsFor ? i.multimonthRowsFor(iSale, iResid)
       : { sale: iSale !== 0 || iResid === 0, resid: iResid !== 0 }
     if (mmRows.sale) rows.push({ item: `Multi-month installments${iResid !== 0 ? ' (sale-triggered)' : ''}`, amount: iSale })
-    if (mmRows.resid) rows.push({ item: 'Multi-month installments (residual · raw_mi)', amount: iResid })
+    if (mmRows.resid) rows.push({ item: `Multi-month installments (residual · ${sourceLabel('raw_mi')})`, amount: iResid })
     rows.push({ item: 'Total Payout', amount: r.total_payout })
     sheets.push({ name: 'Line Items', columns: li, rows })
   }
