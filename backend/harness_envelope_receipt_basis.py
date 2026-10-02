@@ -76,6 +76,32 @@ def check(name, got, want=None):
     return ok
 
 
+def code_only(path):
+    """The module's CODE, with comments AND docstrings removed.
+
+    A rule of the form "this arithmetic must appear nowhere" has to be able to tell prose from code,
+    or the explanation of why the arithmetic is wrong becomes a build failure. Comments are stripped
+    by regex; docstrings are blanked by their own AST spans, so an ordinary string literal the code
+    actually uses (a column name, a label) is left alone.
+    """
+    src = read(path)
+    tree = ast.parse(src)
+    spans = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = getattr(node, "body", None) or []
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            spans.append((body[0].lineno, body[0].end_lineno))
+    lines = src.split("\n")
+    for a, b in spans:
+        for i in range(a - 1, min(b, len(lines))):
+            lines[i] = ""
+    return re.sub(r"(?m)^\s*#.*$", "", "\n".join(lines))
+
+
 def read(p):
     with open(p, "r", encoding="utf-8") as fh:
         return fh.read()
@@ -732,6 +758,110 @@ def main():
     check("CONTROL: showing the basis on EVERY row (noise) is not what the rule accepts",
           "!r.counted_basis.recorded || r.counted_basis.basis !== basis" in
           "{r.counted_basis && <div>counted on {basisShort(r.counted_basis.basis)}</div>}", False)
+
+    # ══ L. ONE DRAWER RULE, DEREFERENCED — AND LOCKED SO IT CANNOT UN-WIRE ══════════════════════
+    # OWNER BUG REPORT 2026-10-02 (Cash Pickup read a $258 shortage that was the bill-pay cash).
+    # Behind it: "how much cash did this row declare, and how much of it was bill payments" was
+    # re-derived by hand at six call sites, each carrying its own version of the mig-103 era rule —
+    # three of them answered for one era only, so all 89 pre-mig-103 rows declared $0.00 of bill-pay
+    # cash while 78 of them hold a real `epay_cash` leg (one $744.00).
+    #
+    # §19.18's lesson is that writing the shared home and leaving callers unwired is not a fix at
+    # all. So these rules fail the BUILD if a caller stops dereferencing it, or if a seventh copy
+    # appears. They read the comment-stripped source, so the prose above may still name the columns.
+    print("\n── L. the declared drawer / bill-pay split has ONE home, and every caller reads it ──")
+    _mod = lambda n: os.path.join(HERE, "app", "modules", "closing", n)          # noqa: E731
+    _ap_src, _bp_src = code_only(_mod("attention_providers.py")), code_only(_mod("billpay_pickup.py"))
+    _r_code, _er_code = code_only(_mod("router.py")), code_only(_mod("envelope_report.py"))
+    check("the era test itself is the pure module's, over every mig-103 column",
+          ER.is_modern_row({"epay_on_cash": 1.0}) is True
+          and ER.is_modern_row({"t_zelle": 0.0}) is True
+          and ER.is_modern_row({"store_cash": 99.0, "epay_cash": 1.0}) is False)
+    check("the drawer is the whole drawer in BOTH eras — the 2026-10-02 regression",
+          (ER.declared_total_cash({"t_cash": 273.0, "store_cash": 273.0, "epay_cash": 0.0,
+                                   "epay_on_cash": 258.0}),
+           ER.declared_total_cash({"store_cash": 10.0, "epay_cash": 744.0})), (273.0, 754.0))
+    check("and so is the bill-pay subset of it — where every raw `epay_on_cash` read $0.00",
+          (ER.declared_billpay_cash({"t_cash": 273.0, "epay_on_cash": 258.0}),
+           ER.declared_billpay_cash({"store_cash": 10.0, "epay_cash": 744.0})), (258.0, 744.0))
+    check("the mig-103+ era is untouched: the day-1 `store_cash` fallback still applies",
+          ER.declared_total_cash({"t_cash": 0, "store_cash": 450.0, "epay_on_cash": 1.0}), 450.0)
+    # NO CALLER RE-DERIVES THE SUM. `store_cash + epay_cash` is the pre-mig-103 drawer; the only
+    # place that arithmetic may appear is inside `declared_total_cash` itself.
+    # ADDING the two legacy cash columns is the signature of a hand-rolled era rule. A line that
+    # merely LISTS them (a column tuple, a SELECT, an allowed-keys set) is not arithmetic and is not
+    # matched; a line that adds them is, wherever it is.
+    _legacy_sum = re.compile(
+        r"(store_cash[^\n]{0,60}\+[^\n]{0,60}epay_cash|epay_cash[^\n]{0,60}\+[^\n]{0,60}store_cash)")
+    # ── EXPLICITLY EXCUSED, with the reason — the house rule is "fixed or explicitly excused", and
+    #    an excuse that is not written down is just an un-wired caller waiting to be found again.
+    #    Each entry is a code fragment that MUST still be present; if one disappears the rule below
+    #    fails, so a stale excuse cannot sit here forever pretending to protect something.
+    _excused = {
+        # create_row's WRITE-TIME fold: the inbound payload may carry either era's field names, and
+        # this is where the two are reconciled INTO `t_cash`. It is the origin of the invariant the
+        # read-side home relies on, not a second reading of a stored row.
+        '_money(payload.get("store_cash")) + _money(payload.get("epay_cash"))':
+            "create_row: the write-time fold that establishes t_cash",
+        # /closing/summary's named cash split operates on an AGGREGATED totals dict, not a row, so
+        # the row-level home does not apply. Σ(store_cash) + Σ(epay_cash) IS Σ(declared_total_cash)
+        # in both eras — the legacy columns are zeroed per row by create_row for a mig-103+ row and
+        # hold the real split for a pre-mig-103 one — so this agrees with the home by construction.
+        'round(_f(tt.get("epay_cash")) + _f(tt.get("store_cash")), 2)':
+            "/closing/summary: the same sum over a totals dict, which the home cannot take",
+    }
+    for _label, _src in (("closing/router", _r_code), ("closing/attention_providers", _ap_src),
+                         ("closing/billpay_pickup", _bp_src)):
+        _hits = [ln.strip() for ln in _src.splitlines()
+                 if _legacy_sum.search(ln) and not any(x in ln for x in _excused)]
+        check("%s adds the two legacy cash columns nowhere of its own" % _label, _hits, [])
+    for _frag, _why in sorted(_excused.items()):
+        check("the excuse for %r is still real (the code it excuses is still there)" % _why,
+              _frag in _r_code)
+    check("control: that scan really bites — the line a re-wired caller would write is caught",
+          bool(_legacy_sum.search('cash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))')))
+    check("control: and a LIST of the two columns is correctly NOT treated as arithmetic",
+          _legacy_sum.search('"t_cash,store_cash,epay_cash,epay_on_cash"') is None)
+    check("the home is where the legacy bill-pay leg is actually read into the drawer",
+          '_f(r.get("epay_cash"))' in _er_code and "def declared_total_cash" in _er_code)
+    # NO CALLER READS THE SUBSET COLUMN RAW for a declared-bill-pay figure. The two sites that may
+    # name it are the pure home and the router's per-tender display helper, which reads it through
+    # the home and keeps `has_t` only for the other six tenders.
+    check("the pickup envelope, the bill-pay envelope, the recon declared figure, the alert and the "
+          "store-day position ALL dereference the home",
+          (_r_code.count("envelope_report_mod.declared_total_cash(") >= 4,
+           _r_code.count("envelope_report_mod.declared_billpay_cash(") >= 3,
+           "declared_total_cash(r)" in _ap_src,
+           "envelope_report.declared_billpay_cash(r)" in _bp_src),
+          (True, True, True, True))
+    # The era TEST has one home too. A caller may still NAME a tender column (the per-tender display
+    # helper returns all seven), but no caller may ask "is this row modern?" with a tuple of its own.
+    # Scoped to a test over a daily_closing ROW. `create_row` asks the same shape of question of the
+    # inbound PAYLOAD — "did the client send this era's field names?" — which is the write-time
+    # decision that establishes the invariant, not a second reading of a stored row.
+    def _era_tests(src):
+        return [ln.strip() for ln in src.splitlines()
+                if "t_ext_cc" in ln and ("is not None" in ln or "for k in" in ln)
+                and "payload.get" not in ln]
+    check("no caller re-implements the era test with a tender tuple of its own",
+          {n: _era_tests(m) for n, m in (("router", _r_code), ("attention_providers", _ap_src),
+                                         ("billpay_pickup", _bp_src)) if _era_tests(m)}, {})
+    check("control: the era test itself lives in the one module that owns it, as a named tuple the "
+          "callers ask through rather than copy",
+          "MODERN_COLUMNS = TENDER_COLUMNS" in _er_code
+          and "for k in MODERN_COLUMNS" in _er_code
+          and "t_ext_cc" in _er_code)
+    check("control: and the rule would catch a caller that copied it back",
+          bool(_era_tests('has_t = any(r.get(k) is not None for k in ("t_cash", "t_ext_cc"))')))
+    check("...and the router asks the home instead",
+          _r_code.count("envelope_report_mod.is_modern_row(") >= 2)
+    check("the column list carries BOTH eras' inputs, so neither can read as $0.00 for want of "
+          "being selected (the §47.8 class this file exists for)",
+          [c for c in ("t_cash", "store_cash", "epay_cash", "epay_on_cash")
+           if c not in ER.CLOSING_COLUMNS], [])
+    check("...and BASIS_INPUT_COLUMNS names them all, so adding one adds it to every query",
+          sorted(ER.BASIS_INPUT_COLUMNS),
+          sorted(("t_cash", "store_cash", "epay_cash", "epay_on_cash")))
 
     print("\n" + "=" * 96)
     print("RESULT: %d passed, %d failed" % (_p, _f))

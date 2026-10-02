@@ -5248,6 +5248,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `mgmt_confirmed(+by/at)` (mig `943`) | `POST /closing/deposit-mgmt-confirm` (management-gated confirm/revoke) | `GET /closing/deposit-accountability` (green-day rule), `GET /closing/deposit-recon` `pickup_deposit` line item (§12 deposit accountability) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_picked_amount` (mig `949`) + `cash_pickup_config.pickup_actual_relieves_cash` knob | `POST /closing/pickup` / `/billpay-pickup` (item `actual_amount`, shared `_confirm_pickup_impl`; NULL = not recorded) | `GET /closing/pickups` + `/billpay-pickups` variance fields, `GET /closing/deposit-accountability` short-pickup chips (pure `closing/pickup_actual.py`, reusing `envelope_report.count_fields`); outflow swap in `_cash_position_core` ONLY under the knob (default false = declared, byte-identical; §12 actual cash picked) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `envelope_opened` (mig **`990`**, WRITTEN NOT APPLIED) | `POST /closing/pickup` / `/billpay-pickup` (item `envelope_opened`, shared `_confirm_pickup_impl`; written only when sent, and the upsert retries WITHOUT it on a pre-990 schema — mig-201 precedent) | THE CONFIRM GATE: opened ⇒ `actual_amount` REQUIRED (pure `pickup_actual.opened_without_count`/`gate_items`, batch checked before any write). Surfaced on `GET /closing/pickups` + `/billpay-pickups` and on the deposit-accountability envelopes. NULL and FALSE are ONE state ('collected sealed'); never relieves cash, never summed (§23p) |
+| `commcalc.cash_pickup_config.pickup_billpay_net_source` (mig **`1038`**, WRITTEN NOT APPLIED; CHECK-tied to `billpay_netting.NET_SOURCES`, default `pos` = byte-identical to mig `989`) | chosen per org in SQL; read by `closing/router.billpay_net_source` (never raises — a database without the column reads `pos`) | `GET /closing/pickups` (`billpay_net_source`, and `billpay_pos_disagrees`/`billpay_pos_gap` when the declared source is in force and a POS figure also exists) — §47.11 |
+| `commcalc.cash_pickup.amount_basis` (mig **`1039`**, WRITTEN NOT APPLIED; nullable, CHECK-tied to `billpay_netting.PICKUP_BASES`, never backfilled) | `POST /closing/pickup` via `pickup_amount_basis` — from the config in force, server-side, never from the client; the upsert retries WITHOUT it on a pre-1039 schema | `GET /closing/pickups` `amount_basis` (worded by `pickup_basis_label`, which reports `recorded: false` for a pre-`1039` row and `stale` when the basis in force differs — the stored amount and its variance are never re-scored) — §47.11 |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals — `dm_ext_cc` since mig `961`: the EXTERNAL-CREDIT portion OF `dm_store_cc`, total-preserving) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection; `dm_epay_cash` also replaces verified days in `_billpay_position_core` (mig `942`) |
 | `commcalc.daily_closing_verification_audit` (mig `935`, append-only; +`dm_ext_cc`/`prior_dm_ext_cc` mig `961`) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.closing_tender_def` (mig `111` tenant tender registry; +`processor_key` mig `960`) | tender-setup editor (`/closing/tender-config`) | closing tender fields + `_closing_amt`; **card-settlement recon leg routing** (`external_credit_recon.tender_processor_map`/`role_columns` — NULL/no row ⇒ the house map, §12) |
@@ -8924,6 +8926,13 @@ the gate.
 
 ## 23m. THE PICKUP ENVELOPE NETS OUT BILL-PAY CASH (owner directive 2026-09-08)
 
+> **STILL OFF, AND REPORTED AGAIN ON 2026-10-02.** `pickup_nets_pos_billpay_cash` is FALSE for every
+> org — verified live — so the overlap below is still on screen, which is what the owner reported again
+> (B-2612 / 2026-09-03: the pickup read $258.00 short and the $258.00 was the bill-pay cash). That
+> report described the **declared** figures, so WHICH figure to net by is now per-org config
+> (`pickup_billpay_net_source`, mig `1038`) rather than a second code path, and the stored amount
+> records its own basis (mig `1039`). See **§47.11**.
+
 **Owner:** *"on the cash pick up it shows the full amount but it should only show the store cash
 amount to be picked up, as the epay amount is being declared and picked up on a different menu — this
 is duplicating the total cash."* Asked which figure to net by: *"not as declared by the employee but
@@ -9283,10 +9292,14 @@ cleared of anything. `over` is reported separately and **never nets a shortage a
 is a distinct field, so a DM $20 short on one envelope and $15 over on another is never shown as "$5
 short". A pickup with no recorded DM is reported under `(unattributed)` rather than dropped.
 
-### (4) CASH SALES EQUIP/ACC — the column, with its basis visible
+### (4) CASH FROM SALES — the column, with its basis visible
+
+> **RENAMED 2026-10-02 (§47.11).** The key is `cash_sales` (totals: `total_cash_sales`), the column
+> header is **Cash from sales**, and the TOTAL cash column beside it is `cash_gross`. Same fact as the
+> 2026-09-08 `cash_equip_acc` under the owner's newer word for it — renamed, not duplicated.
 
 The envelope amount **stays the whole drawer** — bill-pay netting stays **OFF**
-(`pickup_nets_pos_billpay_cash`, mig `989` unapplied, §23m) — and `cash_equip_acc` is a DISPLAY split
+(`pickup_nets_pos_billpay_cash`, mig `989` unapplied, §23m) — and `cash_sales` is a DISPLAY split
 beside it, computed from the one shared `billpay_netting.net_store_day` rule whether or not netting is
 on, so the column and the netting can never disagree. The backend half landed on the base commit; the
 **column is now rendered**, and its **basis is shown, never hidden**: `POS` (green — computed from the
@@ -15191,9 +15204,22 @@ caller selects that declaration instead of writing its own list.
 
 **THE SIBLING, found and checked in the same change.** `deposit_recon` is the other consumer of
 `cash_for_basis`; its own query already carries `epay_on_cash` (and the lock now pins that, so one path
-fixed and the other not cannot happen). `_cash_declared_for_envelope` (§12 cash pickup) sums the LEGACY
-`store_cash + epay_cash` pair, which is the full drawer either way for a mig-103+ row — **excused, not
-fixed**, and it answers a different question (the envelope snapshot, not a basis).
+fixed and the other not cannot happen).
+
+> ~~`_cash_declared_for_envelope` (§12 cash pickup) sums the LEGACY `store_cash + epay_cash` pair,
+> which is the full drawer either way for a mig-103+ row — **excused, not fixed**, and it answers a
+> different question (the envelope snapshot, not a basis).~~
+>
+> **CORRECTED 2026-10-02 — that excuse was wrong, and the owner's next report is what disproved it.**
+> Two things were wrong with it. The full drawer is not "a different question" for the cash-pickup
+> envelope: it is the WRONG question, because the bill-pay share of that drawer is collected on the
+> bill-pay screen, so offering the drawer asks a DM to collect the same dollars twice (owner, B-2612 /
+> 2026-09-03 — the pickup read $258.00 short and the $258.00 was the bill-pay cash). And "the full
+> drawer either way" held only for a mig-103+ row: the sibling helper
+> `_billpay_declared_for_envelope` read `epay_on_cash` RAW, a column no pre-mig-103 row has, so all
+> 89 of those live rows declared $0.00 of bill-pay cash while 78 of them hold a real `epay_cash` leg
+> (one of them $744.00). Excusing one of a pair while the other was broken is the defect wearing a
+> hat that the house rules name. Both now dereference the one home — see §47.11.
 
 **A SECOND DEFECT OF THE SAME SHIPPED FEATURE.** `POST /closing/envelope-count` scored every count
 against the **whole drawer** regardless of the basis on screen, because the basis never left the
@@ -15323,6 +15349,69 @@ load-bearing ones were patched back to the shipped behaviour by hand and watched
 **MONEY-TOUCHING — and a MIGRATION: owner-approved before applying.** Nothing moves money: no amount,
 variance, status or chargeback changes, and every existing row keeps every value it has. What changes is
 that a row can now *say* what it was measuring.
+
+### 47.11 Cash Pickup shows TOTAL cash and CASH FROM SALES — and the drawer has one home (owner 2026-10-02, mig `1038`/`1039`)
+
+**THE REPORT.** *"the cash pick up should show total store cash and sales cash, right now it shows for
+2612 0903 cash pick up 258 short but 258 is epay cash which appears on the next report for epay pick up,
+this cash pick up report should not show anything short since 15 is declared as store cash and 258 as
+epay and the total is 273 — cash pick up should only show the cash from sales and a column for total
+cash"*.
+
+**REPRODUCED IN LIVE DATA FIRST.** B-2612 / 2026-09-03 / Kashif — `daily_closing` `t_cash` 273.00,
+`epay_on_cash` 258.00; `cash_pickup` `amount` 273.00, `actual_picked_amount` 15.00 → variance exactly
+−258.00, the bill-pay cash the bill-pay screen collects separately.
+
+**THE MECHANISM ALREADY EXISTED.** Migration `989` (§23m) was built for this to the owner's directive of
+2026-09-08, which said the figure to net by is the one *"CALCULATED BY THE POS"*, not the declaration.
+`pickup_nets_pos_billpay_cash` has been **FALSE for every org since it shipped** — verified live — which
+is why the overlap is still on screen. Nothing new was built to answer the netting; what was added is
+the one thing that directive did not cover (`1038`), because the 2026-10-02 report describes the
+**declared** figures. The source is per-org config, never a second code path (RULE TWO).
+
+**THE CLASS, NAMED (a design fix, not a report fix).** "How much cash did this row declare, and how much
+of it was bill payments" was re-derived by hand at **six** call sites, each carrying its own version of
+the mig-103 era rule — and three of them answered for one era only. So a pre-mig-103 bill-pay envelope
+read **$0.00**: 89 live rows carry no `t_cash`, 78 of them carry a real `epay_cash` leg (one $744.00),
+and none carries `epay_on_cash` at all.
+
+| fact | home | callers that now dereference it |
+|---|---|---|
+| is this a mig-103+ row? | `envelope_report.is_modern_row` (over `MODERN_COLUMNS`) | `_row_display_tenders`, `_row_epay_display`, `/closing/billpay-pickups`' credit leg |
+| the whole declared drawer, either era | `envelope_report.declared_total_cash` | `GET /closing/pickups`, `_cash_declared_for_envelope`, `/closing/cash-recon`'s declared figure, `_row_display_tenders`, `closing/attention_providers`' envelope-short alert |
+| the bill-pay cash inside it, either era | `envelope_report.declared_billpay_cash` | `/closing/billpay-pickups`, `_billpay_declared_for_envelope`, `billpay_pickup.declared_billpay_by_store_day`, `_row_epay_display`, the netting input |
+| which figure the netting uses | `cash_pickup_config.pickup_billpay_net_source` → `closing/router.billpay_net_source` → `billpay_netting.NET_SOURCES` | `GET /closing/pickups` |
+| which cash a STORED pickup amount is | `commcalc.cash_pickup.amount_basis` (mig `1039`) ← `pickup_amount_basis`, read by `pickup_basis_label` | `GET /closing/pickups` |
+
+**TWO FIGURES, NAMED FOR WHAT THEY ARE.** `cash_gross` is the TOTAL cash (the whole drawer, bill
+payments included — the closing form's own field is *"Total cash in store including Bill Payments"*) and
+`cash_sales` is the SALES cash (that drawer less the bill-pay cash). The 2026-09-08 `cash_equip_acc` key
+was the same fact under an older word and is **renamed, not duplicated** — one fact, one name. Totals:
+`total_cash_sales`. The screen shows both columns and marks which one is the amount being collected, by
+comparing the server's own `cash` rather than re-deriving the switch.
+
+**THE STORED AMOUNT IS NEVER RE-SCORED.** `cash_pickup.amount` is a snapshot of what a DM was asked to
+collect. When the basis in force differs from the row's own, the row is reported **stale**
+(`amount_basis.stale` + `stale_note`) and its variance is left exactly as it happened — re-scoring it
+against today's basis would rewrite what a DM was actually asked for. Same rule as §47.10's stored
+count, and the same no-backfill rule: a pre-`1039` row reads as *un-recorded*, never as a claim.
+
+**WHAT IS STILL OFF.** Netting remains switched off for every org, so no envelope amount changes on
+merge. What changes without any switch: both columns are on screen, and the 89 pre-mig-103 rows stop
+reporting a $0.00 bill-pay envelope and a short drawer.
+
+**LOCK:** `harness_billpay_netting.py` sections **G/H/I** (94 checks) — the declared source, the
+envelope floor, the POS-disagreement report, and both migrations' CHECKs tied to `NET_SOURCES` /
+`PICKUP_BASES`. `harness_cash_pickup.py` section **13** (122 checks) — the B-2612 regression over the
+real endpoint, both eras, the stale statement, the screen. `harness_envelope_receipt_basis.py` section
+**L** (201 checks) — fails the build if any caller adds the two legacy cash columns itself, re-implements
+the era test, or stops dereferencing the home; the two legitimate exceptions are listed **by name with
+their reason**, and a stale exception fails too. Every rule carries an armed control, and the
+load-bearing ones were patched back to the broken behaviour by hand and watched go red.
+
+**MONEY-TOUCHING — MIGRATIONS `1038` AND `1039`: owner-approved before applying.** Neither moves money;
+both are additive and idempotent, and the money-touching statements (choosing the source, switching the
+netting on) are left **commented out** in `1038` for the owner to run with the numbers in front of them.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 
