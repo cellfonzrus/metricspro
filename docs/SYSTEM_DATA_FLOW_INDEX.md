@@ -4388,16 +4388,37 @@ DIFFERENT keys and its money reads as two stores. **Nothing errors; the totals j
 - **`B-60TH` was NOT in the report.** The class sweep found it in the identical shape and it is
   repaired in the SAME migration — fixing one instance and leaving its sibling is the patchwork the
   house rules forbid.
-- **REPORTED, deliberately NOT repaired:** `B-2778` (PA) and `Cellular Services` carry a placeholder
-  address whose real location is **nowhere in the database**. The audit reports them and the harness
-  pins that they stay reported. Inventing a street address to clear a finding would be the "write
-  code that hides it" the house rules forbid — these two need the owner to say what the addresses
-  are.
-- **Verified against the LIVE tenant (2026-10-02, read-only), all four orgs:** findings **8 → 2**
-  with the runbook applied in memory. The two left are the pair above. The other three orgs
-  (incl. luxelink, 39 mapping / 20 roster / 38 alias rows) were already clean and are untouched —
-  luxelink's 19 code-pairs that share a street number all point at the SAME address, so they
-  collapse to one key and are not this defect.
+- **The last two, answered by the owner 2026-10-02** ("cellualr services is compan level data and
+  b2778 is closed and replaced by 1578"):
+  - **`Cellular Services` is not a store at all** — it is a row in **`commcalc.companies`**
+    (`legal_name` "Cellular Services dot net LLC"), the same `company_id` both its `store_mapping`
+    rows point at through `store_companies`. Company-level data books **company-wide**, which `coa`
+    already models as "no attributable store", so the row is **EXEMPT from the invariant, not
+    repaired** — there is no store there to repair. The exemption is a **dereference of
+    `commcalc.companies`** (`store_identity_audit.company_level_keys`, matching `name` OR
+    `legal_name`), never a tenant name in code (RULE TWO), so it holds for every org. Matching is
+    exact on the squashed name: a company name merely CONTAINED in a longer address is NOT excused,
+    because that would risk excusing a real store. Passing no `companies` rows excuses NOTHING, so a
+    caller that forgets them gets the stricter answer rather than a silently different one. The
+    exemption is always PRINTED by `format_findings` — never silent.
+  - **`B-2778` is a CLOSED store, succeeded by `B-1598`** (`'1598 Mount Ephraim Ave'`, same PA
+    market). Read as 1598, not the owner's "1578": **no `B-1578` exists anywhere**, and
+    `commcalc.store_aliases` ALREADY routes `'2778 Mount Ephraim Ave'` and `'2778 Ephraim Ave'` to
+    `B-1598` — the succession was already recorded on the ADDRESS side. **It was never recorded for
+    the CODE**, so (measured live 2026-10-02) every sales row follows the successor (raw_sales
+    **5,928** / daily_sales_feed **2,955**) while `store_expenses` keeps **15 rows / $11,949.67**
+    (August 2026) keyed `'B-2778'` on a dead identity. *The closed store's revenue moved; its costs
+    did not.* Runbook **step 2c**. (That total equals B-60TH's to the cent — verified NOT a
+    double-count: distinct rows with distinct ids, the same August expense template on both stores.)
+  - **A succession recorded on the SUCCESSOR's aliases is invisible to `split_keys`**, because
+    2778's address spellings group under `B-1598`, leaving `B-2778` with one spelling.
+    `placeholder_address` — the repairable cause — is what catches a closed store. Pinned by harness
+    §C4/§C4b rather than left as a surprise.
+- **Live close-out (2026-10-02, read-only, all four orgs): findings 7 → 0** with the full runbook
+  applied in memory. The three other orgs were already clean throughout.
+- **Verified against the LIVE tenant (2026-10-02, read-only), all four orgs.** luxelink's 19
+  code-pairs that share a street number all point at the SAME address, so they collapse to one key
+  and are not this defect.
 - **Proof / lock:** `backend/harness_store_mapping_identity.py` — **39 checks**, DB-free
   (`_harness_dbfree` tripwire), over the **REAL** `coa.store_resolver`: §A reproduces the live split
   for all three stores, §B pins the repair (4 / 3 / 4 spellings → ONE key each), §C the negative
@@ -5549,7 +5570,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
-| **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`; `B-2778` / `Cellular Services` reported, address unknown |
+| **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`, `B-2778` (closed → B-1598); `Cellular Services` is a COMPANY, exempt by dereferencing `commcalc.companies` |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
 | **Where does THIS store's daily closing come from — a rep typing it, or the sales feed?** (and therefore: is a store with no closing row a person who didn't submit, or a derivation that didn't run?) | `commcalc.closing_source_config` (mig `1035`): `store_code IS NULL` = the org default, a row per store = the override; house default `rep_entry` | ONE registry `closing/closing_source.py` (`resolve`, `expects_rep_submission`, `is_derived`, `derivable`, `derive_row`, `plan_day` — pure); ONE read `closing/router._closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, dereferenced by the submit endpoint, `closing_stores`, `_run_closing_missing_alerts` and `attention_providers._p_closing_stale_stores`; lock `harness_closing_source_lock.py`, proofs `harness_closing_source.py` + `harness_closing_source_sweep.py` (§19.39) |

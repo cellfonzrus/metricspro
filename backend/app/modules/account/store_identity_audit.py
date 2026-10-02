@@ -120,6 +120,39 @@ def spellings_for_code(store_code, mapping_rows, store_rows, alias_rows):
     return uniq
 
 
+def company_level_keys(mapping_rows, company_rows=()):
+    """The `store_mapping` keys that are NOT stores: a key whose name IS one of the org's own
+    COMPANIES (owner, 2026-10-02: "cellualr services is compan level data").
+
+    Dereferenced from `commcalc.companies` (`name` / `legal_name`) — the one home of what the org's
+    companies are called — so no tenant's company name is ever spelled in code (RULE TWO). Company-
+    level data books company-wide, which `coa` already models as "no attributable store"; such a row
+    is therefore exempt from the store-identity invariant rather than a defect to repair. Pass the
+    org's `companies` rows and these keys drop out of `audit()`.
+
+    Matching is exact on the squashed name (`Cellular Services` == `cellular services`). It does NOT
+    match a name merely CONTAINED in a longer string, so a mapping row spelling a legal name followed
+    by a parenthetical address is not caught here — such a row carries no `store_code`, so it raises
+    no finding anyway. Widening this to substring matching would risk excusing a real store whose
+    street happens to echo a company name, which is why it is not done.
+    """
+    names = set()
+    for r in company_rows or ():
+        for col in ("name", "legal_name"):
+            k = _squash(r.get(col))
+            if k:
+                names.add(k)
+    if not names:
+        return []
+    out = {}
+    for r in mapping_rows or ():
+        code, addr = _t(r.get("store_code")), _t(r.get("store_address"))
+        if (code and _squash(code) in names) or (addr and _squash(addr) in names):
+            key = code or addr
+            out.setdefault(_squash(key), key)
+    return [out[k] for k in sorted(out)]
+
+
 def known_codes(mapping_rows, store_rows, alias_rows):
     """Every store code any of the three tables asserts, first spelling wins for display."""
     out = {}
@@ -132,18 +165,27 @@ def known_codes(mapping_rows, store_rows, alias_rows):
     return [out[k] for k in sorted(out)]
 
 
-def audit(resolve, mapping_rows, store_rows, alias_rows=()):
+def audit(resolve, mapping_rows, store_rows, alias_rows=(), company_rows=()):
     """Report every place the store-identity invariant is broken. `[]` means it holds.
 
     `resolve` is the REAL resolver (`coa.store_resolver(client, org_id)`) — this never re-implements
     resolution, so the audit cannot drift from the thing it audits.
 
+    `company_rows` are the org's `commcalc.companies` rows. A mapping key that IS a company name is
+    company-level data, not a store (see `company_level_keys`), and is excluded from every check —
+    reporting it would be a false positive, and "repairing" it would invent a store that does not
+    exist. Omitting `company_rows` excuses nothing, so a caller that forgets them gets the old,
+    stricter answer rather than a silently different one.
+
     Each finding: {kind, store_code, diagnosis, spellings, keys}. Deterministic order.
     """
     findings = []
+    excused = {_squash(k) for k in company_level_keys(mapping_rows, company_rows)}
 
     for r in mapping_rows or ():
         code = _t(r.get("store_code"))
+        if _squash(code) in excused:
+            continue
         if code and is_placeholder_address(code, r.get("store_address")):
             findings.append({
                 "kind": PLACEHOLDER_ADDRESS, "store_code": code,
@@ -155,6 +197,8 @@ def audit(resolve, mapping_rows, store_rows, alias_rows=()):
     mapped = {_squash(r.get("store_code")) for r in (mapping_rows or ()) if _t(r.get("store_code"))}
     for r in store_rows or ():
         code = _t(r.get("store_code"))
+        if _squash(code) in excused:
+            continue
         if code and _squash(code) not in mapped:
             findings.append({
                 "kind": ROSTER_WITHOUT_MAPPING, "store_code": code,
@@ -164,6 +208,8 @@ def audit(resolve, mapping_rows, store_rows, alias_rows=()):
                 "spellings": [], "keys": []})
 
     for code in known_codes(mapping_rows, store_rows, alias_rows):
+        if _squash(code) in excused:
+            continue
         sp = spellings_for_code(code, mapping_rows, store_rows, alias_rows)
         if len(sp) < 2:
             continue
@@ -182,14 +228,18 @@ def audit(resolve, mapping_rows, store_rows, alias_rows=()):
     return findings
 
 
-def format_findings(findings):
-    """Human-readable report — used by the live runbook and the harness alike."""
+def format_findings(findings, excused=()):
+    """Human-readable report — used by the live runbook and the harness alike. `excused` is the
+    company-level key list, printed so an exemption is always visible rather than silent."""
+    tail = ("\n  excused as company-level (not stores): %s" % ", ".join(repr(e) for e in excused)
+            ) if excused else ""
     if not findings:
-        return "store identity: OK — every spelling of every store resolves to one canonical key"
+        return ("store identity: OK — every spelling of every store resolves to one canonical key"
+                + tail)
     out = ["store identity: %d finding(s)" % len(findings)]
     for f in findings:
         out.append("  [%s] %s — %s" % (f["kind"], f["store_code"], f["diagnosis"]))
         if f["keys"]:
             out.append("      spellings: %s" % ", ".join(repr(s) for s in f["spellings"]))
             out.append("      keys:      %s" % ", ".join(repr(k) for k in f["keys"]))
-    return "\n".join(out)
+    return "\n".join(out) + tail
