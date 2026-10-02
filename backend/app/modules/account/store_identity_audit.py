@@ -30,6 +30,17 @@ itself — it takes the REAL `resolve` and reports where the invariant is broken
 checked by CI (against fixtures) and by the live runbook (against a tenant) without a second copy
 of the rule. `audit()` returning `[]` IS the invariant.
 
+THESE FINDINGS ARE INTERNAL DIAGNOSTICS, NOT DISPLAY COPY (§19.38). They deliberately name the
+tables and columns at fault, because that is the whole point of a diagnosis — so the text is carried
+under `diagnosis`, which is NOT one of `core.setup_notice.MESSAGE_KEYS`. A message-shaped key
+(`detail`, `note`, `hint`, …) is a key whose value can reach a tenant through an API response, and
+the §19.38 lock rightly fails the build on a table name under one. The first draft of this module
+used `detail` and was caught by that lock.
+
+So: do NOT return these findings to a tenant as they stand. They are for CI, the owner-run runbook
+and the server log. A tenant-facing surface must render its own business-words sentence from `kind`
+and `store_code` and drop the diagnosis.
+
 The two row-shapes above are reported in their own right (`PLACEHOLDER_ADDRESS`,
 `ROSTER_WITHOUT_MAPPING`) because they are the causes and are repairable by a data row; `SPLIT_KEYS`
 is the consequence and is the finding that actually matters — a shape not yet enumerated here still
@@ -127,7 +138,7 @@ def audit(resolve, mapping_rows, store_rows, alias_rows=()):
     `resolve` is the REAL resolver (`coa.store_resolver(client, org_id)`) — this never re-implements
     resolution, so the audit cannot drift from the thing it audits.
 
-    Each finding: {kind, store_code, detail, spellings, keys}. Deterministic order.
+    Each finding: {kind, store_code, diagnosis, spellings, keys}. Deterministic order.
     """
     findings = []
 
@@ -136,7 +147,7 @@ def audit(resolve, mapping_rows, store_rows, alias_rows=()):
         if code and is_placeholder_address(code, r.get("store_address")):
             findings.append({
                 "kind": PLACEHOLDER_ADDRESS, "store_code": code,
-                "detail": ("store_mapping.store_address is %r — the store CODE, not a location, so "
+                "diagnosis": ("store_mapping.store_address is %r — the store CODE, not a location, so "
                            "the resolver has no address to collapse this store's spellings onto"
                            % _t(r.get("store_address"))),
                 "spellings": [], "keys": []})
@@ -147,7 +158,7 @@ def audit(resolve, mapping_rows, store_rows, alias_rows=()):
         if code and _squash(code) not in mapped:
             findings.append({
                 "kind": ROSTER_WITHOUT_MAPPING, "store_code": code,
-                "detail": ("on storeops.stores (address %r) with NO commcalc.store_mapping row, so "
+                "diagnosis": ("on storeops.stores (address %r) with NO commcalc.store_mapping row, so "
                            "neither its address nor its aliases can resolve to it"
                            % _t(r.get("address"))),
                 "spellings": [], "keys": []})
@@ -163,7 +174,7 @@ def audit(resolve, mapping_rows, store_rows, alias_rows=()):
         if len(keys) > 1:
             findings.append({
                 "kind": SPLIT_KEYS, "store_code": code,
-                "detail": ("%d spellings of ONE store resolve to %d different canonical keys — its "
+                "diagnosis": ("%d spellings of ONE store resolve to %d different canonical keys — its "
                            "money reads as %d stores" % (len(sp), len(keys), len(keys))),
                 "spellings": sp, "keys": sorted(keys)})
 
@@ -177,7 +188,7 @@ def format_findings(findings):
         return "store identity: OK — every spelling of every store resolves to one canonical key"
     out = ["store identity: %d finding(s)" % len(findings)]
     for f in findings:
-        out.append("  [%s] %s — %s" % (f["kind"], f["store_code"], f["detail"]))
+        out.append("  [%s] %s — %s" % (f["kind"], f["store_code"], f["diagnosis"]))
         if f["keys"]:
             out.append("      spellings: %s" % ", ".join(repr(s) for s in f["spellings"]))
             out.append("      keys:      %s" % ", ".join(repr(k) for k in f["keys"]))

@@ -94,6 +94,7 @@ _harness_dbfree.install(FakeClient({}))
 
 from app.modules.account.coa import store_resolver            # noqa: E402  THE REAL RESOLVER
 from app.modules.account import store_identity_audit as audit_mod  # noqa: E402
+from app.core import setup_notice as _sn                        # noqa: E402  the §19.38 key list
 
 ORG = "00000000-0000-0000-0000-000000000001"
 
@@ -306,6 +307,12 @@ ok("F6 each step is idempotent (guarded UPDATE / NOT EXISTS insert)",
    _low.count("not exists") >= 2 and "store_address = 'b-1800'" in _low)
 ok("F7 the runbook carries REVERT notes for all three steps",
    "revert" in _low and _low.count("b-60th") >= 2)
+ok("F9 REGRESSION (§19.38) — a finding's text never rides a MESSAGE-SHAPED key. These "
+   "diagnoses name tables on purpose, and a message key's value can reach a tenant; the first "
+   "draft used 'detail' and the infra-names lock caught it.",
+   all(not _sn.is_message_key(k) for f in f0 for k in f)
+   and "diagnosis" in (f0[0] if f0 else {}),
+   sorted({k for f in f0 for k in f if _sn.is_message_key(k)}))
 ok("F8 NO migration repeats the repair — one path, not two (the duplicate rule)",
    not [f for f in os.listdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                                            "database", "migrations"))
