@@ -45,6 +45,14 @@ export default function StoreSetupPage() {
   // this screen is the only place the answer is SET and nothing re-derives it.
   const [srcCfg, setSrcCfg] = useState<ClosingSrcCfg | null>(null)
   const [srcBusy, setSrcBusy] = useState<Record<string, boolean>>({})
+  // BACKFILL (owner 2026-10-02: "do it retroactive from the data you can pull for whatever time").
+  // The endpoint has existed since the backfill PR; without a button the only way to run it was a
+  // hand-made HTTP call, which is not a thing a tenant admin should have to do. Preview first is the
+  // default posture: `dry_run` reports the whole span and writes nothing.
+  const [bfFrom, setBfFrom] = useState('')
+  const [bfTo, setBfTo] = useState('')
+  const [bfBusy, setBfBusy] = useState('')
+  const [bfRes, setBfRes] = useState<any>(null)
 
   async function loadAll() {
     setLoading(true)
@@ -200,6 +208,25 @@ export default function StoreSetupPage() {
     finally { setSrcBusy(b => ({ ...b, [key]: false })) }
   }
 
+  // One call per run; the server walks the span day by day through the SAME nightly sweep, so a
+  // preview and a real run differ only in whether anything is written.
+  async function runBackfill(dryRun: boolean) {
+    if (!bfFrom || !bfTo) { setMsg('Pick both a start and an end date for the backfill.'); return }
+    setBfBusy(dryRun ? 'preview' : 'run')
+    setMsg('')
+    setBfRes(null)
+    try {
+      const q = `start=${encodeURIComponent(bfFrom)}&end=${encodeURIComponent(bfTo)}&dry_run=${dryRun ? 'true' : 'false'}`
+      const r = await api(`/api/v1/closing/derive-range?${q}`, { method: 'POST' })
+      setBfRes(r)
+      const t = r?.totals || {}
+      setMsg(dryRun
+        ? `Preview only, nothing written: ${t.wrote || 0} day-stores would be written, ${t.unchanged || 0} already current, ${t.kept_manual || 0} left as submitted, ${t.skipped || 0} with no feed.`
+        : `Backfill done: ${t.wrote || 0} written, ${t.updated || 0} refreshed, ${t.unchanged || 0} already current, ${t.kept_manual || 0} left as submitted, ${t.skipped || 0} with no feed.`)
+    } catch (err: any) { setMsg('Backfill failed: ' + (err?.message || err)) }
+    finally { setBfBusy('') }
+  }
+
   // ---- bulk STORE setup ----
   async function downloadStoreTemplate() {
     const XLSX = await import('xlsx')
@@ -279,6 +306,51 @@ export default function StoreSetupPage() {
               unchanged. If the feed has not landed for a day, nothing is written and the day is reported
               as missing — it is never filled in with zeros.
             </p>
+            {/* Fill in past days for the feed-derived stores. Preview first — it writes nothing. */}
+            <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Fill in past days</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, color: 'var(--text2)' }}>From</span>
+                <input type="date" style={{ ...sel, width: 160 }} value={bfFrom}
+                  onChange={e => setBfFrom(e.target.value)} />
+                <span style={{ fontSize: 13, color: 'var(--text2)' }}>to</span>
+                <input type="date" style={{ ...sel, width: 160 }} value={bfTo}
+                  onChange={e => setBfTo(e.target.value)} />
+                <button className="btn" disabled={!!bfBusy} onClick={() => runBackfill(true)}
+                  title="Reports what it would write, without writing anything">
+                  {bfBusy === 'preview' ? 'Checking…' : 'Preview'}
+                </button>
+                <button className="btn" disabled={!!bfBusy} onClick={() => runBackfill(false)}
+                  title="Writes the closings for every day in the range that has sales-feed data">
+                  {bfBusy === 'run' ? 'Filling in…' : 'Fill in these days'}
+                </button>
+              </div>
+              <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '8px 0 0' }}>
+                This only touches stores set to <strong>derived from the sales feed</strong>. A day a rep
+                already submitted is left exactly as it is, a day the feed has nothing for is reported
+                rather than written, and running it twice over the same dates changes nothing the second
+                time. Start with <strong>Preview</strong> — it writes nothing.
+              </p>
+              {bfRes && (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)' }}>
+                  <div>
+                    {bfRes.dry_run ? 'Preview' : 'Filled in'} {bfRes.start} to {bfRes.end}
+                    {' — '}{bfRes.days} days, {bfRes.days_with_feed} with sales-feed data.
+                  </div>
+                  {(bfRes.per_day || []).filter((d: any) => !d.b2b_has_data).length > 0 && (
+                    <div style={{ marginTop: 4 }}>
+                      No feed data on: {(bfRes.per_day || []).filter((d: any) => !d.b2b_has_data)
+                        .map((d: any) => d.date).join(', ')}
+                    </div>
+                  )}
+                  {(bfRes.failed || []).length > 0 && (
+                    <div style={{ marginTop: 4, color: 'var(--danger, #c00)' }}>
+                      Could not be done: {(bfRes.failed || []).map((f: any) => f.date).join(', ')}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Add store */}

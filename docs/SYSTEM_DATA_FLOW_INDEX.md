@@ -3397,7 +3397,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `attention_providers._p_closing_stale_stores` (a derived store's gap is reported as
   `closing_derivation_stale` — the derivation not having run — not as "selling but not submitting").
   The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due`,
-  retroactive `POST /closing/derive-range` over a bounded span — the SAME per-day sweep run once per
+  retroactive `POST /closing/derive-range` over a bounded span (run from Store Setup's own
+  "Fill in past days", Preview first — the endpoint without a button left a hand-made HTTP call as the
+  only route) — the SAME per-day sweep run once per
   day, oldest first, so a backfill has no second copy of the derivation rules) takes
   the day's money + counts from the SHARED `_b2b_day` / `_b2b_counts_by_store` (no second derivation)
   and writes a REAL `daily_closing` row marked `source='b2b_derived'` through ONE writer
