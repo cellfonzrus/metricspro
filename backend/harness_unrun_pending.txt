@@ -99,7 +99,6 @@ harness_data_sources_dispatch.py
 harness_db_resilience.py
 harness_db_singleton.py
 harness_deposit_accountability.py
-harness_deposit_recon.py
 harness_device_cost_recon.py
 harness_device_forecast_store_filter.py
 harness_device_margin_block.py
@@ -110,7 +109,6 @@ harness_dm_accessory_attribution_router.py
 harness_dm_checklist_carrier_review.py
 harness_dm_target_attribution.py
 harness_dm_verification_audit.py
-harness_dmverify_parity.py
 harness_doc_intel.py
 harness_eep_pl_wiring.py
 harness_eep_pl_wiring_negcontrol.py
@@ -120,7 +118,6 @@ harness_employee_dashboard_access.py
 harness_envelope_algorithm.py
 harness_envelope_outstanding.py
 harness_envelope_photo_required_gate.py
-harness_envelope_report.py
 harness_epay_alerts.py
 harness_epay_fee_recon.py
 harness_epay_ingest.py

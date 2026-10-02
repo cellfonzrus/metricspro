@@ -22,6 +22,21 @@ const NO_MARKET = '(no market)'
 const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
 const ymd = (s: string) => (s || '').slice(0, 10)
 const stamp = (s: string) => (s || '').slice(0, 16).replace('T', ' ')
+// WHO WAS THERE / WHOSE STORE IT IS (owner 2026-10-02, index §48.7). Both cells report their own
+// `resolved` flag, and this screen renders that distinction instead of flattening it: "we did not
+// look" and "nobody was there" are different facts, and showing an empty cell for the first would
+// accuse a store of being unstaffed. `worked.source` says whether the people are an ACTUAL signal
+// (clocked in / rang sales) or the scheduled roster, and is always shown so a guess cannot read as fact.
+const WORKED_SOURCE_NOTE: Record<string, string> = {
+  actual: 'clocked in or rang sales',
+  scheduled: 'scheduled only — not confirmed present',
+  none: 'no clock-in and no sales recorded',
+}
+type WorkedPerson = { name?: string; email?: string; tag?: string }
+type Worked = { people?: WorkedPerson[]; source?: string; summary?: string; resolved?: boolean }
+type Dm = { names?: string[]; resolved?: boolean; district?: string }
+type PeopleRow = { dm?: Dm; worked?: Worked }
+const peopleNames = (w?: Worked) => (w?.people || []).map(p => p?.name).filter(Boolean)
 
 export default function AccountabilityChainPage() {
   const today = localToday()
@@ -72,6 +87,7 @@ export default function AccountabilityChainPage() {
   // stuck pointer. Derived from the SERVER's stage list so a new stage sorts without a UI change.
   const cols = useMemo<[string, string][]>(() => ([
     ['Date', 'day'], ['Store', 'store_name'], ['Market', 'market'],
+    ['DM', 'dm'], ['Who worked', 'worked'],
     ...stages.map((s: any, i: number) => [s.label, `st${i}`] as [string, string]),
     ['Stuck at', 'stuck_label'], ['Done', 'stages_done'],
   ]), [stages])
@@ -82,6 +98,8 @@ export default function AccountabilityChainPage() {
       // sort by when it happened; a stage not done sorts before every done one
       return st?.done ? (st.at || '1') : ''
     }
+    if (f === 'dm') return (r?.dm?.names || []).join(', ')
+    if (f === 'worked') return peopleNames(r?.worked).join(', ')
     return r?.[f]
   }, [])
   // Seeded newest-day-first: a 30-day board is read from the most recent day backwards.
@@ -92,6 +110,9 @@ export default function AccountabilityChainPage() {
       { header: 'Date', field: 'day', type: 'date', role: 'date', get: (r: any) => r.day },
       { header: 'Store', field: 'store_name', role: 'store', get: (r: any) => r.store_name },
       { header: 'Market', field: 'market', get: (r: any) => r.market || '' },
+      { header: 'DM', field: 'dm', get: (r: PeopleRow) => (r.dm?.resolved ? (r.dm?.names || []).join(', ') : 'not in org tree') },
+      { header: 'Who worked', field: 'worked', get: (r: PeopleRow) => (r.worked?.resolved ? peopleNames(r.worked).join(', ') : 'not resolved') },
+      { header: 'Who worked — source', field: 'worked_source', get: (r: PeopleRow) => (r.worked?.resolved ? (r.worked?.source || '') : '') },
     ]
     // THREE COLUMNS PER STAGE — done / when / who — because "with dates and by who" is the ask, and
     // a spreadsheet that collapses them into one cell cannot be filtered or pivoted on.
@@ -120,6 +141,8 @@ export default function AccountabilityChainPage() {
             One line per <b>store and day</b>, showing each step of the cash chain — <b>done or not, when, and by
             whom</b>. A row appears for <b>every active store on every day in the range</b>, so a store that filed
             nothing is listed as missing rather than left out. <b>Stuck at</b> names the first step not yet done.
+            <b>Who worked</b> shows the people who were actually in the store that day — clocked in or ringing
+            sales — even when nobody closed, and <b>DM</b> names the district manager the location is assigned to.
           </p>
         </div>
         {!loading && rows.length > 0 && (
@@ -204,6 +227,31 @@ export default function AccountabilityChainPage() {
                     <td>{ymd(r.day)}</td>
                     <td>{r.store_name || r.store_code}</td>
                     <td style={{ color: 'var(--text3)' }}>{r.market || ''}</td>
+                    {/* The DM assigned to the location — from the org tree, never guessed. An
+                        unwired tree says so rather than reporting "no DM". */}
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {r.dm?.resolved
+                        ? <>
+                            {(r.dm?.names || []).length > 0
+                              ? (r.dm?.names || []).join(', ')
+                              : <span style={{ color: 'var(--warn)' }}>no manager on the district</span>}
+                            {r.dm?.district && <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.dm.district}</div>}
+                          </>
+                        : <span style={{ color: 'var(--text3)' }} title="This store is not wired into the org hierarchy, so the system cannot say who its DM is.">not in org tree</span>}
+                    </td>
+                    {/* WHO WORKED, whether or not anyone closed — the whole point of the ask. */}
+                    <td style={{ minWidth: 170 }}>
+                      {!r.worked?.resolved
+                        ? <span style={{ color: 'var(--text3)' }} title="Who worked is looked up one day at a time, so only the most recent days in a long range are resolved. Narrow the range to see this day.">not resolved</span>
+                        : peopleNames(r.worked).length === 0
+                          ? <span style={{ color: 'var(--warn)' }} title={WORKED_SOURCE_NOTE[r.worked?.source] || ''}>nobody recorded</span>
+                          : <>
+                              <div>{peopleNames(r.worked).join(', ')}</div>
+                              <div style={{ fontSize: 11, color: r.worked?.source === 'scheduled' ? 'var(--warn)' : 'var(--text3)' }}>
+                                {WORKED_SOURCE_NOTE[r.worked?.source] || r.worked?.source}
+                              </div>
+                            </>}
+                    </td>
                     {(r.stages || []).map((st: any) => (
                       <td key={st.key} style={{ whiteSpace: 'nowrap' }}>
                         <div title={st.detail || ''}>
@@ -244,6 +292,13 @@ export default function AccountabilityChainPage() {
           <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
             {data.days} day(s) × {data.stores_expected} store(s) expected to file ·
             showing {rows.length} of {allRows.length} store-day row(s)
+            {data.worked_dates_capped && (
+              <div style={{ marginTop: 4 }}>
+                <b>Who worked</b> is resolved for the {(data.worked_resolved_dates || []).length} most recent day(s)
+                in this range; older days read “not resolved” rather than showing an empty day as unstaffed.
+                Narrow the range to resolve them.
+              </div>
+            )}
           </div>
         </>
       )}

@@ -27,12 +27,22 @@ sentinel, from the ONE home `_caller_uid`. Storing a name would reintroduce the 
 `commission-discrepancy`). `app/core/actors.py` is the missing join, once: uid -> person from
 `storeops.app_users`, org-scoped, best-effort, name-only.
 
+AND WHY THE SELECTOR STILL READ ZERO (owner bug 2026-10-02, index §47.8). All of the above shipped
+correct, and the receipt showed bill-payment cash 0.00 on every line with store cash carrying the whole
+drawer — because BOTH callers of `expected_cash` hand-spelled a `daily_closing` column list that omitted
+`epay_on_cash`, the split's one input. `.get()` cannot tell "0 dollars" from "never fetched", so nothing
+failed. The class is §19.18's again in its quietest form: the unwired thing was a SELECT LIST. The
+columns a pure reader dereferences now live beside it (`envelope_report.CLOSING_COLUMNS`) and every
+caller selects that declaration — sections H1-H3 below.
+
 WHAT FAILS THE BUILD HERE: a second basis formula; a basis word or label spelled on the screen or in
 the router; the default drifting off the historical figure; an unknown basis folding to 'manual' (which
 would render a whole receipt as zeros); the legacy store_cash fallback being lost; the count math
 leaving `count_fields`; `counted_by` carrying a sentinel again or not using the one home; a second
 uid->name resolver; `core.actors` reading a column it has no business reading, dropping its org scope,
-or raising.
+or raising; a caller hand-spelling a daily_closing column list again; the pure module reading a closing
+column the contract does not declare; the counted basis not reaching the save handler; a basis without
+a column on the screen.
 
 Stdlib only — the pure modules are import-free and exec'd directly; the router is read as text/AST.
 """
@@ -214,8 +224,11 @@ def main():
     # fetches must still produce three DIFFERENT, correct bases. Drop a needed column from the one home
     # and they go red (control I3 proves it).
     print("\nE2. the columns the basis math needs are the columns the endpoint fetches")
+    # One spelling of the dereference, for BOTH closing-row readers: `CLOSING_SELECT` is the joined
+    # form of CLOSING_COLUMNS (pinned identical in section H1), so a caller cannot re-join the tuple
+    # its own way either. H1 names each reader and requires it; this rule is the module-wide floor.
     check("the endpoint builds its select FROM the pure module's column list",
-          'select(",".join(envelope_report_mod.CLOSING_COLUMNS))' in rsrc)
+          "envelope_report_mod.CLOSING_SELECT" in rsrc)
     check("...and no longer spells a daily_closing column list of its own",
           '"t_cash,store_cash,envelope_picture,remarks"' not in rsrc)
     for col in ER.BASIS_INPUT_COLUMNS:
@@ -299,8 +312,222 @@ def main():
              and "def actor_names(" in read(os.path.join(HERE, "app", "core", p))]
     check("no second uid->name resolver under app/core: %s" % (dupes or "none"), dupes, [])
 
+    # ── THE WIRING (owner bug 2026-10-02) ───────────────────────────────────────────────────────
+    # The selector above shipped CORRECT and read 0 anyway: `expected_cash` dereferences
+    # `epay_on_cash`, and BOTH of its callers hand-spelled a daily_closing column list that did not
+    # include it. `.get()` cannot tell "0 dollars" from "never fetched", so the receipt showed
+    # bill-payment cash 0.00 on every line and store cash as the whole drawer, and nothing failed.
+    # The class is §19.18's again, in its quietest form: the unwired thing was a SELECT LIST. So the
+    # columns a pure reader dereferences are DECLARED beside it and every caller selects that
+    # declaration — a reader that starts reading a new column fails this build until the tuple names
+    # it, and every caller then fetches it.
+    print("\nH1. the columns the basis split reads are DECLARED, and every caller selects them")
+    check("CLOSING_COLUMNS is the one column contract, and declares the split's whole input",
+          ("epay_on_cash" in ER.CLOSING_COLUMNS and "t_cash" in ER.CLOSING_COLUMNS
+           and "store_cash" in ER.CLOSING_COLUMNS), True)
+    check("CLOSING_SELECT is DERIVED from it, never a second hand-written list",
+          ER.CLOSING_SELECT, ",".join(ER.CLOSING_COLUMNS))
+    # THE LOCK: every closing-row key the pure module reads must be in the tuple. `r` is bound to
+    # `closing_row or {}` in exactly the functions that take a closing row, so the scan is exact.
+    etree = ast.parse(read(os.path.join(HERE, "app", "modules", "closing", "envelope_report.py")))
+    row_fns = [n for n in ast.walk(etree)
+               if isinstance(n, ast.FunctionDef) and any(a.arg == "closing_row" for a in n.args.args)]
+    check("the closing-row readers are discoverable by their `closing_row` parameter",
+          {"declared_total_cash", "expected_cash", "report_row"} <= {f.name for f in row_fns}, True)
+    undeclared = sorted({
+        c.args[0].value
+        for f in row_fns for c in ast.walk(f)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "get"
+        and isinstance(c.func.value, ast.Name) and c.func.value.id in ("r", "closing_row")
+        and c.args and isinstance(c.args[0], ast.Constant) and isinstance(c.args[0].value, str)
+        and c.args[0].value not in ER.CLOSING_COLUMNS})
+    check("no closing-row column is read without being declared (add it to CLOSING_COLUMNS): %s"
+          % (undeclared or "none"), undeclared, [])
+    # THE LOCK: no caller hand-spells a column list for the rows it feeds to those readers.
+    rtree = ast.parse(rsrc)
+    callers = [n for n in ast.walk(rtree)
+               if isinstance(n, ast.FunctionDef)
+               and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                       and c.func.attr in ("report_row", "expected_cash", "declared_components")
+                       and isinstance(c.func.value, ast.Name)
+                       and c.func.value.id == "envelope_report_mod"
+                       for c in ast.walk(n))]
+    check("the router's envelope-receipt handlers are discoverable",
+          {"envelope_report", "save_envelope_count"} <= {f.name for f in callers}, True)
+    for f in callers:
+        body = ast.get_source_segment(rsrc, f) or ""
+        if 'table("daily_closing")' not in body:
+            continue        # a handler that reads no closing row has no column list to get wrong
+        check("`%s` selects envelope_report.CLOSING_SELECT" % f.name,
+              "envelope_report_mod.CLOSING_SELECT" in body, True)
+        rest = body.replace("envelope_report_mod.CLOSING_SELECT", "")
+        check("`%s` spells no daily_closing money column of its own" % f.name,
+              [c for c in ("t_cash", "epay_on_cash", "store_cash") if '"%s,' % c in rest
+               or ',%s"' % c in rest or ',%s,' % c in rest], [])
+    # The SIBLING consumer of the same formulas must fetch the same column — one of the two paths
+    # fixed and the other not is the same defect wearing a hat.
+    check("deposit_recon's own query carries the split's input too",
+          'select("store_code,close_date,t_cash,store_cash,epay_on_cash")'
+          in read(os.path.join(HERE, "app", "modules", "closing", "deposit_recon.py")), True)
+
+    print("\nH2. a count is scored on the basis the counter was looking at")
+    # Counting the bill-payment or store basis against the whole drawer reads as a huge shortage —
+    # and a shortage can become a CHARGEBACK against the rep. The basis has to reach the handler.
+    check("EnvelopeCountIn accepts a basis",
+          re.search(r"class EnvelopeCountIn\(LaxModel\):(.|\n)*?\n\n", rsrc).group(0).count("basis") >= 1, True)
+    check("the save handler normalizes the incoming basis through the pure module",
+          "normalize_envelope_basis(payload.basis)" in hbody)
+    check("...and passes it to expected_cash instead of taking the bare default",
+          "expected_cash(crow, _basis)" in hbody)
+    check("an absent basis still means the historical default (every stored count keeps its meaning)",
+          ER.expected_cash(row0907, None), ER.expected_cash(row0907, "total_cash"))
+    check("the screen sends the basis it is showing",
+          "basis," in page.split("api('/api/v1/closing/envelope-count'")[1][:900], True)
+
+    print("\nH3. every basis stands beside the chosen one, on screen and in the export")
+    rr3 = ER.report_row({"id": "r", **row0907}, None, None, None, "NJ", basis="bill_payment_cash")
+    check("report_row carries a figure per basis, keyed by basis",
+          rr3["declared"], {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0})
+    check("the flat keys the payload has carried since 2026-10-01 still answer",
+          (rr3["declared_total_cash"], rr3["declared_billpay_cash"]), (1002.0, 230.0))
+    check("basis_options carries the column-header form of the same words",
+          [o["short"] for o in ER.basis_options("ePay")],
+          ["Total cash", "Store cash", "Bill payments (ePay)"])
+    check("...with the same slot rule — an unresolved term drops the parenthetical",
+          [o["short"] for o in ER.basis_options("")][2], "Bill payments")
+    check("the screen renders a column per SERVER option, spelling no basis key",
+          "basisCols" in pcode and "r.declared?.[b.key]" in pcode, True)
+
+    # ── THE CASH IS NAMED FOR WHAT IT IS (owner 2026-10-02, index §47.9) ───────────────────────
+    # Owner: "Store cash in DM Verify is the total cash in the store, need one more field which shows
+    # the store cash - which is total store cash - epay cash as declared by the users". The day-1
+    # `store_cash` column holds the WHOLE drawer for a mig103+ row and EXCLUDES the bill-payment cash
+    # for a pre-mig103 one — one column, two meanings — while the rest of the platform already defines
+    # store cash as the NET figure. A surface that has to show both must not be the place that decides
+    # what either one is, so the SPLIT has one home beside the formulas and every surface reads it.
+    print("\nI1. the cash split has ONE home, and every surface dereferences it")
+    check("deposit_recon.cash_components is the split, and it IS cash_for_basis",
+          all(DR.cash_components(1002.0, 230.0)[b] == DR.cash_for_basis(1002.0, 230.0, b)
+              for b in DR.DERIVED_BASES), True)
+    check("...covering every basis that has a formula, and no 'manual'",
+          sorted(DR.cash_components(1002.0, 230.0)), sorted(DR.DERIVED_BASES))
+    check("the envelope receipt dereferences it (not its own loop over expected_cash)",
+          "deposit_recon.cash_components(" in read(
+              os.path.join(HERE, "app", "modules", "closing", "envelope_report.py")), True)
+    check("/closing/summary dereferences it too — one derivation, two screens",
+          rsrc.count("deposit_recon.cash_components(") >= 2, True)
+    # THE LOCK: nobody re-derives the net. An AST scan for "a cash total MINUS something ePay" —
+    # comments and docstrings legitimately explain the formula (that is where the one home is named),
+    # so the scan is over expressions, not text. The bill-pay recon's own `declared - processor`
+    # variances are a different question and do not match (their LEFT side is the ePay figure).
+    def net_derivations_in(src):
+        out = []
+        for n in ast.walk(ast.parse(src)):
+            if not (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Sub)):
+                continue
+            left = (ast.get_source_segment(src, n.left) or "").lower()
+            right = (ast.get_source_segment(src, n.right) or "").lower()
+            if "epay" in right and any(w in left for w in ("t_cash", "store_cash", "total", "drawer")):
+                out.append(ast.get_source_segment(src, n))
+        return out
+
+    def net_derivations(path):
+        return net_derivations_in(read(path))
+
+    _closing = os.path.join(HERE, "app", "modules", "closing")
+    check("the ONE home derives the net, and it is cash_for_basis",
+          net_derivations(os.path.join(_closing, "deposit_recon.py")), ["_f(t_cash) - _f(epay_cash)"])
+    for mod in ("router.py", "envelope_report.py", "verified_overlay.py", "pickup_actual.py"):
+        check("`closing/%s` does not derive the net itself" % mod,
+              net_derivations(os.path.join(_closing, mod)), [])
+    check("...and money_recon reads the named drawer instead of repeating its expression",
+          'closing_cash = totals["total_store_cash"]' in rsrc, True)
+
+    print("\nI2. DM Verify names the drawer and shows the net beside it")
+    dmv = read(os.path.join(os.path.dirname(HERE), "frontend", "src", "components",
+                            "DailyClosingVerify.tsx"))
+    dmv_code = re.sub(r"(?m)^\s*(//|\*|/\*).*$", "", dmv)
+    dmv_code = re.sub(r"\{/\*.*?\*/\}", "", dmv_code, flags=re.S)
+    # THE RULE, stated as what must NOT be on the screen: the raw `store_cash` field is the column
+    # with two meanings (the drawer for a modern row, the net for a legacy one), so DM Verify must
+    # never RENDER it — every figure it shows comes from the server's named keys. Spelled as the
+    # render expressions themselves so the rule cannot be satisfied by the phrase existing elsewhere
+    # in the file (which is exactly how a looser first cut of this check failed to bite).
+    _raw_renders = [x for x in ("fmt(t.store_cash)", "fmt(r.store_cash)", "=> r.store_cash ",
+                                "r.totals?.store_cash ", "r.totals_original.store_cash",
+                                "totals_original ? r.totals_original.store_cash")
+                    if x in dmv_code]
+    check("DM Verify renders the two-meaning `store_cash` column NOWHERE: %s" % (_raw_renders or "none"),
+          _raw_renders, [])
+    check("the drawer is labelled as a TOTAL and read from the named key",
+          '"Total store cash" value={fmt(t.total_store_cash)}' in dmv_code, True)
+    check("the net figure has its own column, read from the server's named key",
+          '"Store cash" value={fmt(t.store_cash_net)}' in dmv_code, True)
+    check("the per-rep table reads the server's split, not the raw column",
+          "_cash_split?.total_cash" in dmv_code and "_cash_split?.store_cash" in dmv_code, True)
+    check("the screen derives NEITHER figure itself",
+          [x for x in ("- t.epay_on_cash", "- r.epay_on_cash", "-t.epay_on_cash")
+           if x in dmv_code.replace(" ", " ")], [])
+    check("the DM's correction field is named for what it corrects (the cash TOTAL)",
+          'Lbl t="Total store cash"' in dmv_code, True)
+    check("...and prefills from the drawer, so a legacy store's DM is not shown the net as a total",
+          "t.total_store_cash ?? t.store_cash" in dmv_code, True)
+
+    print("\nI3. the live-form mirror cannot drift, and is the only copy on the frontend")
+    # A half-filled SUBMIT form has no server figure to read, so the net is computed in the browser
+    # (owner 2026-10-02: "add the store cash box on the daily closing also, which will be calculated
+    # and greyed out"). That is the ONE legitimate frontend derivation, so it has one home and this
+    # rule keeps it honest against deposit_recon's.
+    FE = os.path.join(os.path.dirname(HERE), "frontend", "src")
+    mirror = read(os.path.join(FE, "lib", "cash-basis.ts"))
+    check("the mirror names the backend home it mirrors",
+          "deposit_recon.cash_components" in mirror, True)
+    check("the mirror's bases are deposit_recon's, exactly",
+          sorted(re.findall(r"^\s{4}(\w+):", mirror, re.M)), sorted(DR.DERIVED_BASES))
+    check("the mirror's net is max(total - billPay, 0) — the same formula, floored the same way",
+          "Math.max(total - billPay, 0)" in mirror, True)
+    check("...and the total / bill-payment legs are pass-throughs, as they are in the one home",
+          "total_cash: total" in mirror and "bill_payment_cash: billPay" in mirror, True)
+    check("the mirror rounds to cents like the backend's _f",
+          "Math.round(" in mirror and "100) / 100" in mirror, True)
+    # THE LOCK: no SECOND copy of this arithmetic anywhere under frontend/src. Comments may explain it.
+    second_copies = []
+    for root, _dirs, files in os.walk(FE):
+        for fn in files:
+            if not fn.endswith((".ts", ".tsx")) or fn == "cash-basis.ts":
+                continue
+            fp = os.path.join(root, fn)
+            body = re.sub(r"(?m)^\s*(//|\*|/\*).*$", "", read(fp))
+            body = re.sub(r"\{/\*.*?\*/\}", "", body, flags=re.S)
+            # The operand char class allows parens/spaces so `enteredCash - (parseFloat(x) || 0)`
+            # matches too — a first cut stopped at the `(` and the rule missed exactly that shape.
+            for mm in re.finditer(r"(?:t_cash|total_cash|enteredCash|total_store_cash)"
+                                  r"[\w.?\[\]'\"() |]*\s-\s[\w.?\[\]'\"() |]*epay", body):
+                second_copies.append("%s: %s" % (os.path.relpath(fp, FE), mm.group(0)))
+    check("no second copy of the net subtraction under frontend/src: %s" % (second_copies or "none"),
+          second_copies, [])
+    submit = read(os.path.join(FE, "components", "ClosingSubmitForm.tsx"))
+    check("the daily-closing form READS the mirror",
+          "from '@/lib/cash-basis'" in submit and "storeCashNet(" in submit, True)
+    check("...and shows it read-only (calculated, greyed — never a field the rep can type into)",
+          re.search(r"Store cash \(total cash less bill payments[^<]*<div style=\{\{ \.\.\.inp,"
+                    r" background: 'var\(--surface2\)'", submit, re.S) is not None, True)
+    check("...and never SUBMITS it (the server recomputes from t_cash and epay_on_cash)",
+          "store_cash:" not in re.sub(r"(?m)^\s*//.*$", "", submit), True)
+
+    print("\nI4. a row rebuilt from ONLY the fetched columns still answers all three bases")
+    # The behavioural form of H1's rule, and the one that would have caught the 2026-10-02 defect on
+    # its own: take the column contract, build a row from NOTHING ELSE, and the bases must differ.
+    _fetched_row = {c: {"t_cash": 1002.0, "epay_on_cash": 230.0}.get(c, None) for c in ER.CLOSING_COLUMNS}
+    check("a row carrying only CLOSING_COLUMNS yields three DIFFERENT, reconciling bases",
+          ER.declared_components(_fetched_row),
+          {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0})
+    check("...and nothing the contract fetches is unread by the module",
+          [c for c in ER.CLOSING_COLUMNS
+           if c not in read(os.path.join(HERE, "app", "modules", "closing", "envelope_report.py"))], [])
+
     # ── I. armed negative controls ──────────────────────────────────────────────────────────────
-    print("\nH. CONTROLS — each rule goes RED with the defect patched back in")
+    print("\nJ. CONTROLS — each rule goes RED with the defect patched back in")
     check("CONTROL: the pre-fix handler's sentinel would be caught",
           '"management"' in '"counted_by": (payload.counted_by or prior or "management"),')
     check("CONTROL: a hand-written basis formula instead of the dereference → RED",
@@ -320,6 +547,43 @@ def main():
           and "{processor}" not in ER.basis_label("bill_payment_cash", "ePay"))
     check("CONTROL: the endpoint going back to indexing the label dict → RED",
           "ENVELOPE_BASIS_LABELS[" in 'x = envelope_report_mod.ENVELOPE_BASIS_LABELS[b]')
+    # The WIRING rules, armed with the select list exactly as it shipped on 2026-10-01.
+    shipped_select = ('.select("id,close_date,store_code,store_name,store_address,employee_name,"\n'
+                      '        "t_cash,store_cash,envelope_picture,remarks")')
+    check("CONTROL: the hand-spelled select list → RED",
+          "envelope_report_mod.CLOSING_SELECT" not in shipped_select
+          and [c for c in ("t_cash", "epay_on_cash", "store_cash")
+               if '"%s,' % c in shipped_select or ',%s,' % c in shipped_select] != [])
+    check("CONTROL: and it is exactly what the owner saw — bill-pay 0, store cash = the whole drawer",
+          (ER.expected_cash({"t_cash": 1002.0}, "bill_payment_cash"),
+           ER.expected_cash({"t_cash": 1002.0}, "store_cash")), (0.0, 1002.0))
+    check("CONTROL: a reader that starts reading an undeclared column → RED",
+          "dm_epay_cash" not in ER.CLOSING_COLUMNS)
+    # The naming rules, armed with the label and the derivation exactly as they stood on 2026-10-01.
+    # The naming rules, armed against the screen exactly as it stood before this change.
+    _shipped_tile = '<Stat label="Store cash" value={fmt(t.store_cash)} />'
+    check("CONTROL: the shipped tile rendered the two-meaning column → RED",
+          [x for x in ("fmt(t.store_cash)",) if x in _shipped_tile] != [])
+    check("CONTROL: ...and it is not the named drawer the rule requires",
+          '"Total store cash" value={fmt(t.total_store_cash)}' not in _shipped_tile)
+    check("CONTROL: a screen deriving the net itself → RED",
+          [x for x in ("- t.epay_on_cash",) if x in "{fmt(t.store_cash - t.epay_on_cash)}"] != [])
+    check("CONTROL: the scan SEES a caller that sneaks the subtraction back in",
+          net_derivations_in('x = totals["store_cash"] - totals["epay_on_cash"]'),
+          ['totals["store_cash"] - totals["epay_on_cash"]'])
+    check("CONTROL: ...and leaves the bill-pay recon's own declared-vs-processor variance alone",
+          net_derivations_in("v = closing_epay - pos_billpay"), [])
+    check("CONTROL: a form inlining the subtraction instead of the mirror → RED",
+          [x for x in (re.search(r"(?:t_cash|total_cash|enteredCash|total_store_cash)"
+                                 r"[\w.?\[\]'\"() |]*\s-\s[\w.?\[\]'\"() |]*epay",
+                                 "{fmt(enteredCash - (parseFloat(f.epay_on_cash) || 0))}"),)
+           if x] != [])
+    check("CONTROL: a row built WITHOUT the contract collapses the bases (the shipped defect)",
+          ER.declared_components({"t_cash": 1002.0}),
+          {"total_cash": 1002.0, "store_cash": 1002.0, "bill_payment_cash": 0.0})
+    check("CONTROL: the legacy column read as a total is WRONG for a legacy row, and the split says so",
+          DR.cash_components(round(80.0 + 30.0, 2), 30.0),
+          {"total_cash": 110.0, "store_cash": 80.0, "bill_payment_cash": 30.0})
     # I3 — the owner's bug, reproduced: drop the column from the fetch and watch the two non-default
     # bases collapse onto the whole drawer and zero, which is exactly what was on screen.
     _broken = {k: full.get(k) for k in ER.CLOSING_COLUMNS if k != "epay_on_cash"}

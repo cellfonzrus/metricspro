@@ -189,6 +189,26 @@ check("A3 cash_for_basis total_cash = t_cash", dr.cash_for_basis(500.0, 120.0, "
 check("A4 cash_for_basis store_cash floors at 0 (epay > t_cash, bad data)", dr.cash_for_basis(50.0, 120.0, "store_cash") == 0.0)
 check("A5 cash_for_basis manual/unknown basis -> 0", dr.cash_for_basis(500.0, 120.0, "manual") == 0.0)
 
+# cash_components — the SPLIT of one drawer, keyed by basis (owner 2026-10-02, index §47.9). It is the
+# ONE home for "show me all three figures": the envelope receipt and DM Verify both dereference it, so
+# neither surface writes `t_cash - epay_cash` itself and they can never disagree.
+check("A5a cash_components gives every basis that HAS a formula, keyed by basis",
+      dr.cash_components(500.0, 120.0) == {"total_cash": 500.0, "store_cash": 380.0,
+                                           "bill_payment_cash": 120.0},
+      str(dr.cash_components(500.0, 120.0)))
+check("A5b every component IS cash_for_basis — not a second derivation",
+      all(dr.cash_components(500.0, 120.0)[b] == dr.cash_for_basis(500.0, 120.0, b)
+          for b in dr.DERIVED_BASES))
+check("A5c the components reconcile: store_cash + bill_payment_cash == total_cash",
+      round(dr.cash_components(500.0, 120.0)["store_cash"]
+            + dr.cash_components(500.0, 120.0)["bill_payment_cash"], 2) == 500.0)
+check("A5d 'manual' is NOT a component (it has no formula, and 0.0 is not a split of anything)",
+      "manual" not in dr.cash_components(500.0, 120.0) and "manual" not in dr.DERIVED_BASES)
+check("A5e a caller may narrow the bases it wants, and gets no others",
+      dr.cash_components(500.0, 120.0, bases=("store_cash",)) == {"store_cash": 380.0})
+check("A5f bad data floors the net at 0 here too (never a negative drawer on a screen)",
+      dr.cash_components(50.0, 120.0)["store_cash"] == 0.0)
+
 exp, adj, gross = dr.expected_deposit(500.0, 120.0, "total_cash", expenses_amt=40.0, bill_amt=120.0, other_amt=10.0,
                                        include_expenses=False, include_bill_payments=False, include_other=False)
 check("A6 EXCLUDED BY DEFAULT: expected == gross when all 3 toggles are False", exp == gross == 500.0, f"{exp} {gross}")

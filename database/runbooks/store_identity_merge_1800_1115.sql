@@ -160,6 +160,45 @@ SELECT '00000000-0000-0000-0000-000000000001', 'B-60TH', '1 S 60th street', 'PA'
 --             store_code_to_address['B-60TH'] = '1 S 60th street' — both paths, one key.
 
 
+-- ─── STEP 2c — 2778: a CLOSED store whose costs never followed it to its successor ───
+-- Owner, 2026-10-02: "b2778 is closed and replaced by 1578". Read as 1598: there is no B-1578
+-- anywhere in the database, while B-1598 '1598 Mount Ephraim Ave' exists in the same market (PA)
+-- and `commcalc.store_aliases` ALREADY routes '2778 Mount Ephraim Ave' and '2778 Ephraim Ave' to
+-- B-1598 — someone had already recorded that succession on the address side. If 1578 meant some
+-- other store, change the address in this step and nothing else here depends on it.
+--
+-- THE DEFECT, measured live 2026-10-02: the succession was recorded for the ADDRESS spellings but
+-- never for the CODE. So every sales row resolves to the successor ('2778 …' → '1598 Mount Ephraim
+-- Ave': raw_sales 5,928 / daily_sales_feed 2,955 rows) while `store_expenses` keeps 15 rows keyed
+-- 'B-2778' totalling $11,949.67 (August 2026) on a dead identity of its own. The closed store's
+-- costs never followed it; its revenue did.
+--
+-- (That total equals B-60TH's to the cent. Verified NOT a double-count: the two sets are distinct
+-- rows with distinct ids — it is the same August expense template applied to both stores.)
+--
+-- Same reason as step 2b that this must be a MAPPING row: `coa.store_code_to_address` reads
+-- `store_mapping` alone and never `store_aliases`, so the existing aliases cannot reach the
+-- expense side.
+--
+-- SAFETY, verified against live data: after this, the ONLY resolution that changes anywhere is
+-- 'B-2778' itself (measured over every mapped address). No `store_companies` row exists for
+-- 'B-2778', and '1598 Mount Ephraim Ave' maps to ONE company, so the merge crosses no legal
+-- entity. Street number 1598 still resolves to exactly one address and 2778 to none, so the
+-- resolver's leading-number step stays unambiguous. `salesforce_id` is left alone: B-1598 already
+-- claims the door (0018000001flQk3AAE), so no door becomes ambiguous.
+UPDATE commcalc.store_mapping
+   SET store_address = '1598 Mount Ephraim Ave'
+ WHERE org_id = '00000000-0000-0000-0000-000000000001'
+   AND store_code = 'B-2778'
+   AND store_address = 'B-2778';          -- idempotent: matches nothing once applied
+-- Expect: UPDATE 1
+--
+-- DELIBERATELY NOT DONE HERE: nothing is marked inactive. `store_mapping.is_active` and the
+-- B-2778 roster row control whether the closed store still appears in pickers, which is a
+-- presentation choice with its own consequences for historical screens — yours to make, and
+-- listed as outstanding below rather than guessed at.
+
+
 -- ─── STEP 3 — attach the two dealer doors (this is the money step) ───────────────────
 -- Until now every raw_mi row on these doors booked COMPANY-WIDE because no mapping row
 -- claimed them: $6,527.04 in August and $8,943.62 in September. After this, each store's
@@ -226,6 +265,9 @@ SELECT salesforce_id, count(*) AS rows_claiming_it
 --   UPDATE commcalc.store_mapping SET salesforce_id = NULL
 --    WHERE org_id = '00000000-0000-0000-0000-000000000001'
 --      AND salesforce_id IN ('0013t00001Y15oMAAR', '0018000000eXGzwAAG');
+--   -- step 2c (send 2778's costs back to a dead identity of their own):
+--   UPDATE commcalc.store_mapping SET store_address = 'B-2778'
+--    WHERE org_id = '00000000-0000-0000-0000-000000000001' AND store_code = 'B-2778';
 --   -- step 2b (remove the 60TH row; its expenses split from its sales again):
 --   DELETE FROM commcalc.store_mapping
 --    WHERE org_id = '00000000-0000-0000-0000-000000000001' AND store_code = 'B-60TH';
@@ -246,6 +288,13 @@ SELECT salesforce_id, count(*) AS rows_claiming_it
 --     store_mapping) but it is why the roster shows the store with no address.
 --   • commcalc.store_companies still holds a row for the address 'B-1800'. Harmless — it points
 --     at the SAME company as '1800 Great Neck Rd' — and dead once nothing resolves to 'B-1800'.
+--   • B-2778 is CLOSED (owner, 2026-10-02) but still carries is_active = true in store_mapping
+--     and a row in storeops.stores. Step 2c merges its money into its successor; whether the dead
+--     code also disappears from store pickers is a separate presentation choice.
+--   • 'Cellular Services' is COMPANY-LEVEL data, not a store (owner, 2026-10-02) — it is a row in
+--     commcalc.companies. It is now EXEMPT from the store-identity audit by dereferencing that
+--     table (account/store_identity_audit.company_level_keys), not repaired, because there is no
+--     store there to repair. Its two store_mapping rows are left exactly as they are.
 --   • B-1115 is recorded in market 'LI' while its carrier address is in Brooklyn. That is your
 --     categorisation to keep or change; this file preserves it rather than guessing.
 -- =====================================================================================

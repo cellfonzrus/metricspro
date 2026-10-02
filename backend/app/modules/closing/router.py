@@ -972,6 +972,14 @@ _SUMMARY_MAX_RANGE_DATES = 45   # OWNER 2026-10-01: "we need atleast 30 days of 
                                 # five other org-level queries and missed these two).
 _GATE_RANK = {"blocked": 4, "flagged": 3, "recon_pending": 2, "not_computed": 1, "ok": 0}
 
+_CHAIN_WORKED_MAX_DATES = 31   # OWNER 2026-10-02 ("who worked in the store that day in case they
+                                # didn't close"): the who-worked signal is PER DATE by construction —
+                                # its B2B leg reads one trans_date — so a 62-day chain would replay it
+                                # 62 times. Capped at a calendar month, MOST RECENT FIRST, the same
+                                # capped-replay posture closing_submissions/_RECON_MAX_DATES already
+                                # use. A date past the cap is REPORTED as unresolved, never rendered
+                                # as "nobody worked" — see the endpoint's own comment.
+
 _RECON_MAX_DATES = 45   # closing-hardening (2026-07-30): bounds the number of distinct close_dates
                          # whose _b2b_day gets replayed per /closing/recon call. Mirrors the
                          # retail-ops perf-fold day-cache pattern (closing_submissions'
@@ -1401,13 +1409,38 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             totals_original = dict(totals)
             _verified_overlay.apply_overlay(totals, _ver)
 
+        # THE CASH SPLIT, with each figure NAMED FOR WHAT IT IS (owner 2026-10-02, index §47.9).
+        # Owner: *"Store cash in DM Verify is the total cash in the store, need one more field which
+        # shows the store cash — which is total store cash - epay cash as declared by the users"*.
+        # `store_cash` (the day-1 column) holds the WHOLE drawer for a mig103+ row — create_row folds
+        # the bill-payment cash into it — while the rest of the platform already defines store cash as
+        # the NET figure (`closing/deposit-categories`, `closing/cash-config`, the submit-flow
+        # explainer). DM Verify was the one surface calling the drawer "Store cash". Both figures are
+        # now served under names that say which is which, and neither is derived here: the split is
+        # `deposit_recon.cash_components`, the same one the envelope receipt dereferences (§47.8).
+        # The drawer is `epay_cash + store_cash` — the SAME expression money_recon's `closing_cash`
+        # uses below (which now reads this key instead of repeating it), era-robust in both column
+        # eras and the invariant `verified_overlay` preserves, so this is correct AFTER the overlay too.
+        def _name_the_cash(tt):
+            if not tt:
+                return
+            split = deposit_recon.cash_components(
+                round(_f(tt.get("epay_cash")) + _f(tt.get("store_cash")), 2),
+                _f(tt.get("epay_on_cash")))
+            tt["total_store_cash"] = split["total_cash"]      # the whole drawer, bill payments inside
+            tt["store_cash_net"] = split["store_cash"]        # register cash, bill payments excluded
+            tt["cash_split"] = split                          # keyed by basis, for a per-basis column
+        _name_the_cash(totals)
+        _name_the_cash(totals_original)
+
         # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
         # Shortage = declared LESS than B2B (money unaccounted). epay-vs-portal is wired but
         # pending the ePay Daily Transactions Report sweep.
         bm = b2b_money.get(code) if code else None
         money_recon = None
         if bm is not None:
-            closing_cash = round(totals["epay_cash"] + totals["store_cash"], 2)   # cash collected
+            closing_cash = totals["total_store_cash"]   # cash collected — the whole drawer (§47.9),
+                                                         # which IS round(epay_cash + store_cash, 2)
             closing_credit = round(totals["store_cc"] + totals["epay_cc"], 2)      # credit declared
             # Declared ePay = the reps' ePay-on-cash + ePay-on-credit split (the DM overlay corrects these
             # when verified). The legacy epay_cash/epay_cc are hard-zeroed for modern rows, so the old
@@ -1472,8 +1505,13 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         out_reps = []
         for rp, (dt, g) in zip(reps, _rep_computed):
             ct_display, rc_display = _rep_custom_displays(rp)
+            # The same split, per rep row (owner 2026-10-02, §47.9) — `dt["cash"]` is that rep's whole
+            # drawer (store_cash + epay_cash, era-robust) and `_epay_display` is their era-aware
+            # bill-payment cash, so the rep table can name the drawer and show the net beside it.
+            _rp_epay = _row_epay_display(rp)
             out_reps.append({**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture")),
-                             "_tenders": dt, "_gate": g, "_epay_display": _row_epay_display(rp),
+                             "_tenders": dt, "_gate": g, "_epay_display": _rp_epay,
+                             "_cash_split": deposit_recon.cash_components(dt["cash"], _rp_epay["cash"]),
                              "_custom_tenders_display": ct_display, "_custom_counts_display": rc_display,
                              "_expense_lines": exp_lines_by_row.get(rp.get("id"), [])})
 
@@ -4601,11 +4639,11 @@ def envelope_report(date_from: str = None, date_to: str = None,
     if date_from > date_to:
         date_from, date_to = date_to, date_from
 
+    # The column list is the pure module's own (envelope_report.CLOSING_SELECT) — never spelled here.
+    # Owner bug 2026-10-02: this list hand-omitted `epay_on_cash`, the whole input to the basis split,
+    # so the receipt read "no bill payments" and "store cash = the whole drawer" on every single line.
     rows = (client.schema("commcalc").table("daily_closing")
-            # The column list is the PURE MODULE's own fact (envelope_report.CLOSING_COLUMNS), not a
-            # list retyped here: a hand-written select is what silently dropped `epay_on_cash` and
-            # zeroed the ePay basis (owner bug 2026-10-02 — see that constant's note).
-            .select(",".join(envelope_report_mod.CLOSING_COLUMNS))
+            .select(envelope_report_mod.CLOSING_SELECT)
             .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
             .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
 
@@ -4721,6 +4759,7 @@ class EnvelopeCountIn(LaxModel):
     counted_by: Any = None
     assign_chargeback: Any = False
     tolerance: Any = 0.0
+    basis: Any = None        # which cash was counted — envelope_report.ENVELOPE_BASES; None ⇒ default
 
 
 @router.post("/envelope-count")
@@ -4745,12 +4784,19 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
     if payload.counted_amount in (None, ""):
         raise HTTPException(400, "counted_amount required")
     rows = (client.schema("commcalc").table("daily_closing")
-            .select("id,close_date,store_code,store_name,store_address,employee_name,t_cash,store_cash")
+            .select(envelope_report_mod.CLOSING_SELECT)
             .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(404, "closing row not found")
     crow = rows[0]
-    expected = envelope_report_mod.expected_cash(crow)
+    # WHICH CASH THIS COUNT IS OF (owner bug 2026-10-02). The receipt screen lets management pick the
+    # basis; this handler scored every count against the whole drawer regardless, so a count taken on
+    # the bill-payment or store-cash basis read as a huge shortage — and a shortage is a CHARGEBACK
+    # against the rep. The count is now scored on the basis the counter was actually looking at, through
+    # the same pure function the report renders. Omitted/unknown ⇒ the historical default (total_cash),
+    # so every existing caller and every stored count keeps its meaning byte-for-byte.
+    _basis = envelope_report_mod.normalize_envelope_basis(payload.basis)
+    expected = envelope_report_mod.expected_cash(crow, _basis)
     cf = envelope_report_mod.count_fields(expected, payload.counted_amount, payload.tolerance)
 
     # existing count row (for re-counts + existing chargeback link)
@@ -7357,6 +7403,8 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
     Keyset-scoped like every closing report (a DM sees their own span). Pure math:
     `closing/deposit_accountability.stage_chain`; proof `backend/harness_accountability_chain.py`."""
     from . import deposit_accountability as _da
+    from app.modules.storeops import org_chain
+    from app.modules.storeops import router as _storeops_router
     require_org(org_id)
     client = sb()
     if date:
@@ -7430,6 +7478,51 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
         meta = smeta.get(r["store_code"], {})
         r["store_name"] = meta.get("address") or r["store_code"]
         r["market"] = meta.get("market")
+
+    # WHO IS ACCOUNTABLE WHEN NOBODY CLOSED (owner 2026-10-02): *"it is showing who closed the store
+    # and uploaded the report but it should also show who worked in the store that day in case they
+    # didn't close, also it should show who is the DM assigned to that location"*. Both facts already
+    # have ONE home each and neither is re-derived here:
+    #
+    #   · who WORKED  -> `_who_worked_display_by_store` (over `_who_worked_by_store`: clocked-in ∪
+    #     B2B-sold, with the scheduled-roster fallback LABELLED as such, never presented as fact) —
+    #     the same answer DM Verify and the cash-pickup screen show.
+    #   · the DM      -> `storeops.org_chain.dm_by_store` (index §48.7) — the org-tree walk, which
+    #     until now was written twice in storeops and per-store only; it is one function and answers
+    #     in bulk, so this report costs ONE set of reads for the whole span instead of four per store.
+    #
+    # The who-worked signal is PER DATE by construction (its B2B leg reads one trans_date), so it is
+    # resolved for at most _CHAIN_WORKED_MAX_DATES dates, MOST RECENT FIRST — the same capped-replay
+    # posture `/closing/submissions` and `/closing/recon` already use. A date past the cap reports
+    # `worked.resolved: false`, NEVER an empty list: "nobody worked" and "we did not look" are
+    # different facts, and a report that renders the second as the first is how a store with no
+    # closing looks blameless.
+    try:
+        _dm_chain = org_chain.dm_by_store(
+            **_storeops_router.org_chain_inputs(org_id))
+    except Exception as _de:
+        print(f"WARN accountability chain DM map unavailable: {_de}")
+        _dm_chain = {}
+    _worked_dates = sorted({r["day"] for r in rows}, reverse=True)[:_CHAIN_WORKED_MAX_DATES]
+    _worked_by_date = {}
+    for _d in _worked_dates:
+        try:
+            _worked_by_date[_d] = _who_worked_display_by_store(client, org_id, _d)
+        except Exception as _we:
+            print(f"WARN accountability chain who-worked for {_d} unavailable: {_we}")
+    for r in rows:
+        _ch = _dm_chain.get(r["store_code"]) or {}
+        # A store whose org tree is not wired reports NO DM rather than a guessed one, and says which
+        # of the two it is, so "nobody is assigned" is never rendered as "we could not tell".
+        r["dm"] = {"names": org_chain.dm_names(_ch),
+                   "resolved": bool(_ch.get("district")),
+                   "district": (_ch.get("district") or {}).get("name")}
+        if r["day"] in _worked_by_date:
+            _w = (_worked_by_date[r["day"]] or {}).get(r["store_code"]) or {}
+            r["worked"] = {"resolved": True, "people": _w.get("worked") or [],
+                           "source": _w.get("source") or "none", "summary": _w.get("summary") or ""}
+        else:
+            r["worked"] = {"resolved": False, "people": [], "source": None, "summary": ""}
     # WHO, AS A PERSON. Most of these columns hold a NAME already (verified_by 'Rana',
     # picked_up_by, handed_to); `envelope_count.counted_by` holds an actor UUID since §47 and the
     # legacy sentinel before it. core.actors is the ONE uid->person join (§47.2) and
@@ -7450,6 +7543,10 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
     # Recomputed over the VISIBLE rows (keyset consistency — never a count the viewer cannot see).
     summary = _da.chain_summary(rows)
     return {"start": start, "end": end, "days": len(days), "rows": rows, "summary": summary,
+            # Which dates the who-worked signal was actually resolved for (see the cap above) — the
+            # screen says so rather than letting an unresolved day read as an empty store.
+            "worked_resolved_dates": sorted(_worked_by_date),
+            "worked_dates_capped": len({r["day"] for r in rows}) > len(_worked_by_date),
             # The stage vocabulary, served from the pure module so the screen spells no stage key
             # and no stage label (the §47 basis-selector posture).
             "stages": _da.stage_catalog(),
