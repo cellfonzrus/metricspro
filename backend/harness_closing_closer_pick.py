@@ -84,7 +84,19 @@ gs = g.group(0) if g else ""
 check("B3 _closer_gate asks closer_pick.verdict", "closer_pick.verdict(perms, submitted_name, names)" in gs)
 check("B4 own names = login full_name + employee record name",
       "full_name" in gs and "employee_id" in gs and "closer_pick.own_names(" in gs)
-check("B5 a refusal is a 403 carrying the reason", "HTTPException(403, why)" in gs)
+# B5 (updated 2026-10-02, index §29.11): the gate no longer raises its own 403. It RETURNS one of
+# two declared refusal codes and `create_row` refuses through the one audited raise site, so the
+# refusal is recorded in commcalc.closing_attempt instead of vanishing — which is what made a
+# missing closing unexplainable. Still a 403, still carrying the reason; the reason now has a home.
+from app.modules.closing import submit_refusal as _sr                        # noqa: E402
+check("B5a the gate returns a declared refusal code rather than raising its own 403",
+      "HTTPException(403" not in gs
+      and 'return "closer_no_name" if not names else "closer_not_permitted"' in gs)
+check("B5b both codes are declared, and both answer 403 carrying the reason",
+      all(c in _sr.REFUSALS and _sr.status_for(c) == 403 and _sr.message_for(c)
+          for c in ("closer_no_name", "closer_not_permitted")))
+check("B5c create_row refuses on the returned code through the audited raise site",
+      "if _gate_code:" in body and "_refuse(client, org_id, d, body, _gate_code," in body)
 check("B6 no second copy of the tiers in the router", "PICK_ANY_SCOPES" not in router and "'market', 'region'" not in router)
 
 # ── C. the screen mirrors it ─────────────────────────────────────────────────────────────────────

@@ -31,6 +31,8 @@ from . import entry_quality
 from . import pickup_actual as _pickup_actual
 from . import closer_resolution
 from . import billpay_netting
+from . import submit_refusal as _refusal
+from . import dedup_key as _dedup
 from . import closing_source as _closing_src
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -1967,13 +1969,9 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     client = sb()
     d = _date(payload.get("close_date"))
     if not d:
-        raise HTTPException(400, "valid close_date required")
-    # WHO the closing is submitted under (index §29.7): the signed-in person, unless their role may pick
-    # anyone (DM and above, or an explicit Roles grant) — closing/closer_pick.verdict is the one rule.
-    # Every live request carries a token (the tenant middleware 401s without one); a direct in-process
-    # call with no header string is the only way to arrive without one.
-    if isinstance(authorization, str) and authorization.strip():
-        _closer_gate(client, org_id, authorization, payload.get("employee_name"))
+        _refuse(client, org_id, None, {"employee_name": payload.get("employee_name"),
+                                       "store_code": payload.get("store_code")},
+                "bad_close_date", detail=f"close_date sent: {str(payload.get('close_date'))[:60]!r}")
     sfid = (payload.get("sfid") or "").strip()
     sm = _store_resolver(client, org_id).get(sfid, {}) if sfid else {}
     body = {
@@ -1986,13 +1984,35 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # WHO the closing is submitted under (index §29.7): the signed-in person, unless their role may pick
+    # anyone (DM and above, or an explicit Roles grant) — closing/closer_pick.verdict is the one rule.
+    # Every live request carries a token (the tenant middleware 401s without one); a direct in-process
+    # call with no header string is the only way to arrive without one.
+    # Checked HERE, after `body` exists, so the refusal is recorded against the store and name it was
+    # attempted for rather than against nothing (index §29.11).
+    if isinstance(authorization, str) and authorization.strip():
+        _gate_code = _closer_gate(client, org_id, authorization, payload.get("employee_name"))
+        if _gate_code:
+            _refuse(client, org_id, d, body, _gate_code,
+                    detail=f"submitted under {str(payload.get('employee_name') or '')[:60]!r}")
+    # IDENTITY IS REQUIRED, not optional (index §29.11). A closing with no store or no employee name
+    # cannot be deduped (`dedup_key.for_row` has nothing to key on), so the old code let it through
+    # with dedup_key NULL — outside the database index that exists to stop duplicates, and invisible
+    # in every store-scoped report. It is a refusal, with a reason the submitter can act on.
+    if not _dedup.dedupable(body.get("store_code"), body.get("employee_name")):
+        _refuse(client, org_id, d, body, "identity_missing",
+                detail=f"store_code={body.get('store_code')!r} employee_name={body.get('employee_name')!r}")
     # ── WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035) — dereference the registry,
     #    never assume a rep. A store the tenant put on the sales feed takes no submission: accepting
     #    one would put a second, hand-typed row beside the derived one and double the store's declared
     #    cash in every recon downstream (the mig-502 duplicate class, from the other direction).
-    #    Refused with the reason and where to change it — never a bare 403. ──
+    #    Refused with the reason and where to change it — never a bare 403. The SENTENCE is owned by
+    #    `closing_source.refusal_message`; this site only names the store (index §29.11 + §19.39).
+    #    Checked AFTER identity, because resolving a store's source needs a store code.
     if not _closing_src.expects_rep_submission(_closing_source(client, org_id, body.get("store_code"))):
-        raise HTTPException(409, _closing_src.refusal_message(body.get("store_code")))
+        _refuse(client, org_id, d, body, "closing_source_not_rep",
+                detail=f"store {str(body.get('store_code') or '')[:40]!r} takes its closing from the feed",
+                message=_closing_src.refusal_message(body.get("store_code")))
     # Robustness (owner-reported 2026-08-19 — Ali "Cellfonz ru ma" + Rashika "Cellfonz r us": the
     # envelope photo wasn't accepted and the app bounced to the main page). The envelope image can now
     # ride the submit as a RAW data-url and be uploaded server-side here — not only as a pre-uploaded
@@ -2004,8 +2024,7 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         try:
             body["envelope_picture"] = _upload_envelope(org_id, _env, raise_on_error=True)
         except Exception as e:
-            raise HTTPException(502, "The envelope photo couldn't be saved — please try submitting again. "
-                                     f"If it keeps failing, tell your manager (storage error: {str(e)[:160]}).")
+            _refuse(client, org_id, d, body, "envelope_upload_failed", detail=str(e)[:300])
 
     # ── Duplicate-submission guard (mig 502): ONE ACTIVE row per (org, store_code, employee_name,
     #    close_date). A rep double-submitting used to create a SECOND daily_closing row that
@@ -2015,32 +2034,35 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     #    Management Review page) — a release unlocks it for exactly ONE corrected resubmit, which
     #    UPDATES that same row (never inserts a second) and re-locks it, fully audited
     #    (released_by/released_at/release_note + corrected_at/correction_count on the row).
+    #    The KEY ITSELF lives in closing/dedup_key — one home, dereferenced here and spelled once in
+    #    SQL by the migration that builds the index (it had drifted: Python folded a STRIPPED name,
+    #    SQL folded the raw one, so a name stored with a stray space produced two different keys for
+    #    one person and the index could not see the duplicate).
     _dupe_store, _dupe_emp = body.get("store_code"), (body.get("employee_name") or "").strip()
     _update_id = None
-    if _dupe_store and _dupe_emp:
-        try:
-            _existing = (client.schema("commcalc").table("daily_closing")
-                         .select("id,released_at,correction_count")
-                         .eq("org_id", org_id).eq("close_date", d).eq("store_code", _dupe_store)
-                         .ilike("employee_name", _dupe_emp)
-                         .order("submitted_at").execute().data) or []
-        except Exception:
-            _existing = []
-        if len(_existing) > 1 and not any(r.get("released_at") for r in _existing):
-            raise HTTPException(409, f"Multiple existing submissions found for {_dupe_emp} at this store "
-                                 f"on {d} (likely from the double-submit bug) — ask a manager to review "
-                                 f"/closing/duplicates and release the correct row before resubmitting.")
-        if _existing:
-            _row0 = _existing[0]
-            if not _row0.get("released_at"):
-                raise HTTPException(409, f"Already submitted for {d} — ask a manager to release it before resubmitting.")
-            _update_id = _row0.get("id")
-            body["correction_count"] = int(_row0.get("correction_count") or 0) + 1
-            body["corrected_at"] = _now()
-            body["released_at"] = None
-            body["released_by"] = None
-            body.pop("submitted_at", None)   # keep the ORIGINAL submitted_at on a corrected resubmit
-        body["dedup_key"] = f"{org_id}|{_dupe_store}|{_dupe_emp.lower()}|{d}"
+    try:
+        _existing = (client.schema("commcalc").table("daily_closing")
+                     .select("id,released_at,correction_count")
+                     .eq("org_id", org_id).eq("close_date", d).eq("store_code", _dupe_store)
+                     .ilike("employee_name", _dupe_emp)
+                     .order("submitted_at").execute().data) or []
+    except Exception:
+        _existing = []
+    if len(_existing) > 1 and not any(r.get("released_at") for r in _existing):
+        _refuse(client, org_id, d, body, "duplicate_multiple",
+                detail=f"{len(_existing)} existing rows for {_dupe_emp} at {_dupe_store} on {d}")
+    if _existing:
+        _row0 = _existing[0]
+        if not _row0.get("released_at"):
+            _refuse(client, org_id, d, body, "duplicate_already_submitted",
+                    detail=f"existing row {_row0.get('id')} for {_dupe_emp} at {_dupe_store} on {d}")
+        _update_id = _row0.get("id")
+        body["correction_count"] = int(_row0.get("correction_count") or 0) + 1
+        body["corrected_at"] = _now()
+        body["released_at"] = None
+        body["released_by"] = None
+        body.pop("submitted_at", None)   # keep the ORIGINAL submitted_at on a corrected resubmit
+    body["dedup_key"] = _dedup.for_row(org_id, _dupe_store, _dupe_emp, d)
     # ── Activation-count fields (mig 501). Configured tenants send `counts: {field_key: value}` for
     #    every field on their axis; standard field_keys still write the physical column (backward-compat
     #    with the rollup dashboard + sheet-upload ingestion), custom ones go to daily_closing.counts
@@ -2071,7 +2093,8 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     exp_amt = _money(payload.get("expense_amount"))
     exp_desc = (payload.get("expense_description") or "").strip()
     if exp_amt > 0 and not exp_desc:
-        raise HTTPException(400, "A description is required for the expense.")
+        _refuse(client, org_id, d, body, "expense_description_required",
+                detail=f"expense_amount={exp_amt}")
     body["expense_amount"] = exp_amt
     body["expense_description"] = exp_desc or None
     body["expense_approved"] = False
@@ -2082,8 +2105,14 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     #    expense_amount/expense_description fields above are UNTOUCHED — both can be sent on the same
     #    submit; nothing here changes their behaviour. Rows are inserted AFTER the row itself is
     #    written (needs the new row's id for closing_row_id) — see `_pending_expense_lines` below.
-    _pending_expense_lines = [_validate_expense_line(client, org_id, ln)
-                              for ln in (payload.get("expense_lines") or []) if isinstance(ln, dict)]
+    try:
+        _pending_expense_lines = [_validate_expense_line(client, org_id, ln)
+                                  for ln in (payload.get("expense_lines") or []) if isinstance(ln, dict)]
+    except HTTPException as e:
+        # _validate_expense_line is shared with the expense endpoints and raises its own 400s there.
+        # On a SUBMIT the refusal must be recorded like every other one (index §29.11); its own
+        # message is the specific circumstance, so it rides as the audited detail.
+        _refuse(client, org_id, d, body, "expense_line_invalid", detail=str(e.detail)[:300])
     # ── Six tender types (mirror the POS X-report). Accept the new t_* fields; fall back to the legacy
     #    store/epay/other fields for any caller (old kiosk) that hasn't sent them yet. ──
     def _pt(k):
@@ -2128,8 +2157,8 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     #    no-op — byte-identical to today's unconditional accept. ──
     if _envelope_config(client, org_id, body.get("store_code")).get("require_photo_if_cash") \
             and tenders["cash"] > 0 and not body.get("envelope_picture"):
-        raise HTTPException(400, "An envelope photo is required because cash was declared for this "
-                             "closing. Attach a photo of the envelope and resubmit.")
+        _refuse(client, org_id, d, body, "envelope_photo_required",
+                detail=f"declared cash {tenders['cash']} with no photo", tenders=tenders)
 
     # ── Close gate + 3-TRY flow: cash SHORT or credit OVER vs B2B is a "blocker". The rep is told only
     #    the DIRECTION (never the amount) and may recount up to 3 times; the 3rd try is auto-accepted and
@@ -2145,11 +2174,11 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     dirs = _variance_dirs(issues)
     is_blocking = any(i["severity"] == "block" for i in issues)
 
-    prior = (client.schema("commcalc").table("closing_attempt").select("id")
-             .eq("org_id", org_id).eq("close_date", d)
-             .eq("store_code", body.get("store_code") or "")
-             .eq("employee_name", body.get("employee_name") or "").execute().data) or []
-    attempt_no = len(prior) + 1
+    # Count REAL tries only: `_real_attempt_count` dereferences submit_refusal.is_real_try, so a
+    # refused submit (a failed photo upload, a duplicate) never advances the rep toward the
+    # auto-accepting third try they would not have earned by recounting (index §29.11).
+    attempt_no = _real_attempt_count(client, org_id, d, body.get("store_code"),
+                                     body.get("employee_name")) + 1
     accept = (not is_blocking) or attempt_no >= 3
     auto_accepted = bool(is_blocking and attempt_no >= 3)
 
@@ -2174,12 +2203,14 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         r = _write(body)
     except Exception as e:
         if "daily_closing_one_active_per_rep_day" in str(e) or "duplicate key" in str(e).lower():
-            # A race: two near-simultaneous submits both passed the pre-check above. The DB-level
-            # partial unique index (mig 502) is the safety net — same refusal message either way.
-            raise HTTPException(409, f"Already submitted for {d} — ask a manager to release it before resubmitting.")
+            # A race: two near-simultaneous submits both passed the pre-check above. The unique
+            # index (mig 502, widened by mig 1037) is the safety net — same refusal either way, and
+            # recorded like every other one so the race is visible instead of inferred.
+            _refuse(client, org_id, d, body, "duplicate_race", detail=str(e)[:300], tenders=tenders)
         # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106,
         # expense_*=mig109, dedup_key/corrected_at/correction_count/released_*=mig502): drop the new
-        # keys + retry. (mig 502 not run -> dedup guard above already no-op'd via empty `_existing`.)
+        # keys + retry. (mig 502 not run -> the `_existing` read above raised and degraded to empty,
+        # and `dedup_key` — now always composed, by closing/dedup_key — is dropped here.)
         for _k in ("t_acima", "epay_on_cash", "epay_on_credit", "epay_on_acima",
                    "expense_amount", "expense_description", "expense_approved", "counts",
                    "dedup_key", "corrected_at", "correction_count", "released_at", "released_by"):
@@ -2459,15 +2490,27 @@ def closing_attempts(period: str = None, date: str = None, store: str = None,
 
     out = []
     for (dt, sc, emp), tries in groups.items():
-        tries.sort(key=lambda x: x.get("attempt_no") or 0)
-        last = tries[-1]
-        auto = any(t.get("auto_accepted") for t in tries)
-        if only_review and not (len(tries) > 1 or auto):
+        tries.sort(key=lambda x: (x.get("attempt_no") or 0, str(x.get("created_at") or "")))
+        # `submit_refusal.is_real_try` is the ONE rule for what counts as a try (index §29.11): a
+        # refused submit stored no closing, so counting it as a recount would read as a rep who
+        # recounted three times when their photo failed three times. Refusals are reported in their
+        # own right instead — and a store-day whose ONLY events are refusals is exactly what
+        # management needs to see, so it always qualifies for review.
+        real = [t for t in tries if _refusal.is_real_try(t)]
+        refusals = [t for t in tries if not _refusal.is_real_try(t)]
+        last = (real or tries)[-1]
+        auto = any(t.get("auto_accepted") for t in real)
+        if only_review and not (len(real) > 1 or auto or refusals):
             continue
         dc = dc_by_key.get((dt, sc, emp)) or {}
         out.append({
             "close_date": dt, "store_code": sc, "store_address": last.get("store_address"),
-            "employee_name": emp, "attempts": len(tries), "auto_accepted": auto,
+            "employee_name": emp, "attempts": len(real), "auto_accepted": auto,
+            # Refused submits for this (date, store, rep): how many, and the reason of the latest.
+            "refusals": len(refusals),
+            "last_refusal_code": (refusals[-1].get("refusal_code") if refusals else None),
+            "last_refusal_detail": (refusals[-1].get("refusal_detail") if refusals else None),
+            "last_refused_at": (refusals[-1].get("created_at") if refusals else None),
             "final_dir": {"cash": last.get("cash_dir"), "credit": last.get("credit_dir")},
             "b2b": {"cash": last.get("b2b_cash"), "credit": last.get("b2b_credit")},
             "row_id": dc.get("id"), "released_at": dc.get("released_at"),
@@ -2479,6 +2522,11 @@ def closing_attempts(period: str = None, date: str = None, store: str = None,
                        "t_cash": t.get("t_cash"), "t_credit": t.get("t_credit"), "t_ext_cc": t.get("t_ext_cc"),
                        "t_gift": t.get("t_gift"), "t_store_acct": t.get("t_store_acct"), "t_zelle": t.get("t_zelle"),
                        "t_acima": t.get("t_acima"),
+                       # A REFUSED submit (index §29.11) — the closing was never stored and this says
+                       # why. Pre-migration-1037 rows carry no refusal columns and read as real tries,
+                       # which is exactly what they were.
+                       "refused": bool(t.get("refused")), "refusal_code": t.get("refusal_code"),
+                       "refusal_detail": t.get("refusal_detail"),
                        "created_at": t.get("created_at")} for t in tries],
         })
     out.sort(key=lambda x: (x["close_date"] or "", x["store_address"] or ""), reverse=True)
@@ -8108,6 +8156,58 @@ _REP_MISMATCH_RETRY = ("Your report does not match the system. Please recount an
 _REP_MISMATCH_REVIEW = "Your report does not match the system — sent for management review."
 
 
+def _real_attempt_count(client, org_id, d, store_code, emp_name) -> int:
+    """How many NON-refused tries this (date, store, rep) already has. `submit_refusal.is_real_try`
+    is the ONE rule for what counts as a try, dereferenced here and by the 3-try close gate, so a
+    REFUSED submit (a failed photo upload, a duplicate) can never be miscounted as a recount — which
+    would let a rep reach the auto-accepting third try without ever having recounted."""
+    if not (store_code and emp_name):
+        return 0
+    try:
+        rows = (client.schema("commcalc").table("closing_attempt").select("*")
+                .eq("org_id", org_id).eq("close_date", d).eq("store_code", store_code)
+                .eq("employee_name", emp_name).execute().data) or []
+    except Exception:
+        return 0
+    return sum(1 for r in rows if _refusal.is_real_try(r))
+
+
+def _refuse(client, org_id, d, body, code, detail="", tenders=None, message="") -> None:
+    """THE single refusal site for a daily-closing submit (index §29.11). Records WHY the closing was
+    refused in the SAME commcalc.closing_attempt audit trail the accepted and blocked tries already
+    use — so GET /closing/attempts and the Management Review screen gain refusals with no second
+    query path — then raises the HTTP error declared in closing/submit_refusal.REFUSALS.
+
+    NEVER raise HTTPException directly from a submit validation: before this existed, all seven
+    refusal paths stored nothing at all, so a rep who said "I submitted it" and a manager who saw
+    nothing had no evidence either way (owner bug report 2026-10-02, 117 E Burnside Ave).
+    harness_closing_submit_refusal.py FAILS THE BUILD if a new path bypasses this function."""
+    r = _refusal.Refusal(code, detail=detail, message=message)
+    b = body or {}
+    try:
+        # A date we could not parse has no close_date to file the refusal under, and close_date is
+        # NOT NULL. File it on the business day the refusal HAPPENED (the honest reading of the row)
+        # and keep the unparseable value in refusal_detail.
+        filed = d or _biz_today_iso()
+        row = _refusal.audit_row(
+            org_id, filed, b, code, detail,
+            real_attempts=_real_attempt_count(client, org_id, filed, b.get("store_code"),
+                                              b.get("employee_name")),
+            tenders=tenders)
+        try:
+            client.schema("commcalc").table("closing_attempt").insert(row).execute()
+        except Exception:
+            # Migration 1037 not run yet — the refusal columns do not exist. Record the refusal
+            # WITHOUT them rather than losing it: an auditable try-row with no reason is still
+            # strictly more than the nothing that was stored before.
+            for k in _refusal.REFUSED_COLUMNS:
+                row.pop(k, None)
+            client.schema("commcalc").table("closing_attempt").insert(row).execute()
+    except Exception as e:
+        print(f"closing refusal log failed ({code}): {e}")
+    raise HTTPException(r.status, r.message)
+
+
 def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credit, b2b, dirs,
                  attempt_no, blocked, accepted, auto_accepted):
     """Record ONE submission try. Management review reads these (with amounts + the true B2B variance);
@@ -8158,9 +8258,11 @@ def _caller_perms(client, authorization: str) -> dict:
         return {}
 
 
-def _closer_gate(client, org_id: str, authorization: str, submitted_name) -> None:
-    """Refuse a closing submitted under someone else's name by a caller who may not pick anyone
-    (closing/closer_pick, index §29.7). Own names = the login's full name + its employee record's name."""
+def _closer_gate(client, org_id: str, authorization: str, submitted_name):
+    """Which refusal code (if any) applies to a closing submitted under `submitted_name` by this
+    caller (closing/closer_pick, index §29.7). Own names = the login's full name + its employee
+    record's name. Returns None when the submit is permitted, else a closing/submit_refusal code —
+    it does NOT raise, so the refusal goes through the one audited raise site (`_refuse`)."""
     from app.modules.closing import closer_pick
     perms = _caller_perms(client, authorization)
     if closer_pick.may_pick_any(perms):
@@ -8180,9 +8282,12 @@ def _closer_gate(client, org_id: str, authorization: str, submitted_name) -> Non
         names = closer_pick.own_names((u or {}).get("full_name"), emp_name)
     except Exception as e:                                              # pragma: no cover - I/O guard
         print(f"WARN closing _closer_gate name lookup failed: {e}")
-    ok, why = closer_pick.verdict(perms, submitted_name, names)
-    if not ok:
-        raise HTTPException(403, why)
+    ok, _why = closer_pick.verdict(perms, submitted_name, names)
+    if ok:
+        return None
+    # Two distinct refusals, both declared in closing/submit_refusal: a caller with NO name on file
+    # cannot submit under any name, which is an admin fix, not a "use your own name" instruction.
+    return "closer_no_name" if not names else "closer_not_permitted"
 
 
 def _can_mgmt_review(perms: dict) -> bool:
