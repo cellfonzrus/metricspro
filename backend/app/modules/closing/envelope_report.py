@@ -75,6 +75,28 @@ def _f(v):
 #     bill_payment_cash = epay_on_cash                the bill-payment (ePay) cash only
 # `expected_cash` now DEREFERENCES that function instead of keeping its own rule, so the receipt and the
 # deposit recon can never disagree about what a basis means.
+# ── THE COLUMNS THIS REPORT NEEDS OFF A daily_closing ROW — one home (owner bug 2026-10-02) ─────
+# Owner: "the store pay and the epay in the management review report is not coming correct, the
+# system shows nothing for epay cash - all entries are zero and the store cash shows total of both."
+#
+# THE CAUSE, and it was mine. The basis math reads `epay_on_cash`, but the endpoint's hand-written
+# `.select(...)` never fetched it. PostgREST simply omits an unselected column, so `r.get("epay_on_cash")`
+# was None on every row and `_f(None)` is 0.0 — which makes the two non-default bases WRONG IN EXACTLY
+# THE WAY REPORTED and leaves the default one right:
+#     bill_payment_cash = epay_cash            -> 0.00 on every envelope  ("nothing for epay cash")
+#     store_cash        = t_cash - epay_cash   -> t_cash ("the store cash shows total of both")
+#     total_cash        = t_cash               -> correct, which is why it shipped unnoticed
+#
+# THE CLASS: a pure function's input column was decided HERE and fetched THERE, with nothing tying the
+# two together. So the column list is now a fact of this module — the module that knows what it reads —
+# and the endpoint builds its select FROM it. A future basis input cannot silently read zero, because
+# adding it here adds it to the query.
+CLOSING_COLUMNS = ("id", "close_date", "store_code", "store_name", "store_address", "employee_name",
+                   "t_cash", "store_cash", "epay_on_cash", "envelope_picture", "remarks")
+# The three the basis math cannot work without; the harness asserts each is in CLOSING_COLUMNS and
+# that a row fetched with ONLY those columns still produces three DIFFERENT, correct bases.
+BASIS_INPUT_COLUMNS = ("t_cash", "store_cash", "epay_on_cash")
+
 ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
 ENVELOPE_BASIS_DEFAULT = "total_cash"
 

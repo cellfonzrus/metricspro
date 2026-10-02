@@ -14851,6 +14851,41 @@ text only) spelling `ePay` or `VidaPay`, a mix of log lines and genuine reader-f
 copy that should resolve through `report_labels.carrier_term`; separating the two is a judgement call per
 site, not a sweep, so it is **reported, not touched**. Deciding it needs the owner.
 
+### 47.8 The ePay basis read $0 on every envelope — the column the math needed was never fetched (owner 2026-10-02)
+
+> Owner: *"the store pay and the epay in the management review report is not coming correct, the system
+> shows nothing for epay cash - all entries are zero and the store cash shows total of both"*
+
+Both halves of that sentence are one cause, and it was introduced by §47.1 itself. `expected_cash` reads
+`epay_on_cash`; the endpoint's **hand-written** `.select(...)` never fetched it. PostgREST omits an
+unselected column, so `r.get("epay_on_cash")` was `None` on every row and `_f(None)` is `0.0`:
+
+| basis | formula | what shipped |
+|---|---|---|
+| `total_cash` *(default)* | `t_cash` | **correct** — which is why it went unnoticed |
+| `store_cash` | `t_cash − epay_cash` | `t_cash` → *"the store cash shows total of both"* |
+| `bill_payment_cash` | `epay_cash` | `0.00` → *"nothing for epay cash"* |
+
+Reproduced on B-559 2026-09-07 (`t_cash` 1002, `epay_on_cash` 230): store basis **1002.00** and bill-pay
+basis **0.00**, where they must be 772.00 and 230.00. After the fix all three read correctly and
+**772.00 + 230.00 = 1002.00** reconciles.
+
+**THE CLASS, not the column:** a pure function's input column was decided in one file and fetched in
+another, with nothing tying them together. So the column list is now a fact of the module that *knows
+what it reads* — `envelope_report.CLOSING_COLUMNS` — and the endpoint builds its select from it
+(`.select(",".join(envelope_report_mod.CLOSING_COLUMNS))`). Adding a future basis input adds it to the
+query by construction; it cannot be read as zero.
+
+**Lock (`harness_envelope_receipt_basis.py`, now 82 checks).** The new §E2 rules are **behavioural, not
+spelling**: a row rebuilt from *only* `CLOSING_COLUMNS` must still produce three **different**, correct
+bases that reconcile, every member of `BASIS_INPUT_COLUMNS` must be in `CLOSING_COLUMNS`, the endpoint
+must dereference it and must no longer spell a column list of its own, and no column may be fetched that
+nothing reads. Control I3 reproduces the owner's screen exactly — drop `epay_on_cash` from the fetch and
+the store basis returns to the whole drawer, the ePay basis to zero, and the default basis stays right.
+
+**No migration. No money moved** — the stored `counted_amount` and every chargeback are untouched; this
+changes only which declared figure the receipt compares against.
+
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 
 > Owner: *"we need to see in a daily report or date range report for the following / Daily Closing done

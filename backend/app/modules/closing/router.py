@@ -4538,8 +4538,10 @@ def envelope_report(date_from: str = None, date_to: str = None,
         date_from, date_to = date_to, date_from
 
     rows = (client.schema("commcalc").table("daily_closing")
-            .select("id,close_date,store_code,store_name,store_address,employee_name,"
-                    "t_cash,store_cash,envelope_picture,remarks")
+            # The column list is the PURE MODULE's own fact (envelope_report.CLOSING_COLUMNS), not a
+            # list retyped here: a hand-written select is what silently dropped `epay_on_cash` and
+            # zeroed the ePay basis (owner bug 2026-10-02 — see that constant's note).
+            .select(",".join(envelope_report_mod.CLOSING_COLUMNS))
             .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
             .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
 

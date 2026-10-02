@@ -207,6 +207,39 @@ def main():
         check("the screen does not hardcode the basis key %r" % word, word not in pcode)
     check("the screen renders the SERVER's option list", "data?.basis_options" in page)
 
+    # ── THE COLUMN THE MATH NEEDS MUST BE THE COLUMN THE QUERY FETCHES (owner bug 2026-10-02) ───
+    # The defect: `epay_on_cash` was read by expected_cash and NOT selected by the endpoint, so every
+    # row saw None -> 0.0; the ePay basis read $0 everywhere and the store basis read the whole drawer.
+    # These rules are BEHAVIOURAL, not spelling checks: a row built from ONLY the columns the endpoint
+    # fetches must still produce three DIFFERENT, correct bases. Drop a needed column from the one home
+    # and they go red (control I3 proves it).
+    print("\nE2. the columns the basis math needs are the columns the endpoint fetches")
+    check("the endpoint builds its select FROM the pure module's column list",
+          'select(",".join(envelope_report_mod.CLOSING_COLUMNS))' in rsrc)
+    check("...and no longer spells a daily_closing column list of its own",
+          '"t_cash,store_cash,envelope_picture,remarks"' not in rsrc)
+    for col in ER.BASIS_INPUT_COLUMNS:
+        check("the basis input %r is in CLOSING_COLUMNS" % col, col in ER.CLOSING_COLUMNS)
+    # THE REGRESSION, exactly as reported: a row as the endpoint would hand it over.
+    full = {"id": "r1", "close_date": "2026-09-07", "store_code": "B-559", "store_name": "B-559",
+            "store_address": "559 Broadway", "employee_name": "Radhika", "t_cash": 1002.0,
+            "store_cash": 1002.0, "epay_on_cash": 230.0, "envelope_picture": None, "remarks": ""}
+    fetched = {k: full.get(k) for k in ER.CLOSING_COLUMNS}
+    check("a row FETCHED THROUGH CLOSING_COLUMNS still carries the bill-pay figure",
+          fetched.get("epay_on_cash"), 230.0)
+    check("...total basis = the whole drawer", ER.expected_cash(fetched, "total_cash"), 1002.0)
+    check("...store basis EXCLUDES bill pay (the reported defect: it read 1002)",
+          ER.expected_cash(fetched, "store_cash"), 772.0)
+    check("...bill-pay basis is the bill-pay cash (the reported defect: it read 0)",
+          ER.expected_cash(fetched, "bill_payment_cash"), 230.0)
+    check("...and the three reconcile: store + billpay == total",
+          round(ER.expected_cash(fetched, "store_cash") + ER.expected_cash(fetched, "bill_payment_cash"), 2),
+          ER.expected_cash(fetched, "total_cash"))
+    check("the three bases are genuinely DIFFERENT on this row (not silently collapsed)",
+          len({ER.expected_cash(fetched, b) for b in ER.ENVELOPE_BASES}), 3)
+    check("every column in CLOSING_COLUMNS is actually read by the module (no dead fetch)",
+          [c for c in ER.CLOSING_COLUMNS if ('r.get("%s")' % c) not in esrc and ('"%s"' % c) not in esrc], [])
+
     # ── H. counted_by ───────────────────────────────────────────────────────────────────────────
     print("\nF. counted_by is the real actor, never a sentinel")
     j = rsrc.index("def save_envelope_count(")
@@ -287,6 +320,15 @@ def main():
           and "{processor}" not in ER.basis_label("bill_payment_cash", "ePay"))
     check("CONTROL: the endpoint going back to indexing the label dict → RED",
           "ENVELOPE_BASIS_LABELS[" in 'x = envelope_report_mod.ENVELOPE_BASIS_LABELS[b]')
+    # I3 — the owner's bug, reproduced: drop the column from the fetch and watch the two non-default
+    # bases collapse onto the whole drawer and zero, which is exactly what was on screen.
+    _broken = {k: full.get(k) for k in ER.CLOSING_COLUMNS if k != "epay_on_cash"}
+    check("CONTROL: epay_on_cash missing from the fetch → store basis reads the WHOLE DRAWER",
+          ER.expected_cash(_broken, "store_cash"), 1002.0)
+    check("CONTROL: ...and the ePay basis reads ZERO on every envelope",
+          ER.expected_cash(_broken, "bill_payment_cash"), 0.0)
+    check("CONTROL: ...while the DEFAULT basis stays right, which is why it shipped unnoticed",
+          ER.expected_cash(_broken, "total_cash"), 1002.0)
 
     print("\n" + "=" * 96)
     print("RESULT: %d passed, %d failed" % (_p, _f))
