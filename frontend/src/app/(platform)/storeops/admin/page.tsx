@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
 import { fieldsDirty } from '@/lib/rowSave'
+import ScreenLink from '@/components/ScreenLink'
 
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
@@ -351,7 +352,7 @@ export default function StoreOpsAdminPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🛠️ StoreOps Admin</h1>
-        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Manage employees, pay rates, and stores.</p>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Manage employees and stores. Pay is set on <ScreenLink to="employees_pay" />.</p>
       </div>
 
       {/* Phase W2 (owner directive 2026-09-01): this combined page was split into two dedicated
@@ -362,9 +363,12 @@ export default function StoreOpsAdminPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* This tab edits name / ID / home store / email / phone / active — NO pay. It was labelled "Employees &
+            Pay", the same name as the HR tab where pay IS set, so the label sent people to the wrong screen
+            (owner 2026-10-02, index §19.40). Pay lives on HR → Employees & Pay, linked above. */}
         {(['employees', 'stores'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t ? 'var(--accent)' : 'var(--surface)', color: tab === t ? '#fff' : 'var(--text2)' }}>
-            {t === 'employees' ? '👥 Employees & Pay' : '🏪 Stores'}
+            {t === 'employees' ? '👥 Employees' : '🏪 Stores'}
           </button>
         ))}
         {msg && <span style={{ fontSize: 13, marginLeft: 8 }}>{msg}</span>}
@@ -405,7 +409,7 @@ export default function StoreOpsAdminPage() {
               <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={upBusy}
                 onChange={e => { const f = e.target.files?.[0]; if (f) uploadEmpBulk(f); e.currentTarget.value = '' }} />
             </label>
-            <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 6 }}>Pay rates are managed in the HR module.</span>
+            <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 6 }}>Pay is set per person on <ScreenLink to="employees_pay" />.</span>
           </div>
 
           <div className="table-wrapper">

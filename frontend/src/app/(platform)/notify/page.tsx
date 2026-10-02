@@ -2,7 +2,8 @@
 // Notify management — recipients, recurring subscriptions, and send history.
 // On-demand sending lives on each report page via <SendReportButton>; this page
 // manages saved recipients and the scheduled subscriptions that pg_cron fires.
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useUrlTab } from '@/lib/useUrlTab'
 import { api, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import PhoneInput from '@/components/PhoneInput'
@@ -47,24 +48,18 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '8px 12px', fontSi
 const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--border,#f3f4f6)' }
 const d10 = (s: string | null) => (s ? String(s).slice(0, 16).replace('T', ' ') : '—')
 
-type NotifyTab = 'recipients' | 'subs' | 'log' | 'settings'
-const NOTIFY_TABS: NotifyTab[] = ['recipients', 'subs', 'log', 'settings']
-
 // Deep-linkable tab (?tab=subs|log|recipients|settings): the admin-attention items for notify link
 // straight to the tab that FIXES them, so "Review schedules" lands on Subscriptions rather than making
-// the admin hunt for it. Read from window.location on mount (not useSearchParams) so the page keeps its
-// current static-render behaviour and needs no Suspense boundary. Unknown value → today's default.
-function initialTab(): NotifyTab {
-  try {
-    const t = new URLSearchParams(window.location.search).get('tab') as NotifyTab | null
-    if (t && NOTIFY_TABS.includes(t)) return t
-  } catch { /* SSR / no window → default */ }
-  return 'subs'
-}
+// the admin hunt for it. Read through the ONE URL-tab reader (lib/useUrlTab.ts, index §19.40) — it follows
+// a link even while this page is already open. Unknown value → today's default.
+const NOTIFY_TABS = ['recipients', 'subs', 'log', 'settings'] as const
 
 export default function NotifyPage() {
-  const [tab, setTab] = useState<NotifyTab>('subs')
-  useEffect(() => { setTab(initialTab()) }, [])
+  return <Suspense fallback={null}><NotifyPageBody /></Suspense>
+}
+
+function NotifyPageBody() {
+  const [tab, setTab] = useUrlTab(NOTIFY_TABS, 'subs')
   const [reports, setReports] = useState<Report[]>([])
   const [saved, setSaved] = useState<Saved[]>([])
   const [employees, setEmployees] = useState<Emp[]>([])

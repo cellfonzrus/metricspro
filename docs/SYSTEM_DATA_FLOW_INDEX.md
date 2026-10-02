@@ -4259,6 +4259,11 @@ as a market-grant keyset member; ambiguity fails closed):
   **A 2xx is not proof (§19.37, 2026-10-02):** each slice declares `echo` (the reply keys carrying the stored
   values) and `rowSave.runRowSave` counts a slice saved only when `notPersisted` finds nothing — a field the server
   names in `pay_fields_ignored`, leaves out, or stored differently fails the save by name. Lock §8 of the same harness.
+- **Employees & Pay is a MENU ITEM (§19.40, owner 2026-10-02).** NAV `Payroll & HR` → **Employees & Pay** →
+  `/hr?tab=employees` — a deep-link entry that gates exactly as `/hr` (`rbac.canSeeItem` delegates via
+  `deepLinkPage`); `/hr`'s tab lives in the URL through the one reader `lib/useUrlTab.ts`; the `/payroll` hub has the
+  same tile; ScreenLink `employees_pay` links every "HR → Employees & Pay" in copy. StoreOps Admin's no-pay tab is
+  now **Employees**. Lock `backend/harness_nav_deep_link_lock.py`, proof `frontend/prove_nav_deep_link.mjs`.
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
@@ -5132,6 +5137,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
 | `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
 | `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1037`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1037` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
 | *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
@@ -5323,6 +5329,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
 | `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
 | `GET /closing/attempts` — additive: `refusals`, `last_refusal_code`, `last_refusal_detail`, `last_refused_at` per group, `refused` / `refusal_code` / `refusal_detail` per try; `attempts` means REAL tries; a store-day whose only events are refusals always qualifies for `only_review=true` | `closing/router.closing_attempts` (dereferencing `submit_refusal.is_real_try`) | §29.11 |
 | **Every JSON response** (no route added) — a MESSAGE-key value carrying a RUNTIME database / hosting error (`setup_notice.SYSTEM_INTERNAL`: duplicate key, violates … constraint, permission denied for table, an error dict `'code': '23505'`, `postgrest…APIError`, a `*.supabase.co` host) reaches a non-super-admin as `SYSTEM_NOTICE` from that sentence on; data rows never read; the original to the server log | `core/setup_notice.SetupNoticeMiddleware` (unchanged registration) | §19.38 |
@@ -5578,6 +5585,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
 | **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`, `B-2778` (closed → B-1598); `Cellular Services` is a COMPANY, exempt by dereferencing `commcalc.companies` |
@@ -5743,6 +5751,69 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.40 **"EMPLOYEES & PAY" IS A MENU ITEM — a link that opens a TAB names a tab its page has (owner 2026-10-02).**
+Owner: *make "Employees & Pay" its own menu item, and fix the stale wording that points people to the wrong place to
+edit pay.* He looked for it and could not find it. **Evidence (code, verified):** Employees & Pay — where pay is SET,
+per row (§19.35) — was only a TAB of `/hr`, held in `useState('comp')`, so nothing could link to it; the menu reached
+`/hr` only through the tile-only **HR · Total Comp** entry, which opens the Total Comp tab. Around it the copy pointed
+elsewhere: `/hr`'s own intro said **"Edit pay on StoreOps Admin"** (stale since #325); StoreOps Admin carried a tab
+ALSO labelled **"👥 Employees & Pay"** that edits name / ID / home store / email / phone / active and **no pay**;
+StoreOps Admin + Employee Setup said "Pay rates are managed in the HR module" (true, unlinked, no tab named); the
+`storeops_no_payscale` admin notice said **"Set it at HR → People"** (the add-a-person form — it sets only a starting
+rate) and linked `/hr`, i.e. the Total Comp tab; the Payroll hub described the Employee Database — a read-only report
+with **no pay column** (`hr/router.py::hr_employee_database_route`) — as "profile, **pay**, documents, history"; the
+Time Clock page named "HR → Employees & Pay" three times as plain text; and three bundled help docs
+(`support_docs_seed.json` `/hr`, `/storeops/admin`, `/storeops/payroll`) sent people to "StoreOps Employees".
+**THE CLASS, NOT THE INSTANCE.** "A link that opens a tab" had no mechanism. Four pages (Notify, Helpdesk Settings,
+Training, Payables) each re-implemented "read `?tab=` from `window.location` once, on mount" — which also ignores a
+link followed while the page is already open (same route, no remount), so a menu entry into a tab would look dead
+from the page itself — and nothing checked that a `?tab=` link names a tab its page declares: a misspelled or stale
+key renders the DEFAULT tab, compiles, and is wrong.
+**Checked first and reused (duplicate gate):** `rbac.ts` NAV (the ONE nav home — the entry is a NAV row, no second
+registry); `components/ScreenLink.tsx` (§23o — the destination is a `SCREENS` row and copy links through
+`<ScreenLink>`; its private `gateHref` was the only path-stripper and is now `rbac.navPath`); `lib/useUnsavedGuard.ts`
+(§19.35 — the HR tab switch still asks `confirmDiscard` first; the guard now also asks for a same-page link with a
+different query, since a query is now a view); the `/payroll` hub's `HubTiles` (one more tile); the attention
+item's existing `deep_link`. Nothing in the index served "open a page on a given tab".
+| fact | ONE home | callers |
+|---|---|---|
+| what a `?tab=` value means, and a tab's URL | `frontend/src/lib/urlTab.ts` (`parseTab`, `tabHref`, `TAB_PARAM` — pure) | the hook |
+| a page's current tab, from the live URL | `frontend/src/lib/useUrlTab.ts` — `useSearchParams` (reactive) + History API `pushState`; default tab drops `?tab=`; unknown key → default | `/hr`, `/notify`, `/helpdesk/settings`, `/training`, `/commcalc/payables` (each inside `<Suspense>`) |
+| which tabs a page has | the page's literal `const X_TABS = [...] as const` passed to `useUrlTab` | every `?tab=` link (checked by the lock) |
+| the path a nav href gates on | `rbac.navPath` (query + #anchor removed) | `canSeeItem` / `navBlockReason` (via `deepLinkPage`), `carrierOK`, `carrierOKActive`, `verticalOK`, `ScreenLink.useCanOpen` |
+| is a NAV entry a door into another page | `rbac.isDeepLinkItem` / `rbac.deepLinkPage` | `canSeeItem` (delegates — the door is visible exactly when its page is), Roles per-function list (no switch for a door) |
+**What changed.** NAV `Payroll & HR` gains **👥 Employees & Pay → `/hr?tab=employees`** (module `hr`, scopes
+`['all','market']` — `/hr`'s own, verbatim; sidebar-visible, not tile-only). The owner clicks **Payroll & HR →
+Employees & Pay** in the side menu; the **Payroll** hub (`/payroll`) has a matching **Employees & Pay** tile; ⌘K
+search finds it. `/hr` reads/writes `?tab=` (`comp` default · `employees` · `payroll` · `timeoff`). ScreenLink
+registers `employees_pay` (aliases "HR → Employees & Pay", "Employees & Pay"). Copy: `/hr` intro → "Set each
+person's pay on the **Employees & Pay** tab" (linked); StoreOps Admin's tab renamed **👥 Employees** and its subtitle
+→ "Manage employees and stores. Pay is set on **HR → Employees & Pay**" (linked); StoreOps Admin + Employee Setup
+→ "Pay is set per person on **HR → Employees & Pay**" (linked); Time Clock's three mentions linked; the no-pay-rate
+notice → "Set it on HR → Employees & Pay (per row) or upload a payscale sheet there", link `/hr?tab=employees`;
+Payroll hub Employee Database → "profile, contact, direct deposit, onboarding documents"; the three help docs
+corrected (they reach the house org's live rows on the next bundled re-seed — `POST /core/support-docs/seed-bundled`
+— not run here; `SEED_VERSION` deliberately not bumped). **No access widened:** `canSeeItem(door) ≡
+canSeeItem(/hr)` over 270 role shapes; a per-function key on the door is ignored (ONE gate). **Not changed:** the
+sidebar's active highlight compares `pathname` to `href`, so the door is not highlighted while on `/hr` (the
+`/hr` group still opens) — reading the query in the app shell would put the whole layout under a Suspense boundary.
+- Lock: `backend/harness_nav_deep_link_lock.py` (56, stdlib) — §A one `?tab=` reader, every caller under
+  `<Suspense>` with literal keys and a default among them; §B EVERY `?tab=` link (NAV, ScreenLink, hub tiles, JSX,
+  backend notices via `ast`, help docs) resolves to a page whose declared keys contain it; §C the Employees & Pay
+  entry exists, is sidebar-visible, opens the tab, and every deep-link entry repeats its page's module + scopes;
+  §D canSeeItem / navBlockReason delegate, carrier / vertical gates and ScreenLink use `navPath`, the Roles list
+  skips doors; §E a registered "X → Y" breadcrumb in copy is a link (§23o) — the 9 pre-existing un-linked sites in
+  other modules are FROZEN and may only shrink — no second surface is labelled "Employees & Pay", and the stale
+  sentences above cannot return. Each rule carries armed negative controls (bogus key → RED, entry removed → RED,
+  wider scopes → RED, old reader / old label / old sentence → RED) and positive controls.
+- Proof: `frontend/prove_nav_deep_link.mjs` (35) — the REAL `rbac.ts` + `urlTab.ts` under Node: the door answers as
+  `/hr` for every role shape, a stray grant on the door opens nothing, every page href is unchanged by `navPath`,
+  carrier / vertical gates agree, a forged door to a page with no entry is refused.
+- **Reported, not fixed:** the 9 frozen breadcrumbs (Vision → Settings ×5, Settings → Stores, Sales Report →
+  ⚙ Classification settings, Closing → Tender Config on intake stage 2, POS Settings → Sales Tax in `pos-config.ts`)
+  belong to other modules' copy; `commcalc/expenses` still says "Add stores in StoreOps Admin" (a store, not pay —
+  Store Setup is the primary page); `closing/router.py` tells the user to re-save a store in "StoreOps Admin".
 
 §19.39 **WHO PRODUCES A STORE'S DAILY CLOSING — reps type it, or it is DERIVED from the sales feed
 (owner directive 2026-10-02, mig `1035`).** Owner: *"the admin should be able to check a box to input daily closing
@@ -9183,6 +9254,12 @@ Every destination named in copy already had a NAV entry in `rbac.ts` — the gap
 menu. **One exception, reported not fixed:** *"Metric Source of Truth"* is named in a `title=` tooltip
 on `closing/cash-recon-management` and **no such page exists** anywhere in NAV or under `app/`. It is
 deliberately NOT in the registry: inventing an href would be worse than the gap.
+
+**Extended 2026-10-02 (§19.40):** destination `employees_pay` → `/hr?tab=employees` (a TAB, via a deep-link NAV
+entry that gates as `/hr`); "HR → Employees & Pay" is linked on Time Clock ×3, StoreOps Admin ×2, Employee Setup and
+the `/hr` intro. The rule "a registered breadcrumb in copy is a link" is now build-enforced by
+`harness_nav_deep_link_lock.py` §E (pre-existing un-linked sites frozen as a shrink-only ratchet), and the
+private `gateHref` here is `rbac.navPath`.
 
 - Proof: `backend/harness_screen_link_guard.py` (51). **Static on purpose** — the defect renders
   perfectly and compiles, so neither `tsc` nor a build can see it. §A every registered href is a real

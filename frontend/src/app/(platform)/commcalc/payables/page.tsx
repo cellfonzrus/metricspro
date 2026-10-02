@@ -1,5 +1,6 @@
 'use client'
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
+import { useUrlTab } from '@/lib/useUrlTab'
 import { api, fmt } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
@@ -11,7 +12,9 @@ import { SortableTh, useTableSort } from '@/components/SortableTh'
 // Device Forecasting & Vendor Payables (module 095). Reads the config-driven ledger built by
 // POST /api/v1/payables/rebuild. Forecasting is phones-only; payables + due are per-IMEI.
 
-type Tab = 'forecast' | 'payables' | 'owed' | 'map'
+// The tabs this page declares; `?tab=` is read through the ONE URL-tab reader (lib/useUrlTab.ts, index §19.40).
+const PAYABLES_TABS = ['forecast', 'payables', 'owed', 'map'] as const
+type Tab = typeof PAYABLES_TABS[number]
 const sel = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' } as const
 const STATUS_COLORS: Record<string, string> = {
   discrepancy: '#dc2626', due: '#d97706', offset: '#16a34a', open: '#6b7280', unconfigured: '#6b7280',
@@ -45,7 +48,11 @@ function MapRow({ cand, carriers, onSave }: any) {
 }
 
 export default function PayablesPage() {
-  const [tab, setTab] = useState<Tab>('payables')
+  return <Suspense fallback={null}><PayablesPageBody /></Suspense>
+}
+
+function PayablesPageBody() {
+  const [tab, setTab] = useUrlTab(PAYABLES_TABS, 'payables')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
 
@@ -97,7 +104,6 @@ export default function PayablesPage() {
       })
       .catch(() => { setRoster([]); setRosterMarkets([]) })
   }, [])
-  useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (t && ['payables', 'forecast', 'owed', 'map'].includes(t)) setTab(t as Tab) }, [])
   useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon])
   useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status])
   useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore])

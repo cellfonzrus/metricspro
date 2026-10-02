@@ -7,7 +7,7 @@ import { ROLES_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
 import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
 import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, reportAreaForPath, canSeeItem, navBlockReason,
          schedulingReach, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
-         grantableModules, missingReportAreasForModule, reportGrantedByConfig,
+         grantableModules, missingReportAreasForModule, reportGrantedByConfig, isDeepLinkItem,
          type Permissions } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
 import { useAuth } from '@/lib/auth-context'
@@ -912,7 +912,9 @@ export default function RolesAdminPage() {
                     {TENANT_NAV.map(g => (
                       <div key={g.group}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{g.group}</div>
-                        {g.items.map(it => {
+                        {/* A deep-link entry (e.g. Employees & Pay → /hr?tab=employees) is a door into a page listed
+                            here under its own name — the page's switch governs it, so it gets none of its own (index §19.40). */}
+                        {g.items.filter(it => !isDeepLinkItem(it)).map(it => {
                           // WHY it's hidden, inline. "It's ticked in Roles but the tab isn't there"
                           // was untraceable before: four different gates can hide one function and
                           // nothing on screen said which. Ticking the box always grants (rbac.ts

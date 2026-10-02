@@ -1,28 +1,22 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useUrlTab } from '@/lib/useUrlTab'
 import Link from 'next/link'
 import { api, ORG_ID } from '@/lib/client'
 
 const base = `/api/v1/helpdesk/config`
 const q = `org_id=${ORG_ID}`
-type Tab = 'categories' | 'priorities' | 'statuses' | 'custom-fields' | 'teams' | 'settings'
-
-const TABS: Tab[] = ['categories', 'priorities', 'statuses', 'custom-fields', 'teams', 'settings']
+const TABS = ['categories', 'priorities', 'statuses', 'custom-fields', 'teams', 'settings'] as const
 
 // Deep-linkable tab (?tab=settings): the "Helpdesk tickets alert nobody" attention item links straight to
-// the tab that fixes it. Read from window.location on mount (not useSearchParams) so the page keeps its
-// current static-render behaviour and needs no Suspense boundary. Unknown value → today's default.
-function initialTab(): Tab {
-  try {
-    const t = new URLSearchParams(window.location.search).get('tab') as Tab | null
-    if (t && TABS.includes(t)) return t
-  } catch { /* SSR / no window → default */ }
-  return 'categories'
+// the tab that fixes it. Read through the ONE URL-tab reader (lib/useUrlTab.ts, index §19.40) — it follows
+// a link even while this page is already open. Unknown value → today's default.
+export default function HelpdeskSettings() {
+  return <Suspense fallback={null}><HelpdeskSettingsBody /></Suspense>
 }
 
-export default function HelpdeskSettings() {
-  const [tab, setTab] = useState<Tab>('categories')
-  useEffect(() => { setTab(initialTab()) }, [])
+function HelpdeskSettingsBody() {
+  const [tab, setTab] = useUrlTab(TABS, 'categories')
   return (
     <div style={{ padding: 24, maxWidth: 860 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>

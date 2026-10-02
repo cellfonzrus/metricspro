@@ -14,7 +14,8 @@
 // MULTI-TENANT: the list comes from GET /api/v1/core/training/tours, which returns the platform
 // defaults ∪ this tenant's own tours with the tenant's version winning. A tenant never sees another
 // tenant's tours. FAIL-SILENT: an un-run migration renders an honest empty state, never an error page.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react'
+import { useUrlTab } from '@/lib/useUrlTab'
 import Link from 'next/link'
 import EntityPicker from '@/components/EntityPicker'
 import ReportShell from '@/components/ReportShell'
@@ -31,12 +32,22 @@ type Scene = {
 }
 type Script = { slug: string; title: string; module?: string; scenes: number; storyboard: Scene[]; narration_text: string }
 
+// Deep link: /training?tab=flowcharts — through the ONE URL-tab reader (lib/useUrlTab.ts, index §19.40), which
+// follows a link even while this page is already open. Recording scripts stay editor-only: a `?tab=scripts`
+// link opened by anyone else lands on the walk-throughs, exactly as the old on-mount reader did.
+const TRAINING_TABS = ['tours', 'flowcharts', 'scripts'] as const
+
 export default function TrainingCenterPage() {
+  return <Suspense fallback={null}><TrainingCenterBody /></Suspense>
+}
+
+function TrainingCenterBody() {
   const [tours, setTours] = useState<Tour[]>([])
   const [ready, setReady] = useState(true)
   const [canEdit, setCanEdit] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<'tours' | 'scripts' | 'flowcharts'>('tours')
+  const [urlTab, setTab] = useUrlTab(TRAINING_TABS, 'tours')
+  const tab = urlTab === 'scripts' && !canEdit ? 'tours' : urlTab
   const [scripts, setScripts] = useState<Script[] | null>(null)
   const [doneTick, setDoneTick] = useState(0)          // bumps to re-read localStorage after a change
 
@@ -53,14 +64,6 @@ export default function TrainingCenterPage() {
       .finally(() => setLoading(false))
   }, [])
   useEffect(() => { load() }, [load])
-
-  // Deep link: /training?tab=flowcharts. Read from the URL rather than useSearchParams so this page
-  // needs no Suspense boundary — a training index that fails to build helps nobody.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const t = new URLSearchParams(window.location.search).get('tab')
-    if (t === 'flowcharts' || t === 'tours') setTab(t)
-  }, [])
 
   useEffect(() => {
     if (tab !== 'scripts' || scripts !== null || !canEdit) return

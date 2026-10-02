@@ -61,8 +61,10 @@ def register(register_provider):
         return [_item("other", "no_payscale", "warning", "Employees with no pay rate set",
                       f"{len(missing)} active employee(s) have no hourly pay rate configured "
                       f"(e.g. {eg}) — payroll will pay them $0 for any hours they work until a rate "
-                      f"is set. Set it at HR → People (per-employee) or upload a payscale sheet there.",
-                      len(missing), "/hr", "Set pay rates (HR)")]
+                      f"is set. Set it on HR → Employees & Pay (per row) or upload a payscale sheet there.",
+                      # the HR TAB where pay is set, not /hr's default Total Comp tab; "HR → People" was the
+                      # add-a-person form, which edits no existing employee's pay (index §19.40)
+                      len(missing), "/hr?tab=employees", "Set pay rates (HR → Employees & Pay)")]
 
     @register_provider("storeops_stores_no_coverage",
                        label="Active stores with recent punches but no staff/schedule on record",
