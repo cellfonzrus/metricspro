@@ -78,8 +78,8 @@ def _record_failure_log(findings):
             "source": "core/security_posture:startup",
             "message": ("Security posture check found %d item(s) at startup." % len(findings))[:1000],
             "detail": {"findings": findings},
-            "remediation": ("Set the missing secret(s) / enable the missing enforcement in Railway. See "
-                            "docs/SECURITY_CONTROLS_SPEC.md and docs/SECURITY_DAILY_QUESTIONS.md."),
+            "remediation": ("Ask the platform team to set the missing secret(s) / enable the missing "
+                            "enforcement on the server (the security controls spec lists each one)."),
         }).execute()
     except Exception:
         pass

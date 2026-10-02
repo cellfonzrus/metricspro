@@ -30,6 +30,7 @@ import { useReportKinds } from '@/lib/report-kinds'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 import ShowsIn from '@/components/ShowsIn'
 import { SETUP_NOTICE, SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 import { LineClassStep, type LineClassBlock } from './line-class-step'   // 2.5a — what counts as an activation (owner 2026-09-21)
 import { TenderColumnsStep, type TenderColumnsBlock, type TenderDecision, type TenderTie, type TenderNumbers } from './tender-columns-step'   // 2.5b — the invoice export's tender columns + the tender basis (owner 2026-09-21)
 
@@ -654,7 +655,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                   <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Rows your bill-payment rule counts / does not (order type + product tokens — metric source of truth, product list)</td><td style={mono}>{num(n.billpay_rows)} / {num(n.non_billpay_rows)}</td></tr>
                   <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ bill payments (what the coverage recon will read) · count</td><td style={{ ...mono, fontWeight: 700 }}>{money(n.sum_amount)} · {num(n.count)}</td></tr>
                   <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Date span</td><td style={mono}>{n.date_span?.from || '—'} → {n.date_span?.to || '—'}</td></tr>
-                  <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Feed this lands in</td><td style={{ textAlign: 'right' }}><code>{a.target_table}</code>{n.feed?.processor ? <span style={note}> · your recon reads &quot;{n.feed.processor}&quot;</span> : n.feed?.note ? <span style={{ ...note, color: '#b45309' }}> · {n.feed.note}</span> : null}</td></tr>
+                  <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Feed this lands in</td><td style={{ textAlign: 'right' }}><b>{sourceLabel(a.target_table)}</b>{n.feed?.processor ? <span style={note}> · your recon reads &quot;{n.feed.processor}&quot;</span> : n.feed?.note ? <span style={{ ...note, color: '#b45309' }}> · {n.feed.note}</span> : null}</td></tr>
                 </tbody>
               </table>
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>

@@ -8,7 +8,7 @@ house row shapes (read from the tenant on 2026-10-02, reproduced here as a fixtu
 that re-opens the split FAILS THIS HARNESS rather than passing a spelling check.
 
   §A  reproduce — the live rows, as they stand, split BOTH stores (and B-60TH, the sibling)
-  §B  the repair — the migration's three rows collapse every spelling to one key
+  §B  the repair — the runbook's three rows collapse every spelling to one key
   §C  negative controls — undo any one repair and its finding comes back
   §D  the audit's own truth table (placeholder rule, roster-without-mapping, spelling gather)
   §E  the invariant holds for the stores the repair does NOT touch (no collateral merge)
@@ -123,7 +123,10 @@ LIVE_ALIASES = [
     {"org_id": ORG, "alias": "3 Palisade Ave Yonkers", "store_code": "B-3PL"},
 ]
 
-# ── what migration 1035 writes (the repair, as rows) ──────────────────────────────────────────────
+# ── what the runbook writes (the repair, as rows) ─────────────────────────────────────────────────
+# `database/runbooks/store_identity_merge_1800_1115.sql` — owner-run, steps 1 / 2 / 2b. There is
+# exactly ONE repair path for this defect and this is it; the harness pins ITS statements, so the
+# runbook and this proof cannot drift. (Steps 1 and 2 landed in #346; step 2b is the B-60TH sibling.)
 REPAIRED_MAPPING = (
     [dict(r, store_address="1800 Great Neck Rd") if r["store_code"] == "B-1800" else dict(r)
      for r in LIVE_MAPPING]
@@ -182,7 +185,7 @@ ok("A10 B-2778 and Cellular Services are REPORTED as placeholders, not silently 
    and by_code(f0, "Cellular Services", audit_mod.PLACEHOLDER_ADDRESS))
 
 # ════ §B the repair ═══════════════════════════════════════════════════════════════════════════════
-print("\n§B the repair — migration 1035's three rows collapse every spelling to one key")
+print("\n§B the repair — the runbook's three rows collapse every spelling to one key")
 r1 = resolver_for(REPAIRED_MAPPING, LIVE_ALIASES)
 f1 = findings_for(REPAIRED_MAPPING, LIVE_STORES, LIVE_ALIASES)
 
@@ -265,7 +268,7 @@ untouched = ["B-103", "103 Fulton Ave", "B-1598", "1598 Mount Ephraim Ave",
              "2778 Mount Ephraim Ave", "B-3PL", "3 Palisade Ave", "3 Palisade Ave Yonkers",
              "B-2778", "Cellular Services", "a store nobody has ever mapped"]
 diff = {s: (r0(s), r1(s)) for s in untouched if r0(s) != r1(s)}
-ok("E1 every store the migration does not name resolves BYTE-IDENTICALLY before and after",
+ok("E1 every store the runbook does not name resolves BYTE-IDENTICALLY before and after",
    diff == {}, diff)
 ok("E2 B-1598 keeps its own address — the 2778 alias does not drag it onto B-2778",
    r1("2778 Mount Ephraim Ave").lower() == "1598 mount ephraim ave",
@@ -274,6 +277,40 @@ ok("E3 an unmappable string is still returned as-is (fail-open on display, never
    r1("a store nobody has ever mapped") == "a store nobody has ever mapped")
 ok("E4 two distinct stores sharing no number are never merged",
    r1("B-103").lower() != r1("B-3PL").lower())
+
+# ════ §F the fixture is tied to the REAL runbook ═════════════════════════════════════════════════
+# Without this, §B proves only that three invented rows would work. These checks read the actual
+# owner-run file and fail if the repair it ships stops matching what §B models — the "lock it so it
+# cannot un-wire" rule. There is ONE repair path, so there is ONE file to check.
+print("\n§F the repair path on disk matches what §B proves")
+RUNBOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "database", "runbooks",
+                       "store_identity_merge_1800_1115.sql")
+ok("F1 the runbook exists (the one repair path for this defect)", os.path.isfile(RUNBOOK), RUNBOOK)
+_sql = ""
+if os.path.isfile(RUNBOOK):
+    with open(RUNBOOK, encoding="utf-8") as fh:
+        _sql = fh.read()
+_low = _sql.lower()
+
+ok("F2 step 1 puts the real address on B-1800's placeholder row",
+   "update commcalc.store_mapping" in _low and "'1800 great neck rd'" in _low
+   and "store_code = 'b-1800'" in _low)
+ok("F3 step 2 inserts the B-1115 mapping row with the address §B pins",
+   "'b-1115'" in _low and "'1115 liberty ave'" in _low
+   and "insert into commcalc.store_mapping" in _low)
+ok("F4 step 2b inserts the B-60TH mapping row with the address §B pins",
+   "'b-60th'" in _low and "'1 s 60th street'" in _low)
+ok("F5 every repaired code §B models is named in the runbook",
+   all(c.lower() in _low for c in ("B-1800", "B-1115", "B-60TH")))
+ok("F6 each step is idempotent (guarded UPDATE / NOT EXISTS insert)",
+   _low.count("not exists") >= 2 and "store_address = 'b-1800'" in _low)
+ok("F7 the runbook carries REVERT notes for all three steps",
+   "revert" in _low and _low.count("b-60th") >= 2)
+ok("F8 NO migration repeats the repair — one path, not two (the duplicate rule)",
+   not [f for f in os.listdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                           "database", "migrations"))
+        if "store_mapping_identity" in f or "store_identity_repair" in f],
+   "a migration re-writing these rows would drift from the runbook")
 
 print("\n%d checks passed, %d failed" % (PASSED[0], len(FAILED)))
 if FAILED:

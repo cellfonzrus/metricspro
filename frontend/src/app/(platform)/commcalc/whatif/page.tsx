@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context'
 import { isSuperAdmin } from '@/lib/rbac'
 import { TrendChart } from '@/components/TrendChart'
 import { WHATIF_GRANTS, RestrictedWhatIf, useWhatIfAccess, type WhatIfTabKey } from './_components/WhatIfGate'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 const card = { padding: 18, borderRadius: 12 } as const
 const num = (v: any) => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0 }
@@ -260,7 +261,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
         {tpl.source_kind === 'boost_rates'
-          ? <>Rates pre-filled from your <b>payout_config</b> for {period}; quantities from actual <b>rep_commissions</b>. Payout = Σ(qty × rate) × tier — the exact engine formula. Accessory / Setup rates are a fraction of sales $ (0.10 = 10%), which is why those rows carry a <b>basis</b>: <b>per month</b> treats the quantity as the month's sales $ (×1), <b>per accessory</b> treats it as a COUNT and multiplies by the $/item you set (default ${DEFAULT_ITEM_PRICE}).</>
+          ? <>Rates pre-filled from your <b>payout rates</b> for {period}; quantities from actual <b>calculated rep commissions</b>. Payout = Σ(qty × rate) × tier — the exact engine formula. Accessory / Setup rates are a fraction of sales $ (0.10 = 10%), which is why those rows carry a <b>basis</b>: <b>per month</b> treats the quantity as the month's sales $ (×1), <b>per accessory</b> treats it as a COUNT and multiplies by the $/item you set (default ${DEFAULT_ITEM_PRICE}).</>
           : <>Components auto-populated from <b>{data.carrier?.name}</b>'s configured Incentive Plans / rules / tiers + payout schedules; baseline quantities from the read-only plan preview for {period}. Payout = Σ(qty × rate) × tier.</>}
       </p>
     </div>
@@ -334,7 +335,7 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
 
       {data.retail_cost?.available && (
         <div className="card" style={{ padding: 14, marginBottom: 18, fontSize: 13, color: 'var(--text2)' }}>
-          🧾 Retail cost of activated products (raw_ma_pr_activation): <b>{fmt(data.retail_cost.total_retail_cost)}</b> across {data.retail_cost.lines} line(s).
+          🧾 Retail cost of activated products ({sourceLabel('raw_ma_pr_activation')}): <b>{fmt(data.retail_cost.total_retail_cost)}</b> across {data.retail_cost.lines} line(s).
         </div>
       )}
 

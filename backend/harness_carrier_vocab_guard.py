@@ -566,6 +566,8 @@ def main():
         bad = True
     if not setup_guard():
         bad = True
+    if not infra_guard():
+        bad = True
     sys.exit(1 if bad else 0)
 
 
@@ -1334,6 +1336,396 @@ def setup_guard():
     ok &= _ctl("N21 a hint INSIDE a list outside a message key is left alone (data is never entered) — by design",
                new["rows"][0]["note"] == "Run migration 071 first.")
     print("  " + ("OK — the setup-internals lock holds." if ok else "FAIL — the setup-internals lock is open."))
+    return ok
+
+
+# ══ INFRA NAMES — no database / hosting identifiers in customer-facing copy (owner 2026-10-02, §19.38) ══════════
+# Owner: "hide database names from the users". §19.36 took the MIGRATION class out of customer copy and named what it
+# left: the ePay sweep tooltips said "→ raw_comp_report", the Notify page said "set RESEND_API_KEY + NOTIFY_FROM_EMAIL
+# on Railway", the payroll drill-down said "storeops.manual_hours entries". THE CLASS: an internal STORAGE or
+# INFRASTRUCTURE identifier — a schema-qualified table (`commcalc.store_mapping`), a bare table / view identifier
+# (`raw_sales`, `rep_commissions`), an environment-variable name, a hosting vendor (Supabase / Railway / Vercel /
+# Postgres / PostgREST) — in rendered copy or an API message. The SAME homes as §SETUP, extended, not a sibling:
+#   · the words: frontend copy is reworded at source; a feed shown in several places reads lib/sourceLabels.ts;
+#   · the boundary: core/setup_notice.SYSTEM_INTERNAL → SYSTEM_NOTICE (runtime DB errors interpolated into a message,
+#     the one thing that cannot be reworded at source), read by the SAME middleware under the SAME MESSAGE_KEYS;
+#   · this lock: the SAME display-copy extractor (display_copy), the SAME comment / `detail=` handling (_setup_code),
+#     the SAME super-admin excusals (SETUP_SUPER_ADMIN_PAGES — NAV-verified by §SETUP — and the operator tree), the
+#     SAME backend emission finder (setup_emissions) judged under the SAME is_message_key, AFTER the boundary has run.
+# NOTHING IS LISTED BY HAND that the code already says. The vocabulary is DERIVED each build: schemas and tables /
+# views from every CREATE in database/migrations plus data_lineage_registry's ingest tables (the ONE place code names
+# a feed table); env names from config.Settings' fields and every os.getenv / os.environ / _env read in backend/app
+# plus every process.env read in frontend/src. So a carrier or product code in ALL-CAPS (ATU_MI, TWP_ALL, BYOD_ACT)
+# is never mistaken for an env var — only a name the code actually reads from the environment is one. A bare table
+# name needs an underscore (so "stores", "employees" — English words — never trip it).
+INFRA_CONFIG = os.path.join(ROOT, "backend", "app", "core", "config.py")
+INFRA_VENDORS = ("Supabase", "Railway", "Vercel", "PostgREST", "PostgreSQL", "Postgres", "pg_cron")
+INFRA_HOSTS = ("supabase.co", "railway.app", "vercel.app")
+INFRA_FE_LABELS = "lib/sourceLabels.ts"          # the one frontend home of a feed's plain name
+_CREATE_REL = re.compile(r"\bcreate\s+(?:or\s+replace\s+)?(?:materialized\s+)?(?:table|view)\s+(?:if\s+not\s+exists\s+)?"
+                         r"(?:\"?([a-z_][a-z0-9_]*)\"?\.)?\"?([a-z_][a-z0-9_]*)", re.I)
+_CREATE_SCHEMA = re.compile(r"\bcreate\s+schema\s+(?:if\s+not\s+exists\s+)?\"?([a-z_][a-z0-9_]*)", re.I)
+_ENV_FIELD = re.compile(r"^    ([A-Z][A-Z0-9_]+)\s*:", re.M)
+_ENV_READ_PY = re.compile(r"""(?:getenv|environ\.get|environ\[|_env)\(?\s*["']([A-Z][A-Z0-9_]+)["']""")
+_ENV_READ_TS = re.compile(r"process\.env\.([A-Z][A-Z0-9_]+)")
+# Platform-only pages beyond §SETUP's list whose SUBJECT is the platform's own configuration. Each is VERIFIED
+# platform-only at every NAV occurrence (the same rbac reader §SETUP uses); one that no longer names anything is stale.
+INFRA_SUPER_ADMIN_PAGES = {
+    "app/(platform)/admin/tenants/page.tsx":
+        "/admin/tenants — Companies (Tenants), Super Admin Toolbox: the tenant-isolation switches it explains ARE env vars",
+}
+# Reviewed (file relative to frontend/src, a substring of the line) -> reason. Stale FAILS.
+INFRA_FE_ALLOW = {}
+# Reviewed (file relative to backend/app, a signature substring of the string) -> reason. Each is a string a TENANT
+# never reads (a super-admin-only endpoint) or an API FIELD name the caller itself sends. Stale FAILS.
+INFRA_BACKEND_ALLOW = {
+    ("core/tenant_middleware.py", "PostgREST health and the connection pool"):
+        "the identity-outage failure_log row is written under the PLATFORM org (_PLATFORM_ORG_ID) — no tenant reads it; "
+        "its remediation names the IDENTITY_BACKEND_503 break-glass on purpose (harness_identity_backend_503 pins it)",
+}
+
+
+def infra_registry(fe_files=None):
+    """(schemas, tables, envs) — DERIVED from the code, never listed (see the section header)."""
+    schemas, tables, envs = set(), set(), set()
+    for f in os.listdir(MIGRATIONS):
+        if not f.endswith(".sql"):
+            continue
+        src = open(os.path.join(MIGRATIONS, f), encoding="utf-8", errors="ignore").read()
+        schemas |= {s.lower() for s in _CREATE_SCHEMA.findall(src)}
+        for s, t in _CREATE_REL.findall(src):
+            if s:
+                schemas.add(s.lower())
+            tables.add(t.lower())
+    from app.modules.commcalc import data_lineage_registry as dl
+    tables |= set(dl.all_ingest_tables())
+    envs |= set(_ENV_FIELD.findall(open(INFRA_CONFIG, encoding="utf-8").read()))
+    for dp, _d, fs in os.walk(BE_APP):
+        for f in fs:
+            if f.endswith(".py"):
+                envs |= set(_ENV_READ_PY.findall(open(os.path.join(dp, f), encoding="utf-8").read()))
+    for lines in (fe_files if fe_files is not None else _fe_files()).values():
+        envs |= set(_ENV_READ_TS.findall("\n".join(lines)))
+    schemas -= {"public", "if", "or"}
+    return schemas, tables, {e for e in envs if "_" in e}
+
+
+def infra_regex(schemas, tables, envs):
+    """ONE detector, four named classes. Case-SENSITIVE: tables are lower-case identifiers, env names exact, vendors
+    capitalised — `import { supabase }` (code) and ATU_MI (a carrier code) are not hits."""
+    alt = lambda xs: "|".join(sorted((re.escape(x) for x in xs), key=len, reverse=True))
+    return re.compile(
+        r"(?P<schema_table>(?<![\w.])(?:" + alt(schemas) + r")\.(?:" + alt(tables) + r"|[a-z][a-z0-9]*_[a-z0-9_]+|000)\b)"
+        r"|(?P<table>(?<![\w.$/-])(?:" + alt(t for t in tables if "_" in t) + r")\b(?!\s*\??:|\())"
+        r"|(?P<env>(?<![\w.])(?:" + alt(envs) + r"|NEXT_PUBLIC_[A-Z0-9_]+)\b|(?<![\w.])(?:"
+        + alt({e.split("_")[0] for e in envs}) + r")_\*)"
+        r"|(?P<vendor>\b(?:" + alt(INFRA_VENDORS) + r")\b|\b[\w-]+\.(?:" + alt(INFRA_HOSTS) + r")\b)")
+
+
+_JSX_TOKEN = re.compile(r">\s*([^<>{}\s]+)\s*<")
+# A table name the API sends as DATA (`target_table` / `source_table` / `table`) rendered as it came — `{r.target_table}`,
+# `${drill.source_table}`, `<code>{sb.table}</code>` — is the same leak at run time. It renders through sourceLabel().
+# An attribute VALUE (`value={t.source_table}`, `key={…}`) is code, not copy.
+_TABLE_FIELD = re.compile(r"(?<![=\w])(?:\{|\$\{)\s*[\w.?!]*\.(?:target_table|source_table|table)\s*"
+                          r"(?:\|\|\s*(?:'[^']*'|\"[^\"]*\")\s*)?\}")
+
+
+def infra_segments(rel, code):
+    """The display copy of a line for THIS axis: the one extractor's segments (display_copy) with `{expr}` /
+    `${expr}` dropped (an identifier inside an expression is code, not copy), plus a lone token between two tags —
+    `<code>RESEND_API_KEY</code>` renders even though it has no space."""
+    segs = [_strip_braces(s) for s in display_copy(rel, code)]
+    if rel.endswith(".tsx"):
+        segs += _JSX_TOKEN.findall(code)
+    return segs
+
+
+def infra_scan_frontend(files, rx, excused=None, allow=None, seen_pages=None):
+    """files: {rel: [lines]}. An infra identifier in a display segment, or a table field rendered raw, FAILS outside
+    the excusals (§SETUP's NAV-verified super-admin pages + INFRA_SUPER_ADMIN_PAGES, the operator tree) and the
+    reviewed allow list. Returns (fails, stale); `seen_pages` collects the excused pages that do name something."""
+    excused = {**SETUP_SUPER_ADMIN_PAGES, **INFRA_SUPER_ADMIN_PAGES} if excused is None else excused
+    allow = INFRA_FE_ALLOW if allow is None else allow
+    fails, seen = [], set()
+    for rel, lines in sorted(files.items()):
+        if rel == SETUP_FE_HOME or rel == INFRA_FE_LABELS:
+            continue
+        if rel in excused or rel.startswith(SETUP_OPERATOR_TREE):
+            if seen_pages is not None and any(rx.search(seg) for ln in lines for seg in infra_segments(rel, ln)):
+                seen_pages.add(rel)
+            continue
+        for i, (ln, is_cmt) in enumerate(comment_lines(lines), 1):
+            if is_cmt:
+                continue
+            code = _setup_code(ln)
+            hit = None
+            for seg in infra_segments(rel, code):
+                m = rx.search(seg)
+                if m:
+                    hit = (m.lastgroup, m.group(0), seg[:110])
+                    break
+            if not hit:
+                m = _TABLE_FIELD.search(code)
+                if m:
+                    hit = ("table_field", m.group(0), code.strip()[:110])
+            if not hit:
+                continue
+            key = next((k for k in allow if k[0] == rel and k[1] in ln), None)
+            if key:
+                seen.add(key)
+                continue
+            fails.append((rel, i) + hit)
+    return fails, [k for k in allow if k not in seen]
+
+
+def infra_scan_backend(sources, rx, is_message_key, neutralize_text, allow=None):
+    """Every string the backend emits under a MESSAGE key (setup_emissions — the §SETUP AST finder) is read the way a
+    tenant receives it: AFTER the boundary (`neutralize_text`). An infra identifier still in it FAILS unless reviewed.
+    Placeholders read as '000' (`commcalc.{t}` → `commcalc.000`). Returns (fails, stale)."""
+    allow = INFRA_BACKEND_ALLOW if allow is None else allow
+    fails, seen = [], set()
+    for rel, src in sorted(sources.items()):
+        if not (rx.search(src) or rx.search(_EMIT_PH.sub("000", src))):
+            continue                                  # no identifier anywhere in the module — skip the AST pass
+        for ln, text, key in setup_emissions(src, rx):
+            if not is_message_key(key):
+                continue
+            m = rx.search(neutralize_text(_EMIT_PH.sub("000", text)))
+            if not m:
+                continue
+            k = next((a for a in allow if a[0] == rel and a[1] in text), None)
+            if k:
+                seen.add(k)
+                continue
+            fails.append((f"{rel}:{ln}", key, m.lastgroup, m.group(0), text[:110]))
+    return fails, [k for k in allow if k not in seen]
+
+
+def infra_wiring(home_src, fe_label_src, tables):
+    """The wires that keep this axis from un-wiring. Returns [(label, ok)]."""
+    out = []
+    code = _py_code(home_src)
+    m = re.search(r"^def neutralize_text\(.*?(?=^def |\Z)", code, re.M | re.S)
+    out.append(("IW1 the boundary's neutralize_text dereferences is_system_internal → SYSTEM_NOTICE (runtime DB errors)",
+                bool(m and re.search(r"elif is_system_internal\(part\):\s*\n\s*out\.append\(SYSTEM_NOTICE\)", m.group(0)))))
+    m = re.search(r"^_MARKERS\s*=\s*\((.*?)\)\n", code, re.M | re.S)
+    out.append(("IW2 the byte prefilter carries the SYSTEM_INTERNAL markers (else a runtime error is never parsed)",
+                bool(m and all(t in m.group(1) for t in ('b"duplicate key"', 'b"permission denied for"', 'b"postgrest"')))))
+    keys = set(re.findall(r"^\s+([a-z][a-z0-9_]*)\s*:", fe_label_src, re.M))
+    out.append(("IW3 every key of the frontend feed-label home (lib/sourceLabels.ts) is a REGISTERED table — no stale name"
+                + (f" — unknown: {sorted(keys - tables)}" if keys - tables else ""), bool(keys) and keys <= tables))
+    src = open(os.path.abspath(__file__), encoding="utf-8").read()
+    body = src[src.index("def infra_segments("):src.index("def infra_scan_frontend(")]
+    out.append(("IW4 the infra scan dereferences the one display-copy extractor (display_copy)", "display_copy(rel, code)" in body))
+    return out
+
+
+def infra_guard():
+    """THE INFRA-NAMES LOCK (§19.38). Returns True when green; prints its own report."""
+    import io
+    import contextlib
+    import time
+    print("\n— database / hosting names in customer-facing copy (homes: core/setup_notice.py + lib/sourceLabels.ts; §19.38) —")
+    from app.core import setup_notice as sn
+    ok = True
+    t0 = time.perf_counter()
+    fe = _fe_files()
+    schemas, tables, envs = infra_registry(fe)
+    rx = infra_regex(schemas, tables, envs)
+    t_reg = time.perf_counter() - t0
+    print(f"  ..    derived: {len(schemas)} schemas, {len(tables)} tables/views, {len(envs)} env names ({t_reg * 1000:.0f} ms)")
+    ok &= _ctl("R1 the registries are derived, not empty (commcalc / storeops schemas; raw_comp_report, raw_mi, "
+               "payroll_change_log tables; RESEND_API_KEY, NEXT_PUBLIC_SUPABASE_URL, GOOGLE_SERVICE_ACCOUNT_JSON env names)",
+               {"commcalc", "storeops", "core"} <= schemas
+               and {"raw_comp_report", "raw_mi", "payroll_change_log", "store_mapping"} <= tables
+               and {"RESEND_API_KEY", "NEXT_PUBLIC_SUPABASE_URL", "GOOGLE_SERVICE_ACCOUNT_JSON"} <= envs)
+    t0 = time.perf_counter()
+    seen_pages = set()
+    ffails, fstale = infra_scan_frontend(fe, rx, seen_pages=seen_pages)
+    t_fe = time.perf_counter() - t0
+    po = platform_only_hrefs()
+    for rel in INFRA_SUPER_ADMIN_PAGES:
+        m = _page_re.search(rel)
+        if not m or m.group(1) not in po:
+            ok = False
+            print(f"  FAIL  excused page {rel} is NOT platform-only in NAV — a tenant can open it; fix its copy instead")
+        if rel not in seen_pages:
+            ok = False
+            print(f"  FAIL  stale infra excusal (the page names nothing any more — remove it): {rel}")
+    if ffails:
+        ok = False
+        print(f"  FAIL  {len(ffails)} database / hosting name(s) in rendered frontend copy:")
+        for rel, i, cls, term, seg in ffails:
+            print(f"        {rel}:{i}  [{cls}: {term}]  {seg}")
+        print("        Fix: say it in business words (a feed's plain name: sourceLabel() in lib/sourceLabels.ts — also for a table"
+              " the API sends as data); a technical detail for the platform team rides <SetupNotice detail=…/>.")
+    else:
+        print(f"  OK    no database / hosting names in rendered frontend copy ({len(fe)} files; excused: the §SETUP super-admin pages + "
+              f"{len(INFRA_SUPER_ADMIN_PAGES)} platform-only page(s) + the operator console)")
+    if fstale:
+        ok = False
+        print(f"  FAIL  stale frontend allow entr(ies): {fstale}")
+    bsrc = _be_app_sources()
+    t0 = time.perf_counter()
+    bfails, bstale = infra_scan_backend(bsrc, rx, sn.is_message_key, sn.neutralize_text)
+    t_be = time.perf_counter() - t0
+    if bfails:
+        ok = False
+        print(f"  FAIL  {len(bfails)} backend message string(s) still name a database / hosting identifier AFTER the boundary:")
+        for where, key, cls, term, text in bfails:
+            print(f"        {where}  [{key} · {cls}: {term}]  {text!r}")
+        print("        Fix: reword at source in business words (the boundary rewrites only runtime database errors).")
+    else:
+        print(f"  OK    every backend message-keyed string is free of database / hosting names after the boundary ({len(bsrc)} modules)")
+    if bstale:
+        ok = False
+        print(f"  FAIL  stale backend allow entr(ies): {bstale}")
+    rd = lambda p: open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    home_src = rd(SETUP_BE_HOME)
+    fe_labels = "\n".join(fe.get(INFRA_FE_LABELS, []))
+    for label, good in infra_wiring(home_src, fe_labels, tables):
+        ok &= _ctl(label, good)
+
+    # ── the boundary's sibling detector, DB-free (the same stubbed ASGI app as §SETUP) ─────────────────────────────
+    print("  — the boundary: runtime database errors (SYSTEM_INTERNAL → SYSTEM_NOTICE) —")
+
+    class NotSuper(sn.SetupNoticeMiddleware):
+        @staticmethod
+        def _is_super_admin(headers):
+            return False
+
+    class Super(sn.SetupNoticeMiddleware):
+        @staticmethod
+        def _is_super_admin(headers):
+            return True
+
+    pg = ("Could not save the store. {'code': '23505', 'details': 'Key (org_id, code)=(f4f1, S1) already exists.', "
+          "'hint': None, 'message': 'duplicate key value violates unique constraint \"stores_org_id_code_key\"'}")
+    leak = json.dumps({"detail": pg}).encode()
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        _, b = _asgi_run(NotSuper, [leak])
+    ok &= _ctl("S1 a PostgREST duplicate-key error dict in `detail` reaches a tenant as the lead sentence + SYSTEM_NOTICE "
+               "(no constraint, column or key value)",
+               json.loads(b) == {"detail": "Could not save the store. " + sn.SYSTEM_NOTICE})
+    ok &= _ctl("S2 …the original goes to the server log", "stores_org_id_code_key" in err.getvalue())
+    _, b = _asgi_run(Super, [leak])
+    ok &= _ctl("S3 …and the platform super admin sees it unchanged", b == leak)
+    samples = [
+        "permission denied for table raw_mi",
+        'null value in column "store_id" of relation "daily_closing" violates not-null constraint',
+        "insert or update on table \"x\" violates foreign key constraint \"x_store_fkey\"",
+        "invalid input syntax for type uuid: \"abc\"",
+        "postgrest.exceptions.APIError: {'message': 'boom'}",
+        "httpx.ConnectError: etxdalernqqtwjcrtcuj.supabase.co unreachable",
+        "canceling statement due to statement timeout",
+    ]
+    ok &= _ctl(f"S4 each runtime shape ({len(samples)}: permission / not-null / FK / input syntax / APIError / host / timeout)"
+               " is neutralized and admitted by the byte prefilter under detail and note",
+               all(sn.neutralize_text("Save failed: " + s) == sn.SYSTEM_NOTICE for s in samples)
+               and all(sn.may_carry_hint(json.dumps({k: "Save failed: " + s}).encode()) for s in samples for k in ("detail", "note")))
+    ok &= _ctl("S5 a setup error keeps the SETUP sentence (precedence): 'relation \"commcalc.x\" does not exist' → SETUP_NOTICE",
+               sn.neutralize_text('relation "commcalc.x" does not exist') == sn.SETUP_NOTICE)
+    plain = ["Duplicate store code — pick another.", "Permission denied: your role cannot edit pay.",
+             "Postgres-style dates (YYYY-MM-DD) only.", "The key value must be a number."]
+    ok &= _ctl("S6 the app's own plain messages ('Duplicate store code', 'Permission denied: your role…') are untouched (SAME object)",
+               all(sn.neutralize_text(t) is t for t in plain))
+    cells = ["duplicate key value violates unique constraint", "permission denied for table x", "Supabase", "raw_mi",
+             "commcalc.store_mapping", "RESEND_API_KEY"]
+    rows = [{"note": c, "detail": c, "message": c, "plan": c} for c in cells]
+    body = json.dumps({"rows": rows, "count": len(rows)}).encode()
+    _, b = _asgi_run(NotSuper, [body])
+    new, orig = sn.neutralize({"rows": rows})
+    ok &= _ctl("S7 data rows whose note / detail / message cells carry database-error or infra text are never touched "
+               "(byte-identical, SAME object)", b is body and orig == [] and new["rows"] is rows)
+
+    # ── performance ──────────────────────────────────────────────────────────────────────────────────────────────
+    print("  — performance —")
+    big = json.dumps({"rows": [{"rep": "Miguel", "plan": "duplicate key value violates unique constraint",
+                                "src": "commcalc.raw_mi on Supabase", "i": i} for i in range(40000)], "total": 40000}).encode()
+    calls = {"n": 0}
+    real_loads = sn._loads
+
+    def counting(x):
+        calls["n"] += 1
+        return real_loads(x)
+
+    sn._loads = counting
+    try:
+        t0 = time.perf_counter()
+        _, b = _asgi_run(NotSuper, [big])
+        dt = time.perf_counter() - t0
+        ok &= _ctl(f"P4 a {len(big) / 1e6:.1f} MB body whose ROWS say 'duplicate key value violates…' / 'Supabase': never "
+                   f"json.loads'd (parses: {calls['n']}), SAME bytes — {dt * 1000:.0f} ms (bound 500 ms)",
+                   b is big and calls["n"] == 0 and dt < 0.5)
+    finally:
+        sn._loads = real_loads
+    ok &= _ctl(f"P5 the static scans stay cheap — registry {t_reg:.1f}s, frontend {t_fe:.1f}s, backend {t_be:.1f}s (bound 30 s each)",
+               t_reg < 30 and t_fe < 30 and t_be < 30)
+
+    # ── negative / positive controls ─────────────────────────────────────────────────────────────────────────────
+    print("  — controls —")
+    page = "app/(platform)/commcalc/epay/sweep/page.tsx"
+    base = fe.get(page, [])
+    f0, _ = infra_scan_frontend({page: base}, rx)
+    red = lambda extra, p=page, b0=base: len(infra_scan_frontend({p: b0 + extra}, rx)[0]) > len(f0)
+    ok &= _ctl("I1 the shipped ePay sweep tooltip put back (title=\"… (#100614) → raw_comp_report\") → RED",
+               red(['            <label style={{ gap: 6 }} title="Comprehensive Compensation Report (#100614) → raw_comp_report">']))
+    ok &= _ctl("I2 a schema-qualified table in JSX text (storeops.manual_hours entries — …) → RED",
+               red(["          storeops.manual_hours entries — this table is not read by payroll"]))
+    ok &= _ctl("I3 an env-var name in a toast and inside <code> (RESEND_API_KEY / GOOGLE_SERVICE_ACCOUNT_JSON) → RED",
+               red(["      setMsg('Email not configured — set RESEND_API_KEY first')"])
+               and red(["          <li>Set <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> = that JSON, then redeploy.</li>"]))
+    ok &= _ctl("I4 a hosting vendor in copy ('Add it on Railway + redeploy', 'Run it in Supabase') → RED",
+               red(["          is not set on the server yet. Add it on Railway + redeploy to enable auto-import."]))
+    ok &= _ctl("I5 a bare table in a template literal toast (`Loaded ${n} rows into carrier_commission`) → RED",
+               red(["      setMsg(`✅ Loaded ${r.saved} rows into carrier_commission for ${period}.`)"]))
+    ok &= _ctl("I6 carrier / product codes in ALL-CAPS copy ('ATU_MI', 'TWP_ALL', 'BYOD_ACT', 'MA_TX', 'SIM_ONLY') → GREEN",
+               not red(["          <div>Plans: ATU_MI, TWP_ALL, BYOD_ACT, MA_TX and SIM_ONLY pay the spiff.</div>"]))
+    ok &= _ctl("I7 identifiers used as CODE (r.device_model in {…}, ${x.raw_mi}, a fetch key 'raw_mi', a type field, "
+               "`import { supabase }`) → GREEN",
+               not red(["          <td>{r.device_model || '—'} rows</td>", "      const s = `${x.raw_mi} of ${n} rows`",
+                        "      api.get('/commcalc/x', { table: 'raw_mi' })", "  device_model: string | null",
+                        "import { supabase, setSessionOrgId } from './supabase'"]))
+    ok &= _ctl("I8 the detail for the platform team as <SetupNotice detail=\"commcalc.store_mapping\" /> → GREEN",
+               not red(['        <SetupNotice detail="commcalc.store_mapping" lead="No stores yet." />']))
+    ok &= _ctl("I9 a comment naming a table / env / vendor → GREEN",
+               not red(["  // reads commcalc.raw_mi; RESEND_API_KEY on Railway", "  {/* raw_comp_report on Supabase */}"]))
+    sa = "app/(platform)/admin/fix-requests/page.tsx"
+    ok &= _ctl("I10 a NAV-verified super-admin page (admin/fix-requests) may say 'Run this SQL in Supabase' → GREEN (excused)",
+               not infra_scan_frontend({sa: fe.get(sa, []) + ["        Run this SQL in Supabase on commcalc.raw_mi"]}, rx)[0]
+               and not infra_scan_frontend({"app/(operator)/operator/x/page.tsx": ["   Plan state comes from storeops.tenants on Railway"]}, rx)[0])
+    _, s11 = infra_scan_frontend({}, rx, allow={("app/x.tsx", "nowhere"): "stale on purpose"})
+    ok &= _ctl("I11 a stale frontend allow entry → RED", bool(s11))
+    ok &= _ctl("I11b a table the API sent as data rendered raw ({r.target_table || '—'}, <code>{sb.table}</code>, "
+               "`rows in ${drill.source_table}`) → RED; through sourceLabel() or as an attribute value → GREEN",
+               red(["              <td>{r.target_table || '—'}</td>"]) and red(["   <b>{k}:</b> <code>{sb.table}</code> rows"])
+               and red(["      : `${n} matching row(s) in ${drill.source_table}`}"])
+               and not red(["              <td>{sourceLabel(r.target_table) || '—'}</td>",
+                            "   <select value={t.source_table || ''} onChange={go}>"]))
+    ok &= _ctl("I11c an env-var FAMILY in copy ('set WHATSAPP_* env vars') → RED",
+               red(["   <div>⚠️ WhatsApp not configured — set WHATSAPP_* env vars + approve the template.</div>"]))
+    bk = lambda src: infra_scan_backend({"commcalc/x.py": src}, rx, sn.is_message_key, sn.neutralize_text)[0]
+    ok &= _ctl("I12 backend: an HTTPException naming commcalc.store_mapping / a note naming raw_sales / a detail naming "
+               "RESEND_API_KEY / a message saying 'on Railway' → RED (each)",
+               bool(bk('raise HTTPException(404, "no commcalc.store_mapping row for this store")\n'))
+               and bool(bk('def f():\n    return {"note": "raw_sales carries no cost column", "rows": []}\n'))
+               and bool(bk('def f():\n    raise HTTPException(503, detail="Email is off (RESEND_API_KEY unset)")\n'))
+               and bool(bk('def f():\n    return {"message": "Set the key on Railway and redeploy."}\n')))
+    ok &= _ctl("I13 backend: an f-string reaching into a schema (`commcalc.{table}`) → RED",
+               bool(bk('def f(t):\n    raise HTTPException(500, f"could not read commcalc.{t} for this org")\n')))
+    ok &= _ctl("I14 backend: a setup hint the boundary replaces whole ('run migration 502 first (commcalc.daily_closing)') → GREEN",
+               not bk('def f():\n    raise HTTPException(500, "run migration 502 first (commcalc.daily_closing)")\n'))
+    ok &= _ctl("I15 backend: a table name as DATA under a non-message key ({'table': 'raw_mi', 'source': 'commcalc.raw_mi'}) "
+               "and a carrier code in a note ('ATU_MI pays $5') → GREEN",
+               not bk('def f():\n    return {"table": "raw_mi", "source": "commcalc.raw_mi", "note": "ATU_MI pays $5 per line"}\n'))
+    _, s16 = infra_scan_backend({}, rx, sn.is_message_key, sn.neutralize_text, {("commcalc/x.py", "nowhere"): "stale"})
+    ok &= _ctl("I16 a stale backend allow entry → RED", bool(s16))
+    w = dict(infra_wiring(home_src.replace("elif is_system_internal(part):", "elif False:"), fe_labels, tables))
+    ok &= _ctl("I17 the boundary stops dereferencing is_system_internal → RED", not w[next(k for k in w if k.startswith("IW1"))])
+    w = dict(infra_wiring(home_src, fe_labels + "\n  raw_no_such_table: 'x',", tables))
+    ok &= _ctl("I18 a frontend feed label for a table that does not exist → RED", not w[next(k for k in w if k.startswith("IW3"))])
+    print("  " + ("OK — the infra-names lock holds." if ok else "FAIL — the infra-names lock is open."))
     return ok
 
 

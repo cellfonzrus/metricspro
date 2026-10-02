@@ -24,6 +24,7 @@ import { ReportShell } from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { type EntityOption } from '@/lib/entity-picker-core'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 const card: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', marginBottom: 14 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }
@@ -495,7 +496,7 @@ export default function MaOverviewReconPage() {
               <div style={{ fontSize: 12, color: 'var(--text2)', margin: '6px 0' }}>
                 {drill.worklist
                   ? `${drill.matched?.toLocaleString()} activation line(s) paid NOTHING — the follow-up worklist, oldest first. Chasing these is manual; this page records nothing.`
-                  : `${drill.matched?.toLocaleString()} matching row(s) in ${drill.source_table}`}
+                  : `${drill.matched?.toLocaleString()} matching row(s) in ${sourceLabel(drill.source_table)}`}
                 {drill.capped ? ` — showing the first ${drill.returned}` : ''}
               </div>
               <ReportShell
@@ -569,7 +570,7 @@ export default function MaOverviewReconPage() {
                     <td style={td}>
                       <select style={sel} value={t.source_table || ''} onChange={e => patchTile(i, { source_table: e.target.value })}>
                         <option value="">(none)</option>
-                        {Object.keys(mapping?.sources || {}).map(s => <option key={s} value={s}>{s}</option>)}
+                        {Object.keys(mapping?.sources || {}).map(s => <option key={s} value={s}>{sourceLabel(s)}</option>)}
                       </select>
                     </td>
                     <td style={td}>
@@ -646,7 +647,7 @@ export default function MaOverviewReconPage() {
 function srcText(t: any): string {
   if (!t?.mapped) return t?.note ? 'no system source mapped' : 'no system source mapped'
   const s = t.source || {}
-  const base = s.agg === 'count' ? `count of ${s.table}` : `Σ ${s.fields} on ${s.table}`
+  const base = s.agg === 'count' ? `count of ${sourceLabel(s.table)}` : `Σ ${s.fields} on ${sourceLabel(s.table)}`
   return base + (s.filter ? ` where ${s.filter}` : '') + (s.agg === 'sum' && s.sign !== 'as_is' ? ` (${s.sign})` : '')
 }
 

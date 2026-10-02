@@ -88,7 +88,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                 </div>
               ) : null}
               {data.total_manual_hours_not_in_payroll ? (
-                <div className="card" style={{ padding: '8px 14px' }} title="storeops.manual_hours entries — /payroll never reads this table, so these are NOT part of the report row's Actual Hrs">
+                <div className="card" style={{ padding: '8px 14px' }} title="Manually entered hours — the payroll report never reads them, so these are NOT part of the report row's Actual Hrs">
                   <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Manual hours (not in payroll)</div>
                   <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtN(data.total_manual_hours_not_in_payroll)}h</div>
                 </div>

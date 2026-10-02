@@ -591,7 +591,7 @@ const implFigure = (
 
     <rect x="36" y="150" width="190" height="104" rx="3" fill="var(--rb-card)" stroke="var(--rb-own)" strokeWidth="1.8" />
     <text x="131" y="130" textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--rb-own)" letterSpacing="1">STEP 1 · THE CARRIER</text>
-    <text x="131" y="182" textAnchor="middle" fontSize="12.5" fontWeight="600" fill="currentColor">commcalc.carrier</text>
+    <text x="131" y="182" textAnchor="middle" fontSize="12.5" fontWeight="600" fill="currentColor">Carrier list</text>
     <text x="131" y="204" textAnchor="middle" fontSize="10.5" fill="currentColor" opacity=".72" fontFamily="ui-monospace, monospace">one row per carrier</text>
     <text x="131" y="224" textAnchor="middle" fontSize="10.5" fill="currentColor" opacity=".72" fontFamily="ui-monospace, monospace">they actually sell</text>
     <text x="131" y="274" textAnchor="middle" fontSize="10.5" fontWeight="600" fill="var(--rb-own)">adding one is a row, never code</text>
@@ -599,9 +599,9 @@ const implFigure = (
     <rect x="330" y="60" width="250" height="92" rx="3" fill="var(--rb-card)" stroke="var(--rb-dm)" strokeWidth="1.6" />
     <text x="455" y="42" textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--rb-dm)" letterSpacing="1">STEP 2–3 · ITS REPORTS</text>
     <g fontSize="10.5" fill="currentColor" opacity=".82" fontFamily="ui-monospace, monospace">
-      <text x="348" y="86">report_definitions</text>
-      <text x="348" y="108">carrier_id  → whose report it is</text>
-      <text x="348" y="130">connector_id → who fetches it</text>
+      <text x="348" y="86">report definitions</text>
+      <text x="348" y="108">carrier    → whose report it is</text>
+      <text x="348" y="130">connector  → who fetches it</text>
     </g>
 
     <rect x="330" y="252" width="250" height="92" rx="3" fill="var(--rb-card)" stroke="currentColor" strokeWidth="1.2" opacity=".55" />
@@ -624,7 +624,7 @@ const implFigure = (
     <rect x="672" y="196" width="220" height="106" rx="3" fill="var(--rb-card)" stroke="var(--rb-mm)" strokeWidth="1.8" />
     <text x="782" y="178" textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--rb-mm)" letterSpacing="1">OR LET IT ARRIVE</text>
     <g fontSize="10.5" fill="currentColor" opacity=".82" fontFamily="ui-monospace, monospace">
-      <text x="690" y="224">connector_instances</text>
+      <text x="690" y="224">connections</text>
       <text x="690" y="246">the portal / mailbox</text>
       <text x="690" y="268">that fetches this</text>
       <text x="690" y="290">same report</text>
@@ -715,7 +715,7 @@ const tenantImplementation: Runbook = {
   ],
   rulesHeading: 'What this flow guarantees',
   rules: [
-    { kind: 'ok', claim: 'No carrier name decides anything in this flow.', why: 'Which uploads and automations belong to a carrier is rows — commcalc.carrier, report_definitions.carrier_id, connector_instances.carrier_id — so a carrier nobody has built for works the same way as one we have. Where a carrier name still appears elsewhere it is a shipped DEFAULT that a row overrides, never a branch.' },
+    { kind: 'ok', claim: 'No carrier name decides anything in this flow.', why: 'Which uploads and automations belong to a carrier is data — the carrier list, each report definition\'s carrier and each connection\'s carrier — so a carrier nobody has built for works the same way as one we have. Where a carrier name still appears elsewhere it is a shipped DEFAULT that a row overrides, never a branch.' },
     { kind: 'ok', claim: 'The automation sits with the upload it replaces.', why: 'A report row already names the connector that fetches it, so the two are one record. Nobody has to know that a page in one module relates to a page in another.' },
     { kind: 'hold', claim: 'A carrier with nothing registered is shown, not hidden.', why: 'It is named, with the action that fixes it. Dropping it would make an unfinished implementation look complete.' },
     { kind: 'bad', claim: 'A column match is never applied on your behalf.', why: 'The mapper proposes and shows its basis; a human confirms. Measured on a real export, three columns hold something other than what their names say.' },

@@ -12,6 +12,7 @@ import { useReportLabels } from '@/lib/report-labels'
 import { posSquash } from '@/lib/carrier-scope'
 import { useConnectors } from '@/lib/connectors'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
@@ -1251,7 +1252,7 @@ export default function EmailImportsPage() {
                       onChange={e => { const ds = e.target.value; if (ds) openMapper(mapper, ds); else setMapData((d: any) => ({ ...d, _sel: '', fields: [], suggestions: [] })) }}
                       style={{ ...sel, minWidth: 260 }}>
                       <option value="">— capture only (no mapping) —</option>
-                      {(mapData.datasets || []).map((d: any) => <option key={d.dataset} value={d.dataset}>{d.dataset} → {d.table} ({d.fields} fields)</option>)}
+                      {(mapData.datasets || []).map((d: any) => <option key={d.dataset} value={d.dataset}>{d.dataset} → {sourceLabel(d.table)} ({d.fields} fields)</option>)}
                     </select>
                     {mapBusy === 'load' && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>loading…</span>}
                   </div>
@@ -1532,7 +1533,7 @@ export default function EmailImportsPage() {
                         return (
                         <tr key={i} style={{ borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
                           <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r.report_key}</td>
-                          <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{r.target_table || '—'}</td>
+                          <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{sourceLabel(r.target_table) || '—'}</td>
                           <td style={{ padding: '6px 8px' }}>{r.rows_ingested ?? 0}</td>
                           <td style={{ padding: '6px 8px', color: tone, whiteSpace: 'normal' }}>
                             {r.rows_ingested ? `imported ${r.months_covered?.length || 0} month(s)` : (r.outcome || r.error || (r.ok ? 'ran, returned no rows' : 'failed'))}

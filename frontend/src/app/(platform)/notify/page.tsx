@@ -94,8 +94,8 @@ export default function NotifyPage() {
       <h1 style={{ marginTop: 0 }}>📤 Notify</h1>
       {health && (!health.email_configured || !health.whatsapp_configured) && (
         <div style={{ ...card, background: '#fff8e1', borderColor: '#f0d68a', fontSize: 13 }}>
-          {!health.email_configured && <div>⚠️ Email (Resend) not configured — set RESEND_API_KEY + NOTIFY_FROM_EMAIL on Railway.</div>}
-          {!health.whatsapp_configured && <div>⚠️ WhatsApp not configured — set WHATSAPP_* env vars + approve the Meta template.</div>}
+          {!health.email_configured && <div>⚠️ Email sending isn&apos;t set up yet — contact support to switch it on.</div>}
+          {!health.whatsapp_configured && <div>⚠️ WhatsApp sending isn&apos;t set up yet — contact support to switch it on.</div>}
         </div>
       )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -204,7 +204,7 @@ function WhatsAppDelivery({ health }: { health: Health | null }) {
         whether we can see that happening.
       </div>
       <Row good={!!h.whatsapp_configured} label="WhatsApp credentials configured"
-        detail={h.whatsapp_configured ? `template “${h.whatsapp_template || '—'}” (${h.whatsapp_template_lang || 'en'})` : 'set the WHATSAPP_* variables on the server'} />
+        detail={h.whatsapp_configured ? `template “${h.whatsapp_template || '—'}” (${h.whatsapp_template_lang || 'en'})` : 'not set up yet — contact support to switch WhatsApp sending on'} />
       <Row good={!!h.whatsapp_webhook_ready} label="Delivery-status callback wired"
         detail={h.whatsapp_webhook_ready
           ? 'delivered / read / failed are recorded on each send'

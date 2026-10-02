@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
 import { PERIOD_ROUTES } from './uploadRoutes'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 const tones: Record<string, { bg: string; fg: string; label: string }> = {
   ok:      { bg: '#dcfce7', fg: '#166534', label: 'ok' },
@@ -93,7 +94,7 @@ export function UploadTracePanel({ period, uploadType, onClose }:
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{String(r.created_at || '').replace('T', ' ').slice(0, 16)}</td>
                       <td style={{ padding: '6px 8px' }}>{r.source}</td>
                       <td style={{ padding: '6px 8px' }}>{r.upload_type || '—'}</td>
-                      <td style={{ padding: '6px 8px' }}>{r.target_table || '—'}</td>
+                      <td style={{ padding: '6px 8px' }}>{sourceLabel(r.target_table) || '—'}</td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{r.rows_in ?? '—'} → <b>{r.rows_saved ?? 0}</b></td>
                       <td style={{ padding: '6px 8px' }}><span style={{ background: tone.bg, color: tone.fg, borderRadius: 10, padding: '1px 8px', fontWeight: 600 }}>{r.status}</span>{r.skipped ? <span style={{ color: 'var(--text3)' }}> · {r.skipped}</span> : ''}</td>
                       <td style={{ padding: '6px 8px', maxWidth: 180 }}>

@@ -1120,7 +1120,7 @@ async def _ingest_custom_report(report_key, file, period, org_id, rdef=None):
             client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).insert(rows[i:i + 500]).execute()
             saved += len(rows[i:i + 500])
         except Exception as e:
-            raise HTTPException(500, f"Insert into {CUSTOM_IMPORT_TABLE} failed at row {i}: {e}")
+            raise HTTPException(500, f"Saving the custom report failed at row {i}: {e}")
     try:
         client.schema("commcalc").table("upload_log").insert(
             {"org_id": org_id, "file_type": report_key, "period": period or None,
@@ -4355,7 +4355,7 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     kind_col = _landing.stamp_column(table)
     if not _table_has_column(client, table, "org_id"):
         mig = _landing.TABLE_MIGRATION.get(table)
-        raise HTTPException(400, f"commcalc.{table} does not exist yet"
+        raise HTTPException(400, "This report's destination is not set up yet"
                             + (f" — run migration {mig} first" if mig else "")
                             + f". Nothing was written; the '{report_key}' file was not landed anywhere else.")
     kind_scoped = bool(kind_col) and _table_has_column(client, table, kind_col)
@@ -4401,7 +4401,7 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
         if not any(any(k not in always_keep for k in m) for m in mapped):
             _trace("error", 0, "no known columns after mapping — nothing changed",
                    error=f"unknown columns: {', '.join(dropped_columns) or '(none)'}")
-            raise HTTPException(400, f"None of the mapped columns exist on commcalc.{table}. "
+            raise HTTPException(400, f"None of the mapped columns exist in this report's destination. "
                 f"Unknown column(s): {', '.join(dropped_columns) or '(none)'}. "
                 f"Fix the column mapping for '{report_key}' and re-import — no data was changed.")
 
@@ -4567,8 +4567,8 @@ async def upload_mapped(
     require_org(org_id)
     registered = (column_mapping.TABLE_MAP.get(report_key) or "").strip()
     if registered and (target_table or "").strip() and (target_table or "").strip() != registered:
-        raise HTTPException(400, f"'{report_key}' lands in commcalc.{registered} (column_mapping.TABLE_MAP); "
-                                 f"target_table='{target_table.strip()}' contradicts it and was refused — nothing was written.")
+        raise HTTPException(400, f"'{report_key}' already has a registered destination; the destination sent "
+                                 f"with this upload contradicts it and was refused — nothing was written.")
     table = (target_table or registered or "").strip()
     if not table:
         # resolve from report_definitions if the caller didn't pass it
@@ -6050,7 +6050,7 @@ def _intake_billpay_feed(client, org_id):
     return {"processor": proc or None,
             "default_layout": _BILLPAY_FEED_LAYOUT.get(proc) or _intake.REPORT_KEY_BY_KIND["bill_payments"],
             "source": ("metric_source_of_truth" if (msrc or {}).get("processor") else "data_source" if proc else "none"),
-            "note": (None if proc else "no bill-pay processor is configured for this org (metric_source_of_truth / data_source) — "
+            "note": (None if proc else "no bill-pay processor is configured for this org (data-source settings) — "
                                        "pick the layout that matches the report you have")}
 
 
@@ -11753,7 +11753,7 @@ def vendor_rebates(period: str = "", store: str = "", status: str = "", org_id: 
         return {"totals": vendor_rebate_feed.totals([]), "by_period": [], "by_store": [],
                 "by_vendor_account": [], "by_component": [], "status_counts": [], "device_cost": None,
                 "available": False,
-                "note": f"No landed rows yet — commcalc.raw_vendor_rebate is not readable ({e}). "
+                "note": f"No landed rows yet — the vendor rebate history is not readable ({e}). "
                         f"Run migration 1005, then import the report from the Implementation Wizard."}
     if status:
         rows = [r for r in rows if vendor_rebate_feed.settlement_status(r) == status]
@@ -13942,7 +13942,7 @@ def bulk_item_mapping(body: BulkItemMappingIn, org_id: str = ORG_ID):
     sales_category = (body.sales_category or "").strip() if "sales_category" in body.model_fields_set else None
     kpi_category = (body.kpi_category or "").strip() if "kpi_category" in body.model_fields_set else None
     if not item_type and not device_model and sales_category is None and kpi_category is None:
-        raise HTTPException(400, "Provide item_type, device_model, sales_category and/or kpi_category to apply.")
+        raise HTTPException(400, "Provide an item type, device model, sales category and/or KPI category to apply.")
     patch = {"source": "manual", "updated_at": _cb_now()}
     if item_type:
         patch["item_type"] = item_type
@@ -19363,7 +19363,7 @@ def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
                 break
             start += page
     except Exception as e:
-        return {"plans": [], "ready": False, "note": f"raw_mi read failed: {e}"}
+        return {"plans": [], "ready": False, "note": f"The MI & ATU report could not be read: {e}"}
     out = []
     for (plan, carrier_id), cnt in plans.items():
         mrc = installment_engine._catalog_mrc(catalog, carrier_id, plan)
@@ -21332,7 +21332,7 @@ def _validate_rule_overrides(overrides):
     out = {}
     for rid, ov in overrides.items():
         if not isinstance(rid, str) or not rid.strip():
-            raise HTTPException(400, "each override key must be a non-empty commission_rule id string")
+            raise HTTPException(400, "each override key must be a non-empty commission rule id")
         if not isinstance(ov, dict):
             raise HTTPException(400, f"override for rule {rid} must be an object")
         unknown = set(ov) - _OVERRIDE_KEYS
@@ -21823,7 +21823,7 @@ def save_commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, to
     return {"saved": True, "period": period, "plan_id": plan_id, "plan_name": plan.get("name"),
             "reps": len(payload), "totals": res.get("totals"),
             "note": ("Saved the Executive-MTD commission for this plan + period. Standalone record — it does "
-                     "not change rep_commissions or any other payout.")}
+                     "not change the calculated rep commissions or any other payout.")}
 
 
 @router.get("/commission-mtd/{period}/saved")
@@ -26191,7 +26191,7 @@ def update_ma_payment_rule(rule_id: str, payload: dict, org_id: str = ORG_ID):
         sb().schema("commcalc").table("ma_payment_rule").update(updates)\
             .eq("org_id", org_id).eq("id", rule_id).execute()
     except Exception as e:
-        raise HTTPException(500, f"ma_payment_rule update failed: {e}")
+        raise HTTPException(500, f"Updating the payment rule failed: {e}")
     return {"status": "ok"}
 
 
@@ -26204,7 +26204,7 @@ def delete_ma_payment_rule(rule_id: str, org_id: str = ORG_ID):
         sb().schema("commcalc").table("ma_payment_rule").delete()\
             .eq("org_id", org_id).eq("id", rule_id).execute()
     except Exception as e:
-        raise HTTPException(500, f"ma_payment_rule delete failed: {e}")
+        raise HTTPException(500, f"Deleting the payment rule failed: {e}")
     return {"status": "ok"}
 
 
@@ -31537,7 +31537,7 @@ def billpay_coverage(period: str, org_id: str = ORG_ID, tolerance: float = 1.0):
     result.update({"period": period, "org_id": org_id, "billpay_source": source,
                    "processor": (processor or None),
                    "note": (None if collected else
-                            "No daily_closing rows for this period — the collected side is empty, "
+                            "No daily closings for this period — the collected side is empty, "
                             "so coverage cannot be assessed yet.")})
     return result
 
@@ -33534,7 +33534,7 @@ def upsert_expense_system_line(period: str, body: UpsertExpenseSystemLineIn, org
             .eq('org_id', org_id).in_('period', pv).eq('source_key', source_key).execute()
     except Exception as e:
         if _is_missing_col_err(e):
-            return {"ok": False, "error": "store_expenses.source_key column missing",
+            return {"ok": False, "error": "Store expenses can't record their source yet",
                     "hint": "run migration 206_commission_expense_system_line.sql (band 200-299)",
                     "period": period, "source_key": source_key}
         raise
@@ -35222,7 +35222,7 @@ def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "defaul
     prof = _pos_profile(client, org_id, pos_key)
     if prof is None:
         raise HTTPException(400, f"No filename standard is defined for POS '{pos_key}' yet — nothing applied. "
-                                 "Define one (a pos_profile row for that POS) rather than applying another POS's rules.")
+                                 "Define one (a POS profile for that POS) rather than applying another POS's rules.")
     imapd = prof.get("imap_defaults") or {}
     sched = prof.get("schedule_defaults") or {}
     std_rules = prof.get("filename_rules") or []
@@ -37835,7 +37835,7 @@ def merchant_portal_health(org_id: str = ORG_ID):
         rows = (client.schema("commcalc").table("data_source").select("*")
                 .eq("org_id", org_id).execute().data) or []
     except Exception as e:
-        return {"ok": False, "error": f"data_source not ready: {e}", "items": []}
+        return {"ok": False, "error": f"Data-source settings could not be read: {e}", "items": []}
     prows = _crp().load_rows(client, org_id)   # mig 998 — so a closed route reads as route_disabled
     sctx = _connector_scope_ctx(client, org_id)  # mig 1014 — a connector that does not APPLY to this
     # tenant's declared POS / carrier has no session to watch: it is not in the roll-up at all
@@ -41356,7 +41356,7 @@ def device_cost_recon_endpoint(period: str = "", window_months: int = 1, group_b
     # confidently report $0 over zero rows and every delta would read as "the policy invented money".
     if today_ok and not s_ok:
         today_ok, today_map = False, {}
-        today_why = ("the sales basis (raw_sales / daily_sales_feed) could not be read, so today's "
+        today_why = ("the sales basis (monthly sales upload / daily sales feed) could not be read, so today's "
                      "device COGS is unknown for this window — not $0")
     d_rows, d_totals = _dcr.delta_table(today_map if today_ok else {}, rows)
     today_tile = {"available": today_ok,
@@ -43304,7 +43304,7 @@ def _epay_portal_pull(client, org_id):
             cfg = _epay_cfg(client, org_id)
             if not cfg or not cfg.get("portal_user") or not cfg.get("portal_pass"):
                 return {"source": "api", "pulled": 0,
-                        "note": "no epay_sweep_config credentials — auto-pull skipped"}
+                        "note": "no portal credentials saved — auto-pull skipped"}
             rcfg = _registry_report_cfg(client, org_id)
             # sync Playwright cannot run inside this coroutine's event loop — run the sweep in a
             # worker thread (which has no running loop), exactly like /epay/sweep/discover-reports.
@@ -43324,7 +43324,7 @@ def _epay_portal_pull(client, org_id):
             return out
     except Exception:
         return {"source": source, "pulled": 0, "error": "auto-pull failed (swallowed)"}
-    return {"source": source, "pulled": 0, "note": "unknown EPAY_PORTAL_SOURCE; treated as no-op"}
+    return {"source": source, "pulled": 0, "note": "unknown portal source setting; nothing was pulled"}
 
 
 def _epay_recompute_flags(client, org_id, day, tolerance):

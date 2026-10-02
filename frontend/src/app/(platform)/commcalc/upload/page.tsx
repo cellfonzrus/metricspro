@@ -15,6 +15,7 @@ import ShowsIn from '@/components/ShowsIn'
 import { LinkedText } from '@/components/ScreenLink'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // ── WHAT THIS PAGE OFFERS IS COMPUTED, NEVER LISTED (owner directives 2026-09-20; design §7) ──────
 // Owner: "it is very important that we don't have extra file upload paths for a new tenant who does
@@ -556,7 +557,7 @@ export default function UploadPage() {
                       <span style={{ fontWeight: 600, fontSize: 14 }}>{r.label || r.report_key} <span style={{ fontSize: 11, color: 'var(--text3)' }}>↗</span></span>
                       <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 0' }}>
                         Map this report&apos;s columns once in the Implementation Wizard, then import the file there.
-                        {r.target_table ? <> Lands in <code style={{ fontSize: 11 }}>{r.target_table}</code>.</> : null}
+                        {r.target_table ? <> Lands in the {sourceLabel(r.target_table)}.</> : null}
                       </div>
                       <div style={{ color: 'var(--text3)', fontSize: 11, margin: '4px 0 0' }}>({r.report_key})</div>
                     </div>

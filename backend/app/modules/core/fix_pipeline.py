@@ -410,7 +410,7 @@ def compute_cost(tokens_total, rate_row, *, model=None):
     rate = blended_rate(rate_row)
     if rate is None:
         return (None, {"tokens": toks, "model": model,
-                       "reason": "no active core.token_rates row matches this model — set one at "
+                       "reason": "no active token rate matches this model — set one at "
                                  "/admin/fix-requests to price it"})
     cost = round(toks / 1_000_000.0 * rate, 6)
     return (cost, {

@@ -215,7 +215,7 @@ export default function DevicePurchasesPage() {
           </div>
 
           <Card title="By company"
-                note={<>Company comes from the store&rsquo;s assignment (<code>store_companies</code>) through the same
+                note={<>Company comes from the store&rsquo;s company assignment through the same
                       resolver the P&amp;L books with. A store nobody has assigned is shown as
                       <strong> {COMPANY_NOT_MAPPED}</strong> rather than folded into the default company — printing
                       the booking fallback would state a fact we do not have.</>}>

@@ -95,7 +95,7 @@ export default function AccountsDashboard() {
 
       {!health.engine_configured && (
         <div className="card" style={{ padding: 12, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13, color: '#92400e' }}>
-          ⚠️ The Claude narrative engine is not configured — statements compute with exact deterministic numbers, but without the written analysis. Set <code>ANTHROPIC_API_KEY</code> on the backend to enable narratives.
+          ⚠️ The written analysis isn&apos;t switched on yet — statements compute with exact deterministic numbers, but without the written narrative. Contact support to enable it.
         </div>
       )}
 

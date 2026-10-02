@@ -91,8 +91,8 @@ def _log_oversize(path: str, method: str, declared, limit: int) -> None:
             "message": f"Upload rejected: body larger than the {limit // (1024 * 1024)} MB cap"[:1000],
             "detail": {"path": path, "method": method, "limit_bytes": limit,
                        "declared_content_length": declared},
-            "remediation": ("If this was a REAL business file, raise the Railway env var MAX_UPLOAD_MB "
-                            "(currently %d) and redeploy; MAX_UPLOAD_MB=0 disables the cap entirely. "
+            "remediation": ("If this was a REAL business file, ask the platform team to raise the upload "
+                            "size limit (currently %d MB); it can also be switched off entirely. "
                             "If it was not, this is the DoS guard doing its job."
                             % (limit // (1024 * 1024))),
         }).execute()

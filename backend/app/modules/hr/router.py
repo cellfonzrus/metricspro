@@ -1071,7 +1071,7 @@ def onboarding_encrypt_existing(authorization: str = Header(default="")):
     if no key is configured. Safe to run repeatedly."""
     org_id, email, role = _require_hr_or_admin(authorization)
     if not crypto.is_enabled():
-        raise HTTPException(400, "Set FIELD_ENCRYPTION_KEY on the backend first, then run this.")
+        raise HTTPException(400, "Field encryption isn't switched on for this server yet — contact support, then run this.")
     so = _so()
     sens_keys = [f["key"] for f in _public_intake_fields(org_id) if f.get("sensitive")]
     if not sens_keys:
@@ -3294,7 +3294,7 @@ async def onboarding_forward_accounting(employee_id: str, body: OnboardingForwar
     if not emp:
         raise HTTPException(404, "employee not found")
     if not is_configured():
-        raise HTTPException(400, "Email isn't configured (RESEND_API_KEY + NOTIFY_FROM_EMAIL) — can't forward.")
+        raise HTTPException(400, "Email sending isn't set up yet — can't forward. Contact support to switch it on.")
     s = _accounting_settings(org_id)
     emails = _recipient_list(body.emails) or (s.get("accounting_emails") or [])
     if not emails:

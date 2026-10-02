@@ -426,7 +426,7 @@ def shows_in(row, table_map, route_tables=None, landing_tables=None, pl_link=Non
         return {"table": None, "consumers": [], "note": "recorded as received — no table reads it yet (an owner decision names one)"}
     cons = consumers_for_table(t, pl_link)
     return {"table": t, "consumers": cons,
-            "note": None if cons else f"lands in commcalc.{t}; no report reads it yet"}
+            "note": None if cons else "no report reads this upload yet"}
 
 
 def feeds_for_table(table, registry_rows, table_map, route_tables=None, landing_tables=None):

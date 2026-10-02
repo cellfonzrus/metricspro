@@ -4,6 +4,7 @@ import { api } from '@/lib/client'
 import { WorkflowNext } from '@/components/WorkflowNext'
 import { useConnectors } from '@/lib/connectors'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Unified connector registry (SaaS framework Phase 2): every vendor portal + the reports it provides
 // + live sweep status, with a generic run-now. The single source of truth for the data pipeline.
@@ -207,7 +208,7 @@ export default function ConnectorsPage() {
                       <tr key={r.id}>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 13, fontWeight: 600 }}>{r.label || r.report_key}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)' }}>{r.source_name || '—'}{r.report_id ? ` (#${r.report_id})` : ''}</td>
-                        <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, fontFamily: 'monospace', color: 'var(--text3)' }}>{r.target_table || '—'}</td>
+                        <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)' }}>{sourceLabel(r.target_table) || '—'}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)' }}>{r.last_upload ? <span title={`${r.last_upload.rows_saved ?? ''} rows · ${r.last_upload.period ?? ''}`}>{dt(r.last_upload.uploaded_at)}</span> : '—'}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)' }}>{r.period_mode}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)' }}>
