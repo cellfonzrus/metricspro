@@ -90,7 +90,7 @@ check("the shared BLEND would have billed $18 for that same call — exact billi
 
 none_cost, none_basis = au.exact_cost(1000, 1000, None)
 check("a model with NO rate row is UNPRICED (None), never $0", none_cost is None)
-check("...and it says why", "no active core.token_rates row" in none_basis["reason"])
+check("...and it says why", "no active token rate" in none_basis["reason"])
 zero_cost, _ = au.exact_cost(0, 0, opus)
 check("a real zero-token call IS $0 (a true zero differs from unpriceable)", zero_cost == Decimal("0"))
 

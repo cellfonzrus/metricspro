@@ -224,7 +224,7 @@ async def send_approval(to: str, req_id: str, token: str, issue: str, fix: str, 
     recipient taps a button, Meta posts that payload to our webhook, which runs the decision. Returns
     the message id. Requires the 'remediation_approval' template to be APPROVED in WhatsApp Manager."""
     if not approval_configured():
-        raise RuntimeError("WhatsApp approval not configured (WHATSAPP_APPROVAL_TEMPLATE + base creds)")
+        raise RuntimeError("WhatsApp approvals aren't set up yet — contact support to switch them on.")
     to = _to_number(to)
     msg = {
         "messaging_product": "whatsapp", "to": to, "type": "template",
@@ -282,7 +282,7 @@ async def send_otp(to: str, code: str, purpose: str = "verification") -> str:
     (Meta delivers text only inside the 24h service window → cold sends may silently not arrive). Marks
     UNCONFIRMED in the handoff. Returns the message id; raises RuntimeError on a hard send failure."""
     if not is_configured():
-        raise RuntimeError("WhatsApp not configured (set WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)")
+        raise RuntimeError("WhatsApp sending isn't set up yet — contact support to switch it on.")
     to = _to_number(to)
     if settings.WHATSAPP_OTP_TEMPLATE:
         msg = {
@@ -349,7 +349,7 @@ async def send_document_detailed(to: str, data: bytes, mime: str, filename: str,
     Returns {"message_id", "route" (the rung that succeeded), "planned", "window_open", "attached"}.
     Raises only if EVERY planned attempt failed. See the module docstring for the 24h-window rationale."""
     if not is_configured():
-        raise RuntimeError("WhatsApp not configured (set WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)")
+        raise RuntimeError("WhatsApp sending isn't set up yet — contact support to switch it on.")
     if window_open is None:
         window_open = await resolve_window_open(to)
 
@@ -404,7 +404,7 @@ async def account_info(timeout: float = 12.0) -> dict:
     {"ok": False, "error": ...} so a diagnostics page can render it."""
     if not is_configured():
         return {"ok": False, "configured": False,
-                "error": "WhatsApp not configured (WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)"}
+                "error": "WhatsApp sending isn't set up yet — contact support to switch it on."}
     fields = ("display_phone_number,verified_name,quality_rating,code_verification_status,"
               "name_status,platform_type,throughput,id")
     try:

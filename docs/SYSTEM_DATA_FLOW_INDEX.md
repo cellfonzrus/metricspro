@@ -57,6 +57,7 @@ Primary code homes:
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
 | 19.31 | **One activation count · Feed vs Transactions** | "How many new activations, and says who? What does the carrier's report claim against what the store's transactions say, and what accounts for every difference — a counting definition, a stale feed slice, or nothing?" |
 | 19.32 | **Daily port-out fraud report** | "Which port-in activations ported out again before they paid for themselves, how much was sold alongside them, and — said in the same breath — how many could we not decide about at all?" |
+| 19.38 | **No database / hosting names in customer copy** | "Why does a page / toast / tooltip / API message say `raw_comp_report`, `commcalc.store_mapping`, `RESEND_API_KEY` or \"Railway\" — and what stops the next one?" |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
@@ -3943,6 +3944,10 @@ neutral noun in the neutral line (`posDeclared` is the term's fact, as in #262).
   `219`, `249_commission_store_resolution.sql`; per-org store_code mig `406`. Endpoints `/store-aliases`
   `router.py:14278,14305`, `/store-resolution` `14296`, `/store-unmatched` `14518`, `/stores` `14254`,
   `/markets` `14246`. **Frontend:** `commcalc/store-match/page.tsx`.
+  **The INVARIANT this chain must satisfy is §13d: one physical store, ONE canonical key.** A
+  `store_mapping` row with no real address (or no row at all) gives the chain nothing to collapse
+  onto and the store's money splits in two — audit it with
+  `account/store_identity_audit.py::audit`, never by eye.
 
 ### 13a. CANONICAL STORE→MARKET RESOLUTION — the once-for-all contract (owner directive 2026-09-03)
 
@@ -4222,6 +4227,9 @@ as a market-grant keyset member; ambiguity fails closed):
   they are dropped. The pre-fix HR row had one 💾 per slice; pressing Lunch left typed rates unsent. Lock
   `backend/harness_row_save_lock.py`, proof `frontend/prove_row_save.mjs`; the StoreOps setup grids are the ratchet
   `frontend/row_save_pending.txt`.
+  **A 2xx is not proof (§19.37, 2026-10-02):** each slice declares `echo` (the reply keys carrying the stored
+  values) and `rowSave.runRowSave` counts a slice saved only when `notPersisted` finds nothing — a field the server
+  names in `pay_fields_ignored`, leaves out, or stored differently fails the save by name. Lock §8 of the same harness.
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
@@ -4307,6 +4315,72 @@ as a market-grant keyset member; ambiguity fails closed):
   - **Proof:** `backend/harness_workforce_report_registry.py` (stdlib-only; entry shape, registry
     splice/key-uniqueness by AST, resolver delegation, end-to-end builders with the REAL
     `strip_pay`, tax-twin vectors, validator).
+### 13d. STORE IDENTITY — one physical store, ONE canonical key (owner directive 2026-10-02)
+
+**Owner (verbatim):** "the store code mapping is not right, 1800 and 1115 are showing up twice."
+
+**The class.** A store's identity is asserted in THREE tables and nothing required them to agree:
+`storeops.stores` (the roster — which stores exist), `commcalc.store_mapping` (the canonical
+ADDRESS per code, which is what the resolver reads) and `commcalc.store_aliases` (POS spellings →
+code). `account.coa.store_resolver` (§13) can only COLLAPSE spellings onto an address that
+`store_mapping` **already carries**, so a store whose mapping row holds no real location — or that
+has no mapping row at all — has nothing for its other spellings to land on. Its spellings resolve to
+DIFFERENT keys and its money reads as two stores. **Nothing errors; the totals just split.**
+
+| shape | live instance | why the resolver splits it |
+|---|---|---|
+| `store_mapping.store_address` holds the store CODE | `B-1800` → `'B-1800'` | no address to collapse onto; the confirmed alias `'1800 Great Neck rd'` lands on a *second* key |
+| no `store_mapping` row at all | `B-1115`, `B-60TH` | the alias→address step needs the code to be IN `store_mapping`, so the confirmed alias is **inert** |
+
+- **The one home of the invariant:** `app/modules/account/store_identity_audit.py` —
+  `is_placeholder_address(code, address)` (the placeholder rule: blank, or nothing but the code),
+  `spellings_for_code`, `known_codes`, `audit(resolve, mapping_rows, store_rows, alias_rows)` →
+  findings (`placeholder_address` / `roster_without_mapping` / `split_keys`), `format_findings`.
+  `audit()` returning `[]` IS the invariant. It takes the **REAL** `resolve` and never
+  re-implements resolution, so the audit cannot drift from the thing it audits, and CI (fixtures)
+  and the live runbook check the SAME fact with no second copy.
+  The `_key` / `_squash` split is load-bearing: a code DERIVED from its address by deleting the
+  spaces (`1800GreatNeckRd` / `'1800 Great Neck Rd'`) is **not** a placeholder — an alnum-only
+  compare called it one, and the harness caught that before the audit shipped.
+- **The repair — ONE path, not two:** runbook
+  **`database/runbooks/store_identity_merge_1800_1115.sql`** (owner-run in the SQL editor; **no SQL
+  applied by any commit**). Steps 1 / 2 (B-1800's placeholder → `'1800 Great Neck Rd'`; the `B-1115`
+  mapping row it never had) plus the dealer-door attachment landed in **#346**; **step 2b** adds the
+  `B-60TH` sibling (`'1 S 60th street'`, B-1's existing canonical address). Every address is taken
+  from a row the database already holds — none is invented. Idempotent, `-- REVERT:` noted per step.
+  Afterwards the junk code `1800GreatNeckRd` is a harmless code-alias on the same canonical address
+  rather than a rival key.
+  **There is deliberately no migration for this.** #346 established the runbook as the repair path;
+  a migration repeating its UPDATE/INSERT would be the sibling derivation the duplicate rule forbids
+  (two paths writing the same rows WILL drift). The harness pins the runbook's own statements, so
+  the fix and its proof cannot diverge.
+- **`B-60TH` is real money, not a theoretical split** (measured live 2026-10-02): 15
+  `commcalc.store_expenses` rows keyed `'B-60TH'` totalling **$11,949.67** (August 2026) sit on a
+  different identity from every sales row, which carries `'1 S 60th street'` (raw_sales 7,805 /
+  daily_sales_feed 4,758). The expense side is the reason a mapping ROW is required and an alias is
+  not enough: **`coa.store_code_to_address` builds its code→address map from `store_mapping` ALONE
+  and never reads `store_aliases`.**
+- **`B-60TH` was NOT in the report.** The class sweep found it in the identical shape and it is
+  repaired in the SAME migration — fixing one instance and leaving its sibling is the patchwork the
+  house rules forbid.
+- **REPORTED, deliberately NOT repaired:** `B-2778` (PA) and `Cellular Services` carry a placeholder
+  address whose real location is **nowhere in the database**. The audit reports them and the harness
+  pins that they stay reported. Inventing a street address to clear a finding would be the "write
+  code that hides it" the house rules forbid — these two need the owner to say what the addresses
+  are.
+- **Verified against the LIVE tenant (2026-10-02, read-only), all four orgs:** findings **8 → 2**
+  with the runbook applied in memory. The two left are the pair above. The other three orgs
+  (incl. luxelink, 39 mapping / 20 roster / 38 alias rows) were already clean and are untouched —
+  luxelink's 19 code-pairs that share a street number all point at the SAME address, so they
+  collapse to one key and are not this defect.
+- **Proof / lock:** `backend/harness_store_mapping_identity.py` — **39 checks**, DB-free
+  (`_harness_dbfree` tripwire), over the **REAL** `coa.store_resolver`: §A reproduces the live split
+  for all three stores, §B pins the repair (4 / 3 / 4 spellings → ONE key each), §C the negative
+  controls (undo any ONE repair and that store is split again), §D the audit's own truth table incl.
+  the `1800GreatNeckRd` regression, §E no collateral merge (every store the runbook does not name
+  resolves BYTE-IDENTICALLY before and after). CI job `store-identity-proof` in
+  `carrier-vocab-guard.yml`.
+
 ### 14s. SALARY → STORE EXPENSES: the write path, and the THREE hours states (owner directive 2026-09-08)
 
 **Owner (verbatim):** "then we need to pull the exact salaries paid as per the schedule and update
@@ -5008,6 +5082,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
 | Actor columns stamped by `router._caller_uid` — `installment_category_rule.updated_by` (**UUID**, mig 245), `plan_installment_schedule.updated_by` + `plan_installment_schedule_audit.changed_by` (mig 210), `commission_org_config.updated_by` (mig 201), `discrepancy_results.appealed_by` (mig 947), `commission_payout_ledger.recorded_by` (mig 267), `ingest_store_guard.updated_by` / `ingest_store_quarantine.decided_by` (mig 280), `targets.updated_by` (mig 006), `financing_target.updated_by` (mig 272) — **who did this: a uid or NULL, never a sentinel** (§19.34) | the plan-installment / category / matcher / payout-config / expected-commission editors, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, the ingest-guard + targets + financing-target saves — all via ONE helper `_caller_uid` (`_mpc_who` / `_xc_who` / `_agency_who` dereference it) | the UI through ONE display rule `frontend/src/lib/actor.ts::actorLabel` (NULL / legacy `'web'` → "system"); lock `harness_actor_uid_lock.py` |
 | `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
@@ -5151,9 +5226,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
-| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
+| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
-| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
+| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards**, **store IDENTITY — §13d: one physical store must resolve to ONE canonical key; the invariant's one home is `account/store_identity_audit.py::audit` (placeholder address / roster-without-mapping / split keys), locked by `harness_store_mapping_identity.py` (CI `store-identity-proof`); repair = the owner-run runbook `store_identity_merge_1800_1115.sql` (#346 + the B-60TH step), deliberately NOT a second migration** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
 | `storeops.salary_expense_config` (mig `435` — RULE TWO: `line_label`, `expense_type`, `book_scheduled_fallback`, `book_no_data_as_zero`) | one row per org, house defaults seeded; absent row == house defaults | `storeops.router._salary_expense_config` → `salary_expense.resolve_config`. §14s |
@@ -5196,6 +5271,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| **Every JSON response** (no route added) — a MESSAGE-key value carrying a RUNTIME database / hosting error (`setup_notice.SYSTEM_INTERNAL`: duplicate key, violates … constraint, permission denied for table, an error dict `'code': '23505'`, `postgrest…APIError`, a `*.supabase.co` host) reaches a non-super-admin as `SYSTEM_NOTICE` from that sentence on; data rows never read; the original to the server log | `core/setup_notice.SetupNoticeMiddleware` (unchanged registration) | §19.38 |
 | **Every JSON response** (no route added) — a MESSAGE-key value (`detail`, `note`, `hint`, `error`, … — `setup_notice.MESSAGE_KEYS`, never a data row / list) carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; data cells are never read; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
@@ -5336,7 +5412,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /hr/compensation` (pay-gated: `pay_rate`/`base_salary`/`total_comp`/`annualized` stripped; commission stays — commcalc's own gate domain) | `hr/router.py:334` | §14 |
 | `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
 | `GET /storeops/employees` (roster; pay-gated 2026-09-10 — a `select("*")` that shipped every `pay_rate`/`pay_amount`; `pay_basis` kept) | `storeops/router.py:201` | §14 DM sweep |
-| `PATCH /storeops/employees/{id}`, `PUT /storeops/employees/{id}/lunch-config`, `PUT /storeops/employees/{id}/face-config` — browser callers from a row editor build the request ONLY in `frontend/src/lib/employeeRowSlices.ts` and send it through `lib/rowSave.ts::planRowSave` (one Save per row, every edited slice; no endpoint changed) | `storeops/router.py::update_employee` / `set_employee_lunch_config` / `set_employee_face_config` | §19.35 |
+| `PATCH /storeops/employees/{id}`, `PUT /storeops/employees/{id}/lunch-config`, `PUT /storeops/employees/{id}/face-config` — browser callers from a row editor build the request ONLY in `frontend/src/lib/employeeRowSlices.ts` and send it through `lib/rowSave.ts::planRowSave` (one Save per row, every edited slice; no endpoint changed); a slice is saved only when its reply proves every field stored (`rowSave.notPersisted` over the slice's `echo` + `NOT_SAVED_KEYS` = `pay_fields_ignored`) | `storeops/router.py::update_employee` / `set_employee_lunch_config` / `set_employee_face_config` | §19.35, §19.37 |
 | `GET /storeops/employees?all_company=true` (**ROSTER REACH** 2026-09-13 — resolves `core.scope.roster_keyset`, not the reporting span; never returns an empty roster) | `storeops/router.py:201` → `_roster_keyset_for:7744` | §29 |
 | `GET /storeops/employees/visible` (dashboard picker; store/market resolution converged onto the SAME `roster_keyset` 2026-09-13 — reach ladder unchanged) | `storeops/router.py:8087` | §29 |
 | `GET /core/grant-universe` → `scheduling.roster_reach`/`roster_stores`/`roster_why` (why THIS login's employee picker is bounded) | `core/router.py` (`_grant_universe`) | §29 |
@@ -5447,8 +5523,11 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
+| **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`; `B-2778` / `Cellular Services` reported, address unknown |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
-| **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) |
+| **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
+| **Did the server actually STORE what an employee-row Save sent?** (vs a 2xx whose gate dropped a field) | the endpoint's reply: `update_employee`'s `UPDATE … RETURNING` row + `pay_fields_ignored`; the lunch / face configs' saved columns | `frontend/src/lib/rowSave.ts::notPersisted` (`NOT_SAVED_KEYS`, `sameStoredValue`) over each slice's `echo` in `lib/employeeRowSlices.ts`, applied by `runRowSave`; lock `harness_row_save_lock.py` §8, proof `prove_row_save.mjs` §V (§19.37) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
 | **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
@@ -5607,6 +5686,116 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.38 **A DATABASE OR HOSTING NAME IN CUSTOMER-FACING COPY — the §19.36 home, extended to the class it named (owner 2026-10-02; fixed).**
+Owner: *"hide database names from the users"*. §19.36 removed MIGRATION names and named what it left unlocked: env-var
+names, hosting vendors, raw table names in tooltips (the ePay sweep checkboxes said `→ raw_comp_report`).
+**The class, not the instance:** an internal STORAGE or INFRASTRUCTURE identifier reached rendered copy or an API
+message — a schema-qualified table (`storeops.manual_hours entries — …`, `commcalc.store_mapping`), a bare table /
+view identifier (`raw_sales`, `raw_mi`, `rep_commissions`, `carrier_commission`, `store_mapping`), a table the API
+sends as DATA rendered as it came (`{r.target_table}`, `<code>{sb.table}</code>`, `count of ${s.table}`), an
+environment-variable name (`RESEND_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `WHATSAPP_*`, `ANTHROPIC_API_KEY`,
+`VISION_AUDIO_ENABLED`), a hosting vendor ("on Railway", "Supabase", "Postgres 42501"), and — at run time — the
+database's own error text interpolated into a message (`detail=f"save failed: {e}"` → "duplicate key value violates
+unique constraint …", `{'code': '23505', 'details': 'Key (org_id, code)=…'}`).
+**Checked first and reused (duplicate gate):** §19.36's whole mechanism — `core/setup_notice.py` (same module, same
+`MESSAGE_KEYS`, same `neutralize` walk that never enters data lists, same `SetupNoticeMiddleware` boundary, same
+super-admin gate `core.router._require_super_admin`), the same lock file and CI job (`harness_carrier_vocab_guard.py`,
+`carrier-vocab-guard.yml`), the same display-copy extractor (`display_copy`), the same comment / `detail=` handling
+(`_setup_code`), the same NAV-verified super-admin excusals (`SETUP_SUPER_ADMIN_PAGES` + the operator tree) and the same
+backend emission finder (`setup_emissions` judged under `is_message_key`). The vocabulary is DERIVED, never listed:
+tables / views / schemas from every `CREATE` in `database/migrations` plus `data_lineage_registry.all_ingest_tables()`
+(the ONE place code names a feed table); env names from `config.Settings` fields + every `os.getenv` / `os.environ` /
+`_env` read in `backend/app` + every `process.env` read in `frontend/src`. A feed's plain name follows the existing
+report-kind registry labels (`report_kinds.HOUSE_KINDS`) and the MA pull registry's display names (`report_pull.py`) —
+no new vocabulary was invented.
+
+| Side | Home | What it does |
+|---|---|---|
+| backend | `app/core/setup_notice.py` — **`SYSTEM_INTERNAL`** (runtime DB / hosting error by SHAPE: duplicate key / violates … constraint / null value in column / permission denied for table / invalid input syntax / value too long / statement timeout / deadlock / SQLSTATE / an error-dict `'code': '23505'` / `postgrest…APIError` / a `*.supabase.co` · `*.railway.app` · `*.vercel.app` host), **`is_system_internal`**, **`SYSTEM_NOTICE`** ("Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."); `neutralize_text` replaces the first such sentence AND the rest of the text (the error's `details` / `hint` tail) — a setup hint keeps precedence (→ `SETUP_NOTICE`); `_MARKERS` carries the new shapes | the runtime boundary — the only part that cannot be reworded at source; data rows still never read |
+| frontend | `frontend/src/lib/sourceLabels.ts` — **`sourceLabel(table)`**: a feed's plain name ("MI & ATU report", "monthly sales upload", "Comprehensive comp report", "calculated rep commissions" …); an unknown table still never prints as an identifier (`raw_` dropped, underscores → spaces) | every page that names a feed in copy, or renders a `target_table` / `source_table` / `table` the API sent |
+| both | words reworded AT SOURCE — 80 frontend sites in 43 files (+ the new `lib/sourceLabels.ts`), 83 backend message strings in 37 modules | see the PR's before/after table |
+
+**Swept (frontend):** accounts (+ companies, device-purchases), closing auto-import setup, commcalc commission-explain /
+-import / -ledger (incl. the MA feed availability line that printed table keys) / reports / payout-plans /
+payout-schedules / plan-installments / planMatch / commissionExport / accessory-definition / gp-category-map / kpi /
+exec-mtd / sales-report / expenses / whatif / schematic / vip / epay sweep tooltips / connectors / daily-commission /
+report-mappings / upload / ma-upload / ma-handsets / ma-overview-recon / ingest-guard / email-imports /
+inventory-sold-recon / device-cost-recon (+ its export column) / UploadTracePanel / ShowsIn, onboarding intake
+stage 2, pos onboarding, notify (email + WhatsApp setup), payroll Actual-Hours drill-down, vision settings, the
+training flowchart (carrier implementation), the Roles editor help text (`rbac.ts`).
+**Swept (backend):** the closing / pay-visibility 403s (`storeops.tenants.*_roles` → "the … roles in the company
+settings"), Google-sheet / email / WhatsApp / field-encryption / vision "not configured" errors (env names → "isn't
+set up yet — contact support"), Store Mapping messages in the commission engine, closing health checks, attention
+items, payout-accrual / plan-options / what-if / labour-coverage / MA-overview notes, the upload-path refusals
+(`commcalc.{table}` → "this report's destination"), failure-log `remediation` texts that a tenant admin reads on
+`/failures` (Railway / `core.failure_log` / `storeops.tenants.money_guard_config`), the AI token-rate reasons.
+**Excused by name (verified, stale FAILS):** the §19.36 super-admin pages and the operator console; plus
+`INFRA_SUPER_ADMIN_PAGES` = `/admin/tenants` (Super Admin Toolbox — its tenant-isolation switches ARE env vars; verified
+platform-only at every NAV occurrence). Reviewed backend allow (`INFRA_BACKEND_ALLOW`): the identity-outage
+`failure_log` row in `core/tenant_middleware.py` — written under the PLATFORM org, its remediation names the
+`IDENTITY_BACKEND_503` break-glass on purpose (`harness_identity_backend_503` pins it).
+**Lock** `harness_carrier_vocab_guard.py` §INFRA (`infra_guard`, run by `main()` beside §SETUP; CI
+`carrier-vocab-guard.yml`, whose paths now include `database/migrations/**`): (R1) the registries derive non-empty;
+(1) frontend — an identifier of the four classes in any display segment (string literal, JSX text, prose line, a lone
+`<code>TOKEN</code>`), or a `target_table` / `source_table` / `table` field rendered without `sourceLabel()`, FAILS
+outside the excusals; (2) backend — every string emitted under a MESSAGE key is read AFTER the boundary
+(`neutralize_text`) and FAILS if it still names one; (IW1–IW4) `neutralize_text` dereferences `is_system_internal`,
+the prefilter carries its markers, every `sourceLabels.ts` key is a registered table, the scan dereferences
+`display_copy`; boundary S1–S7 DB-free (a PostgREST duplicate-key dict in `detail` → lead sentence + `SYSTEM_NOTICE`,
+logged, super admin sees it; seven runtime shapes; setup precedence; the app's own "Duplicate store code" /
+"Permission denied: your role…" untouched; data rows saying "duplicate key…" / `raw_mi` / "Supabase" byte-identical);
+P4–P5 performance (a 5 MB body whose rows carry those words is never parsed; each static scan < 30 s); controls
+I1–I18 (I1 = the shipped `→ raw_comp_report` tooltip put back → RED; I6 = ALL-CAPS carrier codes `ATU_MI` / `TWP_ALL` /
+`BYOD_ACT` / `MA_TX` → GREEN; I7 = identifiers used as code → GREEN; I10 = a super-admin page → GREEN; I14 = a hint the
+boundary replaces whole → GREEN; I15 = a table name as DATA under a non-message key → GREEN).
+**Not covered (stated, not hidden):** column names shown as prose (no derivable registry — a column is also how a
+carrier report header is spelled; the flowchart's `carrier_id` / `connector_id` were reworded by hand); a table
+name a page renders from a field NOT named `target_table` / `source_table` / `table`; a backend string reaching a
+client through a helper's argument or a non-message key (the §19.36 emission finder's reach); DB data rows that
+carry an identifier (e.g. the System Schematic's lineage rows — data, never rewritten); the word "env var" itself.
+
+§19.37 **A 2xx IS NOT PROOF — an employee-row save counts only what the server's reply shows it STORED (owner
+report 2026-10-02, Vzone, second time: "Pay is updated"; the data said otherwise).** **Evidence (live, read-only,
+2026-10-02):** Vzone `f4f1c16e…` E240 / E277 / E278 / E279 still `pay_rate = 0`, `pay_basis = 'hourly'`; no
+`pay_rate` / `pay_basis` / `pay_amount` row in `storeops.payroll_change_log` for ANY org since 2026-09-29. `core.access_log`
+answers why: after #325 merged (2026-09-29 18:47 UTC) the Vzone org received **35 requests in total, all 19:04:01–19:05:39
+UTC that day (onboarding / POS pages), and none since** — no roster read (`GET /storeops/employees`), no
+`PATCH /storeops/employees/{id}`, from anyone. The Vzone admin login (`ss@1313global.us`, an admin in four tenants)
+has since worked in Cellfonz R Us, NY LOGISTICS and Luxelink (roster reads in those three; roles edits), and has sent
+**no employee PATCH to any tenant** since 2026-09-29 18:34 UTC; no PATCH to employee 238/240/277/278/279 exists in any
+org, at any status. **Root cause of the report: not code — no save of the Vzone rates has reached the server since
+#325 shipped**; the rates must be entered in Vzone and saved (the owner's steps are in the PR). **What the trace DID
+find (fixed here, the class asked about):** `rowSave.runRowSave` counted ANY 2xx as "saved", and
+`storeops/router.py::update_employee` deliberately answers **200** when its pay-visibility gate drops pay fields
+from a mixed body (it writes the rest and names them in `pay_fields_ignored`). Nothing read that key. So on Roles &
+Access, a caller below the org's pay line who typed Pay $/hr in the ✏️ Edit panel and pressed Save got
+**"Saved details for …"**, and the typed rate became the row's last-saved snapshot — on screen until the next load.
+(HR → Employees & Pay was not exposed: its pay slice is all-gated, so the same caller gets a 403, already shown.)
+**The class:** a save reports success from the HTTP status, not from what was stored. **The design fix (one home,
+dereferenced):** every slice in `frontend/src/lib/employeeRowSlices.ts` declares `echo` (request key → the key of
+the endpoint's REPLY that carries the stored value: the PATCH's `UPDATE … RETURNING` row, the lunch / face configs'
+saved columns); `frontend/src/lib/rowSave.ts::notPersisted` fails a field the reply names in `NOT_SAVED_KEYS`
+(`pay_fields_ignored`), does not carry, holds a different value for, or has no echo key for; `runRowSave` counts a
+slice saved ONLY when that is empty, otherwise reports it failed BY FIELD ("details NOT saved (pay_rate: the server
+refused to write it …)") and the row stays visibly unsaved. The read-back IS the reply: the stored row the UPDATE
+returned, folded back by `commitSaved`. Every caller is on the engine (HR → Employees & Pay, Roles & Access). **No
+endpoint changed** — the 200-with-names contract was sound, the client ignored it. **Siblings checked:**
+`bulk_payscale` (POST `/employees/bulk-payscale`, manager-gated, returns `updated` + per-row `errors`, which HR's
+upload message shows — not this class); the three StoreOps grids (`storeops/admin`, `storeops/employees`,
+`storeops/setup/employees`, ratchet `row_save_pending.txt`) send no pay field and no gated field, so nothing is
+dropped with a 200 there (their success is still status-based — moving them onto the engine retires that);
+`PATCH /hr/employees/{id}` delegates to `update_employee` (same reply) and has no browser caller. **Reported, not
+fixed here (another class, owner decision):** `POST /storeops/employees`, `POST /storeops/employees/bulk` and
+`POST /hr/employees` write `pay_rate` with NO pay gate at all (create paths), unlike the PATCH and bulk-payscale —
+rule 4 says pay writes are gated server-side. **Lock:** `backend/harness_row_save_lock.py` §8 (CI job *One row, one
+save*) — every `EMP_*_SLICE` declares an `echo` whose reply keys are exactly its `fields`; `RowSlice.echo` is
+required; `runRowSave` calls `notPersisted` before its single `.saved.push`; every `…_ignored` reply key in
+`storeops/router.py` / `hr/router.py` is in `NOT_SAVED_KEYS`; every slice user runs `runRowSave`; planted controls
+7g–7j. Run against `main` it fails 9 checks (8b ×5, 8c, 8d, 8f, 8h). **Proof:** `frontend/prove_row_save.mjs` §V
+(62 checks total): the owner's exact case — admin, hourly, E278 `pay_rate` 0 → 18 — plans one PATCH with 18, the
+reply shows 18 stored, saved and clean; the gate-drop reply was "Saved details" under the transcribed pre-fix engine
+and is now "details NOT saved (pay_rate …)"; a 200 that kept 0, and a bare `{ok:true}`, are not saved.
 
 §19.36 **A MIGRATION NAME IN CUSTOMER-FACING COPY — "setup isn't finished" has ONE home (owner 2026-09-29; fixed).**
 Owner, on Admin → Display Labels (*"Needs migration 068_ui_label_override.sql. Edits show on the next sidebar load."*):
@@ -14619,7 +14808,7 @@ helper never breaks a money report. An unresolved uid is **absent** from the map
 
 ### 47.3 Lock
 
-`backend/harness_envelope_receipt_basis.py` — **126 checks** (52 at 2026-10-01, +74 for the wiring class
+`backend/harness_envelope_receipt_basis.py` — **141 checks** (52 at 2026-10-01, +89 for the wiring class
 in §47.8, +21 for the naming class in §47.9), stdlib, DB-free, run by
 `carrier-vocab-guard`. Fails the build on: a second basis formula; a basis key or label spelled on the
 screen or in the router; the default drifting off the historical figure; an unknown basis folding to
@@ -14741,27 +14930,42 @@ text only) spelling `ePay` or `VidaPay`, a mix of log lines and genuine reader-f
 copy that should resolve through `report_labels.carrier_term`; separating the two is a judgement call per
 site, not a sweep, so it is **reported, not touched**. Deciding it needs the owner.
 
-### 47.8 The selector was correct and read ZERO — the unwired thing was a SELECT LIST (owner 2026-10-02; fixed)
+### 47.8 The ePay basis read $0 on every envelope — the column the math needed was never fetched (owner 2026-10-02)
 
-Owner: the Management Envelope Receipt showed **bill-payment cash 0.00 on every line**, while the
-store-cash basis showed the **whole drawer, bill payments included**. Both at once, for every store and
-every day since the selector shipped.
+> Owner: *"the store pay and the epay in the management review report is not coming correct, the system
+> shows nothing for epay cash - all entries are zero and the store cash shows total of both"*
 
-**Nothing in §47.1 was wrong.** `expected_cash` dereferenced `deposit_recon.cash_for_basis` exactly as
-written; the three formulas were right; the labels resolved. The defect was one level down: **both
-callers of `expected_cash` hand-spelled a `daily_closing` column list that omitted `epay_on_cash`** —
-the split's only input. `.get()` cannot tell *"0 dollars"* from *"never fetched"*, so the three formulas
-silently collapsed to one:
+Both halves of that sentence are one cause, and it was introduced by §47.1 itself. `expected_cash` reads
+`epay_on_cash`; the endpoint's **hand-written** `.select(...)` never fetched it. PostgREST omits an
+unselected column, so `r.get("epay_on_cash")` was `None` on every row and `_f(None)` is `0.0`:
 
-| basis | what it computed with `epay_on_cash` absent | what the reader saw |
+| basis | formula | what shipped |
 |---|---|---|
-| `total_cash` | `t_cash` | correct (which is why nobody noticed) |
-| `store_cash` | `max(t_cash − 0, 0)` | **the whole drawer**, bill payments included |
-| `bill_payment_cash` | `0` | **0.00 on every line, every store, every day** |
+| `total_cash` *(default)* | `t_cash` | **correct** — which is why it went unnoticed |
+| `store_cash` | `t_cash − epay_cash` | `t_cash` → *"the store cash shows total of both"* |
+| `bill_payment_cash` | `epay_cash` | `0.00` → *"nothing for epay cash"* |
 
-**THE CLASS is §19.18's for the fifth time** — a mechanism written and its callers left unwired — in its
-quietest form yet: the unwired thing was a *query*, and a column nobody asked for reads back as a
-perfectly legitimate zero. No exception was raised, no test failed, and the number was plausible.
+Reproduced on B-559 2026-09-07 (`t_cash` 1002, `epay_on_cash` 230): store basis **1002.00** and bill-pay
+basis **0.00**, where they must be 772.00 and 230.00. After the fix all three read correctly and
+**772.00 + 230.00 = 1002.00** reconciles.
+
+**THE CLASS, not the column:** a pure function's input column was decided in one file and fetched in
+another, with nothing tying them together. So the column list is now a fact of the module that *knows
+what it reads* — `envelope_report.CLOSING_COLUMNS` — and the endpoint builds its select from it
+(`.select(",".join(envelope_report_mod.CLOSING_COLUMNS))`). Adding a future basis input adds it to the
+query by construction; it cannot be read as zero.
+
+**Lock (`harness_envelope_receipt_basis.py`, 82 checks when #345 shipped, **141** after the reconciliation below).** The new §E2 rules are **behavioural, not
+spelling**: a row rebuilt from *only* `CLOSING_COLUMNS` must still produce three **different**, correct
+bases that reconcile, every member of `BASIS_INPUT_COLUMNS` must be in `CLOSING_COLUMNS`, the endpoint
+must dereference it and must no longer spell a column list of its own, and no column may be fetched that
+nothing reads. Control I3 reproduces the owner's screen exactly — drop `epay_on_cash` from the fetch and
+the store basis returns to the whole drawer, the ePay basis to zero, and the default basis stays right.
+
+**No migration. No money moved** — the stored `counted_amount` and every chargeback are untouched; this
+changes only which declared figure the receipt compares against.
+
+**WHAT THIS CHANGE ADDED ON TOP OF THE SHIPPED FIX.** The same defect was fixed twice, independently, in one afternoon (#345 landed on `main` while this branch was in review). The two fixes agreed on the diagnosis and on the home; this is what survived the reconciliation, with the duplicate `CLOSING_COLUMNS` the merge would otherwise have left in the module removed.
 
 **THE DESIGN FIX — one fact, one home, dereferenced.** The columns a pure reader dereferences now live
 BESIDE that reader: `envelope_report.CLOSING_COLUMNS` (and `CLOSING_SELECT`, derived from it), and every
@@ -14834,7 +15038,7 @@ drawer rather than from the two-meaning column.
 `dm_store_cash` key is unchanged; no migration. What changed is which figures the screen RENDERS and
 what they are called.
 
-**LOCK** (§47.3's harness, sections I1–I4, 90 → **126 checks**): `cash_components` is the split and IS
+**LOCK** (§47.3's harness, sections I1–I4, 90 → **141 checks**): `cash_components` is the split and IS
 `cash_for_basis`; the envelope receipt and `/closing/summary` both dereference it; an AST scan proves
 **exactly one** place in the closing module derives "a cash total minus something ePay"
 (`deposit_recon`'s own `_f(t_cash) - _f(epay_cash)`) and the router, the receipt, the overlay and

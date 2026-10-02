@@ -1301,7 +1301,7 @@ def _masked_500(client, org_id, source, exc):
             "org_id": org_id or ORG_ID, "category": "system_error", "severity": "error",
             "source": str(source)[:200], "message": f"Auth error [{ref}] at {source}"[:1000],
             "detail": {"ref": ref, "error": str(exc)[:1200]},
-            "remediation": "Search core.failure_log for this reference id to see the internal detail.",
+            "remediation": "Search the failure log for this reference id to see the internal detail.",
         }).execute()
     except Exception:
         pass
@@ -1548,7 +1548,7 @@ FAILURE_TYPES = {
                         "(all-$0, or a near-total wipe of an existing balance) — the 2026-07-13 $0-incident "
                         "shape. The tenant's data was LEFT AS-IS. A $0 result is almost always missing input "
                         "(no plan assignment / empty source file), not a real zero — fix the input then re-run. "
-                        "If the write is legitimately zero, adjust storeops.tenants.money_guard_config."),
+                        "If the write is legitimately zero, ask support to adjust the company's money-guard setting."),
     },
     "other": {"label": "Other", "severity": "warning",
               "remediation": "Review the detail and resolve manually."},

@@ -1362,7 +1362,7 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
             return {(r.get(col) or "").strip().lower()
                     for r in _page(c, "pos", table, col, org_id) if (r.get(col) or "").strip()}
         except Exception as e:
-            raise HTTPException(503, f"could not read pos.{table} — {e}")
+            raise HTTPException(503, f"could not read the POS {table.replace('_', ' ')} — {e}")
 
     def insert(table, rows):
         nonlocal created

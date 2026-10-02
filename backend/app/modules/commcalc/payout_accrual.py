@@ -598,7 +598,7 @@ def compute_day(client, org_id, day, cfg=None, carrier_mode=None):
     if read_error:
         return {"ready": True, "mode": carrier_mode, "work_date": day.isoformat(), "rows": [],
                 "restate": [], "sale_lines": 0, "source_table": None, "read_error": True,
-                "note": ("neither raw_sales nor daily_sales_feed could be read for this date — "
+                "note": ("neither the monthly sales upload nor the daily sales feed could be read for this date — "
                          "nothing was computed and nothing will be written")}
 
     smap = store_code_map(client, org_id)
@@ -883,7 +883,7 @@ def mtd_allocate(client, org_id, day, cfg, carrier_mode):
     if read_error:
         out = dict(empty)
         out.update({"read_error": True,
-                    "note": ("neither raw_sales nor daily_sales_feed could be read for this month — "
+                    "note": ("neither the monthly sales upload nor the daily sales feed could be read for this month — "
                              "nothing was computed and nothing will be written")})
         return out
 

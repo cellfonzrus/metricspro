@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api, apiUpload } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Commission Import Wizard (SAP-style, self-extending). Upload ANY carrier's commission file, then tell the
 // system which column is which category — 1st/2nd/3rd-month commission, spiff, rebate, residual, margins, a
@@ -102,7 +103,7 @@ export default function CommissionImportWizard() {
       fd.append('save_template', 'true')
       const r: any = await apiUpload('/api/v1/commcalc/commission-import/commit', fd)
       const nc = (r.new_categories || []).length
-      setMsg(`✅ Loaded ${r.saved} rows into carrier_commission for ${period}.` +
+      setMsg(`✅ Loaded ${r.saved} rows into the ${sourceLabel('carrier_commission')} for ${period}.` +
              (nc ? ` Created ${nc} new categor${nc === 1 ? 'y' : 'ies'}.` : '') +
              ` Saved a reusable template (${r.template_rows} columns).`)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
@@ -129,7 +130,7 @@ export default function CommissionImportWizard() {
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Upload <b>any</b> carrier&apos;s commission file and map each column to a category. Missing a category
           (a 7th-month spiff, a new bounty)? Create it here — the system adds the column automatically and
-          remembers your mapping for next time. Loads into <code>carrier_commission</code>; the live commission
+          remembers your mapping for next time. Loads into the {sourceLabel('carrier_commission')}; the live commission
           calc is never touched. Need to eyeball the raw file first? <Link href="/commcalc/carrier-comm-file">Carrier Comm File → Table</Link>.
         </p>
       </div>

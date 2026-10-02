@@ -5,6 +5,7 @@ import { api } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import RunCommissionButton from '../_lib/RunCommissionButton'
 import { useActiveCarrier } from '@/lib/auth-context'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Commission Payout Plans — the ONE place that answers "how does each carrier's rep get paid?".
 // It reads /payout-plans/overview, which uses the SAME carrier gate as the live calculator, so what
@@ -194,7 +195,7 @@ export default function PayoutPlansHub() {
                   {[
                     ['Carrier mode', diag.carrier_mode.toUpperCase()],
                     ['Sales rows', `${diag.sales.rows} (${diag.sales.reps.length} reps)`],
-                    ['raw_mi rows', `${diag.raw_mi.rows} (${diag.raw_mi.reps.length} reps)`],
+                    [`${sourceLabel('raw_mi')} rows`, `${diag.raw_mi.rows} (${diag.raw_mi.reps.length} reps)`],
                     ['Plans', String(diag.plans.length)],
                     ['Rep assignments', String(diag.assignments_total)],
                     ['Payout schedules', String(diag.schedules)],

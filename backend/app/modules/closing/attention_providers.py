@@ -102,10 +102,10 @@ def _p_closing_sweep_credentials(client, org_id, ctx):
         out.append({
             "group": "import", "key": "closing_sweep_no_sa", "severity": "error",
             "label": "Daily-closing sheet import has no Google credentials",
-            "detail": ("A Google Sheet id is configured for the daily-closing auto-import, but "
-                       "GOOGLE_SERVICE_ACCOUNT_JSON is not set on the server — the import can never "
-                       "run. Set that environment variable (the service-account JSON), then share "
-                       "the sheet with the service account's email on Closing → Auto-Import."),
+            "detail": ("A Google Sheet id is configured for the daily-closing auto-import, but the "
+                       "Google service-account key is not installed on the server — the import can "
+                       "never run. Contact support to install it, then share the sheet with the "
+                       "service account's email on Closing → Auto-Import."),
             "count": 1, "deep_link": "/closing/imports", "deep_link_label": "Open Closing Auto-Import",
         })
     elif sheet_id and (cfg.get("last_status") or "").strip().lower() == "error":
@@ -175,10 +175,10 @@ def _p_closing_stale_stores(client, org_id, ctx):
         "group": "other", "key": "closing_stale_stores", "severity": "warning",
         "label": "Stores selling but not submitting daily closings",
         "detail": (f"{len(stale)} store(s) had {pos} sales in the last {n_days} day(s) but no "
-                  f"daily_closing submission in that window — cash/tender recon has been blind for "
+                  f"daily closing submission in that window — cash/tender recon has been blind for "
                   f"them: {eg}. Check that the store is actually able to close (kiosk/app access, an "
-                  f"assigned closer) or that its store_code matches what the {pos} sales feed uses "
-                  f"(commcalc.store_mapping)."),
+                  f"assigned closer) or that its store code matches what the {pos} sales feed uses "
+                  f"(Store Mapping)."),
         "count": len(stale), "deep_link": "/closing/management",
         "deep_link_label": "Open Management Review",
     }]

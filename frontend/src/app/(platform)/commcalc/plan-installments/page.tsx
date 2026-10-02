@@ -468,7 +468,7 @@ export default function PlanInstallmentsPage() {
           Store resolution (market + store-scope plan assignments):
           <select style={sel} value={settings.store_resolution || 'exact'}
             onChange={e => setSettings({ ...settings, store_resolution: e.target.value })}>
-            <option value="exact">Exact store_mapping match only (default)</option>
+            <option value="exact">Exact Store Mapping match only (default)</option>
             <option value="alias">Also resolve through the /store-match alias table</option>
           </select>
         </label>

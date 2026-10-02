@@ -20,6 +20,9 @@
 //   F. counting — pendingRowCount drives the banner + leave guard.
 //   G. Roles & Access — the row Save and "Save details" both plan details (incl. pay) AND email; a manual
 //      login (id <= 0) plans nothing.
+//   V. a 2xx is not proof (§19.37, 2026-10-02) — the owner's case (admin, hourly, pay_rate 0 → 18) is saved
+//      only because the reply shows 18 stored; a 200 whose gate dropped pay_rate (`pay_fields_ignored`),
+//      kept another value, or echoed nothing is NOT saved and names the field (pre-fix: "Saved").
 //   N. negative controls — the checks are not vacuous.
 //
 // Run:  node frontend/prove_row_save.mjs     (Node >= 22.18; no node_modules, no network, no DB)
@@ -65,6 +68,54 @@ function oldDetailsBody(e) {
   const body = { name: e.name, home_store: e.home_store, role: e.role, phone: e.phone || null, is_active: !!e.is_active }
   if (Object.prototype.hasOwnProperty.call(e, 'pay_rate')) body.pay_rate = e.pay_rate == null || e.pay_rate === '' ? null : Number(e.pay_rate)
   return body
+}
+
+// A DB-free double of the three real endpoints' REPLY shapes (storeops/router.py): `update_employee`
+// returns the stored row (UPDATE … RETURNING) — minus pay keys and plus `pay_fields_ignored` when its
+// pay-visibility gate drops them; `set_employee_lunch_config` / `set_employee_face_config` return the
+// stored lunch / face columns. `canSeePay=false` models a caller below the org's pay-visibility line.
+function server(stored, { canSeePay = true, keepPayRate = true } = {}) {
+  const GATED = ['pay_rate', 'pay_basis', 'pay_amount', 'termination_date']
+  return {
+    stored,
+    async send(w) {
+      if (w.method === 'PATCH') {
+        let body = { ...w.body }, ignored = []
+        if (!canSeePay) {
+          ignored = Object.keys(body).filter(k => GATED.includes(k)).sort()
+          for (const k of ignored) delete body[k]
+          if (!Object.keys(body).length) { const e = new Error('Pay fields are restricted for your role'); e.status = 403; throw e }
+        }
+        if (!keepPayRate) delete body.pay_rate          // a column the write silently did not take
+        for (const [k, v] of Object.entries(body)) stored[k] = (k === 'pay_rate' || k === 'pay_amount') && v != null ? Number(v) : v
+        const out = { ...stored }
+        if (!canSeePay) for (const k of ['pay_rate', 'pay_amount']) delete out[k]
+        if (ignored.length) out.pay_fields_ignored = ignored
+        return out
+      }
+      if (w.path.endsWith('/lunch-config')) {
+        stored.lunch_deduction_enabled = w.body.enabled
+        stored.lunch_deduction_minutes = w.body.minutes == null ? null : Math.max(0, Math.trunc(Number(w.body.minutes)))
+        return { ok: true, employee_id: stored.employee_id, lunch_deduction_enabled: stored.lunch_deduction_enabled, lunch_deduction_minutes: stored.lunch_deduction_minutes }
+      }
+      if (w.path.endsWith('/face-config')) {
+        stored.face_recognition_enabled = w.body.enabled
+        stored.face_consent_status = w.body.consent
+        return { ok: true, employee_id: stored.employee_id, face_recognition_enabled: stored.face_recognition_enabled,
+                 face_consent_status: stored.face_consent_status, face_consent_at: w.body.consent ? '2026-10-02T12:00:00Z' : null, face_consent_source: null }
+      }
+      throw new Error('unknown endpoint ' + w.path)
+    },
+  }
+}
+// The PRE-§19.37 runRowSave, transcribed from main: any 2xx counted as saved.
+async function oldRunRowSave(writes, send) {
+  const res = { saved: [], failed: [] }
+  for (const w of writes) {
+    try { res.saved.push({ slice: w.slice, label: w.label, response: await send(w) }) }
+    catch (e) { res.failed.push({ slice: w.slice, label: w.label, error: String(e?.message || e) }) }
+  }
+  return res
 }
 
 console.log('A. the reported defect, reproduced (Vzone E278: hourly rate typed + Lunch set On)')
@@ -156,7 +207,7 @@ console.log('D. honest results')
   const msg = RS.rowSaveMessage('mehribon gulyamova', res)
   check('D5 the message names what was saved AND what was not', /Saved pay/.test(msg) && /lunch NOT saved/.test(msg), msg)
   check('D6 the message never claims an unsent slice', !/Saved[^—]*lunch/.test(msg), msg)
-  const allOk = await RS.runRowSave(plan, async () => ({}))
+  const allOk = await RS.runRowSave(plan, w => server({ ...row }).send(w))
   check('D7 all saved → "Saved pay, lunch for …"', RS.rowSaveMessage('X', allOk) === 'Saved pay, lunch for X', RS.rowSaveMessage('X', allOk))
   const face = RS.commitSaved({ ...E278, face_consent_status: 'signed' }, { ...E278 }, HR,
     { saved: [{ slice: 'face', label: 'face recognition', response: { face_recognition_enabled: null, face_consent_status: 'signed', face_consent_at: '2026-09-29T18:00:00Z', face_consent_source: 'hr' } }], failed: [] })
@@ -192,6 +243,64 @@ console.log('G. Roles & Access — one plan for the employee record')
   check('G1 pay typed in the Edit panel + email edited → BOTH planned by either button', eq(plan.map(w => w.slice), ['details', 'email']), plan)
   check('G2 the details PATCH carries the rate', plan[0].body.pay_rate === 18 && plan[0].method === 'PATCH')
   check('G3 a manual login (id <= 0) writes no employee row', RS.planRowSave({ ...row, id: -4 }, { ...snap, id: -4 }, R, undefined).length === 0)
+}
+
+console.log('V. a 2xx is not proof — a save counts only what the server shows it stored (§19.37, 2026-10-02)')
+{
+  // V1–V4: the owner's exact case — the Vzone ADMIN (pay visible), E278 hourly, pay_rate 0 → 18.
+  const snap = { ...E278 }
+  const row = { ...E278, pay_rate: '18' }
+  const db = server({ ...E278 })
+  const plan = RS.planRowSave(row, snap, HR, CTX)
+  check('V1 admin, hourly, 0 → 18: the row Save plans ONE PATCH carrying pay_rate 18',
+    plan.length === 1 && plan[0].method === 'PATCH' && plan[0].path === '/api/v1/storeops/employees/278' && plan[0].body.pay_rate === 18
+    && plan[0].body.pay_basis === 'hourly', plan)
+  const res = await RS.runRowSave(plan, w => db.send(w))
+  check('V2 …the server stores 18 and the reply proves it → saved', res.saved.length === 1 && !res.failed.length && db.stored.pay_rate === 18, res)
+  const c = RS.commitSaved(row, snap, HR, res)
+  check('V3 …the row reads back the STORED rate and is clean', c.row.pay_rate === 18 && !RS.rowDirty(c.row, c.snap, HR), c.row.pay_rate)
+  check('V4 …message "Saved pay for …"', RS.rowSaveMessage('mehribon gulyamova', res) === 'Saved pay for mehribon gulyamova')
+
+  // V5–V8: the gate drops a field with a 200 (Roles & Access details: name + a typed rate, caller below
+  // the pay-visibility line). PRE-FIX: "Saved details" and the typed rate became the snapshot.
+  const R = SL.ROLES_EMPLOYEE_ROW_SLICES
+  const dSnap = { id: 12, employee_id: 'E012', name: 'A', home_store: 'B-1', role: 'Rep', phone: '', is_active: true, email: 'a@x' }
+  const dRow = { ...dSnap, name: 'A B', pay_rate: '18' }
+  const dPlan = RS.planRowSave(dRow, dSnap, R, undefined)
+  const before = await oldRunRowSave(dPlan, w => server({ ...dSnap }, { canSeePay: false }).send(w))
+  check('V5 PRE-FIX model: a 200 whose gate dropped pay_rate was reported "Saved details" (the defect class)',
+    RS.rowSaveMessage('A B', before) === 'Saved details for A B' && before.saved[0].response.pay_fields_ignored?.[0] === 'pay_rate', before)
+  const after = await RS.runRowSave(dPlan, w => server({ ...dSnap }, { canSeePay: false }).send(w))
+  const msg = RS.rowSaveMessage('A B', after)
+  check('V6 THE FIX: the same reply fails the slice and NAMES pay_rate', after.failed.length === 1 && /details NOT saved/.test(msg) && /pay_rate/.test(msg), msg)
+  const dc = RS.commitSaved(dRow, dSnap, R, after)
+  check('V7 …and the row stays visibly unsaved (the typed rate is not taken as stored)', RS.rowDirty(dc.row, dc.snap, R))
+
+  // V8: the server kept a different value with a 200 (a write that silently did not take the column).
+  const stale = await RS.runRowSave(plan, w => server({ ...E278 }, { keepPayRate: false }).send(w))
+  check('V8 a 200 whose stored pay_rate is still 0 → NOT saved, naming what was stored',
+    stale.failed.length === 1 && /pay_rate: the server stored nothing, not 18|pay_rate: the server stored 0, not 18/.test(stale.failed[0].error), stale.failed)
+  // V9: a reply that does not carry the field cannot confirm it.
+  const blind = await RS.runRowSave(plan, async () => ({ ok: true }))
+  check('V9 a bare {ok:true} proves nothing → NOT saved', blind.failed.length === 1 && /did not confirm/.test(blind.failed[0].error), blind.failed)
+  // V10: a pay-hidden caller on HR's pay slice gets the 403 (every field gated) — surfaced, not saved.
+  const hid = await RS.runRowSave(plan, w => server({ ...E278 }, { canSeePay: false }).send(w))
+  check('V10 HR pay save by a caller below the pay line → the 403 is the message', hid.failed.length === 1 && /restricted/.test(hid.failed[0].error), hid)
+  // V11: every registered slice's echo covers every key its build can send (else notPersisted fails it).
+  const full = { ...E278, id: 9, pay_rate: '1', pay_basis: 'annual', pay_amount: '2', termination_date: '2026-10-01',
+                 lunch_deduction_enabled: true, lunch_deduction_minutes: '30', face_recognition_enabled: true, face_consent_status: 'signed',
+                 name: 'n', home_store: 's', phone: 'p', email: 'e' }
+  const uncovered = []
+  for (const s of [...HR, ...R]) {
+    const b = s.build(full, CTX)
+    for (const k of Object.keys(b.body)) if (!s.echo || !s.echo[k]) uncovered.push(`${s.key}.${k}`)
+  }
+  check('V11 every slice declares an echo key for every request key', uncovered.length === 0, uncovered)
+  // V12: lunch + face round-trip through their real reply shapes as saved (no false failure).
+  const lf = { ...E278, lunch_deduction_enabled: true, lunch_deduction_minutes: '30', face_recognition_enabled: false, face_consent_status: 'declined' }
+  const lfRes = await RS.runRowSave(RS.planRowSave(lf, E278, HR, CTX), w => server({ ...E278 }).send(w))
+  check('V12 lunch + face replies prove their fields → both saved', eq(lfRes.saved.map(x => x.slice), ['lunch', 'face']) && !lfRes.failed.length, lfRes)
+  check('V13 numbers compare as numbers, blanks as blanks', RS.sameStoredValue(18, '18.00') && RS.sameStoredValue(null, '') && !RS.sameStoredValue(18, 0) && !RS.sameStoredValue('', 0))
 }
 
 console.log('N. negative controls')

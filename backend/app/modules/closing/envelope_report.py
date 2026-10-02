@@ -75,27 +75,27 @@ def _f(v):
 #     bill_payment_cash = epay_on_cash                the bill-payment (ePay) cash only
 # `expected_cash` now DEREFERENCES that function instead of keeping its own rule, so the receipt and the
 # deposit recon can never disagree about what a basis means.
-ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
-ENVELOPE_BASIS_DEFAULT = "total_cash"
-
-# ── THE ROW CONTRACT: which daily_closing columns this module DEREFERENCES (owner bug 2026-10-02) ──
-# Owner: the receipt showed the bill-payment cash as 0.00 on every line, and the store-cash basis as the
-# WHOLE drawer — i.e. the selector from 2026-10-01 answered every basis with the total.
+# ── THE COLUMNS THIS REPORT NEEDS OFF A daily_closing ROW — one home (owner bug 2026-10-02) ─────
+# Owner: "the store pay and the epay in the management review report is not coming correct, the
+# system shows nothing for epay cash - all entries are zero and the store cash shows total of both."
 #
-# THE CLASS, not the instance: a pure reader's inputs are only as good as its CALLER'S SELECT LIST, and
-# nothing failed when they disagreed. `expected_cash` reads `epay_on_cash`; both of its callers
-# (`/closing/envelope-report` and `POST /closing/envelope-count`) hand-spelled a column list that did not
-# include it, so `_f(None)` → 0.0 and the three formulas collapsed to one:
-#     bill_payment_cash = 0            (every line read "no bill payments")
-#     store_cash        = t_cash - 0   (every line read the whole drawer, bill payments included)
-# A missing column is INVISIBLE here by construction — `.get()` cannot tell "0 dollars" from "not asked
-# for" — so the fix cannot be "add the column at the one call site that surfaced it".
+# THE CAUSE, and it was mine. The basis math reads `epay_on_cash`, but the endpoint's hand-written
+# `.select(...)` never fetched it. PostgREST simply omits an unselected column, so `r.get("epay_on_cash")`
+# was None on every row and `_f(None)` is 0.0 — which makes the two non-default bases WRONG IN EXACTLY
+# THE WAY REPORTED and leaves the default one right:
+#     bill_payment_cash = epay_cash            -> 0.00 on every envelope  ("nothing for epay cash")
+#     store_cash        = t_cash - epay_cash   -> t_cash ("the store cash shows total of both")
+#     total_cash        = t_cash               -> correct, which is why it shipped unnoticed
 #
-# ONE FACT, ONE HOME, DEREFERENCED: the columns live HERE, beside the logic that reads them, and every
-# caller selects `CLOSING_SELECT` instead of writing its own list. Adding a row input to this module now
-# means adding it to this tuple, which every caller already fetches.
-# LOCKED: backend/harness_envelope_basis_wiring.py fails the build if a caller hand-spells a
-# daily_closing column list again, or if this module reads a row key the tuple does not declare.
+# THE CLASS: a pure function's input column was decided HERE and fetched THERE, with nothing tying the
+# two together. So the column list is now a fact of this module — the module that knows what it reads —
+# and the endpoint builds its select FROM it. A future basis input cannot silently read zero, because
+# adding it here adds it to the query.
+#
+# AND THE SAME RULE FOR EVERY OTHER KEY, not just the basis inputs: a missing column is INVISIBLE here
+# by construction, because `.get()` cannot tell "0 dollars" from "not asked for". So no caller spells a
+# column list of its own — each selects `CLOSING_SELECT`, below — and the lock fails the build if one
+# starts to, or if this module reads a row key this tuple does not declare.
 CLOSING_COLUMNS = (
     "id", "close_date", "store_code", "store_name", "store_address", "employee_name",
     "t_cash",            # the canonical declared drawer (declared_total_cash)
@@ -103,7 +103,14 @@ CLOSING_COLUMNS = (
     "epay_on_cash",      # the bill-payment (ePay) cash INSIDE t_cash — the basis split's whole input
     "envelope_picture", "remarks",
 )
+# What every caller actually passes to `.select(...)`, so the query and this tuple cannot drift apart.
 CLOSING_SELECT = ",".join(CLOSING_COLUMNS)
+# The three the basis math cannot work without; the harness asserts each is in CLOSING_COLUMNS and
+# that a row fetched with ONLY those columns still produces three DIFFERENT, correct bases.
+BASIS_INPUT_COLUMNS = ("t_cash", "store_cash", "epay_on_cash")
+
+ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
+ENVELOPE_BASIS_DEFAULT = "total_cash"
 
 # THE PROCESSOR'S NAME IS NOT SPELLED HERE (harness_carrier_vocab_guard, owner directive 2026-09-04).
 # "What this tenant calls its bill-payment processor" already has ONE home — the report_labels

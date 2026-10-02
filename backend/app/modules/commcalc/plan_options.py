@@ -563,9 +563,9 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
                             "values from other reports are selectable but do not pay yet.")
             else:
                 _cr_note = (f"{added} value(s) come from custom reports (e.g. Activation Details / Sales by "
-                            "Product) and are not in this tenant's raw_sales. A rule on a custom-only value is "
+                            "Product) and are not in this tenant's monthly sales upload. A rule on a custom-only value is "
                             "SELECTABLE but will not pay until the custom-report money path is wired — the "
-                            "commission engine reads raw_sales / the daily feed today.")
+                            "commission engine reads the sales uploads / the daily feed today.")
             entry["note"] = (entry["note"] + " " + _cr_note) if entry.get("note") else _cr_note
             custom_field_summary[f] = added
 
@@ -609,7 +609,7 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
             "fields": custom_field_summary,
             "bounded": cr_bounded,
             "note": ("Values from custom reports are offered for assignment but do not pay yet — the "
-                     "commission engine computes against raw_sales / the daily feed, not custom-report "
+                     "commission engine computes against the sales uploads / the daily feed, not custom-report "
                      "lines.") if custom_field_summary else None,
         },
         "note": None if enc_rows else (
@@ -617,7 +617,7 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
             "still type a value, and it will be checked the next time this loads."
             if facets["degraded"] else
             "No sale lines found for the last few months — the pickers will be empty until this tenant's "
-            "sales land (raw_sales or the daily feed)."),
+            "sales land (the monthly sales upload or the daily feed)."),
     }
 
 

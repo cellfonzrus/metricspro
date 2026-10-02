@@ -146,7 +146,7 @@ DEFAULT_TILES = [
      "uploaded_aliases": "Commissions Not Eligible,Not Eligible,Ineligible Commissions",
      "tolerance_abs": 0, "tolerance_pct": 0,
      "note": "NO SOURCE MAPPED ON PURPOSE — the source report's definition is not known. Candidates on "
-             "raw_ma_commission are line_status and suspension_reason; their real value distributions are "
+             "the Marketplace commission details are line status and suspension reason; their real value distributions are "
              "listed under 'Unmapped tile candidates' so the owner can choose, then set agg=count + the "
              "filter in the tile mapping."},
     {"tile_key": "edge_count", "label": "Edge (Device Finance)", "sort_order": 80,

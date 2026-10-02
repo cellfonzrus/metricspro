@@ -336,7 +336,7 @@ export default function VipInvoicesPage() {
       <div className="card" style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, fontWeight: 600 }}>Import Distributor workbook</span>
         <span style={{ color: 'var(--text3)', fontSize: 12, flex: 1 }}>
-          The <code>vip_invoices.xlsx</code> from tools/vip_scraper (Invoices / Lines / Devices). Full replace.
+          The distributor&apos;s invoices workbook (Invoices / Lines / Devices sheets). Full replace.
         </span>
         {importing ? (
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}>

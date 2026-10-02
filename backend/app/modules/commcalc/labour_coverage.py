@@ -370,7 +370,7 @@ def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance
     note = None
     if stores:
         note = (f"${total:,.2f} of commission is booked TWICE across {len(stores)} store(s): once as "
-                f"an expense row and again from commcalc.rep_commissions, which the GP report and "
+                f"an expense row and again from the calculated rep commissions, which the GP report and "
                 f"the P&L already deduct on their own line. Remove one of the two routes.")
     return {"names": sorted(want), "stores": stores,
             "total_double_booked": total, "note": note}
@@ -464,7 +464,7 @@ def suppression_plan(exp_rows, rep_pay_by_key, commission_names, key_of=None, to
         elif state == NO_REPLACEMENT:
             kept.append(key)
             t_kept = round(t_kept + exp, 2)
-            row["reason"] = ("rep_commissions has nothing for this store this month, so suppressing "
+            row["reason"] = ("the calculated rep commissions have nothing for this store this month, so suppressing "
                              "this row would remove a real cost and book no replacement — it is "
                              "still booked as an expense and reported here instead")
         else:

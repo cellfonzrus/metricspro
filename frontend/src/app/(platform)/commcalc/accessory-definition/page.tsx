@@ -322,7 +322,7 @@ export default function AccessoryDefinitionPage() {
           right={<button className="btn btn-secondary" onClick={() => (tab === 'compare' ? loadAgree() : loadDef())} disabled={busy}>{busy ? 'Loading…' : 'Refresh'}</button>}
         />
         <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
-          Market is not offered here — <code>raw_sales</code> carries no market column, so a market filter
+          Market is not offered here — the monthly sales upload carries no market column, so a market filter
           would be a guess rather than a filter.
         </div>
       </div>

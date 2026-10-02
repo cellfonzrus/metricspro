@@ -14,6 +14,7 @@
 // backend/harness_inventory_sold_recon.py), so this file can never disagree with the report.
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Each finding cites its EVIDENCE: which sale line / activation line named the unit, and how the
 // activation was paired (its own serial, or the mobile number THROUGH a sale line) — never a guess.
@@ -124,7 +125,7 @@ export default function InventorySoldReconPage() {
               if (!sb) return null
               return (
                 <div key={k}>
-                  <b style={{ textTransform: 'capitalize' }}>{k}:</b> <code>{sb.table}</code> — {sb.read_ok ? `${sb.rows.toLocaleString()} rows read${sb.truncated ? ' (capped — a floor)' : ''}` : <span style={{ color: '#991b1b' }}>read did not complete{k === 'activations' ? ' — no activation report is loaded; checked against sales only' : ''}</span>}{sb.period ? ` · ${sb.period}` : ''}
+                  <b style={{ textTransform: 'capitalize' }}>{k}:</b> <b>{sourceLabel(sb.table)}</b> — {sb.read_ok ? `${sb.rows.toLocaleString()} rows read${sb.truncated ? ' (capped — a floor)' : ''}` : <span style={{ color: '#991b1b' }}>read did not complete{k === 'activations' ? ' — no activation report is loaded; checked against sales only' : ''}</span>}{sb.period ? ` · ${sb.period}` : ''}
                   {k === 'activations' && sb.read_ok && <> · carries a device key: <b>{sb.carries_device_key ? 'yes' : 'no'}</b> · carries a mobile number: <b>{sb.carries_mobile ? 'yes' : 'no'}</b></>}
                   <div style={{ color: 'var(--text3)' }}>pairs on: {sb.pairs_on}</div>
                 </div>

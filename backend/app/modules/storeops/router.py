@@ -2316,8 +2316,8 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
             if not row:
                 raise HTTPException(403, "Pay fields are restricted for your role (org pay-visibility "
                                          "policy) — nothing else in this update to apply. An admin can "
-                                         "list your role in storeops.tenants.pay_visible_roles or grant "
-                                         "'employee_pay_rates'.")
+                                         "add your role to the pay-visibility roles in the company settings "
+                                         "or grant 'employee_pay_rates'.")
     # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
     if "employee_id" in row and not (row.get("employee_id") or "").strip():
         row["employee_id"] = None
@@ -7544,8 +7544,8 @@ def payroll_raw_route(start: str, end: str, authorization: str = Header(default=
     if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
         raise HTTPException(403, "This feed is payroll money (pay rate + W-4 per employee; "
                             "market-manager-and-up per your org's pay-visibility config). "
-                            "An admin can widen storeops.tenants.pay_visibility / "
-                            "pay_visible_roles, or grant the 'employee_pay_rates' data permission.")
+                            "An admin can widen the pay-visibility roles in the company settings, "
+                            "or grant the 'employee_pay_rates' data permission.")
     return payroll_raw(start=start, end=end, authorization=(authorization or ""), org_id=org_id)
 
 
@@ -9879,8 +9879,8 @@ def _is_db_permission_error(e: Exception) -> bool:
     return "42501" in s or "permission denied" in s
 
 
-_DB_GRANT_HINT = ("Database permission error (Postgres 42501): the backend cannot write the Google "
-                  "Reviews tables. The service-role grants are missing in this tenant's database — "
+_DB_GRANT_HINT = ("Permission error: the Google Reviews data can't be saved for this company yet. "
+                  "The server's write permission for it is missing — "
                   "re-run migration 411 (and 412/420/430) on it, then try again.")
 
 

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // ── Report-pull mapping admin (mig 207, RULE TWO) ────────────────────────────────────────────────
 // The automated VidaPay / T-CETRA report pull is DRIVEN by this config, not hard-coded. Each report's
@@ -117,7 +118,7 @@ export default function ReportMappingsPage() {
               {rep.enabled === false && <span style={{ background: '#fef2f2', color: '#b91c1c', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>disabled</span>}
               {rep.param_spec?.calibration && <span style={{ background: '#fffbeb', color: '#92400e', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>calibration (params pinned on first live run)</span>}
               <div style={{ flex: 1 }} />
-              <div style={{ fontSize: 12, color: 'var(--text3)' }}>→ <b>{rep.target_table}</b>{rep.export_pref ? ` · ${rep.export_pref}` : ''}{rep.param_spec?.iterate_months ? ' · month-by-month' : ''}</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)' }}>→ <b>{sourceLabel(rep.target_table)}</b>{rep.export_pref ? ` · ${rep.export_pref}` : ''}{rep.param_spec?.iterate_months ? ' · month-by-month' : ''}</div>
               {!d && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => startEdit(rep)}>Edit</button>}
               {!d && !rep.inherited && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => resetOverride(rep.report_key)}>Reset to default</button>}
             </div>

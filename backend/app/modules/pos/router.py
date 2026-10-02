@@ -2872,7 +2872,7 @@ def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
     else:
         raise HTTPException(400, f"unknown entity '{entity}' "
                                  "(importable: customers, products, vendors, inventory, "
-                                 "activations, tax_codes)")
+                                 "activations, tax codes)")
 
     return {"inserted": inserted, "skipped": skipped, "errors": errors,
             "total": len(rows)}

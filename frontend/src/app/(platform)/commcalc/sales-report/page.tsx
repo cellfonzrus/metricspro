@@ -13,6 +13,7 @@ import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
 // in the URL, so for a super-admin (whom the tenant middleware does NOT rewrite) the backend defaults to
@@ -276,7 +277,7 @@ export default function SalesReportPage() {
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Classification settings</button>
         <WhereAreMyRowsButton period={period} />
-        {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (raw_sales not promoted yet — enable ‘auto’ on Connectors)</span>}
+        {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (not yet promoted into the monthly sales upload — enable ‘auto’ on Connectors)</span>}
       </div>
 
       {/* NARRATIVE BANNER — plain-English "how sales are tracking vs last month" above the grid.
@@ -297,10 +298,10 @@ export default function SalesReportPage() {
       {data?.source_meta && (
         <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 14, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ background: 'var(--surface2)', borderRadius: 8, padding: '4px 10px' }}>
-            Reading <b>{data.source_meta.primary === 'daily_sales_feed' ? 'daily email feed' : 'monthly raw_sales'}</b>
-            {' '}({data.shown_rows ?? 0} rows shown · feed {data.feed_rows ?? 0} · raw_sales {data.raw_rows ?? 0})
-            {(data.filled_days || []).length > 0 && <> · pulled <b>{(data.filled_days || []).length}</b> extra day(s) from raw_sales that the feed didn’t have</>}
-            {(data.source_meta.completeness_rows ?? 0) > 0 && <> · recovered <b>{data.source_meta.completeness_rows}</b> sale line(s) present in raw_sales that the feed missed on a shared store-day</>}
+            Reading <b>{sourceLabel(data.source_meta.primary === 'daily_sales_feed' ? 'daily_sales_feed' : 'raw_sales')}</b>
+            {' '}({data.shown_rows ?? 0} rows shown · feed {data.feed_rows ?? 0} · monthly upload {data.raw_rows ?? 0})
+            {(data.filled_days || []).length > 0 && <> · pulled <b>{(data.filled_days || []).length}</b> extra day(s) from the monthly sales upload that the feed didn’t have</>}
+            {(data.source_meta.completeness_rows ?? 0) > 0 && <> · recovered <b>{data.source_meta.completeness_rows}</b> sale line(s) present in the monthly sales upload that the feed missed on a shared store-day</>}
           </span>
           {data.org_id && <span style={{ color: 'var(--text3)' }}>org <code style={{ fontSize: 11 }}>{String(data.org_id).slice(0, 8)}…</code></span>}
         </div>
