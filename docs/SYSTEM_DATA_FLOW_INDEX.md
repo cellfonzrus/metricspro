@@ -5251,7 +5251,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.raw_epay_daily_tx` (mig `903`, the processor transaction-detail feed) — via the onboarding intake | `epay_ingest.ingest` (the feed's own idempotent ingest) from the intake's `epay_daily_tx` LAYOUT (`column_mapping.TABLE_MAP`, §30.8) with `source_batch='onboarding-intake:<file>'` | the mig-939 bill-pay reader `_billpay_processor_by_store_day` (`epay_ingest.per_store_day`) — which the intake RE-READS through after landing |
 | `commcalc.raw_ma_daily_tx` — via the onboarding intake | `_ingest_mapped_df` from the intake's `ma_daily_tx` layout (slice replace on `account_id` × `tx_date`, `upload_trace.source='onboarding-intake'`, §30.8) | the mig-939 bill-pay reader (`_ma_billpay_pred` row filter, `_vidapay_account_resolver`) — re-read through after landing |
 | `commcalc.raw_custom_import` (Activation Details, per device) — as the inventory check's SECOND sold-source | (unchanged) | `_intake_activation_rows` → `_cr_resolve_activation_details` (+ `mdn`) → `inventory_sold_recon.reconcile(activation_rows=)` (§11a, §30.8) |
-| `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`) | `GET /closing/envelope-report`, notify `closing_envelope_report` |
+| `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row; **`basis` mig `1036`** — which cash the count counted, nullable, CHECK-tied to `envelope_report.ENVELOPE_BASES`, never backfilled) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`; amounts **and** basis from the one `envelope_report.count_row_fields` call) | `GET /closing/envelope-report` (a stored basis is resolved by `envelope_report.counted_basis`, which reports `recorded: false` for a pre-`1036` row rather than inventing one — §47.10), notify `closing_envelope_report` |
 | `commcalc.ops_chargeback` (mig `504`) | detection sweeps (`ops_chargebacks.py`: missed_closing/missed_dm_verify) **+ `POST /closing/envelope-count`** (reason `envelope_short`, parent rows only, amount = actual shortage) | policy editor (reasons-in-the-wild), decide endpoints, commission settlement `_settle_ops_chargebacks`/`_ops_chargeback_deductions` (`commcalc/router.py:11265-11550`) |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
@@ -5523,7 +5523,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (carries `totals_original`, and the NAMED cash figures `totals.total_store_cash` / `store_cash_net` / `cash_split` + per-rep `_cash_split`, all from `deposit_recon.cash_components` — §47.9), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit, §47.9 |
-| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8 |
+| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8, and STORES it — §47.10), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`, `count_row_fields`, `counted_basis`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8, §47.10 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
@@ -15148,6 +15148,71 @@ what they are called.
 the drawer, shows the net, and derives neither. Armed controls patch the shipped tile back in and go
 red. The bill-pay recon's own `declared − processor` variances are a different question and are proven
 *not* to match the scan.
+
+### 47.10 A stored count now says WHICH CASH it counted (owner 2026-10-02, mig `1036`)
+
+The item §47.8 **reported open rather than fixed**, closed on the owner's word ("do it").
+
+**The class.** §47.8 fixed the *scoring* — a count is measured on the basis the counter was looking at.
+The stored ROW stayed silent about which basis that was, so a row recorded an **amount** without the
+**question the amount answered**. Two rows reading "short $230" could be a shortage in the whole drawer
+and a shortage in the bill-payment cash: each self-consistent (each carries the `expected_amount` it was
+scored against, so no variance and no chargeback is wrong) and indistinguishable on a report.
+
+`commcalc.envelope_count.basis` — `TEXT`, nullable, `CHECK (basis IS NULL OR basis IN (…))`, mig `1036`,
+additive and idempotent with a `-- REVERT:` note. No stored amount, variance, status or chargeback is
+read or written by it.
+
+**ONE CALL WRITES BOTH.** The fix is not a field added at the call site — it is that the amounts and the
+basis come from one function, so a stored amount **cannot** be written without its basis:
+
+| fact | home | callers |
+|---|---|---|
+| everything a count row records about the money (amounts **+** basis) | **`envelope_report.count_row_fields`** | `POST /closing/envelope-count`, which no longer composes `expected_cash` + `count_fields` itself |
+| the short/over verdict | `envelope_report.count_fields` — **unchanged** | the above, plus `pickup_actual.row_variance` and the external-credit tally, whose "expected" is not a cash basis at all |
+| which basis a STORED count used, recorded or not | **`envelope_report.counted_basis`** | `report_row` → the receipt screen and both export columns |
+| the bases that have a formula | `envelope_report.ENVELOPE_BASES` → `deposit_recon.cash_for_basis` | the migration's CHECK is *tied* to this tuple by §K3, never a second list |
+
+**Why the basis is NOT a key of `count_fields`.** That function is the platform's short/over truth table,
+shared by the deposit recon and the external-credit tally (`harness_external_credit_recon` §E pins the
+reuse). Putting an envelope-basis key in its return would push this subsystem's vocabulary into two
+reports that have no use for it. The home is therefore one function *above* the truth table.
+
+**ABSENCE IS NEVER A GUESS — the column is deliberately NOT backfilled.** A pre-`1036` row recorded no
+basis, and writing `total_cash` into it would turn *"nobody recorded this"* into *"somebody chose
+total_cash"*. The READER resolves it instead, in one place: `counted_basis` returns the historical
+default **with `recorded: false`**, because the handler of that era had no basis to use and scored
+against the whole drawer by construction. So the receipt says *"basis not recorded (counted before it
+was stored)"* and never claims a person chose it. A SQL `NULL`, a missing key and an unrecognised word
+all resolve identically.
+
+**Shown when it is worth saying.** The receipt surfaces the stored basis only where it changes a
+reading: when the count on file was taken on a different basis than the line is being *viewed* on (hence
+`counted_basis` is a distinct payload key from `basis`, which is the view), or when the row recorded
+none. On every row it would be noise; on these rows it is the difference between two meanings of "short
+$230". The wording is looked up from the server's own `basis_options()` by the key the server sent, so
+the screen still spells no basis word — §47.8's rule holds. The export carries the basis and
+`Counted on — recorded` as **separate** columns, so "which counts predate the column" is filterable.
+
+**An unapplied migration degrades LOUDLY.** The column is additive, so a database without `1036` rejects
+the whole upsert on an unknown column — which would break a working screen over a column nobody has yet.
+The save retries without the basis, the reply carries `basis_stored: false`, and a WARN names the
+migration. Only that error is caught; any other upsert failure still raises. The one unacceptable
+outcome — saving silently while the receipt implies a basis was recorded — cannot happen, because
+`counted_basis` words a missing basis as un-recorded either way.
+
+**LOCK:** §47.3's harness, section **K1–K5** (181 checks total). Fails the build when: the handler
+composes `expected_cash` + `count_fields` itself again; `count_fields` grows a basis key (which would
+reach the two sibling reports); a stored amount is written without its basis; the migration gains a
+backfill or drops the nullability; the CHECK drifts off `ENVELOPE_BASES`; `counted_basis` passes an
+unknown word through, or reports an un-recorded basis as recorded; `report_row` stops carrying it; an
+uncounted row grows a basis it never had; the screen spells a basis word or shows the note on every row;
+or the degrade path becomes a bare `except: pass`. Each rule carries an **armed control**, and the five
+load-bearing ones were patched back to the shipped behaviour by hand and watched go red.
+
+**MONEY-TOUCHING — and a MIGRATION: owner-approved before applying.** Nothing moves money: no amount,
+variance, status or chargeback changes, and every existing row keeps every value it has. What changes is
+that a row can now *say* what it was measuring.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 

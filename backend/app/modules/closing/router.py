@@ -4747,9 +4747,13 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
     # against the rep. The count is now scored on the basis the counter was actually looking at, through
     # the same pure function the report renders. Omitted/unknown ⇒ the historical default (total_cash),
     # so every existing caller and every stored count keeps its meaning byte-for-byte.
-    _basis = envelope_report_mod.normalize_envelope_basis(payload.basis)
-    expected = envelope_report_mod.expected_cash(crow, _basis)
-    cf = envelope_report_mod.count_fields(expected, payload.counted_amount, payload.tolerance)
+    # AND THE ROW NOW RECORDS WHICH (owner 2026-10-02, mig 1036). #348 fixed the scoring but left
+    # the stored row silent about its basis, so two rows reading "short $230" could be shortages in
+    # two different cashes. The amounts and the basis come from ONE call — `count_row_fields` — so a
+    # stored amount cannot be written without the question it answered. This handler no longer
+    # composes `expected_cash` + `count_fields` itself; that pairing is the pure module's own.
+    cf = envelope_report_mod.count_row_fields(crow, payload.counted_amount, payload.tolerance,
+                                              payload.basis)
 
     # existing count row (for re-counts + existing chargeback link)
     existing = []
@@ -4822,10 +4826,26 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
         "counted_by": (_caller_uid(authorization) or prior.get("counted_by") or None),
         "counted_at": _now(), "chargeback_id": chargeback_id, "updated_at": _now(),
     }
-    saved = (client.schema("commcalc").table("envelope_count")
-             .upsert(body, on_conflict="org_id,closing_row_id").execute())
+    # DEGRADE, LOUDLY, WHILE MIG 1036 IS UNAPPLIED. The basis column is additive, so a database
+    # that has not had 1036 run rejects the whole upsert on an unknown column — which would break a
+    # working screen over a column nobody has yet. The count is saved without the basis and the
+    # server SAYS so (`basis_stored: false` in the reply, and a WARN naming the migration), because
+    # the one thing never acceptable is saving it silently and letting the receipt imply the basis
+    # was recorded. `counted_basis` already words a missing basis as un-recorded, so the row reads
+    # correctly either way.
+    _ec = client.schema("commcalc").table("envelope_count")
+    basis_stored = True
+    try:
+        saved = _ec.upsert(body, on_conflict="org_id,closing_row_id").execute()
+    except Exception as e:
+        if envelope_report_mod.COUNT_BASIS_COLUMN not in str(e):
+            raise
+        print(f"WARN envelope_count.basis not stored (run migration 1036): {str(e)[:160]}")
+        basis_stored = False
+        body = {k: v for k, v in body.items() if k != envelope_report_mod.COUNT_BASIS_COLUMN}
+        saved = _ec.upsert(body, on_conflict="org_id,closing_row_id").execute()
     out = (saved.data or [body])[0]
-    return {"ok": True, "count": out, "chargeback": cb_row}
+    return {"ok": True, "count": out, "chargeback": cb_row, "basis_stored": basis_stored}
 
 
 class DecideEnvelopeChargebackIn(LaxModel):

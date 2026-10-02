@@ -228,6 +228,59 @@ def count_fields(expected, counted, tolerance=0.0):
     return {"expected_amount": exp, "counted_amount": cnt, "variance": var, "status": status}
 
 
+# ── WHAT A STORED COUNT RECORDS ABOUT THE MONEY — one home (owner 2026-10-02, mig 1036) ─────────
+# The class #348 reported open rather than fixed: a stored count row recorded an AMOUNT but not
+# which QUESTION the amount answered. Two rows reading "short $230" could be a shortage in the
+# whole drawer and a shortage in the bill-payment cash — self-consistent each (each carries the
+# `expected_amount` it was scored against) and indistinguishable on a report.
+#
+# `count_fields` is NOT where the basis goes. It is the platform's short/over truth table, shared
+# by the deposit recon and the external-credit tally (harness_external_credit_recon §E pins that
+# reuse), whose "expected" is not a cash basis at all; putting an envelope-basis key in its return
+# would push this module's vocabulary into two reports that have no use for it.
+#
+# So the home is HERE, one function above the truth table: `count_row_fields` produces the amounts
+# AND the basis in one call, from the closing row and the basis the counter saw. The save handler
+# calls it instead of composing `expected_cash` + `count_fields` itself, so a stored amount cannot
+# be written without the basis it was scored on — by construction, not by someone remembering.
+# LOCKED: harness_envelope_receipt_basis.py §K.
+COUNT_BASIS_COLUMN = "basis"            # commcalc.envelope_count.basis (mig 1036)
+
+
+def count_row_fields(closing_row, counted, tolerance=0.0, basis=None):
+    """PURE: everything a `commcalc.envelope_count` row records about the money — the expected
+    snapshot, what was counted, the variance, the short/over verdict, AND which cash basis the
+    count was scored on. The amounts come from `count_fields` (the shared truth table, unchanged);
+    the basis is normalized through `normalize_envelope_basis`, so an absent or unrecognised one
+    degrades to the historical default rather than to a formula-less word.
+
+    Returned as the insert body's own keys, so the caller spreads it and cannot drop the basis."""
+    expected = expected_cash(closing_row, basis)
+    out = dict(count_fields(expected, counted, tolerance))
+    out[COUNT_BASIS_COLUMN] = normalize_envelope_basis(basis)
+    return out
+
+
+def counted_basis(count_row):
+    """PURE: which cash basis a STORED count was scored on → {"basis", "recorded", "label"}.
+
+    `recorded` is the honest half. A row written before mig 1036 carries no basis, and a NULL is
+    NOT backfilled: turning "nobody recorded this" into "somebody chose total_cash" is the absence-
+    is-never-zero defect. So a missing value resolves to the historical default — what the handler
+    of that era scored against by construction, having had no basis to use — and says
+    `recorded: false`, which is what lets a screen word it as "not recorded" instead of asserting a
+    choice nobody made. An unrecognised word resolves the same way, for the same reason.
+
+    `label` is this tenant's own wording for the basis and needs the processor term; callers that
+    have it pass it to `basis_label`. Left as the neutral key here so this function stays pure of
+    label resolution — see `basis_options()`."""
+    raw = str((count_row or {}).get(COUNT_BASIS_COLUMN) or "").strip().lower()
+    known = raw in ENVELOPE_BASES
+    return {"basis": raw if known else ENVELOPE_BASIS_DEFAULT,
+            "recorded": known,
+            "label": raw if known else ENVELOPE_BASIS_DEFAULT}
+
+
 def shortage_amount(variance):
     """The chargeback dollar for a short envelope: the missing cash itself, positive. 0 for an
     over/match variance — an overage is never anyone's chargeback."""
@@ -303,6 +356,11 @@ def report_row(closing_row, count_row, chargeback, ver_row, market,
         "comment": c.get("comment"),
         "counted_by": c.get("counted_by"),
         "counted_at": c.get("counted_at"),
+        # WHICH CASH THE STORED COUNT COUNTED (mig 1036). Distinct from `basis` above, which is the
+        # basis this LINE is being VIEWED on — they differ exactly when management is reading the
+        # receipt on one basis and the count on file was taken on another, which is the confusion
+        # this column exists to end. `recorded: false` means the row predates the column.
+        "counted_basis": counted_basis(c) if counted is not None else None,
         "chargeback_id": c.get("chargeback_id"),
         "chargeback_status": cb.get("status"),
         "chargeback_amount": _f(cb.get("amount")) if cb.get("amount") is not None else None,
