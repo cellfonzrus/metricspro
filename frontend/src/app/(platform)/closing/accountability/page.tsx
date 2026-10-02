@@ -70,7 +70,7 @@ export default function AccountabilityChainPage() {
 
   // Sort: the fixed leading columns, plus one sortable key per stage (its timestamp), plus the
   // stuck pointer. Derived from the SERVER's stage list so a new stage sorts without a UI change.
-  const cols: [string, string][] = useMemo(() => ([
+  const cols = useMemo<[string, string][]>(() => ([
     ['Date', 'day'], ['Store', 'store_name'], ['Market', 'market'],
     ...stages.map((s: any, i: number) => [s.label, `st${i}`] as [string, string]),
     ['Stuck at', 'stuck_label'], ['Done', 'stages_done'],
@@ -84,7 +84,8 @@ export default function AccountabilityChainPage() {
     }
     return r?.[f]
   }, [])
-  const { sorted, sortKey, sortDir, toggle } = useTableSort(rows, cell, 'day')
+  // Seeded newest-day-first: a 30-day board is read from the most recent day backwards.
+  const { sorted, sort, toggle } = useTableSort(rows, cell, { field: 'day', dir: 'desc' })
 
   const columns: ExportColumn[] = useMemo(() => {
     const base: ExportColumn[] = [
@@ -131,9 +132,14 @@ export default function AccountabilityChainPage() {
         )}
       </div>
 
+      {/* The rep picker is hidden deliberately: a row here is a STORE-DAY, not a person's day, and
+          several people appear in one row (two reps filing, a DM collecting, a manager receiving), so
+          filtering the chain by one of them would answer a question this grain cannot answer. The
+          standard-filter doctrine allows omitting a core control where it has no meaning, documented. */}
       <StandardFilterBar
         value={filt} onChange={setFilt}
         periodMode="range"
+        show={{ reps: false }}
         storeOptions={storeOptions} marketOptions={marketOptions}
         storeLabel="Stores…" marketLabel="Markets…"
         right={(
@@ -184,8 +190,11 @@ export default function AccountabilityChainPage() {
               <thead>
                 <tr>
                   {cols.map(([label, field]) => (
-                    <SortableTh key={label + field} label={label} field={field}
-                      sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+                    <SortableTh key={label + field} field={field} sort={sort} onSort={toggle}
+                      disabled={!field}
+                      style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: 'var(--text2)' }}>
+                      {label}
+                    </SortableTh>
                   ))}
                 </tr>
               </thead>
