@@ -437,6 +437,16 @@ on:
       - "backend/harness_pl_range.py"
       - "backend/harness_pl_range_lock.py"
       - "backend/harness_export_xss_upload.py"
+      # index §13e — the store-option fold: its proof, the one home it dereferences, and every
+      # caller wired to it. Without these the lock's own job would be SKIPPED by a change to the
+      # thing it locks, which is the un-wiring it exists to prevent.
+      - "backend/harness_store_option_fold.py"
+      - "backend/app/core/scope.py"
+      - "backend/app/modules/payables/router.py"
+      # index §13d — the store-identity proof and the invariant's one home.
+      - "backend/harness_store_mapping_identity.py"
+      - "backend/app/modules/account/store_identity_audit.py"
+      - "database/runbooks/store_identity_merge_1800_1115.sql"
   push:
     branches: [main]
     paths:
