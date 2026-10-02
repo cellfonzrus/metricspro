@@ -3943,6 +3943,10 @@ neutral noun in the neutral line (`posDeclared` is the term's fact, as in #262).
   `219`, `249_commission_store_resolution.sql`; per-org store_code mig `406`. Endpoints `/store-aliases`
   `router.py:14278,14305`, `/store-resolution` `14296`, `/store-unmatched` `14518`, `/stores` `14254`,
   `/markets` `14246`. **Frontend:** `commcalc/store-match/page.tsx`.
+  **The INVARIANT this chain must satisfy is §13d: one physical store, ONE canonical key.** A
+  `store_mapping` row with no real address (or no row at all) gives the chain nothing to collapse
+  onto and the store's money splits in two — audit it with
+  `account/store_identity_audit.py::audit`, never by eye.
 
 ### 13a. CANONICAL STORE→MARKET RESOLUTION — the once-for-all contract (owner directive 2026-09-03)
 
@@ -4307,6 +4311,61 @@ as a market-grant keyset member; ambiguity fails closed):
   - **Proof:** `backend/harness_workforce_report_registry.py` (stdlib-only; entry shape, registry
     splice/key-uniqueness by AST, resolver delegation, end-to-end builders with the REAL
     `strip_pay`, tax-twin vectors, validator).
+### 13d. STORE IDENTITY — one physical store, ONE canonical key (owner directive 2026-10-02)
+
+**Owner (verbatim):** "the store code mapping is not right, 1800 and 1115 are showing up twice."
+
+**The class.** A store's identity is asserted in THREE tables and nothing required them to agree:
+`storeops.stores` (the roster — which stores exist), `commcalc.store_mapping` (the canonical
+ADDRESS per code, which is what the resolver reads) and `commcalc.store_aliases` (POS spellings →
+code). `account.coa.store_resolver` (§13) can only COLLAPSE spellings onto an address that
+`store_mapping` **already carries**, so a store whose mapping row holds no real location — or that
+has no mapping row at all — has nothing for its other spellings to land on. Its spellings resolve to
+DIFFERENT keys and its money reads as two stores. **Nothing errors; the totals just split.**
+
+| shape | live instance | why the resolver splits it |
+|---|---|---|
+| `store_mapping.store_address` holds the store CODE | `B-1800` → `'B-1800'` | no address to collapse onto; the confirmed alias `'1800 Great Neck rd'` lands on a *second* key |
+| no `store_mapping` row at all | `B-1115`, `B-60TH` | the alias→address step needs the code to be IN `store_mapping`, so the confirmed alias is **inert** |
+
+- **The one home of the invariant:** `app/modules/account/store_identity_audit.py` —
+  `is_placeholder_address(code, address)` (the placeholder rule: blank, or nothing but the code),
+  `spellings_for_code`, `known_codes`, `audit(resolve, mapping_rows, store_rows, alias_rows)` →
+  findings (`placeholder_address` / `roster_without_mapping` / `split_keys`), `format_findings`.
+  `audit()` returning `[]` IS the invariant. It takes the **REAL** `resolve` and never
+  re-implements resolution, so the audit cannot drift from the thing it audits, and CI (fixtures)
+  and the live runbook check the SAME fact with no second copy.
+  The `_key` / `_squash` split is load-bearing: a code DERIVED from its address by deleting the
+  spaces (`1800GreatNeckRd` / `'1800 Great Neck Rd'`) is **not** a placeholder — an alnum-only
+  compare called it one, and the harness caught that before the audit shipped.
+- **The repair:** mig **`1035_store_mapping_identity_repair.sql`** (**WRITTEN, NOT APPLIED** — it
+  changes store ATTRIBUTION, so it is surfaced for owner approval; it moves no money and recomputes
+  no amount). B-1800's placeholder → `'1800 Great Neck Rd'`; mapping rows inserted for `B-1115`
+  (`'1115 Liberty Ave'`) and `B-60TH` (`'1 S 60th street'`, B-1's existing canonical address). Every
+  address is taken from a row the database already holds — none is invented. Idempotent, additive,
+  `-- REVERT:` noted. Afterwards the junk code `1800GreatNeckRd` is a harmless code-alias on the
+  same canonical address rather than a rival key.
+- **`B-60TH` was NOT in the report.** The class sweep found it in the identical shape and it is
+  repaired in the SAME migration — fixing one instance and leaving its sibling is the patchwork the
+  house rules forbid.
+- **REPORTED, deliberately NOT repaired:** `B-2778` (PA) and `Cellular Services` carry a placeholder
+  address whose real location is **nowhere in the database**. The audit reports them and the harness
+  pins that they stay reported. Inventing a street address to clear a finding would be the "write
+  code that hides it" the house rules forbid — these two need the owner to say what the addresses
+  are.
+- **Verified against the LIVE tenant (2026-10-02, read-only), all four orgs:** findings **8 → 2**
+  with the migration applied in memory. The two left are the pair above. The other three orgs
+  (incl. luxelink, 39 mapping / 20 roster / 38 alias rows) were already clean and are untouched —
+  luxelink's 19 code-pairs that share a street number all point at the SAME address, so they
+  collapse to one key and are not this defect.
+- **Proof / lock:** `backend/harness_store_mapping_identity.py` — **39 checks**, DB-free
+  (`_harness_dbfree` tripwire), over the **REAL** `coa.store_resolver`: §A reproduces the live split
+  for all three stores, §B pins the repair (4 / 3 / 4 spellings → ONE key each), §C the negative
+  controls (undo any ONE repair and that store is split again), §D the audit's own truth table incl.
+  the `1800GreatNeckRd` regression, §E no collateral merge (every store the migration does not name
+  resolves BYTE-IDENTICALLY before and after). CI job `store-identity-proof` in
+  `carrier-vocab-guard.yml`.
+
 ### 14s. SALARY → STORE EXPENSES: the write path, and the THREE hours states (owner directive 2026-09-08)
 
 **Owner (verbatim):** "then we need to pull the exact salaries paid as per the schedule and update
@@ -5152,7 +5211,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
-| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
+| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards**, **store IDENTITY — §13d: one physical store must resolve to ONE canonical key; the invariant's one home is `account/store_identity_audit.py::audit` (placeholder address / roster-without-mapping / split keys), locked by `harness_store_mapping_identity.py` (CI `store-identity-proof`); repair mig `1035` WRITTEN, NOT APPLIED** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
 | `storeops.salary_expense_config` (mig `435` — RULE TWO: `line_label`, `expense_type`, `book_scheduled_fallback`, `book_no_data_as_zero`) | one row per org, house defaults seeded; absent row == house defaults | `storeops.router._salary_expense_config` → `salary_expense.resolve_config`. §14s |
@@ -5446,6 +5505,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH` (mig `1035`, NOT APPLIED); `B-2778` / `Cellular Services` reported, address unknown |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |

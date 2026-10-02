@@ -702,6 +702,25 @@ jobs:
         shell: bash
         run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # THE STORE-IDENTITY PROOF (index §13d) drives the REAL account.coa.store_resolver over an in-memory client seeded with
+  # the live house row shapes, plus the REAL account.store_identity_audit. It fails the build if one physical store's
+  # spellings stop collapsing to ONE canonical key — the B-1800 / B-1115 split the owner reported on 2026-10-02, whose
+  # cause is a store_mapping row with no real address (or none at all). Imports the app, so it takes the backend's
+  # dependencies. DB-free (_harness_dbfree tripwire).
+  store-identity-proof:
+    name: Store identity — one store, one canonical key (DB-free, the real resolver)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-identity proof (the live split reproduced; migration 1035's three rows collapse every spelling to one key; undo any one repair and the finding returns — index §13d)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_store_mapping_identity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with
   # the backend's dependencies, like the proofs below. DB-free.
