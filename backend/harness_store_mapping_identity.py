@@ -117,10 +117,16 @@ LIVE_STORES = [
     {"org_id": ORG, "store_code": "B-103", "address": None, "market": "LI"},
     {"org_id": ORG, "store_code": "B-2778", "address": None, "market": "PA"},
 ]
+# the org's OWN companies (commcalc.companies) — the home the audit dereferences for "not a store"
+LIVE_COMPANIES = [
+    {"name": "PA PHONE TRADERS LLC", "legal_name": "PA PHONE TRADERS LLC"},
+    {"name": "Cellular Services", "legal_name": "Cellular Services dot net LLC"},
+]
 LIVE_ALIASES = [
     {"org_id": ORG, "alias": "1800 Great Neck rd", "store_code": "B-1800"},
     {"org_id": ORG, "alias": "1115 Liberty Ave", "store_code": "B-1115"},
     {"org_id": ORG, "alias": "2778 Mount Ephraim Ave", "store_code": "B-1598"},
+    {"org_id": ORG, "alias": "2778 Ephraim Ave", "store_code": "B-1598"},
     {"org_id": ORG, "alias": "3 Palisade Ave Yonkers", "store_code": "B-3PL"},
 ]
 
@@ -128,9 +134,16 @@ LIVE_ALIASES = [
 # `database/runbooks/store_identity_merge_1800_1115.sql` — owner-run, steps 1 / 2 / 2b. There is
 # exactly ONE repair path for this defect and this is it; the harness pins ITS statements, so the
 # runbook and this proof cannot drift. (Steps 1 and 2 landed in #346; step 2b is the B-60TH sibling.)
+def _repair(r):
+    if r["store_code"] == "B-1800":
+        return dict(r, store_address="1800 Great Neck Rd")
+    if r["store_code"] == "B-2778":                      # step 2c — the closed store's successor
+        return dict(r, store_address="1598 Mount Ephraim Ave")
+    return dict(r)
+
+
 REPAIRED_MAPPING = (
-    [dict(r, store_address="1800 Great Neck Rd") if r["store_code"] == "B-1800" else dict(r)
-     for r in LIVE_MAPPING]
+    [_repair(r) for r in LIVE_MAPPING]
     + [{"org_id": ORG, "store_code": "B-1115", "store_address": "1115 Liberty Ave"},
        {"org_id": ORG, "store_code": "B-60TH", "store_address": "1 S 60th street"}]
 )
@@ -140,8 +153,9 @@ def resolver_for(mapping, aliases):
     return store_resolver(FakeClient({"store_mapping": mapping, "store_aliases": aliases}), ORG)
 
 
-def findings_for(mapping, stores, aliases):
-    return audit_mod.audit(resolver_for(mapping, aliases), mapping, stores, aliases)
+def findings_for(mapping, stores, aliases, companies=None):
+    return audit_mod.audit(resolver_for(mapping, aliases), mapping, stores, aliases,
+                           LIVE_COMPANIES if companies is None else companies)
 
 
 def by_code(findings, code, kind=None):
@@ -181,9 +195,17 @@ ok("A9 B-60TH's roster address already collapses onto B-1's address, but its COD
    and r0("B-60TH").lower() != "1 s 60th street",
    (r0("1 S 60th St, Philadelphia"), r0("B-60TH")))
 
-ok("A10 B-2778 and Cellular Services are REPORTED as placeholders, not silently tolerated",
-   by_code(f0, "B-2778", audit_mod.PLACEHOLDER_ADDRESS)
-   and by_code(f0, "Cellular Services", audit_mod.PLACEHOLDER_ADDRESS))
+ok("A10 B-2778 is a CLOSED store (owner 2026-10-02) whose CODE never followed it to its "
+   "successor: its address spellings already resolve to B-1598, its code does not",
+   r0("2778 Mount Ephraim Ave").lower() == "1598 mount ephraim ave"
+   and r0("B-2778").lower() == "b-2778",
+   (r0("2778 Mount Ephraim Ave"), r0("B-2778")))
+ok("A11 and it is reported as a split, not silently tolerated",
+   by_code(f0, "B-2778", audit_mod.PLACEHOLDER_ADDRESS))
+ok("A12 'Cellular Services' is NOT reported — it is one of the org's own companies, so it is "
+   "company-level data and no store exists there to repair (owner 2026-10-02)",
+   not by_code(f0, "Cellular Services"),
+   audit_mod.format_findings(by_code(f0, "Cellular Services")))
 
 # ════ §B the repair ═══════════════════════════════════════════════════════════════════════════════
 print("\n§B the repair — the runbook's three rows collapse every spelling to one key")
@@ -195,7 +217,10 @@ for label, spellings, expect in (
          "1800 great neck rd"),
         ("B2 B-1115", ["B-1115", "1115 Liberty Ave", "1115 liberty ave"], "1115 liberty ave"),
         ("B3 B-60TH", ["B-60TH", "1 S 60th St, Philadelphia", "1 S 60th street", "B-1"],
-         "1 s 60th street")):
+         "1 s 60th street"),
+        ("B3b B-2778 onto its successor", ["B-2778", "2778 Mount Ephraim Ave", "2778 Ephraim Ave",
+                                           "B-1598", "1598 Mount Ephraim Ave"],
+         "1598 mount ephraim ave")):
     got = {r1(s).lower() for s in spellings}
     ok("%s — %d spellings → ONE key %r" % (label, len(spellings), expect),
        got == {expect}, sorted(got))
@@ -204,9 +229,9 @@ ok("B4 no store is left split", not [f for f in f1 if f["kind"] == audit_mod.SPL
    audit_mod.format_findings([f for f in f1 if f["kind"] == audit_mod.SPLIT_KEYS]))
 ok("B5 no roster store is left without a mapping row",
    not [f for f in f1 if f["kind"] == audit_mod.ROSTER_WITHOUT_MAPPING])
-ok("B6 the ONLY findings left are the two placeholders whose real address is not in the database",
-   sorted(f["store_code"] for f in f1) == ["B-2778", "Cellular Services"],
-   audit_mod.format_findings(f1))
+ok("B6 NOTHING is left — every store resolves to one key, and the one non-store is excused",
+   f1 == [], audit_mod.format_findings(f1, audit_mod.company_level_keys(REPAIRED_MAPPING,
+                                                                       LIVE_COMPANIES)))
 
 ok("B7 the junk code 1800GreatNeckRd becomes a harmless code-alias, not a rival key",
    r1("1800GreatNeckRd").lower() == r1("B-1800").lower())
@@ -229,6 +254,19 @@ for label, code, mapping in ctrl:
     ok("%s → %s is split again" % (label, code), by_code(fc, code, audit_mod.SPLIT_KEYS),
        audit_mod.format_findings(fc))
 
+# C4 is deliberately a PLACEHOLDER control, not a split one. B-2778's succession is recorded on
+# ALIASES that name its SUCCESSOR's code (B-1598), so 2778's address spellings belong to B-1598's
+# spelling group and B-2778's own group holds one spelling. `split_keys` therefore cannot see this
+# shape — `placeholder_address`, the repairable cause, is what catches it. Stating the limit rather
+# than asserting a finding that will never appear.
+_c4 = findings_for([dict(r, store_address="B-2778") if r["store_code"] == "B-2778" else dict(r)
+                    for r in REPAIRED_MAPPING], LIVE_STORES, LIVE_ALIASES)
+ok("C4 B-2778 address back to the placeholder → reported again as a placeholder",
+   by_code(_c4, "B-2778", audit_mod.PLACEHOLDER_ADDRESS), audit_mod.format_findings(_c4))
+ok("C4b …and NOT as a split — a succession recorded on the SUCCESSOR's aliases is invisible to "
+   "the split check, which is why the placeholder rule is the one that catches a closed store",
+   not by_code(_c4, "B-2778", audit_mod.SPLIT_KEYS))
+
 # ════ §D the audit's own truth table ══════════════════════════════════════════════════════════════
 print("\n§D the audit's own rules")
 ip = audit_mod.is_placeholder_address
@@ -249,6 +287,23 @@ ok("D8 a store known only to the roster still yields its spellings",
 ok("D9 known_codes unions all three tables",
    {"B-1115", "B-1800", "B-60TH", "B-1598", "B-1"}
    <= set(audit_mod.known_codes(LIVE_MAPPING, LIVE_STORES, LIVE_ALIASES)))
+clk = audit_mod.company_level_keys
+ok("D9a a mapping key that IS a company name is company-level, not a store",
+   clk([{"store_code": "Cellular Services", "store_address": "Cellular Services"}],
+       LIVE_COMPANIES) == ["Cellular Services"])
+ok("D9b matched case- and punctuation-insensitively, on name OR legal_name",
+   clk([{"store_code": "cellular-services", "store_address": "x"}], LIVE_COMPANIES)
+   and clk([{"store_code": "Cellular Services dot net LLC", "store_address": "x"}], LIVE_COMPANIES))
+ok("D9c a REAL store is never excused, even in an org whose companies are known",
+   clk([{"store_code": "B-1800", "store_address": "1800 Great Neck Rd"}], LIVE_COMPANIES) == [])
+ok("D9d NO companies passed excuses NOTHING (a caller who forgets gets the stricter answer)",
+   clk([{"store_code": "Cellular Services", "store_address": "Cellular Services"}], []) == []
+   and [f["store_code"] for f in findings_for(LIVE_MAPPING, LIVE_STORES, LIVE_ALIASES, [])
+        if f["store_code"] == "Cellular Services"])
+ok("D9e a company name merely CONTAINED in a longer address is NOT excused (no substring match)",
+   clk([{"store_code": "B-7", "store_address": "12 Cellular Services Plaza"}], LIVE_COMPANIES) == [])
+ok("D9f the exemption is printed, never silent",
+   "company-level" in audit_mod.format_findings([], ["Cellular Services"]))
 ok("D10 the audit is pure — a clean fixture yields NO findings",
    audit_mod.audit(lambda s: "x", [{"store_code": "B-9", "store_address": "9 Main St"}],
                    [{"store_code": "B-9", "address": "9 Main St"}], []) == [])
@@ -265,9 +320,11 @@ ok("D12 every finding carries one of the enumerated kinds",
 
 # ════ §E no collateral merge ═══════════════════════════════════════════════════════════════════════
 print("\n§E the repair touches nothing else")
+# B-2778 is NOT here: step 2c names it. Its successor B-1598 and the alias spellings that already
+# pointed at B-1598 ARE here — the merge must not disturb the store it merges INTO.
 untouched = ["B-103", "103 Fulton Ave", "B-1598", "1598 Mount Ephraim Ave",
-             "2778 Mount Ephraim Ave", "B-3PL", "3 Palisade Ave", "3 Palisade Ave Yonkers",
-             "B-2778", "Cellular Services", "a store nobody has ever mapped"]
+             "2778 Mount Ephraim Ave", "2778 Ephraim Ave", "B-3PL", "3 Palisade Ave",
+             "3 Palisade Ave Yonkers", "Cellular Services", "a store nobody has ever mapped"]
 diff = {s: (r0(s), r1(s)) for s in untouched if r0(s) != r1(s)}
 ok("E1 every store the runbook does not name resolves BYTE-IDENTICALLY before and after",
    diff == {}, diff)
@@ -301,8 +358,14 @@ ok("F3 step 2 inserts the B-1115 mapping row with the address §B pins",
    and "insert into commcalc.store_mapping" in _low)
 ok("F4 step 2b inserts the B-60TH mapping row with the address §B pins",
    "'b-60th'" in _low and "'1 s 60th street'" in _low)
+ok("F4b step 2c sends B-2778 to its successor's address",
+   "'b-2778'" in _low and "'1598 mount ephraim ave'" in _low)
 ok("F5 every repaired code §B models is named in the runbook",
-   all(c.lower() in _low for c in ("B-1800", "B-1115", "B-60TH")))
+   all(c.lower() in _low for c in ("B-1800", "B-1115", "B-60TH", "B-2778")))
+ok("F5b the runbook records that 'Cellular Services' is company-level and NOT repaired",
+   "cellular services" in _low and "company-level" in _low)
+ok("F5c the runbook states the 1578/1598 reading rather than silently picking one",
+   "1578" in _low and "1598" in _low)
 ok("F6 each step is idempotent (guarded UPDATE / NOT EXISTS insert)",
    _low.count("not exists") >= 2 and "store_address = 'b-1800'" in _low)
 ok("F7 the runbook carries REVERT notes for all three steps",
