@@ -86,7 +86,7 @@ def _log_system_error(request, exc) -> str:
             "detail": {"ref": ref, "method": request.method, "path": safe_path,
                        "exc_type": type(exc).__name__,
                        "traceback": traceback.format_exc()[-4000:]},
-            "remediation": ("An unexpected server error. Search core.failure_log for this reference id to "
+            "remediation": ("An unexpected server error. Search the failure log for this reference id to "
                             "see the full trace. Fix the underlying cause; the masked message shields the "
                             "internals from the client."),
         }).execute()

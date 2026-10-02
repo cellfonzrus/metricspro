@@ -65,14 +65,14 @@ export default function ClosingImportsPage() {
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Setup (one-time)</div>
         <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
           <li>Create a Google Cloud <b>service account</b>, enable the <b>Sheets API</b>, download its JSON key.</li>
-          <li>On Railway set <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> = that JSON, then redeploy.</li>
+          <li>Send that JSON key to support — it is installed on the server for you.</li>
           <li><b>Share</b> the responses sheet (Viewer) with the service-account email below.</li>
           <li>Paste the sheet id, pick a schedule, and enable.</li>
         </ol>
         <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 7, background: saOk ? '#e6f7ec' : '#fef3e2' }}>
           {saOk
             ? <>✅ Service account configured: <b>{cfg.service_account_email || '(key set)'}</b> — share the sheet with this address.</>
-            : <>⚠️ <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> is not set on the server yet. Add it on Railway + redeploy to enable auto-import.</>}
+            : <>⚠️ The Google service-account key isn&apos;t installed on the server yet. Contact support to enable auto-import.</>}
         </div>
       </div>
 

@@ -6,6 +6,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
 import ScreenLink from '@/components/ScreenLink'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Per-carrier MANUAL upload for the MA reports — the SAP-style parallel track to the flaky live portal
 // pull (owner directive 2026-07-17). Wizard: pick a carrier → pick a report (mapping status shown) →
@@ -96,7 +97,7 @@ export default function MaManualUpload() {
                     <MapBadge r={r} />
                     {r.calibration && <span style={{ fontSize: 11, color: '#b45309' }}>· calibration</span>}
                     <div style={{ flex: 1 }} />
-                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>→ {r.target_table}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>→ {sourceLabel(r.target_table)}</span>
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
                     Dedup key: {r.dedup_keys.join(' + ') || '(full row)'}
@@ -185,7 +186,7 @@ function MapStep({ carrierId, report, setMsg, onSaved }: { carrierId: string; re
 
   return (
     <div>
-      <h3 style={{ marginTop: 0 }}>3. Map <code>{report.display_name}</code> columns → {report.target_table}</h3>
+      <h3 style={{ marginTop: 0 }}>3. Map <code>{report.display_name}</code> columns → {sourceLabel(report.target_table)}</h3>
       <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px', maxWidth: 720 }}>
         SAP-style: map once, then just upload data. This report is <MapBadge r={report} />.
         {report.source !== 'none' && ' You only need to re-map if your file uses different column headers than the built-in layout.'}
@@ -269,7 +270,7 @@ function UploadStep({ carrierId, report, setMsg, onRemap }: { carrierId: string;
     <div>
       <h3 style={{ marginTop: 0 }}>4. Upload data — <code>{report.display_name}</code></h3>
       <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 12, maxWidth: 720 }}>
-        💵 <b>Ingest only.</b> This loads the file into <code>{report.target_table}</code>. No commission or residual is recalculated — the loaded numbers are presented for review before any recalc.
+        💵 <b>Ingest only.</b> This loads the file into the {sourceLabel(report.target_table)}. No commission or residual is recalculated — the loaded numbers are presented for review before any recalc.
         <LastUploadLine rec={last[report.report_key]} loaded={loaded} />
       </div>
 

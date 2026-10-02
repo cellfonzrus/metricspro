@@ -7,6 +7,7 @@ import { optionsFromRows } from '@/lib/standard-filters'
 import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
 import LedgerBatchUpload from '@/components/LedgerBatchUpload'
 import { SETUP_NOTICE, setupFailed, useSetupDetailVisible } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Canonical Commission Ledger (SAP-style) — normalise ANY carrier's commission/tx file into FIVE canonical
 // buckets: Commission / Spiff / Equipment rebate / Residual-monthly / Auto Pay residual. A payout paid over
@@ -345,7 +346,7 @@ export default function CommissionLedgerPage() {
             {provPeriod?.raw_rows ? (
               <span style={{ color: 'var(--text3)' }}>
                 raw MA feed holds {provPeriod.raw_rows.toLocaleString()} row(s) for this period
-                {Object.keys(provPeriod.raw_available || {}).length ? ` (${Object.entries(provPeriod.raw_available).map(([t, n]) => `${t} ${n}`).join(', ')})` : ''}
+                {Object.keys(provPeriod.raw_available || {}).length ? ` (${Object.entries(provPeriod.raw_available).map(([t, n]) => `${sourceLabel(t)} ${n}`).join(', ')})` : ''}
                 {prov.raw_sources?.some(s => s.truncated) ? ' — feed scan hit its row cap, so this count is a floor' : ''}
               </span>
             ) : null}
@@ -387,7 +388,7 @@ export default function CommissionLedgerPage() {
               {prev.saved != null ? `✅ Refreshed ${prev.saved.toLocaleString()} line(s) from MA data` : `Preview — ${prev.would_write.toLocaleString()} line(s) would be written`}
             </b>
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>
-              {period} · {prev.sources.map(s => s.source_table).join(' + ')}
+              {period} · {prev.sources.map(s => sourceLabel(s.source_table)).join(' + ')}
             </span>
             <div style={{ flex: 1 }} />
             {prev.saved == null && (
@@ -433,13 +434,13 @@ export default function CommissionLedgerPage() {
             <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
               <b>Excluded as implausible</b> (an ID-like value read as dollars is the failure this catches):{' '}
               {prev.guard.excluded_examples.slice(0, 5).map((x, i) => (
-                <span key={i}>{i ? ' · ' : ''}{x.source_table}.{x.column} = {money(x.amount)}{x.label ? ` (${x.label})` : ''}</span>
+                <span key={i}>{i ? ' · ' : ''}{sourceLabel(x.source_table)} › {x.column} = {money(x.amount)}{x.label ? ` (${x.label})` : ''}</span>
               ))}
             </div>
           )}
           {prev.guard.refused?.length > 0 && prev.guard.refused.map((r, i) => (
             <div key={i} style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
-              ⛔ {r.source_table}: {r.reason}
+              ⛔ {sourceLabel(r.source_table)}: {r.reason}
             </div>
           ))}
           {prev.unmapped?.length > 0 && (
@@ -454,13 +455,13 @@ export default function CommissionLedgerPage() {
           {prev.sources.map(s => (
             <details key={s.report_key} style={{ fontSize: 12, marginTop: 6 }}>
               <summary style={{ cursor: 'pointer' }}>
-                <b>{s.source_table}</b> — {s.read.rows.toLocaleString()} row(s)
+                <b>{sourceLabel(s.source_table)}</b> — {s.read.rows.toLocaleString()} row(s)
                 {s.read.matched_by ? ` matched by ${s.read.matched_by}` : ' (no rows matched)'} · {s.kind} shape · mapping from {s.column_map_source}
                 {s.diag.amount_col ? ` · amount = ${s.diag.amount_col} (${s.diag.amount_confidence})` : ''}
               </summary>
               <div style={{ padding: '6px 0 0 12px', color: 'var(--text2)' }}>
                 {s.mapped_fields.map(f => (
-                  <div key={f.target_field}>{f.label} ← <code>{s.source_table}.{f.col}</code>{' '}
+                  <div key={f.target_field}>{f.label} ← {sourceLabel(s.source_table)} › <code>{f.col}</code>{' '}
                     <span style={{ color: 'var(--text3)' }}>(via header &ldquo;{f.header}&rdquo;, {f.confidence})</span></div>
                 ))}
                 {s.synthesized_fields?.length > 0 && (
@@ -693,7 +694,7 @@ export default function CommissionLedgerPage() {
                       {CATS.map(c => <td key={c} style={{ padding: '6px 8px', textAlign: 'right', color: r[c] ? 'inherit' : 'var(--text3)' }}>{r[c] ? money(r[c]) : '·'}</td>)}
                       <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{money(r.ledger_payout)}</td>
                       <td style={{ padding: '6px 8px', textAlign: 'right' }}
-                          title={r.matched ? 'from rep_commissions.total_payout' : 'no matching live rep payout for this period'}>
+                          title={r.matched ? `total payout from the ${sourceLabel('rep_commissions')}` : 'no matching live rep payout for this period'}>
                         {r.live_payout == null ? <span style={{ color: 'var(--text3)' }}>—</span> : money(r.live_payout)}
                       </td>
                     </tr>

@@ -191,7 +191,7 @@ export default function GpCategoryMapPage() {
       )}
 
       {loading ? <div style={{ color: 'var(--text3)' }}>Loading departments…</div> : depts.length === 0 ? (
-        <div style={{ color: 'var(--text3)', fontSize: 13 }}>No departments found in raw_sales for this org yet — upload sales first.</div>
+        <div style={{ color: 'var(--text3)', fontSize: 13 }}>No departments found in your sales uploads yet — upload sales first.</div>
       ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>

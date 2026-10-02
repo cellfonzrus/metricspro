@@ -24,6 +24,7 @@ import {
   type PlanPreview, type Refused, type Seed, type SourceEdit,
 } from './plan-sources-logic'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 type Evidence = { state: string; count: number | null; reason: string }
 type Task = {
@@ -554,7 +555,7 @@ function PlanSourcesCard({ source, preview, onSaved }: { source: string; preview
             <label style={{ display: 'flex', gap: 8, alignItems: 'baseline', cursor: 'pointer' }}>
               <input type="checkbox" checked={!!e?.enabled} onChange={ev => edit(s.key, { enabled: ev.target.checked })} />
               <span style={{ fontWeight: 600 }}>{s.label}</span>
-              <span style={{ color: 'var(--text3)', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>{s.table}</span>
+              <span style={{ color: 'var(--text3)', fontSize: 11 }}>{sourceLabel(s.table)}</span>
               <span style={{ marginLeft: 'auto', color: 'var(--text2)' }}>
                 {s.error ? `could not be read: ${s.error}`
                   : s.kind === 'lines'

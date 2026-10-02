@@ -22,7 +22,7 @@ async def send_email(to: str, subject: str, html: str, attachments: list | None 
     Raises RuntimeError with the provider message on failure (caught by the caller
     so one bad recipient doesn't abort the batch)."""
     if not is_configured():
-        raise RuntimeError("Resend not configured (set RESEND_API_KEY + NOTIFY_FROM_EMAIL)")
+        raise RuntimeError("Email sending isn't set up yet — contact support to switch it on.")
 
     frm = settings.NOTIFY_FROM_EMAIL
     if settings.NOTIFY_FROM_NAME:

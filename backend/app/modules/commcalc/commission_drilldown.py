@@ -160,7 +160,7 @@ def _annotate_plan_component(pc, cfg):
         "checked_lines": n_lines, "suspect_lines": n_suspect,
         "by_flag": _pdq.summarize(flagged),
         "rate_issues": rate_issues,
-        "note": ("raw_sales carries no cost column — a line's cost is implied as ext_price - gp. "
+        "note": ("The monthly sales upload carries no cost column — a line's cost is implied as price minus GP. "
                  "Flagged lines are a SOURCE-DATA finding, not a calculation change: nothing here "
                  "alters what was paid."),
     }

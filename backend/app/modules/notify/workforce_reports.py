@@ -84,7 +84,7 @@ def _require_pay_access(org_id, authorization):
         raise ValueError(
             "This report is payroll money (market-manager-and-up per your org's pay-visibility "
             "config). Your role may not view it, so nothing was sent. An admin can "
-            "widen storeops.tenants.pay_visibility / pay_visible_roles, or grant the "
+            "widen the pay-visibility roles in the company settings, or grant the "
             "'employee_pay_rates' data permission.")
 
 

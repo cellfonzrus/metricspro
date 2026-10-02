@@ -7,6 +7,7 @@ import RunCommissionButton from '../_lib/RunCommissionButton'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierRowIds } from '@/lib/carrier-scope'
 import { SETUP_NOTICE, SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Multi-month payout schedules (migration 057). A schedule spreads one activation's commission over
 // N months (flat or %MRC); months 2..N pay only if the bill was paid + residual received that month.
@@ -340,7 +341,7 @@ export default function PayoutSchedulesPage() {
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🏷️ Per-product MRC catalog</div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
-          Maps a subscriber&apos;s plan (the raw_mi <strong>Customer Plan</strong>) → its monthly recurring charge.
+          Maps a subscriber&apos;s plan (the {sourceLabel('raw_mi')}&apos;s <strong>Customer Plan</strong>) → its monthly recurring charge.
           A <strong>% of MRC</strong> line uses this directly when its basis is <strong>Per-product MRC</strong>, and as
           a fallback whenever the carrier statement reports $0 MRC — so residual installments
           compute real amounts instead of $0.{!multi && ' Some carrier statements report $0 MRC; those that report a real MRC are unaffected.'}

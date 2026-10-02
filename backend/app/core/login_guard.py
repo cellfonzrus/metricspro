@@ -64,7 +64,7 @@ def _alert_lockout(email, failures):
             "detail": {"email": email, "failures": failures},
             "remediation": ("Repeated failed logins for this email. If unexpected, the account may be "
                             "under a credential-stuffing attempt — consider a password reset and check "
-                            "the access log / login_attempt ledger for the source IPs."),
+                            "the access log / failed-login history for the source IPs."),
         }).execute()
     except Exception:
         pass

@@ -9,6 +9,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import ScreenLink from '@/components/ScreenLink'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // DEVICE COST RECONCILIATION — the OPTION-A MEASUREMENT PASS (owner GO 2026-07-30; the design note
 // docs/designs/device-cost-ledger.md §9 "Execution order locked", item 1).
@@ -205,7 +206,7 @@ export default function DeviceCostReconPage() {
     { header: 'IMEI-linkable', field: 'linkable', get: (r: Row) => (r.linkable ? 'yes' : 'NO') },
     { header: 'Why not linkable', field: 'unlink_reason', get: (r: Row) => r.unlink_reason || '' },
     { header: 'Reference', field: 'ref', get: (r: Row) => r.ref || '' },
-    { header: 'Source table', field: 'source_table', get: (r: Row) => r.source_table || '' },
+    { header: 'Source', field: 'source_table', get: (r: Row) => sourceLabel(r.source_table) },
   ]
 
   const deltaCols: ExportColumn[] = [
@@ -691,7 +692,7 @@ export default function DeviceCostReconPage() {
                 {(d.source_legend || []).map((s: any) => (
                   <tr key={s.source} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={td}><b style={{ color: SRC_TINT[s.source] }}>{s.n}</b> {s.label}</td>
-                    <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>{s.table}</td>
+                    <td style={{ ...td, fontSize: 12 }}>{sourceLabel(s.table)}</td>
                     <td style={{ ...td, fontSize: 12 }}>{s.grain}</td>
                     <td style={{ ...td, fontSize: 12 }}>{s.amount_kind}<div style={{ color: 'var(--text3)' }}>{s.means}</div></td>
                     <td style={{ ...td, fontSize: 12 }}>{s.timing_label}</td>

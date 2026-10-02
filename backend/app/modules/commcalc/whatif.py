@@ -774,7 +774,7 @@ def _ma_byod_residual(client, org_id, months, cfg):
             "avg_residual_per_byod_sub": round(byod_income / comm_stats["byod_lines"], 2),
             "avg_residual_per_other_sub": round(other_income / other_lines, 2) if other_lines else 0.0,
             "match_rate": 1.0,
-            "note": "MA-fed: BYOD 1st-6-month commission (M1-M6) + rebate per activated phone (raw_ma_commission).",
+            "note": "MA-fed: BYOD 1st-6-month commission (M1-M6) + rebate per activated phone (Marketplace commission details).",
         }
 
     note = None
@@ -821,7 +821,7 @@ def _ma_retail_cost(client, org_id, cfg):
                 break
     if lines == 0:
         return {"available": False, "lines": 0, "total_retail_cost": 0.0,
-                "note": "raw_ma_pr_activation present but no recognizable retail-cost column yet (report un-calibrated)."}
+                "note": "PR activation details present but no recognizable retail-cost column yet (report un-calibrated)."}
     return {"available": True, "lines": lines, "total_retail_cost": round(total, 2)}
 
 
@@ -1649,8 +1649,8 @@ def _income_source_swap(per, orphan, months, use_ledger):
                        "rebate / unmapped 'other'), origin-agnostic, residual-order lines excluded"),
         "by_month": rows, "totals": tot,
         "note": ("Displayed figures come from the CANONICAL LEDGER; 'old' is what the legacy "
-                 "raw_ma_commission source would have shown." if use_ledger else
-                 "Displayed figures come from the LEGACY raw_ma_commission source; 'new' is what the "
+                 "Marketplace commission details source would have shown." if use_ledger else
+                 "Displayed figures come from the LEGACY Marketplace commission details source; 'new' is what the "
                  "canonical Commission Ledger would show if income_source were set to 'ma_ledger'. "
                  "Nothing on this page has moved."),
     }

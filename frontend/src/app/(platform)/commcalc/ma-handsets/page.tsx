@@ -9,6 +9,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import ScreenLink from '@/components/ScreenLink'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // MARKETPLACE HANDSET COGS (owner-approved package 2026-07-29).
 //
@@ -310,7 +311,7 @@ export default function MaHandsetCogsPage() {
           <div><b>Definition.</b> {d.definition_note}</div>
           <div><b>Basis.</b> {d.basis_note}</div>
           <div><b>Open orders.</b> {d.open_note}</div>
-          <div><b>Source.</b> <code>{d.source_table}</code> · window {d.window_from} → {d.window_to}</div>
+          <div><b>Source.</b> {sourceLabel(d.source_table)} · window {d.window_from} → {d.window_to}</div>
           {d.unmapped_market_rows > 0 && (
             <div><b>Market coverage.</b> {d.unmapped_market_rows} of {d.unfiltered_rows} line(s) have no
               market and are grouped under <b>{d.no_market_label}</b> — pick that bucket to see them, or

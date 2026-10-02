@@ -666,7 +666,7 @@ def run_due(x_notify_secret: str = Header(default=""), only_org: str = "", limit
                   ((client.schema("core").table("system_check_state").select("*")
                     .order("org_id", desc=False).execute().data) or [])}
     except Exception as e:
-        return {"ok": False, "error": "system_check_state not ready: %s" % cbx.redact(e), "ran": 0}
+        return {"ok": False, "error": "the check-state store is not ready: %s" % cbx.redact(e), "ran": 0}
     # The universe is every ACTIVE TENANT, not just the tenants that already have a state row: a
     # tenant nobody has ever checked must be picked up on the first tick, not stay invisible until
     # someone notices it is missing. `due_orgs` treats a never-run org as due.

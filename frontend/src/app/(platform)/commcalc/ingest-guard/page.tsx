@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
 import { actorLabel } from '@/lib/actor'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 /**
  * CROSS-TENANT INGEST GUARD — admin UI (owner-approved 2026-08-06).
@@ -241,7 +242,7 @@ export default function IngestGuardPage() {
                   </td>
                   <td style={td}>
                     <div>{it.source || '—'}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{it.target_table}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{sourceLabel(it.target_table)}</div>
                   </td>
                   <td style={td}>{it.rows_seen}</td>
                   <td style={td}>{money(it.amount_seen)}</td>

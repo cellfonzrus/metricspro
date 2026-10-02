@@ -13,6 +13,7 @@
 import type { CSSProperties } from 'react'
 import ScreenLink, { SCREENS, type ScreenKey } from '@/components/ScreenLink'
 import type { ShowsIn as ShowsInPayload } from '@/lib/report-kinds'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 const wrap: CSSProperties = { fontSize: 12, color: 'var(--text2)', margin: '4px 0 8px', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline' }
 const pill: CSSProperties = { background: 'var(--bg,rgba(37,99,235,.06))', border: '1px solid var(--border)', borderRadius: 999, padding: '1px 8px', whiteSpace: 'nowrap' }
@@ -52,7 +53,7 @@ export default function ShowsIn({ info, loaded = true, lead = 'This upload will 
         </span>
       ))}
       {compact && cons.length > shown.length && <span style={{ color: 'var(--text3)' }}>+{cons.length - shown.length} more</span>}
-      {info.table && <span style={{ color: 'var(--text3)' }}>· lands in <code style={{ fontSize: 11 }}>{info.table}</code></span>}
+      {info.table && <span style={{ color: 'var(--text3)' }}>· lands in the {sourceLabel(info.table)}</span>}
     </div>
   )
 }

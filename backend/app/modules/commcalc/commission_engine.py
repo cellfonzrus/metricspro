@@ -771,13 +771,13 @@ def _store_trace(store_market, bridge, raw_store):
             t["alias_keys"] = sorted({k for k in (str(hit["store_code"]).strip().lower(),
                                                   str(hit["address"]).strip().lower(), low) if k})
     if t["exact_market"]:
-        t["message"] = f"market '{t['exact_market']}' resolved from commcalc.store_mapping."
+        t["message"] = f"market '{t['exact_market']}' resolved from Store Mapping."
     elif t["status"] == "mapped_no_market":
-        t["message"] = ("a commcalc.store_mapping row exists for this store but its MARKET is blank — "
+        t["message"] = ("a Store Mapping entry exists for this store but its MARKET is blank — "
                         "set the market in Commission settings → Stores & Markets. A market-scope "
                         "assignment cannot attach until it is set.")
     elif t["alias"] and t["alias_market"]:
-        t["message"] = (f"store_mapping has no row for this POS string, but the store-match table "
+        t["message"] = (f"Store Mapping has no entry for this POS string, but Store Matching "
                         f"resolves it via {t['alias']['via']} to {t['alias']['store_code']} "
                         f"({t['alias']['address'] or 'no address'}) in market '{t['alias_market']}' — "
                         f"this only counts once Store resolution is set to 'alias' (Commission settings).")
@@ -786,7 +786,7 @@ def _store_trace(store_market, bridge, raw_store):
                         f"{t['alias']['store_code']}, but that store has NO market set — set it in "
                         f"Commission settings → Stores & Markets.")
     else:
-        t["message"] = ("this POS store string resolves to nothing — no commcalc.store_mapping address, "
+        t["message"] = ("this POS store string resolves to nothing — no Store Mapping address, "
                         "no store code, and no /store-match alias. Map it at /commcalc/store-match. "
                         "Until then the rep's market is blank and no store/market-scope assignment can "
                         "attach.")

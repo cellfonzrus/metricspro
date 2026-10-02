@@ -4,6 +4,7 @@ import { api, ORG_ID } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import { scopeState, connectorNotApplicableCopy, type ConnectorScope } from '@/lib/connectors'
 import { SetupNotice } from '@/lib/setupNotice'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 
 type Cfg = {
@@ -169,13 +170,13 @@ export default function EpaySweepAdmin() {
         <div style={row}>
           <span style={lab}>Reports to pull</span>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Monthly Incentive & ATU Subscriber Details (#102817) → raw_mi">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title={`Monthly Incentive & ATU Subscriber Details (#102817) → ${sourceLabel('raw_mi')}`}>
               <input type="checkbox" checked={cfg.sweep_mi !== false} onChange={e => set('sweep_mi', e.target.checked)} /> MI / ATU
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Comprehensive Compensation Report (#100614) → raw_comp_report">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title={`Comprehensive Compensation Report (#100614) → ${sourceLabel('raw_comp_report')}`}>
               <input type="checkbox" checked={!!cfg.sweep_comp} onChange={e => set('sweep_comp', e.target.checked)} /> Comprehensive Comp
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Commission Payment Detail (#50273) → raw_payment_detail">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title={`Commission Payment Detail (#50273) → ${sourceLabel('raw_payment_detail')}`}>
               <input type="checkbox" checked={!!cfg.sweep_payment} onChange={e => set('sweep_payment', e.target.checked)} /> Payment Detail
             </label>
           </div>

@@ -24,6 +24,7 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 export type FieldOption = {
   value: string; lines?: number; stored_only?: boolean; resolved_bucket?: boolean; config_hits?: number
@@ -58,7 +59,7 @@ export const FALLBACK_VOCAB: Vocab = {
   match_ops: ['equals', 'contains', 'in'].map(v => ({ value: v, label: v })),
   payout_kinds: [
     { value: 'flat_per_unit', label: 'Flat $ per unit', uses: 'amount' },
-    { value: 'pct_mrc', label: '% of MRC (raw_mi)', uses: 'pct' },
+    { value: 'pct_mrc', label: `% of MRC (${sourceLabel('raw_mi')})`, uses: 'pct' },
     { value: 'pct_gp', label: '% of GP', uses: 'pct' },
     { value: 'pct_price', label: '% of price (sale price)', uses: 'pct' },
     { value: 'pct_price_over_cost', label: '% of price − cost', uses: 'pct' },

@@ -222,13 +222,13 @@ def exact_cost(input_tokens, output_tokens, rate_row):
     split and output tokens cost ~5x input on every current model (see the module docstring)."""
     tin, tout = max(0, _int(input_tokens)), max(0, _int(output_tokens))
     if not rate_row:
-        return None, {"reason": "no active core.token_rates row matches this model — set one at "
+        return None, {"reason": "no active token rate matches this model — set one at "
                                 "/admin/fix-requests to price it",
                       "input_tokens": tin, "output_tokens": tout}
     rin = _dec(rate_row.get("usd_per_mtok_in"))
     rout = _dec(rate_row.get("usd_per_mtok_out"))
     if rin is None or rout is None:
-        return None, {"reason": "the matching core.token_rates row has no usable in/out rate",
+        return None, {"reason": "the matching token rate has no usable in/out rate",
                       "input_tokens": tin, "output_tokens": tout,
                       "rate_id": rate_row.get("id")}
     cost = (Decimal(tin) * rin + Decimal(tout) * rout) / _MTOK

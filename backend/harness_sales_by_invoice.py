@@ -508,7 +508,7 @@ check("E13 CR.tender_recon_3way / every consumer still sees the X-report under t
 w = CR.put_tender_basis(db, ORG, "invoice")
 check("E14 put_tender_basis (the ONE writer) sets the org's basis and reads it back; an unknown value is refused; an org with no tenant row is told so",
       w == {"written": True, "basis": "invoice", "read_back": True} and CR.tender_basis(db, ORG) == {"basis": "invoice", "source": "your setting"}
-      and "must be one of" in CR.put_tender_basis(db, ORG, "sales")["error"] and "no storeops.tenants row" in CR.put_tender_basis(fresh_db(), ORG, "invoice")["error"], w)
+      and "must be one of" in CR.put_tender_basis(db, ORG, "sales")["error"] and "settings record is missing" in CR.put_tender_basis(fresh_db(), ORG, "invoice")["error"], w)
 inv = {d: CR._xreport_tenders_by_store(db, ORG, d) for d in ("2026-08-01", "2026-08-02", "2026-08-03")}
 check("E15 under basis 'invoice' the SAME resolver returns the invoice-derived split per store-day (the kiosk's debit 87.10 as card; the vendor rebate / coupon NOT collected — beside as not_customer; 08-03 from the invoices), with by_class",
       inv["2026-08-01"]["V-10"]["cash"] == 181.07 and inv["2026-08-01"]["V-10"]["card"] == 200.0 and inv["2026-08-01"]["V-22"]["card"] == 87.1

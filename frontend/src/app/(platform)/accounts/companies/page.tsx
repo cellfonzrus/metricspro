@@ -191,7 +191,7 @@ export default function CompaniesPage() {
                   </td>
                 </tr>
               ))}
-              {visible.length === 0 && <tr><td colSpan={3} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No stores match. Stores come from the store-mapping registry and from your sales data (raw_sales / daily feed).</td></tr>}
+              {visible.length === 0 && <tr><td colSpan={3} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No stores match. Stores come from the store-mapping registry and from your sales data (the monthly sales upload and the daily sales feed).</td></tr>}
             </tbody>
           </table>
         </div>

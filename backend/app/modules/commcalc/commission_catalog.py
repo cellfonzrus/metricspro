@@ -110,7 +110,7 @@ def add_field(client, org_id, report_key, label, kind="other", data_type="number
                 {"p_column": tf, "p_type": data_type, "p_table": table}).execute()
         except Exception as e:
             raise RuntimeError(
-                f"Could not add column '{tf}' to carrier_commission. Run migration "
+                f"Could not add column '{tf}' to the carrier commission statement. Run migration "
                 f"067_dynamic_commission_column_fn.sql in Supabase first, then retry. [{e}]")
 
     row = {"org_id": org_id, "report_key": report_key, "target_field": tf, "label": label or tf,

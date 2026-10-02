@@ -14,6 +14,7 @@ import { useActiveCarrier } from '@/lib/auth-context'
 import { useReportLabels, usePosTerm } from '@/lib/report-labels'
 import ReportLabelSettings from '@/components/ReportLabelSettings'
 import ScreenLink, { SCREENS, type ScreenKey } from '@/components/ScreenLink'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
@@ -341,10 +342,10 @@ export default function ExecMtdPage() {
       {(src.stores_shown != null) && (
         <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}>
           <span style={{ background: 'var(--surface2)', borderRadius: 8, padding: '4px 10px' }}>
-            Reading <b>{src.primary === 'daily_sales_feed' ? 'daily email feed' : 'monthly raw_sales'}</b>
+            Reading <b>{sourceLabel(src.primary === 'daily_sales_feed' ? 'daily_sales_feed' : 'raw_sales')}</b>
             {' '}· <b>{src.stores_shown}</b> store{src.stores_shown === 1 ? '' : 's'} shown
-            {' '}(feed {src.feed_rows ?? 0} · raw_sales {src.raw_rows ?? 0} rows)
-            {src.stores_from_other > 0 && <> · <b>{src.stores_from_other}</b> store{src.stores_from_other === 1 ? '' : 's'} pulled from {src.other === 'raw_sales' ? 'raw_sales' : 'the feed'} that the primary didn’t carry</>}
+            {' '}(feed {src.feed_rows ?? 0} · monthly upload {src.raw_rows ?? 0} rows)
+            {src.stores_from_other > 0 && <> · <b>{src.stores_from_other}</b> store{src.stores_from_other === 1 ? '' : 's'} pulled from {src.other === 'raw_sales' ? `the ${sourceLabel('raw_sales')}` : 'the feed'} that the primary didn’t carry</>}
             {src.filled_cells > 0 && <> · {src.filled_cells} filled + {src.richer_cells || 0} richer store-day cell(s)</>}
           </span>
         </div>

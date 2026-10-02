@@ -203,7 +203,7 @@ export function hasReport(perms: Permissions, area: string): boolean {
 // AND gating the matching backend read (same contract as REPORT_AREAS + settings).
 export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
   { key: 'carrier_residual', label: 'Carrier residual (raw carrier data)',
-    help: 'Raw carrier/processor residual reports (raw_mi-derived). Only enforced when the tenant sets residual visibility to "permissioned".' },
+    help: 'Raw carrier/processor residual reports (from the MI & ATU report). Only enforced when the tenant sets residual visibility to "permissioned".' },
   // THE carrier-commission permission (owner 2026-09-28, index §6m). Registered here ONLY so the Roles editor can
   // tick / untick it per role; the decision is the server's (`payout_audience.carrier_view_allowed`) and reaches
   // the client as /me `permissions.payout` — never read it with hasDataGrant (the lock fails the build if you do).
