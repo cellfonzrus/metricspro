@@ -180,7 +180,7 @@ on:
       - "backend/app/modules/account/router.py"
       - "backend/harness_carrier_vocab_guard.py"
       # index §29.11 — the closing-refusal lock reads the router, the two pure modules, its own
-      # proof, migration 1035 and the Management Review screen
+      # proof, migration 1037 and the Management Review screen
       - "backend/harness_closing_submit_refusal.py"
       - "backend/app/modules/closing/submit_refusal.py"
       - "backend/app/modules/closing/dedup_key.py"
@@ -714,11 +714,30 @@ jobs:
         shell: bash
         run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # THE STORE-IDENTITY PROOF (index §13d) drives the REAL account.coa.store_resolver over an in-memory client seeded with
+  # the live house row shapes, plus the REAL account.store_identity_audit. It fails the build if one physical store's
+  # spellings stop collapsing to ONE canonical key — the B-1800 / B-1115 split the owner reported on 2026-10-02, whose
+  # cause is a store_mapping row with no real address (or none at all). Imports the app, so it takes the backend's
+  # dependencies. DB-free (_harness_dbfree tripwire).
+  store-identity-proof:
+    name: Store identity — one store, one canonical key (DB-free, the real resolver)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-identity proof (the live split reproduced; the runbook's three rows collapse every spelling to one key; undo any one repair and the finding returns — index §13d)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_store_mapping_identity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
   # THE CLOSING-REFUSAL LOCK (index §29.11, owner bug report 2026-10-02 "we cannot see the daily closing which was
   # submitted"). A daily closing that is REFUSED used to store nothing at all — not even in commcalc.closing_attempt,
   # the submit audit trail — so "I submitted it" versus "we see nothing" was unresolvable for any store, rep or tenant.
   # Every refusal now goes through closing/router._refuse into that same table, with its reason declared once in
-  # closing/submit_refusal.REFUSALS; the dedup key has one home (closing/dedup_key, whose SQL_EXPR migration 1035 must
+  # closing/submit_refusal.REFUSALS; the dedup key has one home (closing/dedup_key, whose SQL_EXPR migration 1037 must
   # contain verbatim). This job FAILS THE BUILD if a submit validation raises HTTPException directly, if a code is
   # raised that the registry does not declare (or declared and never raised), if the router starts spelling a dedup key
   # of its own, if the try counter stops dereferencing _real_attempt_count, if the migration's SQL drifts from the

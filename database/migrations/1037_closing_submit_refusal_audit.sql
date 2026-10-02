@@ -1,4 +1,4 @@
--- 1035_closing_submit_refusal_audit.sql — a REFUSED daily closing leaves a record (index §29.11).
+-- 1037_closing_submit_refusal_audit.sql — a REFUSED daily closing leaves a record (index §29.11).
 -- Run this in the Supabase SQL editor. Numbered, idempotent, additive.
 --
 -- ⚠️ SCHEMA CHANGE — SURFACED FOR OWNER APPROVAL BEFORE APPLYING. No money column is read or
@@ -111,4 +111,4 @@ create unique index if not exists daily_closing_one_active_per_rep_day
   where dedup_key is not null;
 
 NOTIFY pgrst, 'reload schema';
-SELECT 'Migration 1035 complete — refused closings are recorded, and one dedup-key formula guards them' AS status;
+SELECT 'Migration 1037 complete — refused closings are recorded, and one dedup-key formula guards them' AS status;

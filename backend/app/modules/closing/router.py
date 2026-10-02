@@ -2146,7 +2146,7 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     except Exception as e:
         if "daily_closing_one_active_per_rep_day" in str(e) or "duplicate key" in str(e).lower():
             # A race: two near-simultaneous submits both passed the pre-check above. The unique
-            # index (mig 502, widened by mig 1035) is the safety net — same refusal either way, and
+            # index (mig 502, widened by mig 1037) is the safety net — same refusal either way, and
             # recorded like every other one so the race is visible instead of inferred.
             _refuse(client, org_id, d, body, "duplicate_race", detail=str(e)[:300], tenders=tenders)
         # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106,
@@ -2465,7 +2465,7 @@ def closing_attempts(period: str = None, date: str = None, store: str = None,
                        "t_gift": t.get("t_gift"), "t_store_acct": t.get("t_store_acct"), "t_zelle": t.get("t_zelle"),
                        "t_acima": t.get("t_acima"),
                        # A REFUSED submit (index §29.11) — the closing was never stored and this says
-                       # why. Pre-migration-1035 rows carry no refusal columns and read as real tries,
+                       # why. Pre-migration-1037 rows carry no refusal columns and read as real tries,
                        # which is exactly what they were.
                        "refused": bool(t.get("refused")), "refusal_code": t.get("refusal_code"),
                        "refusal_detail": t.get("refusal_detail"),
@@ -8072,7 +8072,7 @@ def _refuse(client, org_id, d, body, code, detail="", tenders=None) -> None:
         try:
             client.schema("commcalc").table("closing_attempt").insert(row).execute()
         except Exception:
-            # Migration 1035 not run yet — the refusal columns do not exist. Record the refusal
+            # Migration 1037 not run yet — the refusal columns do not exist. Record the refusal
             # WITHOUT them rather than losing it: an auditable try-row with no reason is still
             # strictly more than the nothing that was stored before.
             for k in _refusal.REFUSED_COLUMNS:

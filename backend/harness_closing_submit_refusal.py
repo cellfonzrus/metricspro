@@ -33,12 +33,12 @@ Proves:
      `refusals` and `last_refusal_code` are reported, and a store-day whose ONLY events are
      refusals still qualifies for `only_review=true` — that store-day is precisely what management
      needs to see.
-  G. DEGRADE pre-migration-1035 — the refusal columns do not exist yet: the refusal is still
+  G. DEGRADE pre-migration-1037 — the refusal columns do not exist yet: the refusal is still
      recorded (without its reason columns) rather than lost, and the submit still refuses cleanly.
   H. WIRING LOCKS — these FAIL THE BUILD if the design un-wires (the house's "lock it so it cannot
      un-wire" rule): no submit validation may raise HTTPException directly, every code raised must
      be declared, the router must not spell a dedup key inline, the attempt counter must dereference
-     `_real_attempt_count`, and migration 1035's SQL must be `dedup_key.SQL_EXPR` verbatim.
+     `_real_attempt_count`, and migration 1037's SQL must be `dedup_key.SQL_EXPR` verbatim.
 """
 import sys
 import os
@@ -213,7 +213,7 @@ from app.modules.closing import dedup_key as dk        # noqa: E402
 from fastapi import HTTPException                       # noqa: E402
 
 ROUTER_PATH = "app/modules/closing/router.py"
-MIG_PATH = "../database/migrations/1035_closing_submit_refusal_audit.sql"
+MIG_PATH = "../database/migrations/1037_closing_submit_refusal_audit.sql"
 ROUTER_SRC = open(ROUTER_PATH).read()
 
 
@@ -518,13 +518,13 @@ check("a clean single-try closing is still NOT in the review list", not only2["g
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
-# G. DEGRADE — migration 1035 not run yet: the refusal columns do not exist
+# G. DEGRADE — migration 1037 not run yet: the refusal columns do not exist
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
-print("\n== G. pre-migration-1035: the refusal is recorded without its reason columns, never lost ==")
+print("\n== G. pre-migration-1037: the refusal is recorded without its reason columns, never lost ==")
 
 
 class PreMigClient(FakeClient):
-    """closing_attempt rejects any insert carrying the migration-1035 columns, exactly as PostgREST
+    """closing_attempt rejects any insert carrying the migration-1037 columns, exactly as PostgREST
     does before the migration is applied; the retry without them must still land."""
     def table(self, name):
         q = super().table(name)
@@ -642,7 +642,7 @@ check("H5 GET /closing/attempts separates refusals from tries through the one ru
 # H6 — the SQL half of the dedup key must be the module's own expression, verbatim. Change one and
 #      the build fails; that is the only thing stopping the Python/SQL divergence coming back.
 _mig = open(MIG_PATH).read() if os.path.exists(MIG_PATH) else ""
-check("H6a migration 1035 exists", bool(_mig), detail=MIG_PATH)
+check("H6a migration 1037 exists", bool(_mig), detail=MIG_PATH)
 check("H6b it contains dedup_key.SQL_EXPR verbatim", dk.SQL_EXPR in _mig)
 check("H6c SQL_EXPR and for_row fold the same way (trim store, trim+lower name)",
       "btrim(coalesce(d.store_code,''))" in dk.SQL_EXPR
@@ -651,7 +651,7 @@ check("H6c SQL_EXPR and for_row fold the same way (trim store, trim+lower name)"
 _migdir = os.path.dirname(MIG_PATH)
 _others = []
 for fn in sorted(os.listdir(_migdir)) if os.path.isdir(_migdir) else []:
-    if not fn.endswith(".sql") or fn.startswith(("502_", "1035_")):
+    if not fn.endswith(".sql") or fn.startswith(("502_", "1037_")):
         continue
     body = open(os.path.join(_migdir, fn)).read()
     if re.search(r"set\s+dedup_key\s*=", body, re.I):
@@ -660,7 +660,7 @@ check("H6d no THIRD migration spells a dedup-key formula", not _others, detail=s
 
 # H7 — the refusal columns the code writes must be the ones the migration adds.
 for col in sr.REFUSED_COLUMNS:
-    check(f"H7 migration 1035 adds the column the code writes: {col}",
+    check(f"H7 migration 1037 adds the column the code writes: {col}",
           f"add column if not exists {col}" in _mig)
 
 
