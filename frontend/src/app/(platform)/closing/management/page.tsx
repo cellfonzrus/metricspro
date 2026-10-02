@@ -83,7 +83,8 @@ export default function ClosingManagementPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🛡️ Closing — Management Review</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             Every value a rep entered before a close was accepted — including the tries that were
-            <strong> over or short</strong> and the ones <strong>auto-accepted after 3 attempts</strong>. Reps
+            <strong> over or short</strong>, the ones <strong>auto-accepted after 3 attempts</strong>, and the
+            submits that were <strong>turned away before anything was stored</strong>. Reps
             only ever see “over” or “short”; here you see the amounts and the true system variance.
             <span style={{ color: 'var(--text3)' }}> DMs can’t see this page.</span>
           </p>
@@ -142,8 +143,12 @@ export default function ClosingManagementPage() {
                     <span style={{ fontSize: 13, fontWeight: 700 }}>{g.store_address || g.store_code}</span>
                     <span style={{ fontSize: 13 }}>{g.employee_name || '—'}</span>
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{g.close_date}</span>
-                    <span className="badge" style={{ fontSize: 11, background: g.attempts >= 3 ? '#fbe4e4' : 'var(--surface2)', color: g.attempts >= 3 ? '#b42318' : 'var(--text2)' }}>{g.attempts} attempt{g.attempts > 1 ? 's' : ''}</span>
+                    <span className="badge" style={{ fontSize: 11, background: g.attempts >= 3 ? '#fbe4e4' : 'var(--surface2)', color: g.attempts >= 3 ? '#b42318' : 'var(--text2)' }}>{g.attempts === 0 ? 'never counted' : `${g.attempts} attempt${g.attempts > 1 ? 's' : ''}`}</span>
                     {g.auto_accepted && <span className="badge" style={{ fontSize: 11, background: '#b42318', color: '#fff' }}>⚑ auto-accepted — review</span>}
+                    {/* A REFUSED submit (index §29.11): the rep tried and NO closing was stored. Before
+                        this existed the attempt left no trace at all, so a missing closing could not be
+                        told apart from one never submitted. */}
+                    {g.refusals > 0 && <span className="badge" style={{ fontSize: 11, background: '#fef3c7', color: '#92400e' }}>⚠ {g.refusals} submit{g.refusals > 1 ? 's' : ''} turned away — {REFUSAL_WORDS[g.last_refusal_code] || 'see tries'}</span>}
                     {g.released_at && <span className="badge" style={{ fontSize: 11, background: '#dbeafe', color: '#1d4ed8' }}>🔓 released by {g.released_by || 'management'}{g.correction_count ? ` · corrected ${g.correction_count}×` : ''}</span>}
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -182,9 +187,10 @@ export default function ClosingManagementPage() {
                             <td style={{ padding: '5px 8px', fontSize: 12, textAlign: 'right' }}>{fmt(t.entered_credit)}</td>
                             <td style={{ padding: '5px 8px', fontSize: 12 }}><Dir d={t.credit_dir} credit /></td>
                             <td style={{ padding: '5px 8px', fontSize: 12 }}>
-                              {t.blocked ? <span style={{ color: '#b45309' }}>recount</span>
-                                : t.auto_accepted ? <span style={{ color: '#b42318', fontWeight: 600 }}>auto-accepted</span>
-                                  : <span style={{ color: '#15803d' }}>accepted</span>}
+                              {t.refused ? <span style={{ color: '#92400e', fontWeight: 600 }} title={t.refusal_detail || undefined}>turned away — {REFUSAL_WORDS[t.refusal_code] || t.refusal_code}</span>
+                                : t.blocked ? <span style={{ color: '#b45309' }}>recount</span>
+                                  : t.auto_accepted ? <span style={{ color: '#b42318', fontWeight: 600 }}>auto-accepted</span>
+                                    : <span style={{ color: '#15803d' }}>accepted</span>}
                             </td>
                           </tr>
                         ))}
@@ -202,6 +208,23 @@ export default function ClosingManagementPage() {
       )}
     </div>
   )
+}
+
+// What each refusal CODE means in a manager's words. Presentation only — the authority is
+// backend/app/modules/closing/submit_refusal.REFUSALS, and harness_closing_submit_refusal.py fails
+// the build if a code exists there with no words here (index §29.11).
+const REFUSAL_WORDS: Record<string, string> = {
+  bad_close_date: 'the date could not be read',
+  closer_not_permitted: 'submitted under another person’s name',
+  closer_no_name: 'the submitter has no name on file',
+  envelope_upload_failed: 'the envelope photo would not save',
+  envelope_photo_required: 'cash declared with no envelope photo',
+  duplicate_already_submitted: 'already submitted for the day',
+  duplicate_multiple: 'more than one closing already exists',
+  duplicate_race: 'submitted twice at once',
+  expense_description_required: 'an expense had no description',
+  expense_line_invalid: 'an expense line was incomplete',
+  identity_missing: 'no store or no employee name',
 }
 
 function lastTry(g: any) { return g.tries?.[g.tries.length - 1] || {} }

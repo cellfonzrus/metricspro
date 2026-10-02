@@ -5012,6 +5012,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1035`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
+| `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1035`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1035` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
 | *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
 | Actor columns stamped by `router._caller_uid` — `installment_category_rule.updated_by` (**UUID**, mig 245), `plan_installment_schedule.updated_by` + `plan_installment_schedule_audit.changed_by` (mig 210), `commission_org_config.updated_by` (mig 201), `discrepancy_results.appealed_by` (mig 947), `commission_payout_ledger.recorded_by` (mig 267), `ingest_store_guard.updated_by` / `ingest_store_quarantine.decided_by` (mig 280), `targets.updated_by` (mig 006), `financing_target.updated_by` (mig 272) — **who did this: a uid or NULL, never a sentinel** (§19.34) | the plan-installment / category / matcher / payout-config / expected-commission editors, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, the ingest-guard + targets + financing-target saves — all via ONE helper `_caller_uid` (`_mpc_who` / `_xc_who` / `_agency_who` dereference it) | the UI through ONE display rule `frontend/src/lib/actor.ts::actorLabel` (NULL / legacy `'web'` → "system"); lock `harness_actor_uid_lock.py` |
@@ -5200,6 +5202,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
+| `GET /closing/attempts` — additive: `refusals`, `last_refusal_code`, `last_refusal_detail`, `last_refused_at` per group, `refused` / `refusal_code` / `refusal_detail` per try; `attempts` means REAL tries; a store-day whose only events are refusals always qualifies for `only_review=true` | `closing/router.closing_attempts` (dereferencing `submit_refusal.is_real_try`) | §29.11 |
 | **Every JSON response** (no route added) — a MESSAGE-key value carrying a RUNTIME database / hosting error (`setup_notice.SYSTEM_INTERNAL`: duplicate key, violates … constraint, permission denied for table, an error dict `'code': '23505'`, `postgrest…APIError`, a `*.supabase.co` host) reaches a non-super-admin as `SYSTEM_NOTICE` from that sentence on; data rows never read; the original to the server log | `core/setup_notice.SetupNoticeMiddleware` (unchanged registration) | §19.38 |
 | **Every JSON response** (no route added) — a MESSAGE-key value (`detail`, `note`, `hint`, `error`, … — `setup_notice.MESSAGE_KEYS`, never a data row / list) carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; data cells are never read; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
@@ -5452,6 +5456,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
@@ -11569,6 +11574,97 @@ still shows the same, if disabled it should not show anything platform wide"*.
 - **Lock:** `backend/harness_closing_config_active.py`.
 
 ---
+
+### 29.11 A REFUSED CLOSING LEFT NO TRACE — the submit audit trail only started once every check had passed (owner bug report 2026-10-02)
+
+Owner, verbatim: *"also abid did the daily closing for the 117 bunrsoide ave as a dm whoc is now working as a
+sales rep int eh store - we cannot see the daily closing which was submitted, , also he did it again today it
+is stikll not shwoing , 2 things first investigate and fix amd second dont let duplicate entries"*.
+
+**LIVE EVIDENCE FIRST (read-only, before a line was written).** 117 E Burnside Ave is `B-117`
+(`commcalc.store_mapping`, market NYC, sfid `001U100000Ga3kfIAB`; the store master knows it too, with a NULL
+address, which is the house norm there).
+
+| where a closing can land | what was there for B-117 |
+|---|---|
+| `commcalc.daily_closing` | rows on 09-28 (Kashif), 09-29 and 09-30 (Rohit) — **none on 10-01 or 10-02** |
+| `commcalc.closing_attempt` (the submit audit trail) | **nothing from that submitter at ANY store since 09-28** |
+| `commcalc.daily_closing_verification` | no `B-117` row — it did not land on the DM-verify screen either |
+
+The submitter is `abid.akhter@cellfonzrus.us` = app_user `full_name` **"Rana"**, employee **E012** (`storeops.employees.name`
+"Rana", home store B-509, role Market Manager), login role `district_manager`. Every closing he has ever filed is
+under "Rana", so a search for "Abid" finds none of them — worth knowing, and NOT the bug.
+
+**Three candidate causes were ruled out by measurement, not by reading code.** (1) *Scope* — `caller_scope` is a
+strict no-op platform-wide: `_rbac_enabled` reads `app_config.rbac_enabled` and that table does not exist, so
+every keyset is `None` and nothing is being filtered from anyone. (2) *Market resolution* — B-117 carries market
+NYC in BOTH vocabularies, so no market pick drops it. (3) *A twin store identity* (the §511 luxelink shape) —
+B-117 has exactly one mapping row and no alias. The closing was **not hidden. It was REFUSED and nothing was kept.**
+
+**ROOT CAUSE — THE CLASS.** `closing/router.create_row` runs every validation BEFORE the first write, and
+`closing_attempt` — the table that exists so management can see what a rep tried — was written only once they all
+passed (`_log_attempt`, after the close gate). So ALL EIGHT refusal paths stored nothing at all:
+
+| refusal | status | stored before this fix |
+|---|---|---|
+| the close date could not be read | 400 | nothing |
+| the submitter may not use that name / has no name on file | 403 | nothing |
+| the envelope photo would not save | 502 | nothing |
+| **cash declared with no envelope photo** (`require_photo_if_cash` is **true org-wide here**, since 2026-08-11) | 400 | nothing |
+| already submitted for the day / more than one row exists / the index race | 409 | nothing |
+| an expense line, or an expense with no description | 400 | nothing |
+| no store or no employee name on the submit | — | the row was WRITTEN, with no dedup key and no index protection |
+
+A rep says "I submitted it", management sees nothing, and there is no evidence either way — for any store, any
+rep, any tenant. "Burnside's closing is missing" is the instance; **"a refused closing leaves no trace" is the
+class**, and it is what made this unanswerable rather than merely wrong.
+
+**DUPLICATE CHECK (build gate).** Searched this index and the code for an existing mechanism before building:
+`commcalc.closing_attempt` (mig 103) IS the submit audit trail and `GET /closing/attempts` IS its reader, so both
+are **REUSED** — the refusal is three additive columns on that table and three additive keys on that response, not
+a sibling table, endpoint or screen. On duplicates the owner asked to prevent: **migration 502 already prevents
+them**, in the app and as a partial unique index, and the live data agrees — **1,799 closings since 2026-08-01,
+zero duplicate groups, zero NULL dedup keys, zero blank store codes or names**. So no second guard was built. Two
+real gaps in the existing one were closed instead (below). `closing/closer_pick` (§29.7) keeps the one rule for
+WHOSE name a closing carries; it now returns a declared refusal code instead of raising its own 403.
+
+**THE FIX — one home per fact, every caller dereferencing it.**
+- `closing/submit_refusal.py` (pure) — **THE refusal registry**: code → (HTTP status, the sentence the submitter
+  reads). `Refusal`, `audit_row`, and `is_real_try` — the ONE rule for "does this row count as a try".
+- `closing/router._refuse` — **the single raise site**. Records the refusal in `commcalc.closing_attempt` with the
+  reason, then raises the registry's error. `create_row` raises no `HTTPException` of its own any more.
+- `closing/dedup_key.py` (pure) — **THE dedup key**. It had been spelled twice and had already drifted: Python
+  folded a STRIPPED employee name, mig 502's SQL folded the raw one, so a name stored with a stray space produced
+  two keys for one person and the index could not see the duplicate it exists to stop. `SQL_EXPR` is the same
+  formula in SQL and the migration must contain it verbatim.
+- **A refusal is never a try.** `_real_attempt_count` dereferences `is_real_try`, so two failed photo uploads no
+  longer carry a rep to the auto-accepting third try without recounting. That one is money-affecting.
+- **Identity is required.** A submit with no store or no employee name is refused (`identity_missing`) instead of
+  being written with a NULL dedup key, outside the index.
+- **The released window is closed.** Mig 502's index was `where dedup_key is not null and released_at is null`; a
+  release→resubmit UPDATEs the same row, so that second half protected nothing and only left a window for two
+  concurrent inserts. Mig 1035 drops it, after asserting no key is held twice.
+- **Management Review shows it** (`closing/management/page.tsx`): "⚠ N submits turned away — cash declared with no
+  envelope photo", each try row says `turned away`, and a store-day that was only ever refused reads **"never
+  counted"** instead of "0 attempts" and always qualifies for `only_review=true`.
+
+**MIGRATION 1035 — SURFACED FOR OWNER APPROVAL, NOT APPLIED.** Additive columns + the index widening + a
+dedup-key recompute that refuses rather than merging anything ambiguous. No amount column is read or written.
+
+**Lock: `backend/harness_closing_submit_refusal.py` — 108 checks, DB-free.** §A–C pure (registry complete, no
+storage name in submitter copy, the whitespace divergence gone), §D the REGRESSION (each refusal path through the
+real `create_row`: no closing stored AND exactly one audited reason — before the fix every one of those found
+zero rows), §E the money point, §F the Management Review view, §G degrade pre-migration, **§H the WIRING LOCKS
+that fail the build**: no submit validation may raise `HTTPException` directly, every code raised must be
+declared and every declared code must be raised, the router may spell no dedup key, the try counter must
+dereference `_real_attempt_count`, the migration's SQL must be `dedup_key.SQL_EXPR` verbatim, and the screen must
+have words for every code. Verified to BITE: re-inlining one `raise HTTPException` turns ten checks red.
+`harness_closing_closer_pick.py` B5 was updated to pin the new shape (still a 403 carrying the reason).
+
+**OPEN — reported, not fixed.** Which of the eight refusals Abid actually hit cannot be known: the refusals that
+predate this fix left nothing behind, which is the defect. `require_photo_if_cash` being on org-wide makes the
+photo gate the likeliest. From the next refusal on, the answer is on the Management Review screen.
+
 
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)
 
