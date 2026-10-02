@@ -14845,3 +14845,90 @@ Each rule carries an armed control.
 
 **No migration. No money moved. No money math touched** — every figure the chain shows is a date, a name
 or a count. Index: §48.
+
+## 49. THE CAMERAS WENT DARK AND NOTHING SAID SO — registering vision with the machinery that already existed (owner 2026-10-02)
+
+Owner: *"the cameras are not working live any more — set up a mechanism to check every day if they
+working and if they are not working trouble shoot autonomously and initiate a fix … Anything which is
+automated in the system should have this mechanism already built in and the index and the registry
+updated with what mechanisms are in place to keep the system working healthy."*
+
+### 49.1 The gap was never detection
+
+`GET /vision/status` has answered the whole question since mig `900`: whether Google is linked, when
+its token last worked, how many events arrived, how many cameras are assigned, whether a store PC is
+alive. It had simply **never run on its own**. It answers when somebody opens Vision → Settings, so
+the first thing to notice a dark estate was a person wondering why a chart was flat — and on the
+first estate that took weeks.
+
+Nor was the machinery missing. `register_provider()` has put module faults in the admin attention
+popup for months; `control_box_api._provider_specs` turns any registered provider into a
+super-admin lamp *"with no code change and no migration here"*; mig `971`'s self-scheduling daily
+system check already walks every org and evaluates those lamps, hourly tick, per-org cadence, and
+carries a lamp about its own last run. **Vision had never registered.** That is the whole finding,
+and it is why `docs/SELF_HEALING_REGISTRY.md` now exists: a module absent from that register is
+almost certainly a module nothing is watching.
+
+### 49.2 What was added, and how little of it is new
+
+| Piece | What it is |
+|---|---|
+| `app/modules/vision/health.py` | The judgement, pure: `(snapshot, now) → findings`. No DB, no network, no clock. |
+| `app/modules/vision/attention.py` | Six lines of wiring. One `register_provider` call buys the popup item **and** the control-box lamp **and** daily evaluation. |
+| `/vision/health` | The same assessment on demand, so an operator who just changed something need not wait a day. |
+| `/vision/health/run-due` | The repair half, which the attention framework deliberately will not do: a provider is cheap and read-only (it runs on every login popup), so it may report a rejected token and must not go and retry it. |
+| mig `1034` | Self-registers that repair job on every boot. No human-pasted SQL — mig 950's lesson. |
+
+### 49.3 The loop, and the rule that keeps it honest
+
+```
+assess  →  auto-fix what is genuinely fixable  →  RE-ASSESS  →  escalate only what survived
+```
+
+The re-assess is load-bearing: escalating off the first look reports problems the fix just resolved;
+skipping the alert because a fix ran hides the ones it did not.
+
+**Auto-fix is two actions and the shortness is the design.** `retry_token` — a refresh that failed
+on a 5xx or a timeout, where asking once more *is* the fix. `resync_devices` — the real repair when
+a camera was renamed or re-homed in the Google Home app. Everything else escalates naming the thing
+a **person** must do: re-authorising Google, publishing an OAuth consent screen, powering on a store
+PC, drawing a counting line.
+
+`events_stopped` deliberately has **no** auto-fix, and that absence is the point. The cause is almost
+always the Pub/Sub push subscription, which lives in the customer's own Google Cloud. Re-listing
+devices would "do something" and change nothing — and a monitor that runs a fix unable to address
+the cause reports a repair it never made. The rule is now written into the registry: *never claim a
+repair you cannot make.*
+
+This is operational self-healing, the data-health monitor's class. It is **not** the auto-fix
+pipeline: nothing here deploys code, and `fix_pipeline.py`'s Phase-1 rule is untouched.
+
+### 49.4 The diagnosis this exists for
+
+While an OAuth consent screen sits in **Testing**, Google expires every refresh token after **seven
+days**. An estate goes dark weekly, on the dot, with an error that reads like a random Google
+outage — so it gets reconnected, and dies again the next week, forever. `health.assess` separates
+that from a genuine revocation by the gap between `token_issued_at` and `last_error_at` and says
+both halves out loud: reconnect now, **and** publish the consent screen or this recurs every seven
+days. `GET /vision/status` now returns both timestamps for that reason alone.
+
+The other finding worth naming is `entrances_without_line`: a camera flagged as an entrance with no
+counting line builds no gate, counts nobody and reports **zero** — which is indistinguishable from a
+day when nobody came in. Counting entrances that *do* have a line (`_entrances_with_line`) is what
+turns that silence into "4 entrances counting nobody".
+
+### 49.5 Lock
+
+`backend/harness_vision_health.py` — **59 checks**, stdlib, DB-free. §B exists because one branch
+read two ways is the real risk: calling a dead grant retryable turns a weekly outage into a loop of
+refresh attempts against a customer's Google account, and calling a transient 503 "revoked" wakes
+somebody at 3am to re-authorise something that would have healed itself. Both directions are pinned.
+The build fails when: a grant that died inside 8 days stops being diagnosed as the Testing expiry; a
+200-day-old `invalid_grant` starts being; a dead grant becomes auto-retryable; a dead grant stops
+suppressing the event-silence finding (one cause, one alert); the silence threshold widens past a
+working day; an offline store PC is given a phantom remote fix; auto-fixes stop de-duplicating; or
+the alert key stops distinguishing *which* problems are live, so a new fault arriving at noon is
+never reported. Five mutations armed, all caught.
+
+**No money math touched.** Every figure is a timestamp, a count or a lamp. Registry:
+`docs/SELF_HEALING_REGISTRY.md`. Index: §49.
