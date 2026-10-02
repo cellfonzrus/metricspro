@@ -34,7 +34,7 @@ THE DESIGN — one fact, one home, applied at the boundary every caller already 
     `neutralize` too, under the same key rules.
 
 THE SIBLING CLASS — DATABASE / HOSTING NAMES (owner 2026-10-02: "hide database names from the users", index
-§19.37). The same boundary carries a second detector, `SYSTEM_INTERNAL`: the RUNTIME error text of the database /
+§19.38). The same boundary carries a second detector, `SYSTEM_INTERNAL`: the RUNTIME error text of the database /
 its REST layer / the hosting stack, interpolated into a message at run time (`detail=f"save failed: {e}"`) —
 "duplicate key value violates unique constraint …", "permission denied for table …", "null value in column …",
 an error dict `{'code': '23505', …}`, a `postgrest.exceptions.APIError`, a `*.supabase.co` host. Such a sentence
@@ -58,7 +58,7 @@ import re
 import sys
 
 SETUP_NOTICE = "This feature isn't switched on for your company yet. Contact support to enable it."
-# The sibling sentence (§19.37): a runtime database / hosting error. Says what the customer can do, names nothing.
+# The sibling sentence (§19.38): a runtime database / hosting error. Says what the customer can do, names nothing.
 SYSTEM_NOTICE = "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."
 
 # ── WHERE: the message-shaped keys (the ONLY values the boundary reads) ─────────────────────────────────
@@ -110,7 +110,7 @@ def is_setup_internal(text) -> bool:
     return isinstance(text, str) and bool(text) and SETUP_INTERNAL.search(text) is not None
 
 
-# ── WHAT (the sibling, §19.37): a RUNTIME database / hosting error interpolated into a message ─────────
+# ── WHAT (the sibling, §19.38): a RUNTIME database / hosting error interpolated into a message ─────────
 # By SHAPE — the database's own error sentences, its error-dict repr, its client's exception names, the hosting
 # hosts. Never a bare word a customer's message may hold ("duplicate", "permission", "denied", "Postgres" alone).
 SYSTEM_INTERNAL = re.compile("|".join([
@@ -133,7 +133,7 @@ SYSTEM_INTERNAL = re.compile("|".join([
 
 
 def is_system_internal(text) -> bool:
-    """True when `text` carries a runtime database / hosting error a customer must not see (§19.37)."""
+    """True when `text` carries a runtime database / hosting error a customer must not see (§19.38)."""
     return isinstance(text, str) and bool(text) and SYSTEM_INTERNAL.search(text) is not None
 
 
@@ -214,7 +214,7 @@ def neutralize(payload):
 _MARKERS = (b".sql", b"mig", b"sql editor", b"supabase", b"pgrst", b"42p01", b"42703", b"does not exist",
             b"could not find the", b"schema cache", b"not applied", b"not yet applied", b"not been applied",
             b"not created", b"not yet created", b"not been created",
-            # §19.37 — SYSTEM_INTERNAL's shapes (lower-case; the window is lower-cased before the search)
+            # §19.38 — SYSTEM_INTERNAL's shapes (lower-case; the window is lower-cased before the search)
             b"duplicate key", b"violates ", b"null value in column", b"permission denied for", b"invalid input",
             b"too long for type", b"out of range for type", b"statement timeout", b"deadlock detected", b"sqlstate",
             b"'code'", b'\\"code\\"', b"postgrest", b"psycopg", b"apierror", b"railway.app",

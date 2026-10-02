@@ -1,4 +1,4 @@
-// A DATA SOURCE'S PLAIN NAME — the one frontend home (owner 2026-10-02, index §19.37: "hide database names from
+// A DATA SOURCE'S PLAIN NAME — the one frontend home (owner 2026-10-02, index §19.38: "hide database names from
 // the users").
 //
 // A customer reads "MI & ATU report", never the table it lands in. A page that names a feed — in a sentence, a

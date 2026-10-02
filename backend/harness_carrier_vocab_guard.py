@@ -1339,7 +1339,7 @@ def setup_guard():
     return ok
 
 
-# ══ INFRA NAMES — no database / hosting identifiers in customer-facing copy (owner 2026-10-02, §19.37) ══════════
+# ══ INFRA NAMES — no database / hosting identifiers in customer-facing copy (owner 2026-10-02, §19.38) ══════════
 # Owner: "hide database names from the users". §19.36 took the MIGRATION class out of customer copy and named what it
 # left: the ePay sweep tooltips said "→ raw_comp_report", the Notify page said "set RESEND_API_KEY + NOTIFY_FROM_EMAIL
 # on Railway", the payroll drill-down said "storeops.manual_hours entries". THE CLASS: an internal STORAGE or
@@ -1521,11 +1521,11 @@ def infra_wiring(home_src, fe_label_src, tables):
 
 
 def infra_guard():
-    """THE INFRA-NAMES LOCK (§19.37). Returns True when green; prints its own report."""
+    """THE INFRA-NAMES LOCK (§19.38). Returns True when green; prints its own report."""
     import io
     import contextlib
     import time
-    print("\n— database / hosting names in customer-facing copy (homes: core/setup_notice.py + lib/sourceLabels.ts; §19.37) —")
+    print("\n— database / hosting names in customer-facing copy (homes: core/setup_notice.py + lib/sourceLabels.ts; §19.38) —")
     from app.core import setup_notice as sn
     ok = True
     t0 = time.perf_counter()
