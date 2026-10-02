@@ -437,6 +437,12 @@ on:
       - "backend/harness_pl_range.py"
       - "backend/harness_pl_range_lock.py"
       - "backend/harness_export_xss_upload.py"
+      # index §19.40 — the nav deep-link lock reads every page, NAV, ScreenLink, backend notices and the help docs
+      - "backend/harness_nav_deep_link_lock.py"
+      - "frontend/prove_nav_deep_link.mjs"
+      - "frontend/src/**"
+      - "backend/app/**/*.py"
+      - "backend/app/data/support_docs_seed.json"
   push:
     branches: [main]
     paths:
@@ -572,6 +578,9 @@ jobs:
       - name: Run the roles module-catalog lock (the Roles UI's module checkboxes are DERIVED from NAV — no second list; the report-area gate is named on screen, never silent — index §44)
         working-directory: backend
         run: python3 harness_roles_module_catalog.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the nav deep-link lock (every ?tab= link names a tab its page declares; Employees & Pay is a menu entry that gates as /hr; a named breadcrumb is a link; no stale where-to-edit-pay copy — index §19.40)
+        working-directory: backend
+        run: python3 harness_nav_deep_link_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the screen-link guard (every screen a link promises exists; a carrier/POS gate comes with a super-admin re-grant path — index §45)
         working-directory: backend
         run: python3 harness_screen_link_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -667,6 +676,20 @@ jobs:
       - name: Run the one-domain proof (canonical host 308; previews / localhost untouched; rewrites; CSP; the one home; negative controls)
         working-directory: frontend
         run: node prove_one_domain.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE NAV DEEP-LINK PROOF (index §19.40) drives the REAL rbac.ts and urlTab.ts under Node 22 (type stripping; neither
+  # imports anything, so no npm install): a deep-link menu entry (/hr?tab=employees) is visible exactly when its page is,
+  # for every role shape; a stray grant on the door opens nothing; every page href is unchanged by navPath.
+  nav-deep-link-proof:
+    name: Nav deep-link proof (a door into a page is never a second gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the nav deep-link proof (the real rbac.ts + urlTab.ts; negative controls)
+        working-directory: frontend
+        run: node prove_nav_deep_link.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's

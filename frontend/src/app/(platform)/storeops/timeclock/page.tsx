@@ -7,6 +7,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { SetupNotice } from '@/lib/setupNotice'
+import ScreenLink from '@/components/ScreenLink'
 
 // Time Clock admin (Part B / B1): review punches (clock-in/out, hours, selfie, GPS, face-match) and
 // add manual-hours adjustments. The employee-facing clock-in lives in the mobile /portal.
@@ -461,13 +462,13 @@ function FaceSettingsPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (t: a
           no consent record yet ({s.unrecorded ?? '—'} people), dated now and marked
           &quot;assumed_on_enable&quot;. Employees already recorded as declined are left alone. Per the
           owner directive of 2026-08-09 — but if you need a real signed release on file per person,
-          record it individually on HR → Employees &amp; Pay instead.
+          record it individually on <ScreenLink to="employees_pay" /> instead.
         </div>
       )}
       <div style={{ fontSize: 12, color: 'var(--text2)' }}>
         Consent on file: <b>{s.signed ?? 0}</b> signed · <b>{s.declined ?? 0}</b> declined · <b>{s.unrecorded ?? 0}</b> not recorded.
         {' '}Assignment: <b>{s.assigned_on ?? 0}</b> on · <b>{s.assigned_off ?? 0}</b> off · <b>{s.unassigned ?? 0}</b> following the tenant default.
-        {' '}Set these per person on the HR → Employees &amp; Pay tab.
+        {' '}Set these per person on the <ScreenLink to="employees_pay" /> tab.
       </div>
     </div>
   )
@@ -644,7 +645,7 @@ function LunchSettingsPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (c: 
         shift length below. A day that already has a real gap between punch-pairs (a lunch re-clock-in,
         or a genuine split shift) is never auto-deducted on top — see the Time Clock report&apos;s
         &quot;lunch (auto)&quot; line for exactly which days qualified. Per-employee overrides (including
-        fully disabling it for one person) are set on the HR → Employees &amp; Pay tab, next to pay rate.
+        fully disabling it for one person) are set on the <ScreenLink to="employees_pay" /> tab, next to pay rate.
       </p>
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>

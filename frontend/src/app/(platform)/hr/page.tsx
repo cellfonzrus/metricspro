@@ -1,9 +1,14 @@
 'use client'
 // HR module — a consolidated, permission-gated VIEW of salary + commission + people data. Everything
 // is span-scoped server-side (a manager sees only their area) and the underlying data still lives in
-// StoreOps / CommCalc — this is the single place to see total compensation. Editing pay stays on
-// StoreOps Admin. Gated by the `hr` module permission (default OFF for managers).
-import { useState, useEffect, useCallback, useRef } from 'react'
+// StoreOps / CommCalc — this is the single place to see total compensation. Pay is SET here, per row, on
+// the Employees & Pay tab (index §19.35); StoreOps Admin edits no pay. Gated by the `hr` module permission
+// (default OFF for managers).
+//
+// The tab lives in the URL (`?tab=employees`, index §19.40) through the one reader `lib/useUrlTab.ts`, so
+// the "Employees & Pay" menu entry, ScreenLinks and notices open the tab directly — including when /hr is
+// already open.
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
 import { api, ORG_ID, fmt } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG, invalidateApiCache } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
@@ -14,6 +19,8 @@ import { PAY_BASES, PAY_BASIS_LABEL, periodPayPreviewLabel, type PayBasis } from
 import { planRowSave, runRowSave, commitSaved, rowSaveMessage, rowDirty, dirtySlices, pendingRowCount, rebaseRows, fieldChanged } from '@/lib/rowSave'
 import { HR_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
 import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
+import { useUrlTab } from '@/lib/useUrlTab'
+import ScreenLink from '@/components/ScreenLink'
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 function periodToMonth(p: string): string {
@@ -27,11 +34,22 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '8px 12px', fontSi
 const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, borderTop: '1px solid var(--border)' }
 const tdR: React.CSSProperties = { ...td, textAlign: 'right' }
 
-type Tab = 'comp' | 'employees' | 'payroll' | 'timeoff'
+// The tabs this page declares — the ONLY keys a `/hr?tab=` link may name (harness_nav_deep_link_lock.py).
+const HR_TABS = ['comp', 'employees', 'payroll', 'timeoff'] as const
+type Tab = typeof HR_TABS[number]
 
+// `useUrlTab` reads useSearchParams, so the body sits inside a Suspense boundary (lib/useUrlTab.ts).
 export default function HRPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div>}>
+      <HRPageBody />
+    </Suspense>
+  )
+}
+
+function HRPageBody() {
   const { period } = usePeriod()
-  const [tab, setTab] = useState<Tab>('comp')
+  const [tab, setTab] = useUrlTab(HR_TABS, 'comp')
   const [comp, setComp] = useState<any>(null)
   const [emps, setEmps] = useState<any[]>([])
   const [payroll, setPayroll] = useState<any[]>([])
@@ -186,7 +204,8 @@ export default function HRPage() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧑‍💼 HR</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Salary, payroll and total compensation in one place — scoped to your area. Edit pay on StoreOps Admin.
+          Salary, payroll and total compensation in one place — scoped to your area. Set each person&apos;s pay on
+          the <ScreenLink to="employees_pay">Employees &amp; Pay</ScreenLink> tab.
           Configure employer payroll tax + burden items on the <a href="/hr/payroll-expenses" style={{ color: 'var(--accent,#2563eb)' }}>Payroll Expenses</a> page.
           Manage disciplinary/shortage/performance letters in <a href="/hr/letters" style={{ color: 'var(--accent,#2563eb)' }}>HR Letters</a> —
           send one from <a href="/hr/letters/send" style={{ color: 'var(--accent,#2563eb)' }}>Send a Letter</a>, review the{' '}

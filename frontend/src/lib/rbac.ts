@@ -285,6 +285,31 @@ export function hasDataGrant(perms: Permissions, key: string): boolean {
 // endpoints call _require_super_admin), so every other viewer never sees it — in the sidebar, search,
 // any hub, or by URL (platformPathOK). Same field and same gate (`platformOK`) as NavGroup.platformOnly.
 export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string; tileOnly?: boolean; tile?: string; platformOnly?: boolean }
+
+// ── DEEP-LINK ENTRIES — a second DOOR into a page, never a second GATE (owner 2026-10-02, index §19.40) ──
+// Owner: *"make Employees & Pay its own menu item"*. Employees & Pay is a TAB of /hr, so its menu entry is
+// `/hr?tab=employees`: a door into a page that already has its own NAV entry. Every gate keys on the PATH
+// half (`navPath`), and a deep-link entry is visible exactly when its page's OWN entry is (`canSeeItem`
+// delegates to `deepLinkPage`). So a per-function grant/deny on `/hr` governs every door into /hr, the
+// Roles screen lists no separate switch for the door, and nobody can reach a page through a menu entry
+// they could not reach before. The tab key must be one the page declares (`lib/useUrlTab.ts`) and the
+// entry repeats the page's module + scopes verbatim — harness_nav_deep_link_lock.py fails the build if not.
+/** The path a NAV href (or any in-app href) gates on: the query and the #anchor removed. ONE home. */
+export function navPath(href: string): string {
+  return String(href || '').split('#')[0].split('?')[0]
+}
+/** True for a NAV entry that opens a tab/anchor of a page rather than a page of its own. */
+export function isDeepLinkItem(item: { href: string }): boolean {
+  return navPath(item.href) !== item.href
+}
+/** The page entry a deep-link entry opens (the first NAV entry whose href IS its path); null otherwise. */
+export function deepLinkPage(item: { href: string }): NavItem | null {
+  if (!isDeepLinkItem(item)) return null
+  const path = navPath(item.href)
+  for (const g of NAV) for (const it of g.items) if (it.href === path) return it
+  return null
+}
+
 // A named sub-category INSIDE a group (owner directive 2026-08-12 — roadmap #5). Sub-groups are a
 // LAYOUT-level concept only: the built-in NAV literal below stays structurally two-level, so a
 // newly-shipped item still lands in its group with no code change and no tenant re-configuration.
@@ -806,6 +831,11 @@ export const NAV: NavGroup[] = [
     // 'storeops' + ['all','market'] mirrors /storeops/payroll: the hub lists payroll surfaces, and
     // each destination keeps its own (sometimes stricter) gate — e.g. payers stays scopes:['all'].
     { href: '/payroll', label: 'Payroll Dashboard', icon: '🏠', module: 'storeops', scopes: ['all', 'market'] },
+    // Owner 2026-10-02: *"make Employees & Pay its own menu item"* — the owner looked for it and found only
+    // a TAB of /hr behind the "HR · Total Comp" tile. A DEEP-LINK entry (index §19.40): a door into /hr,
+    // visible exactly when /hr is (canSeeItem delegates to the /hr entry below), so it carries /hr's module
+    // + scopes verbatim and grants nothing new. Shown in the sidebar on purpose (not tileOnly).
+    { href: '/hr?tab=employees', label: 'Employees & Pay', icon: '👥', module: 'hr', scopes: ['all', 'market'] },
     // Phase W2.1: everything below is tileOnly — covered by a /payroll hub tile (HR Communications
     // was ADDED to the Payroll Setup tile in the same phase so it could be hidden here too).
     { href: '/hr/people', label: 'People (add employees)', icon: '🧑‍💼', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
@@ -1445,6 +1475,7 @@ export const NAV_CARRIERS: Record<string, string[]> = {
 // Carrier gate: admin per-item override wins (caps['carrier:<href>'] true/false); else a carrier-scoped
 // item shows only when the tenant has a matching carrier. No carrier chosen yet → hide nothing.
 export function carrierOK(href: string, tenantCarriers: CarrierRef[] | undefined, caps: Record<string, boolean | null>): boolean {
+  href = navPath(href)   // a deep-link entry gates as its page (index §19.40); identity for every page href
   const ov = caps['carrier:' + href]
   if (ov === true) return true
   if (ov === false) return false
@@ -1493,6 +1524,7 @@ export function defaultActiveCarrier(carriers: CarrierRef[] | undefined, usesCar
 // matches its required carrier(s). Unlisted hrefs are generic (all carriers). For a single-carrier
 // tenant (active = its only carrier) this returns exactly what carrierOK returned.
 export function carrierOKActive(href: string, activeCarrier: string | undefined, caps: Record<string, boolean | null>): boolean {
+  href = navPath(href)   // a deep-link entry gates as its page (index §19.40); identity for every page href
   const ov = caps['carrier:' + href]
   if (ov === true) return true
   if (ov === false) return false
@@ -1570,13 +1602,14 @@ export function platformPathOK(path: string, user: { super_admin?: boolean } | n
 
 export function verticalOK(item: { href: string; module: string }, v: VerticalInfo | null | undefined,
                            caps: Record<string, boolean | null>): boolean {
-  const ov = caps['vertical:' + item.href]
+  const path = navPath(item.href)   // a deep-link entry gates as its page (index §19.40); identity for every page href
+  const ov = caps['vertical:' + path]
   if (ov === true) return true
   if (ov === false) return false
   if (!v) return true
   if (moduleHiddenByVertical(item.module, v)) return false
-  if (hrefHiddenByVertical(item.href, v.nav_hidden)) return false
-  if (v.uses_carriers === false && (NAV_CARRIERS[item.href] || []).length > 0) return false
+  if (hrefHiddenByVertical(path, v.nav_hidden)) return false
+  if (v.uses_carriers === false && (NAV_CARRIERS[path] || []).length > 0) return false
   return true
 }
 // Route guard twin: may this PATH be opened by this tenant's vertical? The page's module is the module of
@@ -1694,6 +1727,9 @@ export function missingReportAreasForModule(perms: Permissions, key: string): st
 }
 
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
+  // A deep-link entry (`/hr?tab=employees`) is a door into its page: visible exactly when the page is
+  // (index §19.40). No page entry → refused rather than guessed.
+  if (isDeepLinkItem(item)) { const page = deepLinkPage(item); return !!page && canSeeItem(perms, page) }
   if (payoutRefused(perms, item.href)) return false   // the server refuses it to this viewer (index §6j)
   if (isSuperAdmin(perms)) return true
   if (MGMT_ONLY.has(item.href)) return canManage(perms, item.href)
@@ -1727,6 +1763,10 @@ export type NavBlockReason =
   | { gate: 'report'; detail: string }
   | { gate: 'payout'; detail: string }
 export function navBlockReason(perms: Permissions, item: NavItem): NavBlockReason | null {
+  if (isDeepLinkItem(item)) {   // a door into its page — the page's own reason (index §19.40)
+    const page = deepLinkPage(item)
+    return page ? navBlockReason(perms, page) : { gate: 'page', detail: `opens ${navPath(item.href)}, which has no menu entry of its own` }
+  }
   if (payoutRefused(perms, item.href)) {
     return { gate: 'payout', detail: 'carrier commission — the server refuses it to anyone without the "Carrier commission" permission' }
   }
