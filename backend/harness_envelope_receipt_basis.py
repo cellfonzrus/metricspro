@@ -437,6 +437,59 @@ def main():
     check("...and prefills from the drawer, so a legacy store's DM is not shown the net as a total",
           "t.total_store_cash ?? t.store_cash" in dmv_code, True)
 
+    print("\nI3. the live-form mirror cannot drift, and is the only copy on the frontend")
+    # A half-filled SUBMIT form has no server figure to read, so the net is computed in the browser
+    # (owner 2026-10-02: "add the store cash box on the daily closing also, which will be calculated
+    # and greyed out"). That is the ONE legitimate frontend derivation, so it has one home and this
+    # rule keeps it honest against deposit_recon's.
+    FE = os.path.join(os.path.dirname(HERE), "frontend", "src")
+    mirror = read(os.path.join(FE, "lib", "cash-basis.ts"))
+    check("the mirror names the backend home it mirrors",
+          "deposit_recon.cash_components" in mirror, True)
+    check("the mirror's bases are deposit_recon's, exactly",
+          sorted(re.findall(r"^\s{4}(\w+):", mirror, re.M)), sorted(DR.DERIVED_BASES))
+    check("the mirror's net is max(total - billPay, 0) — the same formula, floored the same way",
+          "Math.max(total - billPay, 0)" in mirror, True)
+    check("...and the total / bill-payment legs are pass-throughs, as they are in the one home",
+          "total_cash: total" in mirror and "bill_payment_cash: billPay" in mirror, True)
+    check("the mirror rounds to cents like the backend's _f",
+          "Math.round(" in mirror and "100) / 100" in mirror, True)
+    # THE LOCK: no SECOND copy of this arithmetic anywhere under frontend/src. Comments may explain it.
+    second_copies = []
+    for root, _dirs, files in os.walk(FE):
+        for fn in files:
+            if not fn.endswith((".ts", ".tsx")) or fn == "cash-basis.ts":
+                continue
+            fp = os.path.join(root, fn)
+            body = re.sub(r"(?m)^\s*(//|\*|/\*).*$", "", read(fp))
+            body = re.sub(r"\{/\*.*?\*/\}", "", body, flags=re.S)
+            # The operand char class allows parens/spaces so `enteredCash - (parseFloat(x) || 0)`
+            # matches too — a first cut stopped at the `(` and the rule missed exactly that shape.
+            for mm in re.finditer(r"(?:t_cash|total_cash|enteredCash|total_store_cash)"
+                                  r"[\w.?\[\]'\"() |]*\s-\s[\w.?\[\]'\"() |]*epay", body):
+                second_copies.append("%s: %s" % (os.path.relpath(fp, FE), mm.group(0)))
+    check("no second copy of the net subtraction under frontend/src: %s" % (second_copies or "none"),
+          second_copies, [])
+    submit = read(os.path.join(FE, "components", "ClosingSubmitForm.tsx"))
+    check("the daily-closing form READS the mirror",
+          "from '@/lib/cash-basis'" in submit and "storeCashNet(" in submit, True)
+    check("...and shows it read-only (calculated, greyed — never a field the rep can type into)",
+          re.search(r"Store cash \(total cash less bill payments[^<]*<div style=\{\{ \.\.\.inp,"
+                    r" background: 'var\(--surface2\)'", submit, re.S) is not None, True)
+    check("...and never SUBMITS it (the server recomputes from t_cash and epay_on_cash)",
+          "store_cash:" not in re.sub(r"(?m)^\s*//.*$", "", submit), True)
+
+    print("\nI4. a row rebuilt from ONLY the fetched columns still answers all three bases")
+    # The behavioural form of H1's rule, and the one that would have caught the 2026-10-02 defect on
+    # its own: take the column contract, build a row from NOTHING ELSE, and the bases must differ.
+    _fetched_row = {c: {"t_cash": 1002.0, "epay_on_cash": 230.0}.get(c, None) for c in ER.CLOSING_COLUMNS}
+    check("a row carrying only CLOSING_COLUMNS yields three DIFFERENT, reconciling bases",
+          ER.declared_components(_fetched_row),
+          {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0})
+    check("...and nothing the contract fetches is unread by the module",
+          [c for c in ER.CLOSING_COLUMNS
+           if c not in read(os.path.join(HERE, "app", "modules", "closing", "envelope_report.py"))], [])
+
     # ── I. armed negative controls ──────────────────────────────────────────────────────────────
     print("\nJ. CONTROLS — each rule goes RED with the defect patched back in")
     check("CONTROL: the pre-fix handler's sentinel would be caught",
@@ -484,6 +537,14 @@ def main():
           ['totals["store_cash"] - totals["epay_on_cash"]'])
     check("CONTROL: ...and leaves the bill-pay recon's own declared-vs-processor variance alone",
           net_derivations_in("v = closing_epay - pos_billpay"), [])
+    check("CONTROL: a form inlining the subtraction instead of the mirror → RED",
+          [x for x in (re.search(r"(?:t_cash|total_cash|enteredCash|total_store_cash)"
+                                 r"[\w.?\[\]'\"() |]*\s-\s[\w.?\[\]'\"() |]*epay",
+                                 "{fmt(enteredCash - (parseFloat(f.epay_on_cash) || 0))}"),)
+           if x] != [])
+    check("CONTROL: a row built WITHOUT the contract collapses the bases (the shipped defect)",
+          ER.declared_components({"t_cash": 1002.0}),
+          {"total_cash": 1002.0, "store_cash": 1002.0, "bill_payment_cash": 0.0})
     check("CONTROL: the legacy column read as a total is WRONG for a legacy row, and the split says so",
           DR.cash_components(round(80.0 + 30.0, 2), 30.0),
           {"total_cash": 110.0, "store_cash": 80.0, "bill_payment_cash": 30.0})

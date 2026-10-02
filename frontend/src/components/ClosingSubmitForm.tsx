@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import { storeCashNet } from '@/lib/cash-basis'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { startTour } from '@/lib/tours'
@@ -578,6 +579,20 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label={`${procName} on Cash $`}><input style={inp} inputMode="decimal" value={f.epay_on_cash} onChange={e => set({ epay_on_cash: e.target.value })} placeholder="0.00" /></Field>
           <Field label={`${procName} on Credit $`}><input style={inp} inputMode="decimal" value={f.epay_on_credit} onChange={e => set({ epay_on_credit: e.target.value })} placeholder="0.00" /></Field>
           <Field label={`${procName} on Financing / ${finName} $`}><input style={inp} inputMode="decimal" value={f.epay_on_acima} onChange={e => set({ epay_on_acima: e.target.value })} placeholder="0.00" /></Field>
+        </Row>
+        {/* OWNER 2026-10-02: "add the store cash box on the daily closing also, which will be
+            calculated and greyed out". The rep enters the WHOLE drawer above and the bill-payment
+            cash here; this is the register cash that leaves — shown, never typed, so it can never
+            disagree with the two figures it comes from. Read-only like "Total collected" above, and
+            NOT submitted: the server recomputes it from t_cash and epay_on_cash, through the one
+            home (deposit_recon.cash_components — index §47.9). The arithmetic is `lib/cash-basis`,
+            the frontend's single home for it, never inline here. */}
+        <Row>
+          <Field label="Store cash (total cash less bill payments — calculated) $">
+            <div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>
+              {fmt(storeCashNet(enteredCash, parseFloat(f.epay_on_cash) || 0))}
+            </div>
+          </Field>
         </Row>
         </>)}
 

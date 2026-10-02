@@ -14618,7 +14618,7 @@ helper never breaks a money report. An unresolved uid is **absent** from the map
 
 ### 47.3 Lock
 
-`backend/harness_envelope_receipt_basis.py` — **111 checks** (52 at 2026-10-01, +38 for the wiring class
+`backend/harness_envelope_receipt_basis.py` — **126 checks** (52 at 2026-10-01, +74 for the wiring class
 in §47.8, +21 for the naming class in §47.9), stdlib, DB-free, run by
 `carrier-vocab-guard`. Fails the build on: a second basis formula; a basis key or label spelled on the
 screen or in the router; the default drifting off the historical figure; an unknown basis folding to
@@ -14833,7 +14833,7 @@ drawer rather than from the two-meaning column.
 `dm_store_cash` key is unchanged; no migration. What changed is which figures the screen RENDERS and
 what they are called.
 
-**LOCK** (§47.3's harness, sections I1–I2, 90 → **111 checks**): `cash_components` is the split and IS
+**LOCK** (§47.3's harness, sections I1–I4, 90 → **126 checks**): `cash_components` is the split and IS
 `cash_for_basis`; the envelope receipt and `/closing/summary` both dereference it; an AST scan proves
 **exactly one** place in the closing module derives "a cash total minus something ePay"
 (`deposit_recon`'s own `_f(t_cash) - _f(epay_cash)`) and the router, the receipt, the overlay and
