@@ -436,6 +436,26 @@ def _system_check_cron_startup():
 
 
 @app.on_event("startup")
+def _vision_health_cron_startup():
+    """Self-heal the DAILY camera check schedule on EVERY boot (mig 1034 — owner directive
+    2026-10-02: "check every day if they working and if they are not working trouble shoot
+    autonomously and initiate a fix").
+
+    The cameras on the first estate were dark for weeks and nothing said so, because the only thing
+    that ever asked /vision/status was a person opening the settings page. Detection now rides the
+    attention/control-box machinery that already existed; THIS hook schedules the repair half. Same
+    best-effort posture as the hooks around it: a missing secret / RPC / cron infra logs the reason
+    and never blocks boot, and POST /vision/health/run-due still works by hand."""
+    try:
+        from app.modules.vision.router import ensure_vision_health_cron
+        print(f"[vision-health-cron] self-register on boot: "
+              f"{ensure_vision_health_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [vision-health-cron] self-register failed (the daily camera check stays "
+              f"manual): {e}", flush=True)
+
+
+@app.on_event("startup")
 def _doc_expiry_cron_startup():
     """Self-heal the lease/COI expiry-alert schedule on EVERY boot (mig 967 — owner directive
     2026-09-05: notify "at least 60 days in advance or as per lease requirement").
