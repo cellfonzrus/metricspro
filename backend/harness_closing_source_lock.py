@@ -219,6 +219,9 @@ ok("Store Setup reads and writes the one endpoint",
    "/api/v1/closing/source-config" in SP and "method: 'PUT'" in SP)
 ok("Store Setup offers a per-store setting that can follow the company default",
    "saveClosingSource(" in SP and "saveOrgClosingSource(" in SP and "Company default" in SP)
+ok("the choice is available AT STORE SETUP — the Add-store row carries it (the owner's "
+   "'selected at the time of setting up the store')",
+   "closing_source: ''" in SP and "Daily closing: company default" in SP)
 FM = read(FORM)
 ok("the closing form reads the source off the picker (no second fetch, no second rule)",
    "closing_source?: string" in FM and "'b2b_derived'" in FM and "feedDerived" in FM)

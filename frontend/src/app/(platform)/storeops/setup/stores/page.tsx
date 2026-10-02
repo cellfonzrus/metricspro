@@ -31,7 +31,9 @@ export default function StoreSetupPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [upBusy, setUpBusy] = useState(false)
-  const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '', timezone: '' })
+  // `closing_source: ''` = follow the company default. The owner's "selected at the time of setting up
+  // the store" is this field: the choice is made on the ADD row, not only after the store exists.
+  const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '', timezone: '', closing_source: '' })
   // Lease & Insurance (owner 2026-09-03, mig 946): per-store expandable panel — landlord, rent
   // rails/ACH, escalation, rent-due, insurance, lease/COI docs. Server-gated (management only).
   const [leaseOpen, setLeaseOpen] = useState<Record<string, boolean>>({})
@@ -138,9 +140,25 @@ export default function StoreSetupPage() {
     if (!newStore.store_code.trim()) { setMsg('Store code is required.'); return }
     setMsg('')
     try {
-      await api('/api/v1/storeops/stores', { method: 'POST', body: JSON.stringify({ ...newStore, monthly_target: Number(newStore.monthly_target) || 0 }) })
+      const { closing_source, ...storeBody } = newStore
+      await api('/api/v1/storeops/stores', { method: 'POST', body: JSON.stringify({ ...storeBody, monthly_target: Number(newStore.monthly_target) || 0 }) })
+      // The store's own daily-closing setting, written right after the store exists (it is keyed by
+      // store_code, so it cannot be set before). Left blank, the store simply follows the company
+      // default and no override row is created — so adding a store is unchanged for anyone who
+      // ignores this field.
+      if (closing_source) {
+        try {
+          await api('/api/v1/closing/source-config', { method: 'PUT', body: JSON.stringify({ store_code: newStore.store_code.trim(), source: closing_source }) })
+        } catch (err: any) {
+          // Never report the store as fully added when half of it failed.
+          setMsg(`Added ${newStore.store_code}, but its daily-closing setting was NOT saved (${err?.message || err}). Set it on the store's row below.`)
+          setNewStore({ store_code: '', address: '', market: '', monthly_target: '', timezone: '', closing_source: '' })
+          await loadAll()
+          return
+        }
+      }
       setMsg(`Added ${newStore.store_code}`)
-      setNewStore({ store_code: '', address: '', market: '', monthly_target: '' })
+      setNewStore({ store_code: '', address: '', market: '', monthly_target: '', timezone: '', closing_source: '' })
       await loadAll()
     } catch (err: any) { setMsg('Add failed: ' + (err?.message || err)) }
   }
@@ -274,6 +292,16 @@ export default function StoreSetupPage() {
                 {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
               </select>
               <input style={{ ...sel, width: 120 }} type="number" placeholder="Monthly target" value={newStore.monthly_target} onChange={e => setNewStore({ ...newStore, monthly_target: e.target.value })} />
+              <select style={{ ...sel, width: 200 }} value={newStore.closing_source}
+                onChange={e => setNewStore({ ...newStore, closing_source: e.target.value })}
+                title="Who produces this store's daily closing — blank follows the company default">
+                <option value="">
+                  Daily closing: company default ({srcCfg?.labels?.[srcCfg?.org_default || 'rep_entry']
+                    || CLOSING_SRC_LABEL[srcCfg?.org_default || 'rep_entry']})
+                </option>
+                {(srcCfg?.sources || ['rep_entry', 'b2b_derived']).map(v =>
+                  <option key={v} value={v}>Daily closing: {srcCfg?.labels?.[v] || CLOSING_SRC_LABEL[v] || v}</option>)}
+              </select>
               <button className="btn btn-primary" onClick={addStore}>➕ Add</button>
             </div>
           </div>
