@@ -617,9 +617,6 @@ jobs:
       - name: Run the envelope-receipt proof (the basis split, the short/over truth table and the envelope_short chargeback contract — owner 2026-09-02 / 2026-10-02, index §47)
         working-directory: backend
         run: python3 harness_envelope_report.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the deposit-recon pure math + cash-split proof (cash_for_basis and cash_components — the one home every cash-basis surface dereferences, index §47.9)
-        working-directory: backend
-        run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -734,6 +731,10 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the deposit-recon pure math + cash-split proof (cash_for_basis and cash_components — the one home every cash-basis surface dereferences, index §47.9)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the DM-Verify parity proof (the real /closing/summary over the in-memory client — filters, range mode, the era-aware ePay breakdown, and the named cash figures in both column eras — owner 2026-07-28 / 2026-10-02, index §47.9)
         working-directory: backend
         shell: bash
