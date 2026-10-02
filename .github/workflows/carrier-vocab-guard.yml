@@ -727,6 +727,11 @@ jobs:
       - name: Run the closing-source sweep proof (the feed's day written as a real closing; a rep's row never overwritten; idempotent; a missing feed reported; dry run)
         working-directory: backend
         run: python3 harness_closing_source_sweep.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.39 — the RETROACTIVE BACKFILL over the real endpoint (derive_closing_range). A
+      # backfill's risk is the span itself: a day missed, a day done twice, or history rewritten.
+      - name: Run the closing-source backfill proof (every day once; one sweep not a second derivation; empty days reported; idempotent; a human's row survives; bounds refuse)
+        working-directory: backend
+        run: python3 harness_closing_source_backfill.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend
