@@ -5400,7 +5400,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
-| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash — see §47), `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`); pure: `closing/envelope_report.py` (`normalize_envelope_basis`, `expected_cash`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47 |
+| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
@@ -14584,8 +14584,12 @@ equip/acc figure the DM collected, and the three bases reconcile (`store + billp
 | which bases the receipt offers, and their wording | `envelope_report.ENVELOPE_BASES` / `ENVELOPE_BASIS_LABELS` (the bill-payment label carries a `{processor}` slot, **never a carrier brand** — see §47.6) | `envelope_report.basis_options()` builds the list; the endpoint serves it; **the screen spells no basis key and no basis label** |
 | the short/over math | `envelope_report.count_fields` (unchanged) | follows whatever basis set `declared_cash` |
 
-Every line also reports `declared_total_cash` and `declared_billpay_cash` beside the figure, so *"why is
-this 0?"* is answerable on screen.
+Every line reports a figure for EVERY basis beside the chosen one — `declared` keyed by basis key, plus
+the flat `declared_total_cash` / `declared_billpay_cash` the payload has carried since 2026-10-01 — so
+*"why is this 0?"* is answerable on screen. The receipt renders one column per `basis_options()` entry,
+headed by the server's own `short` label, so the screen still spells no basis key and no basis word and
+a basis added later gets a correctly-labelled column for free. **Until 2026-10-02 none of this was
+rendered, and the figures behind it were all zero — see §47.8.**
 
 ### 47.2 counted_by — the real actor, shown as a person
 
@@ -14614,13 +14618,16 @@ helper never breaks a money report. An unresolved uid is **absent** from the map
 
 ### 47.3 Lock
 
-`backend/harness_envelope_receipt_basis.py` — **52 checks**, stdlib, DB-free, run by
+`backend/harness_envelope_receipt_basis.py` — **90 checks** (52 at 2026-10-01, +38 for the wiring class
+in §47.8), stdlib, DB-free, run by
 `carrier-vocab-guard`. Fails the build on: a second basis formula; a basis key or label spelled on the
 screen or in the router; the default drifting off the historical figure; an unknown basis folding to
 `manual`; the legacy `store_cash` fallback being lost; the count math leaving `count_fields`;
 `counted_by` carrying a sentinel again or not using the one home; a second uid→name resolver;
-`core.actors` reading a column it has no business reading, dropping its org scope, or raising. Each rule
-carries an armed control.
+`core.actors` reading a column it has no business reading, dropping its org scope, or raising; **a caller
+hand-spelling a `daily_closing` column list, the pure module reading a closing column the contract does
+not declare, the counted basis not reaching the save handler, or a basis without a column on the
+screen** (§47.8). Each rule carries an armed control.
 
 Two of its rules had to learn **code from prose** — this change's own comments legitimately name the
 retired sentinel and the basis keys while explaining them, so the "must not appear" rules strip comments
@@ -14732,6 +14739,60 @@ text only) spelling `ePay` or `VidaPay`, a mix of log lines and genuine reader-f
 (`asset/router.py`). Some are chart-of-accounts names that may be deliberate house data and some are
 copy that should resolve through `report_labels.carrier_term`; separating the two is a judgement call per
 site, not a sweep, so it is **reported, not touched**. Deciding it needs the owner.
+
+### 47.8 The selector was correct and read ZERO — the unwired thing was a SELECT LIST (owner 2026-10-02; fixed)
+
+Owner: the Management Envelope Receipt showed **bill-payment cash 0.00 on every line**, while the
+store-cash basis showed the **whole drawer, bill payments included**. Both at once, for every store and
+every day since the selector shipped.
+
+**Nothing in §47.1 was wrong.** `expected_cash` dereferenced `deposit_recon.cash_for_basis` exactly as
+written; the three formulas were right; the labels resolved. The defect was one level down: **both
+callers of `expected_cash` hand-spelled a `daily_closing` column list that omitted `epay_on_cash`** —
+the split's only input. `.get()` cannot tell *"0 dollars"* from *"never fetched"*, so the three formulas
+silently collapsed to one:
+
+| basis | what it computed with `epay_on_cash` absent | what the reader saw |
+|---|---|---|
+| `total_cash` | `t_cash` | correct (which is why nobody noticed) |
+| `store_cash` | `max(t_cash − 0, 0)` | **the whole drawer**, bill payments included |
+| `bill_payment_cash` | `0` | **0.00 on every line, every store, every day** |
+
+**THE CLASS is §19.18's for the fifth time** — a mechanism written and its callers left unwired — in its
+quietest form yet: the unwired thing was a *query*, and a column nobody asked for reads back as a
+perfectly legitimate zero. No exception was raised, no test failed, and the number was plausible.
+
+**THE DESIGN FIX — one fact, one home, dereferenced.** The columns a pure reader dereferences now live
+BESIDE that reader: `envelope_report.CLOSING_COLUMNS` (and `CLOSING_SELECT`, derived from it), and every
+caller selects that declaration instead of writing its own list.
+
+| fact | home | callers |
+|---|---|---|
+| which `daily_closing` columns the receipt's logic reads | `envelope_report.CLOSING_COLUMNS` → `CLOSING_SELECT` | `GET /closing/envelope-report`, `POST /closing/envelope-count` — both select it, neither spells a column |
+| the basis formulas | `deposit_recon.cash_for_basis` (unchanged, §47.1) | `envelope_report.expected_cash` / `declared_components` |
+| the basis wording, long and short | `envelope_report.ENVELOPE_BASIS_LABELS` / `ENVELOPE_BASIS_SHORT_LABELS` → `basis_options()` | the selector AND the per-basis columns; the screen spells neither |
+
+**THE SIBLING, found and checked in the same change.** `deposit_recon` is the other consumer of
+`cash_for_basis`; its own query already carries `epay_on_cash` (and the lock now pins that, so one path
+fixed and the other not cannot happen). `_cash_declared_for_envelope` (§12 cash pickup) sums the LEGACY
+`store_cash + epay_cash` pair, which is the full drawer either way for a mig-103+ row — **excused, not
+fixed**, and it answers a different question (the envelope snapshot, not a basis).
+
+**A SECOND DEFECT OF THE SAME SHIPPED FEATURE.** `POST /closing/envelope-count` scored every count
+against the **whole drawer** regardless of the basis on screen, because the basis never left the
+browser. Counting the bill-payment cash therefore read as a shortage of exactly the register cash — and
+a shortage, ticked, becomes a **chargeback against the rep**. The basis now rides the payload
+(`EnvelopeCountIn.basis`) and the count is scored on what the counter was looking at. Absent or
+unknown ⇒ the historical default, so every existing caller and every stored count keeps its meaning.
+
+**STILL OPEN, REPORTED NOT FIXED:** `commcalc.envelope_count` has no column recording WHICH basis a
+stored count was taken on. The count's own `expected_amount` makes each row self-consistent, so no
+variance is wrong, but the report cannot label a stored count's basis. That needs a migration and is
+owner-gated.
+
+**LOCK:** §47.3's harness, sections H1–H3 (+38 checks), with armed controls that patch back the shipped
+select list and the bare `expected_cash(crow)` call. Proof of the money math:
+`harness_envelope_report.py` section A0 reproduces the owner's defect and pins the fix.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 

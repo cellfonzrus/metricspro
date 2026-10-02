@@ -27,12 +27,22 @@ sentinel, from the ONE home `_caller_uid`. Storing a name would reintroduce the 
 `commission-discrepancy`). `app/core/actors.py` is the missing join, once: uid -> person from
 `storeops.app_users`, org-scoped, best-effort, name-only.
 
+AND WHY THE SELECTOR STILL READ ZERO (owner bug 2026-10-02, index §47.8). All of the above shipped
+correct, and the receipt showed bill-payment cash 0.00 on every line with store cash carrying the whole
+drawer — because BOTH callers of `expected_cash` hand-spelled a `daily_closing` column list that omitted
+`epay_on_cash`, the split's one input. `.get()` cannot tell "0 dollars" from "never fetched", so nothing
+failed. The class is §19.18's again in its quietest form: the unwired thing was a SELECT LIST. The
+columns a pure reader dereferences now live beside it (`envelope_report.CLOSING_COLUMNS`) and every
+caller selects that declaration — sections H1-H3 below.
+
 WHAT FAILS THE BUILD HERE: a second basis formula; a basis word or label spelled on the screen or in
 the router; the default drifting off the historical figure; an unknown basis folding to 'manual' (which
 would render a whole receipt as zeros); the legacy store_cash fallback being lost; the count math
 leaving `count_fields`; `counted_by` carrying a sentinel again or not using the one home; a second
 uid->name resolver; `core.actors` reading a column it has no business reading, dropping its org scope,
-or raising.
+or raising; a caller hand-spelling a daily_closing column list again; the pure module reading a closing
+column the contract does not declare; the counted basis not reaching the save handler; a basis without
+a column on the screen.
 
 Stdlib only — the pure modules are import-free and exec'd directly; the router is read as text/AST.
 """
@@ -266,8 +276,94 @@ def main():
              and "def actor_names(" in read(os.path.join(HERE, "app", "core", p))]
     check("no second uid->name resolver under app/core: %s" % (dupes or "none"), dupes, [])
 
+    # ── THE WIRING (owner bug 2026-10-02) ───────────────────────────────────────────────────────
+    # The selector above shipped CORRECT and read 0 anyway: `expected_cash` dereferences
+    # `epay_on_cash`, and BOTH of its callers hand-spelled a daily_closing column list that did not
+    # include it. `.get()` cannot tell "0 dollars" from "never fetched", so the receipt showed
+    # bill-payment cash 0.00 on every line and store cash as the whole drawer, and nothing failed.
+    # The class is §19.18's again, in its quietest form: the unwired thing was a SELECT LIST. So the
+    # columns a pure reader dereferences are DECLARED beside it and every caller selects that
+    # declaration — a reader that starts reading a new column fails this build until the tuple names
+    # it, and every caller then fetches it.
+    print("\nH1. the columns the basis split reads are DECLARED, and every caller selects them")
+    check("CLOSING_COLUMNS is the one column contract, and declares the split's whole input",
+          ("epay_on_cash" in ER.CLOSING_COLUMNS and "t_cash" in ER.CLOSING_COLUMNS
+           and "store_cash" in ER.CLOSING_COLUMNS), True)
+    check("CLOSING_SELECT is DERIVED from it, never a second hand-written list",
+          ER.CLOSING_SELECT, ",".join(ER.CLOSING_COLUMNS))
+    # THE LOCK: every closing-row key the pure module reads must be in the tuple. `r` is bound to
+    # `closing_row or {}` in exactly the functions that take a closing row, so the scan is exact.
+    etree = ast.parse(read(os.path.join(HERE, "app", "modules", "closing", "envelope_report.py")))
+    row_fns = [n for n in ast.walk(etree)
+               if isinstance(n, ast.FunctionDef) and any(a.arg == "closing_row" for a in n.args.args)]
+    check("the closing-row readers are discoverable by their `closing_row` parameter",
+          {"declared_total_cash", "expected_cash", "report_row"} <= {f.name for f in row_fns}, True)
+    undeclared = sorted({
+        c.args[0].value
+        for f in row_fns for c in ast.walk(f)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "get"
+        and isinstance(c.func.value, ast.Name) and c.func.value.id in ("r", "closing_row")
+        and c.args and isinstance(c.args[0], ast.Constant) and isinstance(c.args[0].value, str)
+        and c.args[0].value not in ER.CLOSING_COLUMNS})
+    check("no closing-row column is read without being declared (add it to CLOSING_COLUMNS): %s"
+          % (undeclared or "none"), undeclared, [])
+    # THE LOCK: no caller hand-spells a column list for the rows it feeds to those readers.
+    rtree = ast.parse(rsrc)
+    callers = [n for n in ast.walk(rtree)
+               if isinstance(n, ast.FunctionDef)
+               and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                       and c.func.attr in ("report_row", "expected_cash", "declared_components")
+                       and isinstance(c.func.value, ast.Name)
+                       and c.func.value.id == "envelope_report_mod"
+                       for c in ast.walk(n))]
+    check("the router's envelope-receipt handlers are discoverable",
+          {"envelope_report", "save_envelope_count"} <= {f.name for f in callers}, True)
+    for f in callers:
+        body = ast.get_source_segment(rsrc, f) or ""
+        if 'table("daily_closing")' not in body:
+            continue        # a handler that reads no closing row has no column list to get wrong
+        check("`%s` selects envelope_report.CLOSING_SELECT" % f.name,
+              "envelope_report_mod.CLOSING_SELECT" in body, True)
+        rest = body.replace("envelope_report_mod.CLOSING_SELECT", "")
+        check("`%s` spells no daily_closing money column of its own" % f.name,
+              [c for c in ("t_cash", "epay_on_cash", "store_cash") if '"%s,' % c in rest
+               or ',%s"' % c in rest or ',%s,' % c in rest], [])
+    # The SIBLING consumer of the same formulas must fetch the same column — one of the two paths
+    # fixed and the other not is the same defect wearing a hat.
+    check("deposit_recon's own query carries the split's input too",
+          'select("store_code,close_date,t_cash,store_cash,epay_on_cash")'
+          in read(os.path.join(HERE, "app", "modules", "closing", "deposit_recon.py")), True)
+
+    print("\nH2. a count is scored on the basis the counter was looking at")
+    # Counting the bill-payment or store basis against the whole drawer reads as a huge shortage —
+    # and a shortage can become a CHARGEBACK against the rep. The basis has to reach the handler.
+    check("EnvelopeCountIn accepts a basis",
+          re.search(r"class EnvelopeCountIn\(LaxModel\):(.|\n)*?\n\n", rsrc).group(0).count("basis") >= 1, True)
+    check("the save handler normalizes the incoming basis through the pure module",
+          "normalize_envelope_basis(payload.basis)" in hbody)
+    check("...and passes it to expected_cash instead of taking the bare default",
+          "expected_cash(crow, _basis)" in hbody)
+    check("an absent basis still means the historical default (every stored count keeps its meaning)",
+          ER.expected_cash(row0907, None), ER.expected_cash(row0907, "total_cash"))
+    check("the screen sends the basis it is showing",
+          "basis," in page.split("api('/api/v1/closing/envelope-count'")[1][:900], True)
+
+    print("\nH3. every basis stands beside the chosen one, on screen and in the export")
+    rr3 = ER.report_row({"id": "r", **row0907}, None, None, None, "NJ", basis="bill_payment_cash")
+    check("report_row carries a figure per basis, keyed by basis",
+          rr3["declared"], {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0})
+    check("the flat keys the payload has carried since 2026-10-01 still answer",
+          (rr3["declared_total_cash"], rr3["declared_billpay_cash"]), (1002.0, 230.0))
+    check("basis_options carries the column-header form of the same words",
+          [o["short"] for o in ER.basis_options("ePay")],
+          ["Total cash", "Store cash", "Bill payments (ePay)"])
+    check("...with the same slot rule — an unresolved term drops the parenthetical",
+          [o["short"] for o in ER.basis_options("")][2], "Bill payments")
+    check("the screen renders a column per SERVER option, spelling no basis key",
+          "basisCols" in pcode and "r.declared?.[b.key]" in pcode, True)
+
     # ── I. armed negative controls ──────────────────────────────────────────────────────────────
-    print("\nH. CONTROLS — each rule goes RED with the defect patched back in")
+    print("\nJ. CONTROLS — each rule goes RED with the defect patched back in")
     check("CONTROL: the pre-fix handler's sentinel would be caught",
           '"management"' in '"counted_by": (payload.counted_by or prior or "management"),')
     check("CONTROL: a hand-written basis formula instead of the dereference → RED",
@@ -287,6 +383,18 @@ def main():
           and "{processor}" not in ER.basis_label("bill_payment_cash", "ePay"))
     check("CONTROL: the endpoint going back to indexing the label dict → RED",
           "ENVELOPE_BASIS_LABELS[" in 'x = envelope_report_mod.ENVELOPE_BASIS_LABELS[b]')
+    # The WIRING rules, armed with the select list exactly as it shipped on 2026-10-01.
+    shipped_select = ('.select("id,close_date,store_code,store_name,store_address,employee_name,"\n'
+                      '        "t_cash,store_cash,envelope_picture,remarks")')
+    check("CONTROL: the hand-spelled select list → RED",
+          "envelope_report_mod.CLOSING_SELECT" not in shipped_select
+          and [c for c in ("t_cash", "epay_on_cash", "store_cash")
+               if '"%s,' % c in shipped_select or ',%s,' % c in shipped_select] != [])
+    check("CONTROL: and it is exactly what the owner saw — bill-pay 0, store cash = the whole drawer",
+          (ER.expected_cash({"t_cash": 1002.0}, "bill_payment_cash"),
+           ER.expected_cash({"t_cash": 1002.0}, "store_cash")), (0.0, 1002.0))
+    check("CONTROL: a reader that starts reading an undeclared column → RED",
+          "dm_epay_cash" not in ER.CLOSING_COLUMNS)
 
     print("\n" + "=" * 96)
     print("RESULT: %d passed, %d failed" % (_p, _f))

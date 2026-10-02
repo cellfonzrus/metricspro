@@ -4537,9 +4537,11 @@ def envelope_report(date_from: str = None, date_to: str = None,
     if date_from > date_to:
         date_from, date_to = date_to, date_from
 
+    # The column list is the pure module's own (envelope_report.CLOSING_SELECT) — never spelled here.
+    # Owner bug 2026-10-02: this list hand-omitted `epay_on_cash`, the whole input to the basis split,
+    # so the receipt read "no bill payments" and "store cash = the whole drawer" on every single line.
     rows = (client.schema("commcalc").table("daily_closing")
-            .select("id,close_date,store_code,store_name,store_address,employee_name,"
-                    "t_cash,store_cash,envelope_picture,remarks")
+            .select(envelope_report_mod.CLOSING_SELECT)
             .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
             .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
 
@@ -4655,6 +4657,7 @@ class EnvelopeCountIn(LaxModel):
     counted_by: Any = None
     assign_chargeback: Any = False
     tolerance: Any = 0.0
+    basis: Any = None        # which cash was counted — envelope_report.ENVELOPE_BASES; None ⇒ default
 
 
 @router.post("/envelope-count")
@@ -4679,12 +4682,19 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
     if payload.counted_amount in (None, ""):
         raise HTTPException(400, "counted_amount required")
     rows = (client.schema("commcalc").table("daily_closing")
-            .select("id,close_date,store_code,store_name,store_address,employee_name,t_cash,store_cash")
+            .select(envelope_report_mod.CLOSING_SELECT)
             .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(404, "closing row not found")
     crow = rows[0]
-    expected = envelope_report_mod.expected_cash(crow)
+    # WHICH CASH THIS COUNT IS OF (owner bug 2026-10-02). The receipt screen lets management pick the
+    # basis; this handler scored every count against the whole drawer regardless, so a count taken on
+    # the bill-payment or store-cash basis read as a huge shortage — and a shortage is a CHARGEBACK
+    # against the rep. The count is now scored on the basis the counter was actually looking at, through
+    # the same pure function the report renders. Omitted/unknown ⇒ the historical default (total_cash),
+    # so every existing caller and every stored count keeps its meaning byte-for-byte.
+    _basis = envelope_report_mod.normalize_envelope_basis(payload.basis)
+    expected = envelope_report_mod.expected_cash(crow, _basis)
     cf = envelope_report_mod.count_fields(expected, payload.counted_amount, payload.tolerance)
 
     # existing count row (for re-counts + existing chargeback link)

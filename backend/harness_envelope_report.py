@@ -22,7 +22,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from app.modules.closing.envelope_report import (  # noqa: E402
     expected_cash, count_fields, shortage_amount, chargeback_parent_row,
-    report_row, status_filter, totals, by_employee, ENVELOPE_SHORT_REASON)
+    report_row, status_filter, totals, by_employee, ENVELOPE_SHORT_REASON,
+    declared_components, CLOSING_COLUMNS)
 
 FAILS = []
 
@@ -32,6 +33,41 @@ def check(name, cond, detail=""):
     if not cond:
         FAILS.append(name)
 
+
+print("A0. REGRESSION — the basis split is zero without its column (owner bug 2026-10-02)")
+# What the owner saw: bill-payment cash 0.00 on EVERY line, store cash = the whole drawer. Cause: the
+# endpoint's hand-spelled select list omitted `epay_on_cash`, so the reader got None for every row and
+# `_f(None)` → 0.0. This pair of checks pins BOTH halves: the broken row shape, and the declared one.
+_no_col = {"t_cash": 100.0}                            # what the old select list actually returned
+_with_col = {"t_cash": 100.0, "epay_on_cash": 70.0}    # what CLOSING_COLUMNS returns
+check("the defect reproduces: with the column absent, bill-pay reads 0",
+      expected_cash(_no_col, "bill_payment_cash") == 0.0)
+check("the defect reproduces: with the column absent, store cash = the whole drawer",
+      expected_cash(_no_col, "store_cash") == expected_cash(_no_col, "total_cash") == 100.0)
+check("fixed: the column is DECLARED, so the three bases differ",
+      (expected_cash(_with_col, "total_cash"), expected_cash(_with_col, "store_cash"),
+       expected_cash(_with_col, "bill_payment_cash")) == (100.0, 30.0, 70.0),
+      str(declared_components(_with_col)))
+check("`epay_on_cash` is in the column contract every caller selects",
+      "epay_on_cash" in CLOSING_COLUMNS, str(CLOSING_COLUMNS))
+# A line whose whole drawer is bill-pay cash: store cash is 0 and that 0 is REAL, not a missing column.
+check("an all-bill-pay drawer reads store cash 0 / bill-pay 100 (the B-559 case)",
+      declared_components({"t_cash": 100.0, "epay_on_cash": 100.0})
+      == {"total_cash": 100.0, "store_cash": 0.0, "bill_payment_cash": 100.0})
+check("bill-pay cash over the drawer never makes store cash negative",
+      declared_components({"t_cash": 50.0, "epay_on_cash": 80.0})["store_cash"] == 0.0)
+_rr = report_row(_with_col, None, None, None, None, basis="bill_payment_cash")
+check("report_row carries a figure for EVERY basis, keyed by basis, whatever the pick",
+      _rr["declared"] == {"total_cash": 100.0, "store_cash": 30.0, "bill_payment_cash": 70.0},
+      str(_rr.get("declared")))
+check("...and declared_cash is the picked one",
+      (_rr["basis"], _rr["declared_cash"]) == ("bill_payment_cash", 70.0))
+check("...and the flat keys the payload carried since 2026-10-01 still answer",
+      (_rr["declared_total_cash"], _rr["declared_billpay_cash"]) == (100.0, 70.0))
+check("the legacy store_cash fallback feeds the split too (a day-1 row)",
+      declared_components({"store_cash": 200.0, "epay_on_cash": 50.0})
+      == {"total_cash": 200.0, "store_cash": 150.0, "bill_payment_cash": 50.0})
+print()
 
 print("A. expected_cash")
 check("t_cash wins", expected_cash({"t_cash": 786.0, "store_cash": 700.0}) == 786.0)

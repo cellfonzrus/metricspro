@@ -78,6 +78,33 @@ def _f(v):
 ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
 ENVELOPE_BASIS_DEFAULT = "total_cash"
 
+# ── THE ROW CONTRACT: which daily_closing columns this module DEREFERENCES (owner bug 2026-10-02) ──
+# Owner: the receipt showed the bill-payment cash as 0.00 on every line, and the store-cash basis as the
+# WHOLE drawer — i.e. the selector from 2026-10-01 answered every basis with the total.
+#
+# THE CLASS, not the instance: a pure reader's inputs are only as good as its CALLER'S SELECT LIST, and
+# nothing failed when they disagreed. `expected_cash` reads `epay_on_cash`; both of its callers
+# (`/closing/envelope-report` and `POST /closing/envelope-count`) hand-spelled a column list that did not
+# include it, so `_f(None)` → 0.0 and the three formulas collapsed to one:
+#     bill_payment_cash = 0            (every line read "no bill payments")
+#     store_cash        = t_cash - 0   (every line read the whole drawer, bill payments included)
+# A missing column is INVISIBLE here by construction — `.get()` cannot tell "0 dollars" from "not asked
+# for" — so the fix cannot be "add the column at the one call site that surfaced it".
+#
+# ONE FACT, ONE HOME, DEREFERENCED: the columns live HERE, beside the logic that reads them, and every
+# caller selects `CLOSING_SELECT` instead of writing its own list. Adding a row input to this module now
+# means adding it to this tuple, which every caller already fetches.
+# LOCKED: backend/harness_envelope_basis_wiring.py fails the build if a caller hand-spells a
+# daily_closing column list again, or if this module reads a row key the tuple does not declare.
+CLOSING_COLUMNS = (
+    "id", "close_date", "store_code", "store_name", "store_address", "employee_name",
+    "t_cash",            # the canonical declared drawer (declared_total_cash)
+    "store_cash",        # the legacy day-1 fallback for t_cash (NOT the net store-cash basis)
+    "epay_on_cash",      # the bill-payment (ePay) cash INSIDE t_cash — the basis split's whole input
+    "envelope_picture", "remarks",
+)
+CLOSING_SELECT = ",".join(CLOSING_COLUMNS)
+
 # THE PROCESSOR'S NAME IS NOT SPELLED HERE (harness_carrier_vocab_guard, owner directive 2026-09-04).
 # "What this tenant calls its bill-payment processor" already has ONE home — the report_labels
 # `processor` term (mig 953: Boost preset 'ePay', Total preset 'VidaPay', registry neutral noun
@@ -95,13 +122,25 @@ ENVELOPE_BASIS_LABELS = {
 }
 
 
-def basis_label(basis, processor_term=""):
+# The SHORT form of the same words, for a column header (owner bug 2026-10-02: every basis now gets its
+# own column, and a sentence-long label is not a column header). Same {processor} slot rule, same one
+# home — a basis is turned into words HERE and nowhere else, long form or short.
+ENVELOPE_BASIS_SHORT_LABELS = {
+    "total_cash": "Total cash",
+    "store_cash": "Store cash",
+    "bill_payment_cash": "Bill payments ({processor})",
+}
+
+
+def basis_label(basis, processor_term="", short=False):
     """PURE: the label for one basis, with the tenant's own word for the bill-payment processor.
 
     `processor_term` is `report_labels.carrier_term(client, org_id, ENVELOPE_BASIS_TERM_KEY)`. Empty or
     blank -> the parenthetical is REMOVED, never filled with a brand or left as a raw '{processor}'.
+    `short=True` gives the column-header form of the same words (same slot rule).
     """
-    tpl = ENVELOPE_BASIS_LABELS[normalize_envelope_basis(basis)]
+    key = normalize_envelope_basis(basis)
+    tpl = (ENVELOPE_BASIS_SHORT_LABELS if short else ENVELOPE_BASIS_LABELS)[key]
     if "{processor}" not in tpl:
         return tpl
     t = str(processor_term or "").strip()
@@ -109,12 +148,14 @@ def basis_label(basis, processor_term=""):
 
 
 def basis_options(processor_term=""):
-    """PURE: the [{key, label}] list the selector renders, in ENVELOPE_BASES order.
+    """PURE: the [{key, label, short}] list the selector and the per-basis columns render, in
+    ENVELOPE_BASES order.
 
     Built here rather than in the endpoint so the screen spells no basis key and no basis label, and
     so there is exactly one place that turns a basis into words.
     """
-    return [{"key": b, "label": basis_label(b, processor_term)} for b in ENVELOPE_BASES]
+    return [{"key": b, "label": basis_label(b, processor_term),
+             "short": basis_label(b, processor_term, short=True)} for b in ENVELOPE_BASES]
 
 
 def normalize_envelope_basis(b):
@@ -148,6 +189,17 @@ def expected_cash(closing_row, basis=ENVELOPE_BASIS_DEFAULT):
     r = closing_row or {}
     return deposit_recon.cash_for_basis(declared_total_cash(r), _f(r.get("epay_on_cash")),
                                         normalize_envelope_basis(basis))
+
+
+def declared_components(closing_row):
+    """PURE: all three cash figures for ONE row, keyed by basis — {total_cash, store_cash,
+    bill_payment_cash}.
+
+    The report shows the components BESIDE the chosen basis so "why is this 0?" is answerable on the
+    screen rather than only in a docstring, and they come from `expected_cash` (hence from
+    `deposit_recon.cash_for_basis`) rather than from arithmetic written here a second time.
+    """
+    return {b: expected_cash(closing_row, b) for b in ENVELOPE_BASES}
 
 
 def count_fields(expected, counted, tolerance=0.0):
@@ -202,14 +254,16 @@ def report_row(closing_row, count_row, chargeback, ver_row, market,
     photo ref, the management count (when one exists), and the linked chargeback status.
 
     `basis` (owner 2026-10-01) picks WHICH cash the line is about — see ENVELOPE_BASES. It changes
-    `declared_cash` only; the two components are always reported beside it so a counter can see why
-    the figure is what it is, and the short/over math stays in `count_fields` (one place).
+    `declared_cash` only; ALL the bases ride beside it in `declared` (keyed by basis key, so the screen
+    can render a column per `basis_options()` entry without spelling a basis word) so a counter can see
+    why the figure is what it is, and the short/over math stays in `count_fields` (one place).
     """
     r = closing_row or {}
     c = count_row or {}
     cb = chargeback or {}
     v = ver_row or {}
     counted = c.get("counted_amount")
+    comp = declared_components(r)
     out = {
         "closing_row_id": r.get("id"),
         "close_date": str(r.get("close_date") or "")[:10],
@@ -217,11 +271,17 @@ def report_row(closing_row, count_row, chargeback, ver_row, market,
         "store_address": r.get("store_address") or r.get("store_name") or r.get("store_code"),
         "market": market or "(no market)",
         "employee_name": r.get("employee_name"),
-        "declared_cash": expected_cash(r, basis),
-        # The two components, always, whatever the basis — so "why is this 0?" is answerable on screen.
+        "declared_cash": comp[normalize_envelope_basis(basis)],
+        # The components, always, whatever the basis — so "why is this 0?" is answerable on screen
+        # (owner bug 2026-10-02: they were reported but never rendered, so a 0 had no explanation).
         "basis": normalize_envelope_basis(basis),
-        "declared_total_cash": declared_total_cash(r),
-        "declared_billpay_cash": _f(r.get("epay_on_cash")),
+        # Keyed BY BASIS, so the screen renders one column per `basis_options()` entry — header from
+        # the server's own resolved label — and therefore spells no basis key and no basis word
+        # itself. A future basis gets its column for free, and cannot get a stale header.
+        "declared": comp,
+        # The two flat keys the payload has carried since 2026-10-01, kept for existing readers.
+        "declared_total_cash": comp["total_cash"],
+        "declared_billpay_cash": comp["bill_payment_cash"],
         "envelope_picture": r.get("envelope_picture"),
         "remarks": r.get("remarks"),
         "dm_verified": bool(v.get("verified")),
