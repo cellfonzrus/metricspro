@@ -3396,7 +3396,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `_run_closing_missing_alerts` (a derived store has nobody to nag) and
   `attention_providers._p_closing_stale_stores` (a derived store's gap is reported as
   `closing_derivation_stale` — the derivation not having run — not as "selling but not submitting").
-  The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due`) takes
+  The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due`,
+  retroactive `POST /closing/derive-range` over a bounded span — the SAME per-day sweep run once per
+  day, oldest first, so a backfill has no second copy of the derivation rules) takes
   the day's money + counts from the SHARED `_b2b_day` / `_b2b_counts_by_store` (no second derivation)
   and writes a REAL `daily_closing` row marked `source='b2b_derived'` through ONE writer
   (`_derive_write`), which is why cash pickup, envelopes, deposit accountability, the five-stage chain
@@ -5134,6 +5136,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Table | Written by | Read by |
 |-------|-----------|---------|
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
+| `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
+| `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1037`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1037` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
 | *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
 | Actor columns stamped by `router._caller_uid` — `installment_category_rule.updated_by` (**UUID**, mig 245), `plan_installment_schedule.updated_by` + `plan_installment_schedule_audit.changed_by` (mig 210), `commission_org_config.updated_by` (mig 201), `discrepancy_results.appealed_by` (mig 947), `commission_payout_ledger.recorded_by` (mig 267), `ingest_store_guard.updated_by` / `ingest_store_quarantine.decided_by` (mig 280), `targets.updated_by` (mig 006), `financing_target.updated_by` (mig 272) — **who did this: a uid or NULL, never a sentinel** (§19.34) | the plan-installment / category / matcher / payout-config / expected-commission editors, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, the ingest-guard + targets + financing-target saves — all via ONE helper `_caller_uid` (`_mpc_who` / `_xc_who` / `_agency_who` dereference it) | the UI through ONE display rule `frontend/src/lib/actor.ts::actorLabel` (NULL / legacy `'web'` → "system"); lock `harness_actor_uid_lock.py` |
@@ -5257,7 +5261,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.raw_epay_daily_tx` (mig `903`, the processor transaction-detail feed) — via the onboarding intake | `epay_ingest.ingest` (the feed's own idempotent ingest) from the intake's `epay_daily_tx` LAYOUT (`column_mapping.TABLE_MAP`, §30.8) with `source_batch='onboarding-intake:<file>'` | the mig-939 bill-pay reader `_billpay_processor_by_store_day` (`epay_ingest.per_store_day`) — which the intake RE-READS through after landing |
 | `commcalc.raw_ma_daily_tx` — via the onboarding intake | `_ingest_mapped_df` from the intake's `ma_daily_tx` layout (slice replace on `account_id` × `tx_date`, `upload_trace.source='onboarding-intake'`, §30.8) | the mig-939 bill-pay reader (`_ma_billpay_pred` row filter, `_vidapay_account_resolver`) — re-read through after landing |
 | `commcalc.raw_custom_import` (Activation Details, per device) — as the inventory check's SECOND sold-source | (unchanged) | `_intake_activation_rows` → `_cr_resolve_activation_details` (+ `mdn`) → `inventory_sold_recon.reconcile(activation_rows=)` (§11a, §30.8) |
-| `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`) | `GET /closing/envelope-report`, notify `closing_envelope_report` |
+| `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row; **`basis` mig `1036`** — which cash the count counted, nullable, CHECK-tied to `envelope_report.ENVELOPE_BASES`, never backfilled) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`; amounts **and** basis from the one `envelope_report.count_row_fields` call) | `GET /closing/envelope-report` (a stored basis is resolved by `envelope_report.counted_basis`, which reports `recorded: false` for a pre-`1036` row rather than inventing one — §47.10), notify `closing_envelope_report` |
 | `commcalc.ops_chargeback` (mig `504`) | detection sweeps (`ops_chargebacks.py`: missed_closing/missed_dm_verify) **+ `POST /closing/envelope-count`** (reason `envelope_short`, parent rows only, amount = actual shortage) | policy editor (reasons-in-the-wild), decide endpoints, commission settlement `_settle_ops_chargebacks`/`_ops_chargeback_deductions` (`commcalc/router.py:11265-11550`) |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
@@ -5324,6 +5328,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
 | `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
+| `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
+| `GET /closing/attempts` — additive: `refusals`, `last_refusal_code`, `last_refusal_detail`, `last_refused_at` per group, `refused` / `refusal_code` / `refusal_detail` per try; `attempts` means REAL tries; a store-day whose only events are refusals always qualifies for `only_review=true` | `closing/router.closing_attempts` (dereferencing `submit_refusal.is_real_try`) | §29.11 |
 | **Every JSON response** (no route added) — a MESSAGE-key value carrying a RUNTIME database / hosting error (`setup_notice.SYSTEM_INTERNAL`: duplicate key, violates … constraint, permission denied for table, an error dict `'code': '23505'`, `postgrest…APIError`, a `*.supabase.co` host) reaches a non-super-admin as `SYSTEM_NOTICE` from that sentence on; data rows never read; the original to the server log | `core/setup_notice.SetupNoticeMiddleware` (unchanged registration) | §19.38 |
 | **Every JSON response** (no route added) — a MESSAGE-key value (`detail`, `note`, `hint`, `error`, … — `setup_notice.MESSAGE_KEYS`, never a data row / list) carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; data cells are never read; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
@@ -5530,10 +5536,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (carries `totals_original`, and the NAMED cash figures `totals.total_store_cash` / `store_cash_net` / `cash_split` + per-rep `_cash_split`, all from `deposit_recon.cash_components` — §47.9), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit, §47.9 |
-| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8 |
+| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8, and STORES it — §47.10), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`, `count_row_fields`, `counted_basis`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8, §47.10 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
-| `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
+| `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store), `POST /closing/derive-range` (retroactive backfill, `start=`/`end=`/`dry_run=`, bounded by `MAX_DERIVE_BACKFILL_DAYS`) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`/`derive_closing_range`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
@@ -5578,6 +5584,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
+| **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
 | **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`, `B-2778` (closed → B-1598); `Cellular Services` is a COMPANY, exempt by dereferencing `commcalc.companies` |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
@@ -11821,6 +11828,109 @@ still shows the same, if disabled it should not show anything platform wide"*.
 
 ---
 
+### 29.11 A REFUSED CLOSING LEFT NO TRACE — the submit audit trail only started once every check had passed (owner bug report 2026-10-02)
+
+Owner, verbatim: *"also abid did the daily closing for the 117 bunrsoide ave as a dm whoc is now working as a
+sales rep int eh store - we cannot see the daily closing which was submitted, , also he did it again today it
+is stikll not shwoing , 2 things first investigate and fix amd second dont let duplicate entries"*.
+
+**LIVE EVIDENCE FIRST (read-only, before a line was written).** 117 E Burnside Ave is `B-117`
+(`commcalc.store_mapping`, market NYC, sfid `001U100000Ga3kfIAB`; the store master knows it too, with a NULL
+address, which is the house norm there).
+
+| where a closing can land | what was there for B-117 |
+|---|---|
+| `commcalc.daily_closing` | rows on 09-28 (Kashif), 09-29 and 09-30 (Rohit) — **none on 10-01 or 10-02** |
+| `commcalc.closing_attempt` (the submit audit trail) | **nothing from that submitter at ANY store since 09-28** |
+| `commcalc.daily_closing_verification` | no `B-117` row — it did not land on the DM-verify screen either |
+
+The submitter is `abid.akhter@cellfonzrus.us` = app_user `full_name` **"Rana"**, employee **E012** (`storeops.employees.name`
+"Rana", home store B-509, role Market Manager), login role `district_manager`. Every closing he has ever filed is
+under "Rana", so a search for "Abid" finds none of them — worth knowing, and NOT the bug.
+
+**Three candidate causes were ruled out by measurement, not by reading code.** (1) *Scope* — `caller_scope` is a
+strict no-op platform-wide: `_rbac_enabled` reads `app_config.rbac_enabled` and that table does not exist, so
+every keyset is `None` and nothing is being filtered from anyone. (2) *Market resolution* — B-117 carries market
+NYC in BOTH vocabularies, so no market pick drops it. (3) *A twin store identity* (the §511 luxelink shape) —
+B-117 has exactly one mapping row and no alias. The closing was **not hidden. It was REFUSED and nothing was kept.**
+
+**ROOT CAUSE — THE CLASS.** `closing/router.create_row` runs every validation BEFORE the first write, and
+`closing_attempt` — the table that exists so management can see what a rep tried — was written only once they all
+passed (`_log_attempt`, after the close gate). So ALL EIGHT refusal paths stored nothing at all:
+
+| refusal | status | stored before this fix |
+|---|---|---|
+| the close date could not be read | 400 | nothing |
+| the submitter may not use that name / has no name on file | 403 | nothing |
+| the envelope photo would not save | 502 | nothing |
+| **cash declared with no envelope photo** (`require_photo_if_cash` is **true org-wide here**, since 2026-08-11) | 400 | nothing |
+| already submitted for the day / more than one row exists / the index race | 409 | nothing |
+| an expense line, or an expense with no description | 400 | nothing |
+| no store or no employee name on the submit | — | the row was WRITTEN, with no dedup key and no index protection |
+
+A rep says "I submitted it", management sees nothing, and there is no evidence either way — for any store, any
+rep, any tenant. "Burnside's closing is missing" is the instance; **"a refused closing leaves no trace" is the
+class**, and it is what made this unanswerable rather than merely wrong.
+
+**DUPLICATE CHECK (build gate).** Searched this index and the code for an existing mechanism before building:
+`commcalc.closing_attempt` (mig 103) IS the submit audit trail and `GET /closing/attempts` IS its reader, so both
+are **REUSED** — the refusal is three additive columns on that table and three additive keys on that response, not
+a sibling table, endpoint or screen. On duplicates the owner asked to prevent: **migration 502 already prevents
+them**, in the app and as a partial unique index, and the live data agrees — **1,799 closings since 2026-08-01,
+zero duplicate groups, zero NULL dedup keys, zero blank store codes or names**. So no second guard was built. Two
+real gaps in the existing one were closed instead (below). `closing/closer_pick` (§29.7) keeps the one rule for
+WHOSE name a closing carries; it now returns a declared refusal code instead of raising its own 403.
+
+**THE FIX — one home per fact, every caller dereferencing it.**
+- `closing/submit_refusal.py` (pure) — **THE refusal registry**: code → (HTTP status, the sentence the submitter
+  reads). `Refusal`, `audit_row`, and `is_real_try` — the ONE rule for "does this row count as a try".
+- `closing/router._refuse` — **the single raise site**. Records the refusal in `commcalc.closing_attempt` with the
+  reason, then raises the registry's error. `create_row` raises no `HTTPException` of its own any more.
+- `closing/dedup_key.py` (pure) — **THE dedup key**. It had been spelled twice and had already drifted: Python
+  folded a STRIPPED employee name, mig 502's SQL folded the raw one, so a name stored with a stray space produced
+  two keys for one person and the index could not see the duplicate it exists to stop. `SQL_EXPR` is the same
+  formula in SQL and the migration must contain it verbatim.
+- **A refusal is never a try.** `_real_attempt_count` dereferences `is_real_try`, so two failed photo uploads no
+  longer carry a rep to the auto-accepting third try without recounting. That one is money-affecting.
+- **Identity is required.** A submit with no store or no employee name is refused (`identity_missing`) instead of
+  being written with a NULL dedup key, outside the index.
+- **The released window is closed.** Mig 502's index was `where dedup_key is not null and released_at is null`; a
+  release→resubmit UPDATEs the same row, so that second half protected nothing and only left a window for two
+  concurrent inserts. Mig 1037 drops it, after asserting no key is held twice.
+- **Management Review shows it** (`closing/management/page.tsx`): "⚠ N submits turned away — cash declared with no
+  envelope photo", each try row says `turned away`, and a store-day that was only ever refused reads **"never
+  counted"** instead of "0 attempts" and always qualifies for `only_review=true`.
+
+**#349's REFUSAL JOINED THE REGISTRY, it did not sit beside it (merge 2026-10-02).** `§19.39` gave a store a
+daily-closing SOURCE and refused a rep's submit on a feed-derived store with its own
+`raise HTTPException(409, closing_source.refusal_message(...))` — a ninth refusal path storing nothing, the exact
+class this section fixes. It now goes through `_refuse` as `closing_source_not_rep` and is audited like the other
+eight. Its SENTENCE stays owned by `closing_source.refusal_message` (it names the store and where to change it):
+`submit_refusal.DELEGATED_MESSAGE` declares the code delegated, the registry **dereferences** that module for the
+status and the store-less fallback, and `_refuse(..., message=)` carries the store-specific rendering through —
+so the words exist in ONE place. A non-delegated code cannot have its words overridden. Checked by **§H9** (7
+checks), which fails the build if the registry ever retypes those words or the router stops passing them.
+
+**MIGRATION 1037 — SURFACED FOR OWNER APPROVAL, NOT APPLIED.** Additive columns + the index widening + a
+dedup-key recompute that refuses rather than merging anything ambiguous. No amount column is read or written.
+
+**Lock: `backend/harness_closing_submit_refusal.py` — 115 checks, DB-free.** §A–C pure (registry complete, no
+storage name in submitter copy, the whitespace divergence gone), §D the REGRESSION (each refusal path through the
+real `create_row`: no closing stored AND exactly one audited reason — before the fix every one of those found
+zero rows), §E the money point, §F the Management Review view, §G degrade pre-migration, **§H the WIRING LOCKS
+that fail the build**: no submit validation may raise `HTTPException` directly, every code raised must be
+declared and every declared code must be raised, the router may spell no dedup key, the try counter must
+dereference `_real_attempt_count`, the migration's SQL must be `dedup_key.SQL_EXPR` verbatim, and the screen must
+have words for every code, and **§H9** that a delegated sentence keeps one home. Verified to BITE:
+re-inlining one `raise HTTPException` turns ten checks red; §H9b caught a literal copy of #349's sentence in a
+code comment during the merge itself.
+`harness_closing_closer_pick.py` B5 was updated to pin the new shape (still a 403 carrying the reason).
+
+**OPEN — reported, not fixed.** Which of the nine refusals Abid actually hit cannot be known: the refusals that
+predate this fix left nothing behind, which is the defect. `require_photo_if_cash` being on org-wide makes the
+photo gate the likeliest. From the next refusal on, the answer is on the Management Review screen.
+
+
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)
 
 Owner: *"I will not do anything manually — the system should ask me while onboarding under 3.4 what is
@@ -15225,6 +15335,71 @@ what they are called.
 the drawer, shows the net, and derives neither. Armed controls patch the shipped tile back in and go
 red. The bill-pay recon's own `declared − processor` variances are a different question and are proven
 *not* to match the scan.
+
+### 47.10 A stored count now says WHICH CASH it counted (owner 2026-10-02, mig `1036`)
+
+The item §47.8 **reported open rather than fixed**, closed on the owner's word ("do it").
+
+**The class.** §47.8 fixed the *scoring* — a count is measured on the basis the counter was looking at.
+The stored ROW stayed silent about which basis that was, so a row recorded an **amount** without the
+**question the amount answered**. Two rows reading "short $230" could be a shortage in the whole drawer
+and a shortage in the bill-payment cash: each self-consistent (each carries the `expected_amount` it was
+scored against, so no variance and no chargeback is wrong) and indistinguishable on a report.
+
+`commcalc.envelope_count.basis` — `TEXT`, nullable, `CHECK (basis IS NULL OR basis IN (…))`, mig `1036`,
+additive and idempotent with a `-- REVERT:` note. No stored amount, variance, status or chargeback is
+read or written by it.
+
+**ONE CALL WRITES BOTH.** The fix is not a field added at the call site — it is that the amounts and the
+basis come from one function, so a stored amount **cannot** be written without its basis:
+
+| fact | home | callers |
+|---|---|---|
+| everything a count row records about the money (amounts **+** basis) | **`envelope_report.count_row_fields`** | `POST /closing/envelope-count`, which no longer composes `expected_cash` + `count_fields` itself |
+| the short/over verdict | `envelope_report.count_fields` — **unchanged** | the above, plus `pickup_actual.row_variance` and the external-credit tally, whose "expected" is not a cash basis at all |
+| which basis a STORED count used, recorded or not | **`envelope_report.counted_basis`** | `report_row` → the receipt screen and both export columns |
+| the bases that have a formula | `envelope_report.ENVELOPE_BASES` → `deposit_recon.cash_for_basis` | the migration's CHECK is *tied* to this tuple by §K3, never a second list |
+
+**Why the basis is NOT a key of `count_fields`.** That function is the platform's short/over truth table,
+shared by the deposit recon and the external-credit tally (`harness_external_credit_recon` §E pins the
+reuse). Putting an envelope-basis key in its return would push this subsystem's vocabulary into two
+reports that have no use for it. The home is therefore one function *above* the truth table.
+
+**ABSENCE IS NEVER A GUESS — the column is deliberately NOT backfilled.** A pre-`1036` row recorded no
+basis, and writing `total_cash` into it would turn *"nobody recorded this"* into *"somebody chose
+total_cash"*. The READER resolves it instead, in one place: `counted_basis` returns the historical
+default **with `recorded: false`**, because the handler of that era had no basis to use and scored
+against the whole drawer by construction. So the receipt says *"basis not recorded (counted before it
+was stored)"* and never claims a person chose it. A SQL `NULL`, a missing key and an unrecognised word
+all resolve identically.
+
+**Shown when it is worth saying.** The receipt surfaces the stored basis only where it changes a
+reading: when the count on file was taken on a different basis than the line is being *viewed* on (hence
+`counted_basis` is a distinct payload key from `basis`, which is the view), or when the row recorded
+none. On every row it would be noise; on these rows it is the difference between two meanings of "short
+$230". The wording is looked up from the server's own `basis_options()` by the key the server sent, so
+the screen still spells no basis word — §47.8's rule holds. The export carries the basis and
+`Counted on — recorded` as **separate** columns, so "which counts predate the column" is filterable.
+
+**An unapplied migration degrades LOUDLY.** The column is additive, so a database without `1036` rejects
+the whole upsert on an unknown column — which would break a working screen over a column nobody has yet.
+The save retries without the basis, the reply carries `basis_stored: false`, and a WARN names the
+migration. Only that error is caught; any other upsert failure still raises. The one unacceptable
+outcome — saving silently while the receipt implies a basis was recorded — cannot happen, because
+`counted_basis` words a missing basis as un-recorded either way.
+
+**LOCK:** §47.3's harness, section **K1–K5** (181 checks total). Fails the build when: the handler
+composes `expected_cash` + `count_fields` itself again; `count_fields` grows a basis key (which would
+reach the two sibling reports); a stored amount is written without its basis; the migration gains a
+backfill or drops the nullability; the CHECK drifts off `ENVELOPE_BASES`; `counted_basis` passes an
+unknown word through, or reports an un-recorded basis as recorded; `report_row` stops carrying it; an
+uncounted row grows a basis it never had; the screen spells a basis word or shows the note on every row;
+or the degrade path becomes a bare `except: pass`. Each rule carries an **armed control**, and the five
+load-bearing ones were patched back to the shipped behaviour by hand and watched go red.
+
+**MONEY-TOUCHING — and a MIGRATION: owner-approved before applying.** Nothing moves money: no amount,
+variance, status or chargeback changes, and every existing row keeps every value it has. What changes is
+that a row can now *say* what it was measuring.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 

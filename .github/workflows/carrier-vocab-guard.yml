@@ -189,6 +189,11 @@ on:
       - "backend/app/modules/account/statement_engine.py"
       - "backend/app/modules/account/router.py"
       - "backend/harness_carrier_vocab_guard.py"
+      # index §29.11 — the closing-refusal lock reads the router, the two pure modules, its own
+      # proof, migration 1037 and the Management Review screen
+      - "backend/harness_closing_submit_refusal.py"
+      - "backend/app/modules/closing/submit_refusal.py"
+      - "backend/app/modules/closing/dedup_key.py"
       - "backend/harness_report_kind_lock.py"
       - "backend/harness_connector_scope_lock.py"
       - "backend/app/modules/commcalc/connector_registry.py"
@@ -750,6 +755,11 @@ jobs:
       - name: Run the closing-source sweep proof (the feed's day written as a real closing; a rep's row never overwritten; idempotent; a missing feed reported; dry run)
         working-directory: backend
         run: python3 harness_closing_source_sweep.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.39 — the RETROACTIVE BACKFILL over the real endpoint (derive_closing_range). A
+      # backfill's risk is the span itself: a day missed, a day done twice, or history rewritten.
+      - name: Run the closing-source backfill proof (every day once; one sweep not a second derivation; empty days reported; idempotent; a human's row survives; bounds refuse)
+        working-directory: backend
+        run: python3 harness_closing_source_backfill.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend
@@ -798,6 +808,30 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_store_mapping_identity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE CLOSING-REFUSAL LOCK (index §29.11, owner bug report 2026-10-02 "we cannot see the daily closing which was
+  # submitted"). A daily closing that is REFUSED used to store nothing at all — not even in commcalc.closing_attempt,
+  # the submit audit trail — so "I submitted it" versus "we see nothing" was unresolvable for any store, rep or tenant.
+  # Every refusal now goes through closing/router._refuse into that same table, with its reason declared once in
+  # closing/submit_refusal.REFUSALS; the dedup key has one home (closing/dedup_key, whose SQL_EXPR migration 1037 must
+  # contain verbatim). This job FAILS THE BUILD if a submit validation raises HTTPException directly, if a code is
+  # raised that the registry does not declare (or declared and never raised), if the router starts spelling a dedup key
+  # of its own, if the try counter stops dereferencing _real_attempt_count, if the migration's SQL drifts from the
+  # module, or if the Management Review screen has no words for a code. It imports the closing router (FastAPI), so it
+  # needs the backend's dependencies — same reason as the job above. DB-free.
+  closing-refusal-lock:
+    name: Closing refusal lock (a refused closing leaves a record)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the closing-refusal lock (every refusal recorded with its reason; a refusal is not a try; one dedup-key formula — index §29.11)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_submit_refusal.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with

@@ -45,7 +45,8 @@ const STATUS_BADGE: Record<string, string> = {
 type BasisOpt = { key: string; label: string; short?: string }
 type BasisCol = { key: string; short: string; label: string }
 // Only the part of a report line the per-basis columns read — `declared` is keyed by basis key.
-type EnvRow = { declared?: Record<string, number> }
+type CountedBasis = { basis: string; recorded: boolean; label: string }
+type EnvRow = { declared?: Record<string, number>; counted_basis?: CountedBasis | null }
 
 const ENV_COLS: [string, string][] = [
   ['Date', 'close_date'], ['Store', 'store_address'], ['Employee', 'employee_name'],
@@ -144,6 +145,10 @@ export default function EnvelopeReportPage() {
             ...basisCols.map(b => [`${b.short} $`, ''] as [string, string]),
             ...ENV_COLS.slice(at)]
   }, [basisCols])
+  // The server's own wording for a basis KEY the server sent us (a stored count's basis, mig 1036).
+  // Falls back to the key only if the server stopped serving that basis, which is visible, not silent.
+  const basisShort = useCallback(
+    (key: string) => basisCols.find(b => b.key === key)?.short || key, [basisCols])
   const envSort = useTableSort(rows, envCell, { field: 'close_date', dir: 'desc' })
   // Seeded on $ short descending: the point of this view is who is worst, so it opens on the answer.
   const empSort = useTableSort(byEmp, empCell, { field: 'short_total', dir: 'desc' })
@@ -232,12 +237,16 @@ export default function EnvelopeReportPage() {
     // The PERSON when the server resolved one (core.actors), else the raw actor id — never blank when
     // somebody counted (owner 2026-10-01 "by who"; the stored value is a UUID per §19.34).
     { header: 'Counted by', field: 'counted_by', get: (r: any) => r.counted_by_name || r.counted_by || '' },
+    // The basis a stored count was scored on, and whether the row actually recorded it (mig 1036)
+    // — a spreadsheet that collapses them cannot be filtered on "which counts predate the column".
+    { header: 'Counted on', field: 'counted_basis', get: (r: EnvRow) => (r.counted_basis ? basisShort(r.counted_basis.basis) : '') },
+    { header: 'Counted on — recorded', field: 'counted_basis_recorded', get: (r: EnvRow) => (r.counted_basis ? (r.counted_basis.recorded ? 'Yes' : 'No') : '') },
     { header: 'Counted at', field: 'counted_at', get: (r: any) => (r.counted_at || '').slice(0, 19).replace('T', ' ') },
     { header: 'Chargeback', field: 'chargeback_status', get: (r: any) => r.chargeback_status || '' },
     { header: 'Chargeback $', field: 'chargeback_amount', money: true, get: (r: any) => r.chargeback_amount },
     { header: 'DM verified', field: 'dm_verified', get: (r: any) => r.dm_verified ? 'Yes' : 'No' },
     { header: 'Envelope photo', field: 'envelope_view_url', get: (r: any) => r.envelope_view_url ? absoluteApiUrl(r.envelope_view_url) : '' },
-  ], [basisCols])
+  ], [basisCols, basisShort])
 
   const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
   const tile: React.CSSProperties = { padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)', minWidth: 130 }
@@ -449,6 +458,20 @@ export default function EnvelopeReportPage() {
                             ? <>by {r.counted_by_name || r.counted_by}</>
                             : <>by system</>}
                           {' · '}{String(r.counted_at).slice(0, 10)}
+                        </div>
+                      )}
+                      {/* WHICH CASH THIS COUNT COUNTED (mig 1036). Shown only when it is worth
+                          saying — when the count on file was taken on a different basis than the
+                          one being viewed, or when the row predates the column and so recorded no
+                          basis at all. Saying it on every row would be noise; saying it on these
+                          rows is the difference between "short $230" meaning two different things.
+                          The wording comes from the SERVER's own basis list, looked up by the key
+                          the server sent, so this screen still spells no basis word of its own. */}
+                      {r.counted_basis && (!r.counted_basis.recorded || r.counted_basis.basis !== basis) && (
+                        <div style={{ fontSize: 10.5, color: r.counted_basis.recorded ? 'var(--text3)' : 'var(--warn)', marginTop: 2 }}>
+                          {r.counted_basis.recorded
+                            ? <>counted on {basisShort(r.counted_basis.basis)}</>
+                            : <>basis not recorded (counted before it was stored)</>}
                         </div>
                       )}
                     </td>
