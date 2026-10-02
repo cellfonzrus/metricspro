@@ -34,6 +34,19 @@ const STATUS_BADGE: Record<string, string> = {
 // opts out rather than pretending to sort. OWNER DIRECTIVE 2026-08-10, "sort function by clicking
 // on the header for all reports" — the mechanism (useTableSort/SortableTh) already existed and this
 // report was one of the 208 tables never wired to it.
+// OWNER BUG 2026-10-02: the receipt read 0.00 for the bill-payment cash on every line while the store
+// basis carried the whole drawer. The cause was server-side (the query never fetched the split's one
+// input), but the screen made it unanswerable: it rendered only the chosen basis, so a 0 had nothing to
+// compare against. Every basis now gets its own column — built from the SERVER's option list
+// (`basis_options()`), headers and all, so this file still spells no basis key and no basis word, and a
+// basis added later gets a column with the right label for free.
+// The server's basis vocabulary as it reaches the screen (envelope_report.basis_options()): a key the
+// screen never spells, the long label for the selector, the short one for a column header.
+type BasisOpt = { key: string; label: string; short?: string }
+type BasisCol = { key: string; short: string; label: string }
+// Only the part of a report line the per-basis columns read — `declared` is keyed by basis key.
+type EnvRow = { declared?: Record<string, number> }
+
 const ENV_COLS: [string, string][] = [
   ['Date', 'close_date'], ['Store', 'store_address'], ['Employee', 'employee_name'],
   ['Declared $', 'declared_cash'], ['Photo', ''], ['Counted $', 'counted_amount'],
@@ -118,6 +131,19 @@ export default function EnvelopeReportPage() {
   // Two views over ONE fetch — the per-envelope detail and the per-employee rollup are the same
   // filtered rows, so switching costs no request and the two can never describe different data.
   const [view, setView] = useState<'envelopes' | 'employees'>('envelopes')
+  // One column per basis the SERVER offers, labelled by the server (basis_options().short). The
+  // per-basis figures are informational siblings of Declared $, so they opt out of sorting the way the
+  // photo column does rather than pretending to sort.
+  const basisCols: BasisCol[] = useMemo(
+    () => ((data?.basis_options || []) as BasisOpt[])
+      .map(b => ({ key: b.key, short: b.short || b.label, label: b.label })),
+    [data])
+  const envCols: [string, string][] = useMemo(() => {
+    const at = ENV_COLS.findIndex(([, f]) => f === 'declared_cash') + 1
+    return [...ENV_COLS.slice(0, at),
+            ...basisCols.map(b => [`${b.short} $`, ''] as [string, string]),
+            ...ENV_COLS.slice(at)]
+  }, [basisCols])
   const envSort = useTableSort(rows, envCell, { field: 'close_date', dir: 'desc' })
   // Seeded on $ short descending: the point of this view is who is worst, so it opens on the answer.
   const empSort = useTableSort(byEmp, empCell, { field: 'short_total', dir: 'desc' })
@@ -144,6 +170,10 @@ export default function EnvelopeReportPage() {
           counted_amount: d.counted,
           comment: d.comment,
           assign_chargeback: d.chargeback,
+          // WHICH CASH was counted (owner bug 2026-10-02): the server scored every count against the
+          // whole drawer, so counting on the bill-payment or store-cash basis read as a huge shortage
+          // — and a shortage can become a chargeback against the rep. The basis on screen rides along.
+          basis,
         }),
       })
       setDrafts(x => { const y = { ...x }; delete y[r.closing_row_id]; return y })
@@ -189,6 +219,12 @@ export default function EnvelopeReportPage() {
     { header: 'Market', field: 'market', get: (r: any) => r.market },
     { header: 'Employee', field: 'employee_name', role: 'rep', get: (r: any) => r.employee_name },
     { header: 'Declared cash $', field: 'declared_cash', money: true, get: (r: any) => r.declared_cash },
+    // The same per-basis columns the table shows — what-you-see-is-what-exports (RULE FOUR §3c),
+    // labelled by the server so the export carries this tenant's own wording too.
+    ...basisCols.map(b => ({
+      header: `${b.short} $`, field: `declared_${b.key}`, money: true,
+      get: (r: EnvRow) => r.declared?.[b.key],
+    })),
     { header: 'Counted $', field: 'counted_amount', money: true, get: (r: any) => r.counted_amount },
     { header: 'Variance $', field: 'variance', money: true, get: (r: any) => r.variance },
     { header: 'Status', field: 'status', get: (r: any) => r.status },
@@ -201,7 +237,7 @@ export default function EnvelopeReportPage() {
     { header: 'Chargeback $', field: 'chargeback_amount', money: true, get: (r: any) => r.chargeback_amount },
     { header: 'DM verified', field: 'dm_verified', get: (r: any) => r.dm_verified ? 'Yes' : 'No' },
     { header: 'Envelope photo', field: 'envelope_view_url', get: (r: any) => r.envelope_view_url ? absoluteApiUrl(r.envelope_view_url) : '' },
-  ], [])
+  ], [basisCols])
 
   const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
   const tile: React.CSSProperties = { padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)', minWidth: 130 }
@@ -364,7 +400,7 @@ export default function EnvelopeReportPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
-                {ENV_COLS.map(([label, field]) => (
+                {envCols.map(([label, field]) => (
                   <SortableTh key={label || field} field={field} sort={envSort.sort} onSort={envSort.toggle}
                     disabled={!field}
                     style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: 'var(--text2)' }}>
@@ -382,7 +418,12 @@ export default function EnvelopeReportPage() {
                     <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>{r.close_date}</td>
                     <td style={{ padding: '6px 10px' }}>{r.store_address}<div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.market}</div></td>
                     <td style={{ padding: '6px 10px' }}>{r.employee_name}</td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right' }}>{fmt(r.declared_cash)}</td>
+                    <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600 }}>{fmt(r.declared_cash)}</td>
+                    {basisCols.map(b => (
+                      <td key={b.key} style={{ padding: '6px 10px', textAlign: 'right', color: 'var(--text2)' }}>
+                        {fmt(r.declared?.[b.key])}
+                      </td>
+                    ))}
                     <td style={{ padding: '6px 10px' }}>
                       {r.envelope_view_url
                         ? <a href={apiUrl(r.envelope_view_url)} target="_blank" rel="noreferrer">📷</a>

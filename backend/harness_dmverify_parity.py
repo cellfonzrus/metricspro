@@ -132,6 +132,8 @@ def fresh_store():
 import _harness_dbfree  # noqa: E402
 import app.modules.core.router as core            # noqa: E402
 import app.modules.closing.router as cr            # noqa: E402
+_REAL_WHO_WORKED = cr._who_worked_by_store    # captured BEFORE any stub below replaces it,
+#                                              so section Q can drive the REAL signal.
 import app.modules.closing.ops_chargebacks as oc   # noqa: E402
 
 AUTH_NONE = ""
@@ -879,6 +881,158 @@ roll_o4 = cr.closing_rollup(period="2026-07", authorization=AUTH_NONE, org_id=HO
 check("O10. no-epay row -> totals.epay_on_cash/cc are 0.0 (present, numeric, not None/missing)",
       roll_o4["totals"]["epay_on_cash"] == 0.0 and roll_o4["totals"]["epay_on_cc"] == 0.0,
       str((roll_o4["totals"].get("epay_on_cash"), roll_o4["totals"].get("epay_on_cc"))))
+
+# ═══ P. THE CASH IS NAMED FOR WHAT IT IS (OWNER 2026-10-02 — "Store cash in DM Verify is the total
+#      cash in the store, need one more field which shows the store cash — which is total store cash -
+#      epay cash as declared by the users") ════════════════════════════════════════════════════════
+# The day-1 `store_cash` column holds the WHOLE drawer for a modern row (create_row folds the
+# bill-payment cash into it) and EXCLUDES it for a pre-mig103 row (where legacy `epay_cash` carries it
+# separately) — so one column, two meanings, and DM Verify rendered it under one name. The endpoint now
+# serves both figures under names that say which is which, from `deposit_recon.cash_components`:
+#     total_store_cash = the whole drawer  = epay_cash + store_cash  (era-robust, both eras)
+#     store_cash_net   = that, less the DECLARED bill-payment cash (epay_on_cash — era-aware)
+# These are DERIVED and ADDITIVE: every legacy field above stays byte-identical, and money_recon's
+# closing_cash now READS total_store_cash rather than repeating its expression.
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="named_modern", t_cash=1002.0, t_credit=0.0, store_cash=1002.0,
+                              epay_cash=0.0, epay_cc=0.0, epay_on_cash=230.0, epay_on_credit=0.0,
+                              epay_on_acima=0.0)]
+rp = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+tp = rp["stores"][0]["totals"]
+check("P1. totals.total_store_cash is the WHOLE drawer (1002), bill payments inside it",
+      tp["total_store_cash"] == 1002.0, str(tp.get("total_store_cash")))
+check("P2. totals.store_cash_net is the drawer LESS the declared bill-pay cash (1002 - 230 = 772)",
+      tp["store_cash_net"] == 772.0, str(tp.get("store_cash_net")))
+check("P3. the two plus the bill-pay cash reconcile: net + billpay == total",
+      round(tp["store_cash_net"] + tp["epay_on_cash"], 2) == tp["total_store_cash"],
+      str((tp["store_cash_net"], tp["epay_on_cash"], tp["total_store_cash"])))
+check("P4. the per-basis split rides along, keyed by basis (one column per basis on screen)",
+      tp["cash_split"] == {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0},
+      str(tp.get("cash_split")))
+check("P5. the legacy store_cash field is UNTOUCHED (additive only — every other reader is safe)",
+      tp["store_cash"] == 1002.0, str(tp["store_cash"]))
+rep_p = rp["stores"][0]["reps"][0]
+check("P6. each REP row carries the same split (the per-rep table names the drawer too)",
+      rep_p["_cash_split"] == {"total_cash": 1002.0, "store_cash": 772.0, "bill_payment_cash": 230.0},
+      str(rep_p.get("_cash_split")))
+
+# A pre-mig103 legacy row: the drawer is store_cash + the REAL legacy epay_cash, so the total must
+# INCLUDE the bill-payment cash the old column kept outside it — the half of the rename that would
+# have been silently wrong had the screen simply relabelled `store_cash` as a total.
+st2 = fresh_store(); wire(st2)
+st2["daily_closing"] = [dc_row(id="named_legacy", t_cash=None, t_credit=None, t_ext_cc=None,
+                               t_gift=None, t_store_acct=None, t_zelle=None, t_acima=None,
+                               store_cash=80.0, store_cc=20.0, epay_cash=30.0, epay_cc=5.0,
+                               other_account=0.0)]
+tl = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)["stores"][0]["totals"]
+check("P7. legacy row: the drawer is 80 + 30 = 110, NOT the 80 the old column reported as 'Store cash'",
+      tl["total_store_cash"] == 110.0, str(tl.get("total_store_cash")))
+check("P8. legacy row: the net is 110 - 30 = 80 (which is what that era's store_cash column meant)",
+      tl["store_cash_net"] == 80.0, str(tl.get("store_cash_net")))
+
+# An all-bill-pay drawer: the net is 0 and that 0 is REAL. And bill-pay over the drawer never goes
+# negative (cash_for_basis floors it) — a DM must never be shown a negative drawer.
+st3 = fresh_store(); wire(st3)
+st3["daily_closing"] = [dc_row(id="named_allepay", t_cash=100.0, t_credit=0.0, store_cash=100.0,
+                               epay_cash=0.0, epay_cc=0.0, epay_on_cash=100.0, epay_on_credit=0.0,
+                               epay_on_acima=0.0)]
+t3 = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)["stores"][0]["totals"]
+check("P9. a drawer that is ALL bill-pay cash reads total 100 / net 0 (the B-559 case)",
+      (t3["total_store_cash"], t3["store_cash_net"]) == (100.0, 0.0),
+      str((t3.get("total_store_cash"), t3.get("store_cash_net"))))
+st4 = fresh_store(); wire(st4)
+st4["daily_closing"] = [dc_row(id="named_over", t_cash=50.0, t_credit=0.0, store_cash=50.0,
+                               epay_cash=0.0, epay_cc=0.0, epay_on_cash=80.0, epay_on_credit=0.0,
+                               epay_on_acima=0.0)]
+t4 = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)["stores"][0]["totals"]
+check("P10. bill-pay cash over the drawer floors the net at 0, never negative",
+      t4["store_cash_net"] == 0.0, str(t4.get("store_cash_net")))
+
+# ═══ Q. THE CASH ACCOUNTABILITY CHAIN NAMES WHO WAS THERE (OWNER 2026-10-02 — "it is showing who
+#      closed the store and uploaded the report but it should also show who worked in the store that
+#      day in case they didnt close also it should show who is the DM assigned to that location") ═══
+# The chain's five stages only ever named people who DID something. A store-day where nobody closed
+# therefore named nobody at all — the rows that most need a person attached were the emptiest. Both
+# missing facts have one home each and this section drives the REAL endpoint over both:
+#   · who WORKED -> _who_worked_display_by_store (over _who_worked_by_store: clocked-in ∪ B2B-sold)
+#   · the DM     -> storeops.org_chain.dm_by_store (the org-tree walk, index §48.7)
+_real_who_worked = _REAL_WHO_WORKED
+st = fresh_store(); fake = wire(st)
+cr._who_worked_by_store = _real_who_worked          # this section wants the REAL signal, not the stub
+st["stores"] = [{"org_id": HOUSE, "store_code": "B-559", "address": "559 Nostrand",
+                 "market": "Brooklyn", "is_active": True}]
+# The org tree: Company > Region > District(Brooklyn) > the store's unit, with a DM on the district.
+st["org_levels"] = [{"org_id": HOUSE, "id": "L1", "name": "Company"},
+                    {"org_id": HOUSE, "id": "L3", "name": "District"},
+                    {"org_id": HOUSE, "id": "L4", "name": "Store"}]
+st["org_units"] = [{"org_id": HOUSE, "id": "U1", "name": "HQ", "level_id": "L1", "parent_id": None},
+                   {"org_id": HOUSE, "id": "U3", "name": "Brooklyn District", "level_id": "L3",
+                    "parent_id": "U1", "code": "district:brooklyn"},
+                   {"org_id": HOUSE, "id": "U4", "name": "B-559", "level_id": "L4", "parent_id": "U3"}]
+st["org_managers"] = [{"org_id": HOUSE, "unit_id": "U3", "employee_id": "E-DM"}]
+st["employees"] = [{"org_id": HOUSE, "employee_id": "E-DM", "name": "Dana Mills", "email": "d@x.test"}]
+# NOBODY CLOSED on this day — the row that used to name nobody — but two people were in the store:
+# one clocked in, one only rang sales.
+st["timelog"] = [{"org_id": HOUSE, "employee_name": "Jane Rep", "store_code": "B-559",
+                  "work_date": "2026-07-15"}]
+st["daily_sales_feed"] = [{"org_id": HOUSE, "period": "2026-07", "trans_date": "2026-07-15",
+                           "store": "559 Nostrand", "salesperson": "Sam Seller",
+                           "user_login": "sams", "voided": ""}]
+ch = cr.accountability_chain(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+qrow = [r for r in ch["rows"] if r["store_code"] == "B-559"]
+check("Q1. the chain returns the store-day even though nobody closed it",
+      len(qrow) == 1, str(ch.get("rows")))
+qrow = qrow[0] if qrow else {}
+check("Q2. it still reports the stage as NOT done (the whole point of the spine)",
+      qrow.get("stuck_at") == "closing", str(qrow.get("stuck_at")))
+check("Q3. the DM assigned to the location is named",
+      (qrow.get("dm") or {}).get("names") == ["Dana Mills"], str(qrow.get("dm")))
+check("Q4. ...and says the org tree resolved, so an empty list can never be mistaken for 'unwired'",
+      (qrow.get("dm") or {}).get("resolved") is True
+      and (qrow.get("dm") or {}).get("district") == "Brooklyn District", str(qrow.get("dm")))
+_people = {p.get("name") for p in ((qrow.get("worked") or {}).get("people") or [])}
+check("Q5. BOTH people who were in the store that day are named — the clocked-in and the seller",
+      _people == {"Jane Rep", "Sam Seller"}, str((qrow.get("worked") or {}).get("people")))
+check("Q6. ...flagged as an ACTUAL signal, not the scheduled-roster fallback",
+      (qrow.get("worked") or {}).get("source") == "actual", str(qrow.get("worked")))
+check("Q7. ...and resolved, with the response saying which dates were resolved",
+      (qrow.get("worked") or {}).get("resolved") is True
+      and ch.get("worked_resolved_dates") == ["2026-07-15"]
+      and ch.get("worked_dates_capped") is False, str(ch.get("worked_resolved_dates")))
+
+# A store whose org tree is NOT wired must report no DM and SAY the tree is the reason — never a
+# guessed name, and never an empty list that reads like "no DM is assigned".
+st2 = fresh_store(); wire(st2)
+cr._who_worked_by_store = _real_who_worked
+st2["stores"] = [{"org_id": HOUSE, "store_code": "X-000", "address": "0 Nowhere",
+                  "market": "", "is_active": True}]
+ch2 = cr.accountability_chain(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+x = [r for r in ch2["rows"] if r["store_code"] == "X-000"][0]
+check("Q8. an unwired org tree reports NO dm name and resolved=false (two different facts)",
+      (x["dm"]["names"], x["dm"]["resolved"], x["dm"]["district"]) == ([], False, None), str(x["dm"]))
+check("Q9. a store where genuinely nobody worked says source 'none', not a fabricated person",
+      x["worked"]["resolved"] is True and x["worked"]["people"] == []
+      and x["worked"]["source"] in ("none", "scheduled"), str(x["worked"]))
+
+# THE CAP: beyond _CHAIN_WORKED_MAX_DATES dates the signal is REPORTED as unresolved rather than
+# rendered as an empty store. Proven by lowering the cap, not by asking for a 62-day range.
+_cap = cr._CHAIN_WORKED_MAX_DATES
+try:
+    cr._CHAIN_WORKED_MAX_DATES = 1
+    ch3 = cr.accountability_chain(start="2026-07-14", end="2026-07-15",
+                                  authorization=AUTH_NONE, org_id=HOUSE)
+    _by_day = {r["day"]: r for r in ch3["rows"] if r["store_code"] == "X-000"}
+    check("Q10. the most RECENT day is the one resolved (capped-replay, newest first)",
+          _by_day["2026-07-15"]["worked"]["resolved"] is True, str(_by_day.get("2026-07-15")))
+    check("Q11. the capped day reports resolved=false — NEVER an empty 'nobody worked'",
+          _by_day["2026-07-14"]["worked"]["resolved"] is False
+          and _by_day["2026-07-14"]["worked"]["source"] is None, str(_by_day.get("2026-07-14")))
+    check("Q12. ...and the response says the cap engaged",
+          ch3["worked_dates_capped"] is True and ch3["worked_resolved_dates"] == ["2026-07-15"],
+          str((ch3.get("worked_dates_capped"), ch3.get("worked_resolved_dates"))))
+finally:
+    cr._CHAIN_WORKED_MAX_DATES = _cap
+    cr._who_worked_by_store = lambda client, org_id, date: {}
 
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")

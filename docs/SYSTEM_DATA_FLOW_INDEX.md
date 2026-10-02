@@ -5267,6 +5267,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.ui_label_override` scope `tiles`, key `super-admin-toolbox` (NO new table/row shape) — the Super Admin Toolbox's saved tile layout, platform super admin only (the designer offers the group through `rbac.platformOK`) | `PUT /tile-layout?module=super-admin-toolbox` | `/hub/super-admin-toolbox` → `layoutToHubGroups`, else `tile-hubs.subsFromItemTiles` over the group's `NavItem.tile`. §38 |
 | `commcalc.report_kind` setup columns (mig `1028`: `required`, `default_cadence`, `download_url`, `download_steps`, `evidence_table`, `upload_path`, `automation_min_runs`, `automation_window_days`) · `storeops.tenants.documents_setup_done_at` (mig `1028`; every tenant existing at apply time stamped done) · `core.import_feed` rows `kind:<key>` (module `setup`) · `core.job_run` rows `sweep:<table>` | `PUT/POST /commcalc/report-kinds/house` (super admin) · `PUT /commcalc/setup-documents/{key}` (cadence → feed enabled + `auto_derived=false`; skip → `muted_until`) · `setup_documents.ensure_feeds` (registers `kind:` feeds, never overwrites) · `router._sweep_set_status` (job_run per finished sweep) · `setup_documents.payload` (stamps done) | `setup_documents.payload` / `gate` / `automation_proof` / `run_reminders`; the wizard; the layout gate. §39 |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
+| `storeops.org_units` / `org_levels` / `org_managers` / `employees` / `stores` (read together by `storeops.router.org_chain_inputs`) | org-hierarchy UI (storeops) | **THE ORG-TREE WALK, one home** — pure `storeops/org_chain.py` (`index_tree` → `district_for` → `managers_at` → `chain_for` → `dm_by_store`/`dm_names`): which district and DM own a store, answered in BULK. Callers: `storeops._dm_for_store` (notify routing), `storeops._managers_above_dm` (escalation), `GET /closing/accountability-chain`'s `dm` cell (§48.7). Lock `harness_org_chain.py` |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
@@ -5521,8 +5522,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
-| `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
-| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash — see §47), `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`); pure: `closing/envelope_report.py` (`normalize_envelope_basis`, `expected_cash`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47 |
+| `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (carries `totals_original`, and the NAMED cash figures `totals.total_store_cash` / `store_cash_net` / `cash_split` + per-rep `_cash_split`, all from `deposit_recon.cash_components` — §47.9), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit, §47.9 |
+| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
@@ -5530,7 +5531,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
-| `GET /closing/accountability-chain` (**THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN** — per (store, day): Daily Closing / DM verified / Cash pickup / Cash handover / Management review, each `done`+`at`+`by`, plus `stuck_at`; keyset-scoped, 62-day cap, standard `stores`/`market` filters through their one resolver each) | `closing/router.py` (`accountability_chain`); pure `closing/deposit_accountability.py` (`expected_store_codes`, `date_span`, `stage_chain`, `chain_summary`, `stage_catalog`) dereferencing `day_accountability`; names via `core/actors.py` (`is_actor_uid`/`resolve_actor_names`); screen `/closing/accountability` | §48 |
+| `GET /closing/accountability-chain` (**THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN** — per (store, day): Daily Closing / DM verified / Cash pickup / Cash handover / Management review, each `done`+`at`+`by`, plus `stuck_at`; **plus `dm` (the assigned district manager) and `worked` (who was actually in the store that day, `actual`/`scheduled`/`none`, resolved for the 31 most recent dates with `worked_resolved_dates` / `worked_dates_capped`) — §48.7**; keyset-scoped, 62-day cap, standard `stores`/`market` filters through their one resolver each) | `closing/router.py` (`accountability_chain`); pure `closing/deposit_accountability.py` (`expected_store_codes`, `date_span`, `stage_chain`, `chain_summary`, `stage_catalog`) dereferencing `day_accountability`; names via `core/actors.py` (`is_actor_uid`/`resolve_actor_names`); pure `storeops/org_chain.py` (`dm_by_store`) over `storeops.router.org_chain_inputs`; who-worked via `closing/router._who_worked_display_by_store`; screen `/closing/accountability` | §48, §48.7 |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report |
 | `GET /portout-fraud` (THE DAILY FRAUD REPORT: port-in activations that ported OUT again inside the configured window, with the accessory sold alongside each one; composes `line_class.activation_class` (is it a port-in), `event_sales.line_feed_state` (did it stay — the retention report's own derivation), `_is_accessory`/`_is_setup_fee` (the Sales Report's own accessory dollar) and the retention report's own bounded `raw_mi` loader; pure `portout_fraud.py`; READ-ONLY, `books_to == []`; the headline carries `undecidable` + `coverage_pct` beside `flagged`) | `commcalc/router.py` (`get_portout_fraud`, beside `/dlar-vs-platform`; rules via `_portout_rules`) | §19.32 — the daily fraud report |
@@ -14875,8 +14876,12 @@ equip/acc figure the DM collected, and the three bases reconcile (`store + billp
 | which bases the receipt offers, and their wording | `envelope_report.ENVELOPE_BASES` / `ENVELOPE_BASIS_LABELS` (the bill-payment label carries a `{processor}` slot, **never a carrier brand** — see §47.6) | `envelope_report.basis_options()` builds the list; the endpoint serves it; **the screen spells no basis key and no basis label** |
 | the short/over math | `envelope_report.count_fields` (unchanged) | follows whatever basis set `declared_cash` |
 
-Every line also reports `declared_total_cash` and `declared_billpay_cash` beside the figure, so *"why is
-this 0?"* is answerable on screen.
+Every line reports a figure for EVERY basis beside the chosen one — `declared` keyed by basis key, plus
+the flat `declared_total_cash` / `declared_billpay_cash` the payload has carried since 2026-10-01 — so
+*"why is this 0?"* is answerable on screen. The receipt renders one column per `basis_options()` entry,
+headed by the server's own `short` label, so the screen still spells no basis key and no basis word and
+a basis added later gets a correctly-labelled column for free. **Until 2026-10-02 none of this was
+rendered, and the figures behind it were all zero — see §47.8.**
 
 ### 47.2 counted_by — the real actor, shown as a person
 
@@ -14905,13 +14910,16 @@ helper never breaks a money report. An unresolved uid is **absent** from the map
 
 ### 47.3 Lock
 
-`backend/harness_envelope_receipt_basis.py` — **52 checks**, stdlib, DB-free, run by
+`backend/harness_envelope_receipt_basis.py` — **141 checks** (52 at 2026-10-01, +89 for the wiring class
+in §47.8, +21 for the naming class in §47.9), stdlib, DB-free, run by
 `carrier-vocab-guard`. Fails the build on: a second basis formula; a basis key or label spelled on the
 screen or in the router; the default drifting off the historical figure; an unknown basis folding to
 `manual`; the legacy `store_cash` fallback being lost; the count math leaving `count_fields`;
 `counted_by` carrying a sentinel again or not using the one home; a second uid→name resolver;
-`core.actors` reading a column it has no business reading, dropping its org scope, or raising. Each rule
-carries an armed control.
+`core.actors` reading a column it has no business reading, dropping its org scope, or raising; **a caller
+hand-spelling a `daily_closing` column list, the pure module reading a closing column the contract does
+not declare, the counted basis not reaching the save handler, or a basis without a column on the
+screen** (§47.8). Each rule carries an armed control.
 
 Two of its rules had to learn **code from prose** — this change's own comments legitimately name the
 retired sentinel and the basis keys while explaining them, so the "must not appear" rules strip comments
@@ -15049,7 +15057,7 @@ what it reads* — `envelope_report.CLOSING_COLUMNS` — and the endpoint builds
 (`.select(",".join(envelope_report_mod.CLOSING_COLUMNS))`). Adding a future basis input adds it to the
 query by construction; it cannot be read as zero.
 
-**Lock (`harness_envelope_receipt_basis.py`, now 82 checks).** The new §E2 rules are **behavioural, not
+**Lock (`harness_envelope_receipt_basis.py`, 82 checks when #345 shipped, **141** after the reconciliation below).** The new §E2 rules are **behavioural, not
 spelling**: a row rebuilt from *only* `CLOSING_COLUMNS` must still produce three **different**, correct
 bases that reconcile, every member of `BASIS_INPUT_COLUMNS` must be in `CLOSING_COLUMNS`, the endpoint
 must dereference it and must no longer spell a column list of its own, and no column may be fetched that
@@ -15058,6 +15066,88 @@ the store basis returns to the whole drawer, the ePay basis to zero, and the def
 
 **No migration. No money moved** — the stored `counted_amount` and every chargeback are untouched; this
 changes only which declared figure the receipt compares against.
+
+**WHAT THIS CHANGE ADDED ON TOP OF THE SHIPPED FIX.** The same defect was fixed twice, independently, in one afternoon (#345 landed on `main` while this branch was in review). The two fixes agreed on the diagnosis and on the home; this is what survived the reconciliation, with the duplicate `CLOSING_COLUMNS` the merge would otherwise have left in the module removed.
+
+**THE DESIGN FIX — one fact, one home, dereferenced.** The columns a pure reader dereferences now live
+BESIDE that reader: `envelope_report.CLOSING_COLUMNS` (and `CLOSING_SELECT`, derived from it), and every
+caller selects that declaration instead of writing its own list.
+
+| fact | home | callers |
+|---|---|---|
+| which `daily_closing` columns the receipt's logic reads | `envelope_report.CLOSING_COLUMNS` → `CLOSING_SELECT` | `GET /closing/envelope-report`, `POST /closing/envelope-count` — both select it, neither spells a column |
+| the basis formulas | `deposit_recon.cash_for_basis` (unchanged, §47.1) | `envelope_report.expected_cash` / `declared_components` |
+| the basis wording, long and short | `envelope_report.ENVELOPE_BASIS_LABELS` / `ENVELOPE_BASIS_SHORT_LABELS` → `basis_options()` | the selector AND the per-basis columns; the screen spells neither |
+
+**THE SIBLING, found and checked in the same change.** `deposit_recon` is the other consumer of
+`cash_for_basis`; its own query already carries `epay_on_cash` (and the lock now pins that, so one path
+fixed and the other not cannot happen). `_cash_declared_for_envelope` (§12 cash pickup) sums the LEGACY
+`store_cash + epay_cash` pair, which is the full drawer either way for a mig-103+ row — **excused, not
+fixed**, and it answers a different question (the envelope snapshot, not a basis).
+
+**A SECOND DEFECT OF THE SAME SHIPPED FEATURE.** `POST /closing/envelope-count` scored every count
+against the **whole drawer** regardless of the basis on screen, because the basis never left the
+browser. Counting the bill-payment cash therefore read as a shortage of exactly the register cash — and
+a shortage, ticked, becomes a **chargeback against the rep**. The basis now rides the payload
+(`EnvelopeCountIn.basis`) and the count is scored on what the counter was looking at. Absent or
+unknown ⇒ the historical default, so every existing caller and every stored count keeps its meaning.
+
+**STILL OPEN, REPORTED NOT FIXED:** `commcalc.envelope_count` has no column recording WHICH basis a
+stored count was taken on. The count's own `expected_amount` makes each row self-consistent, so no
+variance is wrong, but the report cannot label a stored count's basis. That needs a migration and is
+owner-gated.
+
+**LOCK:** §47.3's harness, sections H1–H3 (+38 checks), with armed controls that patch back the shipped
+select list and the bare `expected_cash(crow)` call. Proof of the money math:
+`harness_envelope_report.py` section A0 reproduces the owner's defect and pins the fix.
+
+### 47.9 "Store cash" meant two different things — name the drawer, show the net beside it (owner 2026-10-02; fixed)
+
+Owner: *"Store cash in DM Verify is the total cash in the store, need one more field which shows the
+store cash - which is total store cash - epay cash as declared by the users; the current store cash in
+DM verify change name to total store cash and where ever that is derived change the name there too and
+introduce the store cash column along side for proper reporting"*.
+
+**THE CLASS: one column, two meanings, and one of them had the wrong name.** `daily_closing.store_cash`
+is a day-1 column whose meaning CHANGED with mig 103: for a modern row `create_row` folds the
+bill-payment cash INTO it (so it is the whole drawer), while for a pre-mig103 row the legacy
+`epay_cash` column carried that money separately (so it is the net). Meanwhile the rest of the platform
+had already settled the vocabulary the other way — `closing/deposit-categories` ("Store cash = total
+cash minus bill-payment cash"), `closing/cash-config` ("Store cash only, excludes the bill-payment
+portion"), the submit-flow explainer, and §47.1's own basis table. **DM Verify was the one surface
+calling the drawer "Store cash"**, and it had no net column at all.
+
+**ONE FACT, ONE HOME.** A surface that has to show the drawer AND the net must not be the place that
+decides what either one is, so the SPLIT now lives beside the formulas:
+`deposit_recon.cash_components(t_cash, epay_cash)` → `{total_cash, store_cash, bill_payment_cash}`,
+each value `cash_for_basis` itself.
+
+| fact | home | callers |
+|---|---|---|
+| the split of one drawer, keyed by basis | `deposit_recon.cash_components` (over `cash_for_basis`, §47.1) | `envelope_report.declared_components` (§47.8) · `/closing/summary` per store **and** per rep |
+| the drawer, as a payload key | `totals.total_store_cash` = `round(epay_cash + store_cash, 2)` — era-robust in BOTH column eras, and the invariant `verified_overlay` preserves | DM Verify tiles/table/export; `money_recon`'s `closing_cash` now READS it instead of repeating the expression |
+| the net register cash | `totals.store_cash_net` (and `cash_split` for a per-basis column) | DM Verify's new **Store cash** column |
+
+**WHAT THE RENAME WOULD HAVE GOT WRONG ON ITS OWN.** Simply relabelling `store_cash` as "Total store
+cash" is correct for a modern row and **wrong for a pre-mig103 one**, where that column excludes the
+bill-payment cash the legacy column held. Pinned both ways in `harness_dmverify_parity.py` section P:
+modern (t_cash 1002, epay_on_cash 230) → total 1002 / net 772; legacy (store_cash 80, epay_cash 30) →
+total **110** / net 80. The DM's own correction field (`dm_store_cash`) corrects the cash TOTAL — that
+is what `verified_overlay` lands it on — so it is named "Total store cash" and now prefills from the
+drawer rather than from the two-meaning column.
+
+**ADDITIVE.** Every existing payload field keeps its value, including the raw `store_cash`; the stored
+`dm_store_cash` key is unchanged; no migration. What changed is which figures the screen RENDERS and
+what they are called.
+
+**LOCK** (§47.3's harness, sections I1–I4, 90 → **141 checks**): `cash_components` is the split and IS
+`cash_for_basis`; the envelope receipt and `/closing/summary` both dereference it; an AST scan proves
+**exactly one** place in the closing module derives "a cash total minus something ePay"
+(`deposit_recon`'s own `_f(t_cash) - _f(epay_cash)`) and the router, the receipt, the overlay and
+`pickup_actual` derive none; DM Verify renders the two-meaning `store_cash` field **nowhere**, names
+the drawer, shows the net, and derives neither. Armed controls patch the shipped tile back in and go
+red. The bill-pay recon's own `declared − processor` variances are a different question and are proven
+*not* to match the scan.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 
@@ -15171,6 +15261,48 @@ Each rule carries an armed control.
 
 **No migration. No money moved. No money math touched** — every figure the chain shows is a date, a name
 or a count. Index: §48.
+
+### 48.7 WHO WAS THERE, AND WHOSE STORE IT IS (owner 2026-10-02)
+
+> Owner: *"in th Cash Accountability Chain report it is shwoing who closed teh store and uploaded hte
+> report but it shoudl also show who worked int eh store that day in case they didnt close also it
+> shoul d show who is the d DM assigned to that location"*
+
+**The class, named.** The five stages only ever name people who **did something**. A store-day where
+nobody closed therefore named nobody at all — the rows that most need a person attached were the
+emptiest, which is exactly backwards for a report whose job is to say who owes an answer. Two facts
+were missing, and neither is new: the platform already knows who was in a store on a day, and already
+knows which district owns a store. Neither was dereferenced here.
+
+| fact | home | callers |
+|---|---|---|
+| who was ACTUALLY in the store that day | `closing/router._who_worked_display_by_store` (over `_who_worked_by_store`: clocked-in ∪ B2B-sold, with the scheduled-roster fallback **labelled as such**) | DM Verify / the cash-pickup "who worked" line, **the chain** |
+| which district + DM owns a store | **`storeops/org_chain.py`** (`dm_by_store`, `chain_for`, `dm_names`) — pure, DB-free, in BULK | `storeops._dm_for_store`, `storeops._managers_above_dm`, **the chain** |
+| the four org tables those answers need | `storeops.router.org_chain_inputs(org_id[, store_code])` — one read of `stores` / `org_levels` / `org_units` / `org_managers` / `employees` | both storeops resolvers, the chain |
+
+**The walk had two copies and now has none.** `_dm_for_store` and `_managers_above_dm` each climbed the
+org tree themselves, one store at a time. Both are now thin wrappers over `org_chain` with their return
+shapes byte-preserved, and the walk exists once. Answering for a whole date range one store at a time
+would have been a third copy *and* N round-trips; `dm_by_store` answers for every store in one pass.
+
+**Absence is never zero.** Each new cell carries its own `resolved` flag, because "we did not look" and
+"nobody was there" are different facts and a report that conflates them invents an accusation:
+
+- `dm`: `{names, resolved, district}` — an **unwired org tree** reports `resolved: false` with no names,
+  never "this store has no DM".
+- `worked`: `{people, source, summary, resolved}` — `source` is `actual` / `scheduled` / `none`, so a
+  roster guess can never be read as a fact.
+- The who-worked signal is **per-date by construction** (`_b2b_sales_rows` filters one `trans_date`), so a
+  62-day range would replay it 62 times. It is resolved for at most `_CHAIN_WORKED_MAX_DATES = 31` dates,
+  **most recent first**; the rest report `worked.resolved: false`, and the response carries
+  `worked_resolved_dates` + `worked_dates_capped` so the screen states the limit rather than showing an
+  empty day as unstaffed.
+
+**Lock.** `backend/harness_org_chain.py` (the pure walk, plus the build-failing rule that neither storeops
+resolver contains a district walk of its own) and `harness_dmverify_parity.py` §Q (12 checks driving the
+REAL endpoint over an org tree + a clock-in + a sales row: both people named, the DM named, the unwired
+tree distinguished from an empty one, and the cap proven by lowering it). Both run in
+`carrier-vocab-guard`. **No migration. No money math touched** — every added figure is a name or a flag.
 
 ## 49. THE CAMERAS WENT DARK AND NOTHING SAID SO — registering vision with the machinery that already existed (owner 2026-10-02)
 

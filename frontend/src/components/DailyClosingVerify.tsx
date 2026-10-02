@@ -64,6 +64,13 @@ function GateBadge({ status, resolved }: { status?: string | null; resolved?: bo
   </span>
 }
 
+// The server's named cash figures (deposit_recon.cash_components — §47.9): the whole drawer, the net
+// register cash, and the per-basis split a rep row carries.
+type CashSplit = { total_cash?: number; store_cash?: number; bill_payment_cash?: number }
+type NamedCash = { total_store_cash?: number; store_cash_net?: number }
+type StoreRow = { totals?: NamedCash; totals_original?: NamedCash }
+type RepRow = { _cash_split?: CashSplit }
+
 type Form = { dm_store_cash: string; dm_store_cc: string; dm_epay_cash: string; dm_epay_cc: string; dm_acc_sale: string; dm_other: string; dm_ext_cc: string; note: string }
 
 // A rep row's value for one activation-count field_key (mig 501): a standard field_key is a physical
@@ -284,7 +291,11 @@ export default function DailyClosingVerify() {
     const v = s.verification || {}
     const t = s.totals || {}
     return {
-      dm_store_cash: String(v.dm_store_cash ?? t.store_cash ?? ''),
+      // This field corrects the cash TOTAL (verified_overlay), so it prefills from the drawer —
+      // `total_store_cash`, the server's named figure (§47.9). It used to prefill from the day-1
+      // `store_cash` column, which IS the drawer for a modern row but EXCLUDES the bill-payment cash
+      // for a pre-mig103 one, so a legacy store's DM saw the net figure under a total's meaning.
+      dm_store_cash: String(v.dm_store_cash ?? t.total_store_cash ?? t.store_cash ?? ''),
       dm_store_cc: String(v.dm_store_cc ?? t.store_cc ?? ''),
       // Prefill from the REAL ePay breakdown (t.epay_on_cash/epay_on_cc — era-aware via
       // _row_epay_display, closing/router.py), owner-approved 2026-07-30 ("push"/"go"). The legacy
@@ -440,7 +451,8 @@ export default function DailyClosingVerify() {
     { header: 'Closer', field: 'closer', get: (r: any) => r.closer || '' },
     { header: 'Partial closing to verify', field: 'partial_closing',
       get: (r: any) => (r.partial_closing?.flag ? (r.partial_closing.note || 'yes') : '') },
-    { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.totals?.store_cash },
+    { header: 'Total store cash $', field: 'total_store_cash', money: true, get: (r: StoreRow) => r.totals?.total_store_cash },
+    { header: 'Store cash $', field: 'store_cash_net', money: true, get: (r: StoreRow) => r.totals?.store_cash_net },
     { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.totals?.store_cc },
     { header: `${ep} cash $`, field: 'epay_cash', money: true, get: (r: any) => r.totals?.epay_on_cash },
     { header: `${ep} CC $`, field: 'epay_cc', money: true, get: (r: any) => r.totals?.epay_on_cc },
@@ -464,7 +476,8 @@ export default function DailyClosingVerify() {
     // the store-entered ORIGINAL aggregate (present only when a DM correction actually applied)
     // and the DM's modified values, so an exported date range shows both. ──
     { header: 'DM corrected', field: 'dm_corrected', get: (r: any) => r.dm_corrected ? 'Yes' : 'No' },
-    { header: 'Original store cash $', field: 'orig_store_cash', money: true, get: (r: any) => r.totals_original ? r.totals_original.store_cash : r.totals?.store_cash },
+    { header: 'Original total store cash $', field: 'orig_total_store_cash', money: true, get: (r: StoreRow) => (r.totals_original || r.totals)?.total_store_cash },
+    { header: 'Original store cash $', field: 'orig_store_cash', money: true, get: (r: StoreRow) => (r.totals_original || r.totals)?.store_cash_net },
     { header: 'Original store CC $', field: 'orig_store_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.store_cc : r.totals?.store_cc },
     { header: `Original ${ep} cash $`, field: 'orig_epay_cash', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cash : r.totals?.epay_on_cash },
     { header: `Original ${ep} CC $`, field: 'orig_epay_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cc : r.totals?.epay_on_cc },
@@ -486,7 +499,8 @@ export default function DailyClosingVerify() {
     { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r._store_address },
     { header: 'Market', field: 'market', get: (r: any) => r._store_market },
     { header: 'Employee', field: 'employee_name', role: 'rep', get: (r: any) => r.employee_name },
-    { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.store_cash },
+    { header: 'Total store cash $', field: 'total_store_cash', money: true, get: (r: RepRow) => r._cash_split?.total_cash },
+    { header: 'Store cash $', field: 'store_cash_net', money: true, get: (r: RepRow) => r._cash_split?.store_cash },
     { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.store_cc },
     { header: `${ep} cash $`, field: 'epay_cash', money: true, get: (r: any) => r._epay_display?.cash },
     { header: `${ep} CC $`, field: 'epay_cc', money: true, get: (r: any) => r._epay_display?.cc },
@@ -696,7 +710,15 @@ export default function DailyClosingVerify() {
 
             {/* Totals */}
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 12, fontSize: 13 }}>
-              <Stat label="Store cash" value={fmt(t.store_cash)} />
+              {/* OWNER 2026-10-02: "Store cash in DM Verify is the total cash in the store, need one
+                  more field which shows the store cash — which is total store cash - epay cash as
+                  declared by the users". The day-1 `store_cash` column holds the WHOLE drawer for a
+                  modern row (create_row folds the bill-payment cash into it), while the rest of the
+                  platform already defines store cash as the NET figure. Both now come from the server
+                  under names that say which is which (`total_store_cash` / `store_cash_net`,
+                  deposit_recon.cash_components — §47.9); this screen derives neither. */}
+              <Stat label="Total store cash" value={fmt(t.total_store_cash)} />
+              <Stat label="Store cash" value={fmt(t.store_cash_net)} sub={`total less ${ep} cash`} />
               <Stat label="Store CC" value={fmt(t.store_cc)} />
               {/* OWNER BUG REPORT 2026-07-29 (509 Nostrand): these used to read t.epay_cash/epay_cc,
                   a legacy column create_row ALWAYS zeroes for a modern (t_*) submission — the rep's
@@ -796,7 +818,7 @@ export default function DailyClosingVerify() {
               <div className="table-wrapper" style={{ marginTop: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Employee', 'Store cash', 'Store CC', `${ep} cash`, `${ep} CC`, fin, 'Acc', 'Other', 'Custom tenders',
+                    {['Employee', 'Total store cash', 'Store cash', 'Store CC', `${ep} cash`, `${ep} CC`, fin, 'Acc', 'Other', 'Custom tenders',
                       ...(countCols.length > 0 ? countCols.map(c => c.label) : ['Upg', 'New', 'Post']),
                       'Gate', 'Env', 'Expense', 'Approve exp.', 'Categorized expenses'].map((h, i) =>
                       <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
@@ -805,7 +827,8 @@ export default function DailyClosingVerify() {
                     {s.reps.map((r: any) => (
                       <tr key={r.id}>
                         <td style={cell}>{r.employee_name || '—'}</td>
-                        <td style={cell}>{fmt(r.store_cash)}</td>
+                        <td style={cell}>{fmt(r._cash_split?.total_cash)}</td>
+                        <td style={cell}>{fmt(r._cash_split?.store_cash)}</td>
                         <td style={cell}>{fmt(r.store_cc)}</td>
                         <td style={cell}>{fmt(r._epay_display?.cash)}</td>
                         <td style={cell}>{fmt(r._epay_display?.cc)}</td>
@@ -872,7 +895,11 @@ export default function DailyClosingVerify() {
               <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>Confirm totals (prefilled from rep entries — adjust if needed)</div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <Lbl t="Store cash"><input style={tin} value={f.dm_store_cash || ''} onChange={e => setForm(k, { dm_store_cash: e.target.value })} /></Lbl>
+                  {/* This field corrects the whole drawer, not the net: verified_overlay lands it on
+                      the cash TOTAL and zeroes the folded sibling so `closing_cash = epay_cash +
+                      store_cash` is preserved. Named for what it corrects (owner 2026-10-02); the
+                      payload key `dm_store_cash` is unchanged, so nothing stored moves. */}
+                  <Lbl t="Total store cash"><input style={tin} value={f.dm_store_cash || ''} onChange={e => setForm(k, { dm_store_cash: e.target.value })} /></Lbl>
                   <Lbl t="Store CC"><input style={tin} value={f.dm_store_cc || ''} onChange={e => setForm(k, { dm_store_cc: e.target.value })} /></Lbl>
                   <Lbl t={`${ep} cash`}><input style={tin} value={f.dm_epay_cash || ''} onChange={e => setForm(k, { dm_epay_cash: e.target.value })} /></Lbl>
                   <Lbl t={`${ep} CC`}><input style={tin} value={f.dm_epay_cc || ''} onChange={e => setForm(k, { dm_epay_cc: e.target.value })} /></Lbl>
@@ -895,8 +922,10 @@ export default function DailyClosingVerify() {
 }
 
 function num(v: string): number | null { const n = Number(String(v).replace(/[$,]/g, '')); return isNaN(n) ? null : n }
-const Stat = ({ label, value }: { label: string; value: string }) => (
-  <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div><div style={{ fontWeight: 600 }}>{value}</div></div>
+const Stat = ({ label, value, sub }: { label: string; value: string; sub?: string }) => (
+  <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+    <div style={{ fontWeight: 600 }}>{value}</div>
+    {sub && <div style={{ fontSize: 10, color: 'var(--text3)' }}>{sub}</div>}</div>
 )
 const Lbl = ({ t, children }: { t: string; children: React.ReactNode }) => (
   <label style={{ fontSize: 11, color: 'var(--text3)' }}><div style={{ marginBottom: 2 }}>{t}</div>{children}</label>

@@ -17,6 +17,16 @@ name: carrier-vocab-guard
 #
 # Dependency-free: the guard statically scans frontend/src on bare Python — no pip install.
 #
+# THE ENVELOPE-BASIS WIRING RULES (index §47.8, owner 2026-10-02) were folded INTO the existing
+# harness_envelope_receipt_basis.py rather than shipped as a sibling lock (the duplicate-check gate): the Management
+# Envelope Receipt's cash-basis selector read `daily_closing.epay_on_cash` while BOTH of its callers
+# hand-spelled a column list that omitted it — so the receipt showed bill-payment cash 0.00 on every
+# line and store cash as the whole drawer, and nothing failed, because `.get()` cannot tell "0 dollars"
+# from "never fetched". The columns a pure reader dereferences now live beside it
+# (`envelope_report.CLOSING_COLUMNS`) and every caller selects that declaration; a reader that starts
+# reading a new column fails the build until the tuple names it, and the counted basis must reach the
+# save handler (backend/harness_envelope_receipt_basis.py, sections H1-H3; stdlib only, DB-free).
+#
 # THE REPORT-KIND LOCK (design §7, 2026-09-20) runs in the same job: every upload surface must read
 # the report-kind registry through the one hook, and no second list of report kinds / filename
 # patterns / POS vendor names may exist in code (backend/harness_report_kind_lock.py; stdlib only).
@@ -353,6 +363,8 @@ on:
       - "backend/harness_screen_link_guard.py"
       - "backend/harness_envelope_receipt_basis.py"
       - "backend/harness_accountability_chain.py"
+      - "backend/harness_org_chain.py"
+      - "backend/app/modules/storeops/org_chain.py"
       - "backend/app/modules/closing/deposit_accountability.py"
       - "backend/app/core/actors.py"
       - "backend/app/core/actors.py"
@@ -412,6 +424,11 @@ on:
       - "frontend/src/lib/table-sort.ts"
       - "backend/harness_closing_filter_contract.py"
       - "backend/app/modules/closing/router.py"
+      - "backend/harness_envelope_report.py"
+      - "frontend/src/components/DailyClosingVerify.tsx"
+      - "backend/harness_dmverify_parity.py"
+      - "backend/app/modules/closing/deposit_recon.py"
+      - "frontend/src/app/(platform)/closing/envelope-report/page.tsx"
       - "backend/harness_browser_sweep_kinds.py"
       - "database/migrations/1021_supply_ordering.sql"
       - "backend/app/modules/account/pl_range.py"
@@ -561,12 +578,15 @@ jobs:
       - name: Run the DM-Verify range-cost lock (a full month is served; no org-level lookup sits in the per-date loop — index §46)
         working-directory: backend
         run: python3 harness_dm_verify_range_cost.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the envelope-receipt basis + counted-by lock (one basis vocabulary dereferenced from deposit_recon; the counter is the real actor shown as a person — index §47)
+      - name: Run the envelope-receipt basis + counted-by lock (one basis vocabulary dereferenced from deposit_recon; the columns a pure reader dereferences are declared beside it and every caller selects that declaration; a count is scored on the basis the counter saw; the counter is the real actor shown as a person — index §47 / §47.8)
         working-directory: backend
         run: python3 harness_envelope_receipt_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
+        working-directory: backend
+        run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -594,6 +614,9 @@ jobs:
       - name: Run the table-sort ratchet (a new data table cannot ship unsorted; the unsorted list only shrinks — owner 2026-08-10, index §19.29)
         working-directory: backend
         run: python3 harness_table_sort_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the envelope-receipt proof (the basis split, the short/over truth table and the envelope_short chargeback contract — owner 2026-09-02 / 2026-10-02, index §47)
+        working-directory: backend
+        run: python3 harness_envelope_report.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -725,6 +748,14 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the deposit-recon pure math + cash-split proof (cash_for_basis and cash_components — the one home every cash-basis surface dereferences, index §47.9)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the DM-Verify parity proof (the real /closing/summary over the in-memory client — filters, range mode, the era-aware ePay breakdown, and the named cash figures in both column eras — owner 2026-07-28 / 2026-10-02, index §47.9)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_dmverify_parity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE STORE-IDENTITY PROOF (index §13d) drives the REAL account.coa.store_resolver over an in-memory client seeded with
   # the live house row shapes, plus the REAL account.store_identity_audit. It fails the build if one physical store's
