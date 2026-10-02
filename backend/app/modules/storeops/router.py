@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.core import scope as _cscope
+from . import org_chain
 from app.core import identity as _identity
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
@@ -6538,149 +6539,69 @@ def force_clockout_run_now(authorization: str = Header(default=""), org_id: str 
 
 
 # ── Shift-extension request → DM approval workflow ─────────────────────────────────────────────
+def org_chain_inputs(org_id, store_code=None):
+    """The four org-tree tables the walk needs, read ONCE. PUBLIC: the closing module's
+    accountability chain reads them for the whole org in one go (index §48.7). `store_code` narrows the stores read to one;
+    omitted, every store comes back (what a bulk caller wants). The market overlay is the canonical
+    union (`core.scope.market_by_code`, the 2026-09-03 LI-class rule) so a store whose market lives
+    only in commcalc.store_mapping still binds the district-by-market fallback."""
+    c = sb()
+
+    def _read(table, cols, narrow=None):
+        try:
+            q = c.table(table).select(cols).eq("org_id", org_id)
+            if narrow:
+                q = q.eq(*narrow)
+            return q.execute().data or []
+        except Exception:
+            return []
+
+    stores = _read("stores", "store_code,org_unit_id,market",
+                   ("store_code", store_code) if store_code else None)
+    try:
+        overlay = _cscope.market_by_code(c, org_id)
+    except Exception:
+        overlay = {}
+    return {"stores": stores,
+            "levels": _read("org_levels", "id,name"),
+            "units": _read("org_units", "id,name,level_id,parent_id,code"),
+            "managers": _read("org_managers", "unit_id,employee_id"),
+            "employees": _read("employees", "employee_id,name,email"),
+            "market_by_code": overlay}
+
+
 def _dm_for_store(org_id, store_code):
     """Resolve the District Manager for a store: walk the org tree up from the store's org_unit to a
     District-level node (fallback: match a District unit by market), then read org_managers. Returns
-    (employee_id, email, name) or (None, None, None) when the org tree isn't configured."""
-    c = sb()
-    unit_id, market = None, None
-    try:
-        st = (c.table("stores").select("org_unit_id,market").eq("org_id", org_id)
-              .eq("store_code", store_code).limit(1).execute().data) or []
-        if st:
-            unit_id, market = st[0].get("org_unit_id"), st[0].get("market")
-    except Exception:
-        pass
-    if not (market or "").strip():
-        # canonical union fallback (core.scope.market_by_code; 2026-09-03 LI-class fix) so the
-        # District-by-market fallback below still binds when the market lives in store_mapping.
-        try:
-            market = _cscope.market_by_code(c, org_id).get(str(store_code or "").strip().upper()) or market
-        except Exception:
-            pass
-    try:
-        levels = {l["id"]: (l.get("name") or "") for l in
-                  (c.table("org_levels").select("id,name").eq("org_id", org_id).execute().data or [])}
-        units = {u["id"]: u for u in
-                 (c.table("org_units").select("id,name,level_id,parent_id,code").eq("org_id", org_id).execute().data or [])}
-    except Exception:
-        levels, units = {}, {}
-    district = None
-    cur = units.get(unit_id) if unit_id else None
-    guard = 0
-    while cur and guard < 20:
-        if "district" in (levels.get(cur.get("level_id")) or "").lower():
-            district = cur
-            break
-        cur = units.get(cur.get("parent_id"))
-        guard += 1
-    if not district and market:
-        mk = str(market).strip().lower()
-        for u in units.values():
-            if "district" in (levels.get(u.get("level_id")) or "").lower() and (
-                    mk and (mk in (u.get("name") or "").lower() or (u.get("code") or "").lower() == f"district:{mk}")):
-                district = u
-                break
-    if not district:
+    (employee_id, email, name) or (None, None, None) when the org tree isn't configured.
+
+    THE WALK ITSELF IS NOT HERE (index §48.7). It is `storeops.org_chain`, the one home, which this
+    function and `_managers_above_dm` below both dereference — they used to walk the tree separately,
+    and the second said so in its own docstring. Same rule, same 20-hop guard, same market fallback;
+    this wrapper only keeps the (employee_id, email, name) shape its callers pass to the mailer.
+    When a district node carries SEVERAL managers this returns the first, exactly as the single
+    `.limit(1)` read did before."""
+    chain = org_chain.dm_by_store(**org_chain_inputs(org_id, store_code)).get(
+        str(store_code or "").strip()) or {}
+    dms = chain.get("dm") or []
+    if not dms:
         return (None, None, None)
-    try:
-        mg = (c.table("org_managers").select("employee_id").eq("org_id", org_id)
-              .eq("unit_id", district["id"]).limit(1).execute().data) or []
-        if not mg:
-            return (None, None, None)
-        deid = mg[0]["employee_id"]
-        emp = (c.table("employees").select("name,email").eq("org_id", org_id)
-               .eq("employee_id", deid).limit(1).execute().data) or []
-        return (deid, (emp[0].get("email") if emp else None), (emp[0].get("name") if emp else None))
-    except Exception:
-        return (None, None, None)
+    return (dms[0].get("employee_id"), dms[0].get("email"), dms[0].get("name"))
 
 
 def _managers_above_dm(org_id, store_code):
     """For a store, resolve (a) the immediate District Manager(s) at the store's district node and
     (b) EVERY manager ABOVE the district up the org tree to the root — each as
-    {employee_id, name, email, unit, level}. Mirrors _dm_for_store's district resolution, then climbs
-    org_units.parent_id collecting ALL org_managers at each ancestor (a node may have several).
-    Returns {"dm": [...], "above": [...]}; empty lists when the tree isn't wired (callers skip those
-    emails). Used by the accountability morning lateness alert (managers above the DM) + the DM CAP."""
-    c = sb()
-    unit_id, market = None, None
-    try:
-        st = (c.table("stores").select("org_unit_id,market").eq("org_id", org_id)
-              .eq("store_code", store_code).limit(1).execute().data) or []
-        if st:
-            unit_id, market = st[0].get("org_unit_id"), st[0].get("market")
-    except Exception:
-        pass
-    if not (market or "").strip():
-        # canonical union fallback (core.scope.market_by_code; 2026-09-03 LI-class fix) so the
-        # District-by-market fallback below still binds when the market lives in store_mapping.
-        try:
-            market = _cscope.market_by_code(c, org_id).get(str(store_code or "").strip().upper()) or market
-        except Exception:
-            pass
-    try:
-        levels = {l["id"]: (l.get("name") or "") for l in
-                  (c.table("org_levels").select("id,name").eq("org_id", org_id).execute().data or [])}
-        units = {u["id"]: u for u in
-                 (c.table("org_units").select("id,name,level_id,parent_id,code").eq("org_id", org_id).execute().data or [])}
-    except Exception:
-        levels, units = {}, {}
-    # locate the district node — identical rule to _dm_for_store (climb to a 'district'-level node,
-    # else match a district unit by the store's market).
-    district = None
-    cur = units.get(unit_id) if unit_id else None
-    guard = 0
-    while cur and guard < 20:
-        if "district" in (levels.get(cur.get("level_id")) or "").lower():
-            district = cur
-            break
-        cur = units.get(cur.get("parent_id"))
-        guard += 1
-    if not district and market:
-        mk = str(market).strip().lower()
-        for u in units.values():
-            if "district" in (levels.get(u.get("level_id")) or "").lower() and (
-                    mk and (mk in (u.get("name") or "").lower() or (u.get("code") or "").lower() == f"district:{mk}")):
-                district = u
-                break
-    if not district:
-        return {"dm": [], "above": []}
+    {employee_id, name, email, unit, level}. Returns {"dm": [...], "above": [...]}; empty lists when
+    the tree isn't wired (callers skip those emails). Used by the accountability morning lateness
+    alert (managers above the DM) + the DM CAP.
 
-    def _mgrs(unit):
-        try:
-            rows = (c.table("org_managers").select("employee_id").eq("org_id", org_id)
-                    .eq("unit_id", unit["id"]).execute().data) or []
-        except Exception:
-            rows = []
-        out = []
-        for r in rows:
-            eid = r.get("employee_id")
-            if not eid:
-                continue
-            try:
-                emp = (c.table("employees").select("name,email").eq("org_id", org_id)
-                       .eq("employee_id", eid).limit(1).execute().data) or []
-            except Exception:
-                emp = []
-            out.append({"employee_id": eid, "name": (emp[0].get("name") if emp else None),
-                        "email": (emp[0].get("email") if emp else None),
-                        "unit": unit.get("name"), "level": levels.get(unit.get("level_id"))})
-        return out
-
-    dm = _mgrs(district)
-    above, seen = [], set()
-    cur = units.get(district.get("parent_id"))
-    guard = 0
-    while cur and guard < 20:                     # climb PARENTS above the district to the root
-        for m in _mgrs(cur):
-            key = str(m.get("employee_id"))
-            if key and key not in seen:
-                seen.add(key)
-                above.append(m)
-        cur = units.get(cur.get("parent_id"))
-        guard += 1
-    return {"dm": dm, "above": above}
+    THE WALK IS `storeops.org_chain` (index §48.7), shared with `_dm_for_store` above. This function
+    used to mirror that one's district resolution — its own docstring said so — which is two walks
+    answering one question, and the one that drifts is the one that emails the wrong manager."""
+    chain = org_chain.dm_by_store(**org_chain_inputs(org_id, store_code)).get(
+        str(store_code or "").strip()) or {}
+    return {"dm": chain.get("dm") or [], "above": chain.get("above") or []}
 
 
 class ShiftExtensionRequestIn(LaxModel):
