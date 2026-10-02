@@ -161,6 +161,7 @@ const REPORT_TREES: [string, string][] = [
   ['/storeops/reports', 'storeops'], ['/storeops/reviews', 'storeops'],
   ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
   ['/closing/recon', 'closing'],
+  ['/closing/accountability', 'closing'],
 ]
 // The report area for a path, or null if it's an operational (non-report) page.
 export function reportAreaForPath(path: string): string | null {
@@ -519,6 +520,7 @@ export const NAV: NavGroup[] = [
     { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/envelope-report', label: 'Management Envelope Receipt', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/accountability', label: 'Cash Accountability Chain', icon: '🔗', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/external-credit-recon', label: 'Card Settlement Recon', icon: '💳', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
@@ -850,6 +852,7 @@ export const NAV: NavGroup[] = [
     // mark short/over, assign a short envelope to the rep as a chargeback (existing ops_chargeback
     // machinery). Same scope tiers as DM Verify — DMs count envelopes for their span.
     { href: '/closing/envelope-report', label: 'Management Envelope Receipt', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/accountability', label: 'Cash Accountability Chain', icon: '🔗', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Management one-screen cash recon (owner 2026-09-02): "only market manager and above see it"
     // — the ENFORCEMENT is server-side (closing/billpay_pickup.can_see_cash_recon, the mig-434
