@@ -13,10 +13,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }
 const th: React.CSSProperties = { ...cell, fontWeight: 700, color: 'var(--text2)', fontSize: 12, textAlign: 'left' }
+/* The ONE cell accessor both tables sort through — `@/lib/table-sort`'s comparison rules, not a
+ * second sort of our own (owner directive 2026-08-10, the table-sort ratchet). */
+const getCell = (row: any, field: string) => row?.[field]
 const DOW = [['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'], ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday'], ['7', 'Sunday']]
 
 export default function DmVisitPlanPage() {
@@ -92,9 +96,13 @@ export default function DmVisitPlanPage() {
 
   const c = cfg?.config || {}
   const quota = board?.quota || {}
-  const rows = quota.rows || []
-  const activeRules = rules?.rules || []
+  const rows: any[] = quota.rows || []
+  const activeRules: any[] = rules?.rules || []
   const opts = options?.options || []
+  // Click-a-header sorting on both tables. A market manager with twenty DMs wants the shortfalls at
+  // the top; the default order (day, then name) is preserved until they click.
+  const qSort = useTableSort(rows, getCell)
+  const rSort = useTableSort(activeRules, getCell)
 
   return (
     <div style={{ maxWidth: 1080 }}>
@@ -159,9 +167,16 @@ export default function DmVisitPlanPage() {
           decides. {rules?.is_default ? 'This is the starting order; add a rule and it becomes yours.' : 'This is your order.'}
         </p>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Order</th><th style={th}>Deliverable</th><th style={th}>Where it comes from</th><th style={th}>Weight</th><th style={th}>Priority when</th><th style={th} /></tr></thead>
+          <thead><tr>
+            <SortableTh field="sort" sort={rSort.sort} onSort={rSort.toggle} style={th}>Order</SortableTh>
+            <SortableTh field="label" sort={rSort.sort} onSort={rSort.toggle} style={th}>Deliverable</SortableTh>
+            <SortableTh field="basis" sort={rSort.sort} onSort={rSort.toggle} style={th}>Where it comes from</SortableTh>
+            <SortableTh field="weight" sort={rSort.sort} onSort={rSort.toggle} style={th}>Weight</SortableTh>
+            <SortableTh field="direction" sort={rSort.sort} onSort={rSort.toggle} style={th}>Priority when</SortableTh>
+            <SortableTh field="_actions" sort={rSort.sort} onSort={rSort.toggle} style={th} disabled />
+          </tr></thead>
           <tbody>
-            {activeRules.map((r: any, i: number) => (
+            {rSort.sorted.map((r: any, i: number) => (
               <tr key={`${r.basis}:${r.metric_key}:${i}`}>
                 <td style={cell}>{r.sort}</td>
                 <td style={{ ...cell, fontWeight: 600 }}>{r.label}</td>
@@ -237,9 +252,17 @@ export default function DmVisitPlanPage() {
           {quota.totals ? ` · ${quota.totals.completed} of ${quota.totals.required} visits done` : ''}
         </p>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Day</th><th style={th}>District manager</th><th style={th}>Required</th><th style={th}>Assigned</th><th style={th}>Done</th><th style={th}>Short</th><th style={th}>Not visited</th></tr></thead>
+          <thead><tr>
+            <SortableTh field="visit_date" sort={qSort.sort} onSort={qSort.toggle} style={th}>Day</SortableTh>
+            <SortableTh field="dm_name" sort={qSort.sort} onSort={qSort.toggle} style={th}>District manager</SortableTh>
+            <SortableTh field="required" sort={qSort.sort} onSort={qSort.toggle} style={th}>Required</SortableTh>
+            <SortableTh field="assigned" sort={qSort.sort} onSort={qSort.toggle} style={th}>Assigned</SortableTh>
+            <SortableTh field="completed" sort={qSort.sort} onSort={qSort.toggle} style={th}>Done</SortableTh>
+            <SortableTh field="shortfall" sort={qSort.sort} onSort={qSort.toggle} style={th}>Short</SortableTh>
+            <SortableTh field="assigned_not_visited" sort={qSort.sort} onSort={qSort.toggle} style={th} disabled>Not visited</SortableTh>
+          </tr></thead>
           <tbody>
-            {rows.map((r: any, i: number) => (
+            {qSort.sorted.map((r: any, i: number) => (
               <tr key={i} style={r.shortfall ? { background: 'color-mix(in srgb, var(--danger) 7%, transparent)' } : undefined}>
                 <td style={cell}>{r.visit_date}</td>
                 <td style={{ ...cell, fontWeight: 600 }}>{r.dm_name || r.dm_email || r.dm_key}</td>
