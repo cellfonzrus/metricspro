@@ -140,12 +140,27 @@ function isLocalHost(origin: string): boolean {
 
 const BARE_HTTPS_ORIGIN = /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?$/
 
-/** WHY THIS EXISTS (owner incident 2026-10-03, index §40.10). The move to app.metricspro.tech took the
- *  app off the air, and every fallback in this file is written to keep a build WORKING when a variable is
+/** One thing a production build must have, as DATA — never as operator prose. §19.38 forbids platform
+ *  variable names in copy under src/, and the rule is right: this file is shipped source. The reader-facing
+ *  sentence for each code is composed at build time by the one caller (next.config.ts, outside src/), which
+ *  must carry one for every code here — locked, so a code added without its sentence fails the build. */
+export type ConfigProblemCode =
+  | 'backend-origin-unreachable'
+  | 'site-origin-not-bare'
+  | 'direct-origin-not-bare'
+
+export interface ConfigProblem {
+  code: ConfigProblemCode
+  /** The offending value as resolved, for the message. Never a secret: these are addresses. */
+  value: string
+}
+
+/** WHY THIS EXISTS (owner incident 2026-10-03, index §40.10). The move to app.metricspro.tech took the app
+ *  off the air, and every fallback in this file is written to keep a build WORKING when a variable is
  *  missing — which means a production build with no backend address configured does not fail, it silently
- *  proxies every `/api/v1` and `/health` request to `http://localhost:8000` and ships. The deploy is green,
- *  the pages render, and nothing in the app can reach the API. Same shape for a malformed origin: the
- *  canonical-host redirect quietly does not install, or direct-class uploads quietly go nowhere.
+ *  proxies every path in BACKEND_PATH_PREFIXES to the local development backend and ships. The deploy is
+ *  green, the pages render, and nothing in the app can reach the API. Same shape for a malformed origin:
+ *  the canonical-host redirect quietly does not install, or direct-class uploads quietly go nowhere.
  *
  *  THE CLASS: a development fallback must never be reachable by a PRODUCTION build. The fallbacks stay —
  *  they are right for `next dev` and for a preview — but a production build asserts the facts it cannot
@@ -153,37 +168,25 @@ const BARE_HTTPS_ORIGIN = /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?$/
  *
  *  Pure: `next.config.ts` calls it at build time and throws on a non-empty result; the proof calls it
  *  directly, and `backend/harness_one_domain_lock.py` fails the build if the config stops calling it. */
-export function productionConfigProblems(env: ApiEnv = API_ENV, production = false): string[] {
+export function productionConfigProblems(env: ApiEnv = API_ENV, production = false): ConfigProblem[] {
   if (!production) return []
-  const problems: string[] = []
+  const problems: ConfigProblem[] = []
 
   const backend = backendOrigin(env)
-  if (isLocalHost(backend)) {
-    problems.push(
-      `the backend origin resolves to ${backend || '(empty)'}, which no browser can reach: every ` +
-      `${BACKEND_PATH_PREFIXES.join(' and ')} request is proxied there, so the whole app would load and ` +
-      `then fail every API call. Set BACKEND_ORIGIN (preferred, server-only) or NEXT_PUBLIC_API_URL to ` +
-      `the backend's https origin in the production environment and redeploy.`)
-  }
+  if (isLocalHost(backend)) problems.push({ code: 'backend-origin-unreachable', value: backend })
 
   const site = clean(env.NEXT_PUBLIC_SITE_URL)
-  if (site && !BARE_HTTPS_ORIGIN.test(site)) {
-    problems.push(
-      `NEXT_PUBLIC_SITE_URL is "${site}", which is not a bare https://host[:port]. The ` +
-      `canonical-host redirect installs only for a bare origin, so it would silently not install and the ` +
-      `site metadata would carry a wrong base.`)
-  }
+  if (site && !BARE_HTTPS_ORIGIN.test(site)) problems.push({ code: 'site-origin-not-bare', value: site })
 
   const direct = clean(env.NEXT_PUBLIC_API_DIRECT_ORIGIN)
-  if (direct && !BARE_HTTPS_ORIGIN.test(direct)) {
-    problems.push(
-      `NEXT_PUBLIC_API_DIRECT_ORIGIN is "${direct}", which is not a bare https://host[:port]. ` +
-      `Direct-class calls (multipart uploads and the long synchronous endpoints) are built from it, so ` +
-      `they would be sent to an address the browser cannot resolve.`)
-  }
+  if (direct && !BARE_HTTPS_ORIGIN.test(direct)) problems.push({ code: 'direct-origin-not-bare', value: direct })
 
   return problems
 }
+
+/** Every code productionConfigProblems can emit — the caller must carry a sentence for each (locked). */
+export const CONFIG_PROBLEM_CODES: readonly ConfigProblemCode[] =
+  ['backend-origin-unreachable', 'site-origin-not-bare', 'direct-origin-not-bare']
 
 /** The rewrites next.config.ts installs: every BACKEND_PATH_PREFIXES entry → the backend origin. */
 export function apiRewrites(env: ApiEnv = API_ENV): { source: string; destination: string }[] {

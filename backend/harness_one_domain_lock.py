@@ -158,13 +158,28 @@ def config_wiring(files):
          f"{CONFIG} must call productionConfigProblems(API_ENV, VERCEL_ENV === 'production')"),
         (cfg, r"CONFIG_PROBLEMS\.length\s*\)\s*\{\s*\n?\s*throw\s+new\s+Error",
          f"{CONFIG} must THROW on a production config problem — reporting it without failing the build ships the dark deploy anyway"),
+        (home, r"export\s+const\s+CONFIG_PROBLEM_CODES\b",
+         f"{HOME} must export CONFIG_PROBLEM_CODES so the caller's message map can be checked against it"),
     ]
+    # Every problem code the home can emit needs an operator sentence in the one caller. The codes stay in the
+    # home as DATA (index §19.38 keeps platform variable names out of shipped page copy); the sentences live in
+    # next.config.ts, which is build-time only and outside src/. A code with no sentence would throw
+    # "undefined" at the operator, so a missing one fails the build here.
+    for code in problem_codes(home):
+        if f'"{code}"' not in cfg and f"'{code}'" not in cfg:
+            bad.append(f"{CONFIG}: no operator message for config problem code {code!r} (it would read 'undefined')")
     for text, pattern, msg in need:
         if not re.search(pattern, text):
             bad.append(msg)
     if re.search(r"connect-src[^\"\n]*\*\.up\.", cfg):
         bad.append(f"{CONFIG}: a wildcard backend host is back in connect-src")
     return bad
+
+
+def problem_codes(home_text):
+    """The ConfigProblemCode values CONFIG_PROBLEM_CODES lists in the home."""
+    m = re.search(r"CONFIG_PROBLEM_CODES[^=]*=\s*\n?\s*\[(.*?)\]", home_text, re.S)
+    return re.findall(r"'([a-z][a-z0-9-]*)'", m.group(1)) if m else []
 
 
 # ── rule 6: every browser-launching endpoint is DIRECT ─────────────────────────────────────────────
@@ -304,6 +319,12 @@ def main():
     broken[HOME] = files.get(HOME, "").replace("export function productionConfigProblems", "function productionConfigProblems")
     check("control 7c: a home that stops exporting the gate is caught",
           any("no longer exports productionConfigProblems" in v for v in config_wiring(broken)))
+    check("control 7d: the home's problem codes are read (the scan is not empty)", len(problem_codes(files.get(HOME, ""))) >= 3,
+          problem_codes(files.get(HOME, "")))
+    broken = dict(files)
+    broken[HOME] = files.get(HOME, "").replace("'direct-origin-not-bare']", "'direct-origin-not-bare', 'a-new-code-nobody-worded']")
+    check("control 7e: a NEW problem code with no operator message in the config is caught",
+          any("a-new-code-nobody-worded" in v for v in config_wiring(broken)))
     fake_router = ('router = APIRouter(prefix="/widgets")\n'
                    '@router.post("/{wid}/scrape")\n'
                    'def scrape(wid: str):\n'

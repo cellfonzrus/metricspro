@@ -14650,10 +14650,10 @@ right where they apply — it is to make a production build **assert the facts i
 
 | Piece | Where |
 |---|---|
-| **THE rules**, pure and in the same home as the facts they guard: backend origin not a local/private host; `NEXT_PUBLIC_SITE_URL` and `NEXT_PUBLIC_API_DIRECT_ORIGIN` bare `https://host[:port]` when set | `frontend/src/lib/apiBase.ts` `productionConfigProblems(env, production)` |
-| The one caller — build-time, throws with the variable to set and why | `frontend/next.config.ts` (`CONFIG_PROBLEMS`) |
+| **THE rules**, pure and in the same home as the facts they guard: backend origin not a local/private host; `NEXT_PUBLIC_SITE_URL` and `NEXT_PUBLIC_API_DIRECT_ORIGIN` bare `https://host[:port]` when set. They return CODES, never operator prose — §19.38 keeps platform variable names out of shipped copy under `src/`, and this file is shipped source | `frontend/src/lib/apiBase.ts` `productionConfigProblems(env, production)` → `ConfigProblem[]`, with `CONFIG_PROBLEM_CODES` |
+| The one caller — build-time only and outside `src/`, so it owns the operator sentences (one per code, naming the variable to set and why) and throws | `frontend/next.config.ts` (`CONFIG_PROBLEM_MESSAGES`, `CONFIG_PROBLEMS`) |
 | Proof (both directions) | `frontend/prove_one_domain.mjs` **H**: production with no backend origin / pointed at localhost / 127.0.0.1 / a private address FAILS; a no-scheme site or direct origin FAILS; `next dev`, a preview, and a correctly configured production build all still build; a trailing slash is tolerated |
-| Lock | `backend/harness_one_domain_lock.py` rule 7 + controls 7/7b/7c — a config that only warns, stops calling the gate, or a home that stops exporting it, each fails the build |
+| Lock | `backend/harness_one_domain_lock.py` rule 7 + controls 7/7b/7c/7d/7e — a config that only warns, stops calling the gate, a home that stops exporting it, or a NEW problem code with no operator sentence in the caller (it would read `undefined`), each fails the build |
 
 Verified by two REAL `next build` runs, not only the harness: `VERCEL_ENV=production` with no backend origin fails at
 config load with the message above; the same build with `BACKEND_ORIGIN` + `NEXT_PUBLIC_API_DIRECT_ORIGIN` +
@@ -14663,6 +14663,12 @@ config load with the message above; the same build with `BACKEND_ORIGIN` + `NEXT
 address *answers* — a backend origin that is well-formed but wrong (a dead host, a domain whose TLS is not provisioned)
 still builds. Reachability is a deploy-time fact, not a build-time one; `GET /health` on the site's own origin is how it
 is read (§23d).
+
+**Where the wording lives, and why that is not a workaround.** The first cut put the operator sentences in
+`apiBase.ts` and `carrier-vocab-guard` correctly failed it: §19.38 forbids platform variable names in copy under
+`frontend/src`, and that rule holds for shipped source whether or not a given string is rendered today. So the
+home keeps the RULES as codes and `next.config.ts` — build-time only, outside `src/`, where the rest of the build
+policy already lives — owns the sentences. The guard was satisfied, not excused: `INFRA_FE_ALLOW` gained nothing.
 
 **Siblings checked (CLAUDE.md "find the siblings before you ship").**
 
