@@ -5915,6 +5915,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
+| **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
@@ -6234,6 +6235,80 @@ upload path** (the five manual loads above are the proof it works), or by a port
 
 **REPORTED, NOT FIXED, and NOT this cause:** `commcalc.asset_ledger` has nothing since 2026-09-23. It is not a
 sweep with an `empty_ok` leg, so the silent-zero class does not explain it; it needs its own look.
+
+§19.42 **THE SERVICE FEE ON A BILL PAYMENT IS NOT A TRANSACTION A CONTRACT TYPE COULD HAVE DESCRIBED — the
+Sales Report asked the owner to map 693 walk-in bill payments "so they count as activations" (owner report
+2026-10-03; fixed, no migration).**
+Owner, pasting the banner: *"⚠️ 693 transaction(s) have no contract type and no activation rule matched — map
+them under Onboarding — Commission Intake, step 2.5a … so they count as activations."*
+
+**WHAT THE 693 ACTUALLY WERE.** Measured read-only against production, house org, October 2026 (`period`
+`'October 2026'`, `daily_sales_feed`, 3,698 lines): **690 of the 693 were walk-in bill payments** — two lines
+each, `Bill Payments / Boost RTR / 'Boost RTR $1-$650'` and `Bill Payments / Other Charge / 'ePay Service
+Charge'`. The same class, the same months back: **4,142 of 4,206** in September and **4,270 of 4,315** in
+August. The banner had been ~98% noise since the predicate shipped, and acting on it — writing the activation
+rule it asked for — would have swept every bill payment into the activation count and therefore into pay.
+
+**WHY IT SURVIVED THE PREDICATE THAT EXISTS TO PREVENT EXACTLY THIS.** `router._txn_activation_candidate`
+(§19.31's sibling, written 2026-08-09 after the Total Wireless tenant was told 1,009 of 1,303 transactions
+needed mapping) suppresses a blank-contract-type transaction only when **every** line is tenant-EXCLUDED, a
+BILL-PAYMENT product, or an ACCESSORY. The house org rings the customer's service fee as its **own sales
+line beside the payment line** — 4,176 lines / $16,592.00 in September 2026 — so the RTR payment line was
+suppressed by the seeded word-anchored exclusion and **the fee line was not**. One surviving line per receipt
+made every bill payment read as an activation-capable transaction with no contract type. The other tenant
+rings no separate fee line, which is why its count was already honest (4 in October) and why this looked like
+a Boost-only quirk rather than the general defect it is.
+
+**THE CLASS, NOT THE INSTANCE.** The wrong general fact is not "Boost's fee wording is unmapped"; it is that
+a classifier asking *"could this have been an activation?"* **re-decided what a fee line is** instead of
+reading the registry that already knew. That registry exists and was already dereferenced by three other
+readers: `commcalc/epay_fee_recon.py` (`FEE_DESC` / `HOUSE_FEE_DESCS` / `resolve_fee_descs` / `is_fee_desc`,
+PURE) over the per-org mig-`1045` column `accessory_config.billpay_fee_product_desc` — the fee reconciliation
+itself, the P&L fee booking (`account/coa.py`), and the cash-pickup netting basis
+(`router._billpay_fee_tokens` → `_fr.aggregate_fee_cash`). §19.18's pattern once more: **a registry written
+and a caller left un-wired.**
+
+**THE DESIGN FIX (one fact, one home, dereferenced — never copied).**
+`router._accessory_config_uncached` resolves the column through `resolve_fee_descs` on the whole-row read it
+already performs (no extra round trip) and carries it as **`acfg['billpay_fee_descs']`**;
+`_txn_activation_candidate` **READS that key** as its fourth config test, beside the exclusion predicate,
+`billpay_products` and `_is_accessory`. No wording is spelled in the predicate, so RULE TWO holds, and a
+tenant with nothing configured resolves to the house tuple and is byte-identical.
+
+**BEFORE → AFTER, the same rows through the same reader (read-only, 2026-10-03):**
+
+| org | period | `blank_ct_unrecovered` before | after | `blank_ct_non_activation` after |
+|---|---|---|---|---|
+| house | October 2026 | **693** | **3** | 874 |
+| house | September 2026 | 4,206 | 64 | 5,510 |
+| house | August 2026 | 4,315 | 45 | 5,735 |
+| Total Wireless | October 2026 | 4 | **4** (unchanged) | 430 |
+| Total Wireless | September 2026 | 13 | **13** (unchanged) | 2,919 |
+| LuxeLink | August 2026 | 9 | **9** (unchanged) | 0 |
+
+**NO COUNT MOVED.** `_txn_activation_candidate` has exactly one caller (`_classification_gaps`) and feeds
+only the banner's `blank_ct_non_activation` / `blank_ct_unrecovered` and the `/sales-report/classification-unmatched`
+sample list. Activations, revenue, GP and every payout are untouched — this changes what the report *says
+about itself*, which is precisely what had become unreadable.
+
+**WHAT IS STILL REPORTED, and what it is.** October's true remainder is **3** transactions, now readable:
+one real activation the POS left blank (tid `214887` — a `Android - XP` device + a plan line + a Device Setup
+Charge), one accessory-only receipt on a department the accessory config does not list (`BYOD /
+Accessories`), one charge-only receipt (`One-Time Reactivation Charge`). Those are classification-config
+decisions for the owner (an activation rule changes counts and therefore pay, so it is surfaced, not
+applied); they are no longer buried under 690 bill payments.
+
+**LOCKED SO IT CANNOT UN-WIRE.** `backend/harness_billpay_fee_one_home_lock.py` FAILS THE BUILD if
+`_txn_activation_candidate` stops reading `acfg['billpay_fee_descs']`, if either reader stops resolving the
+mig-1045 column through `resolve_fee_descs`, if the column is read anywhere outside the router, if the P&L or
+netting callers stop dereferencing `epay_fee_recon`, or if the fee wording appears **as a test of a sales
+line** anywhere in backend app code (a display label or prose is not a copy). The DB-free behavioural proof
+`backend/harness_billpay_fee_not_activation.py` drives the REAL `_accessory_config_uncached` /
+`_classification_gaps` / `_txn_activation_candidate` over in-memory rows and a one-row fake config client:
+690 bill payments raise no banner, the one genuine blank-contract-type activation still does and is still
+listed by `trans_id`, a fee line never appears in the "map these" list, a bill payment that also sold a phone
+is still a candidate, a voided receipt is counted nowhere, a tenant with no fee line is unchanged. Both run
+in `.github/workflows/carrier-vocab-guard.yml` (the lock beside the other locks, the proof in its own job).
 
 §19.39 **WHO PRODUCES A STORE'S DAILY CLOSING — reps type it, or it is DERIVED from the sales feed
 (owner directive 2026-10-02, mig `1035`).** Owner: *"the admin should be able to check a box to input daily closing
