@@ -37,8 +37,11 @@ function Splash({ text }: { text: string }) {
 // One full-screen explanatory card. `actionLabel` renames the primary button (the "session expired"
 // state says "Sign in again", not "Sign out"); `secondary` adds an optional extra action; `hint`
 // adds a smaller line under the body. All optional — existing call sites are unchanged.
+// `onSignOut` is OPTIONAL: the §40.12 "can't reach the server" notice has nothing to sign out of — the
+// app never established who you are — so it offers only its own retry. Every other caller passes it and
+// is unchanged.
 function Notice({ title, body, onSignOut, actionLabel, hint, secondary }: {
-  title: string; body: string; onSignOut: () => void
+  title: string; body: string; onSignOut?: () => void
   actionLabel?: string; hint?: string
   secondary?: { label: string; onClick: () => void }
 }) {
@@ -50,7 +53,7 @@ function Notice({ title, body, onSignOut, actionLabel, hint, secondary }: {
         {hint && <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 20 }}>{hint}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
           {secondary && <button className="btn" onClick={secondary.onClick}>{secondary.label}</button>}
-          <button className="btn" onClick={onSignOut}>{actionLabel || 'Sign out'}</button>
+          {onSignOut && <button className="btn" onClick={onSignOut}>{actionLabel || 'Sign out'}</button>}
         </div>
       </div>
     </div>
@@ -672,6 +675,13 @@ function Guard({ children }: { children: React.ReactNode }) {
   // Master switch: until the admin turns enforcement ON, the app stays fully open (today's
   // behavior) so deploying this never locks anyone out. null = still checking.
   const [fetchedEnforce, setFetchedEnforce] = useState<boolean | null>(null)
+  // UNREADABLE ≠ OFF (owner incident 2026-10-03, index §40.12). The catch below used to call
+  // setFetchedEnforce(false), so a backend the browser could not reach rendered `<PlatformShell open>`
+  // — the app dropped its sign-in gate because a request failed. Live that day: BACKEND_ORIGIN named a
+  // host that did not resolve, every proxied call 502'd at the edge, and the owner saw "🔓 Login not
+  // enforced" with no way to sign out while the stored flag was, and always had been, ON.
+  // A FAILED read is now its own state: it never becomes a value, and it is never the open app.
+  const [enforceUnreadable, setEnforceUnreadable] = useState(false)
   // Fast path: the ONE-call /api/v1/core/bootstrap (auth-context) already carried rbac_enabled —
   // use it and skip the extra round trip (derived, so no setState-in-effect). auth-context only ever
   // moves rbacEnabled null → boolean, never back.
@@ -684,8 +694,12 @@ function Guard({ children }: { children: React.ReactNode }) {
     if (rbacEnabled !== null) return
     let on = true
     fetch(apiUrl(`/api/v1/core/auth-config`))
-      .then(r => r.json()).then(d => { if (on) setFetchedEnforce(!!d.rbac_enabled) })
-      .catch(() => { if (on) setFetchedEnforce(false) })
+      // A non-2xx is a FAILED READ, not an answer. The edge serves HTML on a 502, which `.json()`
+      // would reject on anyway — but a gateway that returns a JSON error body would otherwise parse
+      // to `{}` and `!!undefined` would read as "enforcement off". Status is checked first.
+      .then(r => { if (!r.ok) throw new Error(`auth-config ${r.status}`); return r.json() })
+      .then(d => { if (on) setFetchedEnforce(!!d.rbac_enabled) })
+      .catch(() => { if (on) setEnforceUnreadable(true) })
     return () => { on = false }
   }, [rbacEnabled])
 
@@ -731,6 +745,13 @@ function Guard({ children }: { children: React.ReactNode }) {
     if (dest && dest !== pathname) router.replace(dest)
   }, [gateOn, setupGate, pathname, router])
 
+  // The backend could not be reached, so whether login is enforced is UNKNOWN (§40.12). Never the open
+  // app, and never a page of $0.00: say the one true thing instead. Ordered before the `null` splash so
+  // a dead backend stops at a readable notice rather than spinning on "Loading…" forever.
+  if (enforce === null && enforceUnreadable) return <Notice title="Can't reach the server"
+    body="The app loaded, but it cannot reach the server, so nothing here can be shown or trusted yet."
+    hint="This is a connection problem, not lost data — your records are untouched. Try again in a moment; if it persists, the site's backend address needs checking."
+    secondary={{ label: '↻ Try again', onClick: () => window.location.reload() }} />
   if (enforce === null) return <Splash text="Loading…" />
   if (enforce === false) return <PlatformShell open>{children}</PlatformShell>  // app open
 

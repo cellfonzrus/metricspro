@@ -3362,7 +3362,8 @@ def _registry_auto_map(client, org_id):
 
 # Columns the sweep reads per report. Kept as a literal list so a pre-290 database (which lacks the
 # schedule columns) can be detected and degraded gracefully rather than 400-ing the whole sweep.
-_REGISTRY_SWEEP_COLS = ('report_key,auto,refresh_months,refresh_days,'
+_REGISTRY_SWEEP_COLS = ('report_key,auto,refresh_months,refresh_days,arrears_days,'
+                        'empty_stale_after_days,'
                         'sweep_hour,sweep_minute,sweep_timezone,sweep_next_run_at')
 
 
@@ -14816,8 +14817,14 @@ def _do_epay_sweep(org_id, only=None):
         # That used to be reported as a flat 'ok' (the failed report looked imported) — call it 'partial'
         # so the connectors page and the attention feed can tell the operator WHICH report is missing.
         _errs = (res or {}).get('errors') if isinstance(res, dict) else None
+        # SUCCESS IS WHAT LANDED, not what the status word says (§19.21/§19.41). A run whose only
+        # outcome was a zero the sweep could not vouch for imported nothing, so it records an
+        # ATTEMPT — otherwise `last_run_at` goes on advancing while the feed is dead, which is
+        # exactly how two months of statements went missing with a green connector above them.
+        _landed = int((res or {}).get('rows_landed') or 0) if isinstance(res, dict) else 0
         _epay_set_status(client, org_id, 'partial' if _errs else 'ok',
-                         (f"PARTIAL — {res}" if _errs else f"OK — {res}"), mark_run=True)
+                         (f"PARTIAL — {res}" if _errs else f"OK — {res}"), mark_run=True,
+                         success=_landed > 0)
     except epay_sweep.EpayLoginError as e:
         _epay_set_status(client, org_id, 'error', str(e), mark_run=True)
     except epay_sweep.EpayPortalError as e:
