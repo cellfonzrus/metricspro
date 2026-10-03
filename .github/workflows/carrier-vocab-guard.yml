@@ -387,7 +387,7 @@ on:
       - "database/migrations/1044_manager_followup.sql"
       - "backend/app/modules/commcalc/epay_fee_recon.py"
       - "backend/app/modules/commcalc/metric_recon.py"
-      - "database/migrations/1042_billpay_fee_product_desc.sql"
+      - "database/migrations/1045_billpay_fee_product_desc.sql"
       - "backend/harness_accountability_chain.py"
       - "backend/harness_org_chain.py"
       - "backend/app/modules/storeops/org_chain.py"

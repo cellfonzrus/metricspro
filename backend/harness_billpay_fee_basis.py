@@ -29,7 +29,7 @@ WHAT THIS PINS
   D. the owner's own reported store-day reconciles to the cent, and the gap directions survive;
   E. the SIBLING -- the three-way recon's Leg B -- carries the same correction, and a pre-fee
      caller is byte-identical;
-  F. migration 1042's text is tied to the code it configures;
+  F. migration 1045's text is tied to the code it configures;
   G. THE BUILD LOCK: no call site re-adds the legs for itself, and no second copy appears;
   H. every lock in F and G is ARMED -- each is shown to fail when the thing it guards is broken.
 
@@ -265,8 +265,8 @@ check("E4 control: the sibling fix is real -- Leg B with the fee differs from Le
       rows[0]["sales"] != rows2[0]["sales"])
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-print("\n== F. migration 1042 is tied to the code it configures ==")
-_m = open("../database/migrations/1042_billpay_fee_product_desc.sql").read()
+print("\n== F. migration 1045 is tied to the code it configures ==")
+_m = open("../database/migrations/1045_billpay_fee_product_desc.sql").read()
 check("F1 it adds the column the config reader reads, additively and idempotently",
       "billpay_fee_product_desc" in _m and "ADD COLUMN IF NOT EXISTS" in _m)
 check("F2 the column name in the migration is the one the reader asks for",

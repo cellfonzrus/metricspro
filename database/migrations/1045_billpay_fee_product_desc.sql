@@ -1,4 +1,4 @@
--- 1042_billpay_fee_product_desc.sql — PER-ORG vocabulary for the customer bill-payment SERVICE FEE.
+-- 1045_billpay_fee_product_desc.sql — PER-ORG vocabulary for the customer bill-payment SERVICE FEE.
 --
 -- OWNER ASK 2026-10-03, verbatim: "diff of the pos data and th rep defined data needs to be
 -- investigated why those errors take place".
@@ -25,7 +25,7 @@
 -- dereferencing `metric_recon.pos_billpay_cash` / `pos_billpay_total` rather than re-adding the legs.
 --
 -- EMPTY DEFAULT = BYTE-IDENTICAL. `resolve_fee_descs` falls back to the house tuple for a blank
--- list, a non-list, a missing row or a pre-1042 schema (`_billpay_fee_tokens` has its own defensive
+-- list, a non-list, a missing row or a pre-1045 schema (`_billpay_fee_tokens` has its own defensive
 -- read, the mig-313 / mig-944 posture), so nothing changes for a tenant that configures nothing and
 -- the report works before this migration is applied.
 --
@@ -46,5 +46,5 @@ COMMENT ON COLUMN commcalc.accessory_config.billpay_fee_product_desc IS
 
 NOTIFY pgrst, 'reload schema';
 
-SELECT 'Migration 1042 complete — commcalc.accessory_config.billpay_fee_product_desc installed '
+SELECT 'Migration 1045 complete — commcalc.accessory_config.billpay_fee_product_desc installed '
        '(per-org; empty default = the house ePay-service-charge vocabulary, byte-identical).' AS status;

@@ -31465,7 +31465,7 @@ def _billpay_tender_tokens(client, org_id):
 
 def _billpay_fee_tokens(client, org_id):
     """Per-org product_desc vocabulary for the customer bill-payment SERVICE FEE (owner ask
-    2026-10-03; mig 1042 column billpay_fee_product_desc on accessory_config). Own defensive read,
+    2026-10-03; mig 1045 column billpay_fee_product_desc on accessory_config). Own defensive read,
     the mig-313 / mig-944 posture: a pre-1042 schema, a missing row, a blank list or ANY failure
     resolves to `epay_fee_recon.HOUSE_FEE_DESCS`, so a tenant that has configured nothing keeps the
     behaviour that shipped. Returns a tuple of lower-cased tokens; NEVER raises."""
