@@ -553,6 +553,148 @@ def org_market_options(client, org_id: str, present=()) -> list:
     return merge_market_options(canon, present)
 
 
+# ── CANONICAL STORE ENUMERATION — the ONE store option-list composition ─────────────────────────
+# (owner 2026-10-02, after the B-2778 → B-1598 merge: "if they are merged it will show only one
+# data as the store got replaced by the other" — the money merged, the PICKER did not.)
+#
+# `build_market_index` already records WHICH SPELLINGS ARE ONE STORE, and says so in its own
+# comment: "Two codes sharing an address are ONE store, and a resolver that treats them as two
+# makes a picker offer the same store twice." That fact has ONE home — `code_groups` — and the
+# option lists were not dereferencing it. Measured live on the house org the day this was written:
+# 58 options for 31 real stores, 27 of them offered twice, because a roster row with no address
+# contributed its bare CODE while the mapping row contributed the ADDRESS of the same store.
+#
+# Same design rule as the market twin directly above, and the same reason:
+#
+#     EVERY store dropdown/enumeration = ONE option per PHYSICAL STORE (`code_groups`), labelled
+#     with its best known spelling, UNION whatever store spellings the surface's own rows carry
+#     that the index cannot bind (so an orphan row is still selectable, never silently dropped).
+#
+# This is a DISPLAY fold only. No row is rewritten, no resolution changes, and nothing here decides
+# what a filter MATCHES — `build_store_matcher` / `store_resolver` keep that job and already accept
+# every spelling, which is exactly why collapsing the duplicates is safe.
+def build_store_options(idx, present=()) -> list:
+    """PURE: THE store option-list composition — one option per physical store from the canonical
+    union index, plus any spelling present in the surface's own rows that the index cannot bind.
+
+    Returns [{"store": display, "market": canonical market or None, "also_known_as": [other
+    spellings, sorted]} …] sorted case-insensitively by `store`, one entry per store.
+
+    DISPLAY PICK, deterministic and documented rather than guessed: among every spelling the
+    group's rows carry, a STREET ADDRESS (one starting with a digit) beats a bare store code,
+    because a code is what a picker shows when nobody ever recorded the address; among equals the
+    alphabetically-first spelling wins so the label never flickers between reads. Every spelling
+    NOT chosen is returned in `also_known_as`, so a fold is always visible and never silent.
+
+    A `present` spelling the index CAN bind adds nothing (it is already that store's option). One
+    it cannot bind becomes its own option, kept verbatim — an unmapped store is still a real row
+    worth filtering on. Blanks are never options. Never raises."""
+    idx = idx or {}
+    groups = idx.get("code_groups") or {}
+    code_market = build_market_by_code(idx)
+    rows_by_code: dict = {}
+    codeless: list = []
+    for srow in (idx.get("stores") or []):
+        c = _up(srow.get("store_code"))
+        if c:
+            rows_by_code[c] = srow
+        elif _norm(srow.get("address")):
+            codeless.append(srow)
+
+    def _pick(spellings):
+        # street address first (a bare code is the fallback label, never the preferred one)
+        return sorted(spellings, key=lambda v: (not v[:1].isdigit(), v.casefold(), v))[0]
+
+    out: dict = {}          # casefolded display -> option
+    seen_keys: set = set()  # every squashed spelling already covered by an option
+
+    def _emit(spellings, market):
+        spellings = sorted({_norm(v) for v in spellings if _norm(v)}, key=lambda s: (s.casefold(), s))
+        if not spellings:
+            return
+        display = _pick(spellings)
+        for v in spellings:
+            seen_keys.add(_squash(v))
+        cur = out.get(display.casefold())
+        if cur is None:
+            out[display.casefold()] = {"store": display, "market": market or None,
+                                       "also_known_as": [v for v in spellings if v != display]}
+        else:                                   # two groups landing on one label: keep the union
+            if not cur.get("market") and market:
+                cur["market"] = market
+            cur["also_known_as"] = sorted(
+                {*cur["also_known_as"], *(v for v in spellings if v != display)},
+                key=lambda s: (s.casefold(), s))
+
+    done: set = set()
+    for code in sorted(groups):
+        if code in done:
+            continue
+        group = {c for c in (groups.get(code) or {code})}
+        done |= group
+        spellings, markets = set(), set()
+        for c in sorted(group):
+            srow = rows_by_code.get(c) or {}
+            spellings.add(_norm(srow.get("store_code")) or c)
+            if _norm(srow.get("address")):
+                spellings.add(_norm(srow.get("address")))
+            if code_market.get(c):
+                markets.add(code_market[c])
+        _emit(spellings, next(iter(markets)) if len(markets) == 1 else None)
+    for srow in codeless:
+        _emit({_norm(srow.get("address"))}, _norm(srow.get("market")) or None)
+
+    key_index = idx.get("key_index") or {}
+    for v in (present or []):
+        v = _norm(v)
+        sq = _squash(v)
+        if not v or not sq or sq in seen_keys or sq in key_index:
+            continue
+        seen_keys.add(sq)
+        _emit({v}, None)
+    return sorted(out.values(), key=lambda o: (o["store"].casefold(), o["store"]))
+
+
+def fold_store_spellings(idx, spellings) -> list:
+    """PURE: collapse a CALLER'S OWN ordered list of store spellings to one per physical store,
+    keeping the FIRST spelling given for each — so a surface with a measured reason to prefer its
+    own vocabulary (payables prefers `commcalc.store_mapping.store_address`, which is what its rows
+    actually carry) dereferences the SAME `code_groups` fact without having its labels changed.
+
+    `build_store_options` ENUMERATES the org's stores from the index; this DEDUPES a list the
+    caller already built. Both read which spellings are one store from the one home, neither
+    re-derives it. A spelling the index cannot bind is never dropped — it keeps its own slot.
+    Order is preserved. Blanks are dropped. Never raises."""
+    idx = idx or {}
+    key_index = idx.get("key_index") or {}
+    groups = idx.get("code_groups") or {}
+    out, seen = [], set()
+    for raw in (spellings or []):
+        v = _norm(raw)
+        sq = _squash(v)
+        if not v or not sq:
+            continue
+        codes = key_index.get(sq) or set()
+        group = frozenset(sorted({c for code in codes for c in (groups.get(code) or {code})})) or sq
+        if group in seen:
+            continue
+        seen.add(group)
+        out.append(v)
+    return out
+
+
+def org_store_options(client, org_id: str, present=()) -> list:
+    """I/O twin of `build_store_options` off the cached canonical index: the option list every
+    store dropdown must serve. Degrades to the present spellings alone if the index is unreadable
+    (options never blank a working page)."""
+    try:
+        idx = market_index(client, org_id)
+    except Exception as e:                                          # pragma: no cover - I/O guard
+        print(f"WARN core.scope org_store_options index read failed: {e}")
+        idx = {}
+    return build_store_options(idx, present)
+
+
 def market_store_codes(client, org_id: str, market) -> set:
     """store_codes in a market (case-insensitive market match), from the canonical union.
 

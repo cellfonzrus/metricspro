@@ -446,6 +446,8 @@ on:
       - "backend/app/modules/notify/render.py"
       - "backend/harness_pl_range.py"
       - "backend/harness_pl_range_lock.py"
+      - "backend/harness_pl_filter_semantics.py"
+      - "backend/app/modules/account/statement_filter.py"
       - "backend/harness_export_xss_upload.py"
       # index §19.40 — the nav deep-link lock reads every page, NAV, ScreenLink, backend notices and the help docs
       - "backend/harness_nav_deep_link_lock.py"
@@ -453,6 +455,13 @@ on:
       - "frontend/src/**"
       - "backend/app/**/*.py"
       - "backend/app/data/support_docs_seed.json"
+      # index §13e — the store-option fold, and §13d — the store-identity proof: each lock's own
+      # harness and runbook. The two globs above already cover everything under backend/app, but a
+      # harness at the backend ROOT and a runbook are not under them, so a change to the very thing
+      # a lock guards would SKIP that lock — the un-wiring these locks exist to prevent.
+      - "backend/harness_store_option_fold.py"
+      - "backend/harness_store_mapping_identity.py"
+      - "database/runbooks/store_identity_merge_1800_1115.sql"
   push:
     branches: [main]
     paths:
@@ -538,6 +547,14 @@ jobs:
       - name: Run the P&L month-range lock (a multi-month P&L loops THE single-month read; it computes no line; no second range path — index §4c)
         working-directory: backend
         run: python3 harness_pl_range_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §4 — the P&L store/market filter. This harness shipped with the 2026-09-02 market fix
+      # but was never wired into CI, so nothing failed the build when a filter half stopped
+      # dereferencing the canonical store vocabulary — which is exactly how the 2026-10-03
+      # code-selection defect ("device cost is not being added to the p&l of 5619/6149/6507/1710")
+      # reached the owner. Stdlib-only and DB-free.
+      - name: Run the P&L filter-semantics proof (one store vocabulary; a code / alias / variant selection binds its snapshot; fail-closed on ambiguity — index §4)
+        working-directory: backend
+        run: python3 harness_pl_filter_semantics.py | tee -a "$GITHUB_STEP_SUMMARY"
       # index §4a / §4a.1 / §4a.2 — the MA money, the month-of-life LEG and the ladder's RUNG
       # convention each have ONE home. These locks shipped with #270/#272 but were never wired into
       # CI, so nothing failed the build when a caller stopped dereferencing them. Wiring them is the
@@ -786,6 +803,12 @@ jobs:
       - name: Run the closing-source backfill proof (every day once; one sweep not a second derivation; empty days reported; idempotent; a human's row survives; bounds refuse)
         working-directory: backend
         run: python3 harness_closing_source_backfill.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.39 — SEVERAL STORES AT ONCE over the real endpoint (owner 2026-10-03: the store
+      # dropdown is a multi-select). The risk in "many" is all in the fan-out: a store written twice,
+      # a store missed, or a half-applied save reported as success.
+      - name: Run the closing-source multi-store proof (many is one N times; no store written twice; empty selection is the org default; clearing a selection; the gate still gates; a bad source writes nothing)
+        working-directory: backend
+        run: python3 harness_closing_source_multistore.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend
@@ -834,6 +857,20 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_store_mapping_identity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  store-option-fold:
+    name: Store options — each physical store offered once (DB-free, the real composer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-option fold proof (the duplicate union reproduced; one option per physical store; an unbindable spelling is never dropped; both callers must keep dereferencing code_groups — index §13e)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_store_option_fold.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CLOSING-REFUSAL LOCK (index §29.11, owner bug report 2026-10-02 "we cannot see the daily closing which was
   # submitted"). A daily closing that is REFUSED used to store nothing at all — not even in commcalc.closing_attempt,

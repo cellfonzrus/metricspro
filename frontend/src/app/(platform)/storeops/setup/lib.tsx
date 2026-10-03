@@ -79,3 +79,8 @@ export function MarketField({ value, options, onChange, width = 110 }:
     </select>
   )
 }
+
+// Picking WHICH STORES a setting applies to has ONE home, fleet-wide:
+// `components/StoreMultiSelect`. Re-exported here so the three StoreOps setup screens keep importing
+// everything they need from this one file, and so nothing is tempted to re-map a store roster itself.
+export { StoreMultiSelect, storePickerOptions } from '@/components/StoreMultiSelect'

@@ -622,6 +622,58 @@ commissions, expenses.
   assignment `1115 Liberty Ave`, $3,786.27 Aug revenue leaked to "Default Company") re-attributes
   correctly (recompute refreshes stored company snapshots). Proof:
   `harness_pl_filter_semantics.py`.
+
+- **The EXPLICIT store selection resolves through that same vocabulary (fix 2026-10-03, owner:
+  "device cost is not being added to the p&l of the following stores 5619 6149 6507 1710"):** the
+  P&L store picker is `GET /core/filter-options`, which offers `storeops.stores.address` when the
+  row carries one and the **store CODE** when it does not — 26 of the house org's 29 storeops rows
+  carry no address, so the picker handed the filter `B-5619` while the snapshot is keyed
+  `store:5619 N. Broad St.`. The explicit half of `build_store_matcher` compared EXACT spellings
+  only, bound ZERO snapshots, and `aggregate` rendered the consolidated **skeleton at $0.00** — the
+  whole statement, device cost included, read as a measured zero (measured live: `B-5619` →
+  0 stores matched, device cost $0.00; the store's real Sep-2026 figure is $5,902.12). Same defect
+  class as the market bug above — a picker offering a spelling the resolver cannot bind — and the
+  same cure, not a second one: `statement_filter.store_key_expansion` expands the selection through
+  the ONE canonical union vocabulary (code → every address spelling → every POS alias → unambiguous
+  leading street number; fail-closed on an unknown spelling or an ambiguous number), and BOTH halves
+  of the filter now dereference the shared `_keys_for_codes` / `_num_owner_index` /
+  `_codes_for_selection` helpers and ONE index read (`_org_store_vocabulary`), so a store selection
+  and a market selection can never disagree about what is the same store. Covers the Balance Sheet
+  and the multi-month export too — they are the same `filtered_statement` mechanism. Every path that
+  already worked is byte-identical (verified live: the four market filters and the exact-address
+  selections hash-identical before and after). Proof: `harness_pl_filter_semantics.py` §D
+  (10 checks, the code-selection regression among them).
+  **CORRECTED 2026-10-03, same day, against the CURRENT picker.** PR #361 was measured on a checkout
+  that predated **#354** (§13e, merged 13:56 the same day), which wired `/core/filter-options` to
+  `core.scope.build_store_options` and folded the house org's **58 raw spellings to 31 options, one
+  per physical store** — and its display pick prefers a STREET ADDRESS over a bare store code. So
+  #361's headline measurement ("30 of 58 bound nothing, every store code among them") describes the
+  **pre-#354 picker and is no longer the live blast radius**: a bare code does not reach this filter
+  any more, because the picker no longer offers one. Re-measured on current `main`, September 2026,
+  over the 31 options `build_store_options` actually returns:
+
+  | | options binding NO snapshot |
+  |---|---|
+  | before #361 | **4 of 31** |
+  | after #361 | **3 of 31** |
+
+  The one real store #361 fixed on the live picker is **`1 S 60th St, Philadelphia`** (B-60TH), whose
+  snapshot is keyed `1 S 60th street` — the picker's chosen display spelling and the snapshot key
+  differ, exact matching bound nothing, and that store's whole P&L read $0.00. The other three are
+  correct in both runs: the two `Cellular Services` rows are company-level data (excused by
+  dereferencing `commcalc.companies`, §13b) and `228 N Wood Ave, Syosset, NY 11791` has no September
+  store snapshot. #361's mechanism is unchanged and still right — resolving the selection through the
+  one canonical vocabulary is what makes a code, an alias, a variant spelling or a street number bind
+  — but the live defect it closed was ONE store, not nine.
+
+  **The lesson, which is the reusable part:** #354 and #361 fixed the SAME class (a picker offering a
+  spelling the resolver cannot bind) from opposite ends, hours apart, without either knowing of the
+  other — #354 narrowed what the picker offers, #361 widened what the matcher accepts. Both were
+  needed and neither is a duplicate, but a stale checkout is how two agents end up describing one
+  defect with two incompatible numbers. **Re-fetch `origin/main` before measuring a blast radius**,
+  and state the commit the measurement was taken on.
+  **The DATA half:** the picker only offers codes because `storeops.stores.address` is NULL for
+  those rows; backfilling it from `commcalc.store_mapping` removes the cause as well as the symptom.
 - **Wages estimate is salary-basis aware (fix 2026-09-02, owner: "employee salaries … not getting
   autoloaded from the payroll"):** `coa.wages_by_store` → pure `coa.derive_wage_cells`: hourly
   employees stay hours×`pay_rate` (byte-identical); SALARIED employees
@@ -4493,6 +4545,55 @@ DIFFERENT keys and its money reads as two stores. **Nothing errors; the totals j
   resolves BYTE-IDENTICALLY before and after). CI job `store-identity-proof` in
   `carrier-vocab-guard.yml`.
 
+### 13e. CANONICAL STORE ENUMERATION — every store dropdown offers each store ONCE (owner 2026-10-02)
+
+**Owner (verbatim), on the closed store B-2778 merged into its successor B-1598:** "no need to
+hide, if they are merged it will show only one data as the store got replaced by the other."
+
+**The class.** The money merged (§13d — every spelling resolves to one key); the PICKER did not.
+Option lists unioned RAW SPELLINGS from the two vocabularies, so one store contributed its bare
+CODE from a `storeops.stores` row with no address AND its ADDRESS from the `commcalc.store_mapping`
+row — two options, one store. **Measured live 2026-10-02 (house org): `GET /core/filter-options`
+offered 58 options for 31 real stores, 27 of them twice.** Luxelink: 38 → 20, so this is the
+two-code-vocabulary shape too, not a house-only accident.
+
+**The registry already existed and the caller was not wired to it** — §19.18's failure mode, a
+fourth time. `build_market_index.code_groups` IS the "which codes are one physical store" fact, and
+its own docstring already said a resolver treating them as two "makes a picker offer the same store
+twice (pick the wrong one and the grant binds only half the data)". `GET /core/markets` (the GRANT
+picker) dereferenced it; `GET /core/filter-options` (the StandardFilterBar feed) did not.
+
+**The rule, mirroring §13c for markets:**
+
+> EVERY store dropdown/enumeration = ONE option per PHYSICAL STORE (`code_groups`), labelled with
+> its best known spelling, UNION whatever store spellings the surface's own rows carry that the
+> index cannot bind (so an orphan row stays selectable). DISPLAY-only: no row is rewritten and
+> nothing changes what a filter MATCHES — `store_resolver` / `build_store_matcher` keep that job
+> and already accept every spelling, which is exactly why collapsing the duplicates is safe.
+
+- **The one home:** `app/core/scope.py`, beside its market twin —
+  `build_store_options(idx, present=())` (PURE: enumerates the org's stores from the index;
+  returns `{"store", "market", "also_known_as"}`, display pick = a street address beats a bare
+  code, ties alphabetically, every spelling NOT chosen is listed so a fold is never silent) and its
+  I/O twin `org_store_options(client, org_id, present=())`; plus
+  `fold_store_spellings(idx, spellings)` (PURE: dedupes a list the CALLER already built, keeping
+  the caller's FIRST spelling — for a surface with a measured reason to prefer its own vocabulary).
+  A group whose rows disagree on the market reports NO market rather than guessing.
+- **Wired:** `GET /core/filter-options` (via `org_store_options`, 58 → 31 house / 38 → 20 luxelink)
+  and `GET /payables/filter-options` (via `fold_store_spellings`, 32 → 31 — it keeps its measured
+  `store_mapping`-first spelling preference; see its own docstring for why).
+- **Explicitly EXCUSED, not fixed:** `asset /filter-options` `store_groups`
+  (`_build_store_display_groups` + `_grouping_key`). It folds RAW `asset_ledger` store strings,
+  which may be in NEITHER vocabulary, and its `variants` list is load-bearing — the frontend
+  comma-joins it into the `store` filter param. Converging it onto `code_groups` changes what those
+  multi-selects BIND, so it is a separate change with its own proof, not a rider here.
+- **Proof / lock:** `backend/harness_store_option_fold.py` — **51 checks**, DB-free, over the REAL
+  composer: §A reproduces the duplicate union, §B the repair (one option per store, both codes kept
+  visible), §C the deterministic display pick, §D additive (an unbindable spelling is never
+  dropped), §E fail-soft (options never blank a page), §F no collateral (the market twin and the
+  index are untouched; a market-conflicted group reports none), §G/§H the LOCK — both callers must
+  keep dereferencing the one home or the build fails.
+
 ### 14s. SALARY → STORE EXPENSES: the write path, and the THREE hours states (owner directive 2026-09-08)
 
 **Owner (verbatim):** "then we need to pull the exact salaries paid as per the schedule and update
@@ -5344,7 +5445,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
-| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
+| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)**; **store OPTION lists compose ONLY through `build_store_options`/`org_store_options` — or `fold_store_spellings` for a caller's own list — so one physical store is offered once (§13e, CI job `store-option-fold`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards**, **store IDENTITY — §13d: one physical store must resolve to ONE canonical key; the invariant's one home is `account/store_identity_audit.py::audit` (placeholder address / roster-without-mapping / split keys), locked by `harness_store_mapping_identity.py` (CI `store-identity-proof`); repair = the owner-run runbook `store_identity_merge_1800_1115.sql` (#346 + the B-60TH step), deliberately NOT a second migration** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
@@ -5450,6 +5551,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `POST /commcalc/onboarding/intake/analyze` + `/commit` — Stage C kinds `x_report` / `merchant_payments` / `bill_payments` (+ the `role` form field) | `_intake_prepare_xreport` / `_intake_prepare_merchant` / the bill-pay branch of `_intake_prepare_stage2`; `_intake_land` → `_xreport_land_rows` / `merchant_portal_sweep.store_settlement` / `_ingest_mapped_df` or `epay_ingest.ingest`; re-reads `_intake_reread_xreport` / `_merchant` / `_billpay`; cross-checks `_intake_billpay_extract_after_sales` (after sales) and `_intake_sold_check_after_inventory` (after inventory) | §30.8. `GET /onboarding/intake/state` adds `other_kinds`, `merchant_portals` (catalog + the org's sources + roles), `billpay_feed` |
 | `GET /core/my-tenants` · `GET /core/bootstrap` (the login's membership list — the ONLY source of "which companies may I act as"; both exempt from mig-984 scope enforcement) | `core/router._my_tenants_payload` (names from `storeops.tenants`, never from `core.organizations`) | §28 which company am I in — `lib/tenant-scope.ts` `actingCompany`/`switcherOptions`, proof `prove_tenant_scope.mjs` |
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
+| _every endpoint OFFERING store options (dropdown/enumeration)_ | — | §13e one option per PHYSICAL STORE: `core.scope.build_store_options`/`org_store_options`, or `fold_store_spellings` for a caller-built list; both dereference `build_market_index.code_groups`. Locked by `harness_store_option_fold.py` (CI `store-option-fold`); `asset store_groups` explicitly excused there (owner 2026-10-02) |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `POST /commcalc/column-mapping` (the ONE writer of `commcalc.column_mapping`; also where an AMOUNT column declares **which sign is money earned**) | `router.upsert_column_mapping` — read-then-write over the mig-042 expression index; `sign_convention` validated against `commission_ledger.SIGN_CONVENTIONS`, written only on a `number` transform and only when the mig-1006 column exists | §25.11 (the save that never saved) + §25.12 (the convention). Proof `harness_column_mapping_save.py`, `harness_commission_ledger_sign.py` |
 | `GET /commcalc/commission-buckets` · `POST /commcalc/commission-buckets` · `DELETE /commcalc/commission-buckets/{key}` (THE BUCKET REGISTRY, mig 1009: the org's merged buckets with kind / hint words / P&L line, the P&L chart to pick from (`_pl_lines` = `coa.PL_SPEC` + the org's `pl_line_labels`), usage counts; write admin-gated, refused pre-1009 naming the migration) | `router.get_commission_buckets` / `upsert_commission_bucket` / `delete_commission_bucket` → `commission_ledger.load_buckets_meta` / `normalise_bucket`; `_ledger_buckets` (the one reader every ledger endpoint calls) + `_ledger_bucket_guard` (the landing refusal) | §30.7, §15 |
@@ -5570,7 +5672,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /marketing/event-sales/roi` | report 3: the commission actually PAID against the numbers/IMEIs the day activated (`paid_against_activated_numbers`, with `commission_as_of` + the paid-to-date split by period) less the day's cost; withheld entirely while any cost is unknown. The store-month allocation is a labelled fallback for unmatchable lines only | §23s.6, §23s.8 |
 | `POST /marketing/event-sales/roi/link-event` | link a (store, date) to an event, or CREATE one through the module's existing creator with the minimum needed to cost it | §23s.7 |
 
-| `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter; **§4d Print each store** reads this once per store (frontend `plStatement.plQuery`, the page's one query builder) |
+| `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02; the EXPLICIT store selection resolves through that same vocabulary via `statement_filter.store_key_expansion`, so a store picked by its CODE binds its snapshot instead of rendering the $0 skeleton, 2026-10-03) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter; **§4d Print each store** reads this once per store (frontend `plStatement.plQuery`, the page's one query builder) |
 | `GET /account/pl-range?period_from=&period_to=&scope=&stores=&markets=` — the P&L over a month range (≤ 24): the page's lines / drill rows / order, one column per month + a Total, the export `sheets`. READ-ONLY; each month IS `pl_single_month(month)` | `account/router.py` (`get_pl_range` → `_period.month_range` → `pl_single_month` per month → `pl_range.assemble` / `export_sheet` / `notes_sheet`) | §4c |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/royalty/config` · `PUT /account/royalty/lines` · `PUT /account/royalty/config` · `POST /account/royalty/parse` (preview, no write) · `POST /account/royalty/import` · `POST /account/royalty/manual` · `GET /account/royalty/reports` · `GET\|DELETE /account/royalty/report/{id}` — all `require_module("royalty")` | `account/royalty_router.py` → `royalty.parse` / `validate` / `header_fields` / `line_rows` / `pl_bookings` | §37.2–37.3 |
@@ -5601,7 +5703,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8, and STORES it — §47.10), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`, `count_row_fields`, `counted_basis`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8, §47.10 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
-| `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store), `POST /closing/derive-range` (retroactive backfill, `start=`/`end=`/`dry_run=`, bounded by `MAX_DERIVE_BACKFILL_DAYS`) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`/`derive_closing_range`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
+| `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store), `POST /closing/derive-range` (retroactive backfill, `start=`/`end=`/`dry_run=`, bounded by `MAX_DERIVE_BACKFILL_DAYS`); the PUT takes `store_codes[]` (the Store Setup multi-select) as well as one `store_code`, fanning out through the single `_closing_source_write_one` | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`/`derive_closing_range`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
@@ -5651,7 +5753,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`, `B-2778` (closed → B-1598); `Cellular Services` is a COMPANY, exempt by dereferencing `commcalc.companies` |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
-| **Where does THIS store's daily closing come from — a rep typing it, or the sales feed?** (and therefore: is a store with no closing row a person who didn't submit, or a derivation that didn't run?) | `commcalc.closing_source_config` (mig `1035`): `store_code IS NULL` = the org default, a row per store = the override; house default `rep_entry` | ONE registry `closing/closing_source.py` (`resolve`, `expects_rep_submission`, `is_derived`, `derivable`, `derive_row`, `plan_day` — pure); ONE read `closing/router._closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, dereferenced by the submit endpoint, `closing_stores`, `_run_closing_missing_alerts` and `attention_providers._p_closing_stale_stores`; lock `harness_closing_source_lock.py`, proofs `harness_closing_source.py` + `harness_closing_source_sweep.py` (§19.39) |
+| **Where does THIS store's daily closing come from — a rep typing it, or the sales feed?** (and therefore: is a store with no closing row a person who didn't submit, or a derivation that didn't run?) | `commcalc.closing_source_config` (mig `1035`): `store_code IS NULL` = the org default, a row per store = the override; house default `rep_entry` | ONE registry `closing/closing_source.py` (`resolve`, `expects_rep_submission`, `is_derived`, `derivable`, `derive_row`, `plan_day` — pure); ONE read `closing/router._closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, dereferenced by the submit endpoint, `closing_stores`, `_run_closing_missing_alerts` and `attention_providers._p_closing_stale_stores`; lock `harness_closing_source_lock.py`, proofs `harness_closing_source.py` + `harness_closing_source_sweep.py` + `harness_closing_source_multistore.py` (§19.39) |
 | **Did the server actually STORE what an employee-row Save sent?** (vs a 2xx whose gate dropped a field) | the endpoint's reply: `update_employee`'s `UPDATE … RETURNING` row + `pay_fields_ignored`; the lunch / face configs' saved columns | `frontend/src/lib/rowSave.ts::notPersisted` (`NOT_SAVED_KEYS`, `sameStoredValue`) over each slice's `echo` in `lib/employeeRowSlices.ts`, applied by `runRowSave`; lock `harness_row_save_lock.py` §8, proof `prove_row_save.mjs` §V (§19.37) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
@@ -5928,6 +6030,26 @@ envelope, rather than letting the backend 409 them afterwards.
 client: the feed's day written as a real closing, the rep-entry store untouched, idempotent re-runs, a human's row
 kept, a missing feed reported, `dry_run` writing nothing) · `backend/harness_closing_source_lock.py` (the lock). All
 three run in `.github/workflows/carrier-vocab-guard.yml`.
+**SEVERAL STORES AT ONCE — ONE STORE PICKER, FLEET-WIDE (owner directive 2026-10-03).** Owner: *"in store setup to
+assign the store it should be a drop down list to select multiple stores."* **The class:** this is the 2026-08-04
+directive (*"the store picker needs to have check box under the drop down to pick multiple stores"*, called
+fleet-wide and retroactive) that Store Setup never received — and the general fact that was wrong is not "the daily
+closing column is set one row at a time", it is that **every "which stores does this setting apply to" control was
+hand-rolled per screen**, so they drifted (one filtered, one did not; one showed inactive stores, one did not).
+**One home, dereferenced:** `frontend/src/components/StoreMultiSelect.tsx` — the ONE adapter turning a store roster
+into options for the existing shared `components/CheckboxDropdown`; `storeops/setup/lib.tsx` re-exports it rather
+than mapping a roster itself. **The siblings, fixed in the same change:** the insurance-policy *Stores covered*
+checkbox wall (`/storeops/setup/insurance`), the HR *Stores covered* wall (`/hr/people`), and the daily-closing
+source itself, which gains a **Set several stores at once** row on `/storeops/setup/stores` (pick stores → pick the
+source → one Apply; the per-store column is unchanged and still works). **The write stays ONE write:**
+`PUT /closing/source-config` now accepts `store_codes[]` as well as `store_code` and fans out through the single
+`_closing_source_write_one` — not a second bulk endpoint — with `closing_source.normalize_store_codes` (pure:
+de-duplicates case-insensitively, drops blanks, empty selection = the org default) deciding the codes.
+Proof `backend/harness_closing_source_multistore.py` (the REAL endpoint over the in-memory client: many is one N
+times, no store written twice, an empty selection is still the org default, clearing a selection, the permission
+gate still gating a ten-store call, a bad source writing nothing). The lock's section (j) FAILS THE BUILD if a
+setup or HR screen grows its own store checkbox again, if the adapter stops using `CheckboxDropdown`, or if a
+second bulk write path appears.
 
 §19.38 **A DATABASE OR HOSTING NAME IN CUSTOMER-FACING COPY — the §19.36 home, extended to the class it named (owner 2026-10-02; fixed).**
 Owner: *"hide database names from the users"*. §19.36 removed MIGRATION names and named what it left unlocked: env-var
@@ -7250,7 +7372,10 @@ pick another; a market pick that cannot be honoured (roster unavailable) is REPO
 is the designed mechanism: the market picker narrows the STORE option list and "market picked, no store
 picked" means the whole market, so an endpoint taking `stores=` and no `markets=` is correct by design.
 Likewise `StandardFilterBar` RENDERS `MarketStorePicker` (and `closing/_lib/MarketStorePicker` is a
-re-export shim) — they are layered, not duplicated. Only **four** closing pages had no picker at all
+re-export shim) — they are layered, not duplicated. The SETTINGS-side counterpart of the same
+layering is `components/StoreMultiSelect` (owner 2026-10-03, §19.39): *filtering* a report by store is
+`MarketStorePicker`, *assigning* a setting to stores is `StoreMultiSelect`, and both render the one
+`components/CheckboxDropdown` underneath, so neither is a second picker. Only **four** closing pages had no picker at all
 (`management`, `verify`, `readiness`, `duplicates`). The real defects were the singular-`store` endpoint
 and the inline employee set.
 Lock: `harness_closing_filter_contract.py` (23 checks, stdlib, DB-free, in `carrier-vocab-guard.yml`) —
