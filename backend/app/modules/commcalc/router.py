@@ -31141,6 +31141,23 @@ def _billpay_tender_tokens(client, org_id):
             "classify": _mr.classify_tender}
 
 
+def _billpay_fee_tokens(client, org_id):
+    """Per-org product_desc vocabulary for the customer bill-payment SERVICE FEE (owner ask
+    2026-10-03; mig 1042 column billpay_fee_product_desc on accessory_config). Own defensive read,
+    the mig-313 / mig-944 posture: a pre-1042 schema, a missing row, a blank list or ANY failure
+    resolves to `epay_fee_recon.HOUSE_FEE_DESCS`, so a tenant that has configured nothing keeps the
+    behaviour that shipped. Returns a tuple of lower-cased tokens; NEVER raises."""
+    from app.modules.commcalc import epay_fee_recon as _fr
+    cfg = None
+    try:
+        row = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                           lambda q: q.eq("org_id", org_id)).row or {}
+        cfg = row.get("billpay_fee_product_desc")
+    except Exception:
+        cfg = None
+    return _fr.resolve_fee_descs(cfg)
+
+
 def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
     """Per-(canonical store, DAY) bill payments from the email-ingested SALES TRANSACTIONS — the
     DAY-grain sibling of `_billpay_sales_by_store` (owner 2026-09-02 #2: "the total of bill
@@ -31164,6 +31181,7 @@ def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
         k = (st or "—", str(dday or "")[:10])
         slot = out.setdefault(k, {"amount": 0.0, "count": 0, "card": 0.0, "cash": 0.0,
                                   "mixed": 0.0, "other": 0.0, "tendered": 0.0,
+                                  "fee": 0.0, "fee_cash": 0.0, "fee_lines": 0,
                                   "_name": (a.get("store") or st or "—")})
         slot["count"] += int(a.get("bill_qty") or 0)
         slot["amount"] = round(slot["amount"] + float(a.get("bill_amt") or 0.0), 2)
@@ -31171,6 +31189,29 @@ def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
                          ("bill_amt_mixed", "mixed"), ("bill_amt_other", "other"),
                          ("bill_amt_tendered", "tendered")):
             slot[dst] = round(slot[dst] + float(a.get(src) or 0.0), 2)
+    # THE CUSTOMER SERVICE FEE (owner ask 2026-10-03), from the SAME union rows already in hand --
+    # no second read, no second store canonicalisation (same `ckey_fn`), and deliberately NOT inside
+    # `_sales_cell_agg`: the exec `bill_payment` rule EXCLUDES the fee's category on purpose, because
+    # a service charge is not a bill payment. The drawer, however, holds it. See
+    # `metric_recon.pos_billpay_cash` -- the one home that adds the two legs for a cash basis.
+    try:
+        from app.modules.commcalc import epay_fee_recon as _fr
+        fees = _fr.aggregate_fee_cash(rows, ckey_fn, tokens=_billpay_fee_tokens(client, org_id),
+                                      tender_cfg=tender_cfg)
+    except Exception as _fe:
+        print(f"WARN _billpay_sales_by_store_day fee aggregation failed: {_fe}")
+        fees = {}
+    for k, f in (fees or {}).items():
+        kk = (k[0] or "—", str(k[1] or "")[:10])
+        # A fee line on a store-day with NO bill-pay line is still the drawer's money, so the
+        # store-day is created rather than dropped -- an absent bill line is not a reason to lose
+        # cash the rep has to declare.
+        slot = out.setdefault(kk, {"amount": 0.0, "count": 0, "card": 0.0, "cash": 0.0,
+                                   "mixed": 0.0, "other": 0.0, "tendered": 0.0,
+                                   "fee": 0.0, "fee_cash": 0.0, "fee_lines": 0, "_name": kk[0]})
+        slot["fee"] = round(slot["fee"] + float(f.get("fee") or 0.0), 2)
+        slot["fee_cash"] = round(slot["fee_cash"] + float(f.get("fee_cash") or 0.0), 2)
+        slot["fee_lines"] += int(f.get("lines") or 0)
     return out, len(rows)
 
 

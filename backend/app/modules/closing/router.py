@@ -5755,12 +5755,18 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # accessory column below needs it either way (owner 2026-09-08: the split should come from the
     # POS, not the employee's declaration, even though the envelope keeps showing the whole drawer).
     _bp_days = sorted({str(e.get("close_date") or "")[:10] for e in out if e.get("close_date")})
-    _bp_cash, _bp_src = {}, "none"
+    _bp_cash, _bp_src, _bp_fee = {}, "none", {}
     if _bp_days:
         try:
             _sales_bp, _s_src, _s_key = _sales_billpay_for_days(client, org_id, _bp_days)
             if _sales_bp:
-                _bp_cash = {k: _f(v.get("cash")) for k, v in _sales_bp.items()}
+                # THE ONE HOME for "POS bill-payment cash in the drawer" (owner ask 2026-10-03):
+                # the bill lines' cash leg PLUS the customer service-fee cash, which the rep took
+                # and declares. Reading the raw `cash` key here is what made 526 of 535 September
+                # store-days disagree with the declaration -- see metric_recon.pos_billpay_cash.
+                from app.modules.commcalc import metric_recon as _mr_basis
+                _bp_cash = {k: _mr_basis.pos_billpay_cash(v) for k, v in _sales_bp.items()}
+                _bp_fee = {k: _mr_basis.pos_billpay_fee_cash(v) for k, v in _sales_bp.items()}
                 _bp_src, _bp_key = f"sales:{_s_src}", _s_key
             else:
                 _proc_bp, _p_src, _p_key = _pos_billpay_for_days(client, org_id, _bp_days)
@@ -5813,6 +5819,10 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             e["billpay_pos_disagrees"] = (bool(_res.get("pos_disagrees"))
                                           if _res.get("pos_gap") is not None else None)
             e["billpay_pos_gap"] = _res.get("pos_gap")
+            # What the service fee contributed to the POS basis, so a reader can see the correction
+            # instead of a number that silently changed (owner ask 2026-10-03). None when the feed
+            # has no store-day at all -- never a zero that reads as "there was no fee".
+            e["billpay_pos_fee_cash"] = _bp_fee.get((_bp_key(_sd[0]), _sd[1])) if _bp_fee else None
             e["billpay_note"] = billpay_netting.envelope_note(_res, id(e)) if _net_on else None
             if _net_on:
                 e["cash"] = _row.get("net", e.get("cash"))
