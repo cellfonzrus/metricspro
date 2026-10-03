@@ -5573,6 +5573,9 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 
 ## 16. Cross-reference: by TABLE
 
+- `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
+- `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
+
 | Table | Written by | Read by |
 |-------|-----------|---------|
 | `commcalc.report_definitions` — gains **`arrears_days`** and **`empty_stale_after_days`** (mig `1042`): how many days late a source posts, and how long an unbroken run of zero-row pulls stays believable. Per org, per `report_key`, NULL inherits the house default in `empty_pull_verdict`. **No new table** — the day-grain sweep window is now `max(refresh_days, arrears_days)`, which is what stops a one-day window being asked of an in-arrears feed forever | mig `1042` (the house `comp_report` row set to 7); Connectors / report registry | `router._registry_report_cfg` via `_REGISTRY_SWEEP_COLS` → `epay_sweep._expand_jobs` (the window floor) and `epay_sweep._empty_cfg_evidence` → `empty_pull_verdict.classify_empty_pull` — §19.41 |
@@ -5773,6 +5776,8 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | `commcalc.purchase_order` **+ mig `1021` columns** (§36): `vendor_order_ref`, `vendor_order_total`, `shipping_estimate`, `supply_cart_ref`, `supply_meta` (line links, threshold, delivery, plan saving), `cart_evidence` (vendor cart total, lines added, screenshot), `confirmation` (method live_capture\|live_submit\|manual, page, screenshot, who/when), `submitted_by`, `submitted_at`; supply rows carry `source='supply_cart'` | `supply/store.create_order` (one per vendor of a placed cart; `next_po_number`), `save_cart_evidence` (order session), `record_confirmation` / `set_status` (the 301 lifecycle rule) | `GET /supply/orders(/{id})`, `GET /supply/summary` (`ordering_logic.summary_tiles`); the Purchase Orders pages see them as ordinary POs |
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
+
+- `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
@@ -6040,6 +6045,8 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | `GET /storeops/shift-templates` · `POST /storeops/shift-templates/save-week` · `POST /storeops/shift-templates/apply` | `storeops/router.py:3954-4065` | the ONE recurring-schedule mechanism — a per-employee canonical week, and the only path that turns one into `storeops.shifts` (§14v) |
 
 ## 18. Cross-reference: by METRIC / KPI
+
+- **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.16).
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
@@ -16908,6 +16915,117 @@ the policy, and what the fee line is called, the latter asked for only when ther
 /accessory-config` rejects a value outside the home's vocabulary rather than storing it, because a typo
 would resolve to `unknown` and quietly park every store-day the owner meant to have assessed. Mig `1045`'s
 vocabulary was never wired to the API before this change; it is now.
+
+### 47.16 STORE VISIT FOLLOW-THROUGH — the to-do alert, the separate accessory notification, and the draft purchase order (owner 2026-10-03, mig `1047`)
+
+Owner, verbatim: *"based on the store visits need to create an email and whats app alert to the dm and
+all people above to send them a lit of all items which are needed to be done , also create a
+notification list for the store visit , defaultwill be dm and above , a list of accesories to be
+created as a separate notification and a purchase oirder automatically created to be sent to
+vaccessorize , v accessorize is a shopify store , what do you need to integrate that with our
+system"*.
+
+**THREE OUTPUTS, AND WHY THEY ARE THREE.** A visit produces work for the store (fix the display,
+finish the plan step) and a shopping list for the buyer. They go to different people and are acted on
+differently, which is why the owner asked for the accessory list "as a separate notification": two
+scopes, two recipient lists, two dedup trails. The purchase order is the third — the shopping list as
+money, and a **DRAFT** that no code path in this platform transmits to a supplier.
+
+**DUPLICATE CHECK (the build gate), stated:** nothing here is a new mechanism.
+
+| the question | the ONE home it dereferences |
+|---|---|
+| who hears about a store | `commcalc/manager_digest.recipients_for` — DM ∪ above-DM from `storeops.org_chain` (§48.7). That IS the owner's "the dm and all people above", so no new default was invented. |
+| the tenant's own notification list | `storeops.alert_recipient` (mig 089) — one table, one editor (the Cash & Closing Alerts page), new SCOPES as values: `store_visit_todo`, `store_visit_accessories`. **No new table.** |
+| the named list on top of the tree default | `manager_digest.named_extras` + `use_hierarchy` — the one home this change ADDS, because the rows previously had a single reader (`closing/_alert_recipients`) that also carried its own sending, its own dedup and a DM-only fallback. |
+| one digest per recipient, once per what | `manager_digest.plan_digests` + `storeops.alert_log` via `_lateness_already_sent` / `_lateness_record_sent`. No second fan-out, no second dedup. |
+| the purchase order | `commcalc.purchase_order`(+`_line`) (mig 301) through `supply/store.create_order` and `next_po_number` — the same table, numbering and draft→submitted lifecycle a supply cart uses, distinguished by `source = 'store_visit'`. A store-visit accessory list is not a different kind of PO. |
+| what a visit should contain | the visit's own rows. This module reads what the visit recorded; it does not decide what a visit should ask. |
+| the accessory price | `supply/store.latest_rows` (newest catalog run per vendor, mig `1021`). Named in one code file — `harness_supply_ordering.py` §L1 fails the build on a second reader, and did when this was first written against the table directly. |
+
+**The DM-and-above default cannot be lost.** `use_hierarchy(rows)`: no configured rows → the tree
+(the owner's default); rows that keep `include_dm` → the tree **and** the named people; only a tenant
+that *has* a list and has cleared `include_dm` on all of it gets "just these people". Forgetting to
+configure anything can never silence a scope. Someone who is both named and resolved from the tree
+gets ONE digest, because the identity is the address, not how they were found.
+
+**What counts as open work** (`visit_alerts.todo_items`, five kinds in one vocabulary): a checklist
+answer that is not a pass — **an unanswered check is not a pass**; an action item the DM's overlay
+carries with `discussed` falsy; an action-plan step whose status is not finished (its due date rides
+along and `is_overdue` is computed, never assumed — a step with no date is never late); a rep change
+with no reason recorded; and a missing clean-store photo, as ONE evidence item. Work recorded against
+no store is **counted in the digest footer**, never dropped — the §15z ownership rule applied to visits.
+
+**THE SEND IS ON THE SUBMIT EVENT, not on a tick.** Owner, 2026-10-03: *"every sore visti as soon
+as it is uploaded should be emailed as soon as the visti is completed"*. `POST
+/storevisit/visits/{id}/submit` queues `_alert_on_submit`, which calls the SAME
+`_run_store_visit_alerts` scoped to that one visit — the same recipients, the same digests, the same
+`alert_log` dedup, the same draft PO. There is no second send path to drift, and
+`harness_storevisit_alerts.py` §J16 **fails the build** if that hook ever renders, resolves or dedups
+anything of its own. It runs in a BackgroundTask and never raises: a visit is submitted from a phone
+on a store's wifi, and the rep gets their confirmation whether or not an email provider answers. The
+visit is saved BEFORE the alert is queued, so an alerting failure can never cost a submitted visit.
+The hourly sweep is kept as the **safety net rather than the trigger** — a send that failed leaves no
+`alert_log` row, so the next tick retries it, and it also catches visits submitted while the alert was
+switched off. That is "an alert that reached nobody is not already alerted" (§19) applied here.
+
+**The dedup tail is `(visit, item)` and deliberately NOT the date.** A store visit is an EVENT, not a
+daily state, so its to-do list is announced once and re-announced only for work that is new. That is
+the one place this differs from §47.13/§47.14, which are daily digests and key on the date.
+
+**Accessories merge by (store, item), case- and space-folded**: two reps asking for five of a thing on
+two visits is one order for ten, and a PO with the same line twice is a PO a vendor queries. The
+accessory dedup tail carries the QUANTITY, so asking for more is news while the same line again is not.
+
+**The purchase order never claims a price it does not have.** A line with no price on file is kept and
+**NAMED** in `unpriced`, the stated total is declared a **floor**, and both the notification and the
+API say so. Dropping an unpriced accessory so the total looked complete would be the order lying about
+what was asked for. `po_mode` is `'off'` (default) or `'draft'` — there is deliberately **no
+`'submit'`**: no transport to a supplier's own store exists, and a mode that silently did nothing
+would be worse than refusing the word. `'draft'` with no vendor configured resolves to `'off'` and
+says why. One visit raises ONE draft, enforced by the partial unique index on
+`purchase_order(org_id, store_visit_id)` — proven idempotent on a second sweep.
+
+**INTEGRATING A SUPPLIER'S OWN ONLINE STORE — what is needed, and what is not here.** The platform has
+no credential for any supplier, and none is invented. Two routes exist, and the tenant's own supplier
+decides which is available:
+
+1. **The supplier's storefront admin API** — usable only if the tenant OWNS the store. It needs an
+   admin API access token for a private/custom app on that store, the store's own domain, and the
+   `write_draft_orders` (or `write_orders`) scope. The token is a credential, so it goes where every
+   credential in this platform already goes — `commcalc.data_source` + `router._SOURCE_SECRETS`,
+   pointed at by `po_vendor.data_source_id` — never a new column and never in config.
+2. **The supplier's own ordering method** when the tenant is a CUSTOMER of someone else's store: there
+   is no customer-side order API. That is the assisted browser session `supply` already has
+   (`po_vendor.portal_config.ordering`, §36), or the draft emailed/sent by a human.
+
+Until a tenant supplies one of those, the draft PO is the deliverable and a human sends it. **No order
+is ever transmitted without an explicit human action.**
+
+**Endpoints.** `GET /storevisit/alerts/config` (the resolved config, both lists, and whether the
+DM-and-above default is in force) · `PUT /storevisit/alerts/config` · `GET
+/storevisit/visits/{id}/todos` (read-only, the same rows the digest is built from, so the alert and
+the board cannot disagree) · `POST /storevisit/alerts/run-due` (secret-gated hourly pg_cron) · `POST
+/storevisit/alerts/run-now` (manager, **dry run by default** — says exactly who would be messaged, on
+which channels, and what the draft PO would contain, sending and creating nothing).
+
+**Migration `1047`** — config on `storeops.tenants` (every switch OFF, `po_mode` CHECK-constrained to
+what the code implements) and `commcalc.purchase_order.store_visit_id` with its partial unique index.
+Applying it changes no behaviour: nothing sends and no PO is created until a tenant switches it on.
+
+**Proof.** `harness_storevisit_alerts.py` (129 checks, stdlib only, DB-free): A config degradation,
+B what counts as open work, C the DM-and-above default and the notification list, D one digest per
+recipient however found, E the (visit, item) dedup, F the accessory merge, G the draft PO and its
+unpriced floor, H the digests (both renderings, HTML escaping, the unowned footer), I migration `1047`
+tied to the code, J the locks — one fan-out, one dedup, one recipient list, one PO insert, the on-submit
+hook holding none of its own, RULE TWO — each with an armed control. Beyond the harness, the **real sweep was driven end to end** over a stub
+client: 5 open items across 2 visits, 3 recipients (the DM, the manager above, and the tenant's named
+row — the accessory digest correctly reaching only the two on that scope), 2 draft POs priced from the
+catalog, and **no second PO on a re-run**. That run is also what caught two real wiring defects before
+they shipped: the catalog and PO calls were handed an already-schema'd client (`supply/store.t()` and
+`_next_po_number` apply the schema themselves, so `commcalc.commcalc` would have read nothing and
+numbered no PO), and the accessory list's merged lines recorded only the first contributing visit.
+
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 
