@@ -4579,9 +4579,19 @@ picker) dereferenced it; `GET /core/filter-options` (the StandardFilterBar feed)
   `fold_store_spellings(idx, spellings)` (PURE: dedupes a list the CALLER already built, keeping
   the caller's FIRST spelling — for a surface with a measured reason to prefer its own vocabulary).
   A group whose rows disagree on the market reports NO market rather than guessing.
-- **Wired:** `GET /core/filter-options` (via `org_store_options`, 58 → 31 house / 38 → 20 luxelink)
-  and `GET /payables/filter-options` (via `fold_store_spellings`, 32 → 31 — it keeps its measured
-  `store_mapping`-first spelling preference; see its own docstring for why).
+- **Wired:** `GET /core/filter-options` (via `org_store_options`, 58 → 31 house / 38 → 20 luxelink),
+  `GET /payables/filter-options` (via `fold_store_spellings`, 32 → 31 — it keeps its measured
+  `store_mapping`-first spelling preference; see its own docstring for why) and
+  `GET /commcalc/vip/filter-options` (via `org_store_options(present=unbound_spellings(…))`, §15v).
+- **A FEED's own vocabulary is handed over through `statement_filter.unbound_spellings` (added
+  2026-10-03, §15v), never raw.** `build_store_options` tests a `present` spelling's bindability with
+  its own `_squash`; the MATCHER uses `coa._squash_key`, which folds street-suffix drift. So a feed
+  spelling the filter already binds ("5135 Bergenline Ave" → "5135 Bergenline Avenue") came back as
+  its own option — this very defect, offered again through the `present` door. Measured live on the
+  house org 2026-10-03 while building §15v: the distributor-invoice picker grew **33 → 35 options for
+  31 stores** on the raw list, and stays at 33 (31 stores + the 2 spellings nothing binds) when the
+  list is filtered through `unbound_spellings` first. One fact — "does this spelling name a store?" —
+  answered by the home that also decides what a filter MATCHES.
 - **Explicitly EXCUSED, not fixed:** `asset /filter-options` `store_groups`
   (`_build_store_display_groups` + `_grouping_key`). It folds RAW `asset_ledger` store strings,
   which may be in NEITHER vocabulary, and its `variants` list is load-bearing — the frontend
@@ -5152,7 +5162,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
 | `commcalc.vip_invoice_lines` (distributor invoice LINE items; `location` is a STORE ADDRESS in the distributor's own spelling) | `vip_sweep.py` (portal scrape, mig `008`) | **Device Purchases report** (`account/device_purchases.compute` → `GET /account/device-purchases`, §23y — the money grain); `device_cost_recon` (source ② evidence); `asset/invoice_due` (per-invoice device list) |
 | `commcalc.vip_invoice_devices` (one row per SERIALISED unit: serial / IMEI / SIM) | `vip_sweep.py` (mig `008`) | **Device Purchases report** — this table IS the device DEFINITION (`device_purchases.device_product_names`: a line is a device when its `btrim(name)` appears here as a `btrim(product_name)`, §23y); `asset/invoice_due` (serial join); `device_cost_recon`  **Device Payable as at a date** (`account/device_payable`, §23z) — the BILLED-ON side of the two-date join. **ITS COLUMN NAMES LIE: `imei` holds the SIM/ICCID (18 chars on this feed); the 15-digit handset IMEI is in `serial`, which is what `asset_ledger.esn_imei` holds.** Joining on the column CALLED `imei` matches 4 of 19,571 units and still renders a confident total — pinned in `harness_device_payable.py` §A, negative control included |
-| `commcalc.vip_invoices` (invoice HEADERS — `grand_total`, `shipping`, `other_cost`, `due_date`, `status`) | `vip_sweep.py` (mig `008`) | `coa.build_inputs` (`vip_fees` P&L line = shipping + other_cost; `vip_ap` BS payable on unpaid invoices); `asset/invoice_due`. **NOT read by the Device Purchases report** — invoice-level shipping/tax is not device purchase price, and the P&L already books it |
+| `commcalc.vip_invoices` (invoice HEADERS — `grand_total`, `shipping`, `other_cost`, `due_date`, `status`) | `vip_sweep.py` (mig `008`) | **Distributor Invoices report** (`GET /commcalc/vip/summary` + `/vip/invoices` → `commcalc/vip_invoice_filter.py`, §15v — `location` is the DISTRIBUTOR's spelling of a store address and there is NO market column, so its market filter dereferences `core.scope.market_index` through `statement_filter.resolve_store_matcher`); `coa.build_inputs` (`vip_fees` P&L line = shipping + other_cost; `vip_ap` BS payable on unpaid invoices); `asset/invoice_due`. **NOT read by the Device Purchases report** — invoice-level shipping/tax is not device purchase price, and the P&L already books it |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2459` (the line reference here said `2106` until 2026-09-08; the endpoint had moved — see §17 for its own row) |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2106` |
 | **Processor Daily Debits & Credits (owner directive 2026-09-04)** | NO new table / NO migration — reads the EXISTING processor feeds `raw_payment_detail` (§2, epay sweep, migs `020`/`025`) and `raw_ma_daily_tx` (§2, VidaPay sweep/upload/`report_pull`, mig `083`). Naming config = the mig-`953` `report_term` vocabulary (`processor` key); primary-feed config = `metric_source_of_truth`/`data_source` (migs `923`/`939`) | **`commcalc/processor_ledger.py`** — PURE core `classify_amount`/`fold_cells`/`filter_cells`/`day_type_rollup`, IO only in `assemble`. Rows = DAY × TRANSACTION TYPE with DEBITS / CREDITS / NET (= credits − debits) columns; cell grain (processor, date, tx_type, store) so every rollup ties out. **DEBIT/CREDIT RULE is per FEED SHAPE, never a carrier branch** (`FEED_SHAPES`, RULE TWO): `raw_payment_detail.amount` > 0 = CREDIT to the dealer / < 0 = DEBIT; `raw_ma_daily_tx.retail_cost` > 0 = DEBIT (a charge) / < 0 = CREDIT — both verified against live rows 2026-09-04 (house 2026-07-27: D 1,001.60 / C 80,214.66 / N 79,213.06; luxelink 2026-09-02: D 30,297.96 / C 987.50 / N −29,310.46), pinned in the harness. RESOLUTIONS REUSED, never re-derived: processor identity `router._metric_source`+`_billpay_processor_name`, processor NAME `report_labels.load_report_labels` term `processor` (§18 — no vendor literal in module or page copy), VidaPay account→store `router._vidapay_account_resolver`, raw→canonical store `account.coa.store_resolver`, address→code `flag_store_resolver`, store→market + market dropdown `core.scope.market_by_code`/`org_market_options` (§13a/§13c). Endpoint `commcalc/processor_ledger_api.py` `GET /commcalc/processor-ledger` (span-gated via `scope_keyset`/`in_keyset`; unmapped-store cells hidden from scoped callers). Page `commcalc/processor-ledger/page.tsx` (NAV Assets & Inventory + REPORT_DIRECTORY `'assets'` + REPORT_TREES `'asset'`; carrier-NEUTRAL → deliberately NOT in `NAV_CARRIERS`). Scheduled/emailed via notify W3 key `processor_ledger` (`report_registry.py`; filters date_from/date_to/store/type/market). Proof `harness_processor_ledger.py`; guards `harness_market_enumeration_guard.py` (pins `assemble` CANONICAL), `harness_carrier_vocab_guard.py`, `harness_org_scope_guard.py` |
@@ -5289,6 +5299,151 @@ absence vocabulary (`carrier_vs_pay` / `labour_coverage` / §30.12), the alert p
 Nothing new was derived twice. `/commcalc/sales-report` answers the opposite question from the same
 cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 import health answers
 "is the feed late", which is why a missing feed here is reported and not alerted.
+
+
+## 15v. DISTRIBUTOR INVOICES — the standard filters, over a feed with no market column (owner 2026-10-03)
+
+**Owner (verbatim):** *"add date range and market with standard filters for distributor invoices"*.
+
+The report is `GET /commcalc/vip/summary` + `GET /commcalc/vip/invoices` behind
+`frontend …/commcalc/vip/page.tsx` ("Distributor Invoices", NAV module `vip`). It carried three
+pickers of its own — the distributor's month `period`, a single raw `location`, and `status` — and
+none of the RULE FIVE core set (§3d).
+
+### What the data makes hard
+
+`commcalc.vip_invoices` (§16) has **no `market` column**, and its `location` is a store address in
+the **DISTRIBUTOR's own spelling** — `1 S 60th St` where the org's vocabulary says
+`1 S 60th St, Philadelphia`. So "market" is not a filter this table can answer; it is a question
+about the org's store vocabulary, and the only correct way to answer it is to dereference that
+vocabulary. There is exactly one: `core.scope.market_index`, read through
+`account.statement_filter.resolve_store_matcher` — **the same matcher the P&L store/market filter
+reads** (§4, `market_key_expansion` / `store_key_expansion`). This report READS it. It carries no
+spelling rule of its own, so a vocabulary that learns a spelling teaches this report in the same
+instant, and the two can never resolve one spelling to different stores.
+
+### The second defect, fixed in the same change: two filter chains for one question
+
+`/vip/summary` (the tiles, the fees-by-type panel, the fees-by-store table) and `/vip/invoices` (the
+table and its export) each wrote their OWN PostgREST filter chain for the same question — "which
+invoices are in scope?". A condition added to one renders a table whose rows do not add up to the
+tiles above them, and says nothing. The selection now has ONE home,
+`commcalc/vip_invoice_filter.py` (`select` / `summarize` / `in_date_window`, all PURE) behind
+`router._vip_select`, and both endpoints read it. `VIP_FEE_COLS` is now
+`vip_invoice_filter.FEE_COLS` — one fee-bucket list for the totals, the panel and the per-store
+rollup, instead of three readers of a copy.
+
+### What was built
+
+- **Endpoints (additive — every pre-existing param still behaves identically):** `date_from` /
+  `date_to` (inclusive `YYYY-MM-DD` days over `created_on`), and `stores` / `markets`
+  (PIPE-separated, because a store address may contain a comma — the same convention
+  `statement_filter.resolve_store_matcher` already uses). `period` / `location` / `status` stay.
+- **`GET /commcalc/vip/filter-options`** additionally serves `markets` (`core.scope.org_market_options`)
+  and `stores` (`org_store_options`, §13e) — the org roster, NOT this table's own `location` strings,
+  which would offer one store once per spelling and a market this report cannot bind.
+- **`statement_filter.unbound_spellings(idx, spellings)`** — new, PURE: which of a feed's spellings
+  the MATCHER cannot bind. The picker passes only those as `present`, so an unmapped store stays
+  selectable without the §13e duplicate returning through the `present` door (see §13e for the
+  measurement).
+- **Page:** `<StandardFilterBar periodMode="range" cascadeStores={roster}>` with the market → store
+  cascade; `period` and `status` are APPENDED as module facets. The old single `location` select is
+  REPLACED by the standard store multi-select (measured: all 29 distributor spellings on the house
+  org are selectable through it). **DEVIATION, stated:** an invoice names no salesperson, so the rep
+  control is hidden. Filtering is SERVER-side — the tiles are computed by `/vip/summary`, so a
+  client-side narrowing would leave them reporting the whole feed above a filtered table.
+
+### An unbindable spelling is REPORTED, never guessed into a market
+
+`/vip/summary` returns `unresolved` — `{invoices, grand_total, locations}`, the invoices a
+store/market selection could not bind — and the page says so above the tiles. Folding them in would
+invent money for a market; dropping them silently would read as money that is not there.
+
+**Measured live on the house org, 2026-10-03, BEFORE the data fix** (3,989 invoices, 29 distinct
+locations):
+
+| | |
+|---|---|
+| Locations the market filter binds | **26 of 29** |
+| By market | PA 1,562 inv / \$8,289,886.45 · NYC 696 / \$3,216,945.26 · NJ 841 / \$2,840,596.37 · LI 406 / \$1,268,528.79 |
+| Unfiltered total (unchanged by this PR) | 3,989 inv / \$17,987,584.68 |
+| Locations NO market binds | `1 S 60th St` · `1598 Mt Ephraim Ave` · `228 N Wood Ave` |
+| Store options offered | **33** = the org's 31 stores + the 2 spellings nothing binds |
+| Locations unreachable by ANY store option | **none** |
+
+**And AFTER it** — the owner ran both runbooks the same evening (the two `store_aliases` rows, then
+`<2022>`'s market), so re-measured through the real `_vip_select` / `resolve_store_matcher`:
+
+| | |
+|---|---|
+| Locations the market filter binds | **29 of 29** — `unbound_spellings` returns EMPTY |
+| By market | PA 2,035 inv / \$10,432,387.56 · NYC 696 / \$3,216,945.26 · NJ 841 / \$2,840,596.37 · LI 417 / \$1,497,655.49 |
+| Sum of the four markets | **3,989 inv / \$17,987,584.68** — byte-equal to the unfiltered total |
+| `unresolved` reported by `/vip/summary` | **0 invoices, \$0** |
+
+**That reconciliation is the real check on the design**, and it is worth stating why: the four
+markets summing EXACTLY to the unfiltered total proves every invoice is attributable to exactly one
+market — no invoice counted twice (a spelling binding two stores in different markets) and none lost
+(a spelling binding nothing). Neither property is visible from the per-market numbers alone, and
+neither is something the DB-free harness can assert, because it is a fact about this org's data
+rather than about the code. Re-run it after any change to the store vocabulary.
+
+**The house fix for the three is DATA, in the one vocabulary — surfaced for approval, and APPLIED
+by the owner 2026-10-03:** two `commcalc.store_aliases` rows (`1 S 60th St` → `B-60TH`,
+`1598 Mt Ephraim Ave` → `B-1598`) — proved in `harness_vip_invoice_filter.py` §F9/§F10 to bind both
+spellings to market PA and to collapse the picker to one option per physical store (33 → 31), then
+verified against production through the real `resolve_store_matcher`: both bind, both follow the PA
+market filter, and `unbound_spellings` over all 29 distributor locations returns EMPTY. Runbook:
+`database/runbooks/vip_distributor_store_aliases.sql`.
+
+`228 N Wood Ave` binds store `<2022>`, which was assigned to **no market at all**, so the STORE
+filter found it and the MARKET filter could not (no market contains a market-less store). The market
+was the owner's to choose, and they chose **LI** (the address is Syosset NY 11791, Nassau County);
+applied 2026-10-03 and verified — the spelling now follows the `li` filter. Runbook:
+`database/runbooks/vip_store_2022_market.sql`.
+
+**Where that row actually lives, measured 2026-10-03 — the part worth not re-deriving:** it is in
+`commcalc.store_mapping` and `storeops.stores` has NO row for this code, so a market-setting
+statement aimed at the roster table touches nothing. And its `market` was the empty string `''`,
+not `NULL`, so the natural `WHERE market IS NULL` guard matches nothing either — the first draft of
+that runbook had exactly that bug and would have reported success while changing no row. Both halves
+follow from §13's union-of-two-vocabularies design (a store may exist in either side, or both), so
+any future runbook that sets a market must say which side it is writing and must treat blank and
+NULL as the same absence.
+
+### DUPLICATE CHECK (build gate) — what was checked, what was reused
+
+Checked in this index before building: §3d (RULE FIVE — the shared bar, `StandardFilterBar` /
+`MarketStorePicker`), §4 (the P&L's store/market filter — `statement_filter`), §12/§15 (the VIP feed
+and the distributor surfaces), §13a (store→market), §13c (market enumeration), §13e (store
+enumeration), §16's `vip_invoices` row, §17, and every existing store/market filter over a feed
+column: `asset/market_filter.py` (`_apply_market_filter` / `NO_MARKET_SENTINEL`) and
+`asset /filter-options`.
+
+**REUSED, not re-derived:** `account.statement_filter.resolve_store_matcher` /
+`build_store_matcher` / `market_key_expansion` / `store_key_expansion` (the whole store/market
+resolution, §4) · `core.scope.market_index` / `org_market_options` / `org_store_options` (§13c/§13e)
+· `commcalc.calculator.safe_float` · `StandardFilterBar` / `MarketStorePicker` /
+`standard-filters.ts` (§3d) · the page's existing `ExportButtons` / `SendReportButton`.
+
+**NOT reused, and why:** `asset/market_filter._apply_market_filter` answers a market filter by
+`eq`-ing a `market` COLUMN. `vip_invoices` has none, so it cannot serve this question — using it
+would mean adding a market column to this feed, i.e. a second copy of a fact `market_index` already
+owns.
+
+**EXTENDED, not copied:** `statement_filter` gained `unbound_spellings` (above). Its existing
+functions are untouched — `harness_pl_filter_semantics.py` still passes unchanged.
+
+**Proof / lock:** `backend/harness_vip_invoice_filter.py` — **64 checks**, DB-free, over the REAL
+modules. §A the summary arithmetic is unchanged and the three panels tie out; §B the date-range
+semantics (inclusive both ends, fail-closed on a dateless row, open ends); §C the regression the
+first live run produced — `SUMMARY_COLS` did not fetch `created_on`, and because `in_date_window` is
+fail-closed on a dateless row, EVERY window returned zero invoices; §D **the LOCK** — both endpoints
+must read the one selector and write no filter chain of their own, and `vip_invoice_filter` must
+carry no store-spelling rule (checked against the source with docstrings and comments stripped, so
+explaining the design cannot trip the lock that protects it); §E unresolved rows are reported and
+never folded into a total; §F `unbound_spellings`, including the alias row as the fix. CI job
+*Distributor invoices — one selector, one store vocabulary* in `carrier-vocab-guard.yml`.
 
 
 ## 16. Cross-reference: by TABLE
@@ -5494,6 +5649,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/vip/summary` · `GET /commcalc/vip/invoices` (DISTRIBUTOR INVOICES) — additive `date_from` / `date_to` (inclusive days over `created_on`) + `stores` / `markets` (PIPE-separated); both now read ONE selector, so the table always adds up to the tiles; `/summary` also serves `unresolved` (the invoices a store/market selection could not bind) | `commcalc/router.vip_summary` / `vip_invoices_list` → `router._vip_select` → pure `commcalc/vip_invoice_filter.py` + `account.statement_filter.resolve_store_matcher` | §15v |
+| `GET /commcalc/vip/filter-options` — additionally serves `markets` (`core.scope.org_market_options`) and `stores` (`org_store_options`, one option per physical store + only the distributor spellings the matcher cannot bind, via `statement_filter.unbound_spellings`) | `commcalc/router.vip_filter_options` | §15v, §13c, §13e |
 | *(no endpoint added)* — `POST /commcalc/epay/sweep/run-due` / `run` are unchanged in shape; the run's `success` is now decided on `rows_landed` rather than on the status word, so an unverified zero records an ATTEMPT instead of advancing `last_run_at` | `router._do_epay_sweep` → `epay_sweep.run_epay_sweep` (ledger settled before reporting) | §19.41 |
 | `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
 | `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
@@ -5758,6 +5915,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
+| **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
@@ -6078,6 +6236,80 @@ upload path** (the five manual loads above are the proof it works), or by a port
 
 **REPORTED, NOT FIXED, and NOT this cause:** `commcalc.asset_ledger` has nothing since 2026-09-23. It is not a
 sweep with an `empty_ok` leg, so the silent-zero class does not explain it; it needs its own look.
+
+§19.42 **THE SERVICE FEE ON A BILL PAYMENT IS NOT A TRANSACTION A CONTRACT TYPE COULD HAVE DESCRIBED — the
+Sales Report asked the owner to map 693 walk-in bill payments "so they count as activations" (owner report
+2026-10-03; fixed, no migration).**
+Owner, pasting the banner: *"⚠️ 693 transaction(s) have no contract type and no activation rule matched — map
+them under Onboarding — Commission Intake, step 2.5a … so they count as activations."*
+
+**WHAT THE 693 ACTUALLY WERE.** Measured read-only against production, house org, October 2026 (`period`
+`'October 2026'`, `daily_sales_feed`, 3,698 lines): **690 of the 693 were walk-in bill payments** — two lines
+each, `Bill Payments / Boost RTR / 'Boost RTR $1-$650'` and `Bill Payments / Other Charge / 'ePay Service
+Charge'`. The same class, the same months back: **4,142 of 4,206** in September and **4,270 of 4,315** in
+August. The banner had been ~98% noise since the predicate shipped, and acting on it — writing the activation
+rule it asked for — would have swept every bill payment into the activation count and therefore into pay.
+
+**WHY IT SURVIVED THE PREDICATE THAT EXISTS TO PREVENT EXACTLY THIS.** `router._txn_activation_candidate`
+(§19.31's sibling, written 2026-08-09 after the Total Wireless tenant was told 1,009 of 1,303 transactions
+needed mapping) suppresses a blank-contract-type transaction only when **every** line is tenant-EXCLUDED, a
+BILL-PAYMENT product, or an ACCESSORY. The house org rings the customer's service fee as its **own sales
+line beside the payment line** — 4,176 lines / $16,592.00 in September 2026 — so the RTR payment line was
+suppressed by the seeded word-anchored exclusion and **the fee line was not**. One surviving line per receipt
+made every bill payment read as an activation-capable transaction with no contract type. The other tenant
+rings no separate fee line, which is why its count was already honest (4 in October) and why this looked like
+a Boost-only quirk rather than the general defect it is.
+
+**THE CLASS, NOT THE INSTANCE.** The wrong general fact is not "Boost's fee wording is unmapped"; it is that
+a classifier asking *"could this have been an activation?"* **re-decided what a fee line is** instead of
+reading the registry that already knew. That registry exists and was already dereferenced by three other
+readers: `commcalc/epay_fee_recon.py` (`FEE_DESC` / `HOUSE_FEE_DESCS` / `resolve_fee_descs` / `is_fee_desc`,
+PURE) over the per-org mig-`1045` column `accessory_config.billpay_fee_product_desc` — the fee reconciliation
+itself, the P&L fee booking (`account/coa.py`), and the cash-pickup netting basis
+(`router._billpay_fee_tokens` → `_fr.aggregate_fee_cash`). §19.18's pattern once more: **a registry written
+and a caller left un-wired.**
+
+**THE DESIGN FIX (one fact, one home, dereferenced — never copied).**
+`router._accessory_config_uncached` resolves the column through `resolve_fee_descs` on the whole-row read it
+already performs (no extra round trip) and carries it as **`acfg['billpay_fee_descs']`**;
+`_txn_activation_candidate` **READS that key** as its fourth config test, beside the exclusion predicate,
+`billpay_products` and `_is_accessory`. No wording is spelled in the predicate, so RULE TWO holds, and a
+tenant with nothing configured resolves to the house tuple and is byte-identical.
+
+**BEFORE → AFTER, the same rows through the same reader (read-only, 2026-10-03):**
+
+| org | period | `blank_ct_unrecovered` before | after | `blank_ct_non_activation` after |
+|---|---|---|---|---|
+| house | October 2026 | **693** | **3** | 874 |
+| house | September 2026 | 4,206 | 64 | 5,510 |
+| house | August 2026 | 4,315 | 45 | 5,735 |
+| Total Wireless | October 2026 | 4 | **4** (unchanged) | 430 |
+| Total Wireless | September 2026 | 13 | **13** (unchanged) | 2,919 |
+| LuxeLink | August 2026 | 9 | **9** (unchanged) | 0 |
+
+**NO COUNT MOVED.** `_txn_activation_candidate` has exactly one caller (`_classification_gaps`) and feeds
+only the banner's `blank_ct_non_activation` / `blank_ct_unrecovered` and the `/sales-report/classification-unmatched`
+sample list. Activations, revenue, GP and every payout are untouched — this changes what the report *says
+about itself*, which is precisely what had become unreadable.
+
+**WHAT IS STILL REPORTED, and what it is.** October's true remainder is **3** transactions, now readable:
+one real activation the POS left blank (tid `214887` — a `Android - XP` device + a plan line + a Device Setup
+Charge), one accessory-only receipt on a department the accessory config does not list (`BYOD /
+Accessories`), one charge-only receipt (`One-Time Reactivation Charge`). Those are classification-config
+decisions for the owner (an activation rule changes counts and therefore pay, so it is surfaced, not
+applied); they are no longer buried under 690 bill payments.
+
+**LOCKED SO IT CANNOT UN-WIRE.** `backend/harness_billpay_fee_one_home_lock.py` FAILS THE BUILD if
+`_txn_activation_candidate` stops reading `acfg['billpay_fee_descs']`, if either reader stops resolving the
+mig-1045 column through `resolve_fee_descs`, if the column is read anywhere outside the router, if the P&L or
+netting callers stop dereferencing `epay_fee_recon`, or if the fee wording appears **as a test of a sales
+line** anywhere in backend app code (a display label or prose is not a copy). The DB-free behavioural proof
+`backend/harness_billpay_fee_not_activation.py` drives the REAL `_accessory_config_uncached` /
+`_classification_gaps` / `_txn_activation_candidate` over in-memory rows and a one-row fake config client:
+690 bill payments raise no banner, the one genuine blank-contract-type activation still does and is still
+listed by `trans_id`, a fee line never appears in the "map these" list, a bill payment that also sold a phone
+is still a candidate, a voided receipt is counted nowhere, a tenant with no fee line is unchanged. Both run
+in `.github/workflows/carrier-vocab-guard.yml` (the lock beside the other locks, the proof in its own job).
 
 §19.39 **WHO PRODUCES A STORE'S DAILY CLOSING — reps type it, or it is DERIVED from the sales feed
 (owner directive 2026-10-02, mig `1035`).** Owner: *"the admin should be able to check a box to input daily closing
