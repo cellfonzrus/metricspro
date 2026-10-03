@@ -80,7 +80,7 @@ Primary code homes:
 | 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)?" |
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 | 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
-| 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, and which origins may the API be called from?" |
+| 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, which origins may the API be called from, what does a production build refuse to ship without (§40.10), and what was actually measured during the 2026-10-03 domain-move outage (§40.11)?" |
 
 ---
 
@@ -14631,9 +14631,11 @@ when `NEXT_PUBLIC_SITE_URL` is set, so nothing moves until the domain serves the
 
 ---
 
-### 40.10 The production build asserts its configuration — a dark deploy FAILS instead of shipping (owner incident 2026-10-03)
+### 40.10 The production build asserts its configuration — a dark deploy FAILS instead of shipping (found 2026-10-03)
 
-Owner, 2026-10-03: *"the app lost all connection when the app.metricspro.tech was done"*.
+Owner, 2026-10-03: *"the app lost all connection when the app.metricspro.tech was done"*. This gate was built while
+investigating that report. **Read §40.11 before attributing the outage to it: the measurements say this gate would NOT
+have caught that incident.** The defect it closes is real and was found here, but it is a latent one.
 
 **The defect, as a mechanism.** Every lookup in `apiBase.ts` is written to keep a build WORKING when a variable is
 missing: `backendOrigin()` is `BACKEND_ORIGIN || NEXT_PUBLIC_API_URL || http://localhost:8000`, and `directOrigin()` and
@@ -14645,8 +14647,8 @@ the API. Nobody is told, by the build, the deploy, or the app. Malformed values 
 `NEXT_PUBLIC_API_DIRECT_ORIGIN` sends every upload to an address the browser cannot resolve.
 
 **The class (CLAUDE.md "name the class, not the instance").** *A development fallback must not be reachable by a
-production build.* The instance was one wrong Vercel variable during one domain move; the class is every variable in this
-file, on every future move, for every tenant and every environment. The fix is not to delete the fallbacks — they are
+production build.* The trigger was one Vercel variable noticed during one domain move; the class is every variable in
+this file, on every future move, for every tenant and every environment. The fix is not to delete the fallbacks — they are
 right where they apply — it is to make a production build **assert the facts it cannot work without, and fail**.
 
 | Piece | Where |
@@ -14679,6 +14681,47 @@ policy already lives — owns the sentences. The guard was satisfied, not excuse
 | Backend `settings.APP_PUBLIC_URL` / `API_PUBLIC_URL` defaults (the platform alias / the backend host) — emailed links | **Excused, with the reason**: these default to addresses that still resolve, and the §40.4 redirect carries an old app link to the new domain, so a stale value degrades (an old-looking link) rather than breaking. Normalised by `base_url()` (§41) |
 | `mobile/` `EXPO_PUBLIC_API_URL` | **Excused** — a native app with its own build and no proxy; no browser origin to lose |
 | `website/assets/config.js` | **Excused** — a static site with its own one home (§40.6), no build step to gate |
+
+---
+
+### 40.11 What the 2026-10-03 outage actually was — measured, and what this gate does not explain
+
+Recorded because §40.10 was built during this outage and it would be easy, and wrong, to read it as the cause. Everything
+below was read off production that day.
+
+| Measured | Result |
+|---|---|
+| DNS | `app.metricspro.tech` → Vercel (`vercel-dns-017`), `api.metricspro.tech` → the backend host, apex → the marketing host. All correct |
+| The §40.4 canonical 308 | LIVE: `metricspro-five.vercel.app/<path>` → `app.metricspro.tech/<path>`. So the old URL served nothing, and any fault on the new domain took out every user at once |
+| CORS | `app.metricspro.tech` is in `DEFAULT_ORIGINS` already; the backend has no host allow-list (no `TrustedHostMiddleware`) |
+| Supabase auth URL configuration | **Not a suspect.** The frontend's only auth calls are `signInWithPassword`, `getSession`, `signOut`, `onAuthStateChange`. No `emailRedirectTo` / `resetPasswordForEmail` / `signInWithOtp` / `verifyOtp` / `signInWithOAuth` anywhere, no external provider enabled. Forgot-password and 2FA OTP are this backend's own. Site URL / Redirect URLs are therefore cosmetic for sign-in; §40.8 step 4 cannot break it |
+| `GET /health` on the app domain | Returned the BACKEND's payload (`commit afdd063`, 23 modules) |
+| `GET /api/v1/billing/public-pricing` on the app domain | Returned the live price list |
+
+**So the proxy was NOT broken.** Both `BACKEND_PATH_PREFIXES` entries reached the backend before anything was changed,
+which means the production build had a usable backend origin — via the `NEXT_PUBLIC_API_URL` fallback §40.10 deliberately
+keeps. A §40.10 gate in place that day would have passed. It is not the explanation.
+
+**What fixed it:** the owner set `BACKEND_ORIGIN` explicitly in the Vercel production environment (the configuration
+§40.8 step 2 asks for) and **redeployed**; sign-in and the September P&L then worked. The redeploy is a confounder and
+the two changes were not separated, so the cause is recorded as **not isolated**. The candidates, both consistent with
+every row above:
+
+1. **A stale production build.** `NEXT_PUBLIC_*` values are inlined at BUILD time. A deployment built before the domain
+   variables were set serves the old inlined values however correct the dashboard looks — and the browser-side Supabase
+   client (`src/lib/client.ts` reads `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY` with `!`) is exactly the kind of thing that
+   fails for sign-in while server-side rewrites, baked in the same build, still work. On this reading the **redeploy** was
+   the fix and `BACKEND_ORIGIN` was incidental.
+2. **Something in the authenticated path only**, since both probes were anonymous. Not reproduced, and no longer
+   reproducible after the redeploy.
+
+**For the next domain move, the cheap discriminator nobody ran:** after changing variables, check `/health` (proves the
+server-side rewrite) AND one AUTHENTICATED call AND whether the deployment serving traffic was built *after* the variable
+change. Two anonymous endpoints answering proves less than it looks like. Also expected and not a defect: a browser
+session lives per origin, so a domain move signs every user out once.
+
+**Process note worth keeping.** Hours went into infrastructure theories before anyone established what a user saw on
+screen. On a report like "it lost all connection", get the on-screen symptom first.
 
 ---
 
