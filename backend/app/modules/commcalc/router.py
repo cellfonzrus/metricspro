@@ -13570,6 +13570,18 @@ def _accessory_config_uncached(client, org_id):
     gp_acc_basis = "sales"
     if str(_ac.get("gp_acc_basis") or "").strip().lower() in ("sales", "gp"):
         gp_acc_basis = str(_ac["gp_acc_basis"]).strip().lower()
+    # THE BILL-PAYMENT SERVICE-FEE VOCABULARY, DEREFERENCED (index §19.42, 2026-10-03). Which
+    # product_desc means "the fee the store charged for taking this bill payment" has exactly ONE home —
+    # `epay_fee_recon.resolve_fee_descs` over the per-org mig-1045 column `billpay_fee_product_desc`,
+    # house default `HOUSE_FEE_DESCS`. It is carried on the resolved config so every classifier reading
+    # this row READS that fact instead of re-deciding it; the whole-row read above means no extra
+    # round trip. Blank / missing column / any failure -> the house tuple, so an unset tenant is
+    # byte-identical.
+    try:
+        from app.modules.commcalc import epay_fee_recon as _fr_cfg
+        billpay_fee_descs = _fr_cfg.resolve_fee_descs(_ac.get("billpay_fee_product_desc") if got else None)
+    except Exception:
+        billpay_fee_descs = ()
     catalog_classifier = None
     if catalog_classify_enabled:
         try:
@@ -13602,6 +13614,7 @@ def _accessory_config_uncached(client, org_id):
             "apply_to_gp": apply_to_gp,
             "definition_drives_pay": definition_drives_pay,
             "gp_acc_basis": gp_acc_basis,
+            "billpay_fee_descs": tuple(billpay_fee_descs),
             "catalog_classifier": catalog_classifier}
 
 
@@ -27696,17 +27709,19 @@ def _txn_activation_candidate(lines, acfg, is_excluded=None):
     receipts. Acting on that note would have invented an activation rule that swept every bill payment
     into the activation count. The note has to earn its alarm, or it trains the owner to ignore it.
 
-    NOTHING IS HARD-CODED HERE. All three tests are the tenant's own config, already curated elsewhere in
+    NOTHING IS HARD-CODED HERE. All FOUR tests are the tenant's own config, already curated elsewhere in
     this same page: `is_excluded` is the payout_exclusion_map predicate (the RTR rule is a seeded, editable,
-    WORD-anchored config row — not a branch), the bill-payment list is `billpay_products`, and the accessory
-    test is `_is_accessory`, the very classifier the report aggregates accessory revenue with. A tenant with
-    none of them configured gets `is_excluded=None` + an empty accessory config, every line reads
-    activation-capable, and the count is byte-identical to the old behaviour.
+    WORD-anchored config row — not a branch), the bill-payment list is `billpay_products`, the bill-payment
+    SERVICE-FEE vocabulary is `acfg['billpay_fee_descs']` (the mig-1045 per-org column resolved through the
+    one registry, `epay_fee_recon.resolve_fee_descs`), and the accessory test is `_is_accessory`, the very
+    classifier the report aggregates accessory revenue with. A tenant with none of them configured gets
+    `is_excluded=None` + the HOUSE fee vocabulary + an empty accessory config.
 
     An exclusion rule keyed on a column the DISPLAY projection does not carry (sku / tender_type) simply
     never hits — `exclusion_hit` skips a blank value — so this can only ever UNDER-suppress, never
     wrongly hide a real gap."""
     bp = (acfg or {}).get('billpay_products') or set()
+    _fee_descs = (acfg or {}).get('billpay_fee_descs') or ()
     for l in lines or ():
         try:
             if is_excluded is not None and is_excluded(l):
@@ -27716,6 +27731,23 @@ def _txn_activation_candidate(lines, acfg, is_excluded=None):
             # conversion metric can never disagree about what a walk-in recharge is.
             _p = str(l.get('product_desc') or '').strip().lower()
             if _p and (_p in bp if bp else any(_t in _p for _t in _BILLPAY_DEFAULT_TOKENS)):
+                continue
+            # THE SERVICE FEE ON A BILL PAYMENT IS NOT A THING A CONTRACT TYPE COULD HAVE DESCRIBED
+            # (index §19.42; live evidence 2026-10-03). The house org rings the customer fee as its own
+            # sales line — department 'Bill Payments', category 'Other Charge' — beside the RTR payment
+            # line. The payment line is suppressed above (the RTR exclusion / the bill-pay vocabulary),
+            # but the FEE line was not, so every single walk-in bill payment read as an activation-capable
+            # transaction with a blank contract type: 690 of the 693 October alarms, 4,142 of 4,206 in
+            # September, 4,270 of 4,315 in August. The banner told the owner to "map them so they count
+            # as activations" — which, acted on, would have swept bill payments into the activation count:
+            # exactly the failure `_txn_activation_candidate` exists to prevent, on the other tenant.
+            # The fee vocabulary is NOT re-decided here. It is the ONE registry fact every other fee
+            # reader already dereferences (epay_fee_recon.resolve_fee_descs over the mig-1045 per-org
+            # column, carried on acfg['billpay_fee_descs']) — the P&L booking in account/coa.py, the
+            # fee reconciliation and the pickup-netting basis read the same home. An org whose config
+            # resolves to no vocabulary at all (() — only reachable if the registry import fails) keeps
+            # the pre-change behaviour.
+            if _fee_descs and _p and any(_t in _p for _t in _fee_descs):
                 continue
             if _is_accessory(l.get('department'), l.get('category'), l.get('product_desc'), acfg):
                 continue
@@ -27732,7 +27764,8 @@ def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sampl
         resolve to None (not activation/upgrade/byod, not a swap) -> map them in the ct-map.
       blank_ct_transactions : distinct tids with a blank-ct line and NO ct-based activation on any line.
       blank_ct_non_activation : of those, how many could not have been an activation at all — every line
-        is either tenant-EXCLUDED (the RTR / bill-payment map) or an ACCESSORY. Reported, never alarmed
+        is tenant-EXCLUDED (the RTR / bill-payment map), the bill-payment SERVICE FEE, or an ACCESSORY.
+        Reported, never alarmed
         on: mapping these would count bill payments as activations. See _txn_activation_candidate.
       blank_ct_unrecovered  : of those, how many are activation-CAPABLE, were not rescued by the per-org
         activation_rules, and therefore really are unclassified (still 0).

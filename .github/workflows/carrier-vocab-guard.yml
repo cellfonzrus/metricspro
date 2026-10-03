@@ -723,6 +723,15 @@ jobs:
       - name: Run the closing-source lock (one registry, one read, one resolver, one writer, four dereferencing callers, house default unchanged — index §19.39)
         working-directory: backend
         run: python3 harness_closing_source_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.42 — THE SERVICE FEE ON A BILL PAYMENT IS NOT AN ACTIVATION (owner report 2026-10-03).
+      # "Which product_desc is the bill-payment service fee" has ONE home (commcalc/epay_fee_recon.py over
+      # the per-org mig-1045 column) and the Sales Report's "could this have been an activation?" predicate
+      # must keep dereferencing it instead of re-deciding it — 690 of 693 October alarms were walk-in bill
+      # payments surviving on their fee line alone. The behavioural PROOF imports the app, so it runs in its
+      # own job below with the backend's dependencies; this lock is stdlib-only.
+      - name: Run the bill-pay fee one-home lock (one registry, one resolution, the dereferencing callers, no second copy — index §19.42)
+        working-directory: backend
+        run: python3 harness_billpay_fee_one_home_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE ONE-DOMAIN PROOF (index §40) loads the REAL next.config.ts through Next's own config loader, validates the
   # routes with Next's own loadCustomRoutes and evaluates requests with Next's own matchers: a production request on the
@@ -1049,3 +1058,21 @@ jobs:
       - name: Run the device inventory→COGS proof (unsold sits, sold moves, once; the identity closes; the cash line double-counts — index §42)
         working-directory: backend
         run: python3 harness_device_inventory_cogs.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE BILL-PAY FEE / ACTIVATION-CANDIDATE PROOF (index §19.42) drives the REAL
+  # router._classification_gaps / _txn_activation_candidate / _accessory_config_uncached over in-memory rows
+  # and a fake one-row config client: 690 bill payments raise no banner, the one genuine blank-contract-type
+  # activation still does, a tenant that rings no fee line is unchanged. It imports the app, so it runs in
+  # its own job with the backend's dependencies.
+  billpay-fee-activation-proof:
+    name: Bill-pay fee / activation-candidate proof (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the bill-pay fee / activation-candidate proof (the 690 stay silent; the real gap is still reported; the other tenant byte-identical — index §19.42)
+        working-directory: backend
+        run: python3 harness_billpay_fee_not_activation.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
