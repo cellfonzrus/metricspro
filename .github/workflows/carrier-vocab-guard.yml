@@ -760,6 +760,12 @@ jobs:
       - name: Run the closing-source backfill proof (every day once; one sweep not a second derivation; empty days reported; idempotent; a human's row survives; bounds refuse)
         working-directory: backend
         run: python3 harness_closing_source_backfill.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.39 — SEVERAL STORES AT ONCE over the real endpoint (owner 2026-10-03: the store
+      # dropdown is a multi-select). The risk in "many" is all in the fan-out: a store written twice,
+      # a store missed, or a half-applied save reported as success.
+      - name: Run the closing-source multi-store proof (many is one N times; no store written twice; empty selection is the org default; clearing a selection; the gate still gates; a bad source writes nothing)
+        working-directory: backend
+        run: python3 harness_closing_source_multistore.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend

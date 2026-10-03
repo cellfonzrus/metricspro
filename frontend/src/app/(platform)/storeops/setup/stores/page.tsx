@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField } from '../lib'
+import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField, StoreMultiSelect } from '../lib'
 import LeasePanel from './LeasePanel'
 import SalesTaxRateLink from '@/components/SalesTaxRateLink'
 
@@ -49,6 +49,11 @@ export default function StoreSetupPage() {
   // The endpoint has existed since the backfill PR; without a button the only way to run it was a
   // hand-made HTTP call, which is not a thing a tenant admin should have to do. Preview first is the
   // default posture: `dry_run` reports the whole span and writes nothing.
+  // SEVERAL STORES AT ONCE (owner 2026-10-03: "in store setup to assign the store it should be a drop
+  // down list to select multiple stores"). The per-row column stays — this is the same ONE setting,
+  // set for a selection instead of one row at a time, through the same ONE endpoint.
+  const [bulkSrcCodes, setBulkSrcCodes] = useState<string[]>([])
+  const [bulkSrcValue, setBulkSrcValue] = useState('b2b_derived')
   const [bfFrom, setBfFrom] = useState('')
   const [bfTo, setBfTo] = useState('')
   const [bfBusy, setBfBusy] = useState('')
@@ -208,6 +213,28 @@ export default function StoreSetupPage() {
     finally { setSrcBusy(b => ({ ...b, [key]: false })) }
   }
 
+  // ONE call for the whole selection: the endpoint takes `store_codes` and fans out through its own
+  // single row-writer, so picking ten stores cannot behave differently from picking one.
+  async function applyClosingSourceToStores() {
+    if (!bulkSrcCodes.length) { setMsg('Pick at least one store in the dropdown first.'); return }
+    const key = 'src-bulk'
+    setSrcBusy(b => ({ ...b, [key]: true }))
+    setMsg('')
+    try {
+      const body = bulkSrcValue
+        ? { store_codes: bulkSrcCodes, source: bulkSrcValue }
+        : { store_codes: bulkSrcCodes, clear: true }
+      const r = await api('/api/v1/closing/source-config', { method: 'PUT', body: JSON.stringify(body) })
+      const cs = await api('/api/v1/closing/source-config')
+      setSrcCfg(cs || null)
+      const label = bulkSrcValue
+        ? (srcCfg?.labels?.[bulkSrcValue] || CLOSING_SRC_LABEL[bulkSrcValue] || bulkSrcValue).toLowerCase()
+        : 'the company default'
+      setMsg(`${r?.count || bulkSrcCodes.length} store(s) set to ${label}: ${bulkSrcCodes.join(', ')}.`)
+    } catch (err: any) { setMsg('Could not set those stores: ' + (err?.message || err)) }
+    finally { setSrcBusy(b => ({ ...b, [key]: false })) }
+  }
+
   // One call per run; the server walks the span day by day through the SAME nightly sweep, so a
   // preview and a real run differ only in whether anything is written.
   async function runBackfill(dryRun: boolean) {
@@ -306,6 +333,36 @@ export default function StoreSetupPage() {
               unchanged. If the feed has not landed for a day, nothing is written and the day is reported
               as missing — it is never filled in with zeros.
             </p>
+            {/* Several stores at once — the shared checkbox dropdown (../lib -> CheckboxDropdown),
+                so an admin switching nine stores picks nine and presses one button. */}
+            <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Set several stores at once</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <StoreMultiSelect stores={stores} value={bulkSrcCodes} onChange={setBulkSrcCodes}
+                  width={300} placeholder="Select stores…" disabled={!!srcBusy['src-bulk']} />
+                <span style={{ fontSize: 13, color: 'var(--text2)' }}>take their daily closing from</span>
+                <select style={{ ...sel, width: 240 }} value={bulkSrcValue}
+                  disabled={!!srcBusy['src-bulk']}
+                  onChange={e => setBulkSrcValue(e.target.value)}>
+                  {(srcCfg?.sources || ['rep_entry', 'b2b_derived']).map(v =>
+                    <option key={v} value={v}>{srcCfg?.labels?.[v] || CLOSING_SRC_LABEL[v] || v}</option>)}
+                  <option value="">Company default ({srcCfg?.labels?.[srcCfg?.org_default || 'rep_entry']
+                    || CLOSING_SRC_LABEL[srcCfg?.org_default || 'rep_entry']})</option>
+                </select>
+                <button className="btn" disabled={!!srcBusy['src-bulk'] || !bulkSrcCodes.length}
+                  onClick={applyClosingSourceToStores}
+                  title="Applies this one setting to every store ticked in the dropdown">
+                  {srcBusy['src-bulk'] ? 'Saving…' : `Apply to ${bulkSrcCodes.length || 0} store(s)`}
+                </button>
+              </div>
+              <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '8px 0 0' }}>
+                Each store&apos;s own setting is still shown in the <strong>Daily closing</strong> column
+                below, and changing it there still works — this is the same setting for a whole
+                selection. Choosing <strong>Company default</strong> removes those stores&apos; own
+                setting so they follow the company default again.
+              </p>
+            </div>
+
             {/* Fill in past days for the feed-derived stores. Preview first — it writes nothing. */}
             <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Fill in past days</div>

@@ -10121,40 +10121,27 @@ def get_closing_source_config(store_code: str = "", org_id: str = ORG_ID):
 
 class PutClosingSourceIn(LaxModel):
     store_code: Any = None     # blank / omitted → the ORG DEFAULT row
+    store_codes: Any = None    # SEVERAL stores in one call (the Store Setup multi-select dropdown)
     source: Any = None         # 'rep_entry' | 'b2b_derived'
-    clear: Any = False         # with a store_code: drop the override so the store follows the org default
+    clear: Any = False         # with a store code: drop the override so the store follows the org default
 
 
-@router.put("/source-config")
-def put_closing_source_config(payload: PutClosingSourceIn, org_id: str = ORG_ID,
-                              authorization: str = Header(default="")):
-    """Set the org default or ONE store's override. Gated to the same 'closing' settings area as the
-    tender / count-field config (a market-scoped caller must not be able to switch off a store's
-    closing submissions). The owner's *"could be changed later at any time by the tenant admin"* is
-    this endpoint — nothing about the setting is write-once."""
-    require_org(org_id)
-    client = sb()
-    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
-        raise HTTPException(403, "Changing a store's daily-closing source is permission-restricted.")
-    code = str(payload.store_code or "").strip() or None
-    rows = _closing_source_rows(client, org_id)
-    if payload.clear:
-        if not code:
-            raise HTTPException(400, "The org default cannot be cleared — set it to a source instead.")
-        try:
-            (client.schema("commcalc").table("closing_source_config").delete()
-             .eq("org_id", org_id).eq("store_code", code).execute())
-        except Exception as e:
-            print(f"WARN closing source override clear failed (org {org_id}, store {code}): {e}")
-            raise HTTPException(400, "Could not clear this store's daily-closing setting. The setting "
-                                     "is not available on this tenant yet — contact support.")
-        return {"ok": True, "store_code": code, "cleared": True,
-                "source": _closing_src.resolve([r for r in rows if r.get("store_code") != code], code)}
-    raw = str(payload.source or "").strip().lower()
-    if raw not in _closing_src.SOURCES:
-        raise HTTPException(400, f"source must be one of {', '.join(_closing_src.SOURCES)}")
-    row = {"org_id": org_id, "store_code": code, "source": raw, "updated_at": _now(),
-           "updated_by": _caller_email(client, authorization)}
+def _closing_source_clear_one(client, org_id: str, code: str) -> None:
+    """Drop ONE store's override. The only delete of `closing_source_config` in the codebase."""
+    try:
+        (client.schema("commcalc").table("closing_source_config").delete()
+         .eq("org_id", org_id).eq("store_code", code).execute())
+    except Exception as e:
+        print(f"WARN closing source override clear failed (org {org_id}, store {code}): {e}")
+        raise HTTPException(400, "Could not clear this store's daily-closing setting. The setting "
+                                 "is not available on this tenant yet — contact support.")
+
+
+def _closing_source_write_one(client, org_id: str, rows: list, code, raw: str, email) -> None:
+    """Set ONE store's override (or the org default when `code` is None). THE ONE WRITER of
+    `closing_source_config` — a multi-store save fans out through this, so "several stores at once"
+    cannot grow a second, differently-behaved write path."""
+    row = {"org_id": org_id, "store_code": code, "source": raw, "updated_at": _now(), "updated_by": email}
     found = [r for r in rows
              if (str(r.get("store_code") or "").strip().upper() or None) == (code.upper() if code else None)]
     try:
@@ -10167,7 +10154,52 @@ def put_closing_source_config(payload: PutClosingSourceIn, org_id: str = ORG_ID,
         print(f"WARN closing source save failed (org {org_id}, store {code}): {e}")
         raise HTTPException(400, "Could not save the daily-closing setting. The setting is not "
                                  "available on this tenant yet — contact support.")
-    return {"ok": True, "store_code": code, "source": raw, "scope": "store" if code else "org_default"}
+
+
+@router.put("/source-config")
+def put_closing_source_config(payload: PutClosingSourceIn, org_id: str = ORG_ID,
+                              authorization: str = Header(default="")):
+    """Set the org default, ONE store's override, or SEVERAL stores' overrides in one call.
+
+    Owner 2026-10-03: *"in store setup to assign the store it should be a drop down list to select
+    multiple stores"* — the screen picks many stores, so this ONE endpoint takes many codes
+    (`store_codes`) and fans them out through `_closing_source_write_one`. It is not a second bulk
+    endpoint: one store is the one-element case, and `store_code` still works unchanged.
+
+    Gated to the same 'closing' settings area as the tender / count-field config (a market-scoped
+    caller must not be able to switch off a store's closing submissions). The owner's *"could be
+    changed later at any time by the tenant admin"* is this endpoint — nothing here is write-once.
+    """
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Changing a store's daily-closing source is permission-restricted.")
+    # One code or many, de-duplicated by the registry — no store is written twice because a dropdown
+    # offered it twice, and an all-blank selection is the ORG DEFAULT, exactly as before.
+    codes = _closing_src.normalize_store_codes(
+        payload.store_codes if payload.store_codes is not None else payload.store_code)
+    rows = _closing_source_rows(client, org_id)
+    if payload.clear:
+        if not codes:
+            raise HTTPException(400, "The org default cannot be cleared — set it to a source instead.")
+        for code in codes:
+            _closing_source_clear_one(client, org_id, code)
+        left = [r for r in rows
+                if str(r.get("store_code") or "").strip().upper()
+                not in {c.upper() for c in codes}]
+        return {"ok": True, "store_code": codes[0], "store_codes": codes, "cleared": True,
+                "count": len(codes),
+                "source": _closing_src.resolve(left, codes[0]),
+                "sources": {c: _closing_src.resolve(left, c) for c in codes}}
+    raw = str(payload.source or "").strip().lower()
+    if raw not in _closing_src.SOURCES:
+        raise HTTPException(400, f"source must be one of {', '.join(_closing_src.SOURCES)}")
+    email = _caller_email(client, authorization)
+    for code in (codes or [None]):
+        _closing_source_write_one(client, org_id, rows, code, raw, email)
+    return {"ok": True, "store_code": codes[0] if codes else None, "store_codes": codes,
+            "count": len(codes) or 1, "source": raw,
+            "scope": "store" if codes else "org_default"}
 
 
 # ── The derivation sweep ─────────────────────────────────────────────────────────────────────────

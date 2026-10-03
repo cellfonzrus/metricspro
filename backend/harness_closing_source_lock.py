@@ -61,6 +61,12 @@ PROVIDERS = os.path.join(BE_APP, "modules", "closing", "attention_providers.py")
 STORE_PAGE = os.path.join(FE, "app", "(platform)", "storeops", "setup", "stores", "page.tsx")
 FORM = os.path.join(FE, "components", "ClosingSubmitForm.tsx")
 PROOF = os.path.join(BE, "harness_closing_source.py")
+MULTI_PROOF = os.path.join(BE, "harness_closing_source_multistore.py")
+SETUP_LIB = os.path.join(FE, "app", "(platform)", "storeops", "setup", "lib.tsx")
+INSURANCE_PAGE = os.path.join(FE, "app", "(platform)", "storeops", "setup", "insurance", "page.tsx")
+HR_PEOPLE_PAGE = os.path.join(FE, "app", "(platform)", "hr", "people", "page.tsx")
+STORE_PICKER = os.path.join(FE, "components", "StoreMultiSelect.tsx")
+CHECKBOX_DD = os.path.join(FE, "components", "CheckboxDropdown.tsx")
 MIGRATION = os.path.join(ROOT, "database", "migrations", "1035_closing_source.sql")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "carrier-vocab-guard.yml")
 
@@ -238,6 +244,47 @@ ok("the DB-free proof harness exists", os.path.exists(PROOF))
 WF = read(WORKFLOW)
 ok("CI runs the proof and this lock",
    "harness_closing_source.py" in WF and "harness_closing_source_lock.py" in WF)
+
+# ── (j) PICKING *WHICH STORES* A SETTING APPLIES TO — ONE CONTROL, DEREFERENCED ──────────────────
+# OWNER 2026-10-03: *"in store setup to assign the store it should be a drop down list to select
+# multiple stores"*, which is the 2026-08-04 directive ("the store picker needs to have check box
+# under the drop down to pick multiple stores") that was already called fleet-wide and retroactive.
+# THE CLASS: every "which stores does this apply to" control used to be hand-rolled per screen, so
+# they drifted. One home (`components/StoreMultiSelect`, over the shared `CheckboxDropdown`), and a
+# screen that grows its own store checkbox again FAILS THE BUILD here.
+ok("the shared store multi-select exists", os.path.exists(STORE_PICKER))
+ok("the fleet-wide checkbox dropdown it is built on still exists", os.path.exists(CHECKBOX_DD))
+SMS = read(STORE_PICKER)
+ok("the shared control is the dropdown-with-checkboxes, not a second picker of its own",
+   "from '@/components/CheckboxDropdown'" in SMS and "<CheckboxDropdown" in SMS
+   and "storePickerOptions" in SMS)
+LIBX = read(SETUP_LIB)
+ok("Store Setup's shared lib re-exports the ONE control rather than re-mapping a store roster",
+   "export { StoreMultiSelect, storePickerOptions } from '@/components/StoreMultiSelect'" in LIBX)
+INS = read(INSURANCE_PAGE)
+HRP = read(HR_PEOPLE_PAGE)
+ok("the insurance policy screen assigns its stores with the shared dropdown",
+   "StoreMultiSelect" in INS and "<StoreMultiSelect" in INS)
+ok("Store Setup can set the daily-closing source for a SELECTION of stores, in one call",
+   "<StoreMultiSelect" in SP and "applyClosingSourceToStores" in SP and "store_codes: bulkSrcCodes" in SP)
+ok("the HR people screen (the sibling control) uses the same dropdown",
+   "StoreMultiSelect" in HRP and "<StoreMultiSelect" in HRP)
+OWN_STORE_CHECKBOX = re.compile(r"""type=["']checkbox["'][^\n]*store_code""")
+grid_offenders = [n for n, body in (("setup/insurance", INS), ("setup/stores", SP),
+                                    ("setup/lib", LIBX), ("hr/people", HRP))
+                  if OWN_STORE_CHECKBOX.search(body)]
+ok("no screen renders its OWN store checkbox list beside the shared dropdown",
+   not grid_offenders, ", ".join(grid_offenders))
+
+# The many-store write is the one-store write, N times — not a second bulk path.
+ok("the endpoint takes many codes through the REGISTRY's own normalizer",
+   "def normalize_store_codes(" in REG and "_closing_src.normalize_store_codes(" in RTR)
+ok("the fan-out goes through ONE row writer, and there is no second bulk endpoint",
+   RTR.count('@router.put("/source-config")') == 1
+   and re.search(r"def _closing_source_write_one\(", RTR) is not None
+   and "for code in (codes or [None]):" in RTR)
+ok("the many-store proof harness exists", os.path.exists(MULTI_PROOF))
+ok("CI runs the many-store proof", "harness_closing_source_multistore.py" in WF)
 
 # ── (i) NEGATIVE CONTROLS ────────────────────────────────────────────────────────────────────────
 ok("NEG a second literal source value in another module would be caught",
