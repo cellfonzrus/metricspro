@@ -5417,6 +5417,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.report_definitions` — gains **`arrears_days`** and **`empty_stale_after_days`** (mig `1042`): how many days late a source posts, and how long an unbroken run of zero-row pulls stays believable. Per org, per `report_key`, NULL inherits the house default in `empty_pull_verdict`. **No new table** — the day-grain sweep window is now `max(refresh_days, arrears_days)`, which is what stops a one-day window being asked of an in-arrears feed forever | mig `1042` (the house `comp_report` row set to 7); Connectors / report registry | `router._registry_report_cfg` via `_REGISTRY_SWEEP_COLS` → `epay_sweep._expand_jobs` (the window floor) and `epay_sweep._empty_cfg_evidence` → `empty_pull_verdict.classify_empty_pull` — §19.41 |
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
 | `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
 | `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1037`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1037` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
@@ -5613,6 +5614,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 |----------|-------------|---------|
 | `GET /commcalc/vip/summary` · `GET /commcalc/vip/invoices` (DISTRIBUTOR INVOICES) — additive `date_from` / `date_to` (inclusive days over `created_on`) + `stores` / `markets` (PIPE-separated); both now read ONE selector, so the table always adds up to the tiles; `/summary` also serves `unresolved` (the invoices a store/market selection could not bind) | `commcalc/router.vip_summary` / `vip_invoices_list` → `router._vip_select` → pure `commcalc/vip_invoice_filter.py` + `account.statement_filter.resolve_store_matcher` | §15v |
 | `GET /commcalc/vip/filter-options` — additionally serves `markets` (`core.scope.org_market_options`) and `stores` (`org_store_options`, one option per physical store + only the distributor spellings the matcher cannot bind, via `statement_filter.unbound_spellings`) | `commcalc/router.vip_filter_options` | §15v, §13c, §13e |
+| *(no endpoint added)* — `POST /commcalc/epay/sweep/run-due` / `run` are unchanged in shape; the run's `success` is now decided on `rows_landed` rather than on the status word, so an unverified zero records an ATTEMPT instead of advancing `last_run_at` | `router._do_epay_sweep` → `epay_sweep.run_epay_sweep` (ledger settled before reporting) | §19.41 |
 | `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
 | `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
 | `GET /closing/attempts` — additive: `refusals`, `last_refusal_code`, `last_refusal_detail`, `last_refused_at` per group, `refused` / `refusal_code` / `refusal_detail` per try; `attempts` means REAL tries; a store-day whose only events are refusals always qualifies for `only_review=true` | `closing/router.closing_attempts` (dereferencing `submit_refusal.is_real_try`) | §29.11 |
@@ -5873,6 +5875,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
@@ -6103,6 +6106,95 @@ sidebar's active highlight compares `pathname` to `href`, so the door is not hig
   belong to other modules' copy; `commcalc/expenses` still says "Add stores in StoreOps Admin" (a store, not pay —
   Store Setup is the primary page); `closing/router.py` tells the user to re-save a store in "StoreOps Admin".
 
+§19.41 **A SWEEP'S REPORTED STATUS IS NOT A RECORD OF WHAT IT DID — `empty_ok` PUBLISHED A ZERO AS THE
+CARRIER'S OWN ANSWER WHILE THE RUN HAD PROVEN THE FILTER BROKEN (owner report 2026-10-03, mig `1042`).**
+Owner: *"why was the commission statement not uploaded for any of these months they need to be on a cron job
+for automatic upload from the owners portal"*.
+
+**THE AUTOMATION WAS ALREADY BUILT AND ALREADY ON A CRON.** Nothing here is a new capture path. The portal
+connector is enabled (daily 06:00 America/New_York), the comp report has `auto=true` and its own 23:30 slot
+(mig `290`), and the slot has been firing nightly (`report_definitions.sweep_last_run_at`
+2026-10-03T03:30:01Z). What it reported was not what it did.
+
+**MEASURED, house org, read-only.** `commcalc.raw_comp_report` holds six periods and nothing after
+**2026-08-06** (Mar 11,039 · Apr 10,431 · May 10,657 · Jun 9,796 · Jul 11,054 / $614,108.69 · Aug 2,364 /
+$175,398.68 covering 08-01..08-06 ONLY; Sep and Oct zero rows). Every one of them arrived by **manual
+upload** — `upload_log` carries real workbook filenames for `comp_report` and the string `epay auto-sweep`
+only for `mi_report`. **The sweep's comp leg has never landed a single row.** The MI leg lands ~45k rows
+every morning, which is why the connector looked alive. There is no second carrier-commission source
+(`activation_rebate_ledger`, `raw_ma_commission` both empty for this org), so the `carrier_comm` P&L line
+was understated for August and absent for September — which is what made July read as a +$456k outlier.
+
+**THE RUN THAT EXPLAINS IT, from `core.job_run` (`sweep:epay_sweep_config`), verbatim:**
+
+```
+2026-10-03T03:31:01Z   status = SUCCEEDED
+  reports: [{'report': 'comp_report', 'rows': 0, 'mode': 'no_data',
+             'window': '2026-10-03..2026-10-03',
+             'note': 'no compensation posted for 2026-10-03..2026-10-03 — not an error'}]
+  errors:  ["Daily Transaction Detail [2026-10-03]: EpayPortalError: could not set the report's daily
+             date filter — 'Summarize by' could not be set to Daily (hidden field = None); the report
+             returns an empty workbook without it"]
+```
+
+ONE run, ONE browser session, TWO legs driving the SAME portal control. The second leg PROVED the control
+unsettable; the first leg's zero was published as a fact about the carrier anyway, and the run recorded as a
+success. **TWO independent faults, both now properties of the design:**
+
+1. **THE FLAG DECIDED.** `REPORTS['comp_report']['empty_ok'] = True` is a declaration, not evidence: it
+   cannot tell *"the carrier posted nothing"* from *"we asked an unanswerable question"*. Three sweeps already
+   held three different answers to that one question — the merchant sweep had the right one and the right
+   word for it (`empty_confirmed`: the portal displayed its own "no records"), DLAR had a cruder hand-written
+   form, and this sweep had a bare flag. **The duplicate defect, three ways.**
+2. **THE WINDOW COULD NOT CONTAIN DATA.** `report_definitions.refresh_days` was **1**, and the day-grain path
+   reads only that column, so every nightly run asked an **in-arrears** source for **today** — zero rows,
+   forever, each one looking legitimate. `refresh_months = 3` is set on the same row and the day-grain path
+   never reads it (§19.18's pattern again: a setting with no caller). A one-day window on an in-arrears feed
+   is a question the source cannot answer.
+3. **AND NOBODY WAS TOLD.** One `last_status`/`last_detail` per connector, four reports, last writer wins: the
+   03:31 comp outcome was overwritten 29 minutes later by the 04:00 Daily-Transaction-Detail tick and 48 more
+   times that day. `core.job_run` holds the real history and nothing surfaced it. `last_run_at` kept advancing
+   because `'partial'` counted as success.
+
+**THE FIX — one home, dereferenced by every sweep, and it cannot un-wire.**
+- `backend/app/modules/commcalc/empty_pull_verdict.py` — PURE (stdlib only, no DB, no config reads): the ONE
+  home of *"is this zero a statement about the source, or about us?"* Verdicts `CONFIRMED` / `UNVERIFIED` /
+  `SUSPECT`, decided on evidence most-specific-first: a control proven broken in this run outranks everything
+  (even the source's own "no records" — a filter that did not take means the source answered a different
+  question); a report that may never be empty is SUSPECT; the source's own "no records" is the only thing that
+  earns a clean "nothing posted"; then a window narrower than the arrears, a path that has never landed a row,
+  and a silence longer than the configured limit. Only `CONFIRMED` is reported as success. `SOURCE_REPORTED_EMPTY`
+  holds the string `portal_reported_empty` the merchant sweep has published since 2026-07-28 and the Email
+  Imports screen matches on, so the one home and the live contract are literally the same string.
+- `ControlLedger` is **run-scoped, settled at the end**: a leg defers its zero and the run judges it against
+  its siblings' evidence. This is load-bearing — on 2026-10-03 the leg that proved the control broken ran
+  SECOND, so a per-leg check would have cleared the comp zero.
+- An untrusted zero joins the run's `errors` (connector says `partial`, the report is named), its result mode
+  becomes `unverified_no_data`, and `_do_epay_sweep` now stamps `success` on **rows landed** — an unverified
+  zero is not an import, so it no longer advances `last_run_at` (§19.21, on the one path it survived on).
+- The day-grain window is `max(refresh_days, arrears_days)`; **`arrears_days`** and
+  **`empty_stale_after_days`** are per-org config on `report_definitions` (mig `1042`, NULL inherits the house
+  default in the verdict module) and both are in `_REGISTRY_SWEEP_COLS`, so the setting actually reaches the
+  sweep. RULE TWO: no carrier, tenant, portal or report name in any of it.
+- DLAR's own empty guard and the merchant sweep's copy of the reason key both now dereference the shared home.
+- **Lock:** `backend/harness_empty_pull_verdict.py` (56 checks, DB-free) — §A the live 2026-10-03 run replayed
+  **both ways round**, §B every rule with armed mutation controls, §C the live config can no longer produce a
+  one-day window and arrears is a FLOOR not an override, §D the config reaches the sweep and the migration is
+  idempotent with a REVERT note, §E success is what landed, §F the lock proper: every `empty_ok` registry entry
+  declares the controls its zero depends on, `_defer_empty` is the ONLY decision site (counted by `ast` against
+  the `'no_data'` literals), no sweep carries a second copy of the reason key, exactly one ledger per run, the
+  home stays pure, and DLAR's hand-written guard cannot come back.
+
+**WHAT COULD NOT BE PROVEN HERE, SAID PLAINLY.** This container cannot reach the portal, so the *portal
+interaction* is untouched and unverified: whether `Summarize by` can be set at all today is unknown, and the
+'hidden field = None' failure on the Daily Transaction Detail leg is **still live and still unfixed**. This
+change does not make the comp statement arrive; it makes its absence impossible to miss and widens the window
+so that a healthy portal would deliver. **The two missing months must be recovered by the existing manual
+upload path** (the five manual loads above are the proof it works), or by a portal run once the filter is fixed.
+
+**REPORTED, NOT FIXED, and NOT this cause:** `commcalc.asset_ledger` has nothing since 2026-09-23. It is not a
+sweep with an `empty_ok` leg, so the silent-zero class does not explain it; it needs its own look.
+
 §19.39 **WHO PRODUCES A STORE'S DAILY CLOSING — reps type it, or it is DERIVED from the sales feed
 (owner directive 2026-10-02, mig `1035`).** Owner: *"the admin should be able to check a box to input daily closing
 by sales reps for all stores or pull b2b data from directly into daily closing in case the tenant does not want to
@@ -6156,6 +6248,19 @@ envelope, rather than letting the backend 409 them afterwards.
 client: the feed's day written as a real closing, the rep-entry store untouched, idempotent re-runs, a human's row
 kept, a missing feed reported, `dry_run` writing nothing) · `backend/harness_closing_source_lock.py` (the lock). All
 three run in `.github/workflows/carrier-vocab-guard.yml`.
+**THE BACKFILL BUTTON RAN INTO THE 120 s PROXY BUDGET (owner report 2026-10-03: *"does not show anything in
+preview"*; fixed).** Preview over 2026-06-01 → 2026-10-02 did nothing visible. Two defects, both in the panel shipped
+with this feature: (1) a proxied request must produce its first byte within **120 s** (§40.3) and ONE `derive-range`
+call walking ~124 days of the sales feed cannot, so the single-call version could only ever fail on a real backfill;
+(2) the panel reported its result and its failure through the page-level `msg` at the TOP of the screen, far above the
+button, so the failure was invisible and the button looked dead. **The class:** an admin action whose work grows with
+its input must not be one synchronous request, and an action must report itself where it was started. §40.3's
+registered escape for an endpoint that outruns the proxy is `DIRECT_ROUTES` — `derive-range` was never in it, and
+direct would only raise the ceiling while still showing nothing for minutes. **The fix:** the screen sends the span in
+bounded chunks of `BACKFILL_CHUNK_DAYS = 7` to the SAME ONE endpoint (never a per-day loop — 124 days is 18 calls, each
+far inside the budget), aggregates as each lands and renders the running total, and on a failure names the chunk that
+stopped and states that the days already covered are not lost. Progress and errors render inside the panel. Pinned by
+four checks in `harness_closing_source_lock.py` (chunked, one endpoint, self-reporting, honest partial).
 **SEVERAL STORES AT ONCE — ONE STORE PICKER, FLEET-WIDE (owner directive 2026-10-03).** Owner: *"in store setup to
 assign the store it should be a drop down list to select multiple stores."* **The class:** this is the 2026-08-04
 directive (*"the store picker needs to have check box under the drop down to pick multiple stores"*, called
