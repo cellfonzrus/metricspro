@@ -1,3 +1,7 @@
+-- APPLIED by the owner 2026-10-03. Verified against production through the real resolver:
+-- both spellings bind to their stores and follow the PA market filter, and
+-- statement_filter.unbound_spellings over all 29 distributor locations returns EMPTY.
+--
 -- =====================================================================================
 -- TEACH THE ORG VOCABULARY THE DISTRIBUTOR'S OWN SPELLING OF TWO STORES
 --

@@ -5370,13 +5370,21 @@ invent money for a market; dropping them silently would read as money that is no
 | Store options offered | **33** = the org's 31 stores + the 2 spellings nothing binds |
 | Locations unreachable by ANY store option | **none** |
 
-**The house fix for the three is DATA, in the one vocabulary, and it is surfaced for approval, not
-applied:** two `commcalc.store_aliases` rows (`1 S 60th St` → `B-60TH`, `1598 Mt Ephraim Ave` →
-`B-1598`) — proved in `harness_vip_invoice_filter.py` §F9/§F10 to bind both spellings to market PA
-and to collapse the picker to one option per physical store (33 → 31). `228 N Wood Ave` binds store
-`<2022>`, which is assigned to **no market at all**: a market assignment only the owner can make
-(the `Cellular Services Dot net LLC (228 N Wood Ave, …)` row suggests LI, but that row is a COMPANY,
-not a store — §13d). Runbook: `database/runbooks/vip_distributor_store_aliases.sql`.
+**The house fix for the three is DATA, in the one vocabulary — surfaced for approval, and APPLIED
+by the owner 2026-10-03:** two `commcalc.store_aliases` rows (`1 S 60th St` → `B-60TH`,
+`1598 Mt Ephraim Ave` → `B-1598`) — proved in `harness_vip_invoice_filter.py` §F9/§F10 to bind both
+spellings to market PA and to collapse the picker to one option per physical store (33 → 31), then
+verified against production through the real `resolve_store_matcher`: both bind, both follow the PA
+market filter, and `unbound_spellings` over all 29 distributor locations returns EMPTY. Runbook:
+`database/runbooks/vip_distributor_store_aliases.sql`.
+
+`228 N Wood Ave` binds store `<2022>`, which is assigned to **no market at all**, so the STORE
+filter finds it and the MARKET filter cannot (no market contains a market-less store). That is a
+market assignment only the owner can make (the `Cellular Services Dot net LLC (228 N Wood Ave, …)`
+row suggests LI, but that row is a COMPANY, not a store — §13d). **Where the row actually lives,
+measured 2026-10-03:** `commcalc.store_mapping` — `storeops.stores` has NO row for this code — and
+its `market` is the empty string `''`, not `NULL`, so a `market IS NULL` update matches nothing.
+Runbook proposed, not applied: `database/runbooks/vip_store_2022_market.sql`.
 
 ### DUPLICATE CHECK (build gate) — what was checked, what was reused
 
