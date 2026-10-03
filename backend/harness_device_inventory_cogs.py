@@ -685,6 +685,19 @@ check("G10b and it is NOT the POS fallback dressed up as a measurement (the accr
       "substitutes a point-of-sale figure for a stale feed)",
       device_cogs.resolve_device_cost_basis("asset_ledger")["cogs_mode"] == "invoice")
 
+# G10c — A LATE FEED NEVER ZEROES AN ASSET LINE. `asset_ledger_unsold_cells` reporting 0 units is a
+# feed problem, not a $0 inventory, and `statement_engine` must keep the configured basis and REPORT
+# it rather than booking the zero (CLAUDE.md: a defect in live data is reported, never hidden).
+_se_src = SRCS["statement_engine.py"]
+check("G10c statement_engine refuses to book a $0 inventory off a landing that produced no units, "
+      "and reports the fallback instead",
+      'if not amet.get("units"):' in _se_src
+      and "fell_back_to_configured_basis" in _se_src
+      and "_LedgerInventoryEmpty" in _se_src)
+check("G10d …and the empty case really is empty-by-measurement, not by accident",
+      balance_sheet.asset_ledger_unsold_cells([], "2026-09-30")[1]["units"] == 0
+      and balance_sheet.asset_ledger_unsold_cells(rows, "2026-09-30")[1]["units"] > 0)
+
 # G11 — RULE TWO on the new surface too.
 check("G11 the basis declaration is a per-org CONFIG value, never a tenant or carrier branch",
       "account_config" in SRCS[BASIS_HOME]

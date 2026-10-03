@@ -124,6 +124,11 @@ def _fetch_asset_ledger_open(client, org_id):
     return out
 
 
+class _LedgerInventoryEmpty(Exception):
+    """Internal control flow: the asset landing produced no units as of the statement date, so the
+    configured inventory basis stands and the reason is already recorded in meta."""
+
+
 def _fetch_asset_ledger_unsold(client, org_id):
     """The columns the ASSET half needs (mig 1041). Same table, same org scope, same paginated
     reader as the payable half above — one feed, two readings, no second fetch path."""
@@ -391,6 +396,16 @@ def build_inputs_full(client, org_id, period):
             inv_rows = coa._fetch_all(client, "inventory_value",
                                       "store,swept_value,manual_value", {"org_id": org_id})
             eff = balance_sheet.apply_inventory_basis(inv_rows, cells, "asset_ledger", resolve)
+            # A ledger that produced NO units is a feed problem, not a $0 inventory. Zeroing an asset
+            # line because an upload is late would be exactly the "fix that hides the defect" CLAUDE.md
+            # forbids, so the configured basis is kept and the fallback is REPORTED.
+            if not amet.get("units"):
+                amet["fell_back_to_configured_basis"] = True
+                amet["reason"] = ("the asset landing produced no units as of this date — the "
+                                  "configured inventory basis is kept rather than booking a $0 asset "
+                                  "off a feed that has not delivered")
+                meta["inventory_asset_ledger"] = amet
+                raise _LedgerInventoryEmpty()
             inputs["inventory"]["by_store"] = {st: _round(v["value"]) for st, v in eff.items()}
             inputs["inventory"]["label"] = "Inventory — unsold devices (asset landing)"
             if amet.get("snapshot_basis"):
@@ -402,6 +417,8 @@ def build_inputs_full(client, org_id, period):
             meta["inventory_asset_ledger"] = amet
             meta["inventory_basis"] = "asset_ledger"
             meta["inventory_basis_forced_by"] = "device_cost_basis=asset_ledger"
+        except _LedgerInventoryEmpty:
+            pass                          # already recorded in meta; the configured basis stands
         except Exception as e:
             coa._warn("asset-ledger inventory unavailable — configured basis kept", e)
     elif cfg["inventory_basis"] == "devices":
