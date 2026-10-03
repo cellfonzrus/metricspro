@@ -166,3 +166,27 @@ jobs:
       - name: Run the row-save proof (the real rowSave.ts + employeeRowSlices.ts)
         working-directory: frontend
         run: node prove_row_save.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  employee-write-locks:
+    # EMPLOYEE PAY WRITES + CHANGE-LOG IDENTITY (2026-10-03, index §19.41 / §19.42). The pay-write rule lived inline in
+    # PATCH /employees alone — the create, bulk-create, HR-create and payscale-upload paths wrote pay with no "may this
+    # caller see pay?" check. And the payroll change log took WHO from whatever its caller held: Vzone's id 237 was logged
+    # with no employee number because the business id was minted after the row was written. The locks (stdlib): every
+    # employee pay writer calls storeops.gate_pay_write before writing; only _log_payroll_change writes the log and it
+    # builds identity through payroll_log_identity.resolve_log_identity; every employees insert mints. The proof execs the
+    # real handlers against an in-memory database and reproduces both defects on the pre-fix source first.
+    name: Employee pay writes + change-log identity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the pay-write gate lock
+        working-directory: backend
+        run: python3 harness_pay_write_gate_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the change-log identity lock
+        working-directory: backend
+        run: python3 harness_payroll_log_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the employee-write proof (the real handlers, both defects reproduced then fixed)
+        working-directory: backend
+        run: python3 harness_employee_write_proof.py | tee -a "$GITHUB_STEP_SUMMARY"
