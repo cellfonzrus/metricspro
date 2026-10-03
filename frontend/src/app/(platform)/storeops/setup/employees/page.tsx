@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { notSavedNote } from '@/lib/rowSave'
 import { sel, cell, EMP_EDIT_FIELDS, isDirty, PHONE_EG, cleanPhone } from '../lib'
 import ScreenLink from '@/components/ScreenLink'
 
@@ -103,8 +104,10 @@ export default function EmployeeSetupPage() {
     if (ph === null) { alert(PHONE_EG); return }
     setMsg('')
     try {
-      await api('/api/v1/storeops/employees', { method: 'POST', body: JSON.stringify({ ...newEmp, phone: ph, pay_rate: Number(newEmp.pay_rate) || 0 }) })
-      setMsg(`Added ${newEmp.name}`)
+      // No pay field on this screen, so none is sent (it used to send pay_rate 0 for everyone added
+      // here). Pay is set on HR → Employees & Pay; the reply still says if a field was not written (§19.41).
+      const res = await api('/api/v1/storeops/employees', { method: 'POST', body: JSON.stringify({ ...newEmp, phone: ph }) })
+      setMsg(`Added ${newEmp.name}${notSavedNote(res)}`)
       setNewEmp({ name: '', employee_id: '', home_store: '', email: '', phone: '' })
       await loadAll()
     } catch (err: any) { setMsg('Add failed: ' + (err?.message || err)) }
@@ -146,7 +149,7 @@ export default function EmployeeSetupPage() {
       })).filter(r => r.name)
       if (!employees.length) { setMsg('No valid rows (each needs a name).'); setUpBusy(false); return }
       const res = await api('/api/v1/storeops/employees/bulk', { method: 'POST', body: JSON.stringify({ employees }) })
-      setMsg(`Added ${res.inserted} employee(s)${res.skipped ? ` · ${res.skipped} skipped (blank name / duplicate ID)` : ''}.`)
+      setMsg(`Added ${res.inserted} employee(s)${res.skipped ? ` · ${res.skipped} skipped (blank name / duplicate ID)` : ''}.${notSavedNote(res)}`)
       await loadAll()
     } catch (err: any) { setMsg('Upload failed: ' + (err?.message || err)) }
     setUpBusy(false)

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
+import { notSavedNote } from '@/lib/rowSave'
 import { apiCached, CONFIG, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
@@ -53,7 +54,8 @@ export default function HRPeoplePage() {
       const r = await api('/api/v1/hr/employees', { method: 'POST', body: JSON.stringify({
         name: f.name.trim(), email: f.email.trim() || null, phone: f.phone.trim() || null,
         home_store: f.home_store || null, role: f.role_title.trim() || null,   // job title -> employees.role
-        pay_rate: f.pay_rate === '' ? null : Number(f.pay_rate),
+        // Sent only when typed — a blank is not a pay write, so it is never reported as one refused.
+        ...(f.pay_rate === '' ? {} : { pay_rate: Number(f.pay_rate) }),
         role_name: f.role_name || null, market: f.market || null,
         store_codes: f.store_codes.length ? f.store_codes : null,
         store_code: f.store_codes[0] || f.home_store || null,
@@ -64,7 +66,10 @@ export default function HRPeoplePage() {
       }) })
       const inv = r.invite
       const invMsg = inv ? (inv.ok ? (inv.emailed ? ' · onboarding invite emailed ✉️' : ` · invite ready (${inv.email_note || 'send manually'})`) : ` · invite issue: ${inv.error || 'failed'}`) : ''
-      setMsg(`✅ Saved ${f.name}${r.assigned_role ? ` → ${r.assigned_role}` : ''}${invMsg}${r.note ? ` — ${r.note}` : ''}`)
+      // A pay rate the server did not write (the caller's role may not set pay, §19.41) is said, never
+      // swallowed: the person was added, the rate was not.
+      const payNote = notSavedNote(r)
+      setMsg(`${payNote ? '⚠️' : '✅'} Saved ${f.name}${r.assigned_role ? ` → ${r.assigned_role}` : ''}${invMsg}${r.note ? ` — ${r.note}` : ''}${payNote}`)
       if (r.login?.temp_password) setTempPw(`${f.email.trim()} → ${r.login.temp_password}`)
       else if (inv?.temp_password) setTempPw(`${inv.email} → ${inv.temp_password} (portal login)`)
       setF({ name: '', email: '', phone: '', home_store: '', role_title: '', pay_rate: '', role_name: '', market: '', store_codes: [], create_login: false, dob: '', send_invite: true, invite_method: 'link' })
