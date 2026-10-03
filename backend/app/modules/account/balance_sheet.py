@@ -92,7 +92,11 @@ EXTRA_BS_SPEC = [
     ("sales_tax_payable", "Sales tax payable (collected, not remitted)", "liability", "auto_opt", "store"),
 ]
 
-INVENTORY_BASES = ("report", "devices")
+# mig 1041 adds 'asset_ledger': the as-of unsold value of the CONSIGNMENT ledger itself. It is not a
+# knob a tenant sets on its own — it is FORCED by `device_cost_basis='asset_ledger'`
+# (`device_cogs.resolve_device_cost_basis(...)['ledger_inventory']`), because accrual COGS without it
+# relieves an inventory nothing ever booked (index §42.3).
+INVENTORY_BASES = ("report", "devices", "asset_ledger")
 CASH_ON_HAND_BASES = ("off", "verified", "all")
 
 # ── SALES TAX PAYABLE BASIS (owner directive 2026-09-08, mig 991) ───────────────────────────────
@@ -304,6 +308,19 @@ def apply_inventory_basis(inventory_value_rows, device_cells, basis, resolve=Non
     for st, c in (device_cells or {}).items():
         k = rz(st) or st
         dev[k] = round(dev.get(k, 0.0) + safe_float(c.get("value")), 2)
+    # basis 'asset_ledger' (mig 1041): the consignment ledger IS the inventory, and it is the ONLY
+    # source — no report fallback. Falling back to the emailed b2bsoft total for a store the ledger
+    # does not name would mix two cost bases on one line and break the periodic-inventory identity
+    # the accrual COGS basis is proved against. A store the ledger does not cover simply reads $0,
+    # and `statement_engine` reports the coverage in meta.
+    if basis == "asset_ledger":
+        out = {}
+        for st in set(list(dev) + list(manual)):
+            if st in manual:
+                out[st] = {"value": round(manual[st], 2), "source": "manual"}
+            elif st in dev:
+                out[st] = {"value": round(dev[st], 2), "source": "asset_ledger"}
+        return out
     primary, secondary = (dev, swept) if basis == "devices" else (swept, dev)
     p_src, s_src = ("devices", "report") if basis == "devices" else ("report", "devices")
     for st in set(list(primary) + list(secondary) + list(manual)):
@@ -314,6 +331,129 @@ def apply_inventory_basis(inventory_value_rows, device_cells, basis, resolve=Non
         elif st in secondary:
             out[st] = {"value": round(secondary[st], 2), "source": s_src}
     return out
+
+
+# ── 1b. the ASSET half of the consignment ledger (mig 1041, index §42.3) ───────────────────────
+# Owner report 2026-09-29, verbatim: *"cogs will be those phones which are activated and sold, the
+# rest of the phones will become a part of the inventory till they are sold and automatically move
+# to cogs and out of the inventory cost"*.
+#
+# `coa` books the BS `inventory` line from this ledger under ONE predicate — `status == 'on
+# inventory'` — and that column carries 'Open' / 'Paid In Full' / NULL: **0 of 35,346 live house rows
+# match**, because 'On Inventory' is a CATEGORY value. The predicate has therefore booked nothing,
+# ever. These two functions are the half that was never built, over the ledger's OWN columns — no new
+# feed, no new table, no new upload — and they take their population from
+# `device_cogs.FEE_CATEGORIES`, the SAME vocabulary the COGS side excludes, so the two readings are
+# two views of ONE population and the periodic-inventory identity below is an identity rather than a
+# coincidence. Measured over the live house ledger 2026-10-03, every month of 2026:
+# `inventory(open) + purchases − COGS == inventory(close)` closes to **$0.00**.
+def _ledger_population(rows, fee_categories=None):
+    """PURE, internal: the ledger's HANDSET rows, IMEI-deduped, fee categories dropped — the ONE
+    population both readings below are taken over. Yields (store, amount, acquired, sold)."""
+    from app.modules.account.device_cogs import FEE_CATEGORIES
+    # `is None` deliberately, not falsy: an EXPLICIT empty vocabulary means "exclude nothing", which
+    # is how a caller asks for the ledger's whole population. Defaulting an empty tuple back to the
+    # house vocabulary would make that question unaskable.
+    fees = {str(f).strip().upper()
+            for f in (FEE_CATEGORIES if fee_categories is None else fee_categories)}
+    seen = set()
+    for r in rows or []:
+        r = r or {}
+        if str(r.get("category") or "").strip().upper() in fees:
+            continue
+        imei = str(r.get("esn_imei") or "").strip()
+        if imei:
+            if imei in seen:
+                continue
+            seen.add(imei)
+        amt = safe_float(r.get("owed_to_vip"))
+        if not amt:
+            continue
+        yield ((str(r.get("store") or "").strip()) or None, amt,
+               str(r.get("acquired_date") or "")[:10], str(r.get("date_sold") or "")[:10])
+
+
+def asset_ledger_unsold_cells(rows, as_of, fee_categories=None):
+    """PURE: the per-store value of the units this ledger says we HAD BEEN BILLED for on or before
+    `as_of` ('YYYY-MM-DD') and had NOT yet sold on `as_of`. Returns (cells {store: {value, units}},
+    meta).
+
+    AS-OF, NEVER "is it null today" (the §23z discipline, applied to the asset side). The ledger is a
+    wipe-and-reinsert CURRENT snapshot, so a unit that has since sold was still inventory at any date
+    before its `date_sold`, and a status column can never say that. `date_sold` is compared to the
+    as-of DATE; `acquired_date` is the week the distributor billed it ("the asset landing report for
+    every week charges for the phones due").
+
+    A row with NO store cannot be attributed. It is EXCLUDED from the cells and REPORTED in meta
+    (`unplaced_value` / `unplaced_units`) — never folded into a store and never silently dropped;
+    the same honesty `device_inventory_cells` already applies to the device feed. Measured on the
+    live house ledger 2026-10-03: unplaced = $0.00 across 38 stores, so nothing is lost today.
+
+    SNAPSHOT-BASIS ESTIMATE over closed prior years, stated rather than implied: the live snapshot is
+    PRUNED (72 rows in 2023, 1,391 in 2024, against 1,504 and 16,195 units actually invoiced), so an
+    as-of inside a pruned year measures the rows that SURVIVED pruning. `meta['snapshot_basis']` is
+    True whenever `as_of` precedes the earliest `acquired_date` the snapshot still carries + 1 year,
+    and the statement says so."""
+    cutoff = str(as_of or "")[:10]
+    cells, unplaced_v, unplaced_n, units = {}, 0.0, 0, 0
+    earliest = ""
+    if not cutoff:
+        return {}, {"as_of": None, "units": 0, "total": 0.0, "stores": 0,
+                    "unplaced_value": 0.0, "unplaced_units": 0, "snapshot_basis": False,
+                    "reason": "no as-of date — nothing booked rather than a guess"}
+    for store, amt, acq, sold in _ledger_population(rows, fee_categories):
+        if acq and (not earliest or acq < earliest):
+            earliest = acq
+        if not acq or acq > cutoff:
+            continue                      # not yet billed to us on that date
+        if sold and sold <= cutoff:
+            continue                      # already relieved into COGS on or before that date
+        units += 1
+        if not store:
+            unplaced_v = round(unplaced_v + amt, 2)
+            unplaced_n += 1
+            continue
+        c = cells.setdefault(store, {"value": 0.0, "units": 0})
+        c["value"] = round(c["value"] + amt, 2)
+        c["units"] += 1
+    total = round(sum(c["value"] for c in cells.values()), 2)
+    meta = {"as_of": cutoff, "units": units, "total": total, "stores": len(cells),
+            "unplaced_value": unplaced_v, "unplaced_units": unplaced_n,
+            "earliest_acquired": earliest or None,
+            # An as-of within a year of the snapshot's PRUNED edge measures the rows that
+            # survived pruning, not the units actually invoiced — a snapshot-basis ESTIMATE, and the
+            # statement says so rather than presenting it as a measurement.
+            "snapshot_basis": bool(earliest and cutoff < _plus_year(earliest)),
+            "source": "asset_ledger (as-of unsold, acquired_date/date_sold/owed_to_vip)"}
+    return cells, meta
+
+
+def _plus_year(d):
+    """'YYYY-MM-DD' + one year, as a string. Stdlib date arithmetic is overkill for a year bump and
+    a leap-day 02-29 would only widen the window by a day in the conservative direction."""
+    try:
+        return "%04d%s" % (int(str(d)[:4]) + 1, str(d)[4:])
+    except Exception:
+        return str(d)
+
+
+def asset_ledger_purchases(rows, start, end, fee_categories=None):
+    """PURE: what the distributor BILLED for handsets inside [start, end] — the ADDITIONS to
+    inventory, recognised on `acquired_date` over the same IMEI-deduped, fee-excluded population.
+    Returns (total, meta). This is the `purchases` term of the periodic-inventory identity; it is NOT
+    COGS and must never be booked as an expense (that distinction is exactly what §23y
+    `account/device_purchases` already records about what was BILLED)."""
+    s, e = str(start or "")[:10], str(end or "")[:10]
+    total, units = 0.0, 0
+    if not s or not e:
+        return 0.0, {"start": s or None, "end": e or None, "units": 0, "total": 0.0}
+    for _store, amt, acq, _sold in _ledger_population(rows, fee_categories):
+        if not acq or acq < s or acq > e:
+            continue
+        total = round(total + amt, 2)
+        units += 1
+    return total, {"start": s, "end": e, "units": units, "total": total,
+                   "source": "asset_ledger (acquired_date = billed)"}
 
 
 def inventory_recon_rows(inventory_value_rows, device_cells, basis, resolve=None):

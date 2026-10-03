@@ -75,6 +75,131 @@ _MA_DEVICE_ORDER_TYPES = {"branded handset"}
 # on luxelink July all 160 carry $0 rebate. Excluded from the device count AND reported in `meta`.
 _MA_UNKNOWN_SKU = "product not available"
 
+# Fee-only categories on the consignment/asset ledger. These are already booked on `vip_fees` by
+# `coa` and are NOT device cost. ONE HOME, dereferenced (owner directive 2026-09-20): the ASSET side
+# of the same ledger (`balance_sheet.asset_ledger_unsold_cells` / `asset_ledger_purchases`) must take
+# its population over EXACTLY this vocabulary, or the asset and the expense are two readings of two
+# populations and the periodic-inventory identity stops being an identity. A second literal copy of
+# this tuple anywhere in the account module is a build failure
+# (`harness_device_inventory_cogs.py` §G).
+FEE_CATEGORIES = ("PROCESSING FEE", "SHIPPING", "SIM KIT")
+
+# ── THE ONE DEVICE-COST BASIS (owner report 2026-10-03, mig 1041, index §42.5) ──────────────────
+# Owner, verbatim: *"these are not the right numbers, these numbers come from teh asset landing -
+# first check how other stores are getting thier numbers and then fix platform wide - no bandaid"*
+#
+# ONE question — "on what basis does this org expense a handset?" — so ONE declaration per org and
+# ONE resolution of it, of exactly the shape and precedence `distributor_payable_basis` already uses
+# (mig 954): ORG OVERRIDE > CARRIER PRESET > the legacy floor. Never a carrier or tenant branch.
+#
+#   'pos'           sale-time point-of-sale cost (`ext − gp`). What every org books today.
+#   'asset_ledger'  the ACCRUAL basis the owner asked for: the distributor's own per-unit charge off
+#                   the asset-landing ledger, recognised in the month the unit SOLD, with the unsold
+#                   units carried as a balance-sheet asset derived from the SAME ledger.
+#
+# NULL/'' is NOT a third basis — it is "not declared", and it resolves to `undeclared`, which
+# reproduces today's behaviour for that org byte for byte, including the known double-book it leaves
+# in place. That is what makes this change inert until the owner declares a basis per org.
+DEVICE_COST_BASES = ("pos", "asset_ledger")
+BASIS_UNDECLARED = "undeclared"
+
+
+def resolve_device_cost_basis(org_basis, carrier_preset_basis=None, legacy_cogs_mode=None):
+    """PURE. The WHOLE device-cost decision, as one dict, from one declaration.
+
+    `org_basis`            the org's own `account_config.device_cost_basis` (mig 1041). None/'' =
+                           NOT DECLARED (fall through), exactly like mig 954.
+    `carrier_preset_basis` the basis the org's CARRIER declares, read through the ONE carrier-preset
+                           store (`statement_engine.carrier_finance_preset`, key 'device_cost') — the
+                           same lazy auto-assign mig 945/953/954 use, so a new tenant that picks its
+                           carrier at onboarding is correct with no setup hook.
+    `legacy_cogs_mode`     the org's pre-existing `account_config.device_cogs_mode` (mig 621). Read
+                           ONLY here, so no caller can branch on it and reach a different answer.
+
+    WHY ONE DICT AND NOT A FLAG. The accrual basis has three inseparable consequences, and shipping
+    them as three config rows is how the platform would acquire a half-switched org: a tenant on
+    accrual COGS whose cash line still books double-expenses every handset (index §42.1, ~$400k a
+    month on the house org), and a tenant on accrual COGS without the asset side relieves an
+    inventory nothing ever booked (§42.3). So the resolution returns all three together and
+    `harness_device_inventory_cogs.py` §G fails the build if they can ever disagree:
+
+      accrual              → recognise the distributor's per-unit charge at `date_sold`
+      suppress_cash_cogs   → `vip_device_pay` (the PayGo cash settlement) leaves COGS. It is not
+                             lost: the liability it settles is already carried on `owed_vip`, so
+                             cash paid against a booked payable is a settlement, not an expense.
+      ledger_inventory     → the BS `inventory` line is the as-of unsold value of the SAME ledger,
+                             overriding `inventory_basis`, so the unit leaves inventory in the same
+                             month and at the same cost basis it enters COGS.
+
+    `cogs_mode` is what `device_cogs.resolve` is handed. On the accrual basis it is 'invoice', never
+    'auto': when the landing report has not swept (live, 2026-10-03: the ledger's newest
+    `acquired_date`/`date_sold` are both September) the month must render a DECLARED zero through the
+    existing ruling-K3(b) `honest_zero` → `L['device_cost']['note']` passthrough, never a POS figure
+    silently substituted for a stale feed and never a measured-looking $0.
+
+    NEVER RAISES. Returns the undeclared resolution for anything it cannot read."""
+    def _norm(v):
+        v = str(v or "").strip().lower()
+        return v if v in DEVICE_COST_BASES else ""
+
+    basis, source = _norm(org_basis), "org override"
+    if not basis:
+        basis, source = _norm(carrier_preset_basis), "carrier preset"
+    if not basis:
+        legacy = str(legacy_cogs_mode or "off").strip().lower()
+        if legacy not in ("off", "pos", "auto", "invoice"):
+            legacy = "off"
+        return {
+            "basis": BASIS_UNDECLARED, "source": "legacy device_cogs_mode (no basis declared)",
+            "cogs_mode": legacy, "accrual": False,
+            "suppress_cash_cogs": False, "ledger_inventory": False,
+            "legacy_cogs_mode": legacy,
+            # An org left undeclared on 'auto'/'invoice' recognises the distributor's charge AND
+            # still books the cash settlement in COGS. REPORTED on every statement rather than
+            # silently corrected, because correcting it unasked would restate that org's books.
+            "double_book_risk": legacy in ("auto", "invoice"),
+        }
+    accrual = basis == "asset_ledger"
+    return {
+        "basis": basis, "source": source,
+        "cogs_mode": "invoice" if accrual else "off",
+        "accrual": accrual,
+        "suppress_cash_cogs": accrual,
+        "ledger_inventory": accrual,
+        "legacy_cogs_mode": str(legacy_cogs_mode or "").strip().lower() or None,
+        "double_book_risk": False,
+    }
+
+
+def load_basis(client, org_id, carrier_preset=None):
+    """The one READ of the one declaration. Every caller (coa.build_inputs, statement_engine,
+    account/router) dereferences THIS — nothing else reads `device_cost_basis` or branches on
+    `device_cogs_mode` (§G locks that). Each column is its own defensive read, the mig-954 pattern:
+    a pre-1041 database simply has no `device_cost_basis` column and every org stays undeclared,
+    i.e. byte-identical. NEVER raises."""
+    org_basis, legacy = None, "off"
+    try:
+        rows = (client.schema("commcalc").table("account_config")
+                .select("device_cost_basis").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            org_basis = rows[0].get("device_cost_basis")
+    except Exception:
+        org_basis = None
+    try:
+        rows = (client.schema("commcalc").table("account_config")
+                .select("device_cogs_mode").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows and str(rows[0].get("device_cogs_mode") or "").strip():
+            legacy = str(rows[0]["device_cogs_mode"]).strip().lower()
+    except Exception:
+        legacy = "off"
+    if carrier_preset is None:
+        try:
+            from app.modules.account import statement_engine as _se
+            carrier_preset = _se.carrier_finance_preset(client, org_id, "device_cost")
+        except Exception:
+            carrier_preset = ""
+    return resolve_device_cost_basis(org_basis, carrier_preset, legacy)
+
 
 def _page(client, table, select, eqs=None, page=1000, cap=200000):
     """Paginated org-scoped select. Mirrors `coa._fetch_all` (supabase caps a query at 1000 rows).
@@ -179,7 +304,7 @@ def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store):
     Dedup by `esn_imei` for the same reason as the MA path. Fee-only categories are excluded — those
     are already booked on `vip_fees` by `coa` and are not device cost.
     """
-    _FEE_CATS = {"PROCESSING FEE", "SHIPPING", "SIM KIT"}
+    _FEE_CATS = {c.strip().upper() for c in FEE_CATEGORIES}      # ONE HOME, dereferenced
     rows = _page(client, "asset_ledger",
                  "esn_imei,store,category,owed_to_vip,date_sold", {"org_id": org_id})
     seen, by_store, detail = set(), {}, {}

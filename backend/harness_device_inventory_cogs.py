@@ -153,6 +153,7 @@ _harness_dbfree.install(FakeClient({}))
 
 from app.modules.account import coa                                             # noqa: E402
 from app.modules.account import device_cogs                                     # noqa: E402
+from app.modules.account import balance_sheet                                  # noqa: E402
 
 
 # ── the fixture: one consignment ledger, five handsets, told as a story ──────────────────────────
@@ -305,57 +306,20 @@ check("C2  'On Inventory' is a CATEGORY value, not a status — which is why the
       and all(str(r["status"]).strip().lower() != "on inventory" for r in _ledger_rows()))
 
 
-def unsold_as_of(rows, as_of, fee_cats=("PROCESSING FEE", "SHIPPING", "SIM KIT")):
-    """REFERENCE (the specification the asset side must satisfy — pure, no DB, no config).
+def unsold_as_of(rows, as_of):
+    """The REAL asset side (mig 1041): `balance_sheet.asset_ledger_unsold_cells`, flattened to
+    {store: value} so §C reads as it did when this was a local reference.
 
-    The value of the units this ledger says we had been BILLED for on or before `as_of` and had not
-    yet sold on `as_of`. Same three columns the COGS side already reads, same IMEI dedup, same fee
-    exclusion — so the asset and the expense are two readings of ONE ledger rather than two feeds
-    that happen to be about phones. `date_sold` is compared to `as_of`, never to "is it null today":
-    a unit that has since sold was still inventory at a date before it sold, and a status snapshot
-    can never say that (the §23z lesson, applied to the asset side)."""
-    fees = {f.strip().upper() for f in fee_cats}
-    seen, per_store = set(), {}
-    for r in rows or []:
-        if str(r.get("category") or "").strip().upper() in fees:
-            continue
-        acq = str(r.get("acquired_date") or "")[:10]
-        if not acq or acq > as_of:
-            continue                      # not yet billed to us on that date
-        imei = str(r.get("esn_imei") or "").strip()
-        if imei:
-            if imei in seen:
-                continue
-            seen.add(imei)
-        sold = str(r.get("date_sold") or "")[:10]
-        if sold and sold <= as_of:
-            continue                      # already gone to COGS on or before that date
-        amt = float(r.get("owed_to_vip") or 0)
-        if not amt:
-            continue
-        st = str(r.get("store") or "").strip() or "(store not mapped)"
-        per_store[st] = round(per_store.get(st, 0.0) + amt, 2)
-    return per_store
+    It WAS a local reference in this file — the specification §42.3 asked for. It is now production
+    code, and this harness drives the production function, because a specification that stays in a
+    harness is a specification nothing books from."""
+    cells, _meta = balance_sheet.asset_ledger_unsold_cells(rows, as_of)
+    return {st: c["value"] for st, c in cells.items()}
 
 
-def purchases_in(rows, start, end, fee_cats=("PROCESSING FEE", "SHIPPING", "SIM KIT")):
-    """REFERENCE: what the distributor BILLED us for handsets inside [start, end] — the additions to
-    inventory. Recognised on `acquired_date`, IMEI-deduped, fees excluded: the same population the
-    two readings above are taken over, so the identity below is an identity and not a coincidence."""
-    fees = {f.strip().upper() for f in fee_cats}
-    seen, total = set(), 0.0
-    for r in rows or []:
-        if str(r.get("category") or "").strip().upper() in fees:
-            continue
-        acq = str(r.get("acquired_date") or "")[:10]
-        if not acq or acq < start or acq > end:
-            continue
-        imei = str(r.get("esn_imei") or "").strip()
-        if imei:
-            if imei in seen:
-                continue
-            seen.add(imei)
-        total = round(total + float(r.get("owed_to_vip") or 0), 2)
+def purchases_in(rows, start, end):
+    """The REAL purchases term: `balance_sheet.asset_ledger_purchases`."""
+    total, _meta = balance_sheet.asset_ledger_purchases(rows, start, end)
     return total
 
 
@@ -402,6 +366,39 @@ check("C8  the unit in February's COGS is absent from February's closing invento
 # C9 — the reference reads the ledger's own columns, so no new feed, no new upload, no new table.
 check("C9  the asset side needs only acquired_date / date_sold / owed_to_vip — columns the ledger has",
       all(k in _ledger_rows()[0] for k in ("acquired_date", "date_sold", "owed_to_vip")))
+check("C10 the asset side is PRODUCTION code, not a reference in this file",
+      callable(getattr(balance_sheet, "asset_ledger_unsold_cells", None))
+      and callable(getattr(balance_sheet, "asset_ledger_purchases", None)))
+_c_cells, _c_meta = balance_sheet.asset_ledger_unsold_cells(rows, "2026-02-28")
+check("C11 the asset side takes its population from device_cogs.FEE_CATEGORIES — ONE vocabulary, so "
+      "the identity above is an identity and not a coincidence",
+      round(sum(c["value"] for c in _c_cells.values()), 2) == round(U3 + U4, 2)
+      and _c_meta["units"] == 2, "%s %s" % (_c_cells, _c_meta))
+_unplaced = balance_sheet.asset_ledger_unsold_cells(
+    rows + [{"org_id": ORG, "esn_imei": "990000000000099", "store": "", "category": "Open",
+             "owed_to_vip": 111.11, "acquired_date": "2026-01-05", "date_sold": None}],
+    "2026-02-28")[1]
+check("C12 a unit the ledger cannot place is REPORTED, never folded into a store and never dropped",
+      _unplaced["unplaced_value"] == 111.11 and _unplaced["unplaced_units"] == 1, repr(_unplaced))
+check("C13 no as-of date books nothing and SAYS so, rather than guessing today",
+      balance_sheet.asset_ledger_unsold_cells(rows, "")[1].get("reason"),
+      repr(balance_sheet.asset_ledger_unsold_cells(rows, "")[1]))
+check("C14 'is it null TODAY' is NOT the predicate: U1 sold on 2026-02-14 is still inventory on "
+      "2026-02-13 (the §23z as-of discipline on a wipe-and-reinsert snapshot)",
+      inv("2026-02-13") == round(U1 + U3 + U4, 2), inv("2026-02-13"))
+check("C15 basis 'asset_ledger' takes the ledger as the ONLY source — no report fallback mixing two "
+      "cost bases on one line",
+      balance_sheet.apply_inventory_basis(
+          [{"store": "ghost store", "swept_value": 9999.0}],
+          {STORE_B: {"value": U3}}, "asset_ledger")
+      == {STORE_B: {"value": U3, "source": "asset_ledger"}},
+      repr(balance_sheet.apply_inventory_basis(
+          [{"store": "ghost store", "swept_value": 9999.0}],
+          {STORE_B: {"value": U3}}, "asset_ledger")))
+check("C16 a manual per-store override still wins on the ledger basis (the mig-933 precedence)",
+      balance_sheet.apply_inventory_basis(
+          [{"store": STORE_B, "manual_value": 5.0}], {STORE_B: {"value": U3}}, "asset_ledger")
+      == {STORE_B: {"value": 5.0, "source": "manual"}})
 
 
 # ══ §D — THE DOUBLE COUNT NOBODY ASKED ABOUT ═════════════════════════════════════════════════════
@@ -482,6 +479,216 @@ check("F1b the banned-word list is not vacuous (a planted control the check must
       and _deciding_strings('"""boost"""\nimport os\n') == [])
 check("F2  the module's only gate is a per-org config value, not a name",
       "device_cogs_mode" in dc_src and "account_config" in dc_src)
+
+
+
+# ══ §G — THE LOCK: ONE BASIS HOME, DEREFERENCED, AND IT CANNOT UN-WIRE ═══════════════════════════
+# Owner directive 2026-09-20: "if one thing is fixed for one tenant it should be a design fix not a
+# temporary fix". A design fix ships with a check that FAILS THE BUILD if a caller stops
+# dereferencing the shared fact, or if a second copy appears. This is that check.
+section("G. One device-cost basis home, every caller dereferences it, and it cannot un-wire")
+
+import ast                                                                      # noqa: E402
+
+ACCT_DIR = os.path.join(HERE, "app", "modules", "account")
+BASIS_HOME = "device_cogs.py"
+BASIS_FNS = ("resolve_device_cost_basis", "load_basis")
+
+
+def _acct_sources():
+    out = {}
+    for fn in sorted(os.listdir(ACCT_DIR)):
+        if fn.endswith(".py"):
+            out[fn] = open(os.path.join(ACCT_DIR, fn), encoding="utf-8").read()
+    return out
+
+
+SRCS = _acct_sources()
+
+# G1 — THE HOME EXISTS AND IS PURE. The resolver takes values, not a client: a decision that needs a
+# database cannot be proved, and cannot be reused by the honest-zero path or by a config screen.
+check("G1  the one home exists and the decision itself is PURE (values in, decision out)",
+      all(hasattr(device_cogs, f) for f in BASIS_FNS)
+      and device_cogs.resolve_device_cost_basis("asset_ledger")["accrual"] is True)
+
+# G2 — THE THREE CONSEQUENCES ARE INSEPARABLE. Exhaustive over every input the resolver accepts:
+# accrual is NEVER true without BOTH the cash suppression and the ledger inventory. This is the
+# check that makes "one basis, never two" a property rather than a comment.
+_INPUTS = list(device_cogs.DEVICE_COST_BASES) + ["", None, "off", "ASSET_LEDGER", "nonsense"]
+_LEGACY = ["off", "pos", "auto", "invoice", "", None, "nonsense"]
+_bad = []
+for ob in _INPUTS:
+    for cp in _INPUTS:
+        for lg in _LEGACY:
+            d = device_cogs.resolve_device_cost_basis(ob, cp, lg)
+            if d["accrual"] != d["suppress_cash_cogs"] or d["accrual"] != d["ledger_inventory"]:
+                _bad.append((ob, cp, lg, d))
+            if d["accrual"] and d["cogs_mode"] != "invoice":
+                _bad.append((ob, cp, lg, d))
+check("G2  accrual ⇒ cash line suppressed AND ledger inventory, for EVERY input (%d combinations)"
+      % (len(_INPUTS) * len(_INPUTS) * len(_LEGACY)), not _bad, repr(_bad[:3]))
+
+# G3 — UNDECLARED IS BYTE-IDENTICAL. No declaration anywhere ⇒ the legacy mode passes through
+# untouched and nothing is suppressed or forced. This is what makes the change inert on every live
+# org until the owner declares a basis (house 'off', LuxeLink 'auto', Vzone 'off' as at 2026-10-03).
+_bad = []
+for lg in ("off", "pos", "auto", "invoice"):
+    d = device_cogs.resolve_device_cost_basis(None, "", lg)
+    if (d["cogs_mode"] != lg or d["suppress_cash_cogs"] or d["ledger_inventory"]
+            or d["basis"] != device_cogs.BASIS_UNDECLARED):
+        _bad.append((lg, d))
+check("G3  no declaration ⇒ the legacy device_cogs_mode passes through and NOTHING is suppressed "
+      "or forced (every live org is byte-identical until it is declared)", not _bad, repr(_bad))
+check("G3b an UNDECLARED org already on 'auto'/'invoice' has its double-book REPORTED, not silently "
+      "corrected (correcting it unasked would restate that org's books)",
+      device_cogs.resolve_device_cost_basis(None, "", "auto")["double_book_risk"] is True
+      and device_cogs.resolve_device_cost_basis(None, "", "off")["double_book_risk"] is False)
+
+# G4 — PRECEDENCE IS THE mig-954 PRECEDENCE, not a second one.
+check("G4  ORG OVERRIDE > CARRIER PRESET > legacy floor",
+      device_cogs.resolve_device_cost_basis("pos", "asset_ledger", "auto")["basis"] == "pos"
+      and device_cogs.resolve_device_cost_basis(None, "asset_ledger", "off")["basis"] == "asset_ledger"
+      and device_cogs.resolve_device_cost_basis("nonsense", "nonsense", "auto")["basis"]
+      == device_cogs.BASIS_UNDECLARED)
+check("G4b an unknown value at either level is IGNORED, never trusted (mig 954's own rule)",
+      device_cogs.resolve_device_cost_basis("marketplace_due", "", "off")["basis"]
+      == device_cogs.BASIS_UNDECLARED)
+
+def _names_in(node):
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | \
+           {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)} | \
+           {n.value for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+
+
+def _decides_on(src, needle):
+    """Every string constant the module could DECIDE on (docstrings and comments excluded — prose is
+    where the explanation legitimately lives)."""
+    tree = ast.parse(src)
+    skip = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            if ast.get_docstring(node, clean=False) is not None and node.body \
+                    and isinstance(node.body[0], ast.Expr):
+                skip.add(id(node.body[0].value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in skip and needle in n.value]
+
+
+# G5 — NOBODY ELSE READS `device_cogs_mode`. The legacy column is the thing that would let a caller
+# reach a different answer, so reading it outside the home is a build failure. (The config LOADER in
+# coa still carries the column for the settings screen; what is banned is deciding on it.)
+# The legacy column may only be NAMED by the one home, by the mig-611 config LOADER (coa) and by the
+# config WRITER (router) — a setter has to name the column it saves. Everywhere else, naming it is a
+# second decision waiting to diverge. G5b is the sharper half: inside coa the name may be BOUND once
+# and only from the resolved decision, so no edit can quietly restore a direct branch.
+_MODE_READ_ALLOWED = {BASIS_HOME, "coa.py", "router.py"}
+_viol = [fn for fn, src in SRCS.items()
+         if fn not in _MODE_READ_ALLOWED and _decides_on(src, "device_cogs_mode")]
+check("G5  `device_cogs_mode` is decided on in ONE home — no other module in the account package "
+      "can branch on it and reach a different answer", not _viol, repr(_viol))
+_binds = [n for n in ast.walk(ast.parse(SRCS["coa.py"]))
+          if isinstance(n, ast.Assign)
+          and any(isinstance(t, ast.Name) and t.id == "device_cogs_mode" for t in n.targets)]
+check("G5b inside coa the legacy mode is BOUND once, and only from the resolved decision",
+      len(_binds) == 1 and "cogs_mode" in _names_in(_binds[0].value)
+      and "_basis" in _names_in(_binds[0].value),
+      "%d bindings" % len(_binds))
+
+
+# G6 — NO SECOND COPY OF THE DECLARATION. Only the one home may select the column out of
+# account_config; a second reader is a second resolution waiting to diverge.
+_viol = [fn for fn, src in SRCS.items()
+         if fn != BASIS_HOME and 'select("device_cost_basis")' in src]
+check("G6  only the one home SELECTS `device_cost_basis` out of account_config — a second reader is "
+      "a second resolution waiting to diverge", not _viol, repr(_viol))
+check("G6b and the home really does select it (the check is not vacuous)",
+      'select("device_cost_basis")' in SRCS[BASIS_HOME])
+
+# G7 — THE CASH LINE CANNOT BE BOOKED ALONGSIDE THE ACCRUAL LINE. The `add("vip_device_pay", ...)`
+# call must be lexically INSIDE a guard that reads the resolved suppression. This is the check that
+# would have gone red on the shipped code, and it is the one the owner's "no bandaid" depends on:
+# the two lines can never both book, whatever anybody edits later.
+coa_tree = ast.parse(SRCS["coa.py"])
+_cash_calls, _guarded = 0, 0
+
+
+def _is_cash_booking(node):
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "add"
+            and node.args and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "vip_device_pay")
+
+
+def _walk_guards(node, guards):
+    """Walk every node, carrying the list of `If` tests it is lexically INSIDE. An `If` passes its
+    own test down to its body (and NOT to its orelse, which is the unguarded branch)."""
+    global _cash_calls, _guarded
+    if _is_cash_booking(node):
+        _cash_calls += 1
+        if any("suppress_cash_cogs" in _names_in(t) for t in guards):
+            _guarded += 1
+    if isinstance(node, ast.If):
+        for sub in node.body:
+            _walk_guards(sub, guards + [node.test])
+        for sub in node.orelse:
+            _walk_guards(sub, guards)
+        _walk_guards(node.test, guards)
+        return
+    for child in ast.iter_child_nodes(node):
+        _walk_guards(child, guards)
+
+
+_walk_guards(coa_tree, [])
+check("G7  every `vip_device_pay` booking in coa.py is inside a guard that reads the resolved "
+      "`suppress_cash_cogs` — the cash line cannot be booked alongside the accrual line",
+      _cash_calls >= 1 and _guarded == _cash_calls, "%d bookings, %d guarded" % (_cash_calls, _guarded))
+# planted control: the walker must actually catch an UNGUARDED booking, or G7 proves nothing.
+_ctl = ast.parse('def f():\n    add("vip_device_pay", None, 1)\n')
+_cash_calls, _guarded = 0, 0
+_walk_guards(_ctl, [])
+check("G7b the guard walker is not vacuous (a planted unguarded booking must be caught)",
+      _cash_calls == 1 and _guarded == 0, "%d/%d" % (_guarded, _cash_calls))
+
+# G8 — EVERY CALLER DEREFERENCES THE HOME. The three seams that act on the basis — the P&L booking
+# (coa), the balance sheet (statement_engine) and the config screen (router) — must each call it.
+for fn in ("coa.py", "statement_engine.py", "router.py"):
+    check("G8  %s dereferences the one home (load_basis) rather than deciding for itself" % fn,
+          "load_basis(" in SRCS[fn], fn)
+
+# G9 — ONE FEE VOCABULARY. The asset side and the COGS side must take the same population, or the
+# periodic-inventory identity §C proves is a coincidence. A second literal copy is a build failure.
+_viol = [fn for fn, src in SRCS.items()
+         if fn != BASIS_HOME and _decides_on(src, "PROCESSING FEE")]
+check("G9  the fee-category vocabulary has ONE home (device_cogs.FEE_CATEGORIES) and the asset side "
+      "dereferences it — no second literal copy in the account package", not _viol, repr(_viol))
+# The SIM KIT row (U6) was billed 2026-01-08 and sold 2026-01-22, so at 2026-01-10 it is "unsold".
+# Excluding the fee vocabulary it contributes nothing; including it, it contributes its $15. That
+# difference is the proof the asset side is reading the vocabulary rather than carrying its own.
+_fees_in = round(sum(c["value"] for c in balance_sheet.asset_ledger_unsold_cells(
+    rows, "2026-01-10", fee_categories=())[0].values()), 2)
+_fees_out = round(sum(c["value"] for c in
+                      balance_sheet.asset_ledger_unsold_cells(rows, "2026-01-10")[0].values()), 2)
+check("G9b the asset side really does read that home (dropping the exclusion changes its answer by "
+      "exactly the fee rows)", round(_fees_in - _fees_out, 2) == 15.00,
+      "%s vs %s" % (_fees_in, _fees_out))
+
+# G10 — A STALE LANDING READS A DECLARED ZERO, NOT A MEASURED ONE. Live, 2026-10-03: the ledger's
+# newest `acquired_date` and `date_sold` are both September, so October accrual COGS is $0.00. The
+# accrual basis therefore resolves to cogs_mode 'invoice', whose existing ruling-K3(b) `honest_zero`
+# → `L["device_cost"]["note"]` passthrough is the ONE note mechanism — no second one is invented.
+_stale = _cogs_for(10, 2026, mode=device_cogs.resolve_device_cost_basis("asset_ledger")["cogs_mode"])
+check("G10 a month the landing has not reached books $0.00 BY DECLARATION, through the EXISTING "
+      "honest-zero passthrough", _stale["active"] is True and _total(_stale) == 0.0
+      and "honest_zero" in _stale["meta"], repr(_stale["meta"]))
+check("G10b and it is NOT the POS fallback dressed up as a measurement (the accrual basis never "
+      "substitutes a point-of-sale figure for a stale feed)",
+      device_cogs.resolve_device_cost_basis("asset_ledger")["cogs_mode"] == "invoice")
+
+# G11 — RULE TWO on the new surface too.
+check("G11 the basis declaration is a per-org CONFIG value, never a tenant or carrier branch",
+      "account_config" in SRCS[BASIS_HOME]
+      and not [w for w in BANNED if w in " | ".join(_deciding_strings(SRCS[BASIS_HOME])).lower()])
 
 
 print("\n%s\n%d passed, %d failed" % ("=" * 78, P, F))

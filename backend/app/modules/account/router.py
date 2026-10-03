@@ -307,6 +307,26 @@ def put_inventory_values(body: PutInventoryValuesIn, org_id: str = ORG_ID):
 
 
 # ── per-org accounting config (booking rates — mig 611) ────────────────────────────────────────
+def _device_cost_basis_config(client, org_id):
+    """The resolved DEVICE-COST basis for the finance-config screen (mig 1041): what the org has
+    SET, what its carrier PRESET says, what therefore RESOLVES, and every consequence of it. Reads
+    the ONE home (`device_cogs.load_basis`) — this endpoint has no opinion of its own and does not
+    read `device_cogs_mode`. Read-only and best-effort."""
+    from app.modules.account import device_cogs as _dc
+    out = {"bases": list(_dc.DEVICE_COST_BASES)}
+    try:
+        resolved = _dc.load_basis(client, org_id)
+        out.update({"resolved": resolved,
+                    "resolved_basis": resolved["basis"],
+                    "source": resolved["source"],
+                    "suppresses_cash_cogs_line": resolved["suppress_cash_cogs"],
+                    "forces_ledger_inventory": resolved["ledger_inventory"],
+                    "double_book_risk": resolved["double_book_risk"]})
+    except Exception as e:
+        out["note"] = f"unavailable: {type(e).__name__}"
+    return out
+
+
 def _distributor_payable_config(client, org_id):
     """The resolved distributor-payable mapping for the tenant-setup / finance-config screen:
     what the org has SET, what its carrier PRESET says, what therefore RESOLVES, and the valid
@@ -402,7 +422,9 @@ def get_config(org_id: str = ORG_ID):
             # mig 954 — the distributor-payable tenant mapping, RESOLVED (so the setup screen shows
             # what a tenant that has set nothing will actually book, not a blank), with the
             # pick-don't-type option lists for both the basis and its target line.
-            "distributor_payable": _distributor_payable_config(sb(), org_id)}
+            "distributor_payable": _distributor_payable_config(sb(), org_id),
+            # mig 1041 — THE ONE device-cost basis, RESOLVED, with every consequence it carries.
+            "device_cost": _device_cost_basis_config(sb(), org_id)}
 
 
 class AccountPutConfigIn(LaxModel):
@@ -411,6 +433,8 @@ class AccountPutConfigIn(LaxModel):
     payroll_expense_names: Any = None
     payroll_expense_routes: Any = None
     device_cogs_mode: Any = None
+    # mig 1041 — THE ONE device-cost basis (owner report 2026-10-03). MONEY-TOUCHING.
+    device_cost_basis: Any = None
     # mig 954 — the TENANT-SETUP mapping (owner directive 2026-09-04 §C: "these should be mapped
     # when setting up the new tenant for proper reporting")
     distributor_payable_basis: Any = None
@@ -497,6 +521,22 @@ def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
         if mode not in ("off", "auto", "invoice", "pos"):
             raise HTTPException(400, "device_cogs_mode must be one of: off, auto, invoice, pos")
         row["device_cogs_mode"] = mode
+    # mig 1041 — THE ONE DEVICE-COST BASIS. Declaring 'asset_ledger' moves the handset from the
+    # point-of-sale figure to the distributor's per-unit charge at sale, takes the PayGo CASH line
+    # out of COGS, and books the BS inventory line from the same ledger — one declaration, three
+    # inseparable consequences (`device_cogs.resolve_device_cost_basis`). MONEY-TOUCHING: every
+    # period computed afterwards RESTATES, so the caller must recompute and the owner must approve.
+    # An EXPLICIT null clears it back to "not declared", which restores the pre-1041 behaviour.
+    if "device_cost_basis" in body.model_fields_set:
+        from app.modules.account import device_cogs as _dccfg
+        if body.device_cost_basis in (None, ""):
+            row["device_cost_basis"] = None
+        else:
+            b = str(body.device_cost_basis).strip().lower()
+            if b not in _dccfg.DEVICE_COST_BASES:
+                raise HTTPException(400, "device_cost_basis must be one of: "
+                                         + ", ".join(_dccfg.DEVICE_COST_BASES))
+            row["device_cost_basis"] = b
     # ── TENANT-SETUP MAPPING (owner directive 2026-09-04 §C, mig 954) ───────────────────────────
     # Which feed answers "what do we owe the distributor", and which Balance-Sheet line it books to
     # (a per-tenant COST-CENTRE choice, §B). MONEY-TOUCHING — the caller must recompute afterwards.
