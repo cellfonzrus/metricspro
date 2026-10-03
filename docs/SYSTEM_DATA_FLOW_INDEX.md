@@ -5528,6 +5528,10 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | `core.billing_statement` (mig `975`; FROZEN itemized statements incl. the `complete` flag) | `POST /billing/statement/close` | `statement.build_statement(frozen=)` — read, NEVER recomputed |
 | `storeops.pricing_package` / `storeops.tenants.package_key` (mig `908`, REUSED) | existing `/billing/*` pricing endpoints | the PLAN TIERS (free/starter/premium are ROWS, not an enum) + the monthly-fee line on every statement |
 | `commcalc.zero_sales_config` (mig `1016`, **NOT applied**; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) |
+| `storeops.alert_log` — **scope `'billpay_declaration'`** (mig `433` table, no new table) | `closing/router._run_billpay_declaration_alerts` via the SAME `_lateness_record_sent` | `_lateness_already_sent`; the ref_key SPELLING is `manager_digest.ref_key`, the third scope to dereference it. A row is written ONLY when a channel actually delivered, so a dead channel cannot mark a finding escalated (§47.13) |
+| `storeops.tenants` — **the bill-pay declaration-alert config** (mig `1043`: `billpay_declaration_alerts_enabled` / `_alert_time` / `_alert_tolerance` / `_alert_channels` / `_alert_lookback_days` / `_alert_last_run` / `_alert_last_detail`; house defaults in `billpay_declaration_alerts.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `billpay_declaration_alerts.resolve_config` → `_run_billpay_declaration_alerts`; the send time is compared by `manager_digest.due_now` (§47.13) |
+| `storeops.alert_log` — **scope `'manager_followup'`** (mig `433` table, no new table) | `commcalc/router._run_manager_followup_alerts` via the SAME `_lateness_record_sent` | `_lateness_already_sent`; the ref_key SPELLING is `manager_digest.ref_key`, the fourth scope to dereference it. The key tail is (store, queue, age BAND), so a follow-up re-escalates when the work AGES but not when its count ticks by one. A row is written ONLY when a channel actually delivered (§47.14) |
+| `storeops.tenants` — **the Follow Up With Managers config** (mig `1044`: `manager_followup_enabled` / `_time` / `_channels` / `_escalate_after_days` / `_show_oldest` / `_min_items` / `_last_run` / `_last_detail`; house defaults in `manager_followup.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `manager_followup.resolve_config` → `_run_manager_followup_alerts`; the send time is compared by `manager_digest.due_now` (§47.14) |
 | `storeops.alert_log` — **scope `'zero_sales'`** (mig `433` table, no new table) | `router._run_zero_sales_alerts` via the EXISTING `storeops.router._lateness_record_sent` | `_lateness_already_sent` — dedup per (recipient, store, last-zero-day, grain:scope); the ref_key SPELLING is `manager_digest.ref_key`, the one home both this and scope `'epay_discrepancy'` dereference (§15z) |
 | `storeops.shifts` — **as the TRADING-DAY fact** (§15z) | storeops scheduling (§14) | THE one read on this path is `labour_coverage.load_shift_hours_range` (mig-free); `load_shift_hours` (month grain, §4 labour coverage) delegates to it, and `router._zero_sales_core` calls it for the range grain. `targets_engine.scope_hours_by_day` (§5) is the same fact for Daily Targets' `open_days`. There is NO store trading-calendar table |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
@@ -5552,7 +5556,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
-| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
+| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1045` `billpay_fee_product_desc`** — the per-org product_desc vocabulary for the customer bill-payment SERVICE FEE, read by `_billpay_fee_tokens` over `epay_fee_recon.resolve_fee_descs` (empty default ⇒ the house `HOUSE_FEE_DESCS` tuple ⇒ byte-identical; §47.12), **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`_billpay_fee_tokens` (mig `1045` — the SERVICE-FEE product vocabulary, same defensive whole-row posture, default `epay_fee_recon.HOUSE_FEE_DESCS`; the ONE reader, consumed only by the ONE producer `_billpay_sales_by_store_day`, §47.12)**; **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` (since 2026-09-21 also `category_contains` / `department_contains`, additive — the intake's 2.5a step writes them through `PUT /exec-metric-config` for a bucket that matched nothing; the `activation` bucket's byod/upgrade/port tokens are RETIRED as a home — read only as a legacy layer by `line_class.resolve_rules` for a tenant-authored row; the Metric-definitions panel no longer offers it) |
@@ -5728,6 +5732,8 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
 | `GET /sales-report` | `15792` | §3 |
 | `GET /ma-commission/summary` — per-store MA roll-up. `by_store[].store` and the store picker name the real STORE via `ma_store_pnl.canonical_store_index` (mig 314); `spiff_by_month` is the EARNED ladder and `legs.received` the CASH ladder, both from the one home, neither with a hardcoded month count | `router.ma_commission_summary` | §4a |
+| `POST /closing/billpay-declaration-alerts/run-due` (secret-gated HOURLY cron; each tenant's own HH:MM compared in the handler) · `POST /closing/billpay-declaration-alerts/run-now?send=` (manager/admin, defaults to a DRY RUN) | `closing/router.billpay_declaration_alerts_run_due` / `_run_now` → `_run_billpay_declaration_alerts` + `_billpay_declaration_store_days` (joins `billpay_pickup.declared_billpay_in_force` with `metric_recon.pos_billpay_cash`) | §47.13 the morning declaration-exception digest (READ-ONLY; `books_to` = []) |
+| `GET /commcalc/manager-followup` (org- and span-scoped; items with NO store survive the span filter) · `POST /commcalc/manager-followup/alerts/run-due` (secret-gated HOURLY cron; each tenant's own HH:MM compared in the handler) · `POST /commcalc/manager-followup/alerts/run-now?send=` (manager/admin, defaults to a DRY RUN) | `commcalc/router.manager_followup_board` / `_run_due` / `_run_now` → `_run_manager_followup_alerts` + `_followup_items` (reads the three attributable registry queues, every store string through `_store_code_resolver`); assembly is PURE in `commcalc/manager_followup.py` | §47.14 Follow Up With Managers (READ-ONLY; `books_to` = []) |
 | `GET /commcalc/zero-sales` (`date_from`/`date_to`/`market`/`store`/`rep`) · `GET/PUT /commcalc/zero-sales-config` · `POST /commcalc/zero-sales/alerts/run-due` (secret-gated cron) · `POST /commcalc/zero-sales/alerts/run-now?send=` (defaults to a DRY RUN) | `router.zero_sales_report` / `get_zero_sales_config` / `put_zero_sales_config` / `zero_sales_alerts_run_due` / `zero_sales_alerts_run_now` → `_zero_sales_core` + `_run_zero_sales_alerts` | §15z Zero sales (READ-ONLY; `books_to` = []) |
 | `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
@@ -6016,7 +6022,8 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | **External credit machine (declared, per closing row)** | `daily_closing.t_ext_cc` (mig `103` — NOT a new column). DM-corrected days: `dm_store_cc` is the COMBINED card total; `dm_ext_cc` (mig `961`) states the external portion OF it, so `t_credit + t_ext_cc == dm_store_cc` either way — the card total never moves. Its DISPLAY NAME is the mig-`960` carrier label preset (`report_col[:carrier]` key `closing_t_ext_cc`; built-in 'External Credit Card') | `verified_overlay.apply_overlay` (split) + `verification_audit.DM_FIELDS` (audit trail) + `report_labels`/`useReportLabels().colLabel` (name); already inside the mig-939 / mig-944 CARD base — deliberately unchanged. Live 2026-09-04: $62,107.78 house + $1,577.24 LuxeLink |
 | **Card settlement variance (per store, day, processor role)** | declared = the tender columns the org's `closing_tender_def.processor_key` routes to a role (house: `t_ext_cc`→external_cc, `t_credit`→pos_merchant), DM-split applied; settled = `merchant_settlement_day` (mig `955`) summed over `card_brand`, reached through the mig-207 registry. variance = settled − declared, so NEGATIVE = SHORT | `external_credit_recon.recon_row` — the verdict IS `envelope_report.count_fields` (mig-936 truth table, reused; tolerance from `metric_source_of_truth` metric `card_settlement`, default 0.00) → `GET /closing/external-credit-recon`; honest gaps `no_processor_data`/`no_declared_data`/`dm_merged` carry `variance = None` and NEVER a dollar (§12); proof `harness_external_credit_recon.py` |
 | Bill payment on credit card (declared, pickup column) | `daily_closing.epay_on_credit` (per envelope; credit-only closings display with no checkbox — nothing physical to pick up) | `billpay_pickups` envelope `credit` + `total_credit` (`GET /closing/billpay-pickups`, mig `944`) |
-| Bill-pay 3-WAY recon (per store-day) | Leg A `daily_closing.epay_on_cash`+`epay_on_credit` (DM overlay) vs Leg B sales-tx billpay via `_sales_cell_agg` exec `bill_payment` rules + mig-944 tender split (`bill_amt_card/cash/mixed`, `classify_tender`, config `accessory_config.billpay_*_tenders`) vs Leg C processor feed (mig-939 resolution + mig-944 row filter/account fallback) | `metric_recon.reconcile_billpay_three_way_days` via `GET /closing/cash-recon-management` (`_sales_billpay_for_days`/`_pos_billpay_for_days`); W3 report `closing_billpay_recon`; proof `harness_billpay_threeway.py` |
+| Bill-pay 3-WAY recon (per store-day) | Leg A `daily_closing.epay_on_cash`+`epay_on_credit` (DM overlay) vs Leg B sales-tx billpay via `_sales_cell_agg` exec `bill_payment` rules + mig-944 tender split (`bill_amt_card/cash/mixed`, `classify_tender`, config `accessory_config.billpay_*_tenders`) **PLUS the customer service fee (mig `1045`), because Leg A's declaration includes it — added in the ONE home `metric_recon.pos_billpay_total`, never at a call site (§47.12)** vs Leg C processor feed (mig-939 resolution + mig-944 row filter/account fallback) | `metric_recon.reconcile_billpay_three_way_days` via `GET /closing/cash-recon-management` (`_sales_billpay_for_days`/`_pos_billpay_for_days`); W3 report `closing_billpay_recon`; proof `harness_billpay_threeway.py` + `harness_billpay_fee_basis.py` (89, §E the sibling) |
+| **POS bill-payment CASH in the drawer** (the pickup netting basis) | the bill lines' cash leg (`bill_amt_cash`) **+ the customer service-fee cash** (`epay_fee_recon.aggregate_fee_cash`, tender-split, voids dropped, vocabulary mig `1045`) | ONE home `metric_recon.pos_billpay_cash` (+ `pos_billpay_fee_cash` to SHOW the correction); dereferenced by `closing/router.closing_pickups` → `billpay_netting.net_store_day`. `None` stays `None` ⇒ `basis='none'`, never a fee-corrected zero. Build-locked by `harness_billpay_fee_basis.py` §G (§47.12) |
 | Store cash on hand (BS asset, mig `938`; symmetry+floor fix 2026-09-02) | DM-verified `daily_closing` declared cash (overlay-corrected) − SAME-verification-rule outflows (`cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal`, keyed to their envelope's close_date; under `'verified'` only verified store-days' outflows relieve), floored at ZERO per store (suppressed imbalance in meta `floored`), as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
 | Bill-pay pass-through (P&L `billpay_collected`/`billpay_offset`, mig `939`) | `daily_closing.epay_on_cash`+`epay_on_credit` (DM-verified corrections win at store-day grain); pair nets to ZERO | `account/billpay_pl.billpay_cells`/`billpay_bookings` → `coa.build_inputs` (`pl_billpay_presentation='carveout'`; offset label per `pl_billpay_settlement`) |
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date` — mig-944 row filter `ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
@@ -16218,6 +16225,314 @@ load-bearing ones were patched back to the broken behaviour by hand and watched 
 **MONEY-TOUCHING — MIGRATIONS `1038` AND `1039`: owner-approved before applying.** Neither moves money;
 both are additive and idempotent, and the money-touching statements (choosing the source, switching the
 netting on) are left **commented out** in `1038` for the owner to run with the numbers in front of them.
+
+### 47.12 Why POS and DECLARED disagreed on nine store-days out of ten — the fee was cash nobody counted (owner 2026-10-03, mig `1045`)
+
+Owner, verbatim: *"diff of the pos data and th rep defined data needs to be investigated why those
+errors take place"*.
+
+**THE ANSWER IS THAT MOST OF THEM WERE NOT ERRORS.** Measured read-only over September 2026 for the
+house org, through the system's own shared helpers (`closing/router._sales_billpay_for_days`,
+`closing/envelope_report.declared_billpay_cash`, `commcalc/router._sales_rows_union`) — no second
+derivation of anything:
+
+| | |
+|---|---|
+| store-days where the rep's declaration and the POS figure agreed | **9 of 535** |
+| the customer fee, rung as its own sales line | **4,176 lines / $16,592.00** |
+| … how it is worded | dept `Bill Payments`, category `Other Charge`, desc `ePay Service Charge` |
+| the house exec `bill_payment` rule | `exclude_category: ['other charge']` |
+
+So the fee was excluded from the POS bill-pay figure **by config, deliberately**. That exclusion is
+RIGHT for the bill-payment metric — a service charge is not a bill payment, and counting it would
+inflate Exec-MTD's Bill Payment $ — and WRONG for the drawer, because the fee is cash the rep took
+from the customer and has to declare. **One number was answering two different questions**, which is
+why they drifted on 98% of store-days.
+
+**THE DECISIVE SINGLE CASE.** B-103 on 2026-09-13; the feed holds exactly two lines:
+
+```
+Bill Payments | Boost RTR $1-$650      $67.00
+Bill Payments | ePay Service Charge     $4.00
+```
+
+The rep declared **$71.00**. The POS figure was **$67.00**. The rep was right.
+
+**THE CLASS, NOT THE INSTANCE.** The question "how much bill-payment cash did the POS record for
+this store-day" was answered by reading the bill-pay map's raw `cash` key at every call site. It now
+has ONE home — `commcalc/metric_recon.pos_billpay_cash` (cash leg) / `pos_billpay_total` (all
+tenders, the three-way's grain) / `pos_billpay_fee_cash` (just the correction, so a report can SHOW
+it) — and the callers dereference it. `None` stays `None`: a store-day the feed never covered is
+still `basis='none'`, never a fee-corrected zero.
+
+| The fact | Its ONE home | Who dereferences it |
+|---|---|---|
+| is this line the customer service fee | `commcalc/epay_fee_recon.is_fee_desc` + `resolve_fee_descs` (house default `HOUSE_FEE_DESCS`) | `aggregate_fee_cash`, `aggregate_system_fee` |
+| the fee cash per store-day | `commcalc/epay_fee_recon.aggregate_fee_cash` (tender-split, voids dropped) | `commcalc/router._billpay_sales_by_store_day` — the ONE producer |
+| the org's fee vocabulary | `commcalc/router._billpay_fee_tokens` (mig `1045`) | the producer only |
+| POS bill-pay **cash** in the drawer | `metric_recon.pos_billpay_cash` | the pickup netting basis (`closing/router.closing_pickups`) |
+| POS bill-pay **total**, all tenders | `metric_recon.pos_billpay_total` | `reconcile_billpay_three_way_days` Leg B — every caller of the three-way at once |
+
+**THE SIBLING WAS FIXED IN THE SAME CHANGE.** Leg A of the three-way recon is the rep's declared
+`epay_on_cash + epay_on_credit`, which includes the fee whichever way the customer paid. Comparing it
+against the bill lines alone reported a variance on nearly every store-day, exactly as the cash basis
+did. Fixing only the cash leg would have been "one of them fixed and the other not" — the same defect
+wearing a hat. A pre-fee slot (no `fee` key) resolves to its `amount` exactly as before, so every
+existing caller and fixture is byte-identical.
+
+**MEASURED AFTER THE FIX** (same window, same helpers, through the real `closing_pickups`):
+
+| | before | after |
+|---|---|---|
+| store-days agreeing to the cent | 9 | **111** |
+| … within a dollar | — | **342 of 530** |
+| total absolute gap | $18,656.54 | **$10,935.08** (41.4% closed) |
+| B-2612 / 2026-09-03 cash from sales | $35.00 | **$15.00** — the owner's own figure |
+
+**RULE TWO — and why a code constant would have been a patchwork.** The house org words its fee
+`ePay Service Charge`. **LuxeLink rings no separate fee line at all**: its bill-pay department `Rtr`
+holds only `Total Wireless RTR Wallet` and plan lines, and its own September gap (**338 store-days,
+$57,905**, 73 of them agreeing exactly) therefore has a DIFFERENT cause, which this change does not
+claim to fix and does not pretend to. Hard-coding the Boost wording would have repaired one tenant
+and left the other exactly as wrong. So the vocabulary is per-org config (mig `1045`,
+`accessory_config.billpay_fee_product_desc`, empty default ⇒ the house tuple ⇒ byte-identical) with
+the house default in ONE place in code.
+
+**TWO DEFECTS FOUND ON THE WAY — REPORTED, NOT PAPERED OVER.**
+
+1. **The feed is missing fee lines on some store-days** — fewer fee lines than bill transactions
+   (B-103 2026-09-10: 8 txns / 6 fee lines; B-4712 2026-09-19: 15 / 3). A feed-completeness problem,
+   and deliberately NOT smoothed over by assuming a fee per transaction.
+2. **`commcalc/epay_fee_recon.fee_recon` returns zero rows for September** (house org). It reads
+   `raw_sales` ONLY, while this org's sales land in `daily_sales_feed`; the canonical display source
+   is `_sales_rows_union` (feed ∪ raw_sales), which this report does not dereference. So the **ePay
+   Fee Reconciliation report and the hourly ePay fee alert (mig `905`) have been silently empty** —
+   a report reading the wrong table, not a feed that is absent. Same one-fact-one-home rule, still
+   open; `aggregate_system_fee` now takes the vocabulary so the fix is a source swap, not a rewrite.
+
+**THE 188 STORE-DAYS THAT STILL DISAGREE ARE REAL**, worth $10,834, and are what a district manager
+should actually be chasing. Two directions, two different problems:
+
+| Store | Day | Declared | POS basis | Gap | Reading |
+|---|---|---|---|---|---|
+| B-559 | 2026-09-10 | $0.00 | $599.38 | −$599.38 | bill-pay cash never declared |
+| B-6011 | 2026-09-28 | $0.00 | $439.66 | −$439.66 | same |
+| B-1800 | 2026-09-24 | $70.00 | $460.80 | −$390.80 | same |
+| B-3565 | 2026-09-16 | $692.00 | $286.67 | +$405.33 | sales cash labelled as bill-pay |
+| B-559 | 2026-09-24 | $453.00 | $112.72 | +$340.28 | same |
+
+A third, smaller pattern: the declaration is a whole dollar on **504 of 535** store-days while the POS
+figure carries cents on 668 of 815 — routine rounding, a few dollars at a time.
+
+**LOCK.** `harness_billpay_fee_basis.py` (89 checks). Section G FAILS THE BUILD if any of the four
+caller files re-adds a fee leg to a cash or amount leg instead of asking the home, with the ONE
+producer line excused BY NAME and its excuse checked for staleness; G5/G6 pin one producer and one
+config reader. Verified to bite: reverting the pickup basis to `_f(v.get("cash")) + _f(v.get("fee_cash"))`
+produces `✗ G1 router.py re-adds the legs nowhere of its own`. Section H arms every lock — including
+**H6**, which pins that the scan reads spacing-preserving text, because the first cut of this lock
+scanned token-JOINED source and therefore matched nothing and passed vacuously.
+
+**DUPLICATE CHECK (stated for the build gate).** Nothing new was derived. Reused: the fee predicate
+(`epay_fee_recon.is_fee_desc`, which already existed and the P&L already books fees through —
+`account/coa.py`), the sales source (`_sales_rows_union`, already fetched by the producer, so no
+second read), the tender split (`metric_recon.classify_tender` + `accessory_config.billpay_*_tenders`,
+mig 944), the store canonicalisation (the producer's own `ckey_fn`), the era rule for the declared
+side (`envelope_report.declared_billpay_cash`, §47.11), and the netting mechanism itself
+(`billpay_netting.net_store_day`, mig 989/1038 — untouched). **No new report and no new endpoint was
+built: the declared-vs-POS report already exists** as the three-way recon on
+`GET /closing/cash-recon-management` with notify key `closing_billpay_recon` (§12), and it inherits
+this correction through Leg B.
+
+### 47.13 The morning declaration-exception digest — DM and above, email and WhatsApp (owner 2026-10-03, mig `1043`)
+
+Owner, verbatim: *"the system should create that report and send it to the dm and all above via whats
+app and email the next morning at 1030 am - nothing hardcoded"*.
+
+**NOTHING NEW WAS BUILT THAT ALREADY EXISTED.** The duplicate check, stated for the build gate:
+
+| What the ask needs | Where it already lived | What was added |
+|---|---|---|
+| the recipients (DM ∪ above) | `commcalc/manager_digest.recipients_for` → `storeops/org_chain` | nothing |
+| one digest per manager, dedup, `ref_key` spelling | `commcalc/manager_digest.plan_digests` | a `channels` argument |
+| the dedup rows | `storeops.alert_log` + `_lateness_already_sent` / `_lateness_record_sent` | scope `'billpay_declaration'` |
+| a tenant-local HH:MM send time on an hourly tick | the mig-`433` convention (its own default is already 10:30) | `manager_digest.due_now`, so three sweeps stop spelling the compare three times |
+| the declared figure, DM corrections applied | `_billpay_position_core`'s inline block | factored to `billpay_pickup.declared_billpay_in_force`, now dereferenced by both |
+| the POS figure | `metric_recon.pos_billpay_cash` (§47.12) | nothing |
+| the report itself | the 3-way recon on `GET /closing/cash-recon-management`, notify key `closing_billpay_recon` | nothing — **no new report, no new endpoint for the data** |
+| WhatsApp that survives Meta's window | `whatsapp_meta.send_document_detailed` | nothing |
+
+**WHY IT IS A SIGNAL AND NOT NOISE.** Built on the OLD comparison this digest would have escalated
+**526 of 535** September store-days and taught every district manager to ignore it. §47.12 had to land
+first. The real dry run against yesterday (2026-10-02, house org, read-only) flagged **5 store-days
+worth $278.53 out of 18**, with 13 agreeing, and resolved real managers carrying both an email and a
+WhatsApp number from the org tree.
+
+**WHAT IT ALERTS ON — and the one thing it refuses.** `closing/billpay_declaration_alerts` (PURE):
+
+- `under_declared` — the declaration is materially BELOW the POS basis. Bill-pay cash the store took
+  and did not declare, so it was banked as store cash or not banked at all.
+- `over_declared` — materially ABOVE it. Real sales cash labelled as bill-pay cash, which removes it
+  from what the DM is asked to collect.
+- **`no_pos_figure` is NEVER alerted.** The sales feed carried no bill payments for that store-day, so
+  there is nothing to compare. That is a pipeline failure with its own surface (§20 import health),
+  and blaming a store for a report that did not arrive is the silent-zero class the house rules
+  forbid. It is COUNTED in the digest footer — the §15z rule verbatim — so a thin digest is never
+  read as a healthy estate. `ALERTABLE` and `REFUSED_AS_ALERT` partition `GAP_CLASSES`, pinned, so a
+  future class cannot be silently neither.
+
+A `$0.00` declaration against a `$0.00` basis **agrees**; a `$0.00` declaration against a real basis is
+the largest exception there is. The two never collapse, and `gap_of` returns `None` rather than `0.0`
+when there is no basis, so no screen can render "no difference" for a store-day nobody could measure.
+
+**NOTHING HARDCODED, literally** (mig `1043`, per-tenant columns on `storeops.tenants`, every one with
+a house default in `HOUSE_CONFIG` so the sweep resolves identically before the migration is applied):
+`billpay_declaration_alerts_enabled` (**FALSE** — the mig-905 safe-by-default posture, nothing sends on
+deploy) · `billpay_declaration_alert_time` (`'10:30'`) · `billpay_declaration_alert_channels`
+(`["email","whatsapp"]`) · `billpay_declaration_alert_tolerance` (`1.00`) ·
+`billpay_declaration_alert_lookback_days` (`1`). An unparseable value degrades to its default rather
+than to "never alert" or "alert on every cent"; a negative tolerance is read as its magnitude. RULE
+TWO holds in the code: `harness_billpay_declaration_alerts.py` §H scans it with prose stripped.
+
+**THE CHANNEL RULE GENERALISED, IT DID NOT FORK.** `manager_digest`'s house rule was stated as "a
+manager with no email is skipped — the house rule, not a knob", which was right while email was the
+only channel. It is now: **a recipient is reachable on a channel when they have an ADDRESS for it, and
+is skipped only when no requested channel can reach them** (`CHANNEL_ADDRESS_FIELD` / `addresses_for`
+/ `normalize_channels` — one home; a caller chooses which channels to request, never who is skipped).
+`storeops.employees.phone` is now read by `org_chain_inputs` and carried by `org_chain.managers_at`,
+additively. **The dedup identity stays the email wherever there is one**, so every `ref_key` ePay and
+zero-sales have ever written is byte-identical and turning WhatsApp on re-escalates nothing; a
+recipient reachable only on WhatsApp keys on that address instead of being silently dropped. An
+email-only plan carries no `addresses` key at all, so every pre-existing reader is untouched (pinned,
+§F7–F12).
+
+**WHATSAPP IS SENT THE WAY THE HOUSE LEARNED TO SEND IT.** A 10:30 digest is business-initiated and
+therefore almost always OUTSIDE Meta's 24-hour service window, where a free-form text returns HTTP 200
+with a real message id and is then silently dropped (the 2026-08-05 incident, `notify/whatsapp_window`).
+So the WhatsApp leg goes through `whatsapp_meta.send_document_detailed` with `data=b""` — the module's
+own text-only path, which resolves to the approved template rung — and **never `send_text`**, which
+would look like it worked and deliver nothing. Pinned by §H6.
+
+**A DEDUP ROW IS WRITTEN ONLY WHEN A CHANNEL ACTUALLY DELIVERED.** A configured-but-dead channel can
+never mark a finding "escalated" and hide it from tomorrow's run (§H10). Each leg records its own
+outcome; the sweep reports `email_configured` / `whatsapp_configured` honestly rather than counting a
+send that did not happen.
+
+**Endpoints.** `POST /closing/billpay-declaration-alerts/run-due` (secret-gated hourly pg_cron; the
+per-tenant minute is compared in the handler, so ONE job serves every tenant in every timezone) and
+`POST /closing/billpay-declaration-alerts/run-now?send=` (manager/admin, **defaults to a DRY RUN** that
+returns exactly who would be messaged, on which channels, about which store-days — structured, never
+pre-joined prose, so the screen owns presentation). Assembly:
+`closing/router._billpay_declaration_store_days` JOINS the two homes and derives neither.
+
+**Proof.** `harness_billpay_declaration_alerts.py` (93 checks, stdlib only, DB-free), wired into the
+carrier-vocab-guard job. Sections: A config degradation, B the absence-is-not-zero classification,
+C the digest (both renderings agreeing, the refusal footer, rows counted not dropped), D the dedup
+identity (a class CHANGE is news, not a duplicate), E the due-time rule, F channels incl. the
+byte-identity of the email-only callers, G the migration tied to the code, H RULE TWO and the armed
+controls.
+
+### 47.14 FOLLOW UP WITH MANAGERS — the pending work each manager owns, aged (owner 2026-10-03, mig `1044`)
+
+Owner, verbatim: *"then alert the management via a whats app message for all followup items with the
+managers - this will be a seprate module - Follow Up with Managers , all pending jobs assigned to the
+managers will be followed up via this module"*.
+
+**WHAT "ALL PENDING JOBS" MEANS IS NOT DEFINED BY THIS MODULE.** It is
+`commcalc/compliance_summary.CATEGORIES` — the registry the Flags & Compliance dashboard (§41) already
+counts off — which `manager_followup.sources()` **dereferences**. A second list of what counts as a
+pending job is the duplicate defect the index rules forbid, so there is not one, and
+`harness_manager_followup.py` §B4–B5 **fails the build** if a queue label or key is ever spelled inside
+this module. What the follow-up adds is the two things a COUNT cannot give: **who owns an item**, and
+**how long it has been pending**.
+
+**NOTHING NEW WAS BUILT THAT ALREADY EXISTED.** The duplicate check, stated for the build gate:
+
+| What the ask needs | Where it already lived | What was added |
+|---|---|---|
+| what counts as a pending job | `commcalc/compliance_summary.CATEGORIES` | nothing — dereferenced |
+| the recipients (DM ∪ above) | `commcalc/manager_digest.recipients_for` → `storeops/org_chain` | nothing |
+| one digest per manager, dedup, the `ref_key` spelling, the unreachable-recipient skip | `commcalc/manager_digest.plan_digests` | nothing — the `channels` argument landed in §47.13 |
+| the dedup rows | `storeops.alert_log` + `_lateness_already_sent` / `_lateness_record_sent` | scope `'manager_followup'`, the fourth scope on the same table |
+| a tenant-local HH:MM send time on an hourly tick | the mig-`433` convention + `manager_digest.due_now` | nothing |
+| "which store_code is this string" | `_store_code_resolver` (§13) | nothing — dereferenced per queue |
+| the full list of any queue's items | the queue's own page, already linked from the registry | nothing — the digest LINKS it rather than reprinting it |
+| WhatsApp that survives Meta's window | `whatsapp_meta.send_document_detailed` | nothing |
+
+**WHY IT IS A ROLL-UP AND NOT A TO-DO LIST — measured, not assumed** (read-only, house org,
+2026-10-03):
+
+| | |
+|---|---|
+| open items that can be attributed and aged | **76,094** |
+| … of which more than 90 days old | **20,304** |
+| the oldest | **324 days** |
+| open items carrying NO store, so no owner | **14,372** |
+
+A module that WhatsApps a district manager 76,094 rows is not a follow-up, it is a denial of service.
+So a follow-up is per **(manager × queue)**: how many are open, how old the oldest is, which **age
+band** it sits in, and the few oldest by name — with the full list on the queue's own page. The
+**escalation** is what makes it accountability rather than a newsletter: work past
+`manager_followup_escalate_after_days` appears in the digest of the manager **above** the owner too.
+
+**THE FINDING IT REFUSES TO HIDE.** 14,372 open items carry no store at all and therefore cannot be
+assigned to any manager. They are counted as `UNATTRIBUTED` — a VALUE, not a dropped row — and printed
+in **every** digest and payload footer. Quietly excluding a fifth of the backlog because it has no
+owner would make the module lie by omission; an unowned backlog is precisely what a follow-up module
+exists to surface. That is the §15z footer rule applied to ownership.
+
+**AND WHAT IS HONESTLY NOT ATTRIBUTABLE, SAID OUT LOUD.** Three of the ten registry queues carry a
+store and a date on their own rows (`commission_flags`, `pay_discrepancy`, `ops_chargebacks`) and are
+attributed per manager. The other seven are reported in `not_attributed` **with the reason each**:
+`ingest_quarantine`'s store string by definition never resolved to a store (that is what quarantined
+it), and the rest are counted by the dashboard through handlers that return a period's rows rather
+than an ageable per-item queue. `_FOLLOWUP_ATTRIBUTED` + `_FOLLOWUP_NOT_ATTRIBUTED` must **partition
+the whole registry** — the harness fails the build otherwise (§I15–I15c), and `_followup_items`
+refuses to read a queue that is not declared — so a queue can never be silently neither.
+
+**AN AGE WE CANNOT READ IS `unknown`, NEVER 0.** `age_days` returns `None` for an unreadable or
+missing date and `age_band(None)` is `BAND_UNKNOWN`, not the freshest band — calling an unageable row
+fresh is how a 324-day-old item hides in the `0-7` bucket. A future-dated row (clock skew) is unknown
+for the same reason. A group where nothing could be aged reports `oldest_days: None`, which renders as
+"age unknown" and never as "opened today". **Unknown age never escalates** either: chasing a manager
+over an age we could not read would send them after work that might be a day old. Same class as
+§47.8 "absence is never zero", applied to time.
+
+**THE DEDUP KEY IS (store, queue, age BAND)** — not the count. A follow-up **re-escalates when the
+work ages into an older band**, which is the point of a follow-up, but not every day for the same work
+in the same band, because a count that ticks by one is not news. A dedup row is written **only when a
+channel actually delivered**, so a dead channel cannot mark a follow-up sent and hide it tomorrow.
+
+**NOTHING HARDCODED, literally** (mig `1044`, per-tenant columns on `storeops.tenants`, each with a
+house default in `manager_followup.HOUSE_CONFIG` so the sweep resolves identically before the
+migration is applied): `manager_followup_enabled` (**FALSE** — the mig-905 safe-by-default posture,
+nothing sends on deploy) · `manager_followup_time` (`'10:30'`) · `manager_followup_channels`
+(`["whatsapp","email"]`, canonicalised by `normalize_channels` so two tenants who typed the same
+channels in a different order cannot behave differently) · `manager_followup_escalate_after_days`
+(`30`) · `manager_followup_show_oldest` (`5`) · `manager_followup_min_items` (`1`). Every unusable
+value degrades to its default rather than to "never follow up" or "follow up on everything" — an
+escalation age of `0` can never make every item escalate the day it opens. RULE TWO holds in the code:
+no store, tenant, carrier or product name appears in an executable line (§I17, scanned with prose
+stripped, with an armed control).
+
+**Endpoints.** `GET /commcalc/manager-followup` — the board: per (store × queue) with the escalated
+first, the registry's own labels and links, `totals`, `not_attributed`, `truncated` and `read`.
+Org-scoped and span-scoped through the same `scope_keyset` / `in_keyset` every manager surface uses —
+**but items with no store survive the span filter**, because the person who could assign an owner is
+exactly who must see them. `POST /commcalc/manager-followup/alerts/run-due` (secret-gated hourly
+pg_cron; the per-tenant minute is compared in the handler, so ONE job serves every tenant in every
+timezone) and `POST /commcalc/manager-followup/alerts/run-now?send=` (manager/admin, **defaults to a
+DRY RUN** returning exactly who would be messaged, on which channels, about which stores and queues).
+A queue whose read fails returns `([], True)` — "we could not see it", never "there is none".
+
+**Live dry run** (house org, 2026-10-03, read-only, nothing sent): 57 follow-ups, 56 past escalation,
+**5 digests** resolved to real managers carrying both an email and a WhatsApp number from the org tree.
+
+**Proof.** `harness_manager_followup.py` (119 checks, stdlib only, DB-free), wired into the
+carrier-vocab-guard job. Sections: A config degradation, B the vocabulary dereference lock, C ageing
+and the unknown band, D the roll-up with unowned work counted, E escalation and ordering, F the digest
+(both renderings carrying the same facts), G the dedup key, H migration `1044` tied to the code,
+I no second fan-out / dedup / scheduler, RULE TWO, and the armed controls — verified to bite by
+breaking the store-resolver dereference and the `plan_digests` call and watching §I12 and §I1 fail.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 

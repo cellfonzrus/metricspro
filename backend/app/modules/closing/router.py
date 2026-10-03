@@ -5755,12 +5755,18 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # accessory column below needs it either way (owner 2026-09-08: the split should come from the
     # POS, not the employee's declaration, even though the envelope keeps showing the whole drawer).
     _bp_days = sorted({str(e.get("close_date") or "")[:10] for e in out if e.get("close_date")})
-    _bp_cash, _bp_src = {}, "none"
+    _bp_cash, _bp_src, _bp_fee = {}, "none", {}
     if _bp_days:
         try:
             _sales_bp, _s_src, _s_key = _sales_billpay_for_days(client, org_id, _bp_days)
             if _sales_bp:
-                _bp_cash = {k: _f(v.get("cash")) for k, v in _sales_bp.items()}
+                # THE ONE HOME for "POS bill-payment cash in the drawer" (owner ask 2026-10-03):
+                # the bill lines' cash leg PLUS the customer service-fee cash, which the rep took
+                # and declares. Reading the raw `cash` key here is what made 526 of 535 September
+                # store-days disagree with the declaration -- see metric_recon.pos_billpay_cash.
+                from app.modules.commcalc import metric_recon as _mr_basis
+                _bp_cash = {k: _mr_basis.pos_billpay_cash(v) for k, v in _sales_bp.items()}
+                _bp_fee = {k: _mr_basis.pos_billpay_fee_cash(v) for k, v in _sales_bp.items()}
                 _bp_src, _bp_key = f"sales:{_s_src}", _s_key
             else:
                 _proc_bp, _p_src, _p_key = _pos_billpay_for_days(client, org_id, _bp_days)
@@ -5813,6 +5819,10 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             e["billpay_pos_disagrees"] = (bool(_res.get("pos_disagrees"))
                                           if _res.get("pos_gap") is not None else None)
             e["billpay_pos_gap"] = _res.get("pos_gap")
+            # What the service fee contributed to the POS basis, so a reader can see the correction
+            # instead of a number that silently changed (owner ask 2026-10-03). None when the feed
+            # has no store-day at all -- never a zero that reads as "there was no fee".
+            e["billpay_pos_fee_cash"] = _bp_fee.get((_bp_key(_sd[0]), _sd[1])) if _bp_fee else None
             e["billpay_note"] = billpay_netting.envelope_note(_res, id(e)) if _net_on else None
             if _net_on:
                 e["cash"] = _row.get("net", e.get("cash"))
@@ -6744,24 +6754,10 @@ def _billpay_position_core(client, org_id, as_of, store_list, emp_list, ks):
     drows = dq.limit(200000).execute().data or []
     if emp_list:
         drows = [r for r in drows if (r.get("employee_name") or "").strip().lower() in emp_list]
-    decl = _bp.declared_billpay_by_store_day(drows)
-
-    # DM verified-correction overlay (TKT-1030) — dm_epay_cash replaces the store-day's declared
-    # bill-pay cash. Best-effort; a failure leaves the reps' raw split (same posture as
-    # _cash_position_core's overlay).
-    try:
-        _ov = _verified_overlay.build_overlay_map(
-            client, org_id, {d for days in decl.values() for d in days})
-        if _ov:
-            ovmap = {}
-            for _code, _days in decl.items():
-                for _dday in _days:
-                    _dm = _ov.get((_verified_overlay._norm(_code), str(_dday)[:10]))
-                    if _dm and _dm.get("dm_epay_cash") is not None:
-                        ovmap[(_code, _dday)] = _verified_overlay._f(_dm["dm_epay_cash"])
-            _bp.apply_billpay_overlay(decl, ovmap)
-    except Exception:
-        pass
+    # The reps' declared split WITH the DM's verified correction applied (TKT-1030) — one home,
+    # `billpay_pickup.declared_billpay_in_force`, which the morning declaration-exception sweep
+    # dereferences too rather than keeping a second copy of the sequence.
+    decl = _bp.declared_billpay_in_force(client, org_id, drows)
 
     pq = (client.schema("commcalc").table("billpay_pickup")
           .select("store_code,employee_name,close_date,amount,picked_up,picked_up_at,deposited_at")
@@ -10460,6 +10456,226 @@ def derive_closing_due(date: str = "", x_notify_secret: str = Header(default="")
 # provider function itself lazily imports back into this module at CALL time, never at import time,
 # so there is no closing<->attention_providers circular import); guarded so a deploy that hasn't run
 # migration 717 (core.import_feed) yet — or is simply missing the file for some other reason — never
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# BILL-PAY DECLARATION EXCEPTIONS — the morning digest to DM and above (owner ask 2026-10-03)
+#
+# Owner, verbatim: "the system should create that report and send it to the dm and all above via
+# whats app and email the next morning at 1030 am - nothing hardcoded".
+#
+# NOTHING NEW WAS BUILT THAT ALREADY EXISTED (the duplicate-check gate). The sweep shape, the
+# recipient rule, the dedup table and the due-time convention are all the house's:
+#   • recipients, one-digest-per-manager, the unreachable-recipient skip and the ref_key spelling →
+#     `commcalc/manager_digest` (the ONE fan-out ePay and zero-sales already ride);
+#   • the hourly pg_cron tick + a tenant-local HH:MM send time defaulting to 10:30 → the mig-433
+#     convention, with the due decision itself now in `manager_digest.due_now` so three sweeps stop
+#     spelling the comparison three times;
+#   • dedup rows → the existing `storeops.alert_log` via `_lateness_already_sent` /
+#     `_lateness_record_sent`. No new alert table, no second dedup rule;
+#   • the declared figure → `billpay_pickup.declared_billpay_in_force` (reps' split with the DM's
+#     verified correction applied), so a manager is never chased about a store-day they fixed;
+#   • the POS figure → `metric_recon.pos_billpay_cash`, the one home that includes the customer
+#     service fee (§47.12 — without it this digest would have alerted on 526 of 535 store-days);
+#   • the classification, thresholds and wording → `closing/billpay_declaration_alerts` (pure).
+#
+# WHATSAPP IS SENT THE WAY THE HOUSE LEARNED TO SEND IT. A 10:30 digest is business-initiated and
+# therefore almost always OUTSIDE Meta's 24-hour service window, where a free-form text returns HTTP
+# 200 with a real message id and is then silently dropped (the 2026-08-05 incident, documented in
+# `notify/whatsapp_window`). So the WhatsApp leg goes through `whatsapp_meta.send_document_detailed`,
+# the one home that walks the template ladder and REPORTS which rung carried the message — never
+# `send_text`, which would look like it worked and deliver nothing.
+async def _run_billpay_declaration_alerts(org_id_filter=None, respect_enabled=True,
+                                          respect_time=True, dry_run=False):
+    """The daily bill-pay declaration-exception sweep. Iterates tenants, skips unless the tenant has
+    switched it on, compares the declared figure in force against the POS basis for the configured
+    lookback, plans ONE digest per manager (DM ∪ above-DM) and sends it on each channel that can
+    actually reach them, deduped per (recipient, store, day, class). NEVER raises."""
+    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
+                                             _lateness_already_sent, _lateness_record_sent)
+    from app.modules.commcalc import manager_digest as _md
+    from app.modules.commcalc import metric_recon as _mr
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    from . import billpay_declaration_alerts as _bda
+    from . import billpay_pickup as _bp
+    from . import envelope_report as _er
+    client = sb()
+    so = client.schema("storeops")
+    try:
+        tenants = so.table("tenants").select("*").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    wa_ok = whatsapp_meta.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        cfg = _bda.resolve_config(t)
+        if respect_enabled and not cfg["enabled"]:
+            continue
+        now_local = datetime.now(timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date()
+        if respect_time and not _md.due_now(now_local.strftime("%H:%M"), cfg["send_time"]):
+            continue   # the tenant's configured minute has not arrived in ITS day yet
+        start = (today - timedelta(days=cfg["lookback_days"])).isoformat()
+        end = (today - timedelta(days=1)).isoformat()
+        if end < start:
+            start = end
+        try:
+            store_days, meta = _billpay_declaration_store_days(client, oid, start, end)
+        except Exception as e:
+            results.append({"org_id": oid, "error": str(e)[:200]})
+            continue
+        found = _bda.alert_items(store_days, tolerance=cfg["tolerance"])
+        items, counts = found["items"], found["counts"]
+        label = end if start == end else f"{start} to {end}"
+        if not items:
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "flagged": 0,
+                            "counts": counts, "window": label, "pos_source": meta.get("source")})
+            continue
+        stores = {i["store_code"] for i in items if i.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        plan = _md.plan_digests(
+            items, hierarchy, today.isoformat(), scope=_bda.ALERT_SCOPE,
+            build=lambda name, its: _bda.build_digest(name, its, counts=counts,
+                                                      max_rows=cfg["max_rows"], label=label),
+            key_parts=_bda.key_parts, channels=cfg["channels"])
+        sent = skipped = 0
+        planned = []
+        for dg in plan["digests"]:
+            addrs = dg.get("addresses") or ({"email": dg["to"]} if dg.get("to") else {})
+            new_items = [it for it in dg["items"]
+                         if not _lateness_already_sent(so, oid, _bda.ALERT_SCOPE, it["ref_key"])]
+            if not new_items:
+                skipped += 1
+                planned.append({"to": dg["to"], "addresses": addrs, "already_sent": True})
+                continue
+            built = _bda.build_digest(dg["to_name"], new_items, counts=counts,
+                                      max_rows=cfg["max_rows"], label=label)
+            # STRUCTURED, never a pre-joined display string — the dry-run preview is rendered by a
+            # human-facing screen, which owns presentation (the zero-sales rule verbatim).
+            planned.append({"to": dg["to"], "addresses": addrs, "already_sent": False,
+                            "subject": built["subject"],
+                            "items": [{"store_code": i["store_code"], "close_date": i["close_date"],
+                                       "gap_class": i["gap_class"], "gap": i["gap"],
+                                       "declared": i["declared"], "pos_basis": i["pos_basis"]}
+                                      for i in new_items]})
+            if dry_run:
+                continue
+            # A channel that is not configured is NOT a channel that was tried. Each leg records its
+            # own outcome, and the dedup row is written only when at least one leg actually carried
+            # the digest — so a WhatsApp number with no account behind it can never mark a finding
+            # "escalated" and hide it from tomorrow's run.
+            delivered = []
+            if "email" in addrs and email_ok:
+                try:
+                    await email_resend.send_email(to=addrs["email"], subject=built["subject"],
+                                                  html=built["html"])
+                    delivered.append("email")
+                except Exception as e:
+                    print(f"WARN billpay declaration digest email to {addrs['email']} failed: {e}")
+            if "whatsapp" in addrs and wa_ok:
+                try:
+                    # data=b"" is the module's own text-only path: no file to attach, so the ladder
+                    # resolves to the approved template, which IS deliverable business-initiated.
+                    res = await whatsapp_meta.send_document_detailed(
+                        addrs["whatsapp"], b"", "text/plain", "billpay-declarations.txt",
+                        built["text"])
+                    if res.get("message_id"):
+                        delivered.append("whatsapp")
+                except Exception as e:
+                    print(f"WARN billpay declaration digest WhatsApp to {addrs['whatsapp']} "
+                          f"failed: {e}")
+            if delivered:
+                for it in new_items:
+                    _lateness_record_sent(so, oid, _bda.ALERT_SCOPE, it["ref_key"],
+                                          addrs.get("email") or addrs.get("whatsapp"))
+                sent += 1
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(items),
+                        "counts": counts, "window": label, "pos_source": meta.get("source"),
+                        "send_time": cfg["send_time"], "tolerance": cfg["tolerance"],
+                        "channels": list(cfg["channels"]),
+                        "email_configured": email_ok, "whatsapp_configured": wa_ok,
+                        "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+def _billpay_declaration_store_days(client, org_id, start, end):
+    """The per-(store, day) pair the digest compares: the declared bill-pay cash IN FORCE against the
+    POS basis. Returns (store_days, meta).
+
+    Both sides come from their own one home — `billpay_pickup.declared_billpay_in_force` and
+    `metric_recon.pos_billpay_cash` over the shared `_sales_billpay_for_days` — so this function
+    JOINS two answers and derives neither. A store-day the sales feed never covered carries
+    `pos_basis=None`, which the classifier refuses to alert on and counts instead."""
+    from app.modules.commcalc import metric_recon as _mr
+    from . import billpay_pickup as _bp
+    from . import envelope_report as _er
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select(_er.CLOSING_SELECT).eq("org_id", org_id)
+            .gte("close_date", start).lte("close_date", end)
+            .limit(100000).execute().data) or []
+    decl = _bp.declared_billpay_in_force(client, org_id, rows)
+    days = sorted({str(r.get("close_date") or "")[:10] for r in rows if r.get("close_date")})
+    pos, src, ckey = {}, "none", (lambda x: x)
+    if days:
+        try:
+            pos, src, ckey = _sales_billpay_for_days(client, org_id, days)
+        except Exception as e:
+            print(f"WARN billpay declaration sweep could not read the sales bill-pay figure: {e}")
+            pos, src, ckey = {}, "none", (lambda x: x)
+    names = {}
+    for r in rows:
+        code = (str(r.get("store_code") or "").strip())
+        if code and r.get("store_name"):
+            names.setdefault(code, r.get("store_name"))
+    out = []
+    for code, by_day in (decl or {}).items():
+        if code == "?":
+            continue      # a closing with no store cannot be assigned to a manager
+        for dday, amount in by_day.items():
+            slot = None
+            if pos:
+                try:
+                    slot = pos.get((ckey(code), dday))
+                except Exception:
+                    slot = None
+            out.append({"store_code": code, "store_name": names.get(code, code),
+                        "close_date": dday, "declared": amount,
+                        "pos_basis": _mr.pos_billpay_cash(slot),
+                        "fee_cash": _mr.pos_billpay_fee_cash(slot),
+                        "bill_txns": (slot or {}).get("count") if isinstance(slot, dict) else None})
+    return out, {"source": src, "store_days": len(out)}
+
+
+@router.post("/billpay-declaration-alerts/run-due")
+async def billpay_declaration_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated HOURLY pg_cron entrypoint. Each tick asks every switched-on tenant whether its
+    own configured send time has arrived in its own local day; the first tick at or after it sends,
+    and `alert_log` dedup stops every later tick that day. Mirrors `/commcalc/zero-sales/alerts/
+    run-due` and `/commcalc/epay/alerts/run-due` exactly — same dedup table, same recipient rule."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_billpay_declaration_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/billpay-declaration-alerts/run-now")
+async def billpay_declaration_alerts_run_now(send: bool = False,
+                                             authorization: str = Header(default=""),
+                                             org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable gate AND the time gate.
+    DEFAULTS TO A DRY RUN — it returns exactly who WOULD be messaged, on which channels, and about
+    which store-days, sending nothing. Dedup is always honoured, so a real send cannot duplicate the
+    morning run."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_billpay_declaration_alerts(org_id_filter=org_id, respect_enabled=False,
+                                                 respect_time=False, dry_run=not send)
+
+
 # breaks this module's own endpoints.
 try:
     from . import attention_providers  # noqa: F401

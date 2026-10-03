@@ -63,6 +63,40 @@ def declared_billpay_by_store_day(closing_rows):
     return out
 
 
+def declared_billpay_in_force(client, org_id, closing_rows):
+    """THE declared bill-pay cash per (store, day) THAT IS ACTUALLY IN FORCE: the reps' own
+    declarations, with a DM-verified correction REPLACING the store-day's figure where one exists
+    (TKT-1030). Returns {store_code: {day: amount}}.
+
+    WHY THIS IS A FUNCTION AND NOT A BLOCK AT EACH CALLER. Two things have to happen in order -- sum
+    the reps through the one home (`declared_billpay_by_store_day`), then let a verified correction
+    replace the sum (`apply_billpay_overlay`) -- and the overlay's key normalisation is easy to get
+    subtly wrong. `_billpay_position_core` held the only copy of that sequence; the morning
+    declaration-exception sweep needs the same answer, and a second copy would be the divergence the
+    house rules forbid. It matters here more than usual: an alert built on the raw rep figure would
+    chase a district manager about a store-day they had ALREADY corrected.
+
+    The overlay is best-effort, exactly as it was at the call site it came from: if it cannot be read
+    the reps' raw split stands, because a failed correction must not take an alert or a report down.
+    Mutates and returns the map, like `apply_billpay_overlay` itself."""
+    from . import verified_overlay as _vo
+    decl = declared_billpay_by_store_day(closing_rows)
+    try:
+        ov = _vo.build_overlay_map(client, org_id,
+                                   {d for days in decl.values() for d in days})
+        if ov:
+            ovmap = {}
+            for code, days in decl.items():
+                for dday in days:
+                    dm = ov.get((_vo._norm(code), str(dday)[:10]))
+                    if dm and dm.get("dm_epay_cash") is not None:
+                        ovmap[(code, dday)] = _vo._f(dm["dm_epay_cash"])
+            apply_billpay_overlay(decl, ovmap)
+    except Exception:
+        pass
+    return decl
+
+
 def apply_billpay_overlay(decl_by_store_day, dm_epay_cash_by_store_day):
     """PURE: the TKT-1030 rule for the bill-pay split — a VERIFIED store-day's dm_epay_cash
     REPLACES that day's rep-summed declared figure (same replace-not-add semantics as

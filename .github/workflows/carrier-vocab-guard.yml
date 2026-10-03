@@ -376,6 +376,18 @@ on:
       - "backend/harness_dm_verify_range_cost.py"
       - "backend/harness_screen_link_guard.py"
       - "backend/harness_envelope_receipt_basis.py"
+      - "backend/harness_billpay_fee_basis.py"
+      - "backend/harness_billpay_declaration_alerts.py"
+      - "backend/app/modules/closing/billpay_declaration_alerts.py"
+      - "backend/app/modules/commcalc/manager_digest.py"
+      - "database/migrations/1043_billpay_declaration_alerts.sql"
+      - "backend/harness_manager_followup.py"
+      - "backend/app/modules/commcalc/manager_followup.py"
+      - "backend/app/modules/commcalc/compliance_summary.py"
+      - "database/migrations/1044_manager_followup.sql"
+      - "backend/app/modules/commcalc/epay_fee_recon.py"
+      - "backend/app/modules/commcalc/metric_recon.py"
+      - "database/migrations/1045_billpay_fee_product_desc.sql"
       - "backend/harness_accountability_chain.py"
       - "backend/harness_org_chain.py"
       - "backend/app/modules/storeops/org_chain.py"
@@ -635,6 +647,15 @@ jobs:
       - name: Run the envelope-receipt basis + counted-by lock (one basis vocabulary dereferenced from deposit_recon; the columns a pure reader dereferences are declared beside it and every caller selects that declaration; a count is scored on the basis the counter saw; the counter is the real actor shown as a person — index §47 / §47.8)
         working-directory: backend
         run: python3 harness_envelope_receipt_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the bill-pay FEE basis lock (the POS bill-payment figure includes the customer service fee, added in ONE home and dereferenced; no caller re-adds the legs — index §47.12)
+        working-directory: backend
+        run: python3 harness_billpay_fee_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the bill-pay declaration-alert lock (only a person's problem is alerted; a store-day with no POS figure is refused by name and counted; WhatsApp takes the window-safe path — index §47.13)
+        working-directory: backend
+        run: python3 harness_billpay_declaration_alerts.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Follow Up With Managers lock (the pending-job vocabulary is dereferenced from the compliance registry; an age we cannot read is unknown, never 0; unowned work is counted, not dropped; the dedup key re-escalates on ageing — index §47.14)
+        working-directory: backend
+        run: python3 harness_manager_followup.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

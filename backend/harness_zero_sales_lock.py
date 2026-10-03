@@ -136,8 +136,18 @@ check("c4. both kinds plan recipients through the one fan-out",
 check("c5. neither kind rolls its own DM-∪-above-DM loop",
       '"dm"' not in ZS_CODE and '"above"' not in ZS_CODE
       and '"dm"' not in code_of(EPAY) and '"above"' not in code_of(EPAY))
-check("c6. the no-email skip is the fan-out's, not a per-kind rule",
-      "if not em:" in MD and "continue" in MD)
+# The skip rule generalised from "no email" to "no address on any requested channel" when the owner
+# asked for WhatsApp as well (2026-10-03). Its HOME is unchanged -- what this lock cares about -- so
+# the check now pins the general rule and that no per-kind caller re-states it.
+check("c6. the unreachable-recipient skip is the fan-out's, not a per-kind rule",
+      "if not addrs:" in MD and "continue" in MD
+      and "addresses_for(" in MD)
+check("c6b. neither kind decides reachability for itself",
+      "addresses_for(" not in ZS_CODE and "addresses_for(" not in code_of(EPAY)
+      and 'get("email")' not in ZS_CODE)
+check("c6c. the channel vocabulary has ONE home too, so a caller cannot invent a channel",
+      "CHANNEL_ADDRESS_FIELD" in MD
+      and "CHANNEL_ADDRESS_FIELD" not in ZS_CODE and "CHANNEL_ADDRESS_FIELD" not in code_of(EPAY))
 check("c7. the router writes the dedup row through the EXISTING alert_log helpers",
       "_lateness_already_sent(so, oid, _zs.ALERT_SCOPE" in ZS_BLOCK
       and "_lateness_record_sent(so, oid, _zs.ALERT_SCOPE" in ZS_BLOCK)
