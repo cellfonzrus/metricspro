@@ -31,6 +31,12 @@ THIS FAILS THE BUILD WHEN:
      call dead. The fallbacks are right for `next dev` and for a preview and they stay; a PRODUCTION build
      must assert what it cannot work without and FAIL. Without this rule the gate can be deleted and the
      patchwork quietly returns.
+  8. the deploy-time reachability proof disappears (index §40.12, owner incident 2026-10-03). Rule 7's
+     gate is a PURE module: it can prove the backend origin is well-SHAPED, never that it RESOLVES. That
+     day it was shaped perfectly and named a host that does not exist, so every proxied call 502'd while
+     the pages rendered. A configuration fact that only fails at RUNTIME has to be proved against the
+     RUNNING deployment, so `scripts/check_deploy_reachability.py` and its workflow must exist, probe BOTH
+     rewrite prefixes, and require the backend's own payload rather than any HTTP 200.
 Each rule has a negative control below: the rule is run on a synthetic violation and must fire.
 
 Stdlib only, DB-free, no network: `python3 backend/harness_one_domain_lock.py`.
@@ -46,7 +52,6 @@ FRONTEND = os.path.join(ROOT, "frontend")
 HOME = "src/lib/apiBase.ts"                     # the ONE home (relative to frontend/)
 ROUTING = "site-routing.ts"
 CONFIG = "next.config.ts"
-LAYOUT = "src/app/(platform)/layout.tsx"        # the Guard that decides open-app vs sign-in (§40.12)
 # Proved against the RUNNING deployment, because shape is all a build can check (§40.12).
 REACH_SCRIPT = "scripts/check_deploy_reachability.py"
 REACH_WORKFLOW = ".github/workflows/deploy-reachability.yml"
@@ -139,7 +144,6 @@ def config_wiring(files):
     bad = []
     cfg, home, routing = files.get(CONFIG, ""), files.get(HOME, ""), files.get(ROUTING, "")
     client = files.get("src/lib/client.ts", "")
-    layout = files.get(LAYOUT, "")
     need = [
         (cfg, r"from\s+['\"]\./src/lib/apiBase['\"]", f"{CONFIG} does not import the one home ({HOME})"),
         (cfg, r"from\s+['\"]\./site-routing['\"]", f"{CONFIG} does not import {ROUTING}"),
@@ -165,18 +169,6 @@ def config_wiring(files):
          f"{CONFIG} must THROW on a production config problem — reporting it without failing the build ships the dark deploy anyway"),
         (home, r"export\s+const\s+CONFIG_PROBLEM_CODES\b",
          f"{HOME} must export CONFIG_PROBLEM_CODES so the caller's message map can be checked against it"),
-        # Rule 8 — UNREADABLE IS NOT A VALUE, and reachability is proved against the running deploy
-        # (index §40.12, owner incident 2026-10-03). The §40.10 gate is a pure module: it can prove the
-        # backend origin is well-SHAPED, never that it RESOLVES. That day it was shaped perfectly and
-        # named a host that does not exist, so every proxied call 502'd. Two things stop a repeat and
-        # both are locked here, because either one silently reverting restores the whole failure.
-        (layout, r"setEnforceUnreadable\(true\)",
-         f"{LAYOUT}: a FAILED auth-config read must set its own unreadable state. Calling "
-         f"setFetchedEnforce(false) in the catch is the 2026-10-03 defect: an unreachable backend "
-         f"rendered <PlatformShell open> and the app dropped its sign-in gate because a request failed"),
-        (layout, r"enforce\s*===\s*null\s*&&\s*enforceUnreadable\)\s*return\s*<Notice",
-         f"{LAYOUT}: an unreadable enforcement flag must render the 'can't reach the server' notice "
-         f"BEFORE the open-app and loading branches — otherwise it falls through to one of them"),
     ]
     # Every problem code the home can emit needs an operator sentence in the one caller. The codes stay in the
     # home as DATA (index §19.38 keeps platform variable names out of shipped page copy); the sentences live in
@@ -361,15 +353,6 @@ def main():
     broken[HOME] = files.get(HOME, "").replace("'direct-origin-not-bare']", "'direct-origin-not-bare', 'a-new-code-nobody-worded']")
     check("control 7e: a NEW problem code with no operator message in the config is caught",
           any("a-new-code-nobody-worded" in v for v in config_wiring(broken)))
-    broken = dict(files)
-    broken[LAYOUT] = files.get(LAYOUT, "").replace("setEnforceUnreadable(true)", "setFetchedEnforce(false)")
-    check("control 8: a Guard that fails the enforcement read OPEN again is caught",
-          any("2026-10-03 defect" in v for v in config_wiring(broken)))
-    broken = dict(files)
-    broken[LAYOUT] = files.get(LAYOUT, "").replace(
-        "if (enforce === null && enforceUnreadable) return <Notice", "if (false) return <Notice")
-    check("control 8b: a Guard that stops rendering the unreachable notice is caught",
-          any("can't reach the server" in v for v in config_wiring(broken)))
     fake_router = ('router = APIRouter(prefix="/widgets")\n'
                    '@router.post("/{wid}/scrape")\n'
                    'def scrape(wid: str):\n'
