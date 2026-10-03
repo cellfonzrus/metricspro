@@ -170,7 +170,7 @@ def carrier_finance_preset(client, org_id, key):
     The basis this org's CARRIER declares, or ''. REUSES the mig-945/953
     carrier-preset machinery end to end (duplicate-check gate — no second preset store, no second
     carrier normalizer): house-org rows in `commcalc.ui_label_override` under
-    scope 'finance_basis:<carrier code>', key 'distributor_payable', with the carrier code coming
+    scope 'finance_basis:<carrier code>', key `key`, with the carrier code coming
     from `report_labels.normalize_carrier_code` over the org's own `commcalc.carrier` rows (mig 038,
     written by the onboarding "Carrier Selection" step). Lazy auto-assign: a NEW tenant that picks
     its carrier at setup resolves correctly the first time a statement is built, with no setup hook.
