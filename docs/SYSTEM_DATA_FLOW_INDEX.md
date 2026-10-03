@@ -643,6 +643,17 @@ commissions, expenses.
   already worked is byte-identical (verified live: the four market filters and the exact-address
   selections hash-identical before and after). Proof: `harness_pl_filter_semantics.py` §D
   (10 checks, the code-selection regression among them).
+  **MEASURED over every value the picker can offer** (`storeops.stores.address` else the code, ∪
+  `store_mapping.store_address` — 58 values for the house org, September 2026): **30 of 58 bound NO
+  snapshot before the fix** — every one of the 27 codes, plus `1 S 60th St, Philadelphia` (the one
+  storeops address that differs from its snapshot key `1 S 60th street`), plus the two
+  `Cellular Services` company rows. After the fix only **3** do not bind exactly one store, and all
+  three are correct: the two company rows are company-level data (excused by dereferencing
+  `commcalc.companies`, §13b) and `228 N Wood Ave, Syosset, NY 11791` has no September store
+  snapshot. That 30-of-58 is why the owner reported the stores one at a time as he checked them
+  (5619 / 6149 / 6507 / 1710, then 723 / 1598 / 2701 / 3605 / 1 S 60th): nearly every store was
+  affected, and `1115 Liberty Ave` — the single store whose picker address equals its snapshot key
+  exactly — is the one he never reported.
   **The DATA half:** the picker only offers codes because `storeops.stores.address` is NULL for
   those rows; backfilling it from `commcalc.store_mapping` removes the cause as well as the symptom.
 - **Wages estimate is salary-basis aware (fix 2026-09-02, owner: "employee salaries … not getting
