@@ -46,6 +46,10 @@ FRONTEND = os.path.join(ROOT, "frontend")
 HOME = "src/lib/apiBase.ts"                     # the ONE home (relative to frontend/)
 ROUTING = "site-routing.ts"
 CONFIG = "next.config.ts"
+LAYOUT = "src/app/(platform)/layout.tsx"        # the Guard that decides open-app vs sign-in (§40.12)
+# Proved against the RUNNING deployment, because shape is all a build can check (§40.12).
+REACH_SCRIPT = "scripts/check_deploy_reachability.py"
+REACH_WORKFLOW = ".github/workflows/deploy-reachability.yml"
 LOCATION_VARS = ("NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_API_DIRECT_ORIGIN", "BACKEND_ORIGIN", "NEXT_PUBLIC_SITE_URL")
 SKIP_DIRS = {"node_modules", ".next", "out", "build", "scratchpad"}
 EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts")
@@ -135,6 +139,7 @@ def config_wiring(files):
     bad = []
     cfg, home, routing = files.get(CONFIG, ""), files.get(HOME, ""), files.get(ROUTING, "")
     client = files.get("src/lib/client.ts", "")
+    layout = files.get(LAYOUT, "")
     need = [
         (cfg, r"from\s+['\"]\./src/lib/apiBase['\"]", f"{CONFIG} does not import the one home ({HOME})"),
         (cfg, r"from\s+['\"]\./site-routing['\"]", f"{CONFIG} does not import {ROUTING}"),
@@ -160,6 +165,18 @@ def config_wiring(files):
          f"{CONFIG} must THROW on a production config problem — reporting it without failing the build ships the dark deploy anyway"),
         (home, r"export\s+const\s+CONFIG_PROBLEM_CODES\b",
          f"{HOME} must export CONFIG_PROBLEM_CODES so the caller's message map can be checked against it"),
+        # Rule 8 — UNREADABLE IS NOT A VALUE, and reachability is proved against the running deploy
+        # (index §40.12, owner incident 2026-10-03). The §40.10 gate is a pure module: it can prove the
+        # backend origin is well-SHAPED, never that it RESOLVES. That day it was shaped perfectly and
+        # named a host that does not exist, so every proxied call 502'd. Two things stop a repeat and
+        # both are locked here, because either one silently reverting restores the whole failure.
+        (layout, r"setEnforceUnreadable\(true\)",
+         f"{LAYOUT}: a FAILED auth-config read must set its own unreadable state. Calling "
+         f"setFetchedEnforce(false) in the catch is the 2026-10-03 defect: an unreachable backend "
+         f"rendered <PlatformShell open> and the app dropped its sign-in gate because a request failed"),
+        (layout, r"enforce\s*===\s*null\s*&&\s*enforceUnreadable\)\s*return\s*<Notice",
+         f"{LAYOUT}: an unreadable enforcement flag must render the 'can't reach the server' notice "
+         f"BEFORE the open-app and loading branches — otherwise it falls through to one of them"),
     ]
     # Every problem code the home can emit needs an operator sentence in the one caller. The codes stay in the
     # home as DATA (index §19.38 keeps platform variable names out of shipped page copy); the sentences live in
@@ -274,6 +291,25 @@ def main():
     check("no `${origin}/api/v1…` outside the home", not origin_prefixers(files), origin_prefixers(files))
     print("4/5. the config installs the policy from the homes")
     check("rewrites, canonical redirect, connect-src, upload class all wired", not config_wiring(files), config_wiring(files))
+    print("8. reachability is proved against the RUNNING deployment (§40.12)")
+    # A build can only prove the origin is well-SHAPED. The 2026-10-03 host was shaped perfectly and
+    # did not resolve, so the proof has to run against what is actually serving.
+    reach_py = os.path.join(ROOT, REACH_SCRIPT)
+    reach_yml = os.path.join(ROOT, REACH_WORKFLOW)
+    check(f"{REACH_SCRIPT} exists", os.path.isfile(reach_py))
+    check(f"{REACH_WORKFLOW} exists and runs it", os.path.isfile(reach_yml)
+          and "check_deploy_reachability.py" in open(reach_yml, encoding="utf-8").read())
+    if os.path.isfile(reach_py):
+        reach_src = open(reach_py, encoding="utf-8").read()
+        # Both rewrite PREFIXES are separate rules in apiRewrites(); one can be dead while the other works.
+        check("it probes /health AND /api/v1 (the two rewrite prefixes are independent)",
+              '"/health"' in reach_src and '"/api/v1/core/auth-config"' in reach_src)
+        check("it requires the BACKEND's own payload, not merely HTTP 200",
+              '"commit"' in reach_src and '"rbac_enabled"' in reach_src)
+    if os.path.isfile(reach_yml):
+        check("the workflow probes only a SUCCESSFUL Production deployment",
+              "deployment_status.state == 'success'" in open(reach_yml, encoding="utf-8").read())
+
     print("6. every browser-launching endpoint is DIRECT")
     check("the backend declares browser-launching endpoints (the scan is not empty)", len(endpoints) >= 10,
           [f"found {len(endpoints)}"])
@@ -325,6 +361,15 @@ def main():
     broken[HOME] = files.get(HOME, "").replace("'direct-origin-not-bare']", "'direct-origin-not-bare', 'a-new-code-nobody-worded']")
     check("control 7e: a NEW problem code with no operator message in the config is caught",
           any("a-new-code-nobody-worded" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[LAYOUT] = files.get(LAYOUT, "").replace("setEnforceUnreadable(true)", "setFetchedEnforce(false)")
+    check("control 8: a Guard that fails the enforcement read OPEN again is caught",
+          any("2026-10-03 defect" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[LAYOUT] = files.get(LAYOUT, "").replace(
+        "if (enforce === null && enforceUnreadable) return <Notice", "if (false) return <Notice")
+    check("control 8b: a Guard that stops rendering the unreachable notice is caught",
+          any("can't reach the server" in v for v in config_wiring(broken)))
     fake_router = ('router = APIRouter(prefix="/widgets")\n'
                    '@router.post("/{wid}/scrape")\n'
                    'def scrape(wid: str):\n'

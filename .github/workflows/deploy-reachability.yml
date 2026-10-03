@@ -1,0 +1,47 @@
+# DEPLOY-TIME REACHABILITY — a production deployment must be able to reach its backend (index §40.12).
+#
+# Owner incident 2026-10-03: BACKEND_ORIGIN named a host that does not resolve. next.config.ts reads it
+# at BUILD time to build the /api/v1 and /health rewrites, so the dead address was baked into every
+# build after it was set. The deploy was green, the pages rendered, and every proxied call died at the
+# edge with 502 DNS_HOSTNAME_RESOLVE_FAILED — all data read $0.00 for every user, and the app could not
+# read whether login was enforced. Nothing in CI noticed, because nothing asked the RUNNING deployment.
+#
+# The §40.10 build gate cannot catch this: it is a pure module and can only prove the origin is
+# well-shaped, never that it resolves. Reachability is a deploy-time fact (§23d) — so it is proved here,
+# against the deployment that is actually serving traffic.
+#
+# Runs on `deployment_status`, which the hosting platform fires when a deployment goes live. Only a
+# SUCCESSFUL Production deployment is probed; previews and failed deploys are skipped.
+name: deploy-reachability
+
+on:
+  deployment_status:
+  # Hand-run it any time to answer "is production actually wired up right now?"
+  workflow_dispatch:
+    inputs:
+      site:
+        description: The site origin to probe
+        required: false
+        default: https://app.metricspro.tech
+
+permissions:
+  contents: read
+
+jobs:
+  reachability:
+    # `deployment_status` fires for every state (pending/in_progress/failure/success) and for previews.
+    # Probe only what is actually serving customers.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment.environment == 'Production')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prove the deployment can reach its backend
+        run: |
+          python3 scripts/check_deploy_reachability.py \
+            --site "${{ github.event.inputs.site || vars.PUBLIC_SITE_URL || 'https://app.metricspro.tech' }}"
