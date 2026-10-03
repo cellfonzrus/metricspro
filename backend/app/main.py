@@ -20,6 +20,7 @@ from app.modules.account.router import router as account_router
 from app.modules.account.royalty_router import router as account_royalty_router
 from app.modules.commcalc.setup_router import router as setup_documents_router
 from app.modules.storevisit.router import router as storevisit_router
+from app.modules.storevisit.visit_plan_router import router as storevisit_plan_router
 from app.modules.closing.router import router as closing_router
 from app.modules.helpdesk.router import router as helpdesk_router
 from app.modules.hr.router import router as hr_router
@@ -253,6 +254,9 @@ app.include_router(account_router, prefix="/api/v1")  # router carries its own /
 app.include_router(account_royalty_router, prefix="/api/v1")  # franchise royalty + cost/profit centers (mig 1022, index §37; gated on the royalty module)
 app.include_router(setup_documents_router, prefix="/api/v1")  # setup documents: per-carrier required uploads, the setup wizard, reminders (mig 1028, index §39)
 app.include_router(storevisit_router, prefix="/api/v1")  # router carries its own /storevisit prefix
+# The DM visit PLAN surface (quota, assignments, priority order) — same /storevisit prefix, a
+# separate file because the router above is the visit-LOGGING flow (mig 1050).
+app.include_router(storevisit_plan_router, prefix="/api/v1")
 app.include_router(closing_router, prefix="/api/v1")     # router carries its own /closing prefix
 app.include_router(helpdesk_router, prefix="/api/v1")    # router carries its own /helpdesk prefix
 app.include_router(hr_router, prefix="/api/v1")          # router carries its own /hr prefix
