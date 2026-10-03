@@ -242,6 +242,8 @@ ok("the panel reports its own progress and its own failure, beside the button",
    "setBfProg(" in SP and "setBfErr(" in SP and "{bfProg}" in SP and "{bfErr}" in SP)
 ok("a failure names what already landed instead of implying the whole span was lost",
    "are not lost." in SP and "partial" in SP)
+ok("the panel shows WHAT IT WOULD WRITE, not just how many days it read",
+   "bfRes.totals?.wrote" in SP and "bfRes.totals?.kept_manual" in SP and "bfRes.totals?.skipped" in SP)
 
 ok("Store Setup offers a per-store setting that can follow the company default",
    "saveClosingSource(" in SP and "saveOrgClosingSource(" in SP and "Company default" in SP)

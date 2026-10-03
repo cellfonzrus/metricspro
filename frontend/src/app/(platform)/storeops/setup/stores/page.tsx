@@ -466,6 +466,17 @@ export default function StoreSetupPage() {
                     {bfRes.partial ? ' (so far)' : ''}
                     {' — '}{bfRes.days} days, {bfRes.days_with_feed} with sales-feed data.
                   </div>
+                  {/* WHAT IT WOULD WRITE, in the panel. These counts are the whole point of a
+                      preview and they used to appear only in the page-level message at the top of
+                      the screen, which is the same "reported away from the button" defect as the
+                      failure line above (owner report 2026-10-03). */}
+                  <div style={{ marginTop: 4 }}>
+                    {bfRes.dry_run ? 'Would write' : 'Written'}: {bfRes.totals?.wrote || 0}
+                    {' · '}{bfRes.dry_run ? 'would refresh' : 'refreshed'}: {bfRes.totals?.updated || 0}
+                    {' · '}already current: {bfRes.totals?.unchanged || 0}
+                    {' · '}left as a rep submitted it: {bfRes.totals?.kept_manual || 0}
+                    {' · '}skipped, no feed for that store: {bfRes.totals?.skipped || 0}
+                  </div>
                   {(bfRes.per_day || []).filter((d: any) => !d.b2b_has_data).length > 0 && (
                     <div style={{ marginTop: 4 }}>
                       No feed data on: {(bfRes.per_day || []).filter((d: any) => !d.b2b_has_data)
