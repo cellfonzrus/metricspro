@@ -7,7 +7,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import NarrativeBanner from '@/components/NarrativeBanner'
 import {
   EXPENSE_SECTION_TITLE, expenseSections, expenseTieOut, isStoreScope, marginIdentity,
-  scopeBalanceSheetHref, scopeDetailHref, scopeExpenses, scopeStatementPath,
+  scopeBalanceSheetHref, scopeDetailHref, scopeDisplay, scopeExpenses, scopeStatementPath,
   type ScopeRow, type Statement,
 } from './_components/scopeFinancials'
 
@@ -45,7 +45,7 @@ export default function AccountsDashboard() {
   // RULE FOUR (§3c) — tiles doctrine: this hub is a dashboard with detail tables (By Company / By
   // Store), so it exports a {Metric,Value} summary sheet PLUS those tables. DISPLAY/EXPORT ONLY.
   const scopeCols: ExportColumn[] = [
-    { header: 'Scope', get: (r: any) => r.scope_label || r.scope_key },
+    { header: 'Scope', get: (r: any) => scopeDisplay(r) },
     { header: 'Revenue', get: (r: any) => r.revenue, money: true },
     { header: 'Gross Profit', get: (r: any) => r.gross_profit, money: true },
     // Owner request 2026-09-21. The statement's OWN expense total for this scope (backend
@@ -451,7 +451,9 @@ function ScopeTable({ title, rows, period }: { title: string; rows: ScopeRow[]; 
           <tbody>
             {rows.map((s: ScopeRow) => {
               const open = openKey === s.scope_key
-              const label = String(s.scope_label || s.scope_key)
+              // THE display name, from the backend's one home (scopeFinancials, §13b.1) — never
+              // `scope_label || scope_key`, which rendered `company:<uuid>` for a stale label.
+              const label = scopeDisplay(s)
               return (
                 <Fragment key={s.scope_key}>
                   <tr style={{ borderTop: '1px solid var(--border)', fontSize: 13, background: open ? 'var(--surface2, #f8fafc)' : undefined }}>
@@ -527,7 +529,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
     <div className="card" style={{ padding: 14, background: 'var(--surface, #fff)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 700 }}>
-          Expenses — {String(row.scope_label || row.scope_key)} · {period}
+          Expenses — {scopeDisplay(row)} · {period}
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <Link className="btn" style={{ fontSize: 12, padding: '3px 10px' }} href={scopeDetailHref(row.scope_key)}>Full P&amp;L</Link>

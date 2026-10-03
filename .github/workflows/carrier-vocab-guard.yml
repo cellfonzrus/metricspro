@@ -185,6 +185,11 @@ on:
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/harness_account_expenses_one_home.py"
+      # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
+      - "backend/harness_scope_label.py"
+      - "backend/harness_scope_label_lock.py"
+      - "backend/app/modules/account/coa.py"
+      - "frontend/prove_scope_label.mjs"
       - "backend/app/modules/account/analysis.py"
       - "backend/app/modules/account/statement_engine.py"
       - "backend/app/modules/account/router.py"
@@ -494,6 +499,12 @@ jobs:
       - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)
         working-directory: backend
         run: python3 harness_account_expenses_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
+        working-directory: backend
+        run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the scope display-name proof (a null / stale stored label renders the company's CURRENT name; no uuid ever rendered)
+        working-directory: backend
+        run: python3 harness_scope_label.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the report-kind lock (every upload surface reads the registry; no second list)
         working-directory: backend
         run: python3 harness_report_kind_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -712,6 +723,21 @@ jobs:
       - name: Run the nav deep-link proof (the real rbac.ts + urlTab.ts; negative controls)
         working-directory: frontend
         run: node prove_nav_deep_link.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SCOPE DISPLAY-NAME PROOF, frontend half (index §13b.1) drives the REAL
+  # accounts/_components/scopeFinancials.ts under Node 22 (type stripping; the module imports nothing, so no
+  # npm install): a company scope whose stored label is null or stale renders a NAME, and no function of the
+  # one home can emit a uuid or a raw `family:` key for any input.
+  scope-label-proof:
+    name: Scope display-name proof (the picker shows a name, never a company id)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the scope display-name proof (the real scopeFinancials.ts; the regression; the leak matrix)
+        working-directory: frontend
+        run: node prove_scope_label.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's

@@ -31,9 +31,66 @@ export const EXPENSE_SECTIONS = ['opex', 'other'] as const
 /** Display titles for the sections a drill-down renders (same words the P&L uses). */
 export const EXPENSE_SECTION_TITLE: Record<string, string> = { opex: 'Operating Expenses', other: 'Other' }
 
+// ── THE ONE HOME for what a scope is CALLED on screen (owner report 2026-10-03) ──────────────────
+// Owner (verbatim): *"the app shows the company id not the name of the company in the settings to
+// choose the company to work in."*
+//
+// THE CLASS. Every finance surface — the Accounts hub, the P&L, the Balance Sheet, the Cash Flow,
+// their export covers and their scheduled copies — rendered `scope_label || scope_key`.
+// `scope_label` is a COPY persisted into `commcalc.account_statements` at compute time;
+// `scope_key` for a company scope is the literal string `company:<uuid>`. So a company renamed
+// after its snapshot, or a snapshot computed before the company was named, showed the user a raw
+// uuid as the name of their company.
+//
+// THE FIX, one home for both sides: the BACKEND resolves the name once, in
+// `account/coa.scope_display_label` (index §13b.1), by DEREFERENCING the canonical entity
+// inventory `coa.org_companies` — the stored label is only a fallback. Every read that ships a
+// scope (`/account/overview`, `/account/pl|balance-sheet|cash-flow`, `/account/pl-range`,
+// `/account/statement`) stamps the answer as `scope_display`. This file is the frontend's ONLY
+// reader of that fact: no page composes a label itself, and nothing here falls back to
+// `scope_key`. `backend/harness_scope_label_lock.py` fails the build if a page starts to.
+//
+// RULE TWO: nothing below knows a tenant, company or carrier name — a scope is an opaque key and a
+// display name is whatever the registry says it is.
+
+/** A fact the backend resolved; the frontend never re-derives it. Masked rather than leaked when a
+ *  response predates the field: a raw `company:<uuid>` is never shown to a human. */
+const SCOPE_UNKNOWN = 'Unknown scope'
+
+/** Anything a read hands back that carries a scope: a scope row, or a statement response. */
+export type ScopeNamed = { scope_key?: string | null; scope?: string | null; scope_display?: string | null }
+
+/** THE display name of a scope — `scope_display` as the backend's one home resolved it.
+ *  A missing/blank field (an older cached response) degrades to a generic word, NEVER to the key. */
+export function scopeDisplay(row: ScopeNamed | null | undefined): string {
+  const d = String(row?.scope_display || '').trim()
+  return d || SCOPE_UNKNOWN
+}
+
+/** THE display name with a caller-supplied fallback that is ITSELF already a display name (never a
+ *  key) — for a response that carries no scope of its own. */
+export function scopeDisplayOr(row: ScopeNamed | null | undefined, fallback: string): string {
+  const d = String(row?.scope_display || '').trim()
+  return d || String(fallback || '').trim() || SCOPE_UNKNOWN
+}
+
+/** The same answer for a statement read, where the page may have a chosen scope key but no response
+ *  yet. The key is used only to say WHETHER something is selected — never as the label. */
+export function statementScopeDisplay(data: ScopeNamed | null | undefined,
+                                      scopes: ScopeNamed[] | null | undefined,
+                                      selectedKey: string): string {
+  const fromData = String(data?.scope_display || '').trim()
+  if (fromData) return fromData
+  const hit = (scopes || []).find(s => String(s?.scope_key || '') === String(selectedKey || ''))
+  const fromList = String(hit?.scope_display || '').trim()
+  return fromList || SCOPE_UNKNOWN
+}
+
 export type ScopeRow = {
   scope_key: string
   scope_label?: string | null
+  /** THE display name, resolved by the backend's one home. Read it through `scopeDisplay`. */
+  scope_display?: string | null
   revenue?: number | null
   gross_profit?: number | null
   net_income?: number | null

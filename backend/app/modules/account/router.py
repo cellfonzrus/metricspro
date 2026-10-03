@@ -609,6 +609,14 @@ async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "",
 
 
 # ── read snapshots ────────────────────────────────────────────────────────────────────────────
+def _scope_display(scope_key, stored_label, org_id):
+    """The scope's DISPLAY NAME for a statement read — `coa.scope_display_label` (THE one home,
+    §13b.1) over this org's canonical entity inventory. Owner report 2026-10-03: every statement
+    surface used to render `scope_label || scope_key`, so a missing or stale stored label showed the
+    user `company:<uuid>`. The stored label is now only a fallback; the raw key is never rendered."""
+    return coa.scope_display_label(scope_key, stored_label, coa.org_companies(sb(), org_id))
+
+
 def _read(period, st_type, scope, org_id):
     rows = (sb().schema("commcalc").table("account_statements").select("*")
             .eq("org_id", org_id).eq("period", period).eq("statement_type", st_type)
@@ -626,10 +634,13 @@ def _filtered_read(period, st_type, scope, stores, markets, org_id):
     stale = autocompute.staleness(sb(), org_id, period,
                                   computed_at=(base.get("computed_at") if base else None))
     if not base:
-        return {"period": period, "scope": "filtered", "computed": False, "filtered": True, **stale}
+        return {"period": period, "scope": "filtered", "computed": False, "filtered": True,
+                "scope_display": _scope_display("filtered", None, org_id), **stale}
     f = statement_filter.filtered_statement(sb(), org_id, period, st_type, scope, stores, markets)
     return {"period": period, "computed": True, "narrative": None, "model": None,
-            "crosscheck_ok": None, **f, **stale}
+            "crosscheck_ok": None, **f, **stale,
+            "scope_display": _scope_display(f.get("scope_key") or "filtered",
+                                            f.get("scope_label"), org_id)}
 
 
 def pl_single_month(period, scope="consolidated", stores="", markets="", org_id=ORG_ID):
@@ -647,8 +658,10 @@ def pl_single_month(period, scope="consolidated", stores="", markets="", org_id=
     # when a fresh upload has landed since (or the books were never computed). Never changes numbers.
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False, **stale}
+        return {"period": period, "scope": scope, "computed": False,
+                "scope_display": _scope_display(scope, None, org_id), **stale}
     return {"period": period, "scope": scope, "computed": True,
+            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
             "statement": row["payload"], "narrative": row.get("narrative"),
             "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
 
@@ -691,6 +704,7 @@ async def get_pl_range(period_from: str, period_to: str = "", scope: str = "cons
     # the export layout travels WITH the grid, so the page's Excel / CSV / PDF and the scheduled report render
     # the one layout `pl_range.export_sheet` owns — no renderer lays the months out a second time.
     return {"period_from": months[0], "period_to": months[-1], "scope": scope, **out,
+            "scope_display": _scope_display(scope, out.get("scope_label"), org_id),
             "sheets": [pl_range.export_sheet(out), pl_range.notes_sheet(out)]}
 
 
@@ -703,8 +717,10 @@ async def get_bs(period: str, scope: str = "consolidated", stores: str = "", mar
     row = _read(period, "balance_sheet", scope, org_id)
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False, **stale}
+        return {"period": period, "scope": scope, "computed": False,
+                "scope_display": _scope_display(scope, None, org_id), **stale}
     return {"period": period, "scope": scope, "computed": True,
+            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
             "statement": row["payload"], "narrative": row.get("narrative"),
             "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
 
@@ -718,8 +734,10 @@ async def get_cf(period: str, scope: str = "consolidated", org_id: str = ORG_ID)
     row = _read(period, "cash_flow", scope, org_id)
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False, **stale}
+        return {"period": period, "scope": scope, "computed": False,
+                "scope_display": _scope_display(scope, None, org_id), **stale}
     return {"period": period, "scope": scope, "computed": True,
+            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
             "statement": row["payload"], "model": row.get("model"), **stale}
 
 
@@ -1057,11 +1075,17 @@ def overview(period: str, org_id: str = ORG_ID):
             s["cash_flow_tied"] = p.get("tied")
         s["computed_at"] = r.get("computed_at")
         s["model"] = r.get("model")
+    # THE DISPLAY NAME (owner report 2026-10-03, §13b.1): every scope row carries `scope_display`,
+    # resolved by `coa.scope_display_label` against the canonical `companies` enumeration already
+    # read above — so this dropdown shows the entity's CURRENT name even when the snapshot's stored
+    # `scope_label` is null or predates a rename, and can never show `company:<uuid>`. Sorting uses
+    # the same resolved name, so the list reads alphabetically by what the user actually sees.
+    labelled = coa.label_scopes(list(scopes.values()), companies)
     return {"period": period, "computed": bool(rows), "companies": companies,
-            "scopes": sorted(scopes.values(),
+            "scopes": sorted(labelled,
                              key=lambda x: (0 if x["scope_key"] == "consolidated"
                                             else 1 if x["scope_key"].startswith("company:") else 2,
-                                            x.get("scope_label") or ""))}
+                                            x.get("scope_display") or ""))}
 
 
 # ── Narrative banner (owner 2026-08-29 modernization track) ──────────────────────────────────────
@@ -1337,10 +1361,13 @@ async def financial_analysis(months: int = 12, authorization: str = Header(defau
 
     try:
         rows = await run_in_threadpool(_rows)   # bulk Supabase read off the event loop (SEV-1 rule)
-        own_ids = await run_in_threadpool(
-            lambda: {str(c["id"]) for c in coa.org_companies(sb(), org_id)})
+        companies = await run_in_threadpool(lambda: coa.org_companies(sb(), org_id))
+        own_ids = {str(c["id"]) for c in companies}
+        # the per-company comparison series label through THE one home (§13b.1) — a renamed entity
+        # relabels its own series instead of charting `company:<uuid>`.
         return {"org_id": org_id, **analysis.assemble(rows, months=months,
-                                                      own_company_ids=own_ids)}
+                                                      own_company_ids=own_ids,
+                                                      companies=companies)}
     except Exception as e:
         raise HTTPException(500, f"analysis failed: {type(e).__name__}: {e}")
 

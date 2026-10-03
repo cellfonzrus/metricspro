@@ -4143,6 +4143,62 @@ compute and filter paths inherit the canonical enumeration in one move), and
 `finance_attention` (finance_config audit). Billing's `per_entity` count stays a count (returns no
 rows) and is pinned org-scoped in the guard.
 
+### 13b.1. A SCOPE'S DISPLAY NAME — dereferenced from the entity registry, never a stored copy (owner report 2026-10-03)
+
+**Owner (verbatim):** "the app shows the company id not the name of the company in the settings to
+choose the company to work in."
+
+**THE INSTANCE vs THE CLASS.** The instance was the finance scope picker: the company dropdown shared
+by the Accounts hub, the P&L, the Balance Sheet and the Cash Flow labelled each scope
+`scope_label || scope_key`, and `scope_key` for a company scope is the literal string
+`company:<uuid>`. The CLASS is that a scope's display name was a **COPY** — persisted into
+`commcalc.account_statements.scope_label` at COMPUTE time — so every surface fell back to the raw key
+whenever the copy was missing (a snapshot computed before the company was named, or a hand-written
+row) or stale (the company renamed afterwards). `GET /account/overview/{period}` already returned the
+canonical `companies` list in the SAME response as `scopes` (§13b) and simply did not use it.
+*(Ruled out and NOT the defect: the header/login tenant switcher — `frontend/src/lib/tenant-scope.ts`
+and `_my_tenants_payload` in `core/router.py` both label from `name` and cannot emit an org id.)*
+
+**THE ONE HOME.** `account/coa.scope_display_label(scope_key, stored_label, companies)` — PURE,
+DB-free, no global state — resolves, in order: (1) the CANONICAL registry for the scope's family (for
+`company:<id>`, the org's own current name from §13b `coa.org_companies`, read through
+`coa.companies_by_id`); (2) the stored `scope_label`, when non-blank and not the key echoed back;
+(3) the key's own identifier, but ONLY for a family whose identifier is human by construction;
+(4) a generic family word. **The raw key is never returned.** `coa.label_scopes(scopes, companies)`
+(pure) stamps `scope_display` on every scope list an API ships, so no renderer carries the rule.
+RULE TWO: `coa.SCOPE_FAMILIES` / `SCOPE_SINGLETONS` are keyed by scope FAMILY (`company` — identifier
+declared NON-human, so a uuid can never render; `store`, `profit_center` — human identifiers;
+`consolidated`, `filtered`), never by tenant, company or carrier.
+
+**WIRED CALLERS (the whole class, one PR).** Backend: `router._scope_display` (the one dereference
+over `coa.org_companies`) stamps `scope_display` on `pl_single_month` (⇒ `GET /account/pl/{period}`),
+`get_bs`, `get_cf`, `get_pl_range`, `_filtered_read`; `router.overview` stamps the scope list via
+`coa.label_scopes` off the `companies` it already reads **and sorts by the resolved name**;
+`statement_engine.statement` stamps it on the on-demand statement (⇒ `/account/statement`,
+`/account/centers/pl`, `/account/centers/cost-view`); `analysis._scope_series` labels the
+per-company/-store comparison series through the home (`router.financial_analysis` now passes
+`companies=`); notify `finance_reports._financial_statement` / `_account_pl_range` and
+`report_registry._acct_scope_display` (⇒ the scheduled `account_pl` / `account_balance_sheet` titles).
+Frontend: ONE reader, `accounts/_components/scopeFinancials.ts` — `scopeDisplay(row)`,
+`scopeDisplayOr(row, fallback)`, `statementScopeDisplay(data, scopes, selectedKey)` — called by
+`/accounts` (hub table + export + drill-down header), `/accounts/pl`, `/accounts/balance-sheet`,
+`/accounts/cash-flow`, `/accounts/profit-centers` and `_components/plRangeExport.ts`. No page composes
+a label and none reads `scope_display` directly.
+
+**LOCKED SO IT CANNOT UN-WIRE.** `backend/harness_scope_label_lock.py` (stdlib only, DB-free, in the
+`carrier-vocab-guard` job) fails the build when: the home stops existing or stops dereferencing the
+registry; the resolver can return the key; ANY backend or `frontend/src` file re-introduces a
+`scope_label`-or-`scope`/`scope_key` fallback (comments and docstrings excluded, every spelling —
+`||`, `??`, `or`, `String(...)`); a second `scope_display_label` appears; a page reads `scope_display`
+behind the home's back; or any wired caller above stops stamping/reading it. Each rule has a negative
+control. PROOFS: `backend/harness_scope_label.py` (the regression — a company scope whose stored label
+is null or stale renders the CURRENT name; no input of any shape renders a key or leaks a uuid; the
+non-company families; an unnamed entity; org isolation) and `frontend/prove_scope_label.mjs` (the real
+`scopeFinancials.ts` under Node 22 type stripping, in the `scope-label-proof` job).
+
+**NO MIGRATION, NO MONEY MOVED.** `scope_label` stays exactly as written — this changes only WHICH
+string is displayed. No stored figure, line or snapshot is touched.
+
 ### 13c. CANONICAL MARKET VOCABULARY / ENUMERATION — every market dropdown serves the union (owner directive 2026-09-04)
 
 **Owner (verbatim):** "B-1115 is under super nova and LI market under Cellfonz R us, that has been
@@ -5317,7 +5373,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20); **the onboarding intake's inventory landing (`write_inventory_devices`, §30.6) — CONFIRMED the same table the inventory module reads (§30.8)** |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`) → **`balance_sheet.journal_grain_entries`** (mig `954` GRAIN rule: store / company / tenant-total entries, a coarser row booked NET of the finer rows inside it — no double count; conflicts surfaced in `bs['journal_grains']`); legacy `engine.compute_and_store` exact-period read; staleness probe |
-| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`/**`account_pl_range`**; **the P&L month range (§4c, 2026-09-26)** — `router.pl_single_month` (THE single-month read, `get_pl` returns it) looped by `router.get_pl_range` over `_period.month_range`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=`; **Print each store (§4d, 2026-10-01)** — `GET /account/pl/{period}?stores=<one store>` per store via `accounts/_components/plStatement.plQuery` / `PLPerStorePrint.tsx` |
+| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b; **the stored `scope_label` is NOT the display name — every read stamps `scope_display` from `coa.scope_display_label`, §13b.1, 2026-10-03**), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`/**`account_pl_range`**; **the P&L month range (§4c, 2026-09-26)** — `router.pl_single_month` (THE single-month read, `get_pl` returns it) looped by `router.get_pl_range` over `_period.month_range`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=`; **Print each store (§4d, 2026-10-01)** — `GET /account/pl/{period}?stores=<one store>` per store via `accounts/_components/plStatement.plQuery` / `PLPerStorePrint.tsx` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`/`954`) | `PUT /account/config` (incl. the mig-954 tenant mapping `distributor_payable_basis`/`distributor_payable_line`/`asset_ledger_open_statuses`); mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive); **mig-954 distributor-payable mapping** via `balance_sheet.load_bs_config` → `resolve_payable_basis`/`resolve_payable_line` (org column > carrier preset > declared mig-933 family > off) |
 | `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) ; **the inventory→COGS transition §42** (`device_cogs._vip_sold_cost` recognises `owed_to_vip` at `date_sold`; the UNSOLD side of the same ledger is booked by nothing — `coa`'s `status=='on inventory'` inventory predicate matches 0 of 35,346 live rows) ; **Device Payable as at a date** (`account/device_payable`, §23z — the PAID-ON side: `payg_date` is the ONLY per-unit PAYMENT DATE in the platform and the only thing that can backdate a payable, licensed by agreeing to within 2.7% with the settled payment batches; `owed_to_vip` the money; `acquired_date` drives the DERIVED coverage window, because this snapshot has been PRUNED — 72 rows in 2023 and 1,391 in 2024 against 1,504 and 16,195 units actually invoiced, so a payable for a 2024 date returns "not measured" rather than a small confident wrong number) |
@@ -5633,6 +5689,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant; company series fail-closed via `own_company_ids`) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
 | `GET /account/overview/{period}` (headline scopes + THE company/scope dropdown source for dashboard/P&L/BS/Cash-Flow; company scopes fail-closed against `coa.org_companies` per §13b; per scope `revenue`/`gross_profit`/**`expenses`**/`net_income` all from `analysis.pl_totals` — never re-summed here, 2026-09-21) | `account/router.py` (`overview`) | §4, §13b |
 | `GET /account/companies` (canonical company picker — journal + companies pages) | `account/router.py` (`list_companies` → `coa.org_companies`) | §13b |
+| `GET /account/overview/{period}` / `/account/pl|balance-sheet|cash-flow/{period}` / `/account/pl-range` / `/account/statement/{period}` all carry **`scope_display`** — THE scope's display name, `coa.scope_display_label` over `coa.org_companies` (stored `scope_label` only a fallback, the raw `company:<uuid>` key never rendered) | `account/coa.py` (`scope_display_label`, `label_scopes`, `companies_by_id`); `account/router.py` (`_scope_display`, `overview`); `account/statement_engine.py` (`statement`); frontend reader `accounts/_components/scopeFinancials.ts` (`scopeDisplay` / `scopeDisplayOr` / `statementScopeDisplay`). Lock `harness_scope_label_lock.py`, proofs `harness_scope_label.py` + `prove_scope_label.mjs` | §13b.1 |
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |

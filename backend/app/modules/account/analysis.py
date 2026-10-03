@@ -140,7 +140,7 @@ def _dedupe_latest(rows):
     return out
 
 
-def assemble(rows, months=12, own_company_ids=None):
+def assemble(rows, months=12, own_company_ids=None, companies=None):
     """The chart-ready analysis payload. `rows` = account_statements rows (dicts with period,
     statement_type, scope_key, scope_label, payload, computed_at) for ONE org — every statement
     type/scope welcome; unknown ones are ignored. `months` = trailing window (by computed months,
@@ -150,7 +150,12 @@ def assemble(rows, months=12, own_company_ids=None):
     when given, `company:<id>` scopes NOT in the org's own entity inventory are dropped
     (coa.filter_org_scopes — the same fail-closed rule as the statement scope dropdowns), so a
     stale or foreign-entity snapshot can never chart in the per-company comparison. None (the
-    pure/legacy shape) skips the check."""
+    pure/legacy shape) skips the check.
+
+    `companies` (the same `org_companies` rows): the per-company comparison series takes its label
+    from THE one home `coa.scope_display_label` (§13b.1, owner report 2026-10-03) instead of echoing
+    the snapshot's stored `scope_label` — a renamed entity relabels its own series, and a snapshot
+    with no stored label never charts as `company:<uuid>`. None keeps the pure/legacy fallback."""
     months = max(1, min(int(months or 12), 36))
     if own_company_ids is not None:
         from app.modules.account.coa import filter_org_scopes
@@ -198,11 +203,13 @@ def assemble(rows, months=12, own_company_ids=None):
 
     # ── per-company / per-store comparison series ───────────────────────────────────────────────
     def _scope_series(prefix):
+        from app.modules.account.coa import scope_display_label   # local: coa imports analysis' kin
         scopes = {}
         for (mk, st, sc), r in idx.items():
             if st != "pl" or not str(sc or "").startswith(prefix) or mk not in set(month_keys):
                 continue
-            scopes.setdefault(sc, {"scope_key": sc, "label": r.get("scope_label") or sc,
+            scopes.setdefault(sc, {"scope_key": sc,
+                                   "label": scope_display_label(sc, r.get("scope_label"), companies),
                                    "by_month": {}})
             p = pl_totals(r.get("payload") or {})
             scopes[sc]["by_month"][mk] = {"revenue": p["revenue"],

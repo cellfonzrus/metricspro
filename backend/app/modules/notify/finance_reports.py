@@ -53,7 +53,12 @@ async def _financial_statement(org_id, f):
     if not data.get("computed"):
         raise ValueError(f"Financial statement unavailable for {period} / {scope}: "
                          f"{data.get('note') or 'unknown scope'}")
-    label = data.get("scope_label") or scope
+    # THE display name, not a copy: `statement_engine.statement` resolves it through
+    # `coa.scope_display_label` (§13b.1) against the org's canonical entity inventory. A scheduled
+    # send used to title itself `scope_label || scope` and mail out `company:<uuid>` whenever the
+    # stored label was missing or stale (owner report 2026-10-03).
+    from app.modules.account import coa as _coa
+    label = data.get("scope_display") or _coa.scope_display_label(scope, data.get("scope_label"))
     slug = "".join(c if c.isalnum() else "-" for c in str(scope)).strip("-") or "scope"
     sheets = []
     pl = data.get("pl") or {}
@@ -110,7 +115,9 @@ async def _account_pl_range(org_id, f):
     if not data.get("computed_months"):
         raise ValueError(f"P&L not computed for any month of {data['period_from']} → {data['period_to']} / "
                          f"{scope} — open /accounts and click 'Compute statements' first.")
-    label = data.get("scope_label") or scope
+    # same one home as above (§13b.1) — the month-range read stamps `scope_display`.
+    from app.modules.account import coa as _coa
+    label = data.get("scope_display") or _coa.scope_display_label(scope, data.get("scope_label"))
     slug = "".join(c if c.isalnum() else "-" for c in str(scope)).strip("-") or "scope"
     sub = f"{data['period_from']} → {data['period_to']} · cash basis · {label}"
     if data.get("missing_months"):

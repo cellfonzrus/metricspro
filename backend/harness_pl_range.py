@@ -278,15 +278,39 @@ def grid_lines(grid):
 
 # ══ A. get_pl is byte-identical to its old inline body ═════════════════════════════════════════════════
 section("A. get_pl == its pre-change inline body (the refactor moved code, changed nothing)")
+# `scope_display` is the ONE key deliberately added after this oracle was written (owner report
+# 2026-10-03, index §13b.1: a scope's display name is dereferenced from the canonical entity
+# registry instead of rendering `scope_label || scope_key`, i.e. a company uuid). The oracle below
+# stays VERBATIM — the identity is still proved over everything else, with that one additive key
+# removed from BOTH sides (the oracle's filtered branch calls the real `_filtered_read`, which
+# stamps it too) — and A1b then proves the key is present and is a NAME, never the key.
+ADDITIVE_KEYS = ("scope_display",)
+
+
+def without_additive(d):
+    return {k: v for k, v in d.items() if k not in ADDITIVE_KEYS} if isinstance(d, dict) else d
+
+
 same = True
 for scope, stores, markets in VIEWS:
     for m in MONTHS + ["2026-07"]:
-        a = json.dumps(get_pl(m, scope, stores, markets), sort_keys=True, default=str)
-        b = json.dumps(old_get_pl(m, scope, stores, markets), sort_keys=True, default=str)
+        a = json.dumps(without_additive(get_pl(m, scope, stores, markets)), sort_keys=True, default=str)
+        b = json.dumps(without_additive(old_get_pl(m, scope, stores, markets)), sort_keys=True, default=str)
         if a != b:
             same = False
             print("     differs:", scope, stores, markets, m)
-check("A1 every scope / filter / month (computed, not computed, numeric spelling): JSON-identical", same)
+check("A1 every scope / filter / month (computed, not computed, numeric spelling): JSON-identical "
+      "apart from the additive scope_display (§13b.1)", same)
+missing, leaked = [], []
+for scope, stores, markets in VIEWS:
+    for m in MONTHS + ["2026-07"]:
+        d = get_pl(m, scope, stores, markets).get("scope_display")
+        if not str(d or "").strip():
+            missing.append((scope, stores, markets, m))
+        elif str(d) == scope or str(d).startswith("company:"):
+            leaked.append((scope, stores, markets, m, d))
+check("A1b every view carries a scope_display, and it is never the raw `company:<uuid>` key (§13b.1)",
+      not missing and not leaked, [str(x) for x in (missing + leaked)])
 check("A2 the page's handler returns the shared single-month read",
       json.dumps(get_pl(JUL, "company:" + C1), sort_keys=True, default=str)
       == json.dumps(R.pl_single_month(JUL, "company:" + C1, "", "", ORG), sort_keys=True, default=str))

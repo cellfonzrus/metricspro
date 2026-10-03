@@ -10,6 +10,7 @@
 // `backend/harness_pl_range_lock.py` fails the build if it starts to.
 import type { ExportColumn, ExportPayload, ExportSheet } from '@/lib/export'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from './statementExport'
+import { scopeDisplayOr } from './scopeFinancials'
 
 export const PL_RANGE_ENDPOINT = '/api/v1/account/pl-range'
 
@@ -23,6 +24,8 @@ export type PlRangeResponse = {
   period_to: string
   scope: string
   scope_label?: string | null
+  /** THE display name, resolved by the backend's one home (`coa.scope_display_label`, §13b.1). */
+  scope_display?: string | null
   months: string[]
   computed_months: string[]
   missing_months: string[]
@@ -55,7 +58,8 @@ export function plRangeMeta(d: PlRangeResponse, scopeFallback: string): Statemen
   const ingests = (d.month_status || []).map(m => m.newest_ingest_at).filter(Boolean) as string[]
   return {
     reportName: 'Profit & Loss by month',
-    scopeLabel: d.scope_label || scopeFallback,
+    // THE one home's answer (§13b.1); `scopeFallback` is the page's already-resolved name, not a key.
+    scopeLabel: scopeDisplayOr(d, scopeFallback),
     period: `${d.period_from} → ${d.period_to}`,
     basis: 'Cash basis',
     computed: (d.computed_months || []).length > 0,
