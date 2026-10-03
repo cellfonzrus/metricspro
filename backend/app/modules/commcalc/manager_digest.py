@@ -54,8 +54,88 @@ def recipients_for(hierarchy):
     return list(h.get("dm") or []) + list(h.get("above") or [])
 
 
+# ── IS A TENANT'S DAILY ALERT DUE ON THIS TICK? ─────────────────────────────────────────────────
+# ONE home for the mig-433 convention, which was spelled inline at each sweep: a tenant configures a
+# tenant-local HH:MM and an HOURLY pg_cron tick fires every sweep, so each sweep must decide for
+# itself whether the configured minute has arrived. Three sweeps spelling `now.strftime("%H:%M") <
+# send_time` is three chances for one of them to drift on the edge case (a blank setting, a 24:00, a
+# '9:30' with no leading zero) and send a digest an hour early or not at all.
+DEFAULT_ALERT_TIME = "10:30"
+
+
+def normalize_alert_time(value):
+    """A tenant's configured HH:MM, normalised so a comparison is sound. Accepts 'H:MM', 'HH:MM' and
+    'HH:MM:SS'; anything unparseable or out of range resolves to the house default rather than
+    refusing to alert at all (an alert that silently never fires is the failure this guards). PURE."""
+    raw = str(value or "").strip()
+    if not raw:
+        return DEFAULT_ALERT_TIME
+    parts = raw.split(":")
+    if len(parts) < 2:
+        return DEFAULT_ALERT_TIME
+    try:
+        hh, mm = int(parts[0]), int(parts[1])
+    except (TypeError, ValueError):
+        return DEFAULT_ALERT_TIME
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return DEFAULT_ALERT_TIME
+    return "{:02d}:{:02d}".format(hh, mm)
+
+
+def due_now(now_local_hhmm, send_time):
+    """Has the tenant's configured send time arrived in its OWN local day? `now_local_hhmm` is the
+    tenant-local time as 'HH:MM'. True from that minute until midnight, which is what makes an hourly
+    tick safe: the first tick at or after the minute sends, and `alert_log` dedup stops every later
+    tick that day from sending again. A malformed `now` is NOT due -- a clock we cannot read must not
+    trigger a fan-out. PURE."""
+    now = str(now_local_hhmm or "").strip()
+    if len(now) < 5 or now[2] != ":":
+        return False
+    try:
+        int(now[:2]), int(now[3:5])
+    except (TypeError, ValueError):
+        return False
+    return now[:5] >= normalize_alert_time(send_time)
+
+
+# ── WHICH CHANNELS CAN REACH A RECIPIENT ────────────────────────────────────────────────────────
+# The house rule used to be stated as "a manager with no email is skipped -- the house rule, not a
+# knob", which was right while email was the only channel. The owner asked for WhatsApp as well
+# (2026-10-03), and the honest generalisation is: a recipient is reachable on a channel when they
+# have an ADDRESS for that channel, and is skipped only when no requested channel can reach them.
+# That is still not a knob -- a caller chooses which channels to request, never who gets skipped.
+CHANNEL_ADDRESS_FIELD = {"email": "email", "whatsapp": "phone"}
+DEFAULT_CHANNELS = ("email",)
+
+
+def normalize_channels(channels):
+    """The requested channels, in a stable order, unknown names dropped. Empty/garbage resolves to
+    the house default (email), so no caller can accidentally request nothing. PURE."""
+    if isinstance(channels, str):
+        channels = [channels]
+    if not isinstance(channels, (list, tuple, set)):
+        return DEFAULT_CHANNELS
+    want = [str(c).strip().lower() for c in channels]
+    keep = tuple(c for c in ("email", "whatsapp") if c in want)
+    return keep or DEFAULT_CHANNELS
+
+
+def addresses_for(manager, channels=DEFAULT_CHANNELS):
+    """{channel: address} for ONE manager, holding only the channels they actually have an address
+    for. A recipient with no address on any requested channel yields {} and the caller skips them --
+    the same house rule as before, now stated per channel instead of per email. PURE."""
+    m = manager if isinstance(manager, dict) else {}
+    out = {}
+    for ch in normalize_channels(channels):
+        addr = str(m.get(CHANNEL_ADDRESS_FIELD[ch]) or "").strip()
+        if addr:
+            out[ch] = addr
+    return out
+
+
 def plan_digests(items, hierarchy_by_store, today, *, scope, build, key_parts,
-                 store_of=lambda it: it.get("store_code"), kind=None):
+                 store_of=lambda it: it.get("store_code"), kind=None,
+                 channels=DEFAULT_CHANNELS):
     """PURE. Decide the emails to send for ONE tenant, for ONE alert scope.
 
       items                a flat list of per-store findings (any shape the caller's `build` reads).
@@ -77,16 +157,28 @@ def plan_digests(items, hierarchy_by_store, today, *, scope, build, key_parts,
     for it in (items or []):
         by_store.setdefault(store_of(it), []).append(it)
 
-    mgr = {}   # lower(email) -> {"name", "email", "items": [...]}
+    want = normalize_channels(channels)
+    mgr = {}   # identity -> {"name", "email", "addresses", "items": [...]}
     for store, store_items in by_store.items():
         for m in recipients_for(hierarchy_by_store.get(store)):
-            em = str((m or {}).get("email") or "").strip()
-            if not em:
-                continue          # a manager with no email is skipped — the house rule, not a knob.
-            slot = mgr.setdefault(em.lower(), {"name": (m or {}).get("name") or em, "email": em,
-                                               "items": []})
+            addrs = addresses_for(m, want)
+            if not addrs:
+                continue   # no requested channel can reach them — the house rule, not a knob.
+            # THE DEDUP IDENTITY stays the EMAIL wherever there is one, so every ref_key an
+            # email-only caller has ever written is byte-identical and no finding re-escalates.
+            # A recipient reachable ONLY on WhatsApp keys on that address instead, which is the
+            # honest answer: they are a different row in alert_log because they are a different
+            # address, not a silently dropped manager (the pre-2026-10-03 behaviour).
+            ident = addrs.get("email") or addrs.get("whatsapp")
+            slot = mgr.setdefault(ident.lower(), {"name": (m or {}).get("name") or ident,
+                                                  "email": addrs.get("email", ""),
+                                                  "addresses": addrs, "items": []})
+            # A manager reached through two hierarchy paths can carry an address on one path and not
+            # the other; the union is what can reach them, never the last path seen.
+            for ch, a in addrs.items():
+                slot["addresses"].setdefault(ch, a)
             for it in store_items:
-                slot["items"].append({**it, "ref_key": ref_key(scope, today, em, *key_parts(it))})
+                slot["items"].append({**it, "ref_key": ref_key(scope, today, ident, *key_parts(it))})
 
     digests = []
     for slot in mgr.values():
@@ -99,7 +191,15 @@ def plan_digests(items, hierarchy_by_store, today, *, scope, build, key_parts,
             seen.add(it["ref_key"])
             uniq.append(it)
         built = build(slot["name"], uniq)
-        digests.append({"kind": kind or scope, "to": slot["email"], "to_name": slot["name"],
-                        "subject": built["subject"], "html": built["html"], "items": uniq})
-    digests.sort(key=lambda d: d["to"].lower())
+        d = {"kind": kind or scope, "to": slot["email"], "to_name": slot["name"],
+             "subject": built["subject"], "html": built["html"], "items": uniq}
+        # `to` is kept as the email for every existing caller and reader. `addresses` is additive and
+        # names each channel that can actually reach this recipient; `text` is only present when a
+        # caller asked for a channel that needs plain text, so an email-only plan is unchanged.
+        if want != DEFAULT_CHANNELS or set(slot["addresses"]) != {"email"}:
+            d["addresses"] = dict(slot["addresses"])
+            if "text" in built:
+                d["text"] = built["text"]
+        digests.append(d)
+    digests.sort(key=lambda d: (d["to"] or (d.get("addresses") or {}).get("whatsapp") or "").lower())
     return {"digests": digests}

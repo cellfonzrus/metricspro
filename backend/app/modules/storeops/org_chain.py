@@ -84,13 +84,22 @@ def ancestors_of(unit, unit_by_id):
 
 
 def managers_at(unit, mgr_eids_by_unit, emp_by_eid, level_names):
-    """PURE: [{employee_id, name, email, unit, level}] for one unit — a node may have several."""
+    """PURE: [{employee_id, name, email, phone, unit, level}] for one unit — a node may have several.
+
+    `phone` carries the employee's number so an alert can reach a manager on WhatsApp as well as by
+    email (owner ask 2026-10-03). It is ADDITIVE: every existing reader keys on `email` and is
+    unaffected, and the reachability decision itself is not made here — it belongs to
+    `commcalc/manager_digest.addresses_for`, the one home for "which channel can reach this
+    recipient". A manager whose row has no phone simply has None here; that is not a defect to
+    repair at read time, it is the employee record being incomplete, and the digest says so by
+    reaching them on the channels they do have."""
     out = []
     for eid in (mgr_eids_by_unit.get((unit or {}).get("id")) or []):
         if not eid:
             continue
         emp = emp_by_eid.get(eid) or {}
         out.append({"employee_id": eid, "name": emp.get("name"), "email": emp.get("email"),
+                    "phone": emp.get("phone"),
                     "unit": (unit or {}).get("name"), "level": level_names.get((unit or {}).get("level_id"))})
     return out
 
