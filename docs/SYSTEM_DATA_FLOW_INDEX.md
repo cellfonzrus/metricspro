@@ -3396,7 +3396,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `_run_closing_missing_alerts` (a derived store has nobody to nag) and
   `attention_providers._p_closing_stale_stores` (a derived store's gap is reported as
   `closing_derivation_stale` — the derivation not having run — not as "selling but not submitting").
-  The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due`,
+  The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due` (put on its clock by mig `1040`, STEP 2 — shipped unscheduled
+  in 1035 and so had never run once; a sweep called nightly and scheduled nowhere does not exist),
   retroactive `POST /closing/derive-range` over a bounded span (run from Store Setup's own
   "Fill in past days", Preview first — the endpoint without a button left a hand-made HTTP call as the
   only route) — the SAME per-day sweep run once per
