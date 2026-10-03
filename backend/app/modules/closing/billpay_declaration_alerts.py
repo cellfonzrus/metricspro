@@ -24,6 +24,25 @@ AND THE ONE IT REFUSES TO ALERT ON:
                    class this file exists on the right side of. It is COUNTED in the digest footer so
                    a thin digest is never read as a healthy estate, which is the §15z rule verbatim.
 
+AND THE TWO IT REFUSES BECAUSE THE BASIS ITSELF IS NOT SAFE TO COMPARE (owner ask 2026-10-03: "so
+there is not balmnket error on a different tenant"). A store-day with real bill-pay activity and no
+service-fee line means different things depending on whether the org charges such a fee, and the
+org's DECLARED answer — not an inference from its data — decides which:
+
+  fee_line_missing       the org says it DOES charge a bill-payment fee and none rang for this
+                         store-day. The POS basis is therefore understated, so comparing it would
+                         report a shortfall that is really a FEED defect. Refused, counted, and the
+                         footer names it as a feed gap with the remedy — never charged to the rep.
+  fee_policy_unanswered  nobody has said whether the org charges one. Neither reading of the missing
+                         line can honestly be preferred, so the store-day is not compared, and the
+                         footer asks the question rather than guessing an answer. This is the DEFAULT
+                         for an unconfigured tenant, which is why a new tenant can never be
+                         blanket-accused by another tenant's fee vocabulary.
+
+Which states are safe to compare is NOT decided here: it is `metric_recon.billpay_basis_comparable`,
+the one home for the fee policy, dereferenced. A second copy of that judgement at this call site is
+the divergence the house rules forbid.
+
 NOTHING HARDCODED (RULE TWO, and the owner's own words). The send time, the dollar tolerance, the
 channels and the on/off switch are per-tenant config rows with house defaults; the recipients are
 resolved from the org tree, never a typed list; and no carrier, tenant, store or product name appears
@@ -56,11 +75,25 @@ CLASS_UNDER = "under_declared"
 CLASS_OVER = "over_declared"
 CLASS_AGREE = "agree"
 CLASS_NO_POS = "no_pos_figure"
-GAP_CLASSES = (CLASS_UNDER, CLASS_OVER, CLASS_AGREE, CLASS_NO_POS)
+# The two the fee policy refuses: the basis is unsafe to compare, and for two different reasons with
+# two different owners (a broken feed, and an unanswered config question). They are NOT merged into
+# one class, because a digest that cannot say which remedy applies sends the manager nowhere.
+CLASS_FEE_MISSING = "fee_line_missing"
+CLASS_FEE_POLICY_UNSET = "fee_policy_unanswered"
+GAP_CLASSES = (CLASS_UNDER, CLASS_OVER, CLASS_AGREE, CLASS_NO_POS,
+               CLASS_FEE_MISSING, CLASS_FEE_POLICY_UNSET)
 # The two that are a person's problem. `no_pos_figure` is a PIPELINE problem and is refused here by
-# name, the way `zero_sales.GAP_REFUSED` refuses counting an unmeasured day as a zero.
+# name, the way `zero_sales.GAP_REFUSED` refuses counting an unmeasured day as a zero; the two fee
+# classes are refused for the same reason — an unsafe basis is never a rep's error.
 ALERTABLE = (CLASS_UNDER, CLASS_OVER)
-REFUSED_AS_ALERT = (CLASS_AGREE, CLASS_NO_POS)
+REFUSED_AS_ALERT = (CLASS_AGREE, CLASS_NO_POS, CLASS_FEE_MISSING, CLASS_FEE_POLICY_UNSET)
+# The refusals a manager must be TOLD about, in the order the footer states them. `agree` is not one
+# of them: a matching store-day is good news, not something that could not be assessed.
+UNASSESSED = (CLASS_NO_POS, CLASS_FEE_MISSING, CLASS_FEE_POLICY_UNSET)
+# Not a class — a store-day that WAS compared and still says something about the config: a fee line
+# rang where the org declared it charges none. Counted separately so the footer can name it without
+# it ever being mistaken for a declaration exception.
+CLASS_FEE_UNEXPECTED_ADVISORY = "fee_rang_though_policy_says_none"
 
 
 def _f(v):
@@ -68,6 +101,13 @@ def _f(v):
         return round(float(v or 0), 2)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _fee_conflicts_with_policy(fee_state):
+    """Does this store-day's fee state contradict the org's declared policy while still leaving the
+    basis comparable? Asked of the one home rather than spelled here. PURE."""
+    from app.modules.commcalc import metric_recon as _mr
+    return fee_state == _mr.FEE_STATE_UNEXPECTED
 
 
 def resolve_config(tenant_row=None):
@@ -98,17 +138,33 @@ def resolve_config(tenant_row=None):
     return out
 
 
-def classify(declared, pos_basis, tolerance=None):
+def classify(declared, pos_basis, tolerance=None, fee_state=None):
     """One store-day → its class. `pos_basis` is `metric_recon.pos_billpay_cash`'s answer, so None
-    means the feed covered no bill payments for that store-day.
+    means the feed covered no bill payments for that store-day. `fee_state` is
+    `metric_recon.billpay_fee_state`'s answer for the same store-day — omitted (None) keeps the
+    pre-1046 behaviour exactly, so every existing caller is byte-identical.
 
     ABSENCE IS NOT ZERO, and this is the whole point of the function. `pos_basis is None` is
     `no_pos_figure` — never compared, never alerted. A declaration of $0.00 against a POS basis of
     $0.00 agrees; a declaration of $0.00 against a REAL basis is the biggest exception there is, and
-    the two must not collapse into each other. PURE."""
+    the two must not collapse into each other.
+
+    AN UNSAFE BASIS IS NOT A REP'S ERROR EITHER. When the org's declared fee policy says this
+    store-day's basis cannot be trusted — a fee line the org says it charges did not ring, or nobody
+    has said whether it charges one — the store-day is classed by the REASON rather than compared.
+    Whether a state is safe is asked of the one home (`billpay_basis_comparable`), never decided here.
+    PURE."""
     tol = HOUSE_CONFIG["tolerance"] if tolerance is None else abs(_f(tolerance))
     if pos_basis is None:
         return CLASS_NO_POS
+    if fee_state is not None:
+        from app.modules.commcalc import metric_recon as _mr
+        if not _mr.billpay_basis_comparable(fee_state):
+            # The two unsafe states, kept apart because their remedies are. Anything else unsafe a
+            # future release adds falls back to the unanswered-question class rather than to a
+            # comparison, which is the safe direction: it asks instead of accusing.
+            return (CLASS_FEE_MISSING if fee_state == _mr.FEE_STATE_LINE_MISSING
+                    else CLASS_FEE_POLICY_UNSET)
     gap = round(_f(declared) - _f(pos_basis), 2)
     if abs(gap) <= tol:
         return CLASS_AGREE
@@ -138,11 +194,18 @@ def alert_items(store_days, tolerance=None):
     """
     tol = HOUSE_CONFIG["tolerance"] if tolerance is None else abs(_f(tolerance))
     items, counts = [], {c: 0 for c in GAP_CLASSES}
+    advisories = {CLASS_FEE_UNEXPECTED_ADVISORY: 0}
     for sd in (store_days or []):
         d = sd if isinstance(sd, dict) else {}
         basis = d.get("pos_basis")
-        cls = classify(d.get("declared"), basis, tol)
+        state = d.get("fee_state")
+        cls = classify(d.get("declared"), basis, tol, fee_state=state)
         counts[cls] += 1
+        if state is not None and _fee_conflicts_with_policy(state):
+            # COMPARED, and still worth saying: a fee line rang on a store-day whose org says it
+            # charges none. The cash is real so the arithmetic stands; it is the CONFIG ROW that is
+            # wrong, and a silent correct number would leave it wrong forever.
+            advisories[CLASS_FEE_UNEXPECTED_ADVISORY] += 1
         if cls not in ALERTABLE:
             continue
         items.append({
@@ -154,12 +217,13 @@ def alert_items(store_days, tolerance=None):
             "pos_basis": _f(basis),
             "gap": gap_of(d.get("declared"), basis),
             "fee_cash": None if d.get("fee_cash") is None else _f(d.get("fee_cash")),
+            "fee_state": state,
             "bill_txns": d.get("bill_txns"),
         })
     items.sort(key=lambda it: (it["close_date"], -abs(it["gap"] or 0.0), it["store_code"] or ""),
                reverse=True)
-    return {"items": items, "counts": counts,
-            "refused": {CLASS_NO_POS: counts[CLASS_NO_POS]}}
+    return {"items": items, "counts": counts, "advisories": advisories,
+            "refused": {c: counts[c] for c in UNASSESSED}}
 
 
 def key_parts(item):
@@ -186,7 +250,74 @@ def _line(it):
             _money(it.get("declared")), _money(it.get("pos_basis")))
 
 
-def build_digest(name, items, counts=None, max_rows=None, label=None):
+# THE REFUSAL WORDING, ONE HOME. Each unassessed class gets ONE sentence naming what could not be
+# judged, why, and whose problem it is — written here once and read by both renderings of the digest,
+# because two renderings that word the same morning differently is a digest nobody trusts. `{n}` is
+# the count and `{s}` the plural suffix.
+UNASSESSED_NOTES = {
+    CLASS_NO_POS: ("{n} store-day{s} could not be assessed — the sales data carried no bill payments "
+                   "for them, so there was nothing to compare. That is a data-feed gap, not a "
+                   "declaration problem, and it is not counted above."),
+    CLASS_FEE_MISSING: ("{n} store-day{s} could not be assessed — this company is set to charge a "
+                        "bill-payment fee, and no fee line came through on the sales data for those "
+                        "days, which makes the comparison figure too low. That is a data-feed gap to "
+                        "chase with whoever sends the sales reports, not anything a store did."),
+    CLASS_FEE_POLICY_UNSET: ("{n} store-day{s} could not be assessed — nobody has recorded yet "
+                             "whether this company charges customers a bill-payment fee, and those "
+                             "days show bill payments with no fee line. Until that is answered the "
+                             "comparison figure cannot be trusted either way, so no store is being "
+                             "asked about them. It is one setting, under Classification settings."),
+}
+
+# An ADVISORY was compared normally and still says something — about the configuration, not a store.
+ADVISORY_NOTES = {
+    CLASS_FEE_UNEXPECTED_ADVISORY: ("On {n} store-day{s} a bill-payment fee line did come through "
+                                    "even though this company is recorded as not charging one. The "
+                                    "figures above are right either way — that fee is real cash — "
+                                    "but the setting should be corrected."),
+}
+
+
+def _notes_from(registry, source, order):
+    """PURE. [(key, count)] for every key in `order` the source actually counted, in that order.
+    One traversal shared by both the unassessed and the advisory footers, so neither can grow a
+    second copy of "which of these do we mention"."""
+    out = []
+    for key in order:
+        n = (source or {}).get(key) or 0
+        if n and key in registry:
+            out.append((key, int(n)))
+    return out
+
+
+def unassessed_counts(counts=None):
+    """PURE. The refusals this digest must state, in `UNASSESSED` order."""
+    return _notes_from(UNASSESSED_NOTES, counts, UNASSESSED)
+
+
+def advisory_counts(advisories=None):
+    """PURE. The advisories this digest must state."""
+    return _notes_from(ADVISORY_NOTES, advisories, tuple(ADVISORY_NOTES))
+
+
+def _sentence(registry, cls, n):
+    tpl = registry.get(cls)
+    if not tpl:
+        return ""
+    return tpl.format(n=int(n or 0), s="" if int(n or 0) == 1 else "s")
+
+
+def unassessed_sentence(cls, n):
+    """PURE. The ONE sentence for an unassessed class, read by both renderings."""
+    return _sentence(UNASSESSED_NOTES, cls, n)
+
+
+def advisory_sentence(cls, n):
+    """PURE. The ONE sentence for an advisory, read by both renderings."""
+    return _sentence(ADVISORY_NOTES, cls, n)
+
+
+def build_digest(name, items, counts=None, max_rows=None, label=None, advisories=None):
     """One recipient's digest: {"subject", "html", "text"}. `text` is the WhatsApp body — the same
     facts in the same order, because two renderings of one digest that disagree is a digest nobody
     trusts. Rows beyond `max_rows` are COUNTED in a trailing line, never dropped in silence. PURE."""
@@ -207,14 +338,13 @@ def build_digest(name, items, counts=None, max_rows=None, label=None):
     if hidden:
         foot.append("<p>and {0} more store-day{1} not listed here.</p>".format(
             hidden, "" if hidden == 1 else "s"))
-    nopos = counts.get(CLASS_NO_POS) or 0
-    if nopos:
-        # The §15z footer rule: say what could NOT be assessed, so a short digest is never mistaken
-        # for a clean estate.
-        foot.append("<p><i>{0} store-day{1} could not be assessed — the sales data carried no bill "
-                    "payments for them, so there was nothing to compare. That is a data-feed gap, "
-                    "not a declaration problem, and it is not counted above.</i></p>".format(
-                        nopos, "" if nopos == 1 else "s"))
+    # The §15z footer rule: say what could NOT be assessed, so a short digest is never mistaken for
+    # a clean estate — and say it ONCE, from `UNASSESSED_NOTES`, so the HTML and the WhatsApp text
+    # cannot drift into two different accounts of the same morning.
+    for _cls, _n_sd in unassessed_counts(counts):
+        foot.append("<p><i>{0}</i></p>".format(unassessed_sentence(_cls, _n_sd)))
+    for _cls, _n_sd in advisory_counts(advisories):
+        foot.append("<p><i>{0}</i></p>".format(advisory_sentence(_cls, _n_sd)))
     agree = counts.get(CLASS_AGREE) or 0
     if agree:
         foot.append("<p><i>{0} store-day{1} matched and are not listed.</i></p>".format(
@@ -234,10 +364,10 @@ def build_digest(name, items, counts=None, max_rows=None, label=None):
     text_foot = []
     if hidden:
         text_foot.append("and {0} more not listed.".format(hidden))
-    if nopos:
-        text_foot.append("{0} store-day{1} could not be assessed (no bill payments in the sales "
-                         "data) — a feed gap, not a declaration problem.".format(
-                             nopos, "" if nopos == 1 else "s"))
+    for _cls, _n_sd in unassessed_counts(counts):
+        text_foot.append(unassessed_sentence(_cls, _n_sd))
+    for _cls, _n_sd in advisory_counts(advisories):
+        text_foot.append(advisory_sentence(_cls, _n_sd))
     text = ("Bill-pay declaration exceptions ({scope}): {n} store-day{s}, {amt} total.\n"
             "{rows}\n{foot}").format(scope=scope, n=len(items),
                                      s="" if len(items) == 1 else "s", amt=_money(total),

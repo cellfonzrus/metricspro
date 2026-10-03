@@ -5434,7 +5434,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
-| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1045` `billpay_fee_product_desc`** — the per-org product_desc vocabulary for the customer bill-payment SERVICE FEE, read by `_billpay_fee_tokens` over `epay_fee_recon.resolve_fee_descs` (empty default ⇒ the house `HOUSE_FEE_DESCS` tuple ⇒ byte-identical; §47.12), **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`_billpay_fee_tokens` (mig `1045` — the SERVICE-FEE product vocabulary, same defensive whole-row posture, default `epay_fee_recon.HOUSE_FEE_DESCS`; the ONE reader, consumed only by the ONE producer `_billpay_sales_by_store_day`, §47.12)**; **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
+| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1046` `billpay_fee_charged`** — DOES this org charge a bill-payment fee (`yes`/`no`/`unknown`, default unanswered), read by `_billpay_fee_policy` over `metric_recon.resolve_fee_policy`; it changes no arithmetic, only whether the POS basis may be compared against a declaration and whose problem it is when it may not (§47.15), **`1045` `billpay_fee_product_desc`** — the per-org product_desc vocabulary for the customer bill-payment SERVICE FEE, read by `_billpay_fee_tokens` over `epay_fee_recon.resolve_fee_descs` (empty default ⇒ the house `HOUSE_FEE_DESCS` tuple ⇒ byte-identical; §47.12), **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`_billpay_fee_tokens` (mig `1045` — the SERVICE-FEE product vocabulary, same defensive whole-row posture, default `epay_fee_recon.HOUSE_FEE_DESCS`; the ONE reader, consumed only by the ONE producer `_billpay_sales_by_store_day`, §47.12)**; **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` (since 2026-09-21 also `category_contains` / `department_contains`, additive — the intake's 2.5a step writes them through `PUT /exec-metric-config` for a bucket that matched nothing; the `activation` bucket's byod/upgrade/port tokens are RETIRED as a home — read only as a legacy layer by `line_class.resolve_rules` for a tenant-authored row; the Metric-definitions panel no longer offers it) |
@@ -5900,6 +5900,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Bill payment on credit card (declared, pickup column) | `daily_closing.epay_on_credit` (per envelope; credit-only closings display with no checkbox — nothing physical to pick up) | `billpay_pickups` envelope `credit` + `total_credit` (`GET /closing/billpay-pickups`, mig `944`) |
 | Bill-pay 3-WAY recon (per store-day) | Leg A `daily_closing.epay_on_cash`+`epay_on_credit` (DM overlay) vs Leg B sales-tx billpay via `_sales_cell_agg` exec `bill_payment` rules + mig-944 tender split (`bill_amt_card/cash/mixed`, `classify_tender`, config `accessory_config.billpay_*_tenders`) **PLUS the customer service fee (mig `1045`), because Leg A's declaration includes it — added in the ONE home `metric_recon.pos_billpay_total`, never at a call site (§47.12)** vs Leg C processor feed (mig-939 resolution + mig-944 row filter/account fallback) | `metric_recon.reconcile_billpay_three_way_days` via `GET /closing/cash-recon-management` (`_sales_billpay_for_days`/`_pos_billpay_for_days`); W3 report `closing_billpay_recon`; proof `harness_billpay_threeway.py` + `harness_billpay_fee_basis.py` (89, §E the sibling) |
 | **POS bill-payment CASH in the drawer** (the pickup netting basis) | the bill lines' cash leg (`bill_amt_cash`) **+ the customer service-fee cash** (`epay_fee_recon.aggregate_fee_cash`, tender-split, voids dropped, vocabulary mig `1045`) | ONE home `metric_recon.pos_billpay_cash` (+ `pos_billpay_fee_cash` to SHOW the correction); dereferenced by `closing/router.closing_pickups` → `billpay_netting.net_store_day`. `None` stays `None` ⇒ `basis='none'`, never a fee-corrected zero. Build-locked by `harness_billpay_fee_basis.py` §G (§47.12) |
+| **Does this org charge a bill-payment fee** (what "no fee line" MEANS) | `commcalc.accessory_config.billpay_fee_charged` (mig `1046`), DECLARED — never inferred from the data | ONE home `metric_recon.resolve_fee_policy` → `billpay_fee_state` (8 states) → `billpay_basis_comparable` / `pos_billpay_cash_trusted`; read by `_billpay_fee_policy` once per window. An unsafe basis is refused as an alert and never netted; `unknown` (the default) changes nothing anywhere. Build-locked by `harness_billpay_fee_basis.py` §J/§K (§47.15) |
 | Store cash on hand (BS asset, mig `938`; symmetry+floor fix 2026-09-02) | DM-verified `daily_closing` declared cash (overlay-corrected) − SAME-verification-rule outflows (`cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal`, keyed to their envelope's close_date; under `'verified'` only verified store-days' outflows relieve), floored at ZERO per store (suppressed imbalance in meta `floored`), as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
 | Bill-pay pass-through (P&L `billpay_collected`/`billpay_offset`, mig `939`) | `daily_closing.epay_on_cash`+`epay_on_credit` (DM-verified corrections win at store-day grain); pair nets to ZERO | `account/billpay_pl.billpay_cells`/`billpay_bookings` → `coa.build_inputs` (`pl_billpay_presentation='carveout'`; offset label per `pl_billpay_settlement`) |
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date` — mig-944 row filter `ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
@@ -16172,7 +16173,17 @@ existing caller and fixture is byte-identical.
 holds only `Total Wireless RTR Wallet` and plan lines, and its own September gap (**338 store-days,
 $57,905**, 73 of them agreeing exactly) therefore has a DIFFERENT cause, which this change does not
 claim to fix and does not pretend to. Hard-coding the Boost wording would have repaired one tenant
-and left the other exactly as wrong. So the vocabulary is per-org config (mig `1045`,
+and left the other exactly as wrong.
+
+> **CORRECTED 2026-10-03 (§47.15).** The sentence above was right about the fee and wrong about the
+> remedy, and the 2026-10-03 go-live notes carried the error further by recommending that tenant's
+> declaration digest stay OFF because it "would accuse its stores for a feed defect". Re-measured:
+> **0 of its 371** September store-days carry a fee leg, and recomputing the month with the leg
+> removed leaves the classification **identical** — so the missing fee line explains none of its gap.
+> What does: **217 of its 373** September closings declare bill-pay cash of **$0.00** against real POS
+> bill-pay activity, every row modern-era, so those zeros are genuine declarations. Its digest would
+> surface a real compliance problem, not a false accusation. Whether "no fee line" is a defect or
+> normal is now a DECLARED per-org fact rather than an inference (§47.15, mig `1046`). So the vocabulary is per-org config (mig `1045`,
 `accessory_config.billpay_fee_product_desc`, empty default ⇒ the house tuple ⇒ byte-identical) with
 the house default in ONE place in code.
 
@@ -16411,6 +16422,97 @@ and the unknown band, D the roll-up with unowned work counted, E escalation and 
 (both renderings carrying the same facts), G the dedup key, H migration `1044` tied to the code,
 I no second fan-out / dedup / scheduler, RULE TWO, and the armed controls — verified to bite by
 breaking the store-resolver dereference and the `plan_digests` call and watching §I12 and §I1 fail.
+
+### 47.15 DOES THIS TENANT CHARGE A BILL-PAYMENT FEE? — the question that was being guessed (owner 2026-10-03, mig `1046`)
+
+> Owner: *"if lucelink has no fee then we should build a user defined line if tehy take fee for bill
+> payments or not and if they dont it should calculate accordingly so there is not balmnket error on a
+> different tenant , then assignluxelink without fee and create those reports - all user defnined
+> platform wide no hardcoding"*
+
+**THE CLASS OF DEFECT, not the instance.** §47.12 made the fee leg part of the POS basis and mig `1045`
+made its WORDING per-org. Neither can answer *is there a fee at all*, and that is the question the
+comparison actually rests on. Without it, a store-day with bill-pay activity and **no fee line** is three
+different facts wearing one face:
+
+| what it could mean | what the basis is | whose problem it is |
+|---|---|---|
+| the tenant charges no fee | correct | nobody's — compare normally |
+| the tenant charges one and the feed did not ring it | **understated** | the sales feed's |
+| nobody has ever said which | **unknowable** | the owner's, as one setting |
+
+The code was choosing the first reading silently, which is how one tenant's fee vocabulary became
+another tenant's blanket shortfall. **The fix is to ask the org**, once, and to make the answer the only
+thing that decides the reading.
+
+### 47.15a What the measurement said, and what it did NOT excuse
+
+Measured 2026-10-03, read-only, September 2026, through the system's own helpers:
+
+| | house org | the other live tenant |
+|---|---|---|
+| store-days carrying a fee leg | **736 of 772**, $14,184 | **0 of 371** |
+| agreement with the fee leg removed | 348 → **20** | **identical** |
+| September classification | 348 agree / 120 over / 298 under / 6 no-POS | 82 agree / 30 over / **226 under** / 33 no-POS |
+
+So the fee is real and load-bearing for one tenant and carries no information at all for the other — and
+declaring the policy **moves not one cent** of the second tenant's $57,905 gap. **That gap is REPORTED,
+not absorbed:** 217 of its 373 September closings declare bill-pay cash of **$0.00** against real POS
+bill-pay activity (worst: a store declaring $0 against $1,008 across 16 bill transactions), and all 373
+rows are modern-era, so the zeros are genuine declarations rather than a field-era reading artefact. This
+**corrects** the caution recorded in §47.12 and in the 2026-10-03 go-live notes, which said that tenant's
+digest would accuse its stores for a feed defect. It would not.
+
+### 47.15b One fact, one home, dereferenced
+
+| fact | home | callers |
+|---|---|---|
+| the policy VALUES (`yes` / `no` / `unknown`) and the house default | **`metric_recon.FEE_POLICIES` / `HOUSE_FEE_POLICY` / `resolve_fee_policy`** | the API offers them (`GET /accessory-config` → `billpay_fee_policies`) and VALIDATES against them; **no caller and no screen spells one** |
+| what "no fee line" MEANS for one store-day | **`metric_recon.billpay_fee_state`** (8 states) | `_billpay_declaration_store_days` per store-day |
+| whether a basis may be COMPARED against a declaration | **`metric_recon.billpay_basis_comparable`** | `billpay_declaration_alerts.classify` asks it; it names no state tuple of its own |
+| whether a basis may be SUBTRACTED from a drawer | **`metric_recon.pos_billpay_cash_trusted`** (dereferences `pos_billpay_cash`; never re-adds the legs) | `closing_pickups` → `billpay_netting.net_store_day` |
+| the org's declared answer | **`commcalc/router._billpay_fee_policy`** (own defensive whole-row read, the mig-313/944/1045 posture) | read ONCE per window, never per store-day |
+| the refusal WORDING | **`billpay_declaration_alerts.UNASSESSED_NOTES` / `ADVISORY_NOTES`** | both the HTML and the WhatsApp rendering read it, so one morning cannot be described two ways |
+
+### 47.15c An unsafe basis is never a rep's error — the two new refusals
+
+`fee_line_missing` (policy `yes`, no fee line) is a **feed defect**; `fee_policy_unanswered` (nobody has
+said) is a **config gap**. Both are refused as alerts, COUNTED in `counts`, listed in `refused`, and each
+gets its OWN footer sentence naming its own remedy — the §15z rule, kept apart because a digest that
+cannot say which remedy applies sends the manager nowhere. The reverse case, a fee line ringing where the
+policy says none is charged, **is still compared** (that cash is real, so the arithmetic stands) and is
+reported as an **advisory** against the setting rather than against the store.
+
+### 47.15d Applying it changes nothing until somebody answers
+
+`unknown` is the default, and the only state that WITHHOLDS a basis from the netting path is the
+positively-declared `yes` with no fee line (`FEE_STATES_BASIS_UNDERSTATED`). A money-adjacent subtraction
+must not move on a guess, so an unanswered policy keeps today's behaviour exactly. The one behaviour the
+default DOES change is that a store-day nobody can judge stops being reported as a rep's shortfall — which
+is the ask.
+
+**The sibling that is EXCUSED, stated rather than overlooked.** The 3-way recon's Leg B
+(`reconcile_billpay_three_way_days`) asks the same POS question and would show the same spurious
+`mismatch`. Its honest-gap semantics are PER-RANGE booleans (`sales_present`), so dropping a store-day
+while the feed is present yields an honest `0.0` — further from the truth than the understated figure.
+"Present but not trustworthy" needs a third per-store-day state inside a money reconciliation, which is
+surfaced for approval rather than slipped in beside this change. Nothing moves meanwhile: the gate bites
+only on a declared `yes`, and no tenant has declared one. The excusal is written at the call site.
+
+### 47.15e Lock
+
+`harness_billpay_fee_basis.py` sections **J** (the policy, 60 checks) and **K** (the controls), run by
+`carrier-vocab-guard.yml`. The build FAILS if a caller spells a policy value, re-derives which states are
+comparable, stops dereferencing the state machine, or puts the ungated accessor back into the netting
+basis. **K8/K9 fail the build if either lock's own scan starts matching nothing** — the vacuous-lock trap
+that §H6 of the same harness already records, which bit this very check in its first cut: the alert module
+spells `billpay_fee` nowhere, so the anchored fragment was empty and the lock passed on air.
+
+Settable with no SQL: **Sales Report → Classification settings → Bill-payment service fee** (both halves —
+the policy, and what the fee line is called, the latter asked for only when there IS a fee). `PUT
+/accessory-config` rejects a value outside the home's vocabulary rather than storing it, because a typo
+would resolve to `unknown` and quietly park every store-day the owner meant to have assessed. Mig `1045`'s
+vocabulary was never wired to the API before this change; it is now.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 
