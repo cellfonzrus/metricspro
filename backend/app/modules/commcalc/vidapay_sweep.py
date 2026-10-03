@@ -50,6 +50,16 @@ except ImportError:                                     # loaded by path, not as
     _pb_spec.loader.exec_module(_pb)
     PortalRateLimited = _pb.PortalRateLimited
 try:
+    from app.modules.commcalc import empty_pull_verdict as _empty_verdict   # the zero-row vocabulary
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu4
+    import os as _osmod4
+    _ev_spec = _ilu4.spec_from_file_location(
+        "commcalc_empty_pull_verdict",
+        _osmod4.path.join(_osmod4.path.dirname(_osmod4.path.abspath(__file__)), "empty_pull_verdict.py"))
+    _empty_verdict = _ilu4.module_from_spec(_ev_spec)
+    _ev_spec.loader.exec_module(_empty_verdict)
+try:
     from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
 except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
     import importlib.util as _ilu2
@@ -3404,7 +3414,10 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
                                for r in failed[:4])))
     elif empty_ok and len(empty_ok) == len([r for r in reports if r.get("ok")]):
         # Every report that ran said, in the portal's own words, that it has no records.
-        reason = "portal_reported_empty"
+        # The STRONGEST corroboration there is — the source's own "no records". The key is
+        # dereferenced from the one home of the zero-row vocabulary, not restated (index §19.41);
+        # this sweep's verdict was already right, so only the duplicate copy of the word is removed.
+        reason = _empty_verdict.SOURCE_REPORTED_EMPTY
         status = ("imported 0 rows \u2014 the portal ran %d report(s) and reported no records for the "
                   "last %s month(s). That is the portal's own answer, not a scraping problem."
                   % (len(empty_ok), months_back))

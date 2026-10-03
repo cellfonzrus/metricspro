@@ -45,6 +45,16 @@ except ImportError:                                     # loaded by path, not as
     _url_guard = _ilu2.module_from_spec(_ug_spec)
     _ug_spec.loader.exec_module(_url_guard)
 try:
+    from app.modules.commcalc import empty_pull_verdict as _verdict   # THE one home of the zero-row decision
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu3
+    import os as _osmod3
+    _ev_spec = _ilu3.spec_from_file_location(
+        "commcalc_empty_pull_verdict",
+        _osmod3.path.join(_osmod3.path.dirname(_osmod3.path.abspath(__file__)), "empty_pull_verdict.py"))
+    _verdict = _ilu3.module_from_spec(_ev_spec)
+    _ev_spec.loader.exec_module(_verdict)
+try:
     from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
 except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
     def assert_browser_allowed():                        # no-op fallback for path-loaded proof scripts
@@ -241,6 +251,11 @@ COMP_REPORT_ID = "100614"
 DEFAULT_REFRESH_MONTHS = 1
 DEFAULT_REFRESH_DAYS = 1
 
+# The portal control the day-grain reports depend on, named ONCE so the ledger key, the error text
+# and the registry's `controls` tuple cannot drift. A run that proves this unsettable has proven every
+# day-grain leg's zero untrustworthy, whichever leg ran first (index §19.41).
+DAILY_RANGE_CONTROL = "the report's daily date filter"
+
 # Partial-collapse guard: a REPLACE never overwrites a period that already holds >= REPLACE_MIN_ROWS
 # rows with a pull smaller than REPLACE_MIN_RETAIN of that count. A glitched/partial pull (e.g. the
 # portal returning a single stray row) is non-empty, so the empty-download guard misses it — this is
@@ -256,25 +271,48 @@ REPLACE_MIN_RETAIN = 0.5
 # idempotently on (org_id, transaction_id, transaction_source_id) — so an hourly re-pull is safe and
 # never double-counts. This hook is the sweep's bridge into that path; it re-uses epay_ingest whole
 # and reimplements none of the DTD parse.
-def ingest_daily_tx(client, org_id, xlsx_path, source_batch=None):
+def ingest_daily_tx(client, org_id, xlsx_path, source_batch=None, ledger=None, target=None,
+                    evidence=None):
     """Route a downloaded Daily Transaction Detail workbook through epay_ingest (parse + payment/fee
     split + terminal→store resolution + idempotent upsert). Returns a sweep-shaped result dict.
 
-    A zero-row DTD is a legitimately quiet window (no transactions), NOT a failure — it is reported
-    as mode 'no_data' rather than raising, exactly like the comp report's empty_ok path."""
+    A zero-row window MAY be a legitimately quiet one — but whether this particular zero is the
+    source's own answer is not this function's call to make and never was. It is DEFERRED to the
+    run's `ControlLedger` and settled once every leg's evidence is in (index §19.41)."""
     from app.modules.commcalc import epay_ingest as _ei
     try:
         records, _cols = _read_report_records(xlsx_path, "Daily Transaction Detail")
     except EpayEmptyReport:
-        return {"report": "epay_daily_tx", "label": "Daily Transaction Detail", "grain": "day",
-                "rows": 0, "mode": "no_data",
-                "note": "no transactions in the DTD window — nothing to store (not an error)"}
+        res = {"report": "epay_daily_tx", "label": "Daily Transaction Detail", "grain": "day",
+               "rows": 0, "mode": "no_data",
+               "note": "no transactions in the window — nothing to store (pending verdict)"}
+        return _defer_empty(ledger, res, REPORTS["epay_daily_tx"], target, evidence)
     res = _ei.ingest(org_id, records, source_batch=source_batch, client=client) or {}
     out = {"report": "epay_daily_tx", "label": "Daily Transaction Detail", "grain": "day",
            "rows": res.get("saved", 0), "parsed": res.get("rows", 0), "mode": "upsert",
            "unresolved_terminals": res.get("unresolved_terminals", []),
            "source_batch": source_batch}
     return out
+
+
+def _defer_empty(ledger, result, spec, target, evidence=None):
+    """Hand ONE zero-row leg to the run's ledger, or settle it immediately when there is no run
+    ledger (a direct/standalone call). Every empty_ok leg goes through here — there is no second
+    place in this module that decides what a zero means."""
+    ev = {"empty_allowed": bool(spec.get("empty_ok")),
+          "label": spec.get("label") or spec.get("registry_key"),
+          "window": ([target["begin"], target["end"]]
+                     if target and target.get("kind") == "day_range" else None)}
+    ev.update(evidence or {})
+    controls = spec.get("controls") or ()
+    if ledger is not None:
+        return ledger.defer(result, controls=controls, **ev)
+    v = _verdict.classify_empty_pull(broken_controls=(), **ev)
+    result["empty_verdict"] = v
+    if not v["trusted"]:
+        result["mode"] = "unverified_no_data"
+        result["note"] = v["sentence"]
+    return result
 
 
 # Report registry: key → how to download, filter, map and store it.
@@ -307,7 +345,9 @@ REPORTS = {
     "comp_report": {"report_id": COMP_REPORT_ID, "table": "raw_comp_report",
                     "file_type": "comp_report", "registry_key": "comp_report",
                     "grain": "day", "filter": "daily_range", "day_key": "begin_date",
-                    "empty_ok": True,
+                    # `empty_ok` says a zero CAN be legitimate. It never says this zero IS — the
+                    # verdict is settled by empty_pull_verdict against `controls` + the window.
+                    "empty_ok": True, "controls": (DAILY_RANGE_CONTROL,),
                     "period": "data", "label": "Comprehensive Comp",
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
     # Daily Transaction Detail (P1). report_id is RESOLVED at run time from the Commissions menu by
@@ -316,7 +356,8 @@ REPORTS = {
     "epay_daily_tx": {"report_id": None, "label_match": "daily transaction detail",
                       "table": "commcalc.raw_epay_daily_tx", "file_type": "epay_daily_tx",
                       "registry_key": "epay_daily_tx", "grain": "day", "filter": "daily_range",
-                      "empty_ok": True, "label": "Daily Transaction Detail",
+                      "empty_ok": True, "controls": (DAILY_RANGE_CONTROL,),
+                      "label": "Daily Transaction Detail",
                       "ingest": ingest_daily_tx},
 }
 
@@ -672,7 +713,7 @@ def _set_daily_range(page, begin_iso, end_iso):
     return True, f"Daily {begin_iso}..{end_iso}"
 
 
-def _open_and_download(page, report_id, dest_path, target=None):
+def _open_and_download(page, report_id, dest_path, target=None, ledger=None):
     """Open a Commissions report by its menu id, run it, and save the .xlsx.
 
     `target` (optional) describes which slice to fetch:
@@ -690,7 +731,11 @@ def _open_and_download(page, report_id, dest_path, target=None):
         # workbook, which the caller would otherwise record as "nothing posted that day".
         ok, detail = _set_daily_range(page, target["begin"], target["end"])
         if not ok:
-            raise EpayPortalError(f"could not set the report's daily date filter — {detail}")
+            # Record it on the RUN, not just in this leg's exception: the leg that proves the control
+            # broken is often not the leg whose zero it invalidates (on 2026-10-03 it ran second).
+            if ledger is not None:
+                ledger.control_failed(DAILY_RANGE_CONTROL, detail)
+            raise EpayPortalError(f"could not set {DAILY_RANGE_CONTROL} — {detail}")
     elif target:
         try:
             _set_report_month(page, target["month_name"], target["year"])
@@ -934,7 +979,56 @@ def _day_row_count(client, table, org_id, day_key, iso):
         return 0
 
 
-def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id=None):
+def _empty_cfg_evidence(rc_row):
+    """The two per-org thresholds the verdict needs, read from this report's `report_definitions` row
+    (mig 1042). Absent columns / absent row degrade to {} and the house defaults in
+    `empty_pull_verdict` apply — RULE TWO: the numbers are config, never a branch in code."""
+    rc = rc_row or {}
+    out = {}
+    if rc.get("arrears_days") is not None:
+        out["arrears_days"] = rc["arrears_days"]
+    if rc.get("empty_stale_after_days") is not None:
+        out["stale_after_days"] = rc["empty_stale_after_days"]
+    return out
+
+
+def _landing_evidence(client, org_id, spec):
+    """`ever_landed` / `days_since_last_row` for one report's landing table — the two facts that tell
+    a quiet source apart from a path that has never worked. Best-effort: every failure degrades to
+    {} so a probe can never fail a sweep, and an absent fact simply cannot trigger its own rule.
+
+    The arrival column is DEREFERENCED from `data_lineage_registry.freshness_column` — the one home
+    of "which column means arrived" (index §19.18). No copy of it lives here."""
+    table = (spec.get("table") or "").split(".")[-1]
+    if not table:
+        return {}
+    try:
+        from app.modules.commcalc import data_lineage_registry as _lin
+        col = _lin.freshness_column(table)
+    except Exception:
+        col = "created_at"
+    try:
+        resp = (client.schema("commcalc").table(table).select(col)
+                .eq("org_id", org_id).order(col, desc=True).limit(1).execute())
+        rows = resp.data or []
+    except Exception as e:
+        print(f"WARN landing evidence unavailable for {table}: {type(e).__name__}: {e}")
+        return {}
+    if not rows:
+        return {"ever_landed": False}
+    stamp = str(rows[0].get(col) or "")[:10]
+    out = {"ever_landed": True}
+    try:
+        from datetime import date as _date
+        y, m, d = int(stamp[0:4]), int(stamp[5:7]), int(stamp[8:10])
+        out["days_since_last_row"] = (datetime.now(timezone.utc).date() - _date(y, m, d)).days
+    except (ValueError, IndexError):
+        pass
+    return out
+
+
+def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id=None, ledger=None,
+                    cfg_evidence=None):
     """Download one report by key, parse, derive its period, and store it. Every report REPLACES its
     period (delete that period + insert the fresh pull). For comp the period comes from the rows'
     own Begin Date (mode 'data'), so the pull lands under the month it belongs to even if the portal
@@ -945,18 +1039,22 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
     raises before any write, and the PARTIAL-COLLAPSE guard refuses to overwrite a period that holds
     >= REPLACE_MIN_ROWS rows with a pull < REPLACE_MIN_RETAIN of that count."""
     spec = REPORTS[key]
-    _open_and_download(page, report_id or spec["report_id"], xlsx_path, target=target)
+    _open_and_download(page, report_id or spec["report_id"], xlsx_path, target=target, ledger=ledger)
     try:
         records, _cols = _read_report_records(xlsx_path, spec["label"])
-    except EpayEmptyReport as empty:
-        # A report that is ALLOWED to come back empty (comp: the carrier posts late in the evening,
-        # and some days genuinely have nothing) records the attempt cleanly and touches no data.
+    except EpayEmptyReport:
+        # A report that MAY come back empty records the attempt and touches no data — but whether
+        # this zero is the source's own answer is settled by `empty_pull_verdict` once the run's
+        # evidence is complete, never by the registry flag alone (index §19.41).
         if spec.get("empty_ok"):
             win = (f"{target['begin']}..{target['end']}"
                    if target and target.get("kind") == "day_range" else "default window")
-            return {"report": key, "label": spec["label"], "rows": 0, "mode": "no_data",
-                    "window": win, "period": None,
-                    "note": f"no compensation posted for {win} — nothing to store (not an error)"}
+            res = {"report": key, "label": spec["label"], "rows": 0, "mode": "no_data",
+                   "window": win, "period": None,
+                   "note": f"nothing posted for {win} — nothing to store (pending verdict)"}
+            return _defer_empty(ledger, res, spec, target,
+                                {**_landing_evidence(client, org_id, spec),
+                                 **(cfg_evidence or {})})
         raise
     if spec.get("grain") == "day":
         return _store_day_grain(client, org_id, spec, key, records, target)
@@ -1067,7 +1165,13 @@ def _expand_jobs(keys, report_cfg=None):
             for tm in _recent_months(n):
                 jobs.append((k, {**tm, "kind": "month"}))
         elif grain == "day":
-            days = _recent_days(rc.get("refresh_days") or DEFAULT_REFRESH_DAYS)
+            # THE ROOT CAUSE OF THE TWO MISSING MONTHS (index §19.41). `refresh_days` was 1, so every
+            # nightly run asked an IN-ARREARS source for TODAY only, got zero rows, and recorded a
+            # clean "nothing posted" — forever. The window is now never narrower than the source's
+            # configured arrears, so a zero can at least be a meaningful answer. Config, per org
+            # (`report_definitions.arrears_days`), with the house default in empty_pull_verdict.
+            days = _recent_days(max(int(rc.get("refresh_days") or DEFAULT_REFRESH_DAYS),
+                                    _verdict.required_window_days(rc.get("arrears_days"))))
             jobs.append((k, {"kind": "day_range", "begin": days[0], "end": days[-1],
                              "days": days, "period": None}))
         else:
@@ -1097,6 +1201,11 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
     keys = [k for k in (reports or ["mi"]) if k in REPORTS] or ["mi"]
     base_url = _safe_base(url)
     results, errors = [], []
+    # ONE ledger for the whole run: every zero-row leg defers its verdict into it and every broken
+    # control is recorded on it, so the legs are judged against each other's evidence rather than
+    # each one vouching for itself (index §19.41).
+    ledger = _verdict.ControlLedger()
+    _rc = report_cfg or {}
 
     assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
@@ -1160,17 +1269,23 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                     tgt = f" [{target['period']}]"
 
                 spec = REPORTS[key]
+                _cfg_ev = _empty_cfg_evidence(_rc.get(spec.get("registry_key") or key))
                 try:
                     if spec.get("ingest"):
                         # DTD path: download the workbook, then hand it to the report's own ingest
                         # hook (epay_ingest) — parse + payment/fee split + terminal→store resolution +
                         # idempotent upsert — instead of the map/REPLACE path in _process_report.
-                        _open_and_download(page, resolved_ids[key], tmp.name, target=target)
+                        _open_and_download(page, resolved_ids[key], tmp.name, target=target,
+                                           ledger=ledger)
                         source_batch = f"epay-sweep {key}{tgt}".strip()
-                        results.append(spec["ingest"](client, org_id, tmp.name, source_batch))
+                        results.append(spec["ingest"](client, org_id, tmp.name, source_batch,
+                                                      ledger=ledger, target=target,
+                                                      evidence={**_landing_evidence(client, org_id, spec),
+                                                                **_cfg_ev}))
                     else:
                         results.append(_process_report(client, org_id, page, key, tmp.name,
-                                                       target=target, report_id=resolved_ids[key]))
+                                                       target=target, report_id=resolved_ids[key],
+                                                       ledger=ledger, cfg_evidence=_cfg_ev))
                 except Exception as e:
                     errors.append(f"{REPORTS[key]['label']}{tgt}: {type(e).__name__}: {e}")
                 finally:
@@ -1181,13 +1296,24 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
         finally:
             browser.close()
 
+    # SETTLE EVERY DEFERRED ZERO, now that the run's evidence is complete. A zero the sweep cannot
+    # vouch for is REPORTED — it joins `errors`, which is what makes the connector say 'partial'
+    # instead of 'ok' and what puts the report's name in front of an operator. This is the whole
+    # change: the flag no longer decides, the evidence does.
+    for _res, _v in ledger.settle():
+        if not _v["trusted"]:
+            errors.append(f"{_res.get('label') or _res.get('report')}: {_v['sentence']}")
+
     if not results and errors:
         raise EpayPortalError("; ".join(errors))
-    # A day-grain report that legitimately had nothing posted returns mode='no_data'; that is a
-    # completed pull, not a partial run, and must not flag the connector as degraded.
+    # A day-grain report whose zero the run CAN vouch for returns mode='no_data'; that is a completed
+    # pull, not a partial run, and must not flag the connector as degraded.
     summary = {"reports": results}
     if errors:
         summary["errors"] = errors
+    # WHAT WAS WRITTEN, NOT WHAT WAS ATTEMPTED (§19.21): the caller stamps `last_run_at` only when a
+    # run actually imported something, and an unverified zero is not an import.
+    summary["rows_landed"] = sum(int(r.get("rows") or 0) for r in results)
     mi = next((r for r in results if r["report"] == "mi"), None)
     if mi:  # keep back-compat top-level fields for the admin status line
         summary.update({"period": mi["period"], "rows": mi["rows"]})
