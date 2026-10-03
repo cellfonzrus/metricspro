@@ -8,6 +8,7 @@ import re
 import functools as _functools
 import uuid as _uuid_mod   # _caller_uid: an actor id is a UUID or None, never a sentinel (index §19.34)
 from app.core.database import get_supabase
+from app.modules.commcalc import vip_invoice_filter as _vip_filter
 from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api → clean 503 on browser endpoints
                                     browser_allowed as _browser_allowed,
                                     browser_service_url as _browser_service_url,
@@ -3024,11 +3025,23 @@ async def upload_vip_invoices(file: UploadFile = File(...), org_id: str = ORG_ID
 
 
 # ── VIP invoice reports ──────────────────────────────────────────────────────
-VIP_FEE_COLS = ['shipping', 'discount', 'other_cost', 'other_deductions', 'tax']
+# RULE FIVE (§3d) retrofit 2026-10-03 (owner: "add date range and market with standard filters for
+# distributor invoices"). The core set — date RANGE + market + store multi-select — is applied by the
+# ONE shared selector `vip_invoice_filter`, read by BOTH /vip/summary and /vip/invoices so the table
+# can never disagree with the tiles above it. The market/store half is resolved through the org's one
+# store-spelling vocabulary (`statement_filter.resolve_store_matcher` → `core.scope.market_index`),
+# the same home the P&L filter reads — `vip_invoices.location` is the DISTRIBUTOR's own spelling of a
+# store address and this table has no market column. Month / distributor-spelling / status stay as
+# appended module facets (the core set is never substituted).
+VIP_FEE_COLS = _vip_filter.FEE_COLS          # dereferenced: one fee-bucket list, not a second copy
 
 
 def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"):
-    """Paginated fetch of vip_invoices (Supabase caps at 1000 rows/request)."""
+    """Paginated fetch of vip_invoices (Supabase caps at 1000 rows/request).
+
+    Only the three facets PostgREST can answer exactly (period spelling, the distributor's own
+    location string, status) are pushed down here. The date window and the market/store selection
+    are applied in Python by `_vip_select`, because a market is not a column on this table."""
     PAGE, out, frm = 1000, [], 0
     while True:
         q = client.schema('commcalc').table('vip_invoices').select(cols).eq('org_id', org_id)
@@ -3046,11 +3059,37 @@ def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"
     return out
 
 
+def _vip_select(client, org_id, *, period="", location="", status="", date_from="", date_to="",
+                stores="", markets="", cols="*"):
+    """THE in-scope invoice set for this org and this filter selection: (kept, unresolved).
+
+    `stores` / `markets` are PIPE-separated ('|') multi-selects — a store address may itself contain
+    a comma — and are resolved by `statement_filter.resolve_store_matcher`, so any spelling the
+    picker can offer (code, address variant, POS alias, unambiguous street number) binds the
+    distributor's own spelling of the same store. A spelling the vocabulary cannot bind is returned
+    as `unresolved` and REPORTED by the caller, never guessed into a market."""
+    rows = _vip_fetch(client, org_id, period or None, location or None, status or None, cols=cols)
+    matcher = None
+    if (stores or "").strip() or (markets or "").strip():
+        from app.modules.account.statement_filter import resolve_store_matcher
+        matcher, _explicit, _markets = resolve_store_matcher(client, org_id, stores, markets)
+    return _vip_filter.select(rows, store_matcher=matcher, date_from=date_from, date_to=date_to)
+
+
 @router.get("/vip/filter-options")
 def vip_filter_options(org_id: str = ORG_ID):
-    """Distinct stores / periods / statuses for the VIP page filter bar."""
+    """Options for the VIP page filter bar: the module facets (distributor spellings / periods /
+    statuses, built from the values the data actually has — pick-don't-type, RULE THREE) plus the
+    standard bar's `markets` and `stores`.
+
+    `markets` and `stores` are NOT derived here: they are read from `core.scope.org_market_options` /
+    `org_store_options`, the same org roster the P&L and every other standard filter bar offers. A
+    picker built from this table's own `location` strings would offer a market this report cannot
+    resolve, and one store under each of its spellings — the two defects §13e and §4 already fixed
+    once each."""
     require_org(org_id)
-    rows = _vip_fetch(sb(), org_id, cols="location,period,period_year,period_month,status")
+    client = sb()
+    rows = _vip_fetch(client, org_id, cols="location,period,period_year,period_month,status")
     locations = sorted({r['location'] for r in rows if r.get('location')})
     statuses = sorted({r['status'] for r in rows if r.get('status')})
     pmap = {}
@@ -3058,63 +3097,59 @@ def vip_filter_options(org_id: str = ORG_ID):
         if r.get('period'):
             pmap[r['period']] = (r.get('period_year') or 0, r.get('period_month') or 0)
     periods = sorted(pmap, key=lambda p: pmap[p], reverse=True)
-    return {"locations": locations, "periods": periods, "statuses": statuses}
+    from app.core import scope as _core_scope
+    from app.modules.account.statement_filter import unbound_spellings
+    markets = _core_scope.org_market_options(client, org_id)
+    # One option per PHYSICAL store (§13e), PLUS only those distributor spellings the MATCHER cannot
+    # bind — asked of the matcher's own vocabulary (`unbound_spellings`), never of a second squash.
+    # Measured on production 2026-10-03: 29 distinct locations, 26 bound, so the picker offers the
+    # org's 31 stores plus 3 unmapped spellings — and those 3 stay selectable (the explicit half of
+    # `build_store_matcher` matches a selection verbatim) instead of being silently unreachable.
+    idx = _core_scope.market_index(client, org_id)
+    stores = _core_scope.org_store_options(client, org_id,
+                                           present=unbound_spellings(idx, locations))
+    return {"locations": locations, "periods": periods, "statuses": statuses,
+            "markets": markets, "stores": stores}
 
 
 @router.get("/vip/summary")
-async def vip_summary(org_id: str = ORG_ID, period: str = "", location: str = "", status: str = ""):
-    """Totals, fees-by-type (invoice money buckets), and per-store breakdown."""
+async def vip_summary(org_id: str = ORG_ID, period: str = "", location: str = "", status: str = "",
+                      date_from: str = "", date_to: str = "", stores: str = "", markets: str = ""):
+    """Totals, fees-by-type (invoice money buckets), and per-store breakdown over the SAME in-scope
+    set `/vip/invoices` lists — one selector, so the tiles always add up to the table.
+
+    `date_from`/`date_to` are inclusive YYYY-MM-DD days over `created_on`; `stores`/`markets` are
+    pipe-separated. The response also carries `unresolved` — the invoices a store/market selection
+    could not bind to the org vocabulary — so the screen reports them instead of shrinking a total
+    without saying why."""
     require_org(org_id)
-    cols = "location,sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total"
-    rows = _vip_fetch(sb(), org_id, period or None, location or None, status or None, cols=cols)
-
-    def f(v):
-        try:
-            return float(v or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    totals = {"invoices": len(rows), "sub_total": 0.0, "grand_total": 0.0}
-    for c in VIP_FEE_COLS:
-        totals[c] = 0.0
-    by_store: dict = {}
-    for r in rows:
-        loc = r.get('location') or '—'
-        s = by_store.setdefault(loc, {"location": loc, "invoices": 0, "sub_total": 0.0,
-                                      "grand_total": 0.0, **{c: 0.0 for c in VIP_FEE_COLS}})
-        s["invoices"] += 1
-        s["sub_total"] += f(r.get('sub_total'))
-        s["grand_total"] += f(r.get('grand_total'))
-        totals["sub_total"] += f(r.get('sub_total'))
-        totals["grand_total"] += f(r.get('grand_total'))
-        for c in VIP_FEE_COLS:
-            v = f(r.get(c))
-            s[c] += v
-            totals[c] += v
-    totals["fees_total"] = sum(totals[c] for c in VIP_FEE_COLS)
-    by_store_list = sorted(by_store.values(), key=lambda x: x["grand_total"], reverse=True)
-    return {"totals": totals,
-            "fees_by_type": {c: totals[c] for c in VIP_FEE_COLS},
-            "by_store": by_store_list}
+    kept, unresolved = _vip_select(
+        sb(), org_id, period=period, location=location, status=status,
+        date_from=date_from, date_to=date_to, stores=stores, markets=markets,
+        cols=_vip_filter.SUMMARY_COLS)
+    return _vip_filter.summarize(kept, unresolved)
 
 
 @router.get("/vip/invoices")
 async def vip_invoices_list(org_id: str = ORG_ID, period: str = "", location: str = "",
-                            status: str = "", limit: int = 2000, offset: int = 0):
-    """Invoice list for the table + Excel/PDF export (newest first)."""
+                            status: str = "", limit: int = 2000, offset: int = 0,
+                            date_from: str = "", date_to: str = "", stores: str = "",
+                            markets: str = ""):
+    """Invoice list for the table + Excel/PDF export (newest first), over the SAME in-scope set
+    `/vip/summary` totals. Both read `_vip_select`; neither writes its own filter chain.
+
+    Paging is applied AFTER the selection (a market is not a column, so PostgREST cannot page it),
+    which is why the ordering is done here too — newest `created_on` first, exactly as before."""
     require_org(org_id)
-    q = sb().schema('commcalc').table('vip_invoices').select(
-        "vip_id,invoice_number,order_number,location,status,created_on,due_date,"
-        "sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total,period"
-    ).eq('org_id', org_id)
-    if period:
-        q = q.in_('period', _pvariants(period))
-    if location:
-        q = q.eq('location', location)
-    if status:
-        q = q.eq('status', status)
+    kept, _unresolved = _vip_select(
+        sb(), org_id, period=period, location=location, status=status,
+        date_from=date_from, date_to=date_to, stores=stores, markets=markets,
+        cols="vip_id,invoice_number,order_number,location,status,created_on,due_date,"
+             "sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total,period")
+    kept.sort(key=lambda r: str(r.get('created_on') or ''), reverse=True)
     lim = min(max(limit, 1), 5000)
-    return (q.order('created_on', desc=True).range(offset, offset + lim - 1).execute().data) or []
+    off = max(offset, 0)
+    return kept[off:off + lim]
 
 
 @router.get("/vip/invoice/{vip_id}")

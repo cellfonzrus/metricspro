@@ -111,6 +111,33 @@ def _codes_for_selection(idx, value):
     return widened
 
 
+def unbound_spellings(idx, spellings):
+    """PURE: the given store spellings that the org vocabulary cannot bind to any store, in input
+    order, deduped case-insensitively.
+
+    A PICKER needs this. `core.scope.build_store_options(idx, present=…)` offers one option per
+    physical store PLUS any `present` spelling it cannot bind — but it tests bindability with its own
+    `_squash`, which is not the matcher's `coa._squash_key` (that one folds street-suffix drift, so
+    "5135 Bergenline Ave" binds "5135 Bergenline Avenue" while `_squash` sees two strings). Handing
+    `build_store_options` a raw feed vocabulary therefore re-offers stores it already lists — the
+    §13e "one store offered twice" defect, arriving through the back door.
+
+    So a surface whose rows carry a FEED's own spellings asks THIS function (the matcher's own
+    vocabulary) which of them nothing binds, and passes only those as `present`. One fact — "does
+    this spelling name a store?" — answered by the one home that also decides what a filter MATCHES,
+    so the picker can never offer a spelling the filter resolves differently.
+    """
+    out, seen = [], set()
+    for raw in (spellings or ()):
+        v = str(raw or "").strip()
+        if not v or v.casefold() in seen:
+            continue
+        seen.add(v.casefold())
+        if not _codes_for_selection(idx, v):
+            out.append(v)
+    return out
+
+
 def store_key_expansion(idx, stores):
     """PURE (harness: harness_pl_filter_semantics.py): expand an EXPLICIT store selection to every
     matchable SNAPSHOT key spelling, from the same canonical union index the market expansion reads.

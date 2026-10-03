@@ -4579,9 +4579,19 @@ picker) dereferenced it; `GET /core/filter-options` (the StandardFilterBar feed)
   `fold_store_spellings(idx, spellings)` (PURE: dedupes a list the CALLER already built, keeping
   the caller's FIRST spelling — for a surface with a measured reason to prefer its own vocabulary).
   A group whose rows disagree on the market reports NO market rather than guessing.
-- **Wired:** `GET /core/filter-options` (via `org_store_options`, 58 → 31 house / 38 → 20 luxelink)
-  and `GET /payables/filter-options` (via `fold_store_spellings`, 32 → 31 — it keeps its measured
-  `store_mapping`-first spelling preference; see its own docstring for why).
+- **Wired:** `GET /core/filter-options` (via `org_store_options`, 58 → 31 house / 38 → 20 luxelink),
+  `GET /payables/filter-options` (via `fold_store_spellings`, 32 → 31 — it keeps its measured
+  `store_mapping`-first spelling preference; see its own docstring for why) and
+  `GET /commcalc/vip/filter-options` (via `org_store_options(present=unbound_spellings(…))`, §15v).
+- **A FEED's own vocabulary is handed over through `statement_filter.unbound_spellings` (added
+  2026-10-03, §15v), never raw.** `build_store_options` tests a `present` spelling's bindability with
+  its own `_squash`; the MATCHER uses `coa._squash_key`, which folds street-suffix drift. So a feed
+  spelling the filter already binds ("5135 Bergenline Ave" → "5135 Bergenline Avenue") came back as
+  its own option — this very defect, offered again through the `present` door. Measured live on the
+  house org 2026-10-03 while building §15v: the distributor-invoice picker grew **33 → 35 options for
+  31 stores** on the raw list, and stays at 33 (31 stores + the 2 spellings nothing binds) when the
+  list is filtered through `unbound_spellings` first. One fact — "does this spelling name a store?" —
+  answered by the home that also decides what a filter MATCHES.
 - **Explicitly EXCUSED, not fixed:** `asset /filter-options` `store_groups`
   (`_build_store_display_groups` + `_grouping_key`). It folds RAW `asset_ledger` store strings,
   which may be in NEITHER vocabulary, and its `variants` list is load-bearing — the frontend
@@ -5152,7 +5162,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
 | `commcalc.vip_invoice_lines` (distributor invoice LINE items; `location` is a STORE ADDRESS in the distributor's own spelling) | `vip_sweep.py` (portal scrape, mig `008`) | **Device Purchases report** (`account/device_purchases.compute` → `GET /account/device-purchases`, §23y — the money grain); `device_cost_recon` (source ② evidence); `asset/invoice_due` (per-invoice device list) |
 | `commcalc.vip_invoice_devices` (one row per SERIALISED unit: serial / IMEI / SIM) | `vip_sweep.py` (mig `008`) | **Device Purchases report** — this table IS the device DEFINITION (`device_purchases.device_product_names`: a line is a device when its `btrim(name)` appears here as a `btrim(product_name)`, §23y); `asset/invoice_due` (serial join); `device_cost_recon`  **Device Payable as at a date** (`account/device_payable`, §23z) — the BILLED-ON side of the two-date join. **ITS COLUMN NAMES LIE: `imei` holds the SIM/ICCID (18 chars on this feed); the 15-digit handset IMEI is in `serial`, which is what `asset_ledger.esn_imei` holds.** Joining on the column CALLED `imei` matches 4 of 19,571 units and still renders a confident total — pinned in `harness_device_payable.py` §A, negative control included |
-| `commcalc.vip_invoices` (invoice HEADERS — `grand_total`, `shipping`, `other_cost`, `due_date`, `status`) | `vip_sweep.py` (mig `008`) | `coa.build_inputs` (`vip_fees` P&L line = shipping + other_cost; `vip_ap` BS payable on unpaid invoices); `asset/invoice_due`. **NOT read by the Device Purchases report** — invoice-level shipping/tax is not device purchase price, and the P&L already books it |
+| `commcalc.vip_invoices` (invoice HEADERS — `grand_total`, `shipping`, `other_cost`, `due_date`, `status`) | `vip_sweep.py` (mig `008`) | **Distributor Invoices report** (`GET /commcalc/vip/summary` + `/vip/invoices` → `commcalc/vip_invoice_filter.py`, §15v — `location` is the DISTRIBUTOR's spelling of a store address and there is NO market column, so its market filter dereferences `core.scope.market_index` through `statement_filter.resolve_store_matcher`); `coa.build_inputs` (`vip_fees` P&L line = shipping + other_cost; `vip_ap` BS payable on unpaid invoices); `asset/invoice_due`. **NOT read by the Device Purchases report** — invoice-level shipping/tax is not device purchase price, and the P&L already books it |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2459` (the line reference here said `2106` until 2026-09-08; the endpoint had moved — see §17 for its own row) |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2106` |
 | **Processor Daily Debits & Credits (owner directive 2026-09-04)** | NO new table / NO migration — reads the EXISTING processor feeds `raw_payment_detail` (§2, epay sweep, migs `020`/`025`) and `raw_ma_daily_tx` (§2, VidaPay sweep/upload/`report_pull`, mig `083`). Naming config = the mig-`953` `report_term` vocabulary (`processor` key); primary-feed config = `metric_source_of_truth`/`data_source` (migs `923`/`939`) | **`commcalc/processor_ledger.py`** — PURE core `classify_amount`/`fold_cells`/`filter_cells`/`day_type_rollup`, IO only in `assemble`. Rows = DAY × TRANSACTION TYPE with DEBITS / CREDITS / NET (= credits − debits) columns; cell grain (processor, date, tx_type, store) so every rollup ties out. **DEBIT/CREDIT RULE is per FEED SHAPE, never a carrier branch** (`FEED_SHAPES`, RULE TWO): `raw_payment_detail.amount` > 0 = CREDIT to the dealer / < 0 = DEBIT; `raw_ma_daily_tx.retail_cost` > 0 = DEBIT (a charge) / < 0 = CREDIT — both verified against live rows 2026-09-04 (house 2026-07-27: D 1,001.60 / C 80,214.66 / N 79,213.06; luxelink 2026-09-02: D 30,297.96 / C 987.50 / N −29,310.46), pinned in the harness. RESOLUTIONS REUSED, never re-derived: processor identity `router._metric_source`+`_billpay_processor_name`, processor NAME `report_labels.load_report_labels` term `processor` (§18 — no vendor literal in module or page copy), VidaPay account→store `router._vidapay_account_resolver`, raw→canonical store `account.coa.store_resolver`, address→code `flag_store_resolver`, store→market + market dropdown `core.scope.market_by_code`/`org_market_options` (§13a/§13c). Endpoint `commcalc/processor_ledger_api.py` `GET /commcalc/processor-ledger` (span-gated via `scope_keyset`/`in_keyset`; unmapped-store cells hidden from scoped callers). Page `commcalc/processor-ledger/page.tsx` (NAV Assets & Inventory + REPORT_DIRECTORY `'assets'` + REPORT_TREES `'asset'`; carrier-NEUTRAL → deliberately NOT in `NAV_CARRIERS`). Scheduled/emailed via notify W3 key `processor_ledger` (`report_registry.py`; filters date_from/date_to/store/type/market). Proof `harness_processor_ledger.py`; guards `harness_market_enumeration_guard.py` (pins `assemble` CANONICAL), `harness_carrier_vocab_guard.py`, `harness_org_scope_guard.py` |
@@ -5289,6 +5299,151 @@ absence vocabulary (`carrier_vs_pay` / `labour_coverage` / §30.12), the alert p
 Nothing new was derived twice. `/commcalc/sales-report` answers the opposite question from the same
 cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 import health answers
 "is the feed late", which is why a missing feed here is reported and not alerted.
+
+
+## 15v. DISTRIBUTOR INVOICES — the standard filters, over a feed with no market column (owner 2026-10-03)
+
+**Owner (verbatim):** *"add date range and market with standard filters for distributor invoices"*.
+
+The report is `GET /commcalc/vip/summary` + `GET /commcalc/vip/invoices` behind
+`frontend …/commcalc/vip/page.tsx` ("Distributor Invoices", NAV module `vip`). It carried three
+pickers of its own — the distributor's month `period`, a single raw `location`, and `status` — and
+none of the RULE FIVE core set (§3d).
+
+### What the data makes hard
+
+`commcalc.vip_invoices` (§16) has **no `market` column**, and its `location` is a store address in
+the **DISTRIBUTOR's own spelling** — `1 S 60th St` where the org's vocabulary says
+`1 S 60th St, Philadelphia`. So "market" is not a filter this table can answer; it is a question
+about the org's store vocabulary, and the only correct way to answer it is to dereference that
+vocabulary. There is exactly one: `core.scope.market_index`, read through
+`account.statement_filter.resolve_store_matcher` — **the same matcher the P&L store/market filter
+reads** (§4, `market_key_expansion` / `store_key_expansion`). This report READS it. It carries no
+spelling rule of its own, so a vocabulary that learns a spelling teaches this report in the same
+instant, and the two can never resolve one spelling to different stores.
+
+### The second defect, fixed in the same change: two filter chains for one question
+
+`/vip/summary` (the tiles, the fees-by-type panel, the fees-by-store table) and `/vip/invoices` (the
+table and its export) each wrote their OWN PostgREST filter chain for the same question — "which
+invoices are in scope?". A condition added to one renders a table whose rows do not add up to the
+tiles above them, and says nothing. The selection now has ONE home,
+`commcalc/vip_invoice_filter.py` (`select` / `summarize` / `in_date_window`, all PURE) behind
+`router._vip_select`, and both endpoints read it. `VIP_FEE_COLS` is now
+`vip_invoice_filter.FEE_COLS` — one fee-bucket list for the totals, the panel and the per-store
+rollup, instead of three readers of a copy.
+
+### What was built
+
+- **Endpoints (additive — every pre-existing param still behaves identically):** `date_from` /
+  `date_to` (inclusive `YYYY-MM-DD` days over `created_on`), and `stores` / `markets`
+  (PIPE-separated, because a store address may contain a comma — the same convention
+  `statement_filter.resolve_store_matcher` already uses). `period` / `location` / `status` stay.
+- **`GET /commcalc/vip/filter-options`** additionally serves `markets` (`core.scope.org_market_options`)
+  and `stores` (`org_store_options`, §13e) — the org roster, NOT this table's own `location` strings,
+  which would offer one store once per spelling and a market this report cannot bind.
+- **`statement_filter.unbound_spellings(idx, spellings)`** — new, PURE: which of a feed's spellings
+  the MATCHER cannot bind. The picker passes only those as `present`, so an unmapped store stays
+  selectable without the §13e duplicate returning through the `present` door (see §13e for the
+  measurement).
+- **Page:** `<StandardFilterBar periodMode="range" cascadeStores={roster}>` with the market → store
+  cascade; `period` and `status` are APPENDED as module facets. The old single `location` select is
+  REPLACED by the standard store multi-select (measured: all 29 distributor spellings on the house
+  org are selectable through it). **DEVIATION, stated:** an invoice names no salesperson, so the rep
+  control is hidden. Filtering is SERVER-side — the tiles are computed by `/vip/summary`, so a
+  client-side narrowing would leave them reporting the whole feed above a filtered table.
+
+### An unbindable spelling is REPORTED, never guessed into a market
+
+`/vip/summary` returns `unresolved` — `{invoices, grand_total, locations}`, the invoices a
+store/market selection could not bind — and the page says so above the tiles. Folding them in would
+invent money for a market; dropping them silently would read as money that is not there.
+
+**Measured live on the house org, 2026-10-03, BEFORE the data fix** (3,989 invoices, 29 distinct
+locations):
+
+| | |
+|---|---|
+| Locations the market filter binds | **26 of 29** |
+| By market | PA 1,562 inv / \$8,289,886.45 · NYC 696 / \$3,216,945.26 · NJ 841 / \$2,840,596.37 · LI 406 / \$1,268,528.79 |
+| Unfiltered total (unchanged by this PR) | 3,989 inv / \$17,987,584.68 |
+| Locations NO market binds | `1 S 60th St` · `1598 Mt Ephraim Ave` · `228 N Wood Ave` |
+| Store options offered | **33** = the org's 31 stores + the 2 spellings nothing binds |
+| Locations unreachable by ANY store option | **none** |
+
+**And AFTER it** — the owner ran both runbooks the same evening (the two `store_aliases` rows, then
+`<2022>`'s market), so re-measured through the real `_vip_select` / `resolve_store_matcher`:
+
+| | |
+|---|---|
+| Locations the market filter binds | **29 of 29** — `unbound_spellings` returns EMPTY |
+| By market | PA 2,035 inv / \$10,432,387.56 · NYC 696 / \$3,216,945.26 · NJ 841 / \$2,840,596.37 · LI 417 / \$1,497,655.49 |
+| Sum of the four markets | **3,989 inv / \$17,987,584.68** — byte-equal to the unfiltered total |
+| `unresolved` reported by `/vip/summary` | **0 invoices, \$0** |
+
+**That reconciliation is the real check on the design**, and it is worth stating why: the four
+markets summing EXACTLY to the unfiltered total proves every invoice is attributable to exactly one
+market — no invoice counted twice (a spelling binding two stores in different markets) and none lost
+(a spelling binding nothing). Neither property is visible from the per-market numbers alone, and
+neither is something the DB-free harness can assert, because it is a fact about this org's data
+rather than about the code. Re-run it after any change to the store vocabulary.
+
+**The house fix for the three is DATA, in the one vocabulary — surfaced for approval, and APPLIED
+by the owner 2026-10-03:** two `commcalc.store_aliases` rows (`1 S 60th St` → `B-60TH`,
+`1598 Mt Ephraim Ave` → `B-1598`) — proved in `harness_vip_invoice_filter.py` §F9/§F10 to bind both
+spellings to market PA and to collapse the picker to one option per physical store (33 → 31), then
+verified against production through the real `resolve_store_matcher`: both bind, both follow the PA
+market filter, and `unbound_spellings` over all 29 distributor locations returns EMPTY. Runbook:
+`database/runbooks/vip_distributor_store_aliases.sql`.
+
+`228 N Wood Ave` binds store `<2022>`, which was assigned to **no market at all**, so the STORE
+filter found it and the MARKET filter could not (no market contains a market-less store). The market
+was the owner's to choose, and they chose **LI** (the address is Syosset NY 11791, Nassau County);
+applied 2026-10-03 and verified — the spelling now follows the `li` filter. Runbook:
+`database/runbooks/vip_store_2022_market.sql`.
+
+**Where that row actually lives, measured 2026-10-03 — the part worth not re-deriving:** it is in
+`commcalc.store_mapping` and `storeops.stores` has NO row for this code, so a market-setting
+statement aimed at the roster table touches nothing. And its `market` was the empty string `''`,
+not `NULL`, so the natural `WHERE market IS NULL` guard matches nothing either — the first draft of
+that runbook had exactly that bug and would have reported success while changing no row. Both halves
+follow from §13's union-of-two-vocabularies design (a store may exist in either side, or both), so
+any future runbook that sets a market must say which side it is writing and must treat blank and
+NULL as the same absence.
+
+### DUPLICATE CHECK (build gate) — what was checked, what was reused
+
+Checked in this index before building: §3d (RULE FIVE — the shared bar, `StandardFilterBar` /
+`MarketStorePicker`), §4 (the P&L's store/market filter — `statement_filter`), §12/§15 (the VIP feed
+and the distributor surfaces), §13a (store→market), §13c (market enumeration), §13e (store
+enumeration), §16's `vip_invoices` row, §17, and every existing store/market filter over a feed
+column: `asset/market_filter.py` (`_apply_market_filter` / `NO_MARKET_SENTINEL`) and
+`asset /filter-options`.
+
+**REUSED, not re-derived:** `account.statement_filter.resolve_store_matcher` /
+`build_store_matcher` / `market_key_expansion` / `store_key_expansion` (the whole store/market
+resolution, §4) · `core.scope.market_index` / `org_market_options` / `org_store_options` (§13c/§13e)
+· `commcalc.calculator.safe_float` · `StandardFilterBar` / `MarketStorePicker` /
+`standard-filters.ts` (§3d) · the page's existing `ExportButtons` / `SendReportButton`.
+
+**NOT reused, and why:** `asset/market_filter._apply_market_filter` answers a market filter by
+`eq`-ing a `market` COLUMN. `vip_invoices` has none, so it cannot serve this question — using it
+would mean adding a market column to this feed, i.e. a second copy of a fact `market_index` already
+owns.
+
+**EXTENDED, not copied:** `statement_filter` gained `unbound_spellings` (above). Its existing
+functions are untouched — `harness_pl_filter_semantics.py` still passes unchanged.
+
+**Proof / lock:** `backend/harness_vip_invoice_filter.py` — **64 checks**, DB-free, over the REAL
+modules. §A the summary arithmetic is unchanged and the three panels tie out; §B the date-range
+semantics (inclusive both ends, fail-closed on a dateless row, open ends); §C the regression the
+first live run produced — `SUMMARY_COLS` did not fetch `created_on`, and because `in_date_window` is
+fail-closed on a dateless row, EVERY window returned zero invoices; §D **the LOCK** — both endpoints
+must read the one selector and write no filter chain of their own, and `vip_invoice_filter` must
+carry no store-spelling rule (checked against the source with docstrings and comments stripped, so
+explaining the design cannot trip the lock that protects it); §E unresolved rows are reported and
+never folded into a total; §F `unbound_spellings`, including the alias row as the fix. CI job
+*Distributor invoices — one selector, one store vocabulary* in `carrier-vocab-guard.yml`.
 
 
 ## 16. Cross-reference: by TABLE
@@ -5494,6 +5649,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/vip/summary` · `GET /commcalc/vip/invoices` (DISTRIBUTOR INVOICES) — additive `date_from` / `date_to` (inclusive days over `created_on`) + `stores` / `markets` (PIPE-separated); both now read ONE selector, so the table always adds up to the tiles; `/summary` also serves `unresolved` (the invoices a store/market selection could not bind) | `commcalc/router.vip_summary` / `vip_invoices_list` → `router._vip_select` → pure `commcalc/vip_invoice_filter.py` + `account.statement_filter.resolve_store_matcher` | §15v |
+| `GET /commcalc/vip/filter-options` — additionally serves `markets` (`core.scope.org_market_options`) and `stores` (`org_store_options`, one option per physical store + only the distributor spellings the matcher cannot bind, via `statement_filter.unbound_spellings`) | `commcalc/router.vip_filter_options` | §15v, §13c, §13e |
 | *(no endpoint added)* — `POST /commcalc/epay/sweep/run-due` / `run` are unchanged in shape; the run's `success` is now decided on `rows_landed` rather than on the status word, so an unverified zero records an ATTEMPT instead of advancing `last_run_at` | `router._do_epay_sweep` → `epay_sweep.run_epay_sweep` (ledger settled before reporting) | §19.41 |
 | `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
 | `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
