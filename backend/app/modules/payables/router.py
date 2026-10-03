@@ -349,6 +349,20 @@ def payables_filter_options(org_id: str = ORG_ID):
     if not stores and not market_list:
         return {"stores": [], "markets": [], "source": "unavailable"}
     stores.sort(key=lambda s: s["store"])
+    # ONE OPTION PER PHYSICAL STORE (owner 2026-10-02). The dedupe above is EXACT-STRING, so one
+    # store spelled two ways across the two vocabularies was still offered twice (measured live
+    # that day: 32 options for 31 stores — "1 S 60th street" and "1 S 60th St, Philadelphia").
+    # Which spellings are one store has ONE home (`build_market_index.code_groups`); this folds
+    # through it rather than re-deriving it, and deliberately uses `fold_store_spellings` rather
+    # than the canonical composer so THIS module's measured spelling preference (store_mapping
+    # first — see the docstring) still picks the label. Additive and fail-soft as everywhere else.
+    try:
+        from app.core import scope as _cscope
+        keep = set(_cscope.fold_store_spellings(_cscope.market_index(client, org_id),
+                                                [s["store"] for s in stores]))
+        stores = [s for s in stores if s["store"] in keep]
+    except Exception as e:
+        print(f"WARN payables filter-options store fold failed: {e}")
     return {"stores": stores, "markets": market_list, "source": source}
 
 

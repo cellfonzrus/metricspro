@@ -448,6 +448,13 @@ on:
       - "frontend/src/**"
       - "backend/app/**/*.py"
       - "backend/app/data/support_docs_seed.json"
+      # index §13e — the store-option fold, and §13d — the store-identity proof: each lock's own
+      # harness and runbook. The two globs above already cover everything under backend/app, but a
+      # harness at the backend ROOT and a runbook are not under them, so a change to the very thing
+      # a lock guards would SKIP that lock — the un-wiring these locks exist to prevent.
+      - "backend/harness_store_option_fold.py"
+      - "backend/harness_store_mapping_identity.py"
+      - "database/runbooks/store_identity_merge_1800_1115.sql"
   push:
     branches: [main]
     paths:
@@ -808,6 +815,20 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_store_mapping_identity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  store-option-fold:
+    name: Store options — each physical store offered once (DB-free, the real composer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-option fold proof (the duplicate union reproduced; one option per physical store; an unbindable spelling is never dropped; both callers must keep dereferencing code_groups — index §13e)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_store_option_fold.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CLOSING-REFUSAL LOCK (index §29.11, owner bug report 2026-10-02 "we cannot see the daily closing which was
   # submitted"). A daily closing that is REFUSED used to store nothing at all — not even in commcalc.closing_attempt,

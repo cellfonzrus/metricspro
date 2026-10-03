@@ -4437,6 +4437,55 @@ DIFFERENT keys and its money reads as two stores. **Nothing errors; the totals j
   resolves BYTE-IDENTICALLY before and after). CI job `store-identity-proof` in
   `carrier-vocab-guard.yml`.
 
+### 13e. CANONICAL STORE ENUMERATION — every store dropdown offers each store ONCE (owner 2026-10-02)
+
+**Owner (verbatim), on the closed store B-2778 merged into its successor B-1598:** "no need to
+hide, if they are merged it will show only one data as the store got replaced by the other."
+
+**The class.** The money merged (§13d — every spelling resolves to one key); the PICKER did not.
+Option lists unioned RAW SPELLINGS from the two vocabularies, so one store contributed its bare
+CODE from a `storeops.stores` row with no address AND its ADDRESS from the `commcalc.store_mapping`
+row — two options, one store. **Measured live 2026-10-02 (house org): `GET /core/filter-options`
+offered 58 options for 31 real stores, 27 of them twice.** Luxelink: 38 → 20, so this is the
+two-code-vocabulary shape too, not a house-only accident.
+
+**The registry already existed and the caller was not wired to it** — §19.18's failure mode, a
+fourth time. `build_market_index.code_groups` IS the "which codes are one physical store" fact, and
+its own docstring already said a resolver treating them as two "makes a picker offer the same store
+twice (pick the wrong one and the grant binds only half the data)". `GET /core/markets` (the GRANT
+picker) dereferenced it; `GET /core/filter-options` (the StandardFilterBar feed) did not.
+
+**The rule, mirroring §13c for markets:**
+
+> EVERY store dropdown/enumeration = ONE option per PHYSICAL STORE (`code_groups`), labelled with
+> its best known spelling, UNION whatever store spellings the surface's own rows carry that the
+> index cannot bind (so an orphan row stays selectable). DISPLAY-only: no row is rewritten and
+> nothing changes what a filter MATCHES — `store_resolver` / `build_store_matcher` keep that job
+> and already accept every spelling, which is exactly why collapsing the duplicates is safe.
+
+- **The one home:** `app/core/scope.py`, beside its market twin —
+  `build_store_options(idx, present=())` (PURE: enumerates the org's stores from the index;
+  returns `{"store", "market", "also_known_as"}`, display pick = a street address beats a bare
+  code, ties alphabetically, every spelling NOT chosen is listed so a fold is never silent) and its
+  I/O twin `org_store_options(client, org_id, present=())`; plus
+  `fold_store_spellings(idx, spellings)` (PURE: dedupes a list the CALLER already built, keeping
+  the caller's FIRST spelling — for a surface with a measured reason to prefer its own vocabulary).
+  A group whose rows disagree on the market reports NO market rather than guessing.
+- **Wired:** `GET /core/filter-options` (via `org_store_options`, 58 → 31 house / 38 → 20 luxelink)
+  and `GET /payables/filter-options` (via `fold_store_spellings`, 32 → 31 — it keeps its measured
+  `store_mapping`-first spelling preference; see its own docstring for why).
+- **Explicitly EXCUSED, not fixed:** `asset /filter-options` `store_groups`
+  (`_build_store_display_groups` + `_grouping_key`). It folds RAW `asset_ledger` store strings,
+  which may be in NEITHER vocabulary, and its `variants` list is load-bearing — the frontend
+  comma-joins it into the `store` filter param. Converging it onto `code_groups` changes what those
+  multi-selects BIND, so it is a separate change with its own proof, not a rider here.
+- **Proof / lock:** `backend/harness_store_option_fold.py` — **51 checks**, DB-free, over the REAL
+  composer: §A reproduces the duplicate union, §B the repair (one option per store, both codes kept
+  visible), §C the deterministic display pick, §D additive (an unbindable spelling is never
+  dropped), §E fail-soft (options never blank a page), §F no collateral (the market twin and the
+  index are untouched; a market-conflicted group reports none), §G/§H the LOCK — both callers must
+  keep dereferencing the one home or the build fails.
+
 ### 14s. SALARY → STORE EXPENSES: the write path, and the THREE hours states (owner directive 2026-09-08)
 
 **Owner (verbatim):** "then we need to pull the exact salaries paid as per the schedule and update
@@ -5288,7 +5337,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
-| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
+| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)**; **store OPTION lists compose ONLY through `build_store_options`/`org_store_options` — or `fold_store_spellings` for a caller's own list — so one physical store is offered once (§13e, CI job `store-option-fold`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards**, **store IDENTITY — §13d: one physical store must resolve to ONE canonical key; the invariant's one home is `account/store_identity_audit.py::audit` (placeholder address / roster-without-mapping / split keys), locked by `harness_store_mapping_identity.py` (CI `store-identity-proof`); repair = the owner-run runbook `store_identity_merge_1800_1115.sql` (#346 + the B-60TH step), deliberately NOT a second migration** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
@@ -5394,6 +5443,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `POST /commcalc/onboarding/intake/analyze` + `/commit` — Stage C kinds `x_report` / `merchant_payments` / `bill_payments` (+ the `role` form field) | `_intake_prepare_xreport` / `_intake_prepare_merchant` / the bill-pay branch of `_intake_prepare_stage2`; `_intake_land` → `_xreport_land_rows` / `merchant_portal_sweep.store_settlement` / `_ingest_mapped_df` or `epay_ingest.ingest`; re-reads `_intake_reread_xreport` / `_merchant` / `_billpay`; cross-checks `_intake_billpay_extract_after_sales` (after sales) and `_intake_sold_check_after_inventory` (after inventory) | §30.8. `GET /onboarding/intake/state` adds `other_kinds`, `merchant_portals` (catalog + the org's sources + roles), `billpay_feed` |
 | `GET /core/my-tenants` · `GET /core/bootstrap` (the login's membership list — the ONLY source of "which companies may I act as"; both exempt from mig-984 scope enforcement) | `core/router._my_tenants_payload` (names from `storeops.tenants`, never from `core.organizations`) | §28 which company am I in — `lib/tenant-scope.ts` `actingCompany`/`switcherOptions`, proof `prove_tenant_scope.mjs` |
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
+| _every endpoint OFFERING store options (dropdown/enumeration)_ | — | §13e one option per PHYSICAL STORE: `core.scope.build_store_options`/`org_store_options`, or `fold_store_spellings` for a caller-built list; both dereference `build_market_index.code_groups`. Locked by `harness_store_option_fold.py` (CI `store-option-fold`); `asset store_groups` explicitly excused there (owner 2026-10-02) |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `POST /commcalc/column-mapping` (the ONE writer of `commcalc.column_mapping`; also where an AMOUNT column declares **which sign is money earned**) | `router.upsert_column_mapping` — read-then-write over the mig-042 expression index; `sign_convention` validated against `commission_ledger.SIGN_CONVENTIONS`, written only on a `number` transform and only when the mig-1006 column exists | §25.11 (the save that never saved) + §25.12 (the convention). Proof `harness_column_mapping_save.py`, `harness_commission_ledger_sign.py` |
 | `GET /commcalc/commission-buckets` · `POST /commcalc/commission-buckets` · `DELETE /commcalc/commission-buckets/{key}` (THE BUCKET REGISTRY, mig 1009: the org's merged buckets with kind / hint words / P&L line, the P&L chart to pick from (`_pl_lines` = `coa.PL_SPEC` + the org's `pl_line_labels`), usage counts; write admin-gated, refused pre-1009 naming the migration) | `router.get_commission_buckets` / `upsert_commission_bucket` / `delete_commission_bucket` → `commission_ledger.load_buckets_meta` / `normalise_bucket`; `_ledger_buckets` (the one reader every ledger endpoint calls) + `_ledger_bucket_guard` (the landing refusal) | §30.7, §15 |
