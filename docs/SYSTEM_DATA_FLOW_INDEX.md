@@ -80,7 +80,7 @@ Primary code homes:
 | 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)?" |
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 | 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
-| 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, which origins may the API be called from, what does a production build refuse to ship without (§40.10), and what was actually measured during the 2026-10-03 domain-move outage (§40.11)?" |
+| 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, which origins may the API be called from, what does a production build refuse to ship without (§40.10), what was actually measured during the 2026-10-03 domain-move outage (§40.11), and why an unreachable backend must never read as "login not enforced" (§40.13)?" |
 
 ---
 
@@ -5498,6 +5498,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
 | Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
 | **Every backend path, as the BROWSER reaches it** — `/api/v1/*` and `/health` on the site's own origin, proxied server-side (`next.config.ts` `rewrites()` = `apiRewrites()`); uploads + the `require_browser_service()` endpoints + `POST /payables/rebuild` go DIRECT (`DIRECT_ROUTES`) | `frontend/src/lib/apiBase.ts` `apiUrl` / `routeClass` / `productionConfigProblems` (the production config gate, §40.10); lock `harness_one_domain_lock.py`, proof `frontend/prove_one_domain.mjs` | §40 |
+| `GET /api/v1/core/auth-config` — the PUBLIC read of `rbac_enabled` the Guard gates the whole app on. A FAILED read is its own state (`enforceUnreadable`), never the value `false`: the app shows "Can't reach the server", it does NOT open | `frontend/src/app/(platform)/layout.tsx` `Guard`; backend `core/router._rbac_enabled_flag`; lock `harness_one_domain_lock.py` rule 8 | §40.13 |
 | **Any path on the platform hostname in production** → 308 to `NEXT_PUBLIC_SITE_URL`, same path + query (only when that is set; previews / localhost untouched) | `frontend/site-routing.ts` `canonicalHostRedirects` via `next.config.ts` `redirects()` | §40.4 |
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
 | `GET /commcalc/carrier-vs-pay/{period}` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `POST /discrepancy/run` · `GET /discrepancy-appeals` · `/commission-device` · `/commission-explain?view=carrier` — the CARRIER surfaces: 403 for every viewer without `carrier_commission_view` (reps and store managers alike), each by its REGISTERED key | `router._require_carrier_view(authorization, org_id, key)` → `_can_view_carrier_commission` → `payout_audience.carrier_view_allowed`; keys in `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j / §6m |
@@ -14904,6 +14905,40 @@ session lives per origin, so a domain move signs every user out once.
 
 **Process note worth keeping.** Hours went into infrastructure theories before anyone established what a user saw on
 screen. On a report like "it lost all connection", get the on-screen symptom first.
+
+### 40.13 UNREADABLE IS NOT OFF — a failed read must never answer the question it failed to ask (owner incident 2026-10-03)
+
+**What the owner saw**, verbatim: *"something just happened all data is showing zero for all users"* and, minutes
+later, *"also login enforcement jsut got turned off"* — the Roles & Access page reading `🔓 Login not enforced`,
+`Load failed: Error`, `0 employees`, and no way to sign out. Two reports, ONE defect.
+
+**The class, named.** The flag that decides sign-in-or-open lives in the database (`storeops.app_config.rbac_enabled`,
+true since 2026-08-15) and reaches the browser over the public `GET /api/v1/core/auth-config`. The Guard in
+`frontend/src/app/(platform)/layout.tsx` fetched it and, in the `.catch`, called `setFetchedEnforce(false)`. So a
+FAILED READ was recorded as the ANSWER `false`, and `if (enforce === false) return <PlatformShell open>` rendered the
+whole app with its sign-in gate dropped. **Nothing was turned off.** The backend never stopped enforcing — which is
+exactly WHY every screen read `$0.00`: the proxied calls were dying at the edge (see the incident record for the
+cause) while Vercel kept serving the pages themselves.
+
+**The fix is the general one.** A read has three outcomes, not two: `true`, `false`, and *I could not ask*.
+
+| Before | After |
+|---|---|
+| `.then(r => r.json())` — a 502's HTML body parsed as if it were the answer | `.then(r => { if (!r.ok) throw … })` — a non-2xx is a failure, not data |
+| `.catch(() => setFetchedEnforce(false))` — unreadable collapsed onto "off" | `.catch(() => setEnforceUnreadable(true))` — its OWN state, which no branch can mistake for a value |
+| fell through to `<PlatformShell open>` | returns the "Can't reach the server" notice BEFORE the open-app and loading branches |
+
+The notice says what is true and what is not — *"The app loaded, but it cannot reach the server, so nothing here can
+be shown or trusted yet. This is a connection problem, not lost data — your records are untouched"* — with a **↻ Try
+again**. It has nothing to sign out of, so `Notice`'s `onSignOut` is now optional and the button renders only when
+there is one.
+
+**Locked so it cannot un-wire** — `backend/harness_one_domain_lock.py` **rule 8** fails the build if the catch stops
+setting its own unreadable state, or if the notice stops being returned before the open-app branch. Both have negative
+controls (`control 8`, `control 8b`): the rule is run against a synthetic revert to the 2026-10-03 code and must fire.
+
+**Why §40.10 cannot cover this.** That gate is a pure module checking the SHAPE of a configured origin. This defect
+needs no misshapen origin at all: any unreachable backend, for any reason, reproduces it.
 
 ---
 
