@@ -6566,7 +6566,10 @@ def org_chain_inputs(org_id, store_code=None):
             "levels": _read("org_levels", "id,name"),
             "units": _read("org_units", "id,name,level_id,parent_id,code"),
             "managers": _read("org_managers", "unit_id,employee_id"),
-            "employees": _read("employees", "employee_id,name,email"),
+            # `phone` is read so an alert can reach a manager on WhatsApp too (owner 2026-10-03).
+            # Additive: every existing consumer keys on email. Which channel actually reaches a
+            # recipient is decided in ONE place, `commcalc/manager_digest.addresses_for`.
+            "employees": _read("employees", "employee_id,name,email,phone"),
             "market_by_code": overlay}
 
 

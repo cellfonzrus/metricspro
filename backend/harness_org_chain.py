@@ -114,9 +114,20 @@ check("every manager at the district node is returned, not just the first",
       [m["employee_id"] for m in ch["dm"]] == ["E-DM", "E-DM2", "E-GHOST"], str(ch["dm"]))
 check("a manager with no employee row keeps its employee_id (never silently dropped)",
       [m for m in ch["dm"] if m["employee_id"] == "E-GHOST"][0]["name"] is None)
-check("the DM carries name, email, unit and level",
+check("the DM carries name, email, phone, unit and level",
       ch["dm"][0] == {"employee_id": "E-DM", "name": "Dana Mills", "email": "dana@x.test",
+                      "phone": None,
                       "unit": "Brooklyn District", "level": "District"}, str(ch["dm"][0]))
+# `phone` was added so an alert can reach a manager on WhatsApp (owner 2026-10-03). It is ADDITIVE,
+# and the pin below keeps it that way: the walk reports the number it was given and decides nothing
+# about reachability, which belongs to manager_digest.addresses_for.
+check("...and phone is carried through from the employee row when there is one",
+      OC.managers_at({"id": "u-d", "name": "Brooklyn District", "level_id": "l-d"},
+                     {"u-d": ["E-DM"]},
+                     {"E-DM": {"name": "Dana Mills", "email": "dana@x.test", "phone": "5551234567"}},
+                     {"l-d": "District"})[0]["phone"] == "5551234567")
+check("...and an employee row with NO phone yields None, never an empty string that looks like one",
+      ch["dm"][0]["phone"] is None)
 check("everyone ABOVE the district is returned, nearest first",
       [m["employee_id"] for m in ch["above"]] == ["E-RM", "E-CEO"], str(ch["above"]))
 check("...deduped by employee_id when one person manages two ancestors",

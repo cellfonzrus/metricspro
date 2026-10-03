@@ -18,6 +18,29 @@ by store_code. Pure aggregation is factored out for the harness; DB reads degrad
 
 FEE_DESC = "epay service charge"   # raw_sales.product_desc marker for the Boost fee line
 
+# THE HOUSE fee vocabulary (RULE TWO). `FEE_DESC` above is kept as the historical single token so
+# every existing caller and harness reads the same constant; HOUSE_FEE_DESCS is the tuple form the
+# config resolution falls back to, so a tenant with no config row behaves byte-identically.
+#
+# WHY THIS IS CONFIG AND NOT A CONSTANT (measured 2026-10-03): the house org rings the customer fee
+# as its own sales line -- department 'Bill Payments', category 'Other Charge', product_desc
+# 'ePay Service Charge', 4,176 lines / $16,592.00 in September 2026. LuxeLink rings NO separate fee
+# line at all (its bill-pay department 'Rtr' holds only 'Total Wireless RTR Wallet' and plan lines).
+# A code constant naming the Boost wording would therefore fix one tenant and leave the other exactly
+# as wrong -- the patchwork the house rules forbid. One fact, one home, per-org config, house default.
+HOUSE_FEE_DESCS = (FEE_DESC,)
+
+
+def resolve_fee_descs(tokens=None):
+    """THE fee vocabulary for an org: its configured product_desc tokens, else the house default.
+    Blank / non-list / empty config resolves to the house tuple, so an unset tenant is unchanged.
+    Tokens are compared lower-cased and by CONTAINMENT, exactly as `is_fee_desc` always has. PURE."""
+    if isinstance(tokens, (list, tuple, set)):
+        clean = tuple(str(t).strip().lower() for t in tokens if str(t or "").strip())
+        if clean:
+            return clean
+    return HOUSE_FEE_DESCS
+
 
 def _f(v):
     try:
@@ -30,16 +53,68 @@ def _norm(s):
     return str(s or "").strip().upper()
 
 
-def is_fee_desc(product_desc):
-    return FEE_DESC in str(product_desc or "").strip().lower()
+def is_fee_desc(product_desc, tokens=None):
+    """Is this sales line the customer bill-payment service fee? `tokens` is the org's configured
+    vocabulary (see `resolve_fee_descs`); omitted / empty keeps the historical house behaviour, so
+    every pre-existing caller is byte-identical. PURE."""
+    pl = str(product_desc or "").strip().lower()
+    return any(t in pl for t in resolve_fee_descs(tokens))
 
 
-def aggregate_system_fee(sales_rows, store_resolver):
+def aggregate_fee_cash(sales_rows, store_key, tokens=None, tender_cfg=None):
+    """{(store_key, day): {'fee','fee_cash','lines','lines_cash'}} over sales rows -- the customer
+    service FEE, split by tender so the CASH leg is separable from the card leg.
+
+    WHY THE CASH LEG MATTERS, and why this function exists at all (owner ask 2026-10-03). The fee is
+    cash the rep physically took from the customer and must declare, but it is NOT part of the
+    bill-payment metric: the house exec `bill_payment` rule carries `exclude_category:
+    ['other charge']`, which is the category the fee line sits in. That exclusion is RIGHT for
+    "bill payments $ / qty" -- a service charge is not a bill payment -- and WRONG for "how much
+    bill-payment cash is in the drawer", which is what the pickup netting basis must answer. So the
+    fee is aggregated HERE, beside the metric rather than inside it, and the two questions stop
+    being answered by one number.
+
+    `store_key(raw_store) -> key` is the caller's own canonicalisation (the SAME closure the bill-pay
+    map keys by, so the two maps join). `tender_cfg` is `_sales_cell_agg`'s tender config
+    ({'card','cash','classify'}); omitted ⇒ no split and `fee_cash` stays 0.0, never a guess that
+    the whole fee was cash. Voided lines are excluded, as the raw_sales aggregator always has. PURE."""
+    out = {}
+    descs = resolve_fee_descs(tokens)
+    for r in sales_rows or []:
+        if not is_fee_desc(r.get("product_desc"), descs):
+            continue
+        if str(r.get("voided") or "").strip().lower() in ("true", "1", "yes", "voided", "y"):
+            continue
+        d = str(r.get("trans_date") or "")[:10]
+        try:
+            code = store_key(r.get("store"))
+        except Exception:
+            code = None
+        if not (code and d):
+            continue
+        ext = _f(r.get("ext_price"))
+        slot = out.setdefault((code, d), {"fee": 0.0, "fee_cash": 0.0, "lines": 0, "lines_cash": 0})
+        slot["fee"] = round(slot["fee"] + ext, 2)
+        slot["lines"] += 1
+        if tender_cfg is not None:
+            try:
+                bucket = tender_cfg["classify"](r.get("tender_type"),
+                                                tender_cfg.get("card"), tender_cfg.get("cash"))
+            except Exception:
+                bucket = None
+            if bucket == "cash":
+                slot["fee_cash"] = round(slot["fee_cash"] + ext, 2)
+                slot["lines_cash"] += 1
+    return out
+
+
+def aggregate_system_fee(sales_rows, store_resolver, tokens=None):
     """{(store_code, trans_date): fee$} from raw_sales rows, fee lines only, store resolved to store_code.
-    `store_resolver(raw_store_string) -> store_code`. Voided lines are excluded. Pure."""
+    `store_resolver(raw_store_string) -> store_code`. `tokens` is the org's fee vocabulary (omitted ⇒
+    house default, byte-identical). Voided lines are excluded. Pure."""
     out = {}
     for r in sales_rows or []:
-        if not is_fee_desc(r.get("product_desc")):
+        if not is_fee_desc(r.get("product_desc"), tokens):
             continue
         if str(r.get("voided") or "").strip().lower() in ("true", "1", "yes", "voided", "y"):
             continue

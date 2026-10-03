@@ -312,6 +312,88 @@ def classify_tender(tender_type, card_tokens=None, cash_tokens=None):
     return "other"
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE POS BILL-PAYMENT CASH IN THE DRAWER -- ONE HOME, DEREFERENCED (owner ask 2026-10-03)
+#
+# THE CLASS OF DEFECT THIS CLOSES, named rather than its instance. "How much bill-payment cash did
+# the POS record for this store-day" was answered by reading the bill-pay map's raw `cash` key at
+# every call site. That key is the BILL lines' cash leg only: the customer SERVICE FEE is a separate
+# sales line which the exec `bill_payment` rule deliberately excludes (house config
+# `exclude_category: ['other charge']`, which is the fee line's own category). The exclusion is
+# correct for the bill-payment METRIC and wrong for the DRAWER, because the fee is cash the rep took
+# from the customer and must declare. Two questions, one number, so they drifted.
+#
+# MEASURED CONSEQUENCE (read-only, September 2026, house org): of 535 store-days only NINE agreed
+# between the rep's declaration and the POS figure. Adding the fee cash back closes 100 store-days
+# to the cent and 212 more to within a dollar -- 312 of 530, and $7,599 of the $18,657 total gap.
+# The residue is genuine: 218 store-days where the declaration really is wrong, which is what a
+# district manager should be chasing instead of a column that disagrees nine times out of ten.
+#
+# WHY IT MUST BE DEREFERENCED AND NOT COPIED: the pickup netting basis, the three-way recon's Leg B
+# and the envelope's own cash-from-sales column all answer this one question. A second copy of the
+# "add the fee back" arithmetic in any of them is the divergence the house rules forbid, so this is
+# the only place that arithmetic is written. `harness_billpay_fee_basis.py` section C FAILS THE BUILD
+# if a caller goes back to reading the raw key for a basis, or if a second copy appears.
+def pos_billpay_cash(slot):
+    """THE POS bill-payment CASH for one store-day: the bill lines' cash leg PLUS the customer
+    service-fee cash. `slot` is a `_billpay_sales_by_store_day` value ({'cash','fee_cash',...}).
+
+    ABSENCE IS NOT ZERO. `None` (no slot at all) returns None, so a caller can tell "the feed has
+    nothing for this store-day" from "the store-day had no bill-pay cash" -- the distinction the
+    netting basis turns into `basis='none'` rather than subtracting a fabricated zero. A slot that
+    EXISTS but carries no `fee_cash` contributes 0.0 for the fee, which is honest: the feed reported
+    for that store-day and held no fee cash in it. PURE."""
+    if slot is None:
+        return None
+    if not isinstance(slot, dict):
+        try:
+            return round(float(slot or 0.0), 2)
+        except (TypeError, ValueError):
+            return None
+    def _n(v):
+        try:
+            return float(v or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    return round(_n(slot.get("cash")) + _n(slot.get("fee_cash")), 2)
+
+
+def pos_billpay_total(slot):
+    """THE POS bill-payment TOTAL for one store-day, ALL tenders: the bill lines plus the customer
+    service fee. The three-way recon's Leg B grain, and the sibling of `pos_billpay_cash`.
+
+    WHY THE SAME CORRECTION APPLIES HERE. Leg A of that recon is the rep's declared
+    `epay_on_cash + epay_on_credit`, which INCLUDES the fee the customer handed over whichever way
+    they paid. Comparing it against the bill lines alone reports a variance on nearly every
+    store-day, exactly as the cash basis did. Same question, same fix, same home -- fixing only the
+    cash leg would have left this one wrong, which is the "one of them fixed and the other not"
+    defect the house rules name. None stays None: an absent leg is never a fabricated zero. PURE."""
+    if slot is None:
+        return None
+    if not isinstance(slot, dict):
+        try:
+            return round(float(slot or 0.0), 2)
+        except (TypeError, ValueError):
+            return None
+    def _n(v):
+        try:
+            return float(v or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    return round(_n(slot.get("amount")) + _n(slot.get("fee")), 2)
+
+
+def pos_billpay_fee_cash(slot):
+    """Just the service-fee cash leg of a store-day, for a report that must SHOW what was added back
+    rather than quietly folding it in. None when there is no slot. PURE."""
+    if not isinstance(slot, dict):
+        return None
+    try:
+        return round(float(slot.get("fee_cash") or 0.0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def ma_billpay_predicate(order_types=None, exact_products=None, product_tokens=None):
     """PURE factory: row → is this carrier DAILY-TX row a BILL PAYMENT? A row qualifies when its
     order_type is in the configured family (default {'Sales Order'}) AND its product matches the
@@ -371,9 +453,13 @@ def reconcile_billpay_three_way_days(declared_by_sd, sales_by_sd, processor_by_s
     tol = abs(float(tolerance_amt or 0.0))
 
     def _amt(m, k):
+        """Dereferences `pos_billpay_total` for a sales/processor SLOT, so Leg B carries the customer
+        service fee that Leg A's declaration already includes (owner ask 2026-10-03). A slot with no
+        `fee` key resolves to its `amount` exactly as before, so every pre-fee caller and fixture is
+        byte-identical."""
         v = m.get(k)
         if isinstance(v, dict):
-            return float(v.get("amount", 0.0) or 0.0)
+            return float(pos_billpay_total(v) or 0.0)
         return float(v or 0.0)
 
     keys = set(declared_by_sd)
