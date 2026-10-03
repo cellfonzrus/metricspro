@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 // ONE HOME for where the backend is (src/lib/apiBase.ts) and the site routing policy (site-routing.ts),
 // owner 2026-09-28, index §40. Locked by backend/harness_one_domain_lock.py.
-import { API_ENV, apiRewrites, directOrigin } from "./src/lib/apiBase";
+import { API_ENV, apiRewrites, directOrigin, productionConfigProblems, CONFIG_PROBLEM_CODES } from "./src/lib/apiBase";
+import type { ConfigProblemCode } from "./src/lib/apiBase";
 import { canonicalHostRedirects, connectSrc } from "./site-routing";
 
 // Frontend security headers (Security Controls Spec §4, item 11).
@@ -37,6 +38,46 @@ const SECURITY_HEADERS = [
   { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
   { key: "Content-Security-Policy-Report-Only", value: CSP_REPORT_ONLY },
 ];
+
+// A PRODUCTION build asserts the configuration it cannot work without, and FAILS rather than shipping a
+// deploy that renders and then cannot reach its API (owner incident 2026-10-03, index §40.10). The
+// development fallbacks in apiBase.ts stay — they are right for `next dev` and for a preview — but they
+// must not be reachable by a production build. The RULES live in the home; this file is the one caller, and
+// it owns the operator-facing sentences: it is build-time only and outside src/, so naming the platform's
+// variables here is correct where §19.38 forbids it in shipped page copy.
+//
+// One sentence per code the home can emit. A code with no sentence here fails the build (the home exports
+// CONFIG_PROBLEM_CODES and backend/harness_one_domain_lock.py checks every one of them against this map).
+const CONFIG_PROBLEM_MESSAGES: Record<ConfigProblemCode, (value: string) => string> = {
+  "backend-origin-unreachable": (v) =>
+    `the backend origin resolves to ${v || "(empty)"}, which no browser can reach: every /api/v1 and ` +
+    `/health request is proxied there, so the whole app would load and then fail every API call. Set ` +
+    `BACKEND_ORIGIN (preferred, server-only) or NEXT_PUBLIC_API_URL to the backend's https origin in the ` +
+    `production environment and redeploy.`,
+  "site-origin-not-bare": (v) =>
+    `NEXT_PUBLIC_SITE_URL is "${v}", which is not a bare https://host[:port]. The canonical-host redirect ` +
+    `installs only for a bare origin, so it would silently not install and the site metadata would carry ` +
+    `a wrong base.`,
+  "direct-origin-not-bare": (v) =>
+    `NEXT_PUBLIC_API_DIRECT_ORIGIN is "${v}", which is not a bare https://host[:port]. Direct-class calls ` +
+    `(multipart uploads and the long synchronous endpoints) are built from it, so they would be sent to ` +
+    `an address the browser cannot resolve.`,
+};
+
+const CONFIG_PROBLEMS = productionConfigProblems(API_ENV, process.env.VERCEL_ENV === "production");
+if (CONFIG_PROBLEMS.length) {
+  throw new Error(
+    "This production build is not configured and would ship an app that cannot reach its backend:\n" +
+    CONFIG_PROBLEMS.map((p) => `  - ${CONFIG_PROBLEM_MESSAGES[p.code](p.value)}`).join("\n") +
+    "\nFix the environment variables in the production environment and redeploy. See index §40.8/§40.10.",
+  );
+}
+// Every code the home can emit has a sentence above — a loud failure beats an "undefined" message.
+for (const code of CONFIG_PROBLEM_CODES) {
+  if (typeof CONFIG_PROBLEM_MESSAGES[code] !== "function") {
+    throw new Error(`next.config.ts: no message for config problem "${code}" (index §40.10)`);
+  }
+}
 
 const nextConfig: NextConfig = {
   // The browser only ever talks to this site's own host: /api/v1/* and /health are proxied to the

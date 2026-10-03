@@ -24,6 +24,13 @@ THIS FAILS THE BUILD WHEN:
   6. a backend endpoint that launches a browser (`require_browser_service()`) — synchronous work that can
      outrun the platform proxy's 120 s limit — is not matched by apiBase.ts's DIRECT_ROUTES. The set is
      READ from the backend routers, so an endpoint added tomorrow is covered without touching this file.
+  7. next.config.ts stops asserting the PRODUCTION configuration, or apiBase.ts stops exporting the rules
+     (index §40.10, owner incident 2026-10-03). Every fallback in apiBase.ts is written to keep a build
+     working when a variable is missing, which means a production build with no backend address silently
+     proxies the whole API to `http://localhost:8000` and ships: green deploy, rendering pages, every API
+     call dead. The fallbacks are right for `next dev` and for a preview and they stay; a PRODUCTION build
+     must assert what it cannot work without and FAIL. Without this rule the gate can be deleted and the
+     patchwork quietly returns.
 Each rule has a negative control below: the rule is run on a synthetic violation and must fire.
 
 Stdlib only, DB-free, no network: `python3 backend/harness_one_domain_lock.py`.
@@ -142,13 +149,37 @@ def config_wiring(files):
         (routing, r"VERCEL_ENV\s*!==\s*'production'\)\s*return\s*\[\]", f"{ROUTING}: the redirect must be production-only (previews/localhost untouched)"),
         (routing, r"permanent:\s*true", f"{ROUTING}: the canonical-host redirect must be permanent (308)"),
         (client, r"apiUrl\(\s*withOrgScope\(path\)\s*,\s*'direct'\s*\)", "src/lib/client.ts: apiUpload must ask apiUrl(..., 'direct') — uploads must not ride the proxy"),
+        # Rule 7 — the production configuration gate (index §40.10).
+        (home, r"export\s+function\s+productionConfigProblems\b",
+         f"{HOME} no longer exports productionConfigProblems — a misconfigured production build would ship silently again"),
+        (home, r"if\s*\(isLocalHost\(backend\)\)",
+         f"{HOME}: productionConfigProblems must refuse a backend origin no browser can reach"),
+        (cfg, r"productionConfigProblems\(\s*API_ENV\s*,\s*process\.env\.VERCEL_ENV\s*===\s*[\"']production[\"']\s*\)",
+         f"{CONFIG} must call productionConfigProblems(API_ENV, VERCEL_ENV === 'production')"),
+        (cfg, r"CONFIG_PROBLEMS\.length\s*\)\s*\{\s*\n?\s*throw\s+new\s+Error",
+         f"{CONFIG} must THROW on a production config problem — reporting it without failing the build ships the dark deploy anyway"),
+        (home, r"export\s+const\s+CONFIG_PROBLEM_CODES\b",
+         f"{HOME} must export CONFIG_PROBLEM_CODES so the caller's message map can be checked against it"),
     ]
+    # Every problem code the home can emit needs an operator sentence in the one caller. The codes stay in the
+    # home as DATA (index §19.38 keeps platform variable names out of shipped page copy); the sentences live in
+    # next.config.ts, which is build-time only and outside src/. A code with no sentence would throw
+    # "undefined" at the operator, so a missing one fails the build here.
+    for code in problem_codes(home):
+        if f'"{code}"' not in cfg and f"'{code}'" not in cfg:
+            bad.append(f"{CONFIG}: no operator message for config problem code {code!r} (it would read 'undefined')")
     for text, pattern, msg in need:
         if not re.search(pattern, text):
             bad.append(msg)
     if re.search(r"connect-src[^\"\n]*\*\.up\.", cfg):
         bad.append(f"{CONFIG}: a wildcard backend host is back in connect-src")
     return bad
+
+
+def problem_codes(home_text):
+    """The ConfigProblemCode values CONFIG_PROBLEM_CODES lists in the home."""
+    m = re.search(r"CONFIG_PROBLEM_CODES[^=]*=\s*\n?\s*\[(.*?)\]", home_text, re.S)
+    return re.findall(r"'([a-z][a-z0-9-]*)'", m.group(1)) if m else []
 
 
 # ── rule 6: every browser-launching endpoint is DIRECT ─────────────────────────────────────────────
@@ -276,6 +307,24 @@ def main():
     broken[CONFIG] = files.get(CONFIG, "") + "\n// \"connect-src 'self' https://*.up.railway.app\"\n"
     check("control 4b: a wildcard backend host back in connect-src is caught",
           any("wildcard" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[CONFIG] = files.get(CONFIG, "").replace("throw new Error", "console.warn")
+    check("control 7: a next.config.ts that only WARNS instead of failing the build is caught",
+          any("must THROW" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[CONFIG] = re.sub(r"productionConfigProblems\([^)]*\)", "[]", files.get(CONFIG, ""))
+    check("control 7b: a next.config.ts that stops calling the gate at all is caught",
+          any("productionConfigProblems(API_ENV" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[HOME] = files.get(HOME, "").replace("export function productionConfigProblems", "function productionConfigProblems")
+    check("control 7c: a home that stops exporting the gate is caught",
+          any("no longer exports productionConfigProblems" in v for v in config_wiring(broken)))
+    check("control 7d: the home's problem codes are read (the scan is not empty)", len(problem_codes(files.get(HOME, ""))) >= 3,
+          problem_codes(files.get(HOME, "")))
+    broken = dict(files)
+    broken[HOME] = files.get(HOME, "").replace("'direct-origin-not-bare']", "'direct-origin-not-bare', 'a-new-code-nobody-worded']")
+    check("control 7e: a NEW problem code with no operator message in the config is caught",
+          any("a-new-code-nobody-worded" in v for v in config_wiring(broken)))
     fake_router = ('router = APIRouter(prefix="/widgets")\n'
                    '@router.post("/{wid}/scrape")\n'
                    'def scrape(wid: str):\n'
