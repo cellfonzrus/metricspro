@@ -643,17 +643,35 @@ commissions, expenses.
   already worked is byte-identical (verified live: the four market filters and the exact-address
   selections hash-identical before and after). Proof: `harness_pl_filter_semantics.py` §D
   (10 checks, the code-selection regression among them).
-  **MEASURED over every value the picker can offer** (`storeops.stores.address` else the code, ∪
-  `store_mapping.store_address` — 58 values for the house org, September 2026): **30 of 58 bound NO
-  snapshot before the fix** — every one of the 27 codes, plus `1 S 60th St, Philadelphia` (the one
-  storeops address that differs from its snapshot key `1 S 60th street`), plus the two
-  `Cellular Services` company rows. After the fix only **3** do not bind exactly one store, and all
-  three are correct: the two company rows are company-level data (excused by dereferencing
-  `commcalc.companies`, §13b) and `228 N Wood Ave, Syosset, NY 11791` has no September store
-  snapshot. That 30-of-58 is why the owner reported the stores one at a time as he checked them
-  (5619 / 6149 / 6507 / 1710, then 723 / 1598 / 2701 / 3605 / 1 S 60th): nearly every store was
-  affected, and `1115 Liberty Ave` — the single store whose picker address equals its snapshot key
-  exactly — is the one he never reported.
+  **CORRECTED 2026-10-03, same day, against the CURRENT picker.** PR #361 was measured on a checkout
+  that predated **#354** (§13e, merged 13:56 the same day), which wired `/core/filter-options` to
+  `core.scope.build_store_options` and folded the house org's **58 raw spellings to 31 options, one
+  per physical store** — and its display pick prefers a STREET ADDRESS over a bare store code. So
+  #361's headline measurement ("30 of 58 bound nothing, every store code among them") describes the
+  **pre-#354 picker and is no longer the live blast radius**: a bare code does not reach this filter
+  any more, because the picker no longer offers one. Re-measured on current `main`, September 2026,
+  over the 31 options `build_store_options` actually returns:
+
+  | | options binding NO snapshot |
+  |---|---|
+  | before #361 | **4 of 31** |
+  | after #361 | **3 of 31** |
+
+  The one real store #361 fixed on the live picker is **`1 S 60th St, Philadelphia`** (B-60TH), whose
+  snapshot is keyed `1 S 60th street` — the picker's chosen display spelling and the snapshot key
+  differ, exact matching bound nothing, and that store's whole P&L read $0.00. The other three are
+  correct in both runs: the two `Cellular Services` rows are company-level data (excused by
+  dereferencing `commcalc.companies`, §13b) and `228 N Wood Ave, Syosset, NY 11791` has no September
+  store snapshot. #361's mechanism is unchanged and still right — resolving the selection through the
+  one canonical vocabulary is what makes a code, an alias, a variant spelling or a street number bind
+  — but the live defect it closed was ONE store, not nine.
+
+  **The lesson, which is the reusable part:** #354 and #361 fixed the SAME class (a picker offering a
+  spelling the resolver cannot bind) from opposite ends, hours apart, without either knowing of the
+  other — #354 narrowed what the picker offers, #361 widened what the matcher accepts. Both were
+  needed and neither is a duplicate, but a stale checkout is how two agents end up describing one
+  defect with two incompatible numbers. **Re-fetch `origin/main` before measuring a blast radius**,
+  and state the commit the measurement was taken on.
   **The DATA half:** the picker only offers codes because `storeops.stores.address` is NULL for
   those rows; backfilling it from `commcalc.store_mapping` removes the cause as well as the symptom.
 - **Wages estimate is salary-basis aware (fix 2026-09-02, owner: "employee salaries … not getting
