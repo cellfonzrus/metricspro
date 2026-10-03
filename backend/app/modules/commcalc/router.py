@@ -17209,6 +17209,321 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
                      "rep grain shown from computed commissions.") if not dlar_rows else None}
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# FOLLOW UP WITH MANAGERS (owner ask 2026-10-03) — the pending work each manager owns, aged.
+#
+# Owner: "all pending jobs assigned to the managers will be followed up via this module" + "alert
+# the management via a whats app message for all followup items with the managers".
+#
+# WHAT "ALL PENDING JOBS" MEANS IS NOT DEFINED HERE. It is `compliance_summary.CATEGORIES`, the
+# registry the Flags & Compliance dashboard already counts off, which `manager_followup.sources()`
+# dereferences. This glue adds only the item-level read each queue needs so an item can be
+# ATTRIBUTED to a manager and AGED — the two things a count cannot give.
+#
+# WHAT IS HONESTLY NOT ATTRIBUTABLE, SAID OUT LOUD RATHER THAN OMITTED. Three queues carry a store
+# and a date on their own rows and are attributed per manager. One (`ingest_quarantine`) carries a
+# RAW store string that by definition did not resolve to a store — that is what put it in
+# quarantine — so it can never be attributed to a store's manager, and saying otherwise would be a
+# guess. The rest are counted by the dashboard through in-process handlers that return a period's
+# rows rather than an ageable per-item queue; attributing them needs per-queue work this change does
+# not pretend to have done. Every one of them is listed in `not_attributed` on the payload and in
+# the digest footer, so a manager can never read this board as "that is everything".
+_FOLLOWUP_ITEM_CAP = 80000      # a ceiling, with `truncated` reported — never a silent partial roll-up
+
+# The three queues whose own rows carry a store and a date, so an item can be attributed to a
+# manager and aged. Together with `_FOLLOWUP_NOT_ATTRIBUTED` below this must cover the WHOLE
+# registry: a queue that is in neither is a queue nobody is told about, which is the silent-partial
+# defect this module exists to prevent. The harness fails the build if the two stop partitioning
+# `compliance_summary.CATEGORIES`, and `_followup_items` refuses to read a queue not declared here.
+_FOLLOWUP_ATTRIBUTED = ("commission_flags", "pay_discrepancy", "ops_chargebacks")
+
+_FOLLOWUP_NOT_ATTRIBUTED = {
+    "ingest_quarantine":
+        "the quarantined store string never resolved to a store, so it has no manager — that is "
+        "what quarantined it",
+    "attendance_exceptions": "counted per pay period by the attendance handler, not yet per manager",
+    "hours_approval": "counted as DM/HR totals by the payroll-approval handler, not yet per manager",
+    "approvals_pending": "counted by the approvals engine, not yet per manager",
+    "deposit_accountability": "counted as store-days by the accountability board, not yet aged",
+    "billpay_coverage": "counted as month exceptions by the coverage report, not yet aged",
+    "statement_staleness": "an org-level yes/no, not a per-manager queue",
+}
+
+
+def _followup_paged(q_factory, cap=_FOLLOWUP_ITEM_CAP):
+    """Page a PostgREST select to `cap` rows. Returns (rows, truncated). A read that fails returns
+    ([], True) — 'we could not see it', never ([], False) which would read as 'there is none'."""
+    rows, page = [], 0
+    while True:
+        try:
+            got = (q_factory().range(page * 1000, (page + 1) * 1000 - 1).execute().data) or []
+        except Exception as e:
+            print(f"WARN manager follow-up read failed on page {page}: {e}")
+            return rows, True
+        rows += got
+        if len(got) < 1000:
+            return rows, False
+        page += 1
+        if len(rows) >= cap:
+            return rows, True
+
+
+def _followup_items(client, org_id, period=None):
+    """Every pending item that can be attributed to a store and aged, as
+    `manager_followup.summarize` wants them. Returns (items, meta).
+
+    ONE read per queue, selecting only the columns the roll-up needs — a follow-up board that pulls
+    whole rows of a 67,000-row queue is a board nobody loads twice."""
+    items, meta = [], {"truncated": [], "unavailable": [], "read": {}}
+    # A QUEUE DOES NOT GET TO INVENT A STORE KEY. `flags` carries a real `store_code`; the
+    # discrepancy engine's `store` is the POS string it was reconciled under ('3 Palisade Ave
+    # Yonkers'), which no org-tree lookup can resolve to a manager. So every queue's store goes
+    # through the SAME `_store_code_resolver` the Daily-Targets actuals ride (§13) — the one home for
+    # "which store_code is this string" — instead of this module deciding for itself. Without it the
+    # 57 live follow-ups keyed on addresses would have resolved NO manager and the digest would have
+    # been silently empty, which is the kind of quiet nothing this module exists to prevent.
+    try:
+        _resolve_store = _store_code_resolver(client, org_id)
+    except Exception as e:
+        print(f"WARN manager follow-up could not build the store resolver: {e}")
+        _resolve_store = None
+
+    def _store_of(raw):
+        """The store_code for a queue's store string. An unresolvable string stays as it came rather
+        than being guessed at a code: it lands in the UNATTRIBUTED bucket and is REPORTED, which is
+        honest, where a guess would send a manager after a store that is not theirs."""
+        v = str(raw or "").strip()
+        if not v:
+            return None
+        if _resolve_store is None:
+            return v
+        try:
+            return _resolve_store(v) or v
+        except Exception:
+            return v
+
+    def _add(key, rows, truncated, store_key, date_key, label_key):
+        # A queue is read only if it is DECLARED attributable. Adding a read without declaring it
+        # would put a queue in neither list, and nobody would be told it was partial.
+        if key not in _FOLLOWUP_ATTRIBUTED:
+            raise RuntimeError(f"follow-up queue {key!r} is not declared in _FOLLOWUP_ATTRIBUTED")
+        meta["read"][key] = len(rows)
+        if truncated:
+            meta["truncated"].append(key)
+        for r in rows or []:
+            items.append({"source": key,
+                          "store_code": _store_of((r or {}).get(store_key)),
+                          "opened_at": (r or {}).get(date_key) if date_key else None,
+                          "label": (r or {}).get(label_key) if label_key else None,
+                          "ref": (r or {}).get("id")})
+
+    # Commission flags — the big one: 67,344 open for the house org on 2026-10-03, oldest 117 days.
+    rows, trunc = _followup_paged(
+        lambda: (client.schema("commcalc").table("flags")
+                 .select("id,store_code,created_at,flag_type")
+                 .eq("org_id", org_id).eq("status", flag_persist.STATUS_OPEN)
+                 .order("created_at", desc=False)))
+    _add("commission_flags", rows, trunc, "store_code", "created_at", "flag_type")
+
+    # Pay discrepancy — no created_at on the row, so it is aged by the activation date it is about,
+    # which is the honest available date. Rows without one age to unknown, never to today.
+    rows, trunc = _followup_paged(
+        lambda: (client.schema("commcalc").table("discrepancy_results")
+                 .select("id,store,activation_date,comp_type")
+                 .eq("org_id", org_id).eq("status", "open")))
+    _add("pay_discrepancy", rows, trunc, "store", "activation_date", "comp_type")
+
+    # Ops chargebacks awaiting a decision.
+    rows, trunc = _followup_paged(
+        lambda: (client.schema("commcalc").table("ops_chargeback")
+                 .select("id,store_code,created_at,reason")
+                 .eq("org_id", org_id).eq("status", "pending")))
+    _add("ops_chargebacks", rows, trunc, "store_code", "created_at", "reason")
+
+    meta["not_attributed"] = dict(_FOLLOWUP_NOT_ATTRIBUTED)
+    return items, meta
+
+
+@router.get("/manager-followup")
+def manager_followup_board(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """FOLLOW UP WITH MANAGERS — the pending work per store and queue, aged, with what is past the
+    escalation age first. Span-scoped to the caller's own stores through the SAME keyset every other
+    manager surface uses. READ-ONLY.
+
+    `not_attributed` names every queue whose open items this board cannot assign to a manager, with
+    the reason; `truncated` names any queue whose read hit the row ceiling, and `unattributed` counts
+    the items that carry no store at all. None of those is folded into the totals, and none is
+    hidden: a board that silently answered for seven of ten queues would be worse than no board."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.commcalc import manager_followup as _fu
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    today = _datetime.now(_timezone.utc).date().isoformat()
+    cfg = _fu.resolve_config(_followup_tenant_row(client, org_id))
+    items, meta = _followup_items(client, org_id)
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        # A span-scoped caller sees their own stores. Items with NO store are kept: they are the
+        # ones nobody owns, and hiding them from the person who could assign one is the defect.
+        items = [i for i in items
+                 if not i.get("store_code") or in_keyset(ks, i.get("store_code"))]
+    summary = _fu.summarize(items, today, config=cfg)
+    follow = _fu.followup_items(summary, config=cfg)
+    return {"as_of": today, "config": {k: (list(v) if isinstance(v, tuple) else v)
+                                       for k, v in cfg.items()},
+            "totals": summary["totals"], "by_source": summary["by_source"],
+            "items": follow, "labels": _fu.source_labels(),
+            "sources": [{"key": k, "label": lbl, "href": href, "meaning": d}
+                        for (k, lbl, href, d) in _fu.sources()],
+            "not_attributed": meta["not_attributed"], "truncated": meta["truncated"],
+            "read": meta["read"]}
+
+
+def _followup_tenant_row(client, org_id):
+    """The tenant's follow-up config row, or {} — its own defensive read (the mig-313 posture), so a
+    pre-migration schema resolves to the house defaults instead of failing the board."""
+    try:
+        rows = (client.schema("storeops").table("tenants").select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+async def _run_manager_followup_alerts(org_id_filter=None, respect_enabled=True,
+                                       respect_time=True, dry_run=False):
+    """The daily Follow Up With Managers sweep: ONE digest per manager of the work their stores owe,
+    oldest first, with anything past the escalation age also reaching the manager ABOVE them.
+    Recipients, dedup, channels and the due-time rule all come from `manager_digest`. NEVER raises."""
+    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
+                                             _lateness_already_sent, _lateness_record_sent)
+    from app.modules.commcalc import manager_digest as _md
+    from app.modules.commcalc import manager_followup as _fu
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    from app.core.base_url import base_url
+    root = get_supabase()
+    so = root.schema("storeops")
+    try:
+        tenants = so.table("tenants").select("*").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    wa_ok = whatsapp_meta.is_configured()
+    try:
+        link = (base_url() or "").rstrip("/") + "/commcalc/manager-followup"
+    except Exception:
+        link = None
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        cfg = _fu.resolve_config(t)
+        if respect_enabled and not cfg["enabled"]:
+            continue
+        now_local = _datetime.now(_timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date().isoformat()
+        if respect_time and not _md.due_now(now_local.strftime("%H:%M"), cfg["send_time"]):
+            continue
+        try:
+            items, meta = _followup_items(root, oid)
+        except Exception as e:
+            results.append({"org_id": oid, "error": str(e)[:200]})
+            continue
+        summary = _fu.summarize(items, today, config=cfg)
+        follow = _fu.followup_items(summary, config=cfg)
+        if not follow:
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "followups": 0,
+                            "totals": summary["totals"]})
+            continue
+        stores = {i["store_code"] for i in follow if i.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        labels = _fu.source_labels()
+        plan = _md.plan_digests(
+            follow, hierarchy, today, scope=_fu.ALERT_SCOPE,
+            build=lambda name, its: _fu.build_digest(name, its, totals=summary["totals"],
+                                                     labels=labels, link=link,
+                                                     unavailable=meta["truncated"]),
+            key_parts=_fu.key_parts, channels=cfg["channels"])
+        sent = skipped = 0
+        planned = []
+        for dg in plan["digests"]:
+            addrs = dg.get("addresses") or ({"email": dg["to"]} if dg.get("to") else {})
+            new_items = [it for it in dg["items"]
+                         if not _lateness_already_sent(so, oid, _fu.ALERT_SCOPE, it["ref_key"])]
+            if not new_items:
+                skipped += 1
+                planned.append({"to": dg["to"], "addresses": addrs, "already_sent": True})
+                continue
+            built = _fu.build_digest(dg["to_name"], new_items, totals=summary["totals"],
+                                     labels=labels, link=link, unavailable=meta["truncated"])
+            planned.append({"to": dg["to"], "addresses": addrs, "already_sent": False,
+                            "subject": built["subject"],
+                            "items": [{"store_code": i["store_code"], "source": i["source"],
+                                       "open": i["open"], "oldest_days": i["oldest_days"],
+                                       "band": i["band"], "escalated": i["escalated"]}
+                                      for i in new_items]})
+            if dry_run:
+                continue
+            delivered = []
+            if "email" in addrs and email_ok:
+                try:
+                    await email_resend.send_email(to=addrs["email"], subject=built["subject"],
+                                                  html=built["html"])
+                    delivered.append("email")
+                except Exception as e:
+                    print(f"WARN manager follow-up email to {addrs['email']} failed: {e}")
+            if "whatsapp" in addrs and wa_ok:
+                try:
+                    # data=b"" is the text-only rung: a business-initiated 10:30 message takes the
+                    # approved template, never a free-form text Meta accepts and silently drops.
+                    res = await whatsapp_meta.send_document_detailed(
+                        addrs["whatsapp"], b"", "text/plain", "followup.txt", built["text"])
+                    if res.get("message_id"):
+                        delivered.append("whatsapp")
+                except Exception as e:
+                    print(f"WARN manager follow-up WhatsApp to {addrs['whatsapp']} failed: {e}")
+            if delivered:
+                for it in new_items:
+                    _lateness_record_sent(so, oid, _fu.ALERT_SCOPE, it["ref_key"],
+                                          addrs.get("email") or addrs.get("whatsapp"))
+                sent += 1
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped,
+                        "followups": len(follow),
+                        "escalated": sum(1 for i in follow if i["escalated"]),
+                        "totals": summary["totals"], "truncated": meta["truncated"],
+                        "send_time": cfg["send_time"], "channels": list(cfg["channels"]),
+                        "escalate_after_days": cfg["escalate_after_days"],
+                        "email_configured": email_ok, "whatsapp_configured": wa_ok,
+                        "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+@router.post("/manager-followup/alerts/run-due")
+async def manager_followup_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated HOURLY pg_cron entrypoint. Each tick asks every switched-on tenant whether its
+    configured send time has arrived in its own local day; `alert_log` dedup stops every later tick.
+    Mirrors the zero-sales and ePay sweeps exactly — same dedup table, same recipient rule."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_manager_followup_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/manager-followup/alerts/run-now")
+async def manager_followup_run_now(send: bool = False, authorization: str = Header(default=""),
+                                   org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable and time gates. DEFAULTS
+    TO A DRY RUN — it returns exactly who WOULD be messaged, on which channels, and about which
+    stores and queues, sending nothing. Dedup is always honoured."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_manager_followup_alerts(org_id_filter=org_id, respect_enabled=False,
+                                              respect_time=False, dry_run=not send)
+
+
 @router.get("/compliance-summary")
 def get_compliance_summary(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Flags & Compliance dashboard summary (owner directive 2026-09-03: "every flag and

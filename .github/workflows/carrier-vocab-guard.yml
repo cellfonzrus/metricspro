@@ -381,6 +381,10 @@ on:
       - "backend/app/modules/closing/billpay_declaration_alerts.py"
       - "backend/app/modules/commcalc/manager_digest.py"
       - "database/migrations/1043_billpay_declaration_alerts.sql"
+      - "backend/harness_manager_followup.py"
+      - "backend/app/modules/commcalc/manager_followup.py"
+      - "backend/app/modules/commcalc/compliance_summary.py"
+      - "database/migrations/1044_manager_followup.sql"
       - "backend/app/modules/commcalc/epay_fee_recon.py"
       - "backend/app/modules/commcalc/metric_recon.py"
       - "database/migrations/1042_billpay_fee_product_desc.sql"
@@ -641,6 +645,9 @@ jobs:
       - name: Run the bill-pay declaration-alert lock (only a person's problem is alerted; a store-day with no POS figure is refused by name and counted; WhatsApp takes the window-safe path — index §47.13)
         working-directory: backend
         run: python3 harness_billpay_declaration_alerts.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Follow Up With Managers lock (the pending-job vocabulary is dereferenced from the compliance registry; an age we cannot read is unknown, never 0; unowned work is counted, not dropped; the dedup key re-escalates on ageing — index §47.14)
+        working-directory: backend
+        run: python3 harness_manager_followup.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

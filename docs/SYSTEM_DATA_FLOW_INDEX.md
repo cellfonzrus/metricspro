@@ -5407,6 +5407,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.zero_sales_config` (mig `1016`, **NOT applied**; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) |
 | `storeops.alert_log` — **scope `'billpay_declaration'`** (mig `433` table, no new table) | `closing/router._run_billpay_declaration_alerts` via the SAME `_lateness_record_sent` | `_lateness_already_sent`; the ref_key SPELLING is `manager_digest.ref_key`, the third scope to dereference it. A row is written ONLY when a channel actually delivered, so a dead channel cannot mark a finding escalated (§47.13) |
 | `storeops.tenants` — **the bill-pay declaration-alert config** (mig `1043`: `billpay_declaration_alerts_enabled` / `_alert_time` / `_alert_tolerance` / `_alert_channels` / `_alert_lookback_days` / `_alert_last_run` / `_alert_last_detail`; house defaults in `billpay_declaration_alerts.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `billpay_declaration_alerts.resolve_config` → `_run_billpay_declaration_alerts`; the send time is compared by `manager_digest.due_now` (§47.13) |
+| `storeops.alert_log` — **scope `'manager_followup'`** (mig `433` table, no new table) | `commcalc/router._run_manager_followup_alerts` via the SAME `_lateness_record_sent` | `_lateness_already_sent`; the ref_key SPELLING is `manager_digest.ref_key`, the fourth scope to dereference it. The key tail is (store, queue, age BAND), so a follow-up re-escalates when the work AGES but not when its count ticks by one. A row is written ONLY when a channel actually delivered (§47.14) |
+| `storeops.tenants` — **the Follow Up With Managers config** (mig `1044`: `manager_followup_enabled` / `_time` / `_channels` / `_escalate_after_days` / `_show_oldest` / `_min_items` / `_last_run` / `_last_detail`; house defaults in `manager_followup.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `manager_followup.resolve_config` → `_run_manager_followup_alerts`; the send time is compared by `manager_digest.due_now` (§47.14) |
 | `storeops.alert_log` — **scope `'zero_sales'`** (mig `433` table, no new table) | `router._run_zero_sales_alerts` via the EXISTING `storeops.router._lateness_record_sent` | `_lateness_already_sent` — dedup per (recipient, store, last-zero-day, grain:scope); the ref_key SPELLING is `manager_digest.ref_key`, the one home both this and scope `'epay_discrepancy'` dereference (§15z) |
 | `storeops.shifts` — **as the TRADING-DAY fact** (§15z) | storeops scheduling (§14) | THE one read on this path is `labour_coverage.load_shift_hours_range` (mig-free); `load_shift_hours` (month grain, §4 labour coverage) delegates to it, and `router._zero_sales_core` calls it for the range grain. `targets_engine.scope_hours_by_day` (§5) is the same fact for Daily Targets' `open_days`. There is NO store trading-calendar table |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
@@ -5604,6 +5606,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /sales-report` | `15792` | §3 |
 | `GET /ma-commission/summary` — per-store MA roll-up. `by_store[].store` and the store picker name the real STORE via `ma_store_pnl.canonical_store_index` (mig 314); `spiff_by_month` is the EARNED ladder and `legs.received` the CASH ladder, both from the one home, neither with a hardcoded month count | `router.ma_commission_summary` | §4a |
 | `POST /closing/billpay-declaration-alerts/run-due` (secret-gated HOURLY cron; each tenant's own HH:MM compared in the handler) · `POST /closing/billpay-declaration-alerts/run-now?send=` (manager/admin, defaults to a DRY RUN) | `closing/router.billpay_declaration_alerts_run_due` / `_run_now` → `_run_billpay_declaration_alerts` + `_billpay_declaration_store_days` (joins `billpay_pickup.declared_billpay_in_force` with `metric_recon.pos_billpay_cash`) | §47.13 the morning declaration-exception digest (READ-ONLY; `books_to` = []) |
+| `GET /commcalc/manager-followup` (org- and span-scoped; items with NO store survive the span filter) · `POST /commcalc/manager-followup/alerts/run-due` (secret-gated HOURLY cron; each tenant's own HH:MM compared in the handler) · `POST /commcalc/manager-followup/alerts/run-now?send=` (manager/admin, defaults to a DRY RUN) | `commcalc/router.manager_followup_board` / `_run_due` / `_run_now` → `_run_manager_followup_alerts` + `_followup_items` (reads the three attributable registry queues, every store string through `_store_code_resolver`); assembly is PURE in `commcalc/manager_followup.py` | §47.14 Follow Up With Managers (READ-ONLY; `books_to` = []) |
 | `GET /commcalc/zero-sales` (`date_from`/`date_to`/`market`/`store`/`rep`) · `GET/PUT /commcalc/zero-sales-config` · `POST /commcalc/zero-sales/alerts/run-due` (secret-gated cron) · `POST /commcalc/zero-sales/alerts/run-now?send=` (defaults to a DRY RUN) | `router.zero_sales_report` / `get_zero_sales_config` / `put_zero_sales_config` / `zero_sales_alerts_run_due` / `zero_sales_alerts_run_now` → `_zero_sales_core` + `_run_zero_sales_alerts` | §15z Zero sales (READ-ONLY; `books_to` = []) |
 | `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
@@ -16163,6 +16166,109 @@ C the digest (both renderings agreeing, the refusal footer, rows counted not dro
 identity (a class CHANGE is news, not a duplicate), E the due-time rule, F channels incl. the
 byte-identity of the email-only callers, G the migration tied to the code, H RULE TWO and the armed
 controls.
+
+### 47.14 FOLLOW UP WITH MANAGERS — the pending work each manager owns, aged (owner 2026-10-03, mig `1044`)
+
+Owner, verbatim: *"then alert the management via a whats app message for all followup items with the
+managers - this will be a seprate module - Follow Up with Managers , all pending jobs assigned to the
+managers will be followed up via this module"*.
+
+**WHAT "ALL PENDING JOBS" MEANS IS NOT DEFINED BY THIS MODULE.** It is
+`commcalc/compliance_summary.CATEGORIES` — the registry the Flags & Compliance dashboard (§41) already
+counts off — which `manager_followup.sources()` **dereferences**. A second list of what counts as a
+pending job is the duplicate defect the index rules forbid, so there is not one, and
+`harness_manager_followup.py` §B4–B5 **fails the build** if a queue label or key is ever spelled inside
+this module. What the follow-up adds is the two things a COUNT cannot give: **who owns an item**, and
+**how long it has been pending**.
+
+**NOTHING NEW WAS BUILT THAT ALREADY EXISTED.** The duplicate check, stated for the build gate:
+
+| What the ask needs | Where it already lived | What was added |
+|---|---|---|
+| what counts as a pending job | `commcalc/compliance_summary.CATEGORIES` | nothing — dereferenced |
+| the recipients (DM ∪ above) | `commcalc/manager_digest.recipients_for` → `storeops/org_chain` | nothing |
+| one digest per manager, dedup, the `ref_key` spelling, the unreachable-recipient skip | `commcalc/manager_digest.plan_digests` | nothing — the `channels` argument landed in §47.13 |
+| the dedup rows | `storeops.alert_log` + `_lateness_already_sent` / `_lateness_record_sent` | scope `'manager_followup'`, the fourth scope on the same table |
+| a tenant-local HH:MM send time on an hourly tick | the mig-`433` convention + `manager_digest.due_now` | nothing |
+| "which store_code is this string" | `_store_code_resolver` (§13) | nothing — dereferenced per queue |
+| the full list of any queue's items | the queue's own page, already linked from the registry | nothing — the digest LINKS it rather than reprinting it |
+| WhatsApp that survives Meta's window | `whatsapp_meta.send_document_detailed` | nothing |
+
+**WHY IT IS A ROLL-UP AND NOT A TO-DO LIST — measured, not assumed** (read-only, house org,
+2026-10-03):
+
+| | |
+|---|---|
+| open items that can be attributed and aged | **76,094** |
+| … of which more than 90 days old | **20,304** |
+| the oldest | **324 days** |
+| open items carrying NO store, so no owner | **14,372** |
+
+A module that WhatsApps a district manager 76,094 rows is not a follow-up, it is a denial of service.
+So a follow-up is per **(manager × queue)**: how many are open, how old the oldest is, which **age
+band** it sits in, and the few oldest by name — with the full list on the queue's own page. The
+**escalation** is what makes it accountability rather than a newsletter: work past
+`manager_followup_escalate_after_days` appears in the digest of the manager **above** the owner too.
+
+**THE FINDING IT REFUSES TO HIDE.** 14,372 open items carry no store at all and therefore cannot be
+assigned to any manager. They are counted as `UNATTRIBUTED` — a VALUE, not a dropped row — and printed
+in **every** digest and payload footer. Quietly excluding a fifth of the backlog because it has no
+owner would make the module lie by omission; an unowned backlog is precisely what a follow-up module
+exists to surface. That is the §15z footer rule applied to ownership.
+
+**AND WHAT IS HONESTLY NOT ATTRIBUTABLE, SAID OUT LOUD.** Three of the ten registry queues carry a
+store and a date on their own rows (`commission_flags`, `pay_discrepancy`, `ops_chargebacks`) and are
+attributed per manager. The other seven are reported in `not_attributed` **with the reason each**:
+`ingest_quarantine`'s store string by definition never resolved to a store (that is what quarantined
+it), and the rest are counted by the dashboard through handlers that return a period's rows rather
+than an ageable per-item queue. `_FOLLOWUP_ATTRIBUTED` + `_FOLLOWUP_NOT_ATTRIBUTED` must **partition
+the whole registry** — the harness fails the build otherwise (§I15–I15c), and `_followup_items`
+refuses to read a queue that is not declared — so a queue can never be silently neither.
+
+**AN AGE WE CANNOT READ IS `unknown`, NEVER 0.** `age_days` returns `None` for an unreadable or
+missing date and `age_band(None)` is `BAND_UNKNOWN`, not the freshest band — calling an unageable row
+fresh is how a 324-day-old item hides in the `0-7` bucket. A future-dated row (clock skew) is unknown
+for the same reason. A group where nothing could be aged reports `oldest_days: None`, which renders as
+"age unknown" and never as "opened today". **Unknown age never escalates** either: chasing a manager
+over an age we could not read would send them after work that might be a day old. Same class as
+§47.8 "absence is never zero", applied to time.
+
+**THE DEDUP KEY IS (store, queue, age BAND)** — not the count. A follow-up **re-escalates when the
+work ages into an older band**, which is the point of a follow-up, but not every day for the same work
+in the same band, because a count that ticks by one is not news. A dedup row is written **only when a
+channel actually delivered**, so a dead channel cannot mark a follow-up sent and hide it tomorrow.
+
+**NOTHING HARDCODED, literally** (mig `1044`, per-tenant columns on `storeops.tenants`, each with a
+house default in `manager_followup.HOUSE_CONFIG` so the sweep resolves identically before the
+migration is applied): `manager_followup_enabled` (**FALSE** — the mig-905 safe-by-default posture,
+nothing sends on deploy) · `manager_followup_time` (`'10:30'`) · `manager_followup_channels`
+(`["whatsapp","email"]`, canonicalised by `normalize_channels` so two tenants who typed the same
+channels in a different order cannot behave differently) · `manager_followup_escalate_after_days`
+(`30`) · `manager_followup_show_oldest` (`5`) · `manager_followup_min_items` (`1`). Every unusable
+value degrades to its default rather than to "never follow up" or "follow up on everything" — an
+escalation age of `0` can never make every item escalate the day it opens. RULE TWO holds in the code:
+no store, tenant, carrier or product name appears in an executable line (§I17, scanned with prose
+stripped, with an armed control).
+
+**Endpoints.** `GET /commcalc/manager-followup` — the board: per (store × queue) with the escalated
+first, the registry's own labels and links, `totals`, `not_attributed`, `truncated` and `read`.
+Org-scoped and span-scoped through the same `scope_keyset` / `in_keyset` every manager surface uses —
+**but items with no store survive the span filter**, because the person who could assign an owner is
+exactly who must see them. `POST /commcalc/manager-followup/alerts/run-due` (secret-gated hourly
+pg_cron; the per-tenant minute is compared in the handler, so ONE job serves every tenant in every
+timezone) and `POST /commcalc/manager-followup/alerts/run-now?send=` (manager/admin, **defaults to a
+DRY RUN** returning exactly who would be messaged, on which channels, about which stores and queues).
+A queue whose read fails returns `([], True)` — "we could not see it", never "there is none".
+
+**Live dry run** (house org, 2026-10-03, read-only, nothing sent): 57 follow-ups, 56 past escalation,
+**5 digests** resolved to real managers carrying both an email and a WhatsApp number from the org tree.
+
+**Proof.** `harness_manager_followup.py` (119 checks, stdlib only, DB-free), wired into the
+carrier-vocab-guard job. Sections: A config degradation, B the vocabulary dereference lock, C ageing
+and the unknown band, D the roll-up with unowned work counted, E escalation and ordering, F the digest
+(both renderings carrying the same facts), G the dedup key, H migration `1044` tied to the code,
+I no second fan-out / dedup / scheduler, RULE TWO, and the armed controls — verified to bite by
+breaking the store-resolver dereference and the `plan_digests` call and watching §I12 and §I1 fail.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 
