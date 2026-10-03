@@ -586,6 +586,24 @@ check("J52' the API also VALIDATES against the home, so a typo is rejected rathe
       "a silent 'unknown'",
       "not in _mr_cfg.FEE_POLICIES" in _ccr)
 
+# -- J60-J62 the POLICY and the VOCABULARY are two facts, and neither grew a third reader ----------
+# 19.42's own lock (harness_billpay_fee_one_home_lock.py, merged 2026-10-03) owns "WHICH product_desc
+# is the fee". This one owns "IS there a fee". Complementary, not duplicate -- and these checks keep
+# them from quietly becoming the same thing, or from each sprouting its own read of one column.
+check("J60 the two facts live in DIFFERENT columns, so the two locks cannot drift into guarding the "
+      "same thing",
+      "billpay_fee_charged" in _ccr and "billpay_fee_product_desc" in _ccr)
+check("J61 the settings screen reads the DECLARED vocabulary off the ONE whole-row config load, not "
+      "a third round trip for the same cell (4b.1)",
+      "billpay_fee_descs_raw" in _ccr
+      # FIVE: derived once, named as its own key on the returned config (two on that line), then
+      # read by the GET and by the PUT's untouched-field path. A SIXTH would be a new reader.
+      and code_only("app/modules/commcalc/router.py").count("billpay_fee_descs_raw") == 5,
+      code_only("app/modules/commcalc/router.py").count("billpay_fee_descs_raw"))
+check("J62 the RAW cell and the RESOLVED vocabulary are both derived from that one read, so "
+      "'inheriting the house wording' stays distinguishable from 'pinned to it'",
+      "billpay_fee_descs_raw" in _ccr and "resolve_fee_descs" in _ccr)
+
 # ── J53-J59 migration 1046 is tied to the code it configures ──────────────────────────────────────
 _m46 = open("../database/migrations/1046_billpay_fee_charged.sql").read()
 check("J53 it adds the column the reader reads, additively and idempotently",

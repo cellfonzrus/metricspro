@@ -13618,6 +13618,14 @@ def _accessory_config_uncached(client, org_id):
         billpay_fee_descs = _fr_cfg.resolve_fee_descs(_ac.get("billpay_fee_product_desc") if got else None)
     except Exception:
         billpay_fee_descs = ()
+    # THE RAW CELL IS CARRIED TOO, beside the resolved tuple and off the SAME read (owner ask
+    # 2026-10-03). The settings screen needs what this org actually DECLARED, because "inheriting the
+    # house wording" and "pinned to the same words" resolve identically and only one of them follows
+    # a house change. Deriving it here rather than in a reader of its own keeps the column at one
+    # whole-row read (§4b.1) instead of a third round trip for the same cell.
+    _fee_raw = _ac.get("billpay_fee_product_desc") if got else None
+    billpay_fee_descs_raw = ([str(t).strip() for t in _fee_raw if str(t or "").strip()]
+                             if isinstance(_fee_raw, (list, tuple)) else [])
     catalog_classifier = None
     if catalog_classify_enabled:
         try:
@@ -13651,6 +13659,7 @@ def _accessory_config_uncached(client, org_id):
             "definition_drives_pay": definition_drives_pay,
             "gp_acc_basis": gp_acc_basis,
             "billpay_fee_descs": tuple(billpay_fee_descs),
+            "billpay_fee_descs_raw": billpay_fee_descs_raw,
             "catalog_classifier": catalog_classifier}
 
 
@@ -25309,7 +25318,7 @@ def get_accessory_config(org_id: str = ORG_ID):
             # wording) and the POLICY (mig 1046 — whether there is a fee at all). Both are read by
             # the same defensive readers the sweeps use, so a pre-migration schema renders the
             # defaults instead of failing the settings screen.
-            "billpay_fee_product_desc": _billpay_fee_desc_raw(sb(), org_id),
+            "billpay_fee_product_desc": c.get("billpay_fee_descs_raw") or [],
             "billpay_fee_charged": _billpay_fee_policy(sb(), org_id),
             "billpay_fee_policies": list(_mr_cfg.FEE_POLICIES),
             "billpay_fee_policy_default": _mr_cfg.HOUSE_FEE_POLICY}
@@ -25487,7 +25496,7 @@ def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, autho
         row["billpay_fee_product_desc"] = [str(x).strip() for x in (body.billpay_fee_product_desc or [])
                                            if str(x).strip()]
     else:
-        row["billpay_fee_product_desc"] = _billpay_fee_desc_raw(client, org_id)
+        row["billpay_fee_product_desc"] = cur.get("billpay_fee_descs_raw") or []
     # BILL-PAYMENT FEE POLICY (mig 1046) — does this org charge one at all? PICK-DON'T-TYPE: the
     # vocabulary is the one home's `FEE_POLICIES`, never a list spelled here, and a value outside it
     # is REJECTED rather than stored, because a typo would resolve to 'unknown' and quietly park
@@ -31580,20 +31589,6 @@ def _billpay_fee_tokens(client, org_id):
     except Exception:
         cfg = None
     return _fr.resolve_fee_descs(cfg)
-
-
-def _billpay_fee_desc_raw(client, org_id):
-    """THIS org's own configured fee-line wording, exactly as stored — `[]` when it has configured
-    none and is therefore inheriting the house vocabulary. The settings screen needs the RAW list
-    rather than `_billpay_fee_tokens`' resolved tuple, because "inheriting" and "pinned to the same
-    words" look identical once resolved and only one of them follows a house change. NEVER raises."""
-    try:
-        row = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
-                           lambda q: q.eq("org_id", org_id)).row or {}
-        cell = row.get("billpay_fee_product_desc")
-    except Exception:
-        cell = None
-    return [str(t).strip() for t in cell if str(t or "").strip()] if isinstance(cell, (list, tuple)) else []
 
 
 def _billpay_fee_policy(client, org_id):

@@ -16731,6 +16731,16 @@ while the feed is present yields an honest `0.0` — further from the truth than
 surfaced for approval rather than slipped in beside this change. Nothing moves meanwhile: the gate bites
 only on a declared `yes`, and no tenant has declared one. The excusal is written at the call site.
 
+### 47.15f Two fee facts, two locks, no overlap
+
+§19.42 landed the same day and locks **which `product_desc` IS the fee** (`epay_fee_recon` as the one
+registry, every reader through `resolve_fee_descs`). §47.15 locks **whether there is a fee at all**.
+Different columns (`billpay_fee_product_desc` vs `billpay_fee_charged`), different homes, complementary —
+and J60–J62 of `harness_billpay_fee_basis.py` fail the build if the two ever drift into guarding one
+thing, or if either sprouts a second read of its column. The settings screen's "what it is called" field
+reads the **declared** cell off §19.42's own whole-row load (`billpay_fee_descs_raw`, derived beside the
+resolved tuple), not a third round trip — the §4b.1 rule, pinned by J61.
+
 ### 47.15e Lock
 
 `harness_billpay_fee_basis.py` sections **J** (the policy, 60 checks) and **K** (the controls), run by
