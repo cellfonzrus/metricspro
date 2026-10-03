@@ -29,7 +29,7 @@ import Link from 'next/link'
 import { Fragment, useCallback, useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { TENANT_NAV, canSeeItem } from '@/lib/rbac'
+import { TENANT_NAV, canSeeItem, navPath } from '@/lib/rbac'
 import type { NavItem } from '@/lib/rbac'
 
 // ── THE REGISTRY ────────────────────────────────────────────────────────────────────────────────
@@ -41,6 +41,8 @@ export type ScreenKey =
   | 'employees' | 'store_setup' | 'sales_report_settings' | 'connectors' | 'vision_settings'
   | 'comm_onboarding' | 'onboarding_intake' | 'menu_layout' | 'dashboard_designer' | 'target_settings'
   | 'org_structure' | 'billing_usage'
+  // HR → Employees & Pay — where pay is SET, per row (index §19.35 / §19.40). A tab, so its href is a deep link.
+  | 'employees_pay'
   // the CONSUMERS of a landing table (backend landing_identity.CONSUMERS names these keys — "this upload
   // will show in …" on every upload surface, and the way back from an empty report; 2026-09-20)
   | 'upload_files' | 'exec_mtd' | 'sales_report' | 'gp_report' | 'daily_targets' | 'rep_commissions' | 'sales_recon'
@@ -157,6 +159,11 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
     blurb: 'Org Structure: the reporting tree — which unit each manager and employee sits in',
     aliases: ['Org Structure'],
   },
+  employees_pay: {
+    href: '/hr?tab=employees', label: 'HR → Employees & Pay',
+    blurb: 'HR → Employees & Pay: set each person\'s pay (hourly or salary), lunch and face settings — one Save per row',
+    aliases: ['HR → Employees & Pay', 'Employees & Pay'],
+  },
   billing_usage: {
     href: '/admin/billing-usage', label: 'Billing — Usage & Pricing',
     blurb: 'Billing — Usage & Pricing: your company\'s plan, metered usage and statements',
@@ -199,10 +206,8 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
   // reported to the owner as a named destination with nothing behind it.
 }
 
-/** The NAV href a destination gates against (strip #anchor and any query). */
-function gateHref(href: string): string {
-  return String(href || '').split('#')[0].split('?')[0]
-}
+// The NAV href a destination gates against is `rbac.navPath` (the #anchor and the query removed) — ONE
+// home, shared with the sidebar's deep-link entries (index §19.40); this file kept its own copy until then.
 
 // ── THE GATE ────────────────────────────────────────────────────────────────────────────────────
 /**
@@ -219,7 +224,7 @@ export function useCanOpen(): (href: string) => boolean {
     return m
   }, [])
   return useCallback((href: string) => {
-    const item = byHref.get(gateHref(href))
+    const item = byHref.get(navPath(href))
     if (!item) return false
     if (rbacEnabled === false || !session) return true
     return canSeeItem(permissions, item)

@@ -3396,7 +3396,12 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `_run_closing_missing_alerts` (a derived store has nobody to nag) and
   `attention_providers._p_closing_stale_stores` (a derived store's gap is reported as
   `closing_derivation_stale` — the derivation not having run — not as "selling but not submitting").
-  The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due`) takes
+  The sweep `_derive_closing_day` (`POST /closing/derive-day`, nightly `POST /closing/derive-due` (put on its clock by mig `1040`, STEP 2 — shipped unscheduled
+  in 1035 and so had never run once; a sweep called nightly and scheduled nowhere does not exist),
+  retroactive `POST /closing/derive-range` over a bounded span (run from Store Setup's own
+  "Fill in past days", Preview first — the endpoint without a button left a hand-made HTTP call as the
+  only route) — the SAME per-day sweep run once per
+  day, oldest first, so a backfill has no second copy of the derivation rules) takes
   the day's money + counts from the SHARED `_b2b_day` / `_b2b_counts_by_store` (no second derivation)
   and writes a REAL `daily_closing` row marked `source='b2b_derived'` through ONE writer
   (`_derive_write`), which is why cash pickup, envelopes, deposit accountability, the five-stage chain
@@ -4255,6 +4260,11 @@ as a market-grant keyset member; ambiguity fails closed):
   **A 2xx is not proof (§19.37, 2026-10-02):** each slice declares `echo` (the reply keys carrying the stored
   values) and `rowSave.runRowSave` counts a slice saved only when `notPersisted` finds nothing — a field the server
   names in `pay_fields_ignored`, leaves out, or stored differently fails the save by name. Lock §8 of the same harness.
+- **Employees & Pay is a MENU ITEM (§19.40, owner 2026-10-02).** NAV `Payroll & HR` → **Employees & Pay** →
+  `/hr?tab=employees` — a deep-link entry that gates exactly as `/hr` (`rbac.canSeeItem` delegates via
+  `deepLinkPage`); `/hr`'s tab lives in the URL through the one reader `lib/useUrlTab.ts`; the `/payroll` hub has the
+  same tile; ScreenLink `employees_pay` links every "HR → Employees & Pay" in copy. StoreOps Admin's no-pay tab is
+  now **Employees**. Lock `backend/harness_nav_deep_link_lock.py`, proof `frontend/prove_nav_deep_link.mjs`.
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
@@ -5177,6 +5187,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
+| `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
+| `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1037`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1037` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
 | *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
 | Actor columns stamped by `router._caller_uid` — `installment_category_rule.updated_by` (**UUID**, mig 245), `plan_installment_schedule.updated_by` + `plan_installment_schedule_audit.changed_by` (mig 210), `commission_org_config.updated_by` (mig 201), `discrepancy_results.appealed_by` (mig 947), `commission_payout_ledger.recorded_by` (mig 267), `ingest_store_guard.updated_by` / `ingest_store_quarantine.decided_by` (mig 280), `targets.updated_by` (mig 006), `financing_target.updated_by` (mig 272) — **who did this: a uid or NULL, never a sentinel** (§19.34) | the plan-installment / category / matcher / payout-config / expected-commission editors, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, the ingest-guard + targets + financing-target saves — all via ONE helper `_caller_uid` (`_mpc_who` / `_xc_who` / `_agency_who` dereference it) | the UI through ONE display rule `frontend/src/lib/actor.ts::actorLabel` (NULL / legacy `'web'` → "system"); lock `harness_actor_uid_lock.py` |
@@ -5293,6 +5306,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `mgmt_confirmed(+by/at)` (mig `943`) | `POST /closing/deposit-mgmt-confirm` (management-gated confirm/revoke) | `GET /closing/deposit-accountability` (green-day rule), `GET /closing/deposit-recon` `pickup_deposit` line item (§12 deposit accountability) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_picked_amount` (mig `949`) + `cash_pickup_config.pickup_actual_relieves_cash` knob | `POST /closing/pickup` / `/billpay-pickup` (item `actual_amount`, shared `_confirm_pickup_impl`; NULL = not recorded) | `GET /closing/pickups` + `/billpay-pickups` variance fields, `GET /closing/deposit-accountability` short-pickup chips (pure `closing/pickup_actual.py`, reusing `envelope_report.count_fields`); outflow swap in `_cash_position_core` ONLY under the knob (default false = declared, byte-identical; §12 actual cash picked) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `envelope_opened` (mig **`990`**, WRITTEN NOT APPLIED) | `POST /closing/pickup` / `/billpay-pickup` (item `envelope_opened`, shared `_confirm_pickup_impl`; written only when sent, and the upsert retries WITHOUT it on a pre-990 schema — mig-201 precedent) | THE CONFIRM GATE: opened ⇒ `actual_amount` REQUIRED (pure `pickup_actual.opened_without_count`/`gate_items`, batch checked before any write). Surfaced on `GET /closing/pickups` + `/billpay-pickups` and on the deposit-accountability envelopes. NULL and FALSE are ONE state ('collected sealed'); never relieves cash, never summed (§23p) |
+| `commcalc.cash_pickup_config.pickup_billpay_net_source` (mig **`1038`**, WRITTEN NOT APPLIED; CHECK-tied to `billpay_netting.NET_SOURCES`, default `pos` = byte-identical to mig `989`) | chosen per org in SQL; read by `closing/router.billpay_net_source` (never raises — a database without the column reads `pos`) | `GET /closing/pickups` (`billpay_net_source`, and `billpay_pos_disagrees`/`billpay_pos_gap` when the declared source is in force and a POS figure also exists) — §47.11 |
+| `commcalc.cash_pickup.amount_basis` (mig **`1039`**, WRITTEN NOT APPLIED; nullable, CHECK-tied to `billpay_netting.PICKUP_BASES`, never backfilled) | `POST /closing/pickup` via `pickup_amount_basis` — from the config in force, server-side, never from the client; the upsert retries WITHOUT it on a pre-1039 schema | `GET /closing/pickups` `amount_basis` (worded by `pickup_basis_label`, which reports `recorded: false` for a pre-`1039` row and `stale` when the basis in force differs — the stored amount and its variance are never re-scored) — §47.11 |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals — `dm_ext_cc` since mig `961`: the EXTERNAL-CREDIT portion OF `dm_store_cc`, total-preserving) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection; `dm_epay_cash` also replaces verified days in `_billpay_position_core` (mig `942`) |
 | `commcalc.daily_closing_verification_audit` (mig `935`, append-only; +`dm_ext_cc`/`prior_dm_ext_cc` mig `961`) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.closing_tender_def` (mig `111` tenant tender registry; +`processor_key` mig `960`) | tender-setup editor (`/closing/tender-config`) | closing tender fields + `_closing_amt`; **card-settlement recon leg routing** (`external_credit_recon.tender_processor_map`/`role_columns` — NULL/no row ⇒ the house map, §12) |
@@ -5300,7 +5315,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.raw_epay_daily_tx` (mig `903`, the processor transaction-detail feed) — via the onboarding intake | `epay_ingest.ingest` (the feed's own idempotent ingest) from the intake's `epay_daily_tx` LAYOUT (`column_mapping.TABLE_MAP`, §30.8) with `source_batch='onboarding-intake:<file>'` | the mig-939 bill-pay reader `_billpay_processor_by_store_day` (`epay_ingest.per_store_day`) — which the intake RE-READS through after landing |
 | `commcalc.raw_ma_daily_tx` — via the onboarding intake | `_ingest_mapped_df` from the intake's `ma_daily_tx` layout (slice replace on `account_id` × `tx_date`, `upload_trace.source='onboarding-intake'`, §30.8) | the mig-939 bill-pay reader (`_ma_billpay_pred` row filter, `_vidapay_account_resolver`) — re-read through after landing |
 | `commcalc.raw_custom_import` (Activation Details, per device) — as the inventory check's SECOND sold-source | (unchanged) | `_intake_activation_rows` → `_cr_resolve_activation_details` (+ `mdn`) → `inventory_sold_recon.reconcile(activation_rows=)` (§11a, §30.8) |
-| `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`) | `GET /closing/envelope-report`, notify `closing_envelope_report` |
+| `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row; **`basis` mig `1036`** — which cash the count counted, nullable, CHECK-tied to `envelope_report.ENVELOPE_BASES`, never backfilled) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`; amounts **and** basis from the one `envelope_report.count_row_fields` call) | `GET /closing/envelope-report` (a stored basis is resolved by `envelope_report.counted_basis`, which reports `recorded: false` for a pre-`1036` row rather than inventing one — §47.10), notify `closing_envelope_report` |
 | `commcalc.ops_chargeback` (mig `504`) | detection sweeps (`ops_chargebacks.py`: missed_closing/missed_dm_verify) **+ `POST /closing/envelope-count`** (reason `envelope_short`, parent rows only, amount = actual shortage) | policy editor (reasons-in-the-wild), decide endpoints, commission settlement `_settle_ops_chargebacks`/`_ops_chargeback_deductions` (`commcalc/router.py:11265-11550`) |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
@@ -5366,6 +5381,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
+| `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
+| `GET /closing/attempts` — additive: `refusals`, `last_refusal_code`, `last_refusal_detail`, `last_refused_at` per group, `refused` / `refusal_code` / `refusal_detail` per try; `attempts` means REAL tries; a store-day whose only events are refusals always qualifies for `only_review=true` | `closing/router.closing_attempts` (dereferencing `submit_refusal.is_real_try`) | §29.11 |
 | **Every JSON response** (no route added) — a MESSAGE-key value carrying a RUNTIME database / hosting error (`setup_notice.SYSTEM_INTERNAL`: duplicate key, violates … constraint, permission denied for table, an error dict `'code': '23505'`, `postgrest…APIError`, a `*.supabase.co` host) reaches a non-super-admin as `SYSTEM_NOTICE` from that sentence on; data rows never read; the original to the server log | `core/setup_notice.SetupNoticeMiddleware` (unchanged registration) | §19.38 |
 | **Every JSON response** (no route added) — a MESSAGE-key value (`detail`, `note`, `hint`, `error`, … — `setup_notice.MESSAGE_KEYS`, never a data row / list) carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; data cells are never read; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
@@ -5573,10 +5591,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (carries `totals_original`, and the NAMED cash figures `totals.total_store_cash` / `store_cash_net` / `cash_split` + per-rep `_cash_split`, all from `deposit_recon.cash_components` — §47.9), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit, §47.9 |
-| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8 |
+| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash and EVERY basis is reported beside it — see §47), `POST /closing/envelope-count` (takes `basis`, §47.8, and STORES it — §47.10), `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`) — both closing-row readers select `envelope_report.CLOSING_SELECT`, never a hand-written column list (§47.8); pure: `closing/envelope_report.py` (`CLOSING_COLUMNS`/`CLOSING_SELECT`, `normalize_envelope_basis`, `expected_cash`, `declared_components`, `basis_label`, `basis_options`, `count_row_fields`, `counted_basis`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47, §47.8, §47.10 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
-| `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
+| `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store), `POST /closing/derive-range` (retroactive backfill, `start=`/`end=`/`dry_run=`, bounded by `MAX_DERIVE_BACKFILL_DAYS`) | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`/`derive_closing_range`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
@@ -5620,6 +5638,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
+| **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
 | **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`, `B-2778` (closed → B-1598); `Cellular Services` is a COMPANY, exempt by dereferencing `commcalc.companies` |
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
@@ -5784,6 +5804,69 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.40 **"EMPLOYEES & PAY" IS A MENU ITEM — a link that opens a TAB names a tab its page has (owner 2026-10-02).**
+Owner: *make "Employees & Pay" its own menu item, and fix the stale wording that points people to the wrong place to
+edit pay.* He looked for it and could not find it. **Evidence (code, verified):** Employees & Pay — where pay is SET,
+per row (§19.35) — was only a TAB of `/hr`, held in `useState('comp')`, so nothing could link to it; the menu reached
+`/hr` only through the tile-only **HR · Total Comp** entry, which opens the Total Comp tab. Around it the copy pointed
+elsewhere: `/hr`'s own intro said **"Edit pay on StoreOps Admin"** (stale since #325); StoreOps Admin carried a tab
+ALSO labelled **"👥 Employees & Pay"** that edits name / ID / home store / email / phone / active and **no pay**;
+StoreOps Admin + Employee Setup said "Pay rates are managed in the HR module" (true, unlinked, no tab named); the
+`storeops_no_payscale` admin notice said **"Set it at HR → People"** (the add-a-person form — it sets only a starting
+rate) and linked `/hr`, i.e. the Total Comp tab; the Payroll hub described the Employee Database — a read-only report
+with **no pay column** (`hr/router.py::hr_employee_database_route`) — as "profile, **pay**, documents, history"; the
+Time Clock page named "HR → Employees & Pay" three times as plain text; and three bundled help docs
+(`support_docs_seed.json` `/hr`, `/storeops/admin`, `/storeops/payroll`) sent people to "StoreOps Employees".
+**THE CLASS, NOT THE INSTANCE.** "A link that opens a tab" had no mechanism. Four pages (Notify, Helpdesk Settings,
+Training, Payables) each re-implemented "read `?tab=` from `window.location` once, on mount" — which also ignores a
+link followed while the page is already open (same route, no remount), so a menu entry into a tab would look dead
+from the page itself — and nothing checked that a `?tab=` link names a tab its page declares: a misspelled or stale
+key renders the DEFAULT tab, compiles, and is wrong.
+**Checked first and reused (duplicate gate):** `rbac.ts` NAV (the ONE nav home — the entry is a NAV row, no second
+registry); `components/ScreenLink.tsx` (§23o — the destination is a `SCREENS` row and copy links through
+`<ScreenLink>`; its private `gateHref` was the only path-stripper and is now `rbac.navPath`); `lib/useUnsavedGuard.ts`
+(§19.35 — the HR tab switch still asks `confirmDiscard` first; the guard now also asks for a same-page link with a
+different query, since a query is now a view); the `/payroll` hub's `HubTiles` (one more tile); the attention
+item's existing `deep_link`. Nothing in the index served "open a page on a given tab".
+| fact | ONE home | callers |
+|---|---|---|
+| what a `?tab=` value means, and a tab's URL | `frontend/src/lib/urlTab.ts` (`parseTab`, `tabHref`, `TAB_PARAM` — pure) | the hook |
+| a page's current tab, from the live URL | `frontend/src/lib/useUrlTab.ts` — `useSearchParams` (reactive) + History API `pushState`; default tab drops `?tab=`; unknown key → default | `/hr`, `/notify`, `/helpdesk/settings`, `/training`, `/commcalc/payables` (each inside `<Suspense>`) |
+| which tabs a page has | the page's literal `const X_TABS = [...] as const` passed to `useUrlTab` | every `?tab=` link (checked by the lock) |
+| the path a nav href gates on | `rbac.navPath` (query + #anchor removed) | `canSeeItem` / `navBlockReason` (via `deepLinkPage`), `carrierOK`, `carrierOKActive`, `verticalOK`, `ScreenLink.useCanOpen` |
+| is a NAV entry a door into another page | `rbac.isDeepLinkItem` / `rbac.deepLinkPage` | `canSeeItem` (delegates — the door is visible exactly when its page is), Roles per-function list (no switch for a door) |
+**What changed.** NAV `Payroll & HR` gains **👥 Employees & Pay → `/hr?tab=employees`** (module `hr`, scopes
+`['all','market']` — `/hr`'s own, verbatim; sidebar-visible, not tile-only). The owner clicks **Payroll & HR →
+Employees & Pay** in the side menu; the **Payroll** hub (`/payroll`) has a matching **Employees & Pay** tile; ⌘K
+search finds it. `/hr` reads/writes `?tab=` (`comp` default · `employees` · `payroll` · `timeoff`). ScreenLink
+registers `employees_pay` (aliases "HR → Employees & Pay", "Employees & Pay"). Copy: `/hr` intro → "Set each
+person's pay on the **Employees & Pay** tab" (linked); StoreOps Admin's tab renamed **👥 Employees** and its subtitle
+→ "Manage employees and stores. Pay is set on **HR → Employees & Pay**" (linked); StoreOps Admin + Employee Setup
+→ "Pay is set per person on **HR → Employees & Pay**" (linked); Time Clock's three mentions linked; the no-pay-rate
+notice → "Set it on HR → Employees & Pay (per row) or upload a payscale sheet there", link `/hr?tab=employees`;
+Payroll hub Employee Database → "profile, contact, direct deposit, onboarding documents"; the three help docs
+corrected (they reach the house org's live rows on the next bundled re-seed — `POST /core/support-docs/seed-bundled`
+— not run here; `SEED_VERSION` deliberately not bumped). **No access widened:** `canSeeItem(door) ≡
+canSeeItem(/hr)` over 270 role shapes; a per-function key on the door is ignored (ONE gate). **Not changed:** the
+sidebar's active highlight compares `pathname` to `href`, so the door is not highlighted while on `/hr` (the
+`/hr` group still opens) — reading the query in the app shell would put the whole layout under a Suspense boundary.
+- Lock: `backend/harness_nav_deep_link_lock.py` (56, stdlib) — §A one `?tab=` reader, every caller under
+  `<Suspense>` with literal keys and a default among them; §B EVERY `?tab=` link (NAV, ScreenLink, hub tiles, JSX,
+  backend notices via `ast`, help docs) resolves to a page whose declared keys contain it; §C the Employees & Pay
+  entry exists, is sidebar-visible, opens the tab, and every deep-link entry repeats its page's module + scopes;
+  §D canSeeItem / navBlockReason delegate, carrier / vertical gates and ScreenLink use `navPath`, the Roles list
+  skips doors; §E a registered "X → Y" breadcrumb in copy is a link (§23o) — the 9 pre-existing un-linked sites in
+  other modules are FROZEN and may only shrink — no second surface is labelled "Employees & Pay", and the stale
+  sentences above cannot return. Each rule carries armed negative controls (bogus key → RED, entry removed → RED,
+  wider scopes → RED, old reader / old label / old sentence → RED) and positive controls.
+- Proof: `frontend/prove_nav_deep_link.mjs` (35) — the REAL `rbac.ts` + `urlTab.ts` under Node: the door answers as
+  `/hr` for every role shape, a stray grant on the door opens nothing, every page href is unchanged by `navPath`,
+  carrier / vertical gates agree, a forged door to a page with no entry is refused.
+- **Reported, not fixed:** the 9 frozen breadcrumbs (Vision → Settings ×5, Settings → Stores, Sales Report →
+  ⚙ Classification settings, Closing → Tender Config on intake stage 2, POS Settings → Sales Tax in `pos-config.ts`)
+  belong to other modules' copy; `commcalc/expenses` still says "Add stores in StoreOps Admin" (a store, not pay —
+  Store Setup is the primary page); `closing/router.py` tells the user to re-save a store in "StoreOps Admin".
 
 §19.39 **WHO PRODUCES A STORE'S DAILY CLOSING — reps type it, or it is DERIVED from the sales feed
 (owner directive 2026-10-02, mig `1035`).** Owner: *"the admin should be able to check a box to input daily closing
@@ -8967,6 +9050,13 @@ the gate.
 
 ## 23m. THE PICKUP ENVELOPE NETS OUT BILL-PAY CASH (owner directive 2026-09-08)
 
+> **STILL OFF, AND REPORTED AGAIN ON 2026-10-02.** `pickup_nets_pos_billpay_cash` is FALSE for every
+> org — verified live — so the overlap below is still on screen, which is what the owner reported again
+> (B-2612 / 2026-09-03: the pickup read $258.00 short and the $258.00 was the bill-pay cash). That
+> report described the **declared** figures, so WHICH figure to net by is now per-org config
+> (`pickup_billpay_net_source`, mig `1038`) rather than a second code path, and the stored amount
+> records its own basis (mig `1039`). See **§47.11**.
+
 **Owner:** *"on the cash pick up it shows the full amount but it should only show the store cash
 amount to be picked up, as the epay amount is being declared and picked up on a different menu — this
 is duplicating the total cash."* Asked which figure to net by: *"not as declared by the employee but
@@ -9225,6 +9315,12 @@ menu. **One exception, reported not fixed:** *"Metric Source of Truth"* is named
 on `closing/cash-recon-management` and **no such page exists** anywhere in NAV or under `app/`. It is
 deliberately NOT in the registry: inventing an href would be worse than the gap.
 
+**Extended 2026-10-02 (§19.40):** destination `employees_pay` → `/hr?tab=employees` (a TAB, via a deep-link NAV
+entry that gates as `/hr`); "HR → Employees & Pay" is linked on Time Clock ×3, StoreOps Admin ×2, Employee Setup and
+the `/hr` intro. The rule "a registered breadcrumb in copy is a link" is now build-enforced by
+`harness_nav_deep_link_lock.py` §E (pre-existing un-linked sites frozen as a shrink-only ratchet), and the
+private `gateHref` here is `rbac.navPath`.
+
 - Proof: `backend/harness_screen_link_guard.py` (51). **Static on purpose** — the defect renders
   perfectly and compiles, so neither `tsc` nor a build can see it. §A every registered href is a real
   NAV href (an invented one would gate to `false` for every viewer and silently print plain text);
@@ -9326,10 +9422,14 @@ cleared of anything. `over` is reported separately and **never nets a shortage a
 is a distinct field, so a DM $20 short on one envelope and $15 over on another is never shown as "$5
 short". A pickup with no recorded DM is reported under `(unattributed)` rather than dropped.
 
-### (4) CASH SALES EQUIP/ACC — the column, with its basis visible
+### (4) CASH FROM SALES — the column, with its basis visible
+
+> **RENAMED 2026-10-02 (§47.11).** The key is `cash_sales` (totals: `total_cash_sales`), the column
+> header is **Cash from sales**, and the TOTAL cash column beside it is `cash_gross`. Same fact as the
+> 2026-09-08 `cash_equip_acc` under the owner's newer word for it — renamed, not duplicated.
 
 The envelope amount **stays the whole drawer** — bill-pay netting stays **OFF**
-(`pickup_nets_pos_billpay_cash`, mig `989` unapplied, §23m) — and `cash_equip_acc` is a DISPLAY split
+(`pickup_nets_pos_billpay_cash`, mig `989` unapplied, §23m) — and `cash_sales` is a DISPLAY split
 beside it, computed from the one shared `billpay_netting.net_store_day` rule whether or not netting is
 on, so the column and the netting can never disagree. The backend half landed on the base commit; the
 **column is now rendered**, and its **basis is shown, never hidden**: `POS` (green — computed from the
@@ -11793,6 +11893,109 @@ still shows the same, if disabled it should not show anything platform wide"*.
 - **Lock:** `backend/harness_closing_config_active.py`.
 
 ---
+
+### 29.11 A REFUSED CLOSING LEFT NO TRACE — the submit audit trail only started once every check had passed (owner bug report 2026-10-02)
+
+Owner, verbatim: *"also abid did the daily closing for the 117 bunrsoide ave as a dm whoc is now working as a
+sales rep int eh store - we cannot see the daily closing which was submitted, , also he did it again today it
+is stikll not shwoing , 2 things first investigate and fix amd second dont let duplicate entries"*.
+
+**LIVE EVIDENCE FIRST (read-only, before a line was written).** 117 E Burnside Ave is `B-117`
+(`commcalc.store_mapping`, market NYC, sfid `001U100000Ga3kfIAB`; the store master knows it too, with a NULL
+address, which is the house norm there).
+
+| where a closing can land | what was there for B-117 |
+|---|---|
+| `commcalc.daily_closing` | rows on 09-28 (Kashif), 09-29 and 09-30 (Rohit) — **none on 10-01 or 10-02** |
+| `commcalc.closing_attempt` (the submit audit trail) | **nothing from that submitter at ANY store since 09-28** |
+| `commcalc.daily_closing_verification` | no `B-117` row — it did not land on the DM-verify screen either |
+
+The submitter is `abid.akhter@cellfonzrus.us` = app_user `full_name` **"Rana"**, employee **E012** (`storeops.employees.name`
+"Rana", home store B-509, role Market Manager), login role `district_manager`. Every closing he has ever filed is
+under "Rana", so a search for "Abid" finds none of them — worth knowing, and NOT the bug.
+
+**Three candidate causes were ruled out by measurement, not by reading code.** (1) *Scope* — `caller_scope` is a
+strict no-op platform-wide: `_rbac_enabled` reads `app_config.rbac_enabled` and that table does not exist, so
+every keyset is `None` and nothing is being filtered from anyone. (2) *Market resolution* — B-117 carries market
+NYC in BOTH vocabularies, so no market pick drops it. (3) *A twin store identity* (the §511 luxelink shape) —
+B-117 has exactly one mapping row and no alias. The closing was **not hidden. It was REFUSED and nothing was kept.**
+
+**ROOT CAUSE — THE CLASS.** `closing/router.create_row` runs every validation BEFORE the first write, and
+`closing_attempt` — the table that exists so management can see what a rep tried — was written only once they all
+passed (`_log_attempt`, after the close gate). So ALL EIGHT refusal paths stored nothing at all:
+
+| refusal | status | stored before this fix |
+|---|---|---|
+| the close date could not be read | 400 | nothing |
+| the submitter may not use that name / has no name on file | 403 | nothing |
+| the envelope photo would not save | 502 | nothing |
+| **cash declared with no envelope photo** (`require_photo_if_cash` is **true org-wide here**, since 2026-08-11) | 400 | nothing |
+| already submitted for the day / more than one row exists / the index race | 409 | nothing |
+| an expense line, or an expense with no description | 400 | nothing |
+| no store or no employee name on the submit | — | the row was WRITTEN, with no dedup key and no index protection |
+
+A rep says "I submitted it", management sees nothing, and there is no evidence either way — for any store, any
+rep, any tenant. "Burnside's closing is missing" is the instance; **"a refused closing leaves no trace" is the
+class**, and it is what made this unanswerable rather than merely wrong.
+
+**DUPLICATE CHECK (build gate).** Searched this index and the code for an existing mechanism before building:
+`commcalc.closing_attempt` (mig 103) IS the submit audit trail and `GET /closing/attempts` IS its reader, so both
+are **REUSED** — the refusal is three additive columns on that table and three additive keys on that response, not
+a sibling table, endpoint or screen. On duplicates the owner asked to prevent: **migration 502 already prevents
+them**, in the app and as a partial unique index, and the live data agrees — **1,799 closings since 2026-08-01,
+zero duplicate groups, zero NULL dedup keys, zero blank store codes or names**. So no second guard was built. Two
+real gaps in the existing one were closed instead (below). `closing/closer_pick` (§29.7) keeps the one rule for
+WHOSE name a closing carries; it now returns a declared refusal code instead of raising its own 403.
+
+**THE FIX — one home per fact, every caller dereferencing it.**
+- `closing/submit_refusal.py` (pure) — **THE refusal registry**: code → (HTTP status, the sentence the submitter
+  reads). `Refusal`, `audit_row`, and `is_real_try` — the ONE rule for "does this row count as a try".
+- `closing/router._refuse` — **the single raise site**. Records the refusal in `commcalc.closing_attempt` with the
+  reason, then raises the registry's error. `create_row` raises no `HTTPException` of its own any more.
+- `closing/dedup_key.py` (pure) — **THE dedup key**. It had been spelled twice and had already drifted: Python
+  folded a STRIPPED employee name, mig 502's SQL folded the raw one, so a name stored with a stray space produced
+  two keys for one person and the index could not see the duplicate it exists to stop. `SQL_EXPR` is the same
+  formula in SQL and the migration must contain it verbatim.
+- **A refusal is never a try.** `_real_attempt_count` dereferences `is_real_try`, so two failed photo uploads no
+  longer carry a rep to the auto-accepting third try without recounting. That one is money-affecting.
+- **Identity is required.** A submit with no store or no employee name is refused (`identity_missing`) instead of
+  being written with a NULL dedup key, outside the index.
+- **The released window is closed.** Mig 502's index was `where dedup_key is not null and released_at is null`; a
+  release→resubmit UPDATEs the same row, so that second half protected nothing and only left a window for two
+  concurrent inserts. Mig 1037 drops it, after asserting no key is held twice.
+- **Management Review shows it** (`closing/management/page.tsx`): "⚠ N submits turned away — cash declared with no
+  envelope photo", each try row says `turned away`, and a store-day that was only ever refused reads **"never
+  counted"** instead of "0 attempts" and always qualifies for `only_review=true`.
+
+**#349's REFUSAL JOINED THE REGISTRY, it did not sit beside it (merge 2026-10-02).** `§19.39` gave a store a
+daily-closing SOURCE and refused a rep's submit on a feed-derived store with its own
+`raise HTTPException(409, closing_source.refusal_message(...))` — a ninth refusal path storing nothing, the exact
+class this section fixes. It now goes through `_refuse` as `closing_source_not_rep` and is audited like the other
+eight. Its SENTENCE stays owned by `closing_source.refusal_message` (it names the store and where to change it):
+`submit_refusal.DELEGATED_MESSAGE` declares the code delegated, the registry **dereferences** that module for the
+status and the store-less fallback, and `_refuse(..., message=)` carries the store-specific rendering through —
+so the words exist in ONE place. A non-delegated code cannot have its words overridden. Checked by **§H9** (7
+checks), which fails the build if the registry ever retypes those words or the router stops passing them.
+
+**MIGRATION 1037 — SURFACED FOR OWNER APPROVAL, NOT APPLIED.** Additive columns + the index widening + a
+dedup-key recompute that refuses rather than merging anything ambiguous. No amount column is read or written.
+
+**Lock: `backend/harness_closing_submit_refusal.py` — 115 checks, DB-free.** §A–C pure (registry complete, no
+storage name in submitter copy, the whitespace divergence gone), §D the REGRESSION (each refusal path through the
+real `create_row`: no closing stored AND exactly one audited reason — before the fix every one of those found
+zero rows), §E the money point, §F the Management Review view, §G degrade pre-migration, **§H the WIRING LOCKS
+that fail the build**: no submit validation may raise `HTTPException` directly, every code raised must be
+declared and every declared code must be raised, the router may spell no dedup key, the try counter must
+dereference `_real_attempt_count`, the migration's SQL must be `dedup_key.SQL_EXPR` verbatim, and the screen must
+have words for every code, and **§H9** that a delegated sentence keeps one home. Verified to BITE:
+re-inlining one `raise HTTPException` turns ten checks red; §H9b caught a literal copy of #349's sentence in a
+code comment during the merge itself.
+`harness_closing_closer_pick.py` B5 was updated to pin the new shape (still a 403 carrying the reason).
+
+**OPEN — reported, not fixed.** Which of the nine refusals Abid actually hit cannot be known: the refusals that
+predate this fix left nothing behind, which is the defect. `require_photo_if_cash` being on org-wide makes the
+photo gate the likeliest. From the next refusal on, the answer is on the Management Review screen.
+
 
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)
 
@@ -15131,9 +15334,22 @@ caller selects that declaration instead of writing its own list.
 
 **THE SIBLING, found and checked in the same change.** `deposit_recon` is the other consumer of
 `cash_for_basis`; its own query already carries `epay_on_cash` (and the lock now pins that, so one path
-fixed and the other not cannot happen). `_cash_declared_for_envelope` (§12 cash pickup) sums the LEGACY
-`store_cash + epay_cash` pair, which is the full drawer either way for a mig-103+ row — **excused, not
-fixed**, and it answers a different question (the envelope snapshot, not a basis).
+fixed and the other not cannot happen).
+
+> ~~`_cash_declared_for_envelope` (§12 cash pickup) sums the LEGACY `store_cash + epay_cash` pair,
+> which is the full drawer either way for a mig-103+ row — **excused, not fixed**, and it answers a
+> different question (the envelope snapshot, not a basis).~~
+>
+> **CORRECTED 2026-10-02 — that excuse was wrong, and the owner's next report is what disproved it.**
+> Two things were wrong with it. The full drawer is not "a different question" for the cash-pickup
+> envelope: it is the WRONG question, because the bill-pay share of that drawer is collected on the
+> bill-pay screen, so offering the drawer asks a DM to collect the same dollars twice (owner, B-2612 /
+> 2026-09-03 — the pickup read $258.00 short and the $258.00 was the bill-pay cash). And "the full
+> drawer either way" held only for a mig-103+ row: the sibling helper
+> `_billpay_declared_for_envelope` read `epay_on_cash` RAW, a column no pre-mig-103 row has, so all
+> 89 of those live rows declared $0.00 of bill-pay cash while 78 of them hold a real `epay_cash` leg
+> (one of them $744.00). Excusing one of a pair while the other was broken is the defect wearing a
+> hat that the house rules name. Both now dereference the one home — see §47.11.
 
 **A SECOND DEFECT OF THE SAME SHIPPED FEATURE.** `POST /closing/envelope-count` scored every count
 against the **whole drawer** regardless of the basis on screen, because the basis never left the
@@ -15198,6 +15414,134 @@ what they are called.
 the drawer, shows the net, and derives neither. Armed controls patch the shipped tile back in and go
 red. The bill-pay recon's own `declared − processor` variances are a different question and are proven
 *not* to match the scan.
+
+### 47.10 A stored count now says WHICH CASH it counted (owner 2026-10-02, mig `1036`)
+
+The item §47.8 **reported open rather than fixed**, closed on the owner's word ("do it").
+
+**The class.** §47.8 fixed the *scoring* — a count is measured on the basis the counter was looking at.
+The stored ROW stayed silent about which basis that was, so a row recorded an **amount** without the
+**question the amount answered**. Two rows reading "short $230" could be a shortage in the whole drawer
+and a shortage in the bill-payment cash: each self-consistent (each carries the `expected_amount` it was
+scored against, so no variance and no chargeback is wrong) and indistinguishable on a report.
+
+`commcalc.envelope_count.basis` — `TEXT`, nullable, `CHECK (basis IS NULL OR basis IN (…))`, mig `1036`,
+additive and idempotent with a `-- REVERT:` note. No stored amount, variance, status or chargeback is
+read or written by it.
+
+**ONE CALL WRITES BOTH.** The fix is not a field added at the call site — it is that the amounts and the
+basis come from one function, so a stored amount **cannot** be written without its basis:
+
+| fact | home | callers |
+|---|---|---|
+| everything a count row records about the money (amounts **+** basis) | **`envelope_report.count_row_fields`** | `POST /closing/envelope-count`, which no longer composes `expected_cash` + `count_fields` itself |
+| the short/over verdict | `envelope_report.count_fields` — **unchanged** | the above, plus `pickup_actual.row_variance` and the external-credit tally, whose "expected" is not a cash basis at all |
+| which basis a STORED count used, recorded or not | **`envelope_report.counted_basis`** | `report_row` → the receipt screen and both export columns |
+| the bases that have a formula | `envelope_report.ENVELOPE_BASES` → `deposit_recon.cash_for_basis` | the migration's CHECK is *tied* to this tuple by §K3, never a second list |
+
+**Why the basis is NOT a key of `count_fields`.** That function is the platform's short/over truth table,
+shared by the deposit recon and the external-credit tally (`harness_external_credit_recon` §E pins the
+reuse). Putting an envelope-basis key in its return would push this subsystem's vocabulary into two
+reports that have no use for it. The home is therefore one function *above* the truth table.
+
+**ABSENCE IS NEVER A GUESS — the column is deliberately NOT backfilled.** A pre-`1036` row recorded no
+basis, and writing `total_cash` into it would turn *"nobody recorded this"* into *"somebody chose
+total_cash"*. The READER resolves it instead, in one place: `counted_basis` returns the historical
+default **with `recorded: false`**, because the handler of that era had no basis to use and scored
+against the whole drawer by construction. So the receipt says *"basis not recorded (counted before it
+was stored)"* and never claims a person chose it. A SQL `NULL`, a missing key and an unrecognised word
+all resolve identically.
+
+**Shown when it is worth saying.** The receipt surfaces the stored basis only where it changes a
+reading: when the count on file was taken on a different basis than the line is being *viewed* on (hence
+`counted_basis` is a distinct payload key from `basis`, which is the view), or when the row recorded
+none. On every row it would be noise; on these rows it is the difference between two meanings of "short
+$230". The wording is looked up from the server's own `basis_options()` by the key the server sent, so
+the screen still spells no basis word — §47.8's rule holds. The export carries the basis and
+`Counted on — recorded` as **separate** columns, so "which counts predate the column" is filterable.
+
+**An unapplied migration degrades LOUDLY.** The column is additive, so a database without `1036` rejects
+the whole upsert on an unknown column — which would break a working screen over a column nobody has yet.
+The save retries without the basis, the reply carries `basis_stored: false`, and a WARN names the
+migration. Only that error is caught; any other upsert failure still raises. The one unacceptable
+outcome — saving silently while the receipt implies a basis was recorded — cannot happen, because
+`counted_basis` words a missing basis as un-recorded either way.
+
+**LOCK:** §47.3's harness, section **K1–K5** (181 checks total). Fails the build when: the handler
+composes `expected_cash` + `count_fields` itself again; `count_fields` grows a basis key (which would
+reach the two sibling reports); a stored amount is written without its basis; the migration gains a
+backfill or drops the nullability; the CHECK drifts off `ENVELOPE_BASES`; `counted_basis` passes an
+unknown word through, or reports an un-recorded basis as recorded; `report_row` stops carrying it; an
+uncounted row grows a basis it never had; the screen spells a basis word or shows the note on every row;
+or the degrade path becomes a bare `except: pass`. Each rule carries an **armed control**, and the five
+load-bearing ones were patched back to the shipped behaviour by hand and watched go red.
+
+**MONEY-TOUCHING — and a MIGRATION: owner-approved before applying.** Nothing moves money: no amount,
+variance, status or chargeback changes, and every existing row keeps every value it has. What changes is
+that a row can now *say* what it was measuring.
+
+### 47.11 Cash Pickup shows TOTAL cash and CASH FROM SALES — and the drawer has one home (owner 2026-10-02, mig `1038`/`1039`)
+
+**THE REPORT.** *"the cash pick up should show total store cash and sales cash, right now it shows for
+2612 0903 cash pick up 258 short but 258 is epay cash which appears on the next report for epay pick up,
+this cash pick up report should not show anything short since 15 is declared as store cash and 258 as
+epay and the total is 273 — cash pick up should only show the cash from sales and a column for total
+cash"*.
+
+**REPRODUCED IN LIVE DATA FIRST.** B-2612 / 2026-09-03 / Kashif — `daily_closing` `t_cash` 273.00,
+`epay_on_cash` 258.00; `cash_pickup` `amount` 273.00, `actual_picked_amount` 15.00 → variance exactly
+−258.00, the bill-pay cash the bill-pay screen collects separately.
+
+**THE MECHANISM ALREADY EXISTED.** Migration `989` (§23m) was built for this to the owner's directive of
+2026-09-08, which said the figure to net by is the one *"CALCULATED BY THE POS"*, not the declaration.
+`pickup_nets_pos_billpay_cash` has been **FALSE for every org since it shipped** — verified live — which
+is why the overlap is still on screen. Nothing new was built to answer the netting; what was added is
+the one thing that directive did not cover (`1038`), because the 2026-10-02 report describes the
+**declared** figures. The source is per-org config, never a second code path (RULE TWO).
+
+**THE CLASS, NAMED (a design fix, not a report fix).** "How much cash did this row declare, and how much
+of it was bill payments" was re-derived by hand at **six** call sites, each carrying its own version of
+the mig-103 era rule — and three of them answered for one era only. So a pre-mig-103 bill-pay envelope
+read **$0.00**: 89 live rows carry no `t_cash`, 78 of them carry a real `epay_cash` leg (one $744.00),
+and none carries `epay_on_cash` at all.
+
+| fact | home | callers that now dereference it |
+|---|---|---|
+| is this a mig-103+ row? | `envelope_report.is_modern_row` (over `MODERN_COLUMNS`) | `_row_display_tenders`, `_row_epay_display`, `/closing/billpay-pickups`' credit leg |
+| the whole declared drawer, either era | `envelope_report.declared_total_cash` | `GET /closing/pickups`, `_cash_declared_for_envelope`, `/closing/cash-recon`'s declared figure, `_row_display_tenders`, `closing/attention_providers`' envelope-short alert |
+| the bill-pay cash inside it, either era | `envelope_report.declared_billpay_cash` | `/closing/billpay-pickups`, `_billpay_declared_for_envelope`, `billpay_pickup.declared_billpay_by_store_day`, `_row_epay_display`, the netting input |
+| which figure the netting uses | `cash_pickup_config.pickup_billpay_net_source` → `closing/router.billpay_net_source` → `billpay_netting.NET_SOURCES` | `GET /closing/pickups` |
+| which cash a STORED pickup amount is | `commcalc.cash_pickup.amount_basis` (mig `1039`) ← `pickup_amount_basis`, read by `pickup_basis_label` | `GET /closing/pickups` |
+
+**TWO FIGURES, NAMED FOR WHAT THEY ARE.** `cash_gross` is the TOTAL cash (the whole drawer, bill
+payments included — the closing form's own field is *"Total cash in store including Bill Payments"*) and
+`cash_sales` is the SALES cash (that drawer less the bill-pay cash). The 2026-09-08 `cash_equip_acc` key
+was the same fact under an older word and is **renamed, not duplicated** — one fact, one name. Totals:
+`total_cash_sales`. The screen shows both columns and marks which one is the amount being collected, by
+comparing the server's own `cash` rather than re-deriving the switch.
+
+**THE STORED AMOUNT IS NEVER RE-SCORED.** `cash_pickup.amount` is a snapshot of what a DM was asked to
+collect. When the basis in force differs from the row's own, the row is reported **stale**
+(`amount_basis.stale` + `stale_note`) and its variance is left exactly as it happened — re-scoring it
+against today's basis would rewrite what a DM was actually asked for. Same rule as §47.10's stored
+count, and the same no-backfill rule: a pre-`1039` row reads as *un-recorded*, never as a claim.
+
+**WHAT IS STILL OFF.** Netting remains switched off for every org, so no envelope amount changes on
+merge. What changes without any switch: both columns are on screen, and the 89 pre-mig-103 rows stop
+reporting a $0.00 bill-pay envelope and a short drawer.
+
+**LOCK:** `harness_billpay_netting.py` sections **G/H/I** (94 checks) — the declared source, the
+envelope floor, the POS-disagreement report, and both migrations' CHECKs tied to `NET_SOURCES` /
+`PICKUP_BASES`. `harness_cash_pickup.py` section **13** (122 checks) — the B-2612 regression over the
+real endpoint, both eras, the stale statement, the screen. `harness_envelope_receipt_basis.py` section
+**L** (201 checks) — fails the build if any caller adds the two legacy cash columns itself, re-implements
+the era test, or stops dereferencing the home; the two legitimate exceptions are listed **by name with
+their reason**, and a stale exception fails too. Every rule carries an armed control, and the
+load-bearing ones were patched back to the broken behaviour by hand and watched go red.
+
+**MONEY-TOUCHING — MIGRATIONS `1038` AND `1039`: owner-approved before applying.** Neither moves money;
+both are additive and idempotent, and the money-touching statements (choosing the source, switching the
+netting on) are left **commented out** in `1038` for the owner to run with the numbers in front of them.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 

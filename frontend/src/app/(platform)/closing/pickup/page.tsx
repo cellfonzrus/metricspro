@@ -128,11 +128,14 @@ export default function CashPickupPage() {
         columns: [
           { header: 'Store', get: (r: any) => r.store_name || r.store_code },
           { header: 'Rep', get: (r: any) => r.employee_name },
-          { header: 'Cash', get: (r: any) => r.cash, money: true },
-          // owner 2026-09-08 — the equip/acc split, with its BASIS beside it so an exported number
-          // derived from a rep's declaration is never mistaken for a POS-calculated one.
-          { header: 'Cash sales equip/acc', get: (r: any) => r.cash_equip_acc ?? '', money: true },
-          { header: 'Equip/acc basis', get: (r: any) => r.cash_equip_acc_basis === 'pos' ? 'POS' : r.cash_equip_acc_basis === 'declared' ? 'declared' : 'no bill-pay' },
+          // owner 2026-10-02 — both figures, and WHICH of them is the amount being collected, so an
+          // exported sheet carries the same statement the screen makes. The basis rides along so an
+          // exported number taken from a rep's declaration is never mistaken for a POS-calculated one.
+          { header: 'Cash from sales', get: (r: CashFigures) => r.cash_sales ?? '', money: true },
+          { header: 'Total cash', get: (r: CashFigures) => r.cash_gross ?? r.cash, money: true },
+          { header: 'Collecting', get: (r: CashFigures) => collecting(r) === 'sales' ? 'cash from sales' : 'total cash' },
+          { header: 'Sales-cash basis', get: (r: CashFigures) => r.cash_sales_basis === 'pos' ? 'POS' : r.cash_sales_basis === 'declared' ? 'declared' : 'no bill-pay' },
+          { header: 'Recorded basis (collected)', get: (r: CashFigures) => r.amount_basis ? (r.amount_basis.recorded ? r.amount_basis.label : 'not recorded') : '' },
           { header: 'Envelope opened', get: (r: any) => (r.picked_up ? (r.envelope_opened ? 'opened' : 'sealed') : '') },
           { header: 'Actual picked', get: (r: any) => r.actual_picked_amount ?? '', money: true },
           { header: 'Pickup variance', get: (r: any) => r.pickup_variance_status ? `${r.pickup_variance} (${r.pickup_variance_status})` : '' },
@@ -232,6 +235,30 @@ export default function CashPickupPage() {
   // envelope on SEVERAL different days when viewing a range — without the date in the key, checking
   // one day's envelope would also (de)select another day's for the same store+rep.
   const key = (e: any) => `${e.close_date || ''}|${e.store_code || ''}|${e.employee_name || ''}`
+  // The fields THIS change reads, typed — so the two cash figures and the recorded basis cannot be
+  // misspelled silently. (The rest of this page is untyped and stays that way; retyping it is not
+  // this fix's job.)
+  type CashFigures = {
+    cash?: number | null
+    cash_gross?: number | null
+    cash_sales?: number | null
+    cash_sales_basis?: string | null
+    cash_billpay_used?: number | null
+    billpay_note?: string | null
+    billpay_pos_disagrees?: boolean | null
+    billpay_pos_gap?: number | null
+    amount_basis?: { basis: string; recorded: boolean; label: string
+                     in_force?: string; stale?: boolean; stale_note?: string } | null
+  }
+
+  // WHICH of the two columns is the amount actually being collected. The server already decided it —
+  // `e.cash` IS that amount (netted or not, per the tenant's mig-989/1038 switch) — so this compares
+  // rather than re-deriving the rule, and an envelope whose two figures are equal (no bill-pay cash
+  // at all) reads as the total, which is what it is.
+  const collecting = (e: CashFigures): 'sales' | 'total' =>
+    (e.cash_sales != null && Math.abs((e.cash || 0) - e.cash_sales) < 0.005
+      && Math.abs((e.cash_gross ?? e.cash ?? 0) - e.cash_sales) >= 0.005) ? 'sales' : 'total'
+
   const ready = envelopes.filter(e => !e.picked_up)
   const selectedKeys = ready.filter(e => sel_[key(e)])
   const selTotal = selectedKeys.reduce((s, e) => s + (e.cash || 0), 0)
@@ -240,18 +267,19 @@ export default function CashPickupPage() {
   // filters, which a server-side total could not promise. The actual-picked total deliberately
   // covers only the collected envelopes that carry a count; the rest are counted, not absorbed.
   const footTotals = useMemo(() => {
-    let cash = 0, equipAcc = 0, actual = 0, actualCount = 0, missingCount = 0, variance = 0
+    let cash = 0, salesCash = 0, totalCash = 0, actual = 0, actualCount = 0, missingCount = 0, variance = 0
     for (const e of envelopes) {
       cash += e.cash || 0
-      equipAcc += e.cash_equip_acc ?? 0
+      salesCash += e.cash_sales ?? 0
+      totalCash += e.cash_gross ?? e.cash ?? 0
       if (!e.picked_up) continue
       if (e.actual_picked_amount == null) { missingCount++; continue }
       actual += e.actual_picked_amount
       variance += (e.actual_picked_amount - (e.cash || 0))
       actualCount++
     }
-    return { cash: round2(cash), equipAcc: round2(equipAcc), actual: round2(actual),
-             actualCount, missingCount, variance: round2(variance) }
+    return { cash: round2(cash), salesCash: round2(salesCash), totalCash: round2(totalCash),
+             actual: round2(actual), actualCount, missingCount, variance: round2(variance) }
   }, [envelopes])
 
   // Per-store "cash on hand" + a live "left after this pickup" preview (OWNER DIRECTIVE 2026-08-04).
@@ -499,7 +527,12 @@ export default function CashPickupPage() {
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'Cash sales equip/acc', 'Opened?', 'Actual picked', 'POS cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
+                {/* OWNER BUG REPORT 2026-10-02: "cash pick up should only show the cash from sales
+                    and a column for total cash". Both figures are columns now, and the one that IS
+                    the amount being collected is marked — because WHICH of them is collected is the
+                    tenant's bill-pay netting switch (mig 989/1038), not something this table can
+                    decide, and a DM must never have to guess which number to count against. */}
+                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash from sales', 'Total cash', 'Opened?', 'Actual picked', 'POS cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -511,27 +544,41 @@ export default function CashPickupPage() {
                       <td style={cell}>{done ? '✅' : <input type="checkbox" checked={!!sel_[k]} onChange={ev => setSel(s => ({ ...s, [k]: ev.target.checked }))} />}</td>
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
-                      <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
-                      {/* CASH SALES EQUIP/ACC (owner 2026-09-08: "cash pick up is still showing the
-                          total cash, let it be like that, just add another column for cash sales
-                          equip/acc which is total cash minus epay cash"). The envelope amount to the
-                          left STAYS the whole drawer — netting stays off — and this is the display
-                          split beside it. The BASIS is shown, never hidden: a POS-calculated split
-                          (computed from the sales transactions) must not look like one derived from
-                          the rep's own declaration, and "none" means no bill-pay figure existed at
-                          all for this store-day, so the whole drawer is equip/acc by default rather
-                          than by evidence. */}
+                      {/* CASH FROM SALES — the drawer less the bill-pay cash that the bill-pay
+                          screen collects (owner 2026-09-08 "total cash minus epay cash", owner
+                          2026-10-02 "only show the cash from sales"). The BASIS is shown, never
+                          hidden: a POS-calculated split (computed from the sales transactions) must
+                          not look like one taken from the rep's own declaration, and "no bill-pay"
+                          means no bill-pay figure existed at all for this store-day, so the whole
+                          drawer is sales cash by default rather than by evidence. */}
                       <td style={cell} title={
-                        e.cash_equip_acc_basis === 'pos' ? `POS-calculated: ${fmt(e.cash_gross ?? e.cash)} total cash − ${fmt(e.cash_billpay_used)} POS bill-pay cash`
-                          : e.cash_equip_acc_basis === 'declared' ? `From the rep's declaration (no POS bill-pay figure for this store-day): ${fmt(e.cash_gross ?? e.cash)} total cash − ${fmt(e.cash_billpay_used)} declared bill-pay cash`
-                          : 'No bill-pay cash recorded for this store-day — the whole drawer is equipment/accessory cash'}>
-                        {e.cash_equip_acc == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <>
-                          <span style={{ fontWeight: 600 }}>{fmt(e.cash_equip_acc)}</span>
+                        e.cash_sales_basis === 'pos' ? `POS-calculated: ${fmt(e.cash_gross ?? e.cash)} total cash − ${fmt(e.cash_billpay_used)} POS bill-pay cash`
+                          : e.cash_sales_basis === 'declared' ? `As declared on the closing: ${fmt(e.cash_gross ?? e.cash)} total cash − ${fmt(e.cash_billpay_used)} declared bill-pay cash`
+                          : 'No bill-pay cash recorded for this store-day — the whole drawer is sales cash'}>
+                        {e.cash_sales == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <>
+                          <span style={{ fontWeight: collecting(e) === 'sales' ? 700 : 500 }}>{fmt(e.cash_sales)}</span>
                           <span style={{ display: 'block', fontSize: 10, fontWeight: 700, letterSpacing: 0.2, marginTop: 1,
-                            color: e.cash_equip_acc_basis === 'pos' ? '#166534' : e.cash_equip_acc_basis === 'declared' ? '#b45309' : 'var(--text3)' }}>
-                            {e.cash_equip_acc_basis === 'pos' ? 'POS' : e.cash_equip_acc_basis === 'declared' ? 'DECLARED' : 'no bill-pay'}
+                            color: e.cash_sales_basis === 'pos' ? '#166534' : e.cash_sales_basis === 'declared' ? '#b45309' : 'var(--text3)' }}>
+                            {collecting(e) === 'sales' ? 'COLLECTING · ' : ''}
+                            {e.cash_sales_basis === 'pos' ? 'POS' : e.cash_sales_basis === 'declared' ? 'DECLARED' : 'no bill-pay'}
                           </span>
                         </>}
+                      </td>
+                      {/* TOTAL CASH — the whole declared drawer, bill payments included (the
+                          closing form's own field is "Total cash in store including Bill Payments").
+                          Marked COLLECTING while the netting switch is off, which is what made the
+                          2026-10-02 report look like a $258 shortage: the drawer was offered for
+                          collection while the bill-pay share of it was collected on the other
+                          screen. */}
+                      <td style={cell} title={e.billpay_note || 'The whole declared drawer, bill payments included'}>
+                        <span style={{ fontWeight: collecting(e) === 'total' ? 700 : 500 }}>{fmt(e.cash_gross ?? e.cash)}</span>
+                        {collecting(e) === 'total' && (
+                          <span style={{ display: 'block', fontSize: 10, fontWeight: 700, letterSpacing: 0.2, marginTop: 1, color: 'var(--text3)' }}>COLLECTING</span>
+                        )}
+                        {e.billpay_pos_disagrees && (
+                          <span style={{ display: 'block', fontSize: 10, fontWeight: 700, marginTop: 1, color: '#b45309' }}
+                                title={`The POS bill-pay figure for this store-day differs from the declarations by ${fmt(Math.abs(e.billpay_pos_gap || 0))}`}>POS DISAGREES</span>
+                        )}
                       </td>
                       {/* OPENED? (owner 2026-09-08: "it should have a check box asking if the cash
                           envelope was opened", mig 990). The DM's own statement about what they
@@ -568,6 +615,17 @@ export default function CashPickupPage() {
                                 {e.pickup_variance_status === 'short' && <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {fmt(e.pickup_variance)} short</span>}
                                 {e.pickup_variance_status === 'over' && <span style={{ color: '#b45309', fontWeight: 700 }}> +{fmt(e.pickup_variance)} over</span>}
                                 {e.pickup_variance_status === 'match' && <span style={{ color: '#166534' }}> ✓</span>}
+                                {/* mig 1039 — a pickup recorded on a DIFFERENT basis than the one
+                                    this screen now works on. Its variance is what happened at the
+                                    time and is never re-scored; what the reader is owed is the
+                                    statement that the question has changed, so a shortage against
+                                    the whole drawer is not read as a shortage of sales cash. */}
+                                {e.amount_basis?.stale && (
+                                  <span style={{ display: 'block', fontWeight: 400, fontSize: 10.5, color: 'var(--warn)', marginTop: 2 }}
+                                        title={e.amount_basis.stale_note}>
+                                    collected on {e.amount_basis.recorded ? e.amount_basis.label.split(' (')[0] : 'total cash (basis not recorded)'}
+                                  </span>
+                                )}
                               </span>
                         ) : (() => {
                           const a = (actuals[k] || '').trim()
@@ -658,8 +716,13 @@ export default function CashPickupPage() {
                     Totals <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 11 }}>
                       · {envelopes.length} envelope{envelopes.length === 1 ? '' : 's'} shown</span>
                   </td>
-                  <td style={{ ...cell, border: 0 }}>{fmt(footTotals.cash)}</td>
-                  <td style={{ ...cell, border: 0, color: 'var(--text2)' }}>{fmt(footTotals.equipAcc)}</td>
+                  {/* The two columns' own totals, in the columns' own order (owner 2026-10-02). The
+                      bold one is whichever is being collected, so the bottom line and the Confirm
+                      button can never be read as two different amounts. */}
+                  <td style={{ ...cell, border: 0, color: footTotals.cash === footTotals.salesCash ? undefined : 'var(--text2)',
+                               fontWeight: footTotals.cash === footTotals.salesCash ? 700 : 400 }}>{fmt(footTotals.salesCash)}</td>
+                  <td style={{ ...cell, border: 0, color: footTotals.cash === footTotals.totalCash ? undefined : 'var(--text2)',
+                               fontWeight: footTotals.cash === footTotals.totalCash ? 700 : 400 }}>{fmt(footTotals.totalCash)}</td>
                   <td style={{ ...cell, border: 0 }} />
                   <td style={{ ...cell, border: 0 }}>
                     {footTotals.actualCount === 0

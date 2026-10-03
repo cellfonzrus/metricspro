@@ -29,7 +29,10 @@ export function useUnsavedGuard(count: number) {
       if (!a || a.target === '_blank' || a.hasAttribute('download')) return
       let url: URL
       try { url = new URL(a.href, window.location.href) } catch { return }
-      if (url.origin === window.location.origin && url.pathname === window.location.pathname) return
+      // Same page AND same query = an in-page anchor; nothing is left. A different query on the same page is a
+      // different VIEW now that a tab lives in the URL (`lib/useUrlTab.ts`, index §19.40), so it asks first.
+      if (url.origin === window.location.origin && url.pathname === window.location.pathname
+          && url.search === window.location.search) return
       if (!window.confirm(unsavedPrompt(n.current))) { e.preventDefault(); e.stopPropagation() }
     }
     window.addEventListener('beforeunload', onBeforeUnload)

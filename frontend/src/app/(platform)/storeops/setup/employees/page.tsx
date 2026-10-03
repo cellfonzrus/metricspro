@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { sel, cell, EMP_EDIT_FIELDS, isDirty, PHONE_EG, cleanPhone } from '../lib'
+import ScreenLink from '@/components/ScreenLink'
 
 export default function EmployeeSetupPage() {
   const [emps, setEmps] = useState<any[]>([])
@@ -202,7 +203,7 @@ export default function EmployeeSetupPage() {
               <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={upBusy}
                 onChange={e => { const f = e.target.files?.[0]; if (f) uploadEmpBulk(f); e.currentTarget.value = '' }} />
             </label>
-            <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 6 }}>Pay rates are managed in the HR module.</span>
+            <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 6 }}>Pay is set per person on <ScreenLink to="employees_pay" />.</span>
           </div>
 
           <div className="table-wrapper">

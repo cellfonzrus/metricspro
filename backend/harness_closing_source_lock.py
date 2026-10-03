@@ -217,6 +217,13 @@ ok("the config table constrains the vocabulary at the database",
 SP = read(STORE_PAGE)
 ok("Store Setup reads and writes the one endpoint",
    "/api/v1/closing/source-config" in SP and "method: 'PUT'" in SP)
+# THE RETROACTIVE RUN IS REACHABLE (owner 2026-10-02: "do it retroactive"). The endpoint without a
+# button left the only route a hand-made HTTP call, which a tenant admin cannot be asked to make.
+ok("Store Setup can run the retroactive backfill, and offers the no-write preview first",
+   "/api/v1/closing/derive-range" in SP and "runBackfill(true)" in SP and "runBackfill(false)" in SP)
+ok("the backfill is driven by the ONE range endpoint, not a per-day loop in the browser",
+   "derive-range" in SP and "/closing/derive-day" not in SP)
+
 ok("Store Setup offers a per-store setting that can follow the company default",
    "saveClosingSource(" in SP and "saveOrgClosingSource(" in SP and "Company default" in SP)
 ok("the choice is available AT STORE SETUP — the Add-store row carries it (the owner's "

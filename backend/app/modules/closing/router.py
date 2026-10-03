@@ -31,6 +31,8 @@ from . import entry_quality
 from . import pickup_actual as _pickup_actual
 from . import closer_resolution
 from . import billpay_netting
+from . import submit_refusal as _refusal
+from . import dedup_key as _dedup
 from . import closing_source as _closing_src
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -399,13 +401,19 @@ def _row_display_tenders(r: dict) -> dict:
     A pre-mig103 sheet_upload row (no t_* at all) falls back to the legacy store_cash/store_cc/
     epay_cash/epay_cc/other_account split — the EXACT SAME fallback create_row already applies at
     write time (see POST /row above) — so this is a pure read-time re-derivation, not new math."""
-    has_t = any(r.get(k) is not None for k in
-                ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima"))
+    # The era test is `envelope_report.is_modern_row` — the ONE home for it (owner bug 2026-10-02);
+    # this tuple used to be spelled here and a narrower version of it in two other places.
+    has_t = envelope_report_mod.is_modern_row(r)
     if has_t:
-        return {"cash": _f(r.get("t_cash")), "credit": _f(r.get("t_credit")), "ext_cc": _f(r.get("t_ext_cc")),
+        return {"cash": envelope_report_mod.declared_total_cash(r),
+                "credit": _f(r.get("t_credit")), "ext_cc": _f(r.get("t_ext_cc")),
                 "gift": _f(r.get("t_gift")), "store_acct": _f(r.get("t_store_acct")),
                 "zelle": _f(r.get("t_zelle")), "acima": _f(r.get("t_acima"))}
-    return {"cash": round(_f(r.get("store_cash")) + _f(r.get("epay_cash")), 2),
+    # The legacy drawer rule is NOT re-derived here: `envelope_report.declared_total_cash` is the one
+    # home for "how much cash did this row declare" in BOTH eras (owner bug 2026-10-02), and it gives
+    # exactly this sum for a pre-mig-103 row. The credit leg keeps its own sum — there is no basis math
+    # on credit and so no shared home to read.
+    return {"cash": envelope_report_mod.declared_total_cash(r),
             "credit": round(_f(r.get("store_cc")) + _f(r.get("epay_cc")), 2),
             "ext_cc": 0.0, "gift": 0.0, "store_acct": 0.0,
             "zelle": _f(r.get("other_account")), "acima": 0.0}
@@ -426,12 +434,16 @@ def _row_epay_display(r: dict) -> dict:
     sheet_upload row has no epay_on_* columns at all; its legacy epay_cash/epay_cc columns hold a
     REAL, separate value instead (already added into store_cash/store_cc's own total there — see
     _row_display_tenders' fallback branch), so surfacing them unchanged is correct for that era too."""
-    has_t = any(r.get(k) is not None for k in
-                ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima"))
+    # The era test is `envelope_report.is_modern_row` — the ONE home for it (owner bug 2026-10-02);
+    # this tuple used to be spelled here and a narrower version of it in two other places.
+    has_t = envelope_report_mod.is_modern_row(r)
+    # The CASH leg of this split is `envelope_report.declared_billpay_cash` — the one home for "how
+    # much of the drawer was bill payments" in either era (owner bug 2026-10-02). The credit leg has
+    # no basis math and so no shared home; its era branch reads the same `has_t` test.
     if has_t:
-        return {"cash": _f(r.get("epay_on_cash")),
+        return {"cash": envelope_report_mod.declared_billpay_cash(r),
                 "cc": round(_f(r.get("epay_on_credit")) + _f(r.get("epay_on_acima")), 2)}
-    return {"cash": _f(r.get("epay_cash")), "cc": _f(r.get("epay_cc"))}
+    return {"cash": envelope_report_mod.declared_billpay_cash(r), "cc": _f(r.get("epay_cc"))}
 
 
 @router.get("/submissions")
@@ -1967,13 +1979,9 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     client = sb()
     d = _date(payload.get("close_date"))
     if not d:
-        raise HTTPException(400, "valid close_date required")
-    # WHO the closing is submitted under (index §29.7): the signed-in person, unless their role may pick
-    # anyone (DM and above, or an explicit Roles grant) — closing/closer_pick.verdict is the one rule.
-    # Every live request carries a token (the tenant middleware 401s without one); a direct in-process
-    # call with no header string is the only way to arrive without one.
-    if isinstance(authorization, str) and authorization.strip():
-        _closer_gate(client, org_id, authorization, payload.get("employee_name"))
+        _refuse(client, org_id, None, {"employee_name": payload.get("employee_name"),
+                                       "store_code": payload.get("store_code")},
+                "bad_close_date", detail=f"close_date sent: {str(payload.get('close_date'))[:60]!r}")
     sfid = (payload.get("sfid") or "").strip()
     sm = _store_resolver(client, org_id).get(sfid, {}) if sfid else {}
     body = {
@@ -1986,13 +1994,35 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # WHO the closing is submitted under (index §29.7): the signed-in person, unless their role may pick
+    # anyone (DM and above, or an explicit Roles grant) — closing/closer_pick.verdict is the one rule.
+    # Every live request carries a token (the tenant middleware 401s without one); a direct in-process
+    # call with no header string is the only way to arrive without one.
+    # Checked HERE, after `body` exists, so the refusal is recorded against the store and name it was
+    # attempted for rather than against nothing (index §29.11).
+    if isinstance(authorization, str) and authorization.strip():
+        _gate_code = _closer_gate(client, org_id, authorization, payload.get("employee_name"))
+        if _gate_code:
+            _refuse(client, org_id, d, body, _gate_code,
+                    detail=f"submitted under {str(payload.get('employee_name') or '')[:60]!r}")
+    # IDENTITY IS REQUIRED, not optional (index §29.11). A closing with no store or no employee name
+    # cannot be deduped (`dedup_key.for_row` has nothing to key on), so the old code let it through
+    # with dedup_key NULL — outside the database index that exists to stop duplicates, and invisible
+    # in every store-scoped report. It is a refusal, with a reason the submitter can act on.
+    if not _dedup.dedupable(body.get("store_code"), body.get("employee_name")):
+        _refuse(client, org_id, d, body, "identity_missing",
+                detail=f"store_code={body.get('store_code')!r} employee_name={body.get('employee_name')!r}")
     # ── WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035) — dereference the registry,
     #    never assume a rep. A store the tenant put on the sales feed takes no submission: accepting
     #    one would put a second, hand-typed row beside the derived one and double the store's declared
     #    cash in every recon downstream (the mig-502 duplicate class, from the other direction).
-    #    Refused with the reason and where to change it — never a bare 403. ──
+    #    Refused with the reason and where to change it — never a bare 403. The SENTENCE is owned by
+    #    `closing_source.refusal_message`; this site only names the store (index §29.11 + §19.39).
+    #    Checked AFTER identity, because resolving a store's source needs a store code.
     if not _closing_src.expects_rep_submission(_closing_source(client, org_id, body.get("store_code"))):
-        raise HTTPException(409, _closing_src.refusal_message(body.get("store_code")))
+        _refuse(client, org_id, d, body, "closing_source_not_rep",
+                detail=f"store {str(body.get('store_code') or '')[:40]!r} takes its closing from the feed",
+                message=_closing_src.refusal_message(body.get("store_code")))
     # Robustness (owner-reported 2026-08-19 — Ali "Cellfonz ru ma" + Rashika "Cellfonz r us": the
     # envelope photo wasn't accepted and the app bounced to the main page). The envelope image can now
     # ride the submit as a RAW data-url and be uploaded server-side here — not only as a pre-uploaded
@@ -2004,8 +2034,7 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         try:
             body["envelope_picture"] = _upload_envelope(org_id, _env, raise_on_error=True)
         except Exception as e:
-            raise HTTPException(502, "The envelope photo couldn't be saved — please try submitting again. "
-                                     f"If it keeps failing, tell your manager (storage error: {str(e)[:160]}).")
+            _refuse(client, org_id, d, body, "envelope_upload_failed", detail=str(e)[:300])
 
     # ── Duplicate-submission guard (mig 502): ONE ACTIVE row per (org, store_code, employee_name,
     #    close_date). A rep double-submitting used to create a SECOND daily_closing row that
@@ -2015,32 +2044,35 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     #    Management Review page) — a release unlocks it for exactly ONE corrected resubmit, which
     #    UPDATES that same row (never inserts a second) and re-locks it, fully audited
     #    (released_by/released_at/release_note + corrected_at/correction_count on the row).
+    #    The KEY ITSELF lives in closing/dedup_key — one home, dereferenced here and spelled once in
+    #    SQL by the migration that builds the index (it had drifted: Python folded a STRIPPED name,
+    #    SQL folded the raw one, so a name stored with a stray space produced two different keys for
+    #    one person and the index could not see the duplicate).
     _dupe_store, _dupe_emp = body.get("store_code"), (body.get("employee_name") or "").strip()
     _update_id = None
-    if _dupe_store and _dupe_emp:
-        try:
-            _existing = (client.schema("commcalc").table("daily_closing")
-                         .select("id,released_at,correction_count")
-                         .eq("org_id", org_id).eq("close_date", d).eq("store_code", _dupe_store)
-                         .ilike("employee_name", _dupe_emp)
-                         .order("submitted_at").execute().data) or []
-        except Exception:
-            _existing = []
-        if len(_existing) > 1 and not any(r.get("released_at") for r in _existing):
-            raise HTTPException(409, f"Multiple existing submissions found for {_dupe_emp} at this store "
-                                 f"on {d} (likely from the double-submit bug) — ask a manager to review "
-                                 f"/closing/duplicates and release the correct row before resubmitting.")
-        if _existing:
-            _row0 = _existing[0]
-            if not _row0.get("released_at"):
-                raise HTTPException(409, f"Already submitted for {d} — ask a manager to release it before resubmitting.")
-            _update_id = _row0.get("id")
-            body["correction_count"] = int(_row0.get("correction_count") or 0) + 1
-            body["corrected_at"] = _now()
-            body["released_at"] = None
-            body["released_by"] = None
-            body.pop("submitted_at", None)   # keep the ORIGINAL submitted_at on a corrected resubmit
-        body["dedup_key"] = f"{org_id}|{_dupe_store}|{_dupe_emp.lower()}|{d}"
+    try:
+        _existing = (client.schema("commcalc").table("daily_closing")
+                     .select("id,released_at,correction_count")
+                     .eq("org_id", org_id).eq("close_date", d).eq("store_code", _dupe_store)
+                     .ilike("employee_name", _dupe_emp)
+                     .order("submitted_at").execute().data) or []
+    except Exception:
+        _existing = []
+    if len(_existing) > 1 and not any(r.get("released_at") for r in _existing):
+        _refuse(client, org_id, d, body, "duplicate_multiple",
+                detail=f"{len(_existing)} existing rows for {_dupe_emp} at {_dupe_store} on {d}")
+    if _existing:
+        _row0 = _existing[0]
+        if not _row0.get("released_at"):
+            _refuse(client, org_id, d, body, "duplicate_already_submitted",
+                    detail=f"existing row {_row0.get('id')} for {_dupe_emp} at {_dupe_store} on {d}")
+        _update_id = _row0.get("id")
+        body["correction_count"] = int(_row0.get("correction_count") or 0) + 1
+        body["corrected_at"] = _now()
+        body["released_at"] = None
+        body["released_by"] = None
+        body.pop("submitted_at", None)   # keep the ORIGINAL submitted_at on a corrected resubmit
+    body["dedup_key"] = _dedup.for_row(org_id, _dupe_store, _dupe_emp, d)
     # ── Activation-count fields (mig 501). Configured tenants send `counts: {field_key: value}` for
     #    every field on their axis; standard field_keys still write the physical column (backward-compat
     #    with the rollup dashboard + sheet-upload ingestion), custom ones go to daily_closing.counts
@@ -2071,7 +2103,8 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     exp_amt = _money(payload.get("expense_amount"))
     exp_desc = (payload.get("expense_description") or "").strip()
     if exp_amt > 0 and not exp_desc:
-        raise HTTPException(400, "A description is required for the expense.")
+        _refuse(client, org_id, d, body, "expense_description_required",
+                detail=f"expense_amount={exp_amt}")
     body["expense_amount"] = exp_amt
     body["expense_description"] = exp_desc or None
     body["expense_approved"] = False
@@ -2082,8 +2115,14 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     #    expense_amount/expense_description fields above are UNTOUCHED — both can be sent on the same
     #    submit; nothing here changes their behaviour. Rows are inserted AFTER the row itself is
     #    written (needs the new row's id for closing_row_id) — see `_pending_expense_lines` below.
-    _pending_expense_lines = [_validate_expense_line(client, org_id, ln)
-                              for ln in (payload.get("expense_lines") or []) if isinstance(ln, dict)]
+    try:
+        _pending_expense_lines = [_validate_expense_line(client, org_id, ln)
+                                  for ln in (payload.get("expense_lines") or []) if isinstance(ln, dict)]
+    except HTTPException as e:
+        # _validate_expense_line is shared with the expense endpoints and raises its own 400s there.
+        # On a SUBMIT the refusal must be recorded like every other one (index §29.11); its own
+        # message is the specific circumstance, so it rides as the audited detail.
+        _refuse(client, org_id, d, body, "expense_line_invalid", detail=str(e.detail)[:300])
     # ── Six tender types (mirror the POS X-report). Accept the new t_* fields; fall back to the legacy
     #    store/epay/other fields for any caller (old kiosk) that hasn't sent them yet. ──
     def _pt(k):
@@ -2128,8 +2167,8 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     #    no-op — byte-identical to today's unconditional accept. ──
     if _envelope_config(client, org_id, body.get("store_code")).get("require_photo_if_cash") \
             and tenders["cash"] > 0 and not body.get("envelope_picture"):
-        raise HTTPException(400, "An envelope photo is required because cash was declared for this "
-                             "closing. Attach a photo of the envelope and resubmit.")
+        _refuse(client, org_id, d, body, "envelope_photo_required",
+                detail=f"declared cash {tenders['cash']} with no photo", tenders=tenders)
 
     # ── Close gate + 3-TRY flow: cash SHORT or credit OVER vs B2B is a "blocker". The rep is told only
     #    the DIRECTION (never the amount) and may recount up to 3 times; the 3rd try is auto-accepted and
@@ -2145,11 +2184,11 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     dirs = _variance_dirs(issues)
     is_blocking = any(i["severity"] == "block" for i in issues)
 
-    prior = (client.schema("commcalc").table("closing_attempt").select("id")
-             .eq("org_id", org_id).eq("close_date", d)
-             .eq("store_code", body.get("store_code") or "")
-             .eq("employee_name", body.get("employee_name") or "").execute().data) or []
-    attempt_no = len(prior) + 1
+    # Count REAL tries only: `_real_attempt_count` dereferences submit_refusal.is_real_try, so a
+    # refused submit (a failed photo upload, a duplicate) never advances the rep toward the
+    # auto-accepting third try they would not have earned by recounting (index §29.11).
+    attempt_no = _real_attempt_count(client, org_id, d, body.get("store_code"),
+                                     body.get("employee_name")) + 1
     accept = (not is_blocking) or attempt_no >= 3
     auto_accepted = bool(is_blocking and attempt_no >= 3)
 
@@ -2174,12 +2213,14 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         r = _write(body)
     except Exception as e:
         if "daily_closing_one_active_per_rep_day" in str(e) or "duplicate key" in str(e).lower():
-            # A race: two near-simultaneous submits both passed the pre-check above. The DB-level
-            # partial unique index (mig 502) is the safety net — same refusal message either way.
-            raise HTTPException(409, f"Already submitted for {d} — ask a manager to release it before resubmitting.")
+            # A race: two near-simultaneous submits both passed the pre-check above. The unique
+            # index (mig 502, widened by mig 1037) is the safety net — same refusal either way, and
+            # recorded like every other one so the race is visible instead of inferred.
+            _refuse(client, org_id, d, body, "duplicate_race", detail=str(e)[:300], tenders=tenders)
         # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106,
         # expense_*=mig109, dedup_key/corrected_at/correction_count/released_*=mig502): drop the new
-        # keys + retry. (mig 502 not run -> dedup guard above already no-op'd via empty `_existing`.)
+        # keys + retry. (mig 502 not run -> the `_existing` read above raised and degraded to empty,
+        # and `dedup_key` — now always composed, by closing/dedup_key — is dropped here.)
         for _k in ("t_acima", "epay_on_cash", "epay_on_credit", "epay_on_acima",
                    "expense_amount", "expense_description", "expense_approved", "counts",
                    "dedup_key", "corrected_at", "correction_count", "released_at", "released_by"):
@@ -2459,15 +2500,27 @@ def closing_attempts(period: str = None, date: str = None, store: str = None,
 
     out = []
     for (dt, sc, emp), tries in groups.items():
-        tries.sort(key=lambda x: x.get("attempt_no") or 0)
-        last = tries[-1]
-        auto = any(t.get("auto_accepted") for t in tries)
-        if only_review and not (len(tries) > 1 or auto):
+        tries.sort(key=lambda x: (x.get("attempt_no") or 0, str(x.get("created_at") or "")))
+        # `submit_refusal.is_real_try` is the ONE rule for what counts as a try (index §29.11): a
+        # refused submit stored no closing, so counting it as a recount would read as a rep who
+        # recounted three times when their photo failed three times. Refusals are reported in their
+        # own right instead — and a store-day whose ONLY events are refusals is exactly what
+        # management needs to see, so it always qualifies for review.
+        real = [t for t in tries if _refusal.is_real_try(t)]
+        refusals = [t for t in tries if not _refusal.is_real_try(t)]
+        last = (real or tries)[-1]
+        auto = any(t.get("auto_accepted") for t in real)
+        if only_review and not (len(real) > 1 or auto or refusals):
             continue
         dc = dc_by_key.get((dt, sc, emp)) or {}
         out.append({
             "close_date": dt, "store_code": sc, "store_address": last.get("store_address"),
-            "employee_name": emp, "attempts": len(tries), "auto_accepted": auto,
+            "employee_name": emp, "attempts": len(real), "auto_accepted": auto,
+            # Refused submits for this (date, store, rep): how many, and the reason of the latest.
+            "refusals": len(refusals),
+            "last_refusal_code": (refusals[-1].get("refusal_code") if refusals else None),
+            "last_refusal_detail": (refusals[-1].get("refusal_detail") if refusals else None),
+            "last_refused_at": (refusals[-1].get("created_at") if refusals else None),
             "final_dir": {"cash": last.get("cash_dir"), "credit": last.get("credit_dir")},
             "b2b": {"cash": last.get("b2b_cash"), "credit": last.get("b2b_credit")},
             "row_id": dc.get("id"), "released_at": dc.get("released_at"),
@@ -2479,6 +2532,11 @@ def closing_attempts(period: str = None, date: str = None, store: str = None,
                        "t_cash": t.get("t_cash"), "t_credit": t.get("t_credit"), "t_ext_cc": t.get("t_ext_cc"),
                        "t_gift": t.get("t_gift"), "t_store_acct": t.get("t_store_acct"), "t_zelle": t.get("t_zelle"),
                        "t_acima": t.get("t_acima"),
+                       # A REFUSED submit (index §29.11) — the closing was never stored and this says
+                       # why. Pre-migration-1037 rows carry no refusal columns and read as real tries,
+                       # which is exactly what they were.
+                       "refused": bool(t.get("refused")), "refusal_code": t.get("refusal_code"),
+                       "refusal_detail": t.get("refusal_detail"),
                        "created_at": t.get("created_at")} for t in tries],
         })
     out.sort(key=lambda x: (x["close_date"] or "", x["store_address"] or ""), reverse=True)
@@ -4033,7 +4091,9 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
             addr = meta.get("address") or (reps[0].get("store_address") if reps else None) or (reps[0].get("store_name") if reps else None)
             for r in reps:
                 emp = (r.get("employee_name") or "").strip()
-                dcash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
+                # ONE home for the declared drawer, both eras (owner bug 2026-10-02) — this site
+                # used to spell the pre-mig-103 sum itself and read a mig-103+ row's drawer as 0.
+                dcash = envelope_report_mod.declared_total_cash(r)
                 dcred = _f(r.get("store_cc")) + _f(r.get("epay_cc"))
                 repb = _rep_b2b(day, code, emp) if (code and day and day["has_data"]) else None
                 if repb is None:
@@ -4747,9 +4807,13 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
     # against the rep. The count is now scored on the basis the counter was actually looking at, through
     # the same pure function the report renders. Omitted/unknown ⇒ the historical default (total_cash),
     # so every existing caller and every stored count keeps its meaning byte-for-byte.
-    _basis = envelope_report_mod.normalize_envelope_basis(payload.basis)
-    expected = envelope_report_mod.expected_cash(crow, _basis)
-    cf = envelope_report_mod.count_fields(expected, payload.counted_amount, payload.tolerance)
+    # AND THE ROW NOW RECORDS WHICH (owner 2026-10-02, mig 1036). #348 fixed the scoring but left
+    # the stored row silent about its basis, so two rows reading "short $230" could be shortages in
+    # two different cashes. The amounts and the basis come from ONE call — `count_row_fields` — so a
+    # stored amount cannot be written without the question it answered. This handler no longer
+    # composes `expected_cash` + `count_fields` itself; that pairing is the pure module's own.
+    cf = envelope_report_mod.count_row_fields(crow, payload.counted_amount, payload.tolerance,
+                                              payload.basis)
 
     # existing count row (for re-counts + existing chargeback link)
     existing = []
@@ -4822,10 +4886,26 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
         "counted_by": (_caller_uid(authorization) or prior.get("counted_by") or None),
         "counted_at": _now(), "chargeback_id": chargeback_id, "updated_at": _now(),
     }
-    saved = (client.schema("commcalc").table("envelope_count")
-             .upsert(body, on_conflict="org_id,closing_row_id").execute())
+    # DEGRADE, LOUDLY, WHILE MIG 1036 IS UNAPPLIED. The basis column is additive, so a database
+    # that has not had 1036 run rejects the whole upsert on an unknown column — which would break a
+    # working screen over a column nobody has yet. The count is saved without the basis and the
+    # server SAYS so (`basis_stored: false` in the reply, and a WARN naming the migration), because
+    # the one thing never acceptable is saving it silently and letting the receipt imply the basis
+    # was recorded. `counted_basis` already words a missing basis as un-recorded, so the row reads
+    # correctly either way.
+    _ec = client.schema("commcalc").table("envelope_count")
+    basis_stored = True
+    try:
+        saved = _ec.upsert(body, on_conflict="org_id,closing_row_id").execute()
+    except Exception as e:
+        if envelope_report_mod.COUNT_BASIS_COLUMN not in str(e):
+            raise
+        print(f"WARN envelope_count.basis not stored (run migration 1036): {str(e)[:160]}")
+        basis_stored = False
+        body = {k: v for k, v in body.items() if k != envelope_report_mod.COUNT_BASIS_COLUMN}
+        saved = _ec.upsert(body, on_conflict="org_id,closing_row_id").execute()
     out = (saved.data or [body])[0]
-    return {"ok": True, "count": out, "chargeback": cb_row}
+    return {"ok": True, "count": out, "chargeback": cb_row, "basis_stored": basis_stored}
 
 
 class DecideEnvelopeChargebackIn(LaxModel):
@@ -5398,7 +5478,9 @@ async def _run_cash_unpicked_alerts(org_id=None):
             continue
         cutoff = (today - _td(days=days)).isoformat()
         # closings older than the cutoff whose cash hasn't been marked picked up
-        closings = (c.schema("commcalc").table("daily_closing").select("store_code,close_date,store_cash,epay_cash")
+        # Counts store-days, never dollars (see the loop below) — so it asks for no cash column at
+        # all rather than a hand-spelled pair that reads like an era rule it does not have.
+        closings = (c.schema("commcalc").table("daily_closing").select("store_code,close_date")
                     .eq("org_id", oid).lte("close_date", cutoff).gte("close_date", (today - _td(days=days + 14)).isoformat())
                     .execute().data) or []
         picks = {(p.get("store_code") or "", str(p.get("close_date"))) for p in
@@ -5534,9 +5616,16 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         client, org_id, date_from=(_pu_dates[0] if _pu_dates else None),
         date_to=(_pu_dates[-1] if _pu_dates else None))
 
+    # The basis a pickup written NOW would carry (mig 1039), so each stored row can say whether its
+    # own amount still answers the question this screen is asking. Read once for the whole list.
+    _amount_basis_now = pickup_amount_basis(client, org_id)
+
     out, emp_options = [], set()
     for r in rows:
-        cash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
+        # THE DRAWER, from the one home that knows both eras (owner bug 2026-10-02). This line used
+        # to spell the pre-mig-103 sum, which happens to equal a mig-103+ row's `t_cash` only because
+        # `create_row` zeroes the legacy columns — an invariant this screen was silently relying on.
+        cash = envelope_report_mod.declared_total_cash(r)
         cash = _envelope.net_row(cash, r.get("id"), _exp_by_row, _wd_by_row)
         if cash <= 0 and not r.get("envelope_picture"):
             continue
@@ -5595,6 +5684,11 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "deposit_flagged": bool(p.get("deposit_flagged")) if p else False,
             "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
             "pickup_id": p.get("id") if p else None,
+            # mig 1039 — WHICH cash the stored `amount` is, worded by the one reader
+            # (`pickup_amount_basis` writes it, `pickup_basis_label` reads it). A row from before the
+            # column existed says so rather than being read as a claim nobody made.
+            "amount_basis": (pickup_basis_label(p.get("amount_basis"), _amount_basis_now)
+                             if p else None),
             # mig 949 (owner 2026-09-04): the ACTUAL cash the DM took from the envelope, beside
             # the declared figure, + variance/short-over-match (envelope-report truth table via
             # pickup_actual.row_variance). All None when no actual was recorded — honest absence.
@@ -5656,6 +5750,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # subtracting a fabricated zero and calling it reconciled is the defect class this file exists to
     # avoid. RULE TWO: off unless the tenant switches it on.
     _net_on = billpay_netting_enabled(client, org_id)
+    _net_src = billpay_net_source(client, org_id)
     # The POS bill-pay figure is fetched whether or not NETTING is on, because the equipment/
     # accessory column below needs it either way (owner 2026-09-08: the split should come from the
     # POS, not the employee's declaration, even though the envelope keeps showing the whole drawer).
@@ -5683,13 +5778,16 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     for r in rows:
         _k = ((r.get("store_code") or ""), str(r.get("close_date") or "")[:10],
               (r.get("employee_name") or ""))
-        _decl_bp[_k] = _f(r.get("epay_on_cash"))
+        # The rep's declared bill-pay cash, from the one home — both eras (owner bug 2026-10-02).
+        _decl_bp[_k] = envelope_report_mod.declared_billpay_cash(r)
     for e in out:
         _sd = ((e.get("store_code") or ""), str(e.get("close_date") or "")[:10])
         _by_sd.setdefault(_sd, []).append(e)
     for _sd, _envs in _by_sd.items():
         _pos_bp = None
-        if _net_on and _bp_cash:
+        # Fetched whether the source is 'pos' or 'declared': on the declared source it is what lets
+        # the result say the POS does not back a declaration, instead of merely trusting it.
+        if _bp_cash:
             try:
                 _pos_bp = _bp_cash.get((_bp_key(_sd[0]), _sd[1]))
             except Exception:
@@ -5700,33 +5798,46 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             [{"key": id(e), "t_cash": e.get("cash"),
               "epay_on_cash": _decl_bp.get((_sd[0], _sd[1], e.get("employee_name") or ""), 0.0)}
              for e in _envs],
-            pos_billpay_cash=_pos_bp, enabled=True)
+            pos_billpay_cash=_pos_bp, enabled=True, source=_net_src)
         for e in _envs:
             _row = _res["rows"].get(id(e)) or {}
             e["cash_gross"] = _row.get("gross", e.get("cash"))
             e["billpay_netted"] = _row.get("billpay_netted", 0.0) if _net_on else 0.0
             e["billpay_basis"] = _res["basis"] if _net_on else "off"
+            e["billpay_net_source"] = _net_src
             e["billpay_source"] = _bp_src if (_net_on and _res["basis"] == "pos") else None
             e["billpay_declared"] = _row.get("declared_billpay", 0.0)
             e["billpay_declared_exceeds_cash"] = bool(_row.get("declared_exceeds_cash"))
+            # On the declared source, whether the POS backs the declaration (mig 1038). None when
+            # there is no POS figure for the store-day — "nobody checked", never "it agrees".
+            e["billpay_pos_disagrees"] = (bool(_res.get("pos_disagrees"))
+                                          if _res.get("pos_gap") is not None else None)
+            e["billpay_pos_gap"] = _res.get("pos_gap")
             e["billpay_note"] = billpay_netting.envelope_note(_res, id(e)) if _net_on else None
             if _net_on:
                 e["cash"] = _row.get("net", e.get("cash"))
-            # OWNER REFINEMENT 2026-09-08: "cash pick up is still showing the total cash — let it be
-            # like that, just add another column for cash sales equip/acc which is total cash minus
-            # epay cash." So the envelope amount STAYS the whole drawer (netting stays off) and this
-            # is a DISPLAY split beside it: what of the drawer is equipment/accessory sales rather
-            # than bill payments. Uses the POS figure when there is one, else the rep's declaration,
-            # and says which — an equipment figure derived from a number nobody checked should not
-            # look like one that was.
+            # ── THE TWO FIGURES THE OWNER ASKED FOR ───────────────────────────────────────────
+            # OWNER REFINEMENT 2026-09-08: "add another column for cash sales equip/acc which is
+            # total cash minus epay cash."
+            # OWNER BUG REPORT 2026-10-02: "cash pick up should only show the cash from sales and a
+            # column for total cash" — the same two figures, and the newer message says which of
+            # them is the one being collected. So they are named for what they ARE, once:
+            #   cash_gross  the TOTAL cash — the whole declared drawer, bill payments included
+            #   cash_sales  the SALES cash — that drawer less the bill-pay cash collected on the
+            #               bill-pay screen (the 2026-09-08 "equip/acc" figure, under the owner's
+            #               newer word for it; ONE key, because one fact with two names is the
+            #               divergence the house rules forbid)
+            # WHICH of the two is the amount in `cash` stays the tenant's switch (mig 989), and
+            # `cash_sales_basis` always says which figure the sales cash was derived from, so a
+            # number nobody checked never looks like one that was.
             _gross = _f(e.get("cash_gross") if e.get("cash_gross") is not None else e.get("cash"))
             if _res["basis"] == "pos":
                 _bp_used, _bp_basis = _f(_row.get("billpay_netted")), "pos"
             else:
                 _bp_used = _f(_row.get("declared_billpay"))
                 _bp_basis = "declared" if _bp_used else "none"
-            e["cash_equip_acc"] = round(max(0.0, _gross - _bp_used), 2)
-            e["cash_equip_acc_basis"] = _bp_basis
+            e["cash_sales"] = round(max(0.0, _gross - _bp_used), 2)
+            e["cash_sales_basis"] = _bp_basis
             e["cash_billpay_used"] = round(_bp_used, 2)
 
     out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
@@ -5835,7 +5946,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                                    for e in out
                                                    if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
             # The equipment/accessory split (§23m), totalled the same way the column shows it.
-            "total_cash_equip_acc": round(sum(_f(e.get("cash_equip_acc")) for e in out), 2),
+            "total_cash_sales": round(sum(_f(e.get("cash_sales")) for e in out), 2),
             "not_closed": not_closed,
             # Per-store cash-on-hand, AS OF `_as_of` (the Day-mode date, or Range-mode's end date) --
             # closes the loop between the Store Cash on Hand report and the actual pickup action.
@@ -6267,21 +6378,36 @@ class RecordDepositIn(LaxModel):
 # the sibling commcalc.billpay_pickup table (see 942_billpay_pickup.sql for why a sibling table,
 # not a kind column: the UNIQUE upsert key is load-bearing and a missed kind filter would leak
 # billpay rows into the general cash movement — the sibling table is fail-closed by construction).
-def _cash_declared_for_envelope(client, org_id, cdate, store, emp):
-    """The general envelope's system-declared cash: store_cash + epay_cash (the mig-034 snapshot
-    definition — the FULL cash, ePay included)."""
-    dc = (client.schema("commcalc").table("daily_closing").select("store_cash,epay_cash")
+def _declared_closing_row(client, org_id, cdate, store, emp):
+    """The ONE row read behind both declared_fn helpers below, with the ONE column list the pure
+    module declares (`envelope_report.CLOSING_SELECT`). Spelled once so neither helper can ask for a
+    column the other needs — the §47.8 defect class: an unselected column reads as $0.00 and is
+    indistinguishable from a store that took no cash."""
+    dc = (client.schema("commcalc").table("daily_closing")
+          .select(envelope_report_mod.CLOSING_SELECT)
           .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
           .eq("employee_name", emp).limit(1).execute().data) or []
-    return (_f(dc[0].get("store_cash")) + _f(dc[0].get("epay_cash"))) if dc else None
+    return dc[0] if dc else None
+
+
+def _cash_declared_for_envelope(client, org_id, cdate, store, emp):
+    """The general envelope's system-declared cash: the WHOLE declared drawer, bill payments included
+    (the mig-034 snapshot definition), via `envelope_report.declared_total_cash` — the one home that
+    knows both the mig-103+ and the pre-mig-103 spelling of that drawer."""
+    row = _declared_closing_row(client, org_id, cdate, store, emp)
+    return envelope_report_mod.declared_total_cash(row) if row else None
 
 
 def _billpay_declared_for_envelope(client, org_id, cdate, store, emp):
-    """The billpay envelope's system-declared amount: the rep's declared ePay-on-cash split."""
-    dc = (client.schema("commcalc").table("daily_closing").select("epay_on_cash")
-          .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
-          .eq("employee_name", emp).limit(1).execute().data) or []
-    return _f(dc[0].get("epay_on_cash")) if dc else None
+    """The billpay envelope's system-declared amount: the rep's declared bill-pay-on-cash split, via
+    `envelope_report.declared_billpay_cash`.
+
+    OWNER BUG 2026-10-02 (the same class as the report that prompted it): this read `epay_on_cash`
+    RAW, a column that does not exist on a pre-mig-103 row — so all 89 of those rows declared $0.00 of
+    bill-pay cash while 78 of them carry a real `epay_cash` leg (one of them $744). The era rule now
+    comes from the one home instead of being absent here."""
+    row = _declared_closing_row(client, org_id, cdate, store, emp)
+    return envelope_report_mod.declared_billpay_cash(row) if row else None
 
 
 def _record_deposit_impl(payload: RecordDepositIn, org_id: str, table: str, declared_fn):
@@ -6357,11 +6483,19 @@ class ConfirmPickupIn(LaxModel):
 
 
 async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str,
-                               cfg_table: str, kind_label: str, fallback_cfg_table=None):
+                               cfg_table: str, kind_label: str, fallback_cfg_table=None,
+                               amount_basis_fn=None):
     """Shared pickup-confirmation writer + notify — see confirm_pickup's docstring for the flow."""
     if isinstance(payload, dict):    # direct/harness callers pass plain dicts — coerce, same keys
         payload = ConfirmPickupIn(**payload)
     client = sb()
+    # ── WHICH CASH THIS AMOUNT IS (owner bug 2026-10-02, mig 1039) ───────────────────────────────
+    # `amount` is a SNAPSHOT of what the screen offered, and until now the row recorded no statement
+    # of which cash that was — so the day a tenant switches the bill-pay netting on or off, every
+    # historical pickup silently changes meaning and no stored row can be read back honestly. Exactly
+    # the class mig 1036 just closed for a stored envelope count. Resolved ONCE here, server-side,
+    # from the config actually in force rather than from anything the client claims.
+    _basis = amount_basis_fn(client, org_id) if amount_basis_fn else None
     top_date = _date(payload.date or payload.close_date)
     items = payload.items or []
     if not items:
@@ -6392,6 +6526,8 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
                "store_name": it.get("store_name"), "employee_name": (it.get("employee_name") or ""),
                "amount": amt, "picked_up": True, "picked_up_by": dm, "picked_up_at": _now(),
                "note": (it.get("note") or "").strip() or None}
+        if _basis:
+            row["amount_basis"] = _basis
         # OWNER 2026-09-04 ("one more column is needed actual cash picked from envelope"):
         # `actual_amount` per item = the ACTUAL cash the DM physically took, stored in mig-949
         # actual_picked_amount beside the declared snapshot (`amount`). The key is written ONLY
@@ -6415,14 +6551,23 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
         try:
             client.schema("commcalc").table(table).upsert(
                 row, on_conflict="org_id,close_date,store_code,employee_name").execute()
-        except Exception:
-            # pre-990 schema (no envelope_opened column): retry without it so the pickup — and the
-            # mig-949 count that matters most — still records. The mig-201 product_mrc precedent.
-            # The flag is a statement ABOUT the count, never a substitute for it, so dropping it
-            # loses no money figure. Re-raised if the write fails for any other reason.
-            if "envelope_opened" not in row:
+        except Exception as _e:
+            # A schema older than one of the OPTIONAL statement columns: retry without the ones the
+            # error names, so the pickup — and the mig-949 count that matters most — still records.
+            # The mig-201 product_mrc precedent. Each of these is a statement ABOUT the amount, never
+            # a substitute for it, so dropping one loses no money figure. Re-raised if the write
+            # fails for any other reason.
+            #   envelope_opened  pre-990 schema
+            #   amount_basis     pre-1039 schema (the basis then reads as NULL, which
+            #                    `pickup_amount_basis` words as "not recorded" — never as a guess)
+            _drop = [k for k in ("envelope_opened", "amount_basis") if k in row and k in str(_e)]
+            if not _drop:
                 raise
-            row.pop("envelope_opened", None)
+            for _k in _drop:
+                row.pop(_k, None)
+                if _k == "amount_basis":
+                    print("WARN cash_pickup.amount_basis not stored (run migration 1039): "
+                          f"{str(_e)[:160]}")
             client.schema("commcalc").table(table).upsert(
                 row, on_conflict="org_id,close_date,store_code,employee_name").execute()
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
@@ -6447,7 +6592,8 @@ async def confirm_pickup(payload: ConfirmPickupIn, org_id: str = ORG_ID):
     item 2), a batch can span multiple days — each item's OWN `close_date` (if sent) wins, so a
     multi-day selection is never mis-stamped with one shared date."""
     return await _confirm_pickup_impl(payload, org_id, "cash_pickup",
-                                      "cash_pickup_config", "Cash pickup")
+                                      "cash_pickup_config", "Cash pickup",
+                                      amount_basis_fn=pickup_amount_basis)
 
 
 @router.post("/billpay-pickup")
@@ -6588,7 +6734,10 @@ def _billpay_position_core(client, org_id, as_of, store_list, emp_list, ks):
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
 
     dq = (client.schema("commcalc").table("daily_closing")
-          .select("store_code,employee_name,close_date,epay_on_cash")
+          # The declared bill-pay figure's era rule needs the row's tender/legacy columns, not
+          # `epay_on_cash` alone — hand-spelling this list is what made the pre-mig-103 rows read
+          # $0.00 here (owner bug 2026-10-02).
+          .select("store_code,employee_name,close_date,t_cash,epay_cash,epay_on_cash")
           .eq("org_id", org_id).lte("close_date", as_of))
     if store_list:
         dq = dq.in_("store_code", store_list)
@@ -6678,14 +6827,20 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
 
     out, emp_options = [], set()
     for r in rows:
-        cash = _f(r.get("epay_on_cash"))
+        # The declared bill-pay CASH from the one home, so a pre-mig-103 envelope stops reading $0.00
+        # (owner bug 2026-10-02 — 78 live rows carry a real legacy `epay_cash` leg this page missed).
+        cash = envelope_report_mod.declared_billpay_cash(r)
         # OWNER 2026-09-02 #2: "in the billpayment pick, add another column for bill payment on
         # credit card" — the rep's declared ePay-on-credit split, shown beside the cash envelope.
         # A credit-only closing (bill payments taken on card, none in cash) now shows as a
         # DISPLAY row too (there is no physical cash to pick up — the UI renders no checkbox and
         # `ready` counts only cash envelopes), so the day's declared bill-pay total is complete
         # for the POS cross-check below.
-        credit = _f(r.get("epay_on_credit"))
+        # Same era rule on the credit leg: `epay_on_credit` is the mig-103+ column, the legacy
+        # `epay_cc` is the pre-mig-103 one. There is no basis math on credit, so it has no shared
+        # home to read — the era test is the row's own `t_cash`, exactly as in `declared_billpay_cash`.
+        credit = (_f(r.get("epay_on_credit")) if envelope_report_mod.is_modern_row(r)
+                  else _f(r.get("epay_cc")))
         code = r.get("store_code") or ""
         p = pick_by.get((code, (r.get("employee_name") or ""), str(r.get("close_date"))))
         if cash <= 0 and credit <= 0 and not p:
@@ -6840,6 +6995,86 @@ def _pos_tenders_for_days(client, org_id, days):
         except Exception:
             pass
     return out
+
+
+def pickup_amount_basis(client, org_id) -> str:
+    """WHICH cash a Cash Pickup `amount` written RIGHT NOW is — one of `billpay_netting.PICKUP_BASES`
+    (mig 1039, owner bug 2026-10-02).
+
+    'off'       netting is not on, so the amount is the whole declared drawer
+    'declared'  the drawer less the rep's own declared bill-pay cash
+    'pos'       the drawer less the POS-calculated bill-pay cash
+    Read from the config in force, not from the client: the screen computed the amount from this same
+    config moments earlier, and a basis a caller could assert is a basis a caller could get wrong.
+    The per-store-day 'none' case (netting on, no POS figure, nothing netted) is NOT asserted here —
+    that envelope's amount equals the drawer, and the row says 'pos' meaning "the POS source was in
+    force", which is what a reader needs to interpret it.
+    """
+    if not billpay_netting_enabled(client, org_id):
+        return "off"
+    return billpay_net_source(client, org_id)
+
+
+_PICKUP_BASIS_WORDS = {
+    "off": "total cash (bill payments included)",
+    "none": "total cash — no POS bill-pay figure for that store-day, so nothing was netted",
+    "declared": "sales cash (the rep's declared bill-pay cash netted out)",
+    "pos": "sales cash (the POS-calculated bill-pay cash netted out)",
+}
+
+
+def pickup_basis_label(basis, in_force=None):
+    """PURE: how a stored pickup basis reads on a screen — and how a MISSING one reads.
+
+    A row written before mig 1039 recorded nothing, so it is worded as un-recorded, never backfilled
+    into a claim somebody made (the house rule: absence is never a guess; see mig 1036's
+    `counted_basis`).
+
+    `in_force` is the basis a pickup written NOW would use (`pickup_amount_basis`). When it differs
+    from the row's own, the row is STALE: its stored `amount` — and therefore the variance measured
+    against it — answers a question the screen is no longer asking. That is REPORTED, never
+    recomputed: re-scoring a stored amount against today's basis would rewrite what the DM was
+    actually asked to collect, which is the money-rewriting this file exists to refuse. The same
+    rule mig 1036 applies to a stored envelope count.
+    """
+    b = str(basis or "").strip().lower()
+    recorded = b in billpay_netting.PICKUP_BASES
+    if not recorded:
+        b = "off"
+    out = {"basis": b, "recorded": recorded,
+           "label": (_PICKUP_BASIS_WORDS[b] if recorded else
+                     "total cash (not recorded — collected before the basis was stored)")}
+    f = str(in_force or "").strip().lower()
+    if f in billpay_netting.PICKUP_BASES and f != b:
+        out["in_force"] = f
+        out["stale"] = True
+        out["stale_note"] = (
+            f"This was collected on {_PICKUP_BASIS_WORDS[b].split(' (')[0]}"
+            + ("" if recorded else ", as far as can be told — the basis was not recorded")
+            + f"; the pickup screen now works on {_PICKUP_BASIS_WORDS[f].split(' (')[0]}. "
+              "Any variance beside it was measured against what the DM was asked for at the time.")
+    else:
+        out["in_force"] = f or b
+        out["stale"] = False
+    return out
+
+
+def billpay_net_source(client, org_id) -> str:
+    """WHICH figure this tenant nets the bill-pay cash by — `billpay_netting.NET_SOURCES`, house
+    default 'pos' (mig 1038, owner bug 2026-10-02).
+
+    RULE TWO: a per-org config row, never a code branch. ADAPTIVE: a database without mig 1038, or a
+    config read that fails, gives 'pos' — exactly the behaviour mig 989 shipped — because an
+    unreadable config must never change which cash a DM is told to collect.
+    """
+    try:
+        rows = (client.schema("commcalc").table("cash_pickup_config")
+                .select("pickup_billpay_net_source").eq("org_id", org_id).limit(1)
+                .execute().data) or []
+        return billpay_netting.normalize_net_source(rows[0].get("pickup_billpay_net_source")
+                                                    if rows else None)
+    except Exception:
+        return billpay_netting.NET_SOURCE_DEFAULT
 
 
 def billpay_netting_enabled(client, org_id) -> bool:
@@ -8108,6 +8343,58 @@ _REP_MISMATCH_RETRY = ("Your report does not match the system. Please recount an
 _REP_MISMATCH_REVIEW = "Your report does not match the system — sent for management review."
 
 
+def _real_attempt_count(client, org_id, d, store_code, emp_name) -> int:
+    """How many NON-refused tries this (date, store, rep) already has. `submit_refusal.is_real_try`
+    is the ONE rule for what counts as a try, dereferenced here and by the 3-try close gate, so a
+    REFUSED submit (a failed photo upload, a duplicate) can never be miscounted as a recount — which
+    would let a rep reach the auto-accepting third try without ever having recounted."""
+    if not (store_code and emp_name):
+        return 0
+    try:
+        rows = (client.schema("commcalc").table("closing_attempt").select("*")
+                .eq("org_id", org_id).eq("close_date", d).eq("store_code", store_code)
+                .eq("employee_name", emp_name).execute().data) or []
+    except Exception:
+        return 0
+    return sum(1 for r in rows if _refusal.is_real_try(r))
+
+
+def _refuse(client, org_id, d, body, code, detail="", tenders=None, message="") -> None:
+    """THE single refusal site for a daily-closing submit (index §29.11). Records WHY the closing was
+    refused in the SAME commcalc.closing_attempt audit trail the accepted and blocked tries already
+    use — so GET /closing/attempts and the Management Review screen gain refusals with no second
+    query path — then raises the HTTP error declared in closing/submit_refusal.REFUSALS.
+
+    NEVER raise HTTPException directly from a submit validation: before this existed, all seven
+    refusal paths stored nothing at all, so a rep who said "I submitted it" and a manager who saw
+    nothing had no evidence either way (owner bug report 2026-10-02, 117 E Burnside Ave).
+    harness_closing_submit_refusal.py FAILS THE BUILD if a new path bypasses this function."""
+    r = _refusal.Refusal(code, detail=detail, message=message)
+    b = body or {}
+    try:
+        # A date we could not parse has no close_date to file the refusal under, and close_date is
+        # NOT NULL. File it on the business day the refusal HAPPENED (the honest reading of the row)
+        # and keep the unparseable value in refusal_detail.
+        filed = d or _biz_today_iso()
+        row = _refusal.audit_row(
+            org_id, filed, b, code, detail,
+            real_attempts=_real_attempt_count(client, org_id, filed, b.get("store_code"),
+                                              b.get("employee_name")),
+            tenders=tenders)
+        try:
+            client.schema("commcalc").table("closing_attempt").insert(row).execute()
+        except Exception:
+            # Migration 1037 not run yet — the refusal columns do not exist. Record the refusal
+            # WITHOUT them rather than losing it: an auditable try-row with no reason is still
+            # strictly more than the nothing that was stored before.
+            for k in _refusal.REFUSED_COLUMNS:
+                row.pop(k, None)
+            client.schema("commcalc").table("closing_attempt").insert(row).execute()
+    except Exception as e:
+        print(f"closing refusal log failed ({code}): {e}")
+    raise HTTPException(r.status, r.message)
+
+
 def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credit, b2b, dirs,
                  attempt_no, blocked, accepted, auto_accepted):
     """Record ONE submission try. Management review reads these (with amounts + the true B2B variance);
@@ -8158,9 +8445,11 @@ def _caller_perms(client, authorization: str) -> dict:
         return {}
 
 
-def _closer_gate(client, org_id: str, authorization: str, submitted_name) -> None:
-    """Refuse a closing submitted under someone else's name by a caller who may not pick anyone
-    (closing/closer_pick, index §29.7). Own names = the login's full name + its employee record's name."""
+def _closer_gate(client, org_id: str, authorization: str, submitted_name):
+    """Which refusal code (if any) applies to a closing submitted under `submitted_name` by this
+    caller (closing/closer_pick, index §29.7). Own names = the login's full name + its employee
+    record's name. Returns None when the submit is permitted, else a closing/submit_refusal code —
+    it does NOT raise, so the refusal goes through the one audited raise site (`_refuse`)."""
     from app.modules.closing import closer_pick
     perms = _caller_perms(client, authorization)
     if closer_pick.may_pick_any(perms):
@@ -8180,9 +8469,12 @@ def _closer_gate(client, org_id: str, authorization: str, submitted_name) -> Non
         names = closer_pick.own_names((u or {}).get("full_name"), emp_name)
     except Exception as e:                                              # pragma: no cover - I/O guard
         print(f"WARN closing _closer_gate name lookup failed: {e}")
-    ok, why = closer_pick.verdict(perms, submitted_name, names)
-    if not ok:
-        raise HTTPException(403, why)
+    ok, _why = closer_pick.verdict(perms, submitted_name, names)
+    if ok:
+        return None
+    # Two distinct refusals, both declared in closing/submit_refusal: a caller with NO name on file
+    # cannot submit under any name, which is an admin fix, not a "use your own name" instruction.
+    return "closer_no_name" if not names else "closer_not_permitted"
 
 
 def _can_mgmt_review(perms: dict) -> bool:
@@ -10026,6 +10318,79 @@ def derive_closing_day(date: str = "", dry_run: bool = False, org_id: str = ORG_
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Deriving daily closings is permission-restricted.")
     return _derive_closing_day(client, org_id, (date or "").strip() or _yesterday_iso(), dry_run=dry_run)
+
+
+MAX_DERIVE_BACKFILL_DAYS = 400
+
+
+def _derive_date_span(start: str, end: str) -> list:
+    """The inclusive list of ISO days from `start` to `end`, oldest first — the ONE place a backfill
+    span is turned into days, so the endpoint below has no date arithmetic of its own.
+
+    Refuses rather than guesses: an unparseable bound, an end before its start, or a span longer than
+    `MAX_DERIVE_BACKFILL_DAYS` raises. An unbounded backfill is not a kindness — it is a sweep nobody
+    can predict the cost of, and a reversed range silently returning zero days would read as "there
+    was nothing to do" when the caller simply typed the bounds the wrong way round.
+    """
+    try:
+        d0 = datetime.fromisoformat(str(start).strip()[:10]).date()
+        d1 = datetime.fromisoformat(str(end).strip()[:10]).date()
+    except Exception:
+        raise HTTPException(400, "Give both dates as YYYY-MM-DD.")
+    if d1 < d0:
+        raise HTTPException(400, "The end date is before the start date.")
+    span = (d1 - d0).days + 1
+    if span > MAX_DERIVE_BACKFILL_DAYS:
+        raise HTTPException(400, f"That is {span} days. Backfill at most {MAX_DERIVE_BACKFILL_DAYS} "
+                                 f"days at a time.")
+    return [(d0 + timedelta(days=i)).isoformat() for i in range(span)]
+
+
+@router.post("/derive-range")
+def derive_closing_range(start: str = "", end: str = "", dry_run: bool = False, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    """Backfill derived closings across a span of days — the retroactive form of `/derive-day`.
+
+    It runs the SAME `_derive_closing_day` sweep once per day, oldest first; there is no second
+    derivation of the money and no second set of rules about what a derived closing contains. So
+    every honesty property of the one-day sweep holds for a backfill unchanged: a day whose feed
+    carried nothing for a store is skipped and reported, a rep's own row is never overwritten, and a
+    re-run over the same span writes nothing because each day's row already matches its feed.
+
+    The response is per-day COUNTS plus a totals block, not the full row bodies — a 120-day backfill
+    with 11 stores is 1,320 decisions, and a caller needs to see the shape of what happened and which
+    days did nothing, not every field of every row. `dry_run=true` reports the whole span without
+    writing anything, which is the sane first run of any backfill.
+    """
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Deriving daily closings is permission-restricted.")
+    days = _derive_date_span(start or _yesterday_iso(), end or _yesterday_iso())
+    per_day, totals = [], {"wrote": 0, "updated": 0, "unchanged": 0, "kept_manual": 0, "skipped": 0}
+    days_with_feed, failed = 0, []
+    for d in days:
+        try:
+            r = _derive_closing_day(client, org_id, d, dry_run=dry_run)
+        except Exception as e:
+            # One bad day never costs the rest of the span — it is named instead.
+            print(f"closing derivation backfill failed for org {org_id} on {d} (non-fatal): {e}")
+            failed.append({"date": d, "error": str(e)[:300]})
+            continue
+        if r.get("b2b_has_data"):
+            days_with_feed += 1
+        counts = {"wrote": len(r.get("wrote") or []), "updated": len(r.get("updated") or []),
+                  "unchanged": len(r.get("unchanged") or []),
+                  "kept_manual": len(r.get("kept_manual") or []),
+                  "skipped": len(r.get("skipped") or [])}
+        for k in totals:
+            totals[k] += counts[k]
+        per_day.append({"date": d, "b2b_has_data": bool(r.get("b2b_has_data")),
+                        "reasons": sorted({s.get("reason") for s in (r.get("skipped") or [])
+                                           if s.get("reason")}), **counts})
+    return {"org_id": org_id, "start": days[0], "end": days[-1], "days": len(days),
+            "dry_run": bool(dry_run), "days_with_feed": days_with_feed,
+            "totals": totals, "failed": failed, "per_day": per_day}
 
 
 @router.post("/derive-due")

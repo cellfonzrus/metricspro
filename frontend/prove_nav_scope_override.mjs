@@ -97,7 +97,10 @@ function oldCanAccessPath(perms, path) {
   return R.moduleGranted(perms.modules, R.navModuleForPath(path) ?? R.moduleForPath(path))
 }
 
-const ALL_ITEMS = R.NAV.flatMap(g => g.items)
+// A deep-link entry (e.g. /hr?tab=employees, index §19.40) is a door into a page, not a page: it carries no
+// per-function switch of its own and answers exactly as its page does — proved by prove_nav_deep_link.mjs. The
+// byte-identity oracle below models per-PAGE overrides, so doors are left to that proof.
+const ALL_ITEMS = R.NAV.flatMap(g => g.items).filter(i => !(R.isDeepLinkItem && R.isDeepLinkItem(i)))
 const SCOPED_ITEMS = ALL_ITEMS.filter(i => i.scopes && i.scopes.length)
 must(ALL_ITEMS.length > 100, `expected a large nav, got ${ALL_ITEMS.length}`)
 must(SCOPED_ITEMS.length > 10, `expected scope-restricted items, got ${SCOPED_ITEMS.length}`)
