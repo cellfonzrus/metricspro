@@ -382,6 +382,11 @@ on:
       - "backend/app/modules/commcalc/manager_digest.py"
       - "database/migrations/1043_billpay_declaration_alerts.sql"
       - "backend/harness_manager_followup.py"
+      - "backend/app/modules/storevisit/visit_alerts.py"
+      - "backend/app/modules/storevisit/router.py"
+      - "backend/app/modules/supply/store.py"
+      - "database/migrations/1046_store_visit_alerts.sql"
+      - "backend/harness_storevisit_alerts.py"
       - "backend/app/modules/commcalc/manager_followup.py"
       - "backend/app/modules/commcalc/compliance_summary.py"
       - "database/migrations/1044_manager_followup.sql"
@@ -656,6 +661,9 @@ jobs:
       - name: Run the Follow Up With Managers lock (the pending-job vocabulary is dereferenced from the compliance registry; an age we cannot read is unknown, never 0; unowned work is counted, not dropped; the dedup key re-escalates on ageing — index §47.14)
         working-directory: backend
         run: python3 harness_manager_followup.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the store-visit follow-through lock (DM-and-above is the default and cannot be lost; one fan-out, one dedup, one recipient list, one PO insert; the draft PO names an unpriced line rather than dropping it; no 'submit' mode — index §47.15)
+        working-directory: backend
+        run: python3 harness_storevisit_alerts.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
