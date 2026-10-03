@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 // ONE HOME for where the backend is (src/lib/apiBase.ts) and the site routing policy (site-routing.ts),
 // owner 2026-09-28, index §40. Locked by backend/harness_one_domain_lock.py.
-import { API_ENV, apiRewrites, directOrigin } from "./src/lib/apiBase";
+import { API_ENV, apiRewrites, directOrigin, productionConfigProblems } from "./src/lib/apiBase";
 import { canonicalHostRedirects, connectSrc } from "./site-routing";
 
 // Frontend security headers (Security Controls Spec §4, item 11).
@@ -37,6 +37,20 @@ const SECURITY_HEADERS = [
   { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
   { key: "Content-Security-Policy-Report-Only", value: CSP_REPORT_ONLY },
 ];
+
+// A PRODUCTION build asserts the configuration it cannot work without, and FAILS rather than shipping a
+// deploy that renders and then cannot reach its API (owner incident 2026-10-03, index §40.10). The
+// development fallbacks in apiBase.ts stay — they are right for `next dev` and for a preview — but they
+// must not be reachable by a production build. The rules live in the home; this is the one caller that
+// enforces them.
+const CONFIG_PROBLEMS = productionConfigProblems(API_ENV, process.env.VERCEL_ENV === "production");
+if (CONFIG_PROBLEMS.length) {
+  throw new Error(
+    "This production build is not configured and would ship an app that cannot reach its backend:\n" +
+    CONFIG_PROBLEMS.map((p) => `  - ${p}`).join("\n") +
+    "\nFix the environment variables in the production environment and redeploy. See index §40.8/§40.10.",
+  );
+}
 
 const nextConfig: NextConfig = {
   // The browser only ever talks to this site's own host: /api/v1/* and /health are proxied to the

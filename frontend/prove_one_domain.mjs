@@ -20,6 +20,8 @@
 //   F. CSP connect-src — no backend host once a direct origin on the customer domain is configured
 //   G. the one home    — browser calls are same-origin; uploads and the long endpoints are DIRECT;
 //                        the server uses the real origin; nothing private is rendered
+//   H. production gate  — a production build with no reachable backend origin, or a malformed site /
+//                        direct origin, FAILS to build instead of shipping an app that cannot reach its API
 //   N. negative controls — the evaluator is not vacuous
 //
 // Run:  node frontend/prove_one_domain.mjs     (Node >= 22.18; needs frontend/node_modules; no network)
@@ -145,7 +147,7 @@ console.log('D. safety gates')
 const noSite = await loadConfig({ VERCEL_ENV: 'production', NEXT_PUBLIC_API_URL: RAILWAY })
 check('production WITHOUT an explicit NEXT_PUBLIC_SITE_URL installs no redirect (no lock-out)',
       noSite.routes.redirects.filter(x => !x.internal).length === 0)
-const loopSite = await loadConfig({ VERCEL_ENV: 'production', NEXT_PUBLIC_SITE_URL: `https://${PROD_ALIAS}` })
+const loopSite = await loadConfig({ VERCEL_ENV: 'production', NEXT_PUBLIC_SITE_URL: `https://${PROD_ALIAS}`, NEXT_PUBLIC_API_URL: RAILWAY })
 check('a canonical site that is itself a platform host installs no redirect (no loop)',
       loopSite.routes.redirects.filter(x => !x.internal).length === 0)
 
@@ -203,6 +205,53 @@ check('siteUrl defaults to https://app.metricspro.tech (owner 2026-09-28)', A.si
 check('BACKEND_PATH_PREFIXES are exactly /api/v1 and /health', JSON.stringify(A.BACKEND_PATH_PREFIXES) === '["/api/v1","/health"]')
 check('absoluteApiUrl during SSR never renders the backend origin (site stands in)',
       A.absoluteApiUrl('/api/v1/closing/envelope-view/x') === `${A.siteUrl()}/api/v1/closing/envelope-view/x`)
+
+// ── H. production config gate (owner incident 2026-10-03, index §40.10) ──────────────────────────
+console.log('H. production config gate')
+
+// Loading the real next.config.ts under an environment, capturing the build-time failure if there is one.
+async function loadOutcome(env) {
+  try { return { ok: true, loaded: await loadConfig(env) } }
+  catch (e) { return { ok: false, message: String((e && e.message) || e) } }
+}
+
+let o = await loadOutcome({ VERCEL_ENV: 'production', NEXT_PUBLIC_SITE_URL: 'https://app.metricspro.tech' })
+check('production with NO backend origin configured FAILS the build (the live 2026-10-03 shape)', o.ok === false, o)
+check('… and the message names the variables to set', !o.ok && /BACKEND_ORIGIN/.test(o.message) && /NEXT_PUBLIC_API_URL/.test(o.message), o.message)
+check('… and says the app would load and then fail every API call', !o.ok && /fail every API call/.test(o.message), o.message)
+
+o = await loadOutcome({ VERCEL_ENV: 'production', NEXT_PUBLIC_API_URL: 'http://localhost:8000' })
+check('production pointed at localhost FAILS the build too (an explicit value, not just a fallback)', o.ok === false, o)
+o = await loadOutcome({ VERCEL_ENV: 'production', BACKEND_ORIGIN: 'http://127.0.0.1:8000' })
+check('production pointed at 127.0.0.1 FAILS the build', o.ok === false, o)
+o = await loadOutcome({ VERCEL_ENV: 'production', BACKEND_ORIGIN: 'http://10.1.2.3:8000' })
+check('production pointed at a private address FAILS the build', o.ok === false, o)
+
+o = await loadOutcome({ VERCEL_ENV: 'production', NEXT_PUBLIC_API_URL: RAILWAY,
+                        NEXT_PUBLIC_SITE_URL: 'https://app.metricspro.tech/' })
+check('a NEXT_PUBLIC_SITE_URL with a trailing slash is tolerated (it is cleaned, not a typo)', o.ok === true, o)
+o = await loadOutcome({ VERCEL_ENV: 'production', NEXT_PUBLIC_API_URL: RAILWAY,
+                        NEXT_PUBLIC_SITE_URL: 'app.metricspro.tech' })
+check('a NEXT_PUBLIC_SITE_URL with no scheme FAILS the build (the redirect would silently not install)', o.ok === false, o)
+o = await loadOutcome({ VERCEL_ENV: 'production', NEXT_PUBLIC_API_URL: RAILWAY,
+                        NEXT_PUBLIC_API_DIRECT_ORIGIN: 'api.metricspro.tech' })
+check('a NEXT_PUBLIC_API_DIRECT_ORIGIN with no scheme FAILS the build (uploads would go nowhere)', o.ok === false, o)
+
+// The fallbacks stay — they are right everywhere except a production build.
+o = await loadOutcome({})
+check('`next dev` with nothing configured still builds (the localhost fallback is right there)', o.ok === true, o)
+o = await loadOutcome({ VERCEL_ENV: 'preview', NEXT_PUBLIC_VERCEL_ENV: 'preview' })
+check('a PREVIEW with nothing configured still builds', o.ok === true, o)
+o = await loadOutcome({ VERCEL_ENV: 'production', BACKEND_ORIGIN: 'https://backend.internal.example',
+                        NEXT_PUBLIC_SITE_URL: 'https://app.metricspro.tech',
+                        NEXT_PUBLIC_API_DIRECT_ORIGIN: 'https://api.metricspro.tech' })
+check('a correctly configured production build still builds', o.ok === true, o)
+
+// The rules themselves, read from the home.
+check('control: the gate is inert when `production` is false',
+      A.productionConfigProblems({}, false).length === 0)
+check('control: the same environment WITH production true reports exactly one problem',
+      A.productionConfigProblems({}, true).length === 1, A.productionConfigProblems({}, true))
 
 // ── N. negative controls ──────────────────────────────────────────────────────────────────────────
 console.log('N. negative controls')

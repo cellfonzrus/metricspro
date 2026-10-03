@@ -127,6 +127,64 @@ export function absoluteApiUrl(path: string, cls?: RouteClass): string {
   return (browser ? window.location.origin : siteUrl(API_ENV)) + p
 }
 
+/** A host that only exists on the build machine — a backend origin pointing at one of these can never
+ *  be reached from a browser. Used by productionConfigProblems(); not a security boundary. */
+function isLocalHost(origin: string): boolean {
+  const host = String(origin || '').replace(/^[a-z]+:\/\//i, '').split('/')[0].split(':')[0].toLowerCase()
+  if (!host) return true
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1') return true
+  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) return true
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return true
+  return false
+}
+
+const BARE_HTTPS_ORIGIN = /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?$/
+
+/** WHY THIS EXISTS (owner incident 2026-10-03, index §40.10). The move to app.metricspro.tech took the
+ *  app off the air, and every fallback in this file is written to keep a build WORKING when a variable is
+ *  missing — which means a production build with no backend address configured does not fail, it silently
+ *  proxies every `/api/v1` and `/health` request to `http://localhost:8000` and ships. The deploy is green,
+ *  the pages render, and nothing in the app can reach the API. Same shape for a malformed origin: the
+ *  canonical-host redirect quietly does not install, or direct-class uploads quietly go nowhere.
+ *
+ *  THE CLASS: a development fallback must never be reachable by a PRODUCTION build. The fallbacks stay —
+ *  they are right for `next dev` and for a preview — but a production build asserts the facts it cannot
+ *  work without, and FAILS instead of going dark.
+ *
+ *  Pure: `next.config.ts` calls it at build time and throws on a non-empty result; the proof calls it
+ *  directly, and `backend/harness_one_domain_lock.py` fails the build if the config stops calling it. */
+export function productionConfigProblems(env: ApiEnv = API_ENV, production = false): string[] {
+  if (!production) return []
+  const problems: string[] = []
+
+  const backend = backendOrigin(env)
+  if (isLocalHost(backend)) {
+    problems.push(
+      `the backend origin resolves to ${backend || '(empty)'}, which no browser can reach: every ` +
+      `${BACKEND_PATH_PREFIXES.join(' and ')} request is proxied there, so the whole app would load and ` +
+      `then fail every API call. Set BACKEND_ORIGIN (preferred, server-only) or NEXT_PUBLIC_API_URL to ` +
+      `the backend's https origin in the production environment and redeploy.`)
+  }
+
+  const site = clean(env.NEXT_PUBLIC_SITE_URL)
+  if (site && !BARE_HTTPS_ORIGIN.test(site)) {
+    problems.push(
+      `NEXT_PUBLIC_SITE_URL is "${site}", which is not a bare https://host[:port]. The ` +
+      `canonical-host redirect installs only for a bare origin, so it would silently not install and the ` +
+      `site metadata would carry a wrong base.`)
+  }
+
+  const direct = clean(env.NEXT_PUBLIC_API_DIRECT_ORIGIN)
+  if (direct && !BARE_HTTPS_ORIGIN.test(direct)) {
+    problems.push(
+      `NEXT_PUBLIC_API_DIRECT_ORIGIN is "${direct}", which is not a bare https://host[:port]. ` +
+      `Direct-class calls (multipart uploads and the long synchronous endpoints) are built from it, so ` +
+      `they would be sent to an address the browser cannot resolve.`)
+  }
+
+  return problems
+}
+
 /** The rewrites next.config.ts installs: every BACKEND_PATH_PREFIXES entry → the backend origin. */
 export function apiRewrites(env: ApiEnv = API_ENV): { source: string; destination: string }[] {
   const origin = backendOrigin(env)

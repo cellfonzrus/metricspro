@@ -5339,7 +5339,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
 | Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
-| **Every backend path, as the BROWSER reaches it** — `/api/v1/*` and `/health` on the site's own origin, proxied server-side (`next.config.ts` `rewrites()` = `apiRewrites()`); uploads + the `require_browser_service()` endpoints + `POST /payables/rebuild` go DIRECT (`DIRECT_ROUTES`) | `frontend/src/lib/apiBase.ts` `apiUrl` / `routeClass`; lock `harness_one_domain_lock.py`, proof `frontend/prove_one_domain.mjs` | §40 |
+| **Every backend path, as the BROWSER reaches it** — `/api/v1/*` and `/health` on the site's own origin, proxied server-side (`next.config.ts` `rewrites()` = `apiRewrites()`); uploads + the `require_browser_service()` endpoints + `POST /payables/rebuild` go DIRECT (`DIRECT_ROUTES`) | `frontend/src/lib/apiBase.ts` `apiUrl` / `routeClass` / `productionConfigProblems` (the production config gate, §40.10); lock `harness_one_domain_lock.py`, proof `frontend/prove_one_domain.mjs` | §40 |
 | **Any path on the platform hostname in production** → 308 to `NEXT_PUBLIC_SITE_URL`, same path + query (only when that is set; previews / localhost untouched) | `frontend/site-routing.ts` `canonicalHostRedirects` via `next.config.ts` `redirects()` | §40.4 |
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
 | `GET /commcalc/carrier-vs-pay/{period}` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `POST /discrepancy/run` · `GET /discrepancy-appeals` · `/commission-device` · `/commission-explain?view=carrier` — the CARRIER surfaces: 403 for every viewer without `carrier_commission_view` (reps and store managers alike), each by its REGISTERED key | `router._require_carrier_view(authorization, org_id, key)` → `_can_view_carrier_commission` → `payout_audience.carrier_view_allowed`; keys in `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j / §6m |
@@ -14612,18 +14612,66 @@ when `NEXT_PUBLIC_SITE_URL` is set, so nothing moves until the domain serves the
 
 ### 40.9 Locks and proofs
 
-- `backend/harness_one_domain_lock.py` (stdlib, CI `carrier-vocab-guard`): only the home reads the four env vars; no
+- `backend/harness_one_domain_lock.py` (stdlib, CI `carrier-vocab-guard`): rule 7 — `next.config.ts` must call
+  `productionConfigProblems(API_ENV, VERCEL_ENV === 'production')` and **throw** on a non-empty result, and the home must
+  keep exporting it (§40.10); only the home reads the four env vars; no
   `railway.app` / `vercel.app` literal under `frontend/src`; nobody builds `${origin}/api/v1`; `next.config.ts` installs
   rewrites / redirect / connect-src from the homes; `apiUpload` is direct; every `require_browser_service()` endpoint (read
   from the routers) matches `DIRECT_ROUTES`. A negative control for each rule.
 - `backend/harness_cors_policy.py` (stdlib, CI): §40.5 end to end + `main.py` wiring + controls.
-- `frontend/prove_one_domain.mjs` (CI job `one-domain-proof`, Node 22 + `npm ci`): loads the REAL `next.config.ts` through
+- `frontend/prove_one_domain.mjs` (CI job `one-domain-proof`, Node 22 + `npm ci`): section **H** is the production
+  configuration gate (§40.10) — it loads the real config under each environment and asserts which ones FAIL; loads the REAL `next.config.ts` through
   Next's own `transpileConfig`, validates with `loadCustomRoutes`, evaluates with Next's `getPathMatch` / `matchHas` /
   `prepareDestination` — 308 with path + query, previews / localhost / custom domains / look-alikes untouched, rewrites,
   CSP, the home's resolver; negative controls.
 - Verified by two `next build`s: with only `NEXT_PUBLIC_API_URL` set, one static chunk still names the backend (the
   direct-class fallback); with `BACKEND_ORIGIN` + `NEXT_PUBLIC_API_DIRECT_ORIGIN=https://api.metricspro.tech` and no
   `NEXT_PUBLIC_API_URL`, **no** file under `.next/static` or the prerendered pages names the backend host.
+
+---
+
+### 40.10 The production build asserts its configuration — a dark deploy FAILS instead of shipping (owner incident 2026-10-03)
+
+Owner, 2026-10-03: *"the app lost all connection when the app.metricspro.tech was done"*.
+
+**The defect, as a mechanism.** Every lookup in `apiBase.ts` is written to keep a build WORKING when a variable is
+missing: `backendOrigin()` is `BACKEND_ORIGIN || NEXT_PUBLIC_API_URL || http://localhost:8000`, and `directOrigin()` and
+`siteUrl()` fall back the same way. Those fallbacks are correct for `next dev` and for a preview. On a **production**
+build they are a trap: a build with no backend address configured does not fail — it bakes `http://localhost:8000` into
+every `/api/v1` and `/health` rewrite and ships. The deploy is green, the pages render, and nothing in the app can reach
+the API. Nobody is told, by the build, the deploy, or the app. Malformed values fail just as quietly: a
+`NEXT_PUBLIC_SITE_URL` that is not a bare origin makes `canonicalHostRedirects()` install nothing, and a malformed
+`NEXT_PUBLIC_API_DIRECT_ORIGIN` sends every upload to an address the browser cannot resolve.
+
+**The class (CLAUDE.md "name the class, not the instance").** *A development fallback must not be reachable by a
+production build.* The instance was one wrong Vercel variable during one domain move; the class is every variable in this
+file, on every future move, for every tenant and every environment. The fix is not to delete the fallbacks — they are
+right where they apply — it is to make a production build **assert the facts it cannot work without, and fail**.
+
+| Piece | Where |
+|---|---|
+| **THE rules**, pure and in the same home as the facts they guard: backend origin not a local/private host; `NEXT_PUBLIC_SITE_URL` and `NEXT_PUBLIC_API_DIRECT_ORIGIN` bare `https://host[:port]` when set | `frontend/src/lib/apiBase.ts` `productionConfigProblems(env, production)` |
+| The one caller — build-time, throws with the variable to set and why | `frontend/next.config.ts` (`CONFIG_PROBLEMS`) |
+| Proof (both directions) | `frontend/prove_one_domain.mjs` **H**: production with no backend origin / pointed at localhost / 127.0.0.1 / a private address FAILS; a no-scheme site or direct origin FAILS; `next dev`, a preview, and a correctly configured production build all still build; a trailing slash is tolerated |
+| Lock | `backend/harness_one_domain_lock.py` rule 7 + controls 7/7b/7c — a config that only warns, stops calling the gate, or a home that stops exporting it, each fails the build |
+
+Verified by two REAL `next build` runs, not only the harness: `VERCEL_ENV=production` with no backend origin fails at
+config load with the message above; the same build with `BACKEND_ORIGIN` + `NEXT_PUBLIC_API_DIRECT_ORIGIN` +
+`NEXT_PUBLIC_SITE_URL` set completes and renders every route.
+
+**What the gate does NOT cover, said plainly.** It proves the build knows *where* the backend is; it cannot prove the
+address *answers* — a backend origin that is well-formed but wrong (a dead host, a domain whose TLS is not provisioned)
+still builds. Reachability is a deploy-time fact, not a build-time one; `GET /health` on the site's own origin is how it
+is read (§23d).
+
+**Siblings checked (CLAUDE.md "find the siblings before you ship").**
+
+| Other path that could ship a configuration that cannot work | Status |
+|---|---|
+| `frontend/site-routing.ts` `canonicalHostRedirects()` — silently installs nothing on a malformed site URL | **Fixed by the same gate** — a malformed `NEXT_PUBLIC_SITE_URL` now fails the build instead of leaving the redirect off. The deliberate gates (no site URL ⇒ no redirect; a platform host ⇒ no loop) are unchanged and still install nothing, by design (§40.4) |
+| Backend `settings.APP_PUBLIC_URL` / `API_PUBLIC_URL` defaults (the platform alias / the backend host) — emailed links | **Excused, with the reason**: these default to addresses that still resolve, and the §40.4 redirect carries an old app link to the new domain, so a stale value degrades (an old-looking link) rather than breaking. Normalised by `base_url()` (§41) |
+| `mobile/` `EXPO_PUBLIC_API_URL` | **Excused** — a native app with its own build and no proxy; no browser origin to lose |
+| `website/assets/config.js` | **Excused** — a static site with its own one home (§40.6), no build step to gate |
 
 ---
 
