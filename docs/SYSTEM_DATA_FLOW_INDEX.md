@@ -16402,6 +16402,29 @@ A queue whose read fails returns `([], True)` — "we could not see it", never "
 
 **Live dry run** (house org, 2026-10-03, read-only, nothing sent): 57 follow-ups, 56 past escalation,
 **5 digests** resolved to real managers carrying both an email and a WhatsApp number from the org tree.
+All five receive the SAME roll-up, because all five sit at or above DM for every one of the 29 stores —
+the owner's call, verbatim 2026-10-03: *"there are 5 managers is ok let it go to all to have
+visibility"*. So the DM ∪ above rule stands unnarrowed, deliberately.
+
+**The screen** (`/commcalc/manager-followup`, Flags & Compliance group, NAV + `reports.ts` both at
+`scopes: ['all','market']` — the second-door gate mirrored 1:1, §38.6). It **spells no queue name of
+its own**: the labels and the per-queue links come from the server's `labels` / `sources`, so a queue
+renamed in the pure module renames itself here (the §48 server-supplied-catalog posture). It shows
+the four honesty facts as first-class UI rather than footnotes: the **No owner** tile and its banner
+(work carrying no store, which is not a row because nobody owns it), the `not_attributed` list **with
+the reason per queue**, a per-queue *partial* marker for anything `truncated`, and `age unknown`
+wherever an age could not be read — which also **sorts as the oldest**, not the newest, because
+burying unverified age under fresh work is how it stays unverified. The **Preview the digest** button
+calls `run-now` and never passes `send`, so a screen cannot message five managers by mis-click; it
+reports `email_configured` / `whatsapp_configured` honestly, since a channel with no credentials
+delivers nothing. Turning the alert on stays a config change, never a button.
+
+**Applied and switched on.** Migs `1043`/`1044`/`1045` applied 2026-10-03 (all 16 columns probed 200,
+every tenant `false` on arrival); go-live (the two hourly `pg_cron` jobs + the per-tenant switch) is
+`/mnt/project-files/migrations/GO_LIVE_alerts_2026-10-03.sql`, house org only. **LuxeLink's
+declaration digest is deliberately NOT switched on**: 12 of its 14 store-days read under-declared
+because its feed rings no service-fee line at all, so its basis is still wrong and alerting it would
+accuse its stores of a feed defect (§47.12's unexplained $57,905). Its follow-up half is sound.
 
 **Proof.** `harness_manager_followup.py` (119 checks, stdlib only, DB-free), wired into the
 carrier-vocab-guard job. Sections: A config degradation, B the vocabulary dereference lock, C ageing
