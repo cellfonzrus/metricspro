@@ -6142,8 +6142,10 @@ registered escape for an endpoint that outruns the proxy is `DIRECT_ROUTES` — 
 direct would only raise the ceiling while still showing nothing for minutes. **The fix:** the screen sends the span in
 bounded chunks of `BACKFILL_CHUNK_DAYS = 7` to the SAME ONE endpoint (never a per-day loop — 124 days is 18 calls, each
 far inside the budget), aggregates as each lands and renders the running total, and on a failure names the chunk that
-stopped and states that the days already covered are not lost. Progress and errors render inside the panel. Pinned by
-four checks in `harness_closing_source_lock.py` (chunked, one endpoint, self-reporting, honest partial).
+stopped and states that the days already covered are not lost. Progress and errors render inside the panel. The result's own counts (what it
+would write / refresh / leave as a rep's / skip for want of a feed) render in the panel too — they were the point of a
+preview and only existed in that same page-top message. Pinned by five checks in
+`harness_closing_source_lock.py` (chunked, one endpoint, self-reporting, honest partial, the counts in the panel).
 **SEVERAL STORES AT ONCE — ONE STORE PICKER, FLEET-WIDE (owner directive 2026-10-03).** Owner: *"in store setup to
 assign the store it should be a drop down list to select multiple stores."* **The class:** this is the 2026-08-04
 directive (*"the store picker needs to have check box under the drop down to pick multiple stores"*, called
