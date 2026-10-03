@@ -466,6 +466,9 @@ on:
       - "backend/harness_store_option_fold.py"
       - "backend/harness_store_mapping_identity.py"
       - "database/runbooks/store_identity_merge_1800_1115.sql"
+      # index §19.26 — the distributor-invoice filter lock (same reason as the two above: its
+      # harness sits at the backend ROOT, outside the backend/app glob it guards)
+      - "backend/harness_vip_invoice_filter.py"
   push:
     branches: [main]
     paths:
@@ -875,6 +878,20 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_store_option_fold.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  vip-invoice-filter:
+    name: Distributor invoices — one selector, one store vocabulary (DB-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the distributor-invoice filter proof (the tiles and the table read ONE selector; the date window's fail-closed regression reproduced; the market half must keep dereferencing statement_filter.resolve_store_matcher; unresolved spellings are reported, never folded into a total — index §19.26)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_vip_invoice_filter.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CLOSING-REFUSAL LOCK (index §29.11, owner bug report 2026-10-02 "we cannot see the daily closing which was
   # submitted"). A daily closing that is REFUSED used to store nothing at all — not even in commcalc.closing_attempt,

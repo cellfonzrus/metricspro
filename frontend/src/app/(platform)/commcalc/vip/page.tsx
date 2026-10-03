@@ -4,6 +4,26 @@ import { api, apiUpload, fmt, ORG_ID } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
+
+// RULE FIVE (§3d) retrofit, owner request 2026-10-03: "add date range and market with standard filters
+// for distributor invoices". The shared <StandardFilterBar> is ADOPTED — period as a DATE RANGE plus the
+// market -> store cascade — and the page's own month/status pickers are APPENDED as module facets (the
+// core set is never substituted). The page's old single "All stores" select is REPLACED by the standard
+// store multi-select rather than kept beside it: its options were this feed's own raw `location` strings,
+// which is the same store offered once per spelling (§13e), and the new picker reaches every one of them
+// (measured: all 29 distributor spellings on the house org are selectable through it).
+//
+// DEVIATION, stated out loud: a distributor invoice is raised against the DEALER account and names no
+// salesperson, so there is no rep dimension and the rep control is hidden.
+//
+// Filtering is SERVER-side, not over the loaded rows: the tiles, the fees-by-type panel and the
+// fees-by-store table are computed by /vip/summary, so a client-side narrowing would leave them
+// reporting the unfiltered totals above a filtered table. Market cannot be filtered client-side at all —
+// `vip_invoices` has no market column and `location` is the distributor's own spelling of a store
+// address, which only the org's store vocabulary can resolve (see vip_invoice_filter.py).
 
 
 type Totals = {
@@ -14,7 +34,11 @@ type StoreRow = {
   location: string; invoices: number; sub_total: number; grand_total: number
   shipping: number; discount: number; other_cost: number; other_deductions: number; tax: number
 }
-type Summary = { totals: Totals; fees_by_type: Record<string, number>; by_store: StoreRow[] }
+// `unresolved` — invoices a store/market selection could not bind to the org's store vocabulary. The
+// server REPORTS them rather than folding them into the totals, so a store missing from the mapping
+// reads as a row to add, never as money that is not there.
+type Unresolved = { invoices: number; grand_total: number; locations: string[] }
+type Summary = { totals: Totals; fees_by_type: Record<string, number>; by_store: StoreRow[]; unresolved?: Unresolved }
 type Invoice = {
   vip_id: number; invoice_number: string; order_number: string | null; location: string
   status: string; created_on: string | null; due_date: string | null
@@ -211,12 +235,17 @@ function InvoiceDetailModal({ vipId, onClose }: { vipId: number; onClose: () => 
 }
 
 export default function VipInvoicesPage() {
-  const [period, setPeriod] = useState('')
-  const [location, setLocation] = useState('')
-  const [status, setStatus] = useState('')
+  // The standard core set. `period`/`periodTo` are the date RANGE (inclusive YYYY-MM-DD days over the
+  // invoice's created_on); `stores`/`markets` are the cascade's multi-selects.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const [period, setPeriod] = useState('')          // module facet: the distributor's own month period
+  const [status, setStatus] = useState('')          // module facet
   const [periods, setPeriods] = useState<string[]>([])
-  const [locations, setLocations] = useState<string[]>([])
   const [statuses, setStatuses] = useState<string[]>([])
+  // Store roster WITH each store's market, from /vip/filter-options — which reads the org's one store
+  // option home (core.scope.org_store_options) plus any distributor spelling the matcher cannot bind,
+  // so every spelling in the data is selectable and no store is offered twice.
+  const [roster, setRoster] = useState<StoreOpt[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
@@ -225,27 +254,44 @@ export default function VipInvoicesPage() {
   const [detailId, setDetailId] = useState<number | null>(null)  // open invoice preview
   const [invQ, setInvQ] = useState('')                            // free-text invoice search
 
-  useEffect(() => {
+  const loadOptions = useCallback(() => {
     apiCached(`/api/v1/commcalc/vip/filter-options?org_id=${ORG_ID}`, LOOKUP)
-      .then((d: any) => { setPeriods(d.periods || []); setLocations(d.locations || []); setStatuses(d.statuses || []) })
+      .then((d: any) => {
+        setPeriods(d.periods || []); setStatuses(d.statuses || [])
+        setRoster((d.stores || []).map((x: any) => (
+          typeof x === 'string' ? { id: x, label: x, market: null }
+                                : { id: x.store, label: x.store, market: x.market || null })))
+      })
       .catch(console.error)
   }, [])
+
+  useEffect(() => { loadOptions() }, [loadOptions])
+
+  // ONE query string for both calls, so the table and the tiles above it can never be answering
+  // different questions. Stores/markets are PIPE-separated — a store address may contain a comma.
+  const filterParams = useCallback(() => {
+    const qs = new URLSearchParams({ org_id: ORG_ID })
+    if (period) qs.set('period', period)
+    if (status) qs.set('status', status)
+    if (filt.period) qs.set('date_from', filt.period)
+    if (filt.periodTo) qs.set('date_to', filt.periodTo)
+    if (filt.stores.length) qs.set('stores', filt.stores.join('|'))
+    if (filt.markets.length) qs.set('markets', filt.markets.join('|'))
+    return qs
+  }, [period, status, filt])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const qs = new URLSearchParams({ org_id: ORG_ID })
-      if (period) qs.set('period', period)
-      if (location) qs.set('location', location)
-      if (status) qs.set('status', status)
+      const qs = filterParams().toString()
       const [s, inv] = await Promise.all([
-        api(`/api/v1/commcalc/vip/summary?${qs.toString()}`),
-        api(`/api/v1/commcalc/vip/invoices?${qs.toString()}`),
+        api(`/api/v1/commcalc/vip/summary?${qs}`),
+        api(`/api/v1/commcalc/vip/invoices?${qs}`),
       ])
       setSummary(s); setInvoices(inv)
     } catch (e) { console.error(e) }
     setLoading(false)
-  }, [period, location, status])
+  }, [filterParams])
 
   useEffect(() => { load() }, [load])
 
@@ -256,8 +302,7 @@ export default function VipInvoicesPage() {
       // apiUpload (not a bare fetch) so the bearer token rides along with the multipart body
       const data = await apiUpload(`/api/v1/commcalc/vip/upload?org_id=${ORG_ID}`, form)
       setImportMsg(`✅ ${data.invoices.toLocaleString()} invoices · ${data.lines.toLocaleString()} lines · ${data.devices.toLocaleString()} devices`)
-      apiCached(`/api/v1/commcalc/vip/filter-options?org_id=${ORG_ID}`, LOOKUP)
-        .then((d: any) => { setPeriods(d.periods || []); setLocations(d.locations || []); setStatuses(d.statuses || []) })
+      loadOptions()
       load()
     } catch (e: any) {
       setImportMsg(`❌ ${e.message}`)
@@ -289,11 +334,22 @@ export default function VipInvoicesPage() {
       { header: 'Tax', get: r => r.tax, money: true },
       { header: 'Grand Total', get: r => r.grand_total, money: true },
     ]
-    const filterLabel = [period || null, location || null, status || null].filter(Boolean).join(' · ') || 'All invoices'
+    // What-you-see-is-what-exports: the subtitle names every filter that shaped these rows, the core
+    // set included, so an exported workbook can never look like the whole feed when it is a slice.
+    const dateLabel = filt.period && filt.periodTo ? `${filt.period} → ${filt.periodTo}`
+      : filt.period ? `from ${filt.period}` : filt.periodTo ? `through ${filt.periodTo}` : null
+    const filterLabel = [
+      dateLabel, period || null, status || null,
+      filt.markets.length ? `Markets: ${filt.markets.join(', ')}` : null,
+      filt.stores.length ? `Stores: ${filt.stores.join(', ')}` : null,
+    ].filter(Boolean).join(' · ') || 'All invoices'
+    const slug = (v: string) => v.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+    const nameBit = filt.stores.length === 1 ? '-' + slug(filt.stores[0])
+      : filt.markets.length === 1 ? '-' + slug(filt.markets[0]) : ''
     return {
       title: 'Distributor Invoices',
       subtitle: filterLabel,
-      filename: `vip-invoices${location ? '-' + location.replace(/[^a-z0-9]+/gi, '-').toLowerCase() : ''}`,
+      filename: `vip-invoices${nameBit}`,
       sheets: [
         { name: 'Invoices', rows: invoices, columns: invCols },
         { name: 'Fees by Store', rows: summary?.by_store || [], columns: storeCols },
@@ -327,7 +383,12 @@ export default function VipInvoicesPage() {
           </p>
         </div>
         {summary && <ExportButtons payload={buildPayload} />}
-        {summary && <SendReportButton reportKey="vip_invoices" filters={{ ...(period?{period}:{}), ...(location?{location}:{}), ...(status?{status}:{}) }} />}
+        {summary && <SendReportButton reportKey="vip_invoices" filters={{
+          ...(period ? { period } : {}), ...(status ? { status } : {}),
+          ...(filt.period ? { date_from: filt.period } : {}), ...(filt.periodTo ? { date_to: filt.periodTo } : {}),
+          ...(filt.stores.length ? { stores: filt.stores.join('|') } : {}),
+          ...(filt.markets.length ? { markets: filt.markets.join('|') } : {}),
+        }} />}
         <a className="btn" href="/commcalc/vip/paygo" style={{ textDecoration: 'none' }}>📦 Asset Lending (PayGo)</a>
         <a className="btn" href="/commcalc/vip/sweep" style={{ textDecoration: 'none' }}>⚙️ Auto-sweep</a>
       </div>
@@ -352,22 +413,45 @@ export default function VipInvoicesPage() {
         {importMsg && <div style={{ fontSize: 12, color: importMsg.startsWith('✅') ? '#16a34a' : '#dc2626', width: '100%' }}>{importMsg}</div>}
       </div>
 
-      {/* Filters */}
-      <div className="card" style={{ padding: 14, marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>Filters:</span>
-        <select style={selStyle} value={period} onChange={e => setPeriod(e.target.value)}>
-          <option value="">All periods</option>
-          {periods.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <select style={selStyle} value={location} onChange={e => setLocation(e.target.value)}>
-          <option value="">All stores</option>
-          {locations.map(l => <option key={l} value={l}>{l}</option>)}
-        </select>
-        <select style={selStyle} value={status} onChange={e => setStatus(e.target.value)}>
-          <option value="">All statuses</option>
-          {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+      {/* Filters — the shared core set (date range + market -> store cascade), with this module's own
+          period and status pickers appended. Reps are hidden: an invoice names no salesperson. */}
+      <div className="card" style={{ padding: 14, marginBottom: 20 }}>
+        <StandardFilterBar
+          value={filt} onChange={setFilt}
+          periodMode="range"
+          show={{ period: true, stores: true, markets: true, reps: false }}
+          cascadeStores={roster}
+          storeLabel="Stores…" marketLabel="Markets…"
+          right={<>
+            <label style={{ fontSize: 12, color: 'var(--text2)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              Period
+              <select style={selStyle} value={period} onChange={e => setPeriod(e.target.value)}>
+                <option value="">All periods</option>
+                {periods.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: 'var(--text2)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              Status
+              <select style={selStyle} value={status} onChange={e => setStatus(e.target.value)}>
+                <option value="">All statuses</option>
+                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+          </>}
+        />
       </div>
+
+      {/* A store/market selection that could not bind some of this feed's own store spellings SAYS SO.
+          Those invoices are excluded (never guessed into a market), and the fix is a store_aliases row
+          in the org vocabulary — which every report reads, so one row fixes all of them at once. */}
+      {summary && (summary.unresolved?.invoices || 0) > 0 && (
+        <div className="card" style={{ marginBottom: 20, borderLeft: '3px solid #d97706', fontSize: 13 }}>
+          <strong>{summary.unresolved!.invoices.toLocaleString()} invoices</strong> ({fmt(summary.unresolved!.grand_total)})
+          are excluded because this filter could not match the distributor&apos;s spelling of their store:{' '}
+          {summary.unresolved!.locations.join(', ')}. They are reachable by picking that spelling in the
+          store filter; mapping it to the store (a store alias) makes it follow the market filter too.
+        </div>
+      )}
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>Loading…</div>
