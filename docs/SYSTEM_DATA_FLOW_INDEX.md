@@ -6032,6 +6032,19 @@ envelope, rather than letting the backend 409 them afterwards.
 client: the feed's day written as a real closing, the rep-entry store untouched, idempotent re-runs, a human's row
 kept, a missing feed reported, `dry_run` writing nothing) · `backend/harness_closing_source_lock.py` (the lock). All
 three run in `.github/workflows/carrier-vocab-guard.yml`.
+**THE BACKFILL BUTTON RAN INTO THE 120 s PROXY BUDGET (owner report 2026-10-03: *"does not show anything in
+preview"*; fixed).** Preview over 2026-06-01 → 2026-10-02 did nothing visible. Two defects, both in the panel shipped
+with this feature: (1) a proxied request must produce its first byte within **120 s** (§40.3) and ONE `derive-range`
+call walking ~124 days of the sales feed cannot, so the single-call version could only ever fail on a real backfill;
+(2) the panel reported its result and its failure through the page-level `msg` at the TOP of the screen, far above the
+button, so the failure was invisible and the button looked dead. **The class:** an admin action whose work grows with
+its input must not be one synchronous request, and an action must report itself where it was started. §40.3's
+registered escape for an endpoint that outruns the proxy is `DIRECT_ROUTES` — `derive-range` was never in it, and
+direct would only raise the ceiling while still showing nothing for minutes. **The fix:** the screen sends the span in
+bounded chunks of `BACKFILL_CHUNK_DAYS = 7` to the SAME ONE endpoint (never a per-day loop — 124 days is 18 calls, each
+far inside the budget), aggregates as each lands and renders the running total, and on a failure names the chunk that
+stopped and states that the days already covered are not lost. Progress and errors render inside the panel. Pinned by
+four checks in `harness_closing_source_lock.py` (chunked, one endpoint, self-reporting, honest partial).
 **SEVERAL STORES AT ONCE — ONE STORE PICKER, FLEET-WIDE (owner directive 2026-10-03).** Owner: *"in store setup to
 assign the store it should be a drop down list to select multiple stores."* **The class:** this is the 2026-08-04
 directive (*"the store picker needs to have check box under the drop down to pick multiple stores"*, called
