@@ -162,6 +162,10 @@ on:
       - "frontend/prove_one_domain.mjs"
       - "frontend/package-lock.json"
       - "backend/harness_one_domain_lock.py"
+      # index §40.12 — rule 8 locks these two, so a change to either must run the lock that guards it
+      # (the §13e lesson: a job behind an allowlist that does not name its own subject skips silently).
+      - "scripts/check_deploy_reachability.py"
+      - ".github/workflows/deploy-reachability.yml"
       - "backend/harness_cors_policy.py"
       - "backend/app/core/cors_policy.py"
       - "backend/app/modules/payables/router.py"

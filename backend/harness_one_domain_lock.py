@@ -31,8 +31,14 @@ THIS FAILS THE BUILD WHEN:
      call dead. The fallbacks are right for `next dev` and for a preview and they stay; a PRODUCTION build
      must assert what it cannot work without and FAIL. Without this rule the gate can be deleted and the
      patchwork quietly returns.
-  8. the Guard in src/app/(platform)/layout.tsx treats an UNREADABLE enforcement flag as a value
-     (index §40.12, owner incident 2026-10-03). The flag that decides sign-in-or-open lives in the
+  8. the deploy-time reachability proof disappears (index §40.12, owner incident 2026-10-03). Rule 7's
+     gate is a PURE module: it can prove the backend origin is well-SHAPED, never that it RESOLVES. That
+     day it was shaped perfectly and named a host that does not exist, so every proxied call 502'd while
+     the pages rendered. A configuration fact that only fails at RUNTIME has to be proved against the
+     RUNNING deployment, so `scripts/check_deploy_reachability.py` and its workflow must exist, probe BOTH
+     rewrite prefixes, and require the backend's own payload rather than any HTTP 200.
+  9. the Guard in src/app/(platform)/layout.tsx treats an UNREADABLE enforcement flag as a value
+     (index §40.13, owner incident 2026-10-03). The flag that decides sign-in-or-open lives in the
      database and reaches the browser over `GET /api/v1/core/auth-config`. The catch on that fetch
      used to call `setFetchedEnforce(false)`, so a backend the browser could not reach rendered
      `<PlatformShell open>`: the app dropped its sign-in gate, showed "Login not enforced" and had no
@@ -53,7 +59,10 @@ FRONTEND = os.path.join(ROOT, "frontend")
 HOME = "src/lib/apiBase.ts"                     # the ONE home (relative to frontend/)
 ROUTING = "site-routing.ts"
 CONFIG = "next.config.ts"
-LAYOUT = "src/app/(platform)/layout.tsx"        # the Guard that decides open-app vs sign-in (§40.12)
+LAYOUT = "src/app/(platform)/layout.tsx"        # the Guard that decides open-app vs sign-in (§40.13)
+# Proved against the RUNNING deployment, because shape is all a build can check (§40.12).
+REACH_SCRIPT = "scripts/check_deploy_reachability.py"
+REACH_WORKFLOW = ".github/workflows/deploy-reachability.yml"
 LOCATION_VARS = ("NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_API_DIRECT_ORIGIN", "BACKEND_ORIGIN", "NEXT_PUBLIC_SITE_URL")
 SKIP_DIRS = {"node_modules", ".next", "out", "build", "scratchpad"}
 EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts")
@@ -169,7 +178,7 @@ def config_wiring(files):
          f"{CONFIG} must THROW on a production config problem — reporting it without failing the build ships the dark deploy anyway"),
         (home, r"export\s+const\s+CONFIG_PROBLEM_CODES\b",
          f"{HOME} must export CONFIG_PROBLEM_CODES so the caller's message map can be checked against it"),
-        # Rule 8 — UNREADABLE IS NOT A VALUE (index §40.12, owner incident 2026-10-03). The §40.10 gate
+        # Rule 9 — UNREADABLE IS NOT A VALUE (index §40.13, owner incident 2026-10-03). The §40.10 gate
         # is a pure module: it can prove the backend origin is well-SHAPED, never that it RESOLVES. That
         # day it was shaped perfectly and named a host that does not exist, so every proxied call 502'd —
         # and the Guard read that failure as "enforcement is off" and opened the app.
@@ -294,6 +303,25 @@ def main():
     check("no `${origin}/api/v1…` outside the home", not origin_prefixers(files), origin_prefixers(files))
     print("4/5. the config installs the policy from the homes")
     check("rewrites, canonical redirect, connect-src, upload class all wired", not config_wiring(files), config_wiring(files))
+    print("8. reachability is proved against the RUNNING deployment (§40.12)")
+    # A build can only prove the origin is well-SHAPED. The 2026-10-03 host was shaped perfectly and
+    # did not resolve, so the proof has to run against what is actually serving.
+    reach_py = os.path.join(ROOT, REACH_SCRIPT)
+    reach_yml = os.path.join(ROOT, REACH_WORKFLOW)
+    check(f"{REACH_SCRIPT} exists", os.path.isfile(reach_py))
+    check(f"{REACH_WORKFLOW} exists and runs it", os.path.isfile(reach_yml)
+          and "check_deploy_reachability.py" in open(reach_yml, encoding="utf-8").read())
+    if os.path.isfile(reach_py):
+        reach_src = open(reach_py, encoding="utf-8").read()
+        # Both rewrite PREFIXES are separate rules in apiRewrites(); one can be dead while the other works.
+        check("it probes /health AND /api/v1 (the two rewrite prefixes are independent)",
+              '"/health"' in reach_src and '"/api/v1/core/auth-config"' in reach_src)
+        check("it requires the BACKEND's own payload, not merely HTTP 200",
+              '"commit"' in reach_src and '"rbac_enabled"' in reach_src)
+    if os.path.isfile(reach_yml):
+        check("the workflow probes only a SUCCESSFUL Production deployment",
+              "deployment_status.state == 'success'" in open(reach_yml, encoding="utf-8").read())
+
     print("6. every browser-launching endpoint is DIRECT")
     check("the backend declares browser-launching endpoints (the scan is not empty)", len(endpoints) >= 10,
           [f"found {len(endpoints)}"])
@@ -347,12 +375,12 @@ def main():
           any("a-new-code-nobody-worded" in v for v in config_wiring(broken)))
     broken = dict(files)
     broken[LAYOUT] = files.get(LAYOUT, "").replace("setEnforceUnreadable(true)", "setFetchedEnforce(false)")
-    check("control 8: a Guard that fails the enforcement read OPEN again is caught",
+    check("control 9: a Guard that fails the enforcement read OPEN again is caught",
           any("2026-10-03 defect" in v for v in config_wiring(broken)))
     broken = dict(files)
     broken[LAYOUT] = files.get(LAYOUT, "").replace(
         "if (enforce === null && enforceUnreadable) return <Notice", "if (false) return <Notice")
-    check("control 8b: a Guard that stops rendering the unreachable notice is caught",
+    check("control 9b: a Guard that stops rendering the unreachable notice is caught",
           any("can't reach the server" in v for v in config_wiring(broken)))
     fake_router = ('router = APIRouter(prefix="/widgets")\n'
                    '@router.post("/{wid}/scrape")\n'
