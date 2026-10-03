@@ -13,6 +13,7 @@ import type { ExportSheet } from '@/lib/export'
 import { usePosTerm } from '@/lib/report-labels'
 import { StalenessBanner } from '../_components/StalenessBanner'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
+import { scopeDisplay, statementScopeDisplay } from '../_components/scopeFinancials'
 
 const SEC: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity' }
 
@@ -66,12 +67,14 @@ function BSInner() {
   const marketOpts: string[] = useMemo(() => fopts.markets || [], [fopts])
 
   const st = data?.statement
+  // THE scope's display name — the backend's one home, read once (scopeFinancials, §13b.1).
+  const scopeName = statementScopeDisplay(data, scopes, scope)
   const sec = (t: string) => (st?.sections || []).find((s: any) => s.type === t)
 
   // RULE FOUR (§3c) export. DISPLAY/EXPORT ONLY — figures come straight from the computed snapshot.
   function bsMeta(): StatementMeta {
     return {
-      reportName: 'Balance Sheet', scopeLabel: st?.scope_label || scope, period, basis: 'Point-in-time',
+      reportName: 'Balance Sheet', scopeLabel: scopeName, period, basis: 'Point-in-time',
       computed: !!data?.computed, computedAt: data?.computed_at,
       newestIngestAt: data?.newest_ingest_at, stale: !!data?.stale,
       extra: st ? [
@@ -120,17 +123,17 @@ function BSInner() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⚖️ Balance Sheet</h1>
-          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>{period} · point-in-time · {st?.scope_label || scope}</p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>{period} · point-in-time · {scopeName}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <select className="select" value={scope} onChange={e => setScope(e.target.value)}>
-            {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{(s.scope_label || s.scope_key).substring(0, 50)}</option>)}
+            {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{scopeDisplay(s).substring(0, 50)}</option>)}
             {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
           </select>
           <Link className="btn" href="/accounts/inventory" style={{ fontSize: 13 }}>📦 Edit inventory</Link>
           <Link className="btn" href="/accounts/cash-flow" style={{ fontSize: 13 }}>💧 Cash Flow</Link>
           {st && <ReportExportBar
-            title={`Balance Sheet — ${st?.scope_label || scope}`}
+            title={`Balance Sheet — ${scopeName}`}
             subtitle={statementSubtitle(bsMeta())}
             filename={`balance-sheet-${(data?.filtered ? 'filtered' : scope).replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
             sheets={bsSheets()} />}

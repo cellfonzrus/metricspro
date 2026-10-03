@@ -590,11 +590,16 @@ def statement(client, org_id, period, scope="consolidated", kinds=("pl", "balanc
     match = next((s for s in scopes if s[0] == scope), None)
     if match is None:
         return {"period": period, "scope": scope, "computed": False,
+                "scope_display": coa.scope_display_label(scope, None, companies),
                 "note": "unknown scope for this org"}
     scope_key, scope_label, stores_in_scope, include_cw = match
     pl, bs, cf = _assemble_scope(client, org_id, period, inputs, journal, matcher,
                                  scope_key, scope_label, stores_in_scope, include_cw, company_of)
     out = {"period": period, "scope": scope_key, "scope_label": scope_label, "computed": True,
+           # THE display name through the one home (§13b.1) — `companies` here IS the canonical
+           # enumeration (coa.company_assignment ⇒ org_companies), so an on-demand statement titles
+           # itself with the entity's current name and never with `company:<uuid>`.
+           "scope_display": coa.scope_display_label(scope_key, scope_label, companies),
            "on_demand": True, "computed_at": datetime.now(timezone.utc).isoformat(),
            "meta": meta}
     if "pl" in kinds:

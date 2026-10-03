@@ -6,6 +6,7 @@
 // `profit_center:<code>` scope) — the same lines, the same numbers as the P&L Statement, never a second P&L.
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { api, fmt } from '@/lib/client'
+import { scopeDisplay } from '../_components/scopeFinancials'
 
 const th: React.CSSProperties = { textAlign: 'left', padding: '6px 9px', fontSize: 12, color: 'var(--text2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '6px 9px', fontSize: 13, borderBottom: '1px solid var(--border)' }
@@ -21,7 +22,9 @@ interface CentersData {
   store_map_conflicts?: Record<string, unknown>; problems?: { profit?: string[] }
 }
 interface PlSection { type: string; name: string; subtotal: number; lines: { key: string; label: string; amount: number }[] }
-interface CenterStatement { scope_label?: string; computed?: boolean; note?: string; pl?: { sections: PlSection[]; gross_profit: number; net_income: number } }
+// `scope_display` = THE display name the statement engine resolved through the one home
+// (`account/coa.scope_display_label`, index §13b.1) — read through `scopeDisplay`, never composed here.
+interface CenterStatement { scope_label?: string; scope_display?: string | null; computed?: boolean; note?: string; pl?: { sections: PlSection[]; gross_profit: number; net_income: number } }
 
 export default function ProfitCentersPage() {
   const [data, setData] = useState<CentersData | null>(null)
@@ -96,7 +99,7 @@ export default function ProfitCentersPage() {
       {pc && (
         <div className="card" style={{ padding: 14 }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>P&L — {stmt?.scope_label || pc}</div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>P&L — {stmt ? scopeDisplay(stmt) : pc}</div>
             <input type="month" value={period} onChange={e => setPeriod(e.target.value)} />
           </div>
           {stmt && !stmt.computed && <div style={{ color: '#b45309' }}>{stmt.note}</div>}

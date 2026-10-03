@@ -369,6 +369,101 @@ def filter_org_scopes(scopes, own_company_ids, key="scope_key"):
     return out
 
 
+# ── THE ONE HOME for a scope's DISPLAY NAME (owner report 2026-10-03) ────────────────────────────
+# Owner (verbatim): "the app shows the company id not the name of the company in the settings to
+# choose the company to work in."
+#
+# THE CLASS (not the instance). A scope's display name was a COPY: `commcalc.account_statements`
+# .scope_label is written once at COMPUTE time and every finance surface rendered
+# `scope_label || scope_key`. `scope_key` for a company scope is the literal string
+# `company:<uuid>`, so the moment the copy was missing or stale — a company renamed after the
+# snapshot, a snapshot computed before the company was named, a hand-written row — the user was
+# shown a raw uuid. The fix is not "repair the P&L page": a display name for an entity is a
+# DEREFERENCE of the canonical company inventory (§13b `org_companies`), with the stored copy only
+# as a fallback, and the raw key NEVER rendered to a human. One home, every caller wired, locked by
+# `backend/harness_scope_label_lock.py` so a new `scope_label || scope_key` cannot reappear.
+#
+# RULE TWO: the table below is keyed by scope FAMILY, never by tenant, company or carrier. A family
+# whose identifier is opaque (a uuid) may never render that identifier; a family whose identifier is
+# itself the human name (a store address, a profit-center code) may.
+SCOPE_FAMILIES = {
+    # family: (identifier is human-readable, generic fallback word)
+    "company": (False, "Unnamed company"),
+    "store": (True, "Store"),
+    "profit_center": (True, "Profit center"),
+}
+# Scope keys that are not `family:ident` at all — the whole key IS the family.
+SCOPE_SINGLETONS = {
+    "consolidated": "Consolidated (all companies)",
+    "filtered": "Filtered",
+}
+SCOPE_UNKNOWN = "Unknown scope"
+
+
+def companies_by_id(companies):
+    """PURE: {company id (str): current name} from a `org_companies` result. A blank name is NOT an
+    entry — an entity nobody has named yet must fall through to the stored label / generic word
+    rather than render an empty option."""
+    out = {}
+    for c in (companies or []):
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id") or "").strip()
+        name = str(c.get("name") or "").strip()
+        if cid and name:
+            out[cid] = name
+    return out
+
+
+def scope_display_label(scope_key, stored_label=None, companies=None):
+    """PURE — THE ONE answer to "what do we call this scope on screen?".
+
+    Resolution order, for every surface in finance (dropdowns, page titles, export covers,
+    scheduled-report titles, drill-down headers):
+      1. the CANONICAL registry for the scope's family — for `company:<id>`, the org's own current
+         entity name from `org_companies` (pass its rows as `companies`);
+      2. the stored `scope_label` copy, when it is non-blank AND not just the key echoed back;
+      3. the key's own identifier, but ONLY for a family whose identifier is human-readable by
+         construction (a store address, a profit-center code);
+      4. a generic family word ("Unnamed company"), never a raw key or uuid.
+
+    `companies` may be omitted by a pure caller that has no registry at hand; the result then
+    degrades to step 2+ and still never returns `company:<uuid>`.
+    """
+    key = str(scope_key or "").strip()
+    label = str(stored_label or "").strip()
+    if label == key:          # a snapshot that stored the key as its own label carries no name
+        label = ""
+    if not key:
+        return label or SCOPE_UNKNOWN
+    if key in SCOPE_SINGLETONS:
+        return label or SCOPE_SINGLETONS[key]
+    family, sep, ident = key.partition(":")
+    ident = ident.strip()
+    if not sep:
+        return label or SCOPE_SINGLETONS.get(family) or SCOPE_UNKNOWN
+    human_ident, generic = SCOPE_FAMILIES.get(family, (False, SCOPE_UNKNOWN))
+    if family == "company" and ident:
+        name = companies_by_id(companies).get(ident)
+        if name:
+            return name
+    if label:
+        return label
+    if human_ident and ident:
+        return ident
+    return generic
+
+
+def label_scopes(scopes, companies=None, key="scope_key", stored="scope_label",
+                 out="scope_display"):
+    """PURE: stamp `out` on every scope dict with `scope_display_label`. The helper every API
+    response that ships a scope list calls, so no renderer has to know the rule."""
+    for s in (scopes or []):
+        if isinstance(s, dict):
+            s[out] = scope_display_label(s.get(key), s.get(stored), companies)
+    return scopes
+
+
 def store_company_map(client, org_id):
     """store_address (normalized) -> company_id, plus a default-company id."""
     companies = org_companies(client, org_id)   # the canonical entity enumeration (fail closed)

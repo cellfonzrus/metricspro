@@ -6,6 +6,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import ReportExportBar from '@/components/ReportExportBar'
 import { StalenessBanner } from '../_components/StalenessBanner'
+import { scopeDisplay, statementScopeDisplay } from '../_components/scopeFinancials'
 import type { ExportSheet } from '@/lib/export'
 
 // Cash Flow statement (roadmap Phase 2 UI; backend since PR #179): the stored DERIVED cash-flow
@@ -34,6 +35,8 @@ function CFInner() {
   }, [period, scope, reloadKey])
 
   const st = data?.statement
+  // THE scope's display name — the backend's one home, read once (scopeFinancials, §13b.1).
+  const scopeName = statementScopeDisplay(data, scopes, scope)
 
   function sheets(): ExportSheet[] {
     const rows: any[] = []
@@ -59,17 +62,17 @@ function CFInner() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💧 Cash Flow</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            {period} · derived (indirect method over balance-sheet deltas) · {st?.scope_label || scope}
+            {period} · derived (indirect method over balance-sheet deltas) · {scopeName}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <select className="select" value={scope} onChange={e => setScope(e.target.value)}>
-            {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{(s.scope_label || s.scope_key).substring(0, 50)}</option>)}
-            {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
+            {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{scopeDisplay(s).substring(0, 50)}</option>)}
+            {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scopeName}</option>}
           </select>
           <Link className="btn" href="/accounts/balance-sheet" style={{ fontSize: 13 }}>⚖️ Balance Sheet</Link>
           {st && <ReportExportBar
-            title={`Cash Flow — ${st?.scope_label || scope}`} subtitle={`${period} · derived (indirect method)`}
+            title={`Cash Flow — ${scopeName}`} subtitle={`${period} · derived (indirect method)`}
             filename={`cash-flow-${scope.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
             sheets={sheets()} />}
         </div>
