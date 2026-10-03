@@ -1,0 +1,53 @@
+-- 1040_closing_derive_nightly_schedule.sql
+-- Schedule the daily-closing DERIVATION sweep. Additive, idempotent, moves no money, creates no table.
+--
+-- THE DEFECT THIS CLOSES (found 2026-10-03, owner asked "is that completed or I need to do anything").
+-- Migration 1035 + PR #349 shipped `POST /closing/derive-due` and called it "the nightly sweep", but
+-- nothing ever scheduled it. There was no cron entry for it anywhere in database/, so it had never
+-- run once: nine stores sat on `b2b_derived` with zero derived rows, and the honest reason was that
+-- the sweep had no clock, not that the feed or the config was wrong. A sweep described as nightly and
+-- scheduled nowhere is a sweep that does not exist.
+--
+-- DUPLICATE CHECK. No second sweep, no second endpoint, no new table. This schedules the existing
+-- `/closing/derive-due` entrypoint exactly as migration 033 schedules `/closing/sweep/run-due` — the
+-- same pg_cron + pg_net shape, the same NOTIFY_RUN_SECRET header, the same "STEP 2 after deploy"
+-- convention, so there is one way this platform puts a sweep on a clock and this is it.
+--
+-- WHY ONCE AN HOUR rather than once at a fixed time: `/closing/derive-due` derives YESTERDAY for every
+-- tenant holding at least one `b2b_derived` store, it is idempotent (a re-run over an unchanged feed
+-- writes nothing and reports `unchanged`), and a tenant with no derived store is never even read. So
+-- an hourly poll costs almost nothing and means a feed that lands late still produces yesterday's
+-- closing the same day, instead of waiting a full day for one fixed-time run that fired too early.
+
+-- ── STEP 1: nothing to do in SQL. The endpoint ships with the app. ──────────────────────────────
+
+-- ── STEP 2 (run AFTER the app is deployed, with the real values substituted) ────────────────────
+-- Requires pg_cron + pg_net, both already used by migration 033. Substitute <APP_PUBLIC_URL> and
+-- <NOTIFY_RUN_SECRET> with this deployment's values — they are deliberately NOT written into a
+-- migration file, which is committed to the repository.
+--
+-- Unschedule-then-schedule so re-running STEP 2 cannot leave two jobs on the same name:
+--   SELECT cron.unschedule('closing-derive-due') WHERE EXISTS (
+--     SELECT 1 FROM cron.job WHERE jobname = 'closing-derive-due');
+--   SELECT cron.schedule('closing-derive-due', '17 * * * *', $$
+--     SELECT net.http_post(
+--       url     := 'https://<APP_PUBLIC_URL>/api/v1/closing/derive-due',
+--       headers := jsonb_build_object('Content-Type','application/json','X-Notify-Secret','<NOTIFY_RUN_SECRET>'),
+--       body    := '{}'::jsonb);
+--   $$);
+--
+-- Minute 17 rather than 0: the hour boundary is where every other poller already fires.
+
+-- ── VERIFY (after STEP 2) ───────────────────────────────────────────────────────────────────────
+--   SELECT jobname, schedule, active FROM cron.job WHERE jobname = 'closing-derive-due';
+-- Then, after the next firing, expect one row per derived store per day WITH a feed:
+--   SELECT close_date, count(*) FROM commcalc.daily_closing
+--    WHERE derived_at IS NOT NULL GROUP BY 1 ORDER BY 1 DESC LIMIT 5;
+--
+-- BACKFILL is separate and deliberately manual: past days are filled from Store Setup's
+-- "Fill in past days" (Preview writes nothing), because writing months of history is a decision a
+-- person makes once, not something a clock should do unasked.
+
+-- REVERT:
+--   SELECT cron.unschedule('closing-derive-due');
+-- Nothing else to undo — this migration creates no object and writes no row.
