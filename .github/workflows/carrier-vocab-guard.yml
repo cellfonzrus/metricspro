@@ -17,6 +17,16 @@ name: carrier-vocab-guard
 #
 # Dependency-free: the guard statically scans frontend/src on bare Python — no pip install.
 #
+# THE BILL-PAYMENT FEE POLICY (index §47.15, owner 2026-10-03) rides the EXISTING
+# harness_billpay_fee_basis.py rather than a sibling lock (the duplicate-check gate), as sections J/K:
+# whether a tenant charges a bill-payment fee is a DECLARED per-org fact resolved in ONE home
+# (commcalc/metric_recon.resolve_fee_policy / billpay_fee_state / billpay_basis_comparable), "no fee
+# line" is interpreted in exactly one function, and a basis the policy says is understated is neither
+# compared against a rep's declaration nor netted out of a drawer. The build FAILS if a caller spells
+# a policy value, re-derives which states are comparable, stops dereferencing the state machine, or
+# puts the plain accessor back into the netting basis — and K8/K9 fail the build if either lock's own
+# scan ever starts matching nothing.
+#
 # THE ENVELOPE-BASIS WIRING RULES (index §47.8, owner 2026-10-02) were folded INTO the existing
 # harness_envelope_receipt_basis.py rather than shipped as a sibling lock (the duplicate-check gate): the Management
 # Envelope Receipt's cash-basis selector read `daily_closing.epay_on_cash` while BOTH of its callers
@@ -388,6 +398,7 @@ on:
       - "backend/app/modules/commcalc/epay_fee_recon.py"
       - "backend/app/modules/commcalc/metric_recon.py"
       - "database/migrations/1045_billpay_fee_product_desc.sql"
+      - "database/migrations/1046_billpay_fee_charged.sql"
       - "backend/harness_accountability_chain.py"
       - "backend/harness_org_chain.py"
       - "backend/app/modules/storeops/org_chain.py"

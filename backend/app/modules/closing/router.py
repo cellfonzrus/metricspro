@@ -5765,7 +5765,17 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                 # and declares. Reading the raw `cash` key here is what made 526 of 535 September
                 # store-days disagree with the declaration -- see metric_recon.pos_billpay_cash.
                 from app.modules.commcalc import metric_recon as _mr_basis
-                _bp_cash = {k: _mr_basis.pos_billpay_cash(v) for k, v in _sales_bp.items()}
+                from app.modules.commcalc.router import _billpay_fee_policy as _bp_pol_fn
+                # GATED ON THE ORG'S DECLARED FEE POLICY (owner ask 2026-10-03). This path
+                # SUBTRACTS the figure from the drawer, so an understated basis leaves a store
+                # looking short of cash it never had -- the same blanket error the declaration
+                # digest refuses, in the sibling caller that answers the same question. The gate
+                # bites only when the org has positively declared that it charges a fee and no fee
+                # line reached the feed; an unanswered policy keeps today's behaviour exactly,
+                # because a money-adjacent subtraction must not change on a guess.
+                _bp_pol = _bp_pol_fn(client, org_id)
+                _bp_cash = {k: _mr_basis.pos_billpay_cash_trusted(v, _bp_pol)
+                            for k, v in _sales_bp.items()}
                 _bp_fee = {k: _mr_basis.pos_billpay_fee_cash(v) for k, v in _sales_bp.items()}
                 _bp_src, _bp_key = f"sales:{_s_src}", _s_key
             else:
@@ -7358,6 +7368,16 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
         _pc_hit = pos_billpay.get((_ckey(code) or code, dday)) if pos_billpay else None
         if _pc_hit is not None:
             _twC[(code, dday)] = _pc_hit
+    # THE FEE POLICY IS DELIBERATELY NOT APPLIED TO LEG B HERE, and this is the excusal rather than
+    # an oversight (owner ask 2026-10-03; the "find the siblings" rule). Leg B is the same POS
+    # bill-pay question the declaration digest and the netting basis ask, and the same understated
+    # basis would read as a spurious 'mismatch'. But this function's honest-gap semantics are
+    # PER-RANGE booleans (`sales_present`): a store-day dropped from the map while the feed is
+    # present becomes an honest 0.0, which is further from the truth than the understated figure.
+    # Expressing "present but not trustworthy" needs a third per-store-day state inside a money
+    # reconciliation, which the house surfaces for approval rather than slipping in beside this
+    # change. Until then nothing here moves: the gate bites only on a declared 'yes', and no tenant
+    # has declared one.
     _tw_rows, _tw_sum = _mr.reconcile_billpay_three_way_days(
         _twA, _twB, _twC, tolerance_amt=_f(tolerance),
         sales_present=sales_present, processor_present=bool(pos_billpay))
@@ -10530,17 +10550,33 @@ async def _run_billpay_declaration_alerts(org_id_filter=None, respect_enabled=Tr
             continue
         found = _bda.alert_items(store_days, tolerance=cfg["tolerance"])
         items, counts = found["items"], found["counts"]
+        refused, advisories = found["refused"], found["advisories"]
         label = end if start == end else f"{start} to {end}"
+        # A REFUSAL IS NOT A SILENCE. Nothing alertable can still mean something went wrong that is
+        # nobody's declaration: the org says it charges a bill-payment fee and no fee line came
+        # through, so the comparison figure was too low to use. That is a live-data defect and it is
+        # REPORTED -- it rides every result payload below (the board and the dry-run preview render
+        # it) and is logged here, rather than being folded into a manager's chase list where a feed
+        # problem would read as a store's problem. It deliberately does NOT raise a digest of its
+        # own: a second notification path for the same morning is the duplicate the house rules
+        # forbid, and the existing import-health surface (§20) owns feed defects.
+        if refused.get(_bda.CLASS_FEE_MISSING):
+            print(f"WARN billpay declaration sweep org={oid} window={label}: "
+                  f"{refused[_bda.CLASS_FEE_MISSING]} store-day(s) unassessable -- the org is set to "
+                  f"charge a bill-payment fee and no fee line reached the sales feed")
         if not items:
             results.append({"org_id": oid, "sent": 0, "skipped": 0, "flagged": 0,
-                            "counts": counts, "window": label, "pos_source": meta.get("source")})
+                            "counts": counts, "refused": refused, "advisories": advisories,
+                            "fee_policy": meta.get("fee_policy"),
+                            "window": label, "pos_source": meta.get("source")})
             continue
         stores = {i["store_code"] for i in items if i.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
         plan = _md.plan_digests(
             items, hierarchy, today.isoformat(), scope=_bda.ALERT_SCOPE,
             build=lambda name, its: _bda.build_digest(name, its, counts=counts,
-                                                      max_rows=cfg["max_rows"], label=label),
+                                                      max_rows=cfg["max_rows"], label=label,
+                                                      advisories=advisories),
             key_parts=_bda.key_parts, channels=cfg["channels"])
         sent = skipped = 0
         planned = []
@@ -10553,7 +10589,8 @@ async def _run_billpay_declaration_alerts(org_id_filter=None, respect_enabled=Tr
                 planned.append({"to": dg["to"], "addresses": addrs, "already_sent": True})
                 continue
             built = _bda.build_digest(dg["to_name"], new_items, counts=counts,
-                                      max_rows=cfg["max_rows"], label=label)
+                                      max_rows=cfg["max_rows"], label=label,
+                                      advisories=advisories)
             # STRUCTURED, never a pre-joined display string — the dry-run preview is rendered by a
             # human-facing screen, which owns presentation (the zero-sales rule verbatim).
             planned.append({"to": dg["to"], "addresses": addrs, "already_sent": False,
@@ -10594,7 +10631,9 @@ async def _run_billpay_declaration_alerts(org_id_filter=None, respect_enabled=Tr
                                           addrs.get("email") or addrs.get("whatsapp"))
                 sent += 1
         results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(items),
-                        "counts": counts, "window": label, "pos_source": meta.get("source"),
+                        "counts": counts, "refused": refused, "advisories": advisories,
+                        "fee_policy": meta.get("fee_policy"),
+                        "window": label, "pos_source": meta.get("source"),
                         "send_time": cfg["send_time"], "tolerance": cfg["tolerance"],
                         "channels": list(cfg["channels"]),
                         "email_configured": email_ok, "whatsapp_configured": wa_ok,
@@ -10611,8 +10650,14 @@ def _billpay_declaration_store_days(client, org_id, start, end):
     JOINS two answers and derives neither. A store-day the sales feed never covered carries
     `pos_basis=None`, which the classifier refuses to alert on and counts instead."""
     from app.modules.commcalc import metric_recon as _mr
+    from app.modules.commcalc.router import _billpay_fee_policy
     from . import billpay_pickup as _bp
     from . import envelope_report as _er
+    # THE ORG'S DECLARED FEE POLICY, read once for the whole window from its own one home. It never
+    # changes the arithmetic below -- it decides whether a store-day whose feed rang no fee line may
+    # be compared against a declaration at all, and when it may not, which of two different
+    # problems it is. Read here rather than per row so a config read cannot scale with store-days.
+    policy = _billpay_fee_policy(client, org_id)
     rows = (client.schema("commcalc").table("daily_closing")
             .select(_er.CLOSING_SELECT).eq("org_id", org_id)
             .gte("close_date", start).lte("close_date", end)
@@ -10646,8 +10691,9 @@ def _billpay_declaration_store_days(client, org_id, start, end):
                         "close_date": dday, "declared": amount,
                         "pos_basis": _mr.pos_billpay_cash(slot),
                         "fee_cash": _mr.pos_billpay_fee_cash(slot),
+                        "fee_state": _mr.billpay_fee_state(slot, policy),
                         "bill_txns": (slot or {}).get("count") if isinstance(slot, dict) else None})
-    return out, {"source": src, "store_days": len(out)}
+    return out, {"source": src, "store_days": len(out), "fee_policy": policy}
 
 
 @router.post("/billpay-declaration-alerts/run-due")

@@ -133,11 +133,22 @@ got = A.alert_items(SD)
 check("B10 only the alertable classes become items",
       [i["store_code"] for i in got["items"]] == ["B-3565", "B-559"],
       [i["store_code"] for i in got["items"]])
-check("B11 every class is counted, including the ones that are not alerts",
-      got["counts"] == {A.CLASS_UNDER: 1, A.CLASS_OVER: 1, A.CLASS_AGREE: 1, A.CLASS_NO_POS: 1},
+# `counts` is keyed by the CLASS REGISTRY, not by a list repeated here: when the fee policy added two
+# more refusals (2026-10-03) a hand-spelled dict went stale and said the counts were wrong when they
+# were right. Pinning the shape against `GAP_CLASSES` is the same fact read from its one home.
+check("B11 every class in the registry is counted, including the ones that are not alerts",
+      set(got["counts"]) == set(A.GAP_CLASSES)
+      and {k: v for k, v in got["counts"].items() if v}
+      == {A.CLASS_UNDER: 1, A.CLASS_OVER: 1, A.CLASS_AGREE: 1, A.CLASS_NO_POS: 1},
       got["counts"])
-check("B12 the unassessable store-days are reported as refused, not forgotten",
-      got["refused"] == {A.CLASS_NO_POS: 1})
+check("B12 the unassessable store-days are reported as refused, not forgotten -- every unassessed "
+      "reason has a row, so a refusal can never be silently absent",
+      set(got["refused"]) == set(A.UNASSESSED) and got["refused"][A.CLASS_NO_POS] == 1,
+      got["refused"])
+check("B12' a store-day with no fee_state is classed exactly as before the fee policy existed, so "
+      "this whole fixture is byte-identical to its pre-1046 run",
+      all(it.get("fee_state") is None for it in got["items"])
+      and not any(got["counts"][c] for c in (A.CLASS_FEE_MISSING, A.CLASS_FEE_POLICY_UNSET)))
 check("B13 an item carries the fee that was added back, so the figure's change is explainable",
       got["items"][1]["fee_cash"] == 20.0)
 check("B14 no store-days -> no items and no fabricated counts",
