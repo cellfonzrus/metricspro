@@ -5359,7 +5359,8 @@ rollup, instead of three readers of a copy.
 store/market selection could not bind — and the page says so above the tiles. Folding them in would
 invent money for a market; dropping them silently would read as money that is not there.
 
-**Measured live on the house org, 2026-10-03** (3,989 invoices, 29 distinct locations):
+**Measured live on the house org, 2026-10-03, BEFORE the data fix** (3,989 invoices, 29 distinct
+locations):
 
 | | |
 |---|---|
@@ -5370,6 +5371,23 @@ invent money for a market; dropping them silently would read as money that is no
 | Store options offered | **33** = the org's 31 stores + the 2 spellings nothing binds |
 | Locations unreachable by ANY store option | **none** |
 
+**And AFTER it** — the owner ran both runbooks the same evening (the two `store_aliases` rows, then
+`<2022>`'s market), so re-measured through the real `_vip_select` / `resolve_store_matcher`:
+
+| | |
+|---|---|
+| Locations the market filter binds | **29 of 29** — `unbound_spellings` returns EMPTY |
+| By market | PA 2,035 inv / \$10,432,387.56 · NYC 696 / \$3,216,945.26 · NJ 841 / \$2,840,596.37 · LI 417 / \$1,497,655.49 |
+| Sum of the four markets | **3,989 inv / \$17,987,584.68** — byte-equal to the unfiltered total |
+| `unresolved` reported by `/vip/summary` | **0 invoices, \$0** |
+
+**That reconciliation is the real check on the design**, and it is worth stating why: the four
+markets summing EXACTLY to the unfiltered total proves every invoice is attributable to exactly one
+market — no invoice counted twice (a spelling binding two stores in different markets) and none lost
+(a spelling binding nothing). Neither property is visible from the per-market numbers alone, and
+neither is something the DB-free harness can assert, because it is a fact about this org's data
+rather than about the code. Re-run it after any change to the store vocabulary.
+
 **The house fix for the three is DATA, in the one vocabulary — surfaced for approval, and APPLIED
 by the owner 2026-10-03:** two `commcalc.store_aliases` rows (`1 S 60th St` → `B-60TH`,
 `1598 Mt Ephraim Ave` → `B-1598`) — proved in `harness_vip_invoice_filter.py` §F9/§F10 to bind both
@@ -5378,13 +5396,20 @@ verified against production through the real `resolve_store_matcher`: both bind,
 market filter, and `unbound_spellings` over all 29 distributor locations returns EMPTY. Runbook:
 `database/runbooks/vip_distributor_store_aliases.sql`.
 
-`228 N Wood Ave` binds store `<2022>`, which is assigned to **no market at all**, so the STORE
-filter finds it and the MARKET filter cannot (no market contains a market-less store). That is a
-market assignment only the owner can make (the `Cellular Services Dot net LLC (228 N Wood Ave, …)`
-row suggests LI, but that row is a COMPANY, not a store — §13d). **Where the row actually lives,
-measured 2026-10-03:** `commcalc.store_mapping` — `storeops.stores` has NO row for this code — and
-its `market` is the empty string `''`, not `NULL`, so a `market IS NULL` update matches nothing.
-Runbook proposed, not applied: `database/runbooks/vip_store_2022_market.sql`.
+`228 N Wood Ave` binds store `<2022>`, which was assigned to **no market at all**, so the STORE
+filter found it and the MARKET filter could not (no market contains a market-less store). The market
+was the owner's to choose, and they chose **LI** (the address is Syosset NY 11791, Nassau County);
+applied 2026-10-03 and verified — the spelling now follows the `li` filter. Runbook:
+`database/runbooks/vip_store_2022_market.sql`.
+
+**Where that row actually lives, measured 2026-10-03 — the part worth not re-deriving:** it is in
+`commcalc.store_mapping` and `storeops.stores` has NO row for this code, so a market-setting
+statement aimed at the roster table touches nothing. And its `market` was the empty string `''`,
+not `NULL`, so the natural `WHERE market IS NULL` guard matches nothing either — the first draft of
+that runbook had exactly that bug and would have reported success while changing no row. Both halves
+follow from §13's union-of-two-vocabularies design (a store may exist in either side, or both), so
+any future runbook that sets a market must say which side it is writing and must treat blank and
+NULL as the same absence.
 
 ### DUPLICATE CHECK (build gate) — what was checked, what was reused
 

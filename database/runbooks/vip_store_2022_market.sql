@@ -1,3 +1,7 @@
+-- APPLIED by the owner 2026-10-03 with market = 'LI'. Verified through the real
+-- resolver: '228 N Wood Ave' now follows the LI market filter, and the four markets
+-- sum byte-equal to the unfiltered distributor total (3,989 inv / $17,987,584.68).
+--
 -- Distributor invoices: give store <2022> a market so it follows the market filter
 --
 -- RUN THIS YOURSELF in the Supabase SQL editor. Claude does not apply SQL.
