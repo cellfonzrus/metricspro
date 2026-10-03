@@ -14899,7 +14899,7 @@ change, and it is not correct on its own — see §42.5.
 `backend/app/modules/account/coa.py` (`device_cost` settlement, `vip_device_pay`, the dead
 `status=='on inventory'` inventory predicate) ·
 `backend/app/modules/account/balance_sheet.py` (`device_inventory_cells`, `apply_inventory_basis`,
-`asset_ledger_open_bookings`) · `backend/harness_device_inventory_cogs.py` (**68 checks** as at 2026-10-03, stdlib,
+`asset_ledger_open_bookings`) · `backend/harness_device_inventory_cogs.py` (**70 checks** as at 2026-10-03, stdlib,
 DB-free, synthetic IMEIs; run by `.github/workflows/carrier-vocab-guard.yml` job
 `finance-royalty-proof`) · `database/migrations/1041_device_cost_basis.sql`.
 
