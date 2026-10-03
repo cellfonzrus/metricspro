@@ -18,6 +18,7 @@ from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
+from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -13605,6 +13606,26 @@ def _accessory_config_uncached(client, org_id):
     gp_acc_basis = "sales"
     if str(_ac.get("gp_acc_basis") or "").strip().lower() in ("sales", "gp"):
         gp_acc_basis = str(_ac["gp_acc_basis"]).strip().lower()
+    # THE BILL-PAYMENT SERVICE-FEE VOCABULARY, DEREFERENCED (index §19.42, 2026-10-03). Which
+    # product_desc means "the fee the store charged for taking this bill payment" has exactly ONE home —
+    # `epay_fee_recon.resolve_fee_descs` over the per-org mig-1045 column `billpay_fee_product_desc`,
+    # house default `HOUSE_FEE_DESCS`. It is carried on the resolved config so every classifier reading
+    # this row READS that fact instead of re-deciding it; the whole-row read above means no extra
+    # round trip. Blank / missing column / any failure -> the house tuple, so an unset tenant is
+    # byte-identical.
+    try:
+        from app.modules.commcalc import epay_fee_recon as _fr_cfg
+        billpay_fee_descs = _fr_cfg.resolve_fee_descs(_ac.get("billpay_fee_product_desc") if got else None)
+    except Exception:
+        billpay_fee_descs = ()
+    # THE RAW CELL IS CARRIED TOO, beside the resolved tuple and off the SAME read (owner ask
+    # 2026-10-03). The settings screen needs what this org actually DECLARED, because "inheriting the
+    # house wording" and "pinned to the same words" resolve identically and only one of them follows
+    # a house change. Deriving it here rather than in a reader of its own keeps the column at one
+    # whole-row read (§4b.1) instead of a third round trip for the same cell.
+    _fee_raw = _ac.get("billpay_fee_product_desc") if got else None
+    billpay_fee_descs_raw = ([str(t).strip() for t in _fee_raw if str(t or "").strip()]
+                             if isinstance(_fee_raw, (list, tuple)) else [])
     catalog_classifier = None
     if catalog_classify_enabled:
         try:
@@ -13637,6 +13658,8 @@ def _accessory_config_uncached(client, org_id):
             "apply_to_gp": apply_to_gp,
             "definition_drives_pay": definition_drives_pay,
             "gp_acc_basis": gp_acc_basis,
+            "billpay_fee_descs": tuple(billpay_fee_descs),
+            "billpay_fee_descs_raw": billpay_fee_descs_raw,
             "catalog_classifier": catalog_classifier}
 
 
@@ -25288,7 +25311,17 @@ def get_accessory_config(org_id: str = ORG_ID):
             "catalog_accessory_categories": c["catalog_accessory_categories_list"],
             "apply_to_gp": c.get("apply_to_gp", False),
             "definition_drives_pay": c.get("definition_drives_pay", False),
-            "gp_acc_basis": c.get("gp_acc_basis", "sales")}
+            "gp_acc_basis": c.get("gp_acc_basis", "sales"),
+            # THE BILL-PAYMENT SERVICE FEE, both halves of it (owner ask 2026-10-03). Resolved
+            # through their own one homes, so this payload can never disagree with what the reports
+            # read: the VOCABULARY (mig 1045 — what the fee line is called here, empty = the house
+            # wording) and the POLICY (mig 1046 — whether there is a fee at all). Both are read by
+            # the same defensive readers the sweeps use, so a pre-migration schema renders the
+            # defaults instead of failing the settings screen.
+            "billpay_fee_product_desc": c.get("billpay_fee_descs_raw") or [],
+            "billpay_fee_charged": _billpay_fee_policy(sb(), org_id),
+            "billpay_fee_policies": list(_mr_cfg.FEE_POLICIES),
+            "billpay_fee_policy_default": _mr_cfg.HOUSE_FEE_POLICY}
 
 
 class PutAccessoryConfigIn(LaxModel):
@@ -25308,6 +25341,8 @@ class PutAccessoryConfigIn(LaxModel):
     apply_to_gp: Any = None
     definition_drives_pay: Any = None
     gp_acc_basis: Any = None
+    billpay_fee_product_desc: Any = None   # mig 1045: what this org's bill-payment fee line is called
+    billpay_fee_charged: Any = None        # mig 1046: 'yes' | 'no' | 'unknown' — IS there a fee?
 
 
 @router.put("/accessory-config")
@@ -25455,18 +25490,39 @@ def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, autho
         row["gp_acc_basis"] = _gb
     else:
         row["gp_acc_basis"] = str(cur.get("gp_acc_basis") or "sales")
+    # BILL-PAYMENT FEE VOCABULARY (mig 1045) — what this org's fee line is called. Empty resolves to
+    # the house wording in the one home, so clearing it is "inherit", never "blank".
+    if "billpay_fee_product_desc" in body.model_fields_set:
+        row["billpay_fee_product_desc"] = [str(x).strip() for x in (body.billpay_fee_product_desc or [])
+                                           if str(x).strip()]
+    else:
+        row["billpay_fee_product_desc"] = cur.get("billpay_fee_descs_raw") or []
+    # BILL-PAYMENT FEE POLICY (mig 1046) — does this org charge one at all? PICK-DON'T-TYPE: the
+    # vocabulary is the one home's `FEE_POLICIES`, never a list spelled here, and a value outside it
+    # is REJECTED rather than stored, because a typo would resolve to 'unknown' and quietly park
+    # every store-day the owner meant to have assessed.
+    if "billpay_fee_charged" in body.model_fields_set:
+        _fp = str(body.billpay_fee_charged or "").strip().lower()
+        if _fp not in _mr_cfg.FEE_POLICIES:
+            raise HTTPException(400, "billpay_fee_charged must be one of: "
+                                     + ", ".join(_mr_cfg.FEE_POLICIES))
+        row["billpay_fee_charged"] = _fp
+    else:
+        row["billpay_fee_charged"] = _billpay_fee_policy(client, org_id)
     # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
     # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
     # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge', catalog →
     # disabled/legacy classification).
-    _new313 = ["activation_details_rules"]
+    _new1046 = ["billpay_fee_charged"]
+    _new1045 = _new1046 + ["billpay_fee_product_desc"]
+    _new313 = _new1045 + ["activation_details_rules"]
     _new930 = _new313 + ["gp_acc_basis"]
     _new276 = _new930 + ["definition_drives_pay"]
     _new250 = _new276 + ["apply_to_gp"]
     _new231 = _new250 + ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
     _drop_final = _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], _new313, _new930, _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
+    for _drop in ([], _new1046, _new1045, _new313, _new930, _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)
@@ -27731,17 +27787,19 @@ def _txn_activation_candidate(lines, acfg, is_excluded=None):
     receipts. Acting on that note would have invented an activation rule that swept every bill payment
     into the activation count. The note has to earn its alarm, or it trains the owner to ignore it.
 
-    NOTHING IS HARD-CODED HERE. All three tests are the tenant's own config, already curated elsewhere in
+    NOTHING IS HARD-CODED HERE. All FOUR tests are the tenant's own config, already curated elsewhere in
     this same page: `is_excluded` is the payout_exclusion_map predicate (the RTR rule is a seeded, editable,
-    WORD-anchored config row — not a branch), the bill-payment list is `billpay_products`, and the accessory
-    test is `_is_accessory`, the very classifier the report aggregates accessory revenue with. A tenant with
-    none of them configured gets `is_excluded=None` + an empty accessory config, every line reads
-    activation-capable, and the count is byte-identical to the old behaviour.
+    WORD-anchored config row — not a branch), the bill-payment list is `billpay_products`, the bill-payment
+    SERVICE-FEE vocabulary is `acfg['billpay_fee_descs']` (the mig-1045 per-org column resolved through the
+    one registry, `epay_fee_recon.resolve_fee_descs`), and the accessory test is `_is_accessory`, the very
+    classifier the report aggregates accessory revenue with. A tenant with none of them configured gets
+    `is_excluded=None` + the HOUSE fee vocabulary + an empty accessory config.
 
     An exclusion rule keyed on a column the DISPLAY projection does not carry (sku / tender_type) simply
     never hits — `exclusion_hit` skips a blank value — so this can only ever UNDER-suppress, never
     wrongly hide a real gap."""
     bp = (acfg or {}).get('billpay_products') or set()
+    _fee_descs = (acfg or {}).get('billpay_fee_descs') or ()
     for l in lines or ():
         try:
             if is_excluded is not None and is_excluded(l):
@@ -27751,6 +27809,23 @@ def _txn_activation_candidate(lines, acfg, is_excluded=None):
             # conversion metric can never disagree about what a walk-in recharge is.
             _p = str(l.get('product_desc') or '').strip().lower()
             if _p and (_p in bp if bp else any(_t in _p for _t in _BILLPAY_DEFAULT_TOKENS)):
+                continue
+            # THE SERVICE FEE ON A BILL PAYMENT IS NOT A THING A CONTRACT TYPE COULD HAVE DESCRIBED
+            # (index §19.42; live evidence 2026-10-03). The house org rings the customer fee as its own
+            # sales line — department 'Bill Payments', category 'Other Charge' — beside the RTR payment
+            # line. The payment line is suppressed above (the RTR exclusion / the bill-pay vocabulary),
+            # but the FEE line was not, so every single walk-in bill payment read as an activation-capable
+            # transaction with a blank contract type: 690 of the 693 October alarms, 4,142 of 4,206 in
+            # September, 4,270 of 4,315 in August. The banner told the owner to "map them so they count
+            # as activations" — which, acted on, would have swept bill payments into the activation count:
+            # exactly the failure `_txn_activation_candidate` exists to prevent, on the other tenant.
+            # The fee vocabulary is NOT re-decided here. It is the ONE registry fact every other fee
+            # reader already dereferences (epay_fee_recon.resolve_fee_descs over the mig-1045 per-org
+            # column, carried on acfg['billpay_fee_descs']) — the P&L booking in account/coa.py, the
+            # fee reconciliation and the pickup-netting basis read the same home. An org whose config
+            # resolves to no vocabulary at all (() — only reachable if the registry import fails) keeps
+            # the pre-change behaviour.
+            if _fee_descs and _p and any(_t in _p for _t in _fee_descs):
                 continue
             if _is_accessory(l.get('department'), l.get('category'), l.get('product_desc'), acfg):
                 continue
@@ -27767,7 +27842,8 @@ def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sampl
         resolve to None (not activation/upgrade/byod, not a swap) -> map them in the ct-map.
       blank_ct_transactions : distinct tids with a blank-ct line and NO ct-based activation on any line.
       blank_ct_non_activation : of those, how many could not have been an activation at all — every line
-        is either tenant-EXCLUDED (the RTR / bill-payment map) or an ACCESSORY. Reported, never alarmed
+        is tenant-EXCLUDED (the RTR / bill-payment map), the bill-payment SERVICE FEE, or an ACCESSORY.
+        Reported, never alarmed
         on: mapping these would count bill payments as activations. See _txn_activation_candidate.
       blank_ct_unrecovered  : of those, how many are activation-CAPABLE, were not rescued by the per-org
         activation_rules, and therefore really are unclassified (still 0).
@@ -31513,6 +31589,27 @@ def _billpay_fee_tokens(client, org_id):
     except Exception:
         cfg = None
     return _fr.resolve_fee_descs(cfg)
+
+
+def _billpay_fee_policy(client, org_id):
+    """THE org's DECLARED answer to "do you charge customers a bill-payment service fee?" (owner ask
+    2026-10-03; mig 1046 column billpay_fee_charged on accessory_config). Own defensive read, the
+    mig-313 / mig-944 / mig-1045 posture: a pre-1046 schema, a missing row, a junk value or ANY
+    failure resolves through the ONE home to `metric_recon.HOUSE_FEE_POLICY` — never to a guess in
+    either direction, because an unanswered question must not be answered by code. The sibling of
+    `_billpay_fee_tokens` above: that one answers what the fee line is CALLED, this one whether there
+    is one at all, and the second question is the one the comparison depends on. NEVER raises."""
+    from app.modules.commcalc import metric_recon as _mr
+    cell = None
+    try:
+        # ANY SUBSET OF COLUMNS (index §4b.1): the row is read WHOLE, so neither mig-1045's
+        # vocabulary nor mig-1046's policy can hide the other behind one missing column.
+        row = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                           lambda q: q.eq("org_id", org_id)).row or {}
+        cell = row.get("billpay_fee_charged")
+    except Exception:
+        cell = None
+    return _mr.resolve_fee_policy(cell)
 
 
 def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
