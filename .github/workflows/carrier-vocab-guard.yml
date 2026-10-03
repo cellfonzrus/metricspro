@@ -1093,3 +1093,21 @@ jobs:
       - name: Run the bill-pay fee / activation-candidate proof (the 690 stay silent; the real gap is still reported; the other tenant byte-identical — index §19.42)
         working-directory: backend
         run: python3 harness_billpay_fee_not_activation.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SCHEDULE-FROM-WORK-HISTORY PROOF (index §14v) drives the REAL
+  # storeops/schedule_from_history.py over in-memory transaction rows: the calendar arithmetic against
+  # date.weekday(), nearest-rank percentiles with OUTWARD rounding (the derived shift always contains the
+  # observed one), relief gets no recurring rows, both readings of the coverage denominator, no invented
+  # measurement, the store-alias and lost-page regressions, and the UN-WIRING LOCK — the tool must keep
+  # dereferencing the module and storeops.shift_templates stays the only table it inserts into, so a
+  # sibling schedule-generation path fails the build. stdlib only, DB-free.
+  schedule-from-history-proof:
+    name: Schedule from work history (DB-free, the real module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the schedule-from-history proof (the inference is stated and outward-rounded; relief is not a weekly commitment; one derivation, one destination table — index §14v)
+        working-directory: backend
+        run: python3 harness_schedule_from_history.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
