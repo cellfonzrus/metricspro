@@ -622,6 +622,29 @@ commissions, expenses.
   assignment `1115 Liberty Ave`, $3,786.27 Aug revenue leaked to "Default Company") re-attributes
   correctly (recompute refreshes stored company snapshots). Proof:
   `harness_pl_filter_semantics.py`.
+
+- **The EXPLICIT store selection resolves through that same vocabulary (fix 2026-10-03, owner:
+  "device cost is not being added to the p&l of the following stores 5619 6149 6507 1710"):** the
+  P&L store picker is `GET /core/filter-options`, which offers `storeops.stores.address` when the
+  row carries one and the **store CODE** when it does not — 26 of the house org's 29 storeops rows
+  carry no address, so the picker handed the filter `B-5619` while the snapshot is keyed
+  `store:5619 N. Broad St.`. The explicit half of `build_store_matcher` compared EXACT spellings
+  only, bound ZERO snapshots, and `aggregate` rendered the consolidated **skeleton at $0.00** — the
+  whole statement, device cost included, read as a measured zero (measured live: `B-5619` →
+  0 stores matched, device cost $0.00; the store's real Sep-2026 figure is $5,902.12). Same defect
+  class as the market bug above — a picker offering a spelling the resolver cannot bind — and the
+  same cure, not a second one: `statement_filter.store_key_expansion` expands the selection through
+  the ONE canonical union vocabulary (code → every address spelling → every POS alias → unambiguous
+  leading street number; fail-closed on an unknown spelling or an ambiguous number), and BOTH halves
+  of the filter now dereference the shared `_keys_for_codes` / `_num_owner_index` /
+  `_codes_for_selection` helpers and ONE index read (`_org_store_vocabulary`), so a store selection
+  and a market selection can never disagree about what is the same store. Covers the Balance Sheet
+  and the multi-month export too — they are the same `filtered_statement` mechanism. Every path that
+  already worked is byte-identical (verified live: the four market filters and the exact-address
+  selections hash-identical before and after). Proof: `harness_pl_filter_semantics.py` §D
+  (10 checks, the code-selection regression among them).
+  **The DATA half:** the picker only offers codes because `storeops.stores.address` is NULL for
+  those rows; backfilling it from `commcalc.store_mapping` removes the cause as well as the symptom.
 - **Wages estimate is salary-basis aware (fix 2026-09-02, owner: "employee salaries … not getting
   autoloaded from the payroll"):** `coa.wages_by_store` → pure `coa.derive_wage_cells`: hourly
   employees stay hours×`pay_rate` (byte-identical); SALARIED employees
@@ -5514,7 +5537,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /marketing/event-sales/roi` | report 3: the commission actually PAID against the numbers/IMEIs the day activated (`paid_against_activated_numbers`, with `commission_as_of` + the paid-to-date split by period) less the day's cost; withheld entirely while any cost is unknown. The store-month allocation is a labelled fallback for unmatchable lines only | §23s.6, §23s.8 |
 | `POST /marketing/event-sales/roi/link-event` | link a (store, date) to an event, or CREATE one through the module's existing creator with the minimum needed to cost it | §23s.7 |
 
-| `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter; **§4d Print each store** reads this once per store (frontend `plStatement.plQuery`, the page's one query builder) |
+| `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02; the EXPLICIT store selection resolves through that same vocabulary via `statement_filter.store_key_expansion`, so a store picked by its CODE binds its snapshot instead of rendering the $0 skeleton, 2026-10-03) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter; **§4d Print each store** reads this once per store (frontend `plStatement.plQuery`, the page's one query builder) |
 | `GET /account/pl-range?period_from=&period_to=&scope=&stores=&markets=` — the P&L over a month range (≤ 24): the page's lines / drill rows / order, one column per month + a Total, the export `sheets`. READ-ONLY; each month IS `pl_single_month(month)` | `account/router.py` (`get_pl_range` → `_period.month_range` → `pl_single_month` per month → `pl_range.assemble` / `export_sheet` / `notes_sheet`) | §4c |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/royalty/config` · `PUT /account/royalty/lines` · `PUT /account/royalty/config` · `POST /account/royalty/parse` (preview, no write) · `POST /account/royalty/import` · `POST /account/royalty/manual` · `GET /account/royalty/reports` · `GET\|DELETE /account/royalty/report/{id}` — all `require_module("royalty")` | `account/royalty_router.py` → `royalty.parse` / `validate` / `header_fields` / `line_rows` / `pl_bookings` | §37.2–37.3 |

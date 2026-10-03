@@ -36,6 +36,119 @@ def _r(x):
     return round(safe_float(x), 2)
 
 
+# ── THE store-spelling vocabulary, dereferenced (never copied) ──────────────────────────────────
+# Both the MARKET expansion and the EXPLICIT-STORE expansion below need the same three facts: which
+# key spellings a store code owns, which store a spelling names, and which leading street numbers
+# are unambiguous. Each fact has ONE home here and both callers READ it, so the two halves of the
+# filter can never disagree about what counts as the same store.
+
+def _keys_for_codes(idx, codes):
+    """PURE: every UPPER key spelling the org's vocabulary knows for these store codes — the code
+    itself, every address spelling (`addr_keys`) and every POS synonym (`alias_keys`)."""
+    idx = idx or {}
+    addr_keys = idx.get("addr_keys") or {}
+    alias_keys = idx.get("alias_keys") or {}
+    out = set()
+    for code in codes or ():
+        c = str(code).upper()
+        if not c:
+            continue
+        out.add(c)
+        out |= {str(a).upper() for a in (addr_keys.get(c) or ())}
+        out |= {str(a).upper() for a in (alias_keys.get(c) or ())}
+    out.discard("")
+    return out
+
+
+def _num_owner_index(idx):
+    """PURE: leading street number -> {owning identity}. A number claimed by two identities is
+    ambiguous and must never match (fail-closed), exactly as `store_resolver` documents."""
+    from app.modules.account.coa import _lead_num_key
+    idx = idx or {}
+    num_owner = {}
+    for code, addrs in (idx.get("addr_keys") or {}).items():
+        for a in addrs:
+            nk = _lead_num_key(a)
+            if nk:
+                num_owner.setdefault(nk, set()).add(str(code).upper())
+    for s in (idx.get("stores") or ()):
+        a = str((s or {}).get("address") or "")
+        nk = _lead_num_key(a)
+        if nk:
+            ident = str((s or {}).get("store_code") or "").upper() or a.upper()
+            num_owner.setdefault(nk, set()).add(ident)
+    return num_owner
+
+
+def _codes_for_selection(idx, value):
+    """PURE: the UPPER store code(s) an arbitrary selected spelling names — exact code, then any
+    squashed key spelling (`key_index`: code | address | alias), then an UNAMBIGUOUS leading street
+    number. Widened through `code_groups` so a store carried under two code vocabularies resolves to
+    both. Empty set when nothing binds (fail-closed — a spelling is never guessed into a store)."""
+    from app.modules.account.coa import _squash_key, _lead_num_key
+    idx = idx or {}
+    key_index = idx.get("key_index") or {}
+    code_groups = idx.get("code_groups") or {}
+    addr_keys = idx.get("addr_keys") or {}
+    v = str(value or "").strip()
+    if not v:
+        return set()
+    found = set()
+    up = v.upper()
+    if up in addr_keys or up in (idx.get("alias_keys") or {}):
+        found.add(up)
+    if not found:
+        found |= {str(c).upper() for c in (key_index.get(_squash_key(v)) or ())}
+    if not found:
+        nk = _lead_num_key(v)
+        if nk:
+            owners = (_num_owner_index(idx) or {}).get(nk) or set()
+            if len(owners) == 1:
+                found |= {o for o in owners if o in addr_keys}
+    widened = set(found)
+    for c in found:
+        widened |= {str(g).upper() for g in (code_groups.get(c) or ())}
+    return widened
+
+
+def store_key_expansion(idx, stores):
+    """PURE (harness: harness_pl_filter_semantics.py): expand an EXPLICIT store selection to every
+    matchable SNAPSHOT key spelling, from the same canonical union index the market expansion reads.
+
+    OWNER BUG 2026-10-03 — *"device cost is not being added to the p&l of the following stores 5619
+    6149 6507 1710"*. The P&L store picker is `/core/filter-options`, which offers
+    `storeops.stores.address` when the row has one and the STORE CODE when it does not; 26 of the
+    house org's 29 storeops rows carry no address, so the picker offered `B-5619` while the snapshot
+    is keyed `store:5619 N. Broad St.`. The explicit half of the matcher compared EXACT spellings
+    only, so the selection bound ZERO store snapshots and `aggregate` rendered the consolidated
+    SKELETON at $0.00 — every line, device cost among them, read as a measured zero.
+
+    This is the SAME defect class as the 2026-09-02 market bug documented in `market_key_expansion`
+    (a picker offering a spelling the resolver cannot bind) and it gets the same cure rather than a
+    second one: the selection is resolved through the ONE canonical vocabulary, so any spelling the
+    picker can offer — code, address variant, POS alias, or a bare street number — binds the store's
+    snapshot. Fail-closed: a spelling that names no store contributes only itself, and an ambiguous
+    street number never matches.
+
+    Returns (upper_keys, squashed_keys, member_nums) — the same triple `market_key_expansion`
+    returns, so the two expansions simply union."""
+    from app.modules.account.coa import _squash_key
+    idx = idx or {}
+    addr_keys = idx.get("addr_keys") or {}
+    picked = {str(s or "").strip() for s in (stores or ()) if str(s or "").strip()}
+    upper_keys = {p.upper() for p in picked}        # the selection itself always matches (unchanged)
+    codes = set()
+    for p in picked:
+        codes |= _codes_for_selection(idx, p)
+    upper_keys |= _keys_for_codes(idx, codes)
+    squashed_keys = {_squash_key(k) for k in upper_keys}
+    squashed_keys.discard("")
+    num_owner = _num_owner_index(idx)
+    member_nums = {n for n, owners in num_owner.items()
+                   if len(owners) == 1 and next(iter(owners)) in (codes | upper_keys)}
+    return upper_keys, squashed_keys, member_nums
+
+
 def market_key_expansion(idx, markets):
     """PURE (harness: harness_pl_filter_semantics.py): expand a market selection to every matchable
     STORE KEY spelling, from the canonical UNION market index (core.scope.build_market_index shape).
@@ -57,10 +170,9 @@ def market_key_expansion(idx, markets):
                       store, mirroring store_resolver's documented precedence. A number claimed by
                       two different stores never matches (fail-closed).
     Market names match case-insensitively; an unknown market contributes nothing (fail-closed)."""
-    from app.modules.account.coa import _squash_key, _lead_num_key
+    from app.modules.account.coa import _squash_key
     idx = idx or {}
     by_market = idx.get("by_market") or {}
-    addr_keys = idx.get("addr_keys") or {}
     want = {str(m or "").strip().lower() for m in (markets or []) if str(m or "").strip()}
     upper_keys, member_codes = set(), set()
     for mk in want:
@@ -69,23 +181,11 @@ def market_key_expansion(idx, markets):
             continue
         upper_keys |= {str(k).upper() for k in (b.get("keys") or ())}
         member_codes |= {str(c).upper() for c in (b.get("codes") or ())}
-    for code in member_codes:
-        upper_keys |= {str(a).upper() for a in (addr_keys.get(code) or ())}
+    upper_keys |= _keys_for_codes(idx, member_codes)
     squashed_keys = {_squash_key(k) for k in upper_keys}
     squashed_keys.discard("")
-    # index-wide street-number ambiguity: number → owning identity (code, else the address itself)
-    num_owner = {}
-    for code, addrs in addr_keys.items():
-        for a in addrs:
-            nk = _lead_num_key(a)
-            if nk:
-                num_owner.setdefault(nk, set()).add(str(code).upper())
-    for s in (idx.get("stores") or ()):
-        a = str((s or {}).get("address") or "")
-        nk = _lead_num_key(a)
-        if nk:
-            ident = str((s or {}).get("store_code") or "").upper() or a.upper()
-            num_owner.setdefault(nk, set()).add(ident)
+    # index-wide street-number ambiguity, from the ONE shared index (number → owning identity)
+    num_owner = _num_owner_index(idx)
     member_idents = member_codes | upper_keys
     member_nums = {n for n, owners in num_owner.items()
                    if len(owners) == 1 and next(iter(owners)) in member_idents}
@@ -94,9 +194,10 @@ def market_key_expansion(idx, markets):
 
 def build_store_matcher(explicit_stores, upper_keys, squashed_keys, member_nums):
     """PURE: fn(snapshot store address) -> bool for the combined store+market selection.
-    Explicit stores (the picker offers the exact snapshot addresses) match case-insensitively —
-    byte-identical to the old behaviour; market membership matches by any known spelling (exact
-    upper → squashed → unambiguous leading street number)."""
+    The explicit selection still matches case-insensitively as-is (byte-identical to the old
+    behaviour); everything the two expansions resolved — the selected stores' other spellings and
+    the selected markets' members — matches by any known spelling (exact upper → squashed →
+    unambiguous leading street number)."""
     from app.modules.account.coa import _squash_key, _lead_num_key
     explicit_lower = {str(s).strip().lower() for s in (explicit_stores or ()) if str(s).strip()}
     explicit_upper = {s.upper() for s in explicit_lower}
@@ -117,49 +218,73 @@ def build_store_matcher(explicit_stores, upper_keys, squashed_keys, member_nums)
     return match
 
 
+def _org_store_vocabulary(client, org_id):
+    """The org's canonical union store vocabulary (core.scope.market_index: storeops.stores ∪
+    commcalc.store_mapping ∪ store_aliases) — ONE read, dereferenced by both expansions. A read
+    failure degrades to a best-effort store_mapping-only index (the pre-2026-09 authority) shaped
+    the same way, never to silently-all. Market-less mapping rows are carried too, because a STORE
+    selection must resolve whether or not its row names a market."""
+    try:
+        from app.core import scope as core_scope
+        idx = core_scope.market_index(client, org_id)
+        if idx:
+            return idx
+    except Exception:
+        pass
+    try:
+        from app.modules.account import coa
+        rows = coa._fetch_all(client, "store_mapping", "store_code,store_address,market",
+                              {"org_id": org_id})
+        idx = {"by_market": {}, "addr_keys": {}, "alias_keys": {}, "key_index": {},
+               "code_groups": {}, "stores": []}
+        for r in rows:
+            mk = (r.get("market") or "").strip().lower()
+            sa = (r.get("store_address") or "").strip()
+            code = (r.get("store_code") or "").strip().upper()
+            if not sa and not code:
+                continue
+            idx["stores"].append({"store_code": code, "address": sa, "market": mk or None})
+            if code and sa:
+                idx["addr_keys"].setdefault(code, set()).add(sa.upper())
+                idx["key_index"].setdefault(coa._squash_key(sa), set()).add(code)
+                idx["key_index"].setdefault(coa._squash_key(code), set()).add(code)
+            if not mk or not sa:
+                continue
+            b = idx["by_market"].setdefault(mk, {"codes": set(), "keys": set()})
+            b["keys"].add(sa.upper())
+            if code:
+                b["codes"].add(code)
+        return idx
+    except Exception:
+        return {}
+
+
 def resolve_store_matcher(client, org_id, stores_csv="", markets_csv=""):
     """Resolve the active store/market selection to a snapshot-address matcher.
 
-      • explicit stores → matched as-is, case-insensitively (they ARE the scope store addresses the
-        picker offered).
-      • markets → resolved through the org's canonical union market index
-        (core.scope.market_index: storeops.stores ∪ commcalc.store_mapping ∪ store_aliases), so any
-        market the picker offers binds — see market_key_expansion. A read failure degrades to a
-        best-effort store_mapping-only expansion (the old authority), never to silently-all.
+      • explicit stores → resolved through the org's canonical union vocabulary, so ANY spelling the
+        picker can offer binds the store's snapshot: the exact selection, its store CODE, every
+        address variant, every POS alias, and an unambiguous leading street number — see
+        `store_key_expansion` (owner bug 2026-10-03).
+      • markets → resolved through the SAME index, so any market the picker offers binds — see
+        `market_key_expansion` (owner bug 2026-09-02).
+
+    Both halves read one index and union their key triples, so the filter cannot treat a spelling as
+    one store for a market selection and a different store for an explicit one.
 
     Values are PIPE-separated ('|'), not comma — a canonical store_address may itself contain a comma
     ("123 Main St, Queens NY"). Returns (matcher, explicit_stores:set, markets:list)."""
     stores = {s.strip() for s in (stores_csv or "").split("|") if s.strip()}
     markets = [m.strip() for m in (markets_csv or "").split("|") if m.strip()]
     upper_keys, squashed_keys, member_nums = set(), set(), set()
-    if markets:
-        idx = None
-        try:
-            from app.core import scope as core_scope
-            idx = core_scope.market_index(client, org_id)
-        except Exception:
-            idx = None
-        if idx is None:
-            # degraded fallback: the pre-2026-09 store_mapping-only vocabulary (case-insensitive now)
-            try:
-                from app.modules.account import coa
-                rows = coa._fetch_all(client, "store_mapping", "store_code,store_address,market",
-                                      {"org_id": org_id})
-                idx = {"by_market": {}, "addr_keys": {}, "stores": []}
-                for r in rows:
-                    mk = (r.get("market") or "").strip().lower()
-                    sa = (r.get("store_address") or "").strip()
-                    code = (r.get("store_code") or "").strip().upper()
-                    if not mk or not sa:
-                        continue
-                    b = idx["by_market"].setdefault(mk, {"codes": set(), "keys": set()})
-                    b["keys"].add(sa.upper())
-                    if code:
-                        b["codes"].add(code)
-                        idx["addr_keys"].setdefault(code, set()).add(sa.upper())
-            except Exception:
-                idx = {}
-        upper_keys, squashed_keys, member_nums = market_key_expansion(idx, markets)
+    if stores or markets:
+        idx = _org_store_vocabulary(client, org_id)
+        if markets:
+            u, sq, nums = market_key_expansion(idx, markets)
+            upper_keys |= u; squashed_keys |= sq; member_nums |= nums
+        if stores:
+            u, sq, nums = store_key_expansion(idx, stores)
+            upper_keys |= u; squashed_keys |= sq; member_nums |= nums
     return build_store_matcher(stores, upper_keys, squashed_keys, member_nums), stores, markets
 
 

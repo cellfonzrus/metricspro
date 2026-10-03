@@ -14,6 +14,14 @@ DB-free, pure-stdlib. Proves, against fixture data modeled on the LIVE failures:
      attributes by unambiguous street number instead of leaking to Default Company; unassigned
      stores still land on the default company; ambiguity fails closed to the default.
 
+  D. EXPLICIT STORE RESOLUTION (owner bug 2026-10-03: "device cost is not being added to the p&l
+     of the following stores 5619 / 6149 / 6507 / 1710") — /core/filter-options offers the STORE
+     CODE whenever storeops.stores carries no address, so the picker handed the filter 'B-5619'
+     while the snapshot is keyed 'store:5619 N. Broad St.'. The explicit half matched exact
+     spellings only, bound zero snapshots, and the whole statement rendered the $0 skeleton.
+     store_key_expansion resolves the selection through the SAME canonical vocabulary the market
+     half reads, and the $0 skeleton is proved to come back as the real amounts.
+
   C. COMPOSITION + LINEARITY — the filtered statement is the exact per-line SUM of the matched
      store snapshots (statement_filter.aggregate), company scope × market filter composes as AND,
      and company-wide lines stay $0 in a filtered view.
@@ -26,7 +34,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.account.statement_filter import (          # noqa: E402
-    market_key_expansion, build_store_matcher, aggregate)
+    market_key_expansion, store_key_expansion, build_store_matcher, aggregate)
 from app.modules.account.coa import build_company_matcher   # noqa: E402
 
 FAIL = 0
@@ -57,6 +65,14 @@ IDX = {
         "B-1115": {"1115 LIBERTY AVE"},
         "B-55A": {"55 MAIN ST"},
         "B-55B": {"55 BROAD AVE"},
+    },
+    "alias_keys": {"B-1115": {"LIBERTY AVENUE STORE"}},
+    "code_groups": {},
+    "key_index": {
+        "B1": {"B-1"}, "1S60THSTREET": {"B-1"},
+        "B1115": {"B-1115"}, "1115LIBERTYAVE": {"B-1115"}, "LIBERTYAVENUESTORE": {"B-1115"},
+        "B55A": {"B-55A"}, "55MAINST": {"B-55A"},
+        "B55B": {"B-55B"}, "55BROADAVE": {"B-55B"},
     },
     "stores": [
         {"store_code": "B-1", "address": "1 S 60th street", "market": "PA"},
@@ -177,6 +193,45 @@ agg_none = aggregate([], "pl", structure=CONSOLIDATED)
 check("no matches → full $0 skeleton (never a missing-section crash)",
       agg_none["net_income"] == 0.0
       and {ln["key"] for s in agg_none["sections"] for ln in s["lines"]} >= {"mi_income", "wages"})
+
+
+# ── D. explicit store selection resolves through the canonical vocabulary (owner bug 2026-10-03) ─
+print()
+print("D. explicit store selection (code / alias / variant spelling all bind the snapshot)")
+
+
+def _match(sel):
+    return build_store_matcher({sel}, *store_key_expansion(IDX, {sel}))
+
+
+check("REGRESSION — a store picked by its CODE binds the snapshot address ('B-1115')",
+      _match("B-1115")("1115 Liberty Ave"))
+check("the exact snapshot address still binds (old behaviour kept)",
+      _match("1115 Liberty Ave")("1115 Liberty Ave"))
+check("a code selection does NOT bind another store ('B-1115' vs '1 S 60th street')",
+      not _match("B-1115")("1 S 60th street"))
+check("a POS alias binds the store it names ('Liberty Avenue Store')",
+      _match("Liberty Avenue Store")("1115 Liberty Ave"))
+check("punctuation / case drift binds by squash ('1115 LIBERTY AVE.')",
+      _match("1115 LIBERTY AVE.")("1115 Liberty Ave"))
+check("the sales spelling with city/zip binds by street number",
+      _match("B-1115")("1115 Liberty Ave Brooklyn, NY 11208"))
+check("AMBIGUOUS street number fails closed — '55' names two stores",
+      not (_match("55")("55 Main St") or _match("55")("55 Broad Ave")))
+check("an unknown spelling binds only itself, never a guess",
+      not _match("999 Nowhere Rd")("1115 Liberty Ave"))
+
+# the defect as the owner saw it: a code selection used to render the $0 skeleton
+picked_code = [p for a, p in STORES.items() if _match("B-1115")(a)]
+agg_code = aggregate(picked_code, "pl", structure=CONSOLIDATED)
+by_code = {ln["key"]: ln["amount"] for s in agg_code["sections"] for ln in s["lines"]}
+check("REGRESSION — a code-picked store's lines are its real amounts, not $0.00",
+      by_code.get("accessory_rev") == 3786.27 and len(picked_code) == 1)
+
+# a store selection and the market it belongs to must agree about the same store
+check("store and market expansions agree on the same store (one vocabulary)",
+      build_store_matcher(set(), *market_key_expansion(IDX, ["LI"]))("1115 Liberty Ave")
+      and _match("B-1115")("1115 Liberty Ave"))
 
 print()
 if FAIL:
