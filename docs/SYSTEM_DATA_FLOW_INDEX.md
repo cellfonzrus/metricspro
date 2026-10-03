@@ -49,7 +49,7 @@ Primary code homes:
 | 12 | **Cash / deposit reconciliation** | "Collected cash vs bank deposits. Expected deposit, variance, basis." |
 | 12a | **Merchant-processor portals** | "Where do the card processors' own daily figures come from, and how are they tallied against what employees declared?" |
 | 13 | **Org hierarchy & store resolution** | "Which stores does a manager see? How is a raw store string canonicalized to a store_code?" |
-| 14 | **Employees & scheduling** | "Do shifts feed pay? Rep→employee name mapping. Hours in targets." |
+| 14 | **Employees & scheduling** | "Do shifts feed pay? Rep→employee name mapping. Hours in targets. How is a recurring weekly schedule created, and can one be DERIVED from what a rep actually did?" |
 | 15 | **Other commission subsystems** | MA (master-agent) commission, VIP, epay, chargebacks, expenses, agency, financing, accrual/payout ledger. |
 | 15z | **Zero sales — no activation, no upgrade** | "Which stores (and which reps) sold nothing for how many days running — and which of those 'zeros' are really a feed that never arrived?" |
 | 16 | **Cross-reference: by TABLE** | table → sections/functions that read & write it. |
@@ -4277,7 +4277,8 @@ as a market-grant keyset member; ambiguity fails closed):
   monthly_target`), `storeops.employees` (`:21` — `employee_id, name, home_store, role, pay_rate,
   epay_login, epay_salesperson, org_unit_id`), `storeops.shifts` (`:37` — `employee_id, employee_name,
   store_code, shift_date, start_time, end_time, scheduled_hours, actual_hours, status, is_deleted`),
-  `shifts_archive` (`:60`), `schedule_templates` (`:88`), `roles` (`:97`). Shift templates mig `040`;
+  `shifts_archive` (`:60`), `schedule_templates` (`:88` — **DEAD, nothing reads it**), `roles`
+  (`:97`). The LIVE recurring schedule is `shift_templates` mig `040` (§14v);
   timeclock mig `045`,`432`.
 - **Rep→StoreOps name map:** `commcalc.name_map` (mig `002:171` — `epay_login, epay_salesperson,
   storeops_name`). Rep aliases mig `016`; endpoints `/rep-aliases` `router.py:21528`, `/rep-employee-map`
@@ -5446,6 +5447,130 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 *Distributor invoices — one selector, one store vocabulary* in `carrier-vocab-guard.yml`.
 
 
+### 14v. A SCHEDULE DERIVED FROM WORK HISTORY — the nine PA reps (owner directive 2026-10-03)
+
+**Owner (verbatim):** *"Add the 9 sales reps from the 9 stores we worked on a schedule as they have
+been working in the past, this needs analysis based on work history and then assign schedule, again
+nothing is hard coded just as user entered and editable."*
+
+**THE SETTING (§14u's roster, now needing hours).** The ten PA employees `E257`–`E266` exist on
+`storeops.employees` (all `pay_basis='hourly'`, all `pay_rate` NULL, no `hire_date`) and
+`storeops.shifts` had **zero rows ever** for the nine PA store codes against 4,449 for the other
+nineteen — which is exactly why those nine have no hours-derived wages anywhere.
+
+**NO NEW MECHANISM — the duplicate check.** The search was for every existing schedule-generation
+path. ONE exists and it is the right one: **`storeops.shift_templates` (mig `040`)** — the
+per-employee canonical week (`weekday` 0=Mon..6=Sun → store + times), written by
+`POST /storeops/shift-templates/save-week` and materialised into `storeops.shifts` for any week by
+`POST /storeops/shift-templates/apply` (`storeops/router.py:3954-4065`; dedup-safe, skips approved
+time off, canonicalises the employee id via `_canonical_shift_employee_id` — the 2026-07-27 money
+fix). `storeops.schedule_templates` (mig `003:88`) is a DEAD table: no code reads or writes it.
+Nothing new was built to create shifts, and deliberately **no SQL for `storeops.shifts` was
+shipped** — the apply endpoint is the only writer, because a hand-written INSERT would miss all
+three of its guards. What was added is the DERIVATION only.
+
+**NEW pure module `backend/app/modules/storeops/schedule_from_history.py`** — transaction history →
+a proposed weekly pattern. No client, no I/O, no clock, stdlib only (RULE TWO: every threshold,
+percentile, rounding step and day grouping is a `DEFAULTS` key; no store/rep/carrier/tenant name
+appears, and the harness asserts that against the source).
+- `day_spans` (rows → one record per store·rep·day with first/last transaction minute),
+  `rep_profiles` (regular vs **relief**), `weekday_occurrences` (the coverage denominator),
+  `store_hours` (the open/close envelope, per day group, pooled over every rep at the store),
+  `house_pattern` (the fallback), `weekly_template` (the emitted rows + provenance),
+  `monthly_hours` / `weekly_hours` / `month_weekday_counts`, `rate_check` (the money cross-check,
+  both directions), `resolve_rows` (store binding, injected), `weekday_of` (Zeller, pinned).
+- **THE INFERENCE IS STATED, never implied.** A transaction proves presence, not store hours. Start
+  = `open_percentile` (10th) of first-transaction minutes rounded **DOWN**; end =
+  `close_percentile` (90th) of last-transaction minutes rounded **UP**. Outward on purpose — a rep
+  is on the floor before the first sale and after the last — and the harness pins that the derived
+  envelope always CONTAINS the observed one. Every row carries `evidence`
+  (`measured` | `house:thin` | `house:none` | `none`) and its sample count, so an assumption can
+  never be presented as a measurement.
+- **Relief is not a weekly commitment.** A rep under `regular_min_days` in every analysed month gets
+  ZERO recurring rows and is REPORTED in `relief` with its day counts.
+- **The one judgement call is a knob**: `weekday_denominator` `'traded'` (house default — a store
+  shut on a weekday never makes its rep look absent, but at a single-rep store the coverage filter
+  cannot fire) vs `'calendar'`. Both readings are pinned by the harness; on the live derivation they
+  produce **identical** templates, differing only in the reported `days_possible`.
+
+**Caller (read-only, wires the module): `backend/tools/derive_schedule_from_history.py`** — SELECTs
+`commcalc.raw_sales` / `store_mapping` / `store_aliases` / `storeops.employees` and EMITS SQL; it
+writes nothing. Store binding goes through the platform's own resolver inputs (§13a:
+`store_mapping` + `store_aliases`), never an address match, and a feed string that binds nowhere is
+reported in `unresolved` while one belonging to another store is reported separately as
+`out_of_scope` — only the former is a defect.
+
+**THE LIVE DERIVATION (read-only, 2026-10-03, house org, Jul+Aug 2026 `raw_sales`).** Nine regular
+reps × seven days = **63 template rows, every one `measured`**; one relief rep (`E266`) with none.
+Mon–Sat 09:30/10:00 → 19:00/19:30 (9.0–9.5 h), Sun 12:00/12:30 → 16:30/17:30 (4.5–5.5 h); 58.5–62.5
+h/week, **2,383.0 h across the nine in August 2026**.
+- **THE MONEY CROSS-CHECK that anchors it:** 2,383.0 h × **$17.00/h** (the rate 34 of the estate's
+  other hourly employees already carry) = **$40,511.00** against the **$40,500.00** of
+  `Employee Salaries` just entered for those nine stores — **$11.00 apart, 0.03%**. Two independent
+  numbers meeting that closely is the evidence for both the schedule and the rate. A six-day week
+  would land ~$500/store/month BELOW the entered figure: the $4,500 only adds up at seven days,
+  which is also what the POS shows (29–31 of August's 31 days per rep).
+- **Every one of the relief rep's five August cover days is a day that store's own rep was absent**
+  (`B-60TH` ×2, `B-6149`, `B-3605`, `B-6507`) — which is how we know the seven-day week is real.
+
+**TWO LIVE DEFECTS FOUND AND REPORTED, NOT WORKED AROUND:**
+1. **A store's POS spelling is not its `store_address`.** The feed writes Mount Ephraim as
+   `'2778 Ephraim Ave '` (trailing space) and `'2778 Ephraim Ave'`; `store_mapping.store_address` is
+   `'1598 Mount Ephraim Ave'`. An address match finds ZERO history and concludes `E263` has none —
+   he has 5,780 rows. `commcalc.store_aliases` already carries the binding; the resolver is the ONE
+   home for it and this derivation dereferences it. (Also: `storeops.stores` and
+   `employees.home_store` carry `B-2778` while `store_mapping`'s live code is `B-1598`; both map to
+   the one address so the P&L folds them, and the template rows use `B-2778` — the roster's code.)
+2. **AN UNORDERED POSTGREST PAGE WALK LOSES ROWS.** A `.range()` walk with no `ORDER BY` dropped 58
+   of one rep's 1,109 August rows and hid a seventh off-roster salesperson entirely. Days-worked and
+   first/last-transaction evidence are COUNTS over those rows, so a lost page silently SHORTENS a
+   real schedule. The tool now orders by `id`; the harness pins that `day_spans` is
+   order-independent and that a dropped day genuinely lowers the derived coverage (regression R1).
+
+**⚠ THE DOUBLE COUNT, SURFACED NOT FIXED (money; affects all 29 stores, not just these nine).**
+`commcalc.account_config.payroll_expense_names` is an **EMPTY LIST** for the house org, so
+`coa.build_inputs`'s `is_manual_payroll` test (§14s, mig `621` K2) never fires: a manual
+`Employee Salaries` row carries no `source_key`, routes to `store_opex`, and leaves
+`has_payroll_gross` FALSE — so the `wages_by_store` shifts×rate ESTIMATE books on the `wages` line
+**as well**. Giving these nine a schedule extends an existing condition to them (~$40,500/month of
+labour counted twice); the other twenty already have both a manual row and shifts. **The fix is one
+config row, not code** — `payroll_expense_names = ARRAY['employee salaries']` plus
+`payroll_authority_grain = 'store'` (so one entered figure does not zero every other store's
+estimate). Written up as STEP 7 of the owner's SQL with its own preview/verify/revert; NOT applied.
+
+**ALSO REPORTED, not acted on:** `raw_sales` holds **nothing after 2026-08-31** (loaded 2026-09-03;
+periods Mar–Aug 2026 + Jun/Jul 2024) — September and October have no POS sales at all, so August and
+July are the only recent history there is. `trans_ts` exists **only** in August 2026 and stamps local
+store wall-clock labelled `+00:00` (the hour histogram runs 09:00–19:00, a trading day, not a UTC
+offset of one) — July therefore proves attendance and only August can speak to times. Seven POS
+salespeople have no `storeops.employees` row, `'Rahman, Abdur'` among them (824 rows, seven stores,
+Apr–Jul 2026, gone before August).
+
+**Hire dates:** all ten are NULL. The earliest `raw_sales` day is a FLOOR, not a hire date, and for
+six reps the feed simply starts at its own window edge. Three are evidential and offered commented
+out: `E264` 2026-07-22 and `E265` 2026-08-01 (each overlapping/succeeding the previous rep at that
+store), `E266` 2026-07-27.
+
+**Proof / lock:** `backend/harness_schedule_from_history.py` — **109 checks**, DB-free, stdlib.
+§1 the calendar arithmetic against `date.weekday()` over four years; §2 nearest-rank percentile and
+OUTWARD rounding (the derived envelope contains the observed one); §3 relief gets no recurring rows
+while its transactions still inform the store's hours; §4 the coverage fraction AND both readings of
+its denominator; §5 no invented measurement (thin/absent/assumed each stamped); §6 store binding is
+injected and what binds nowhere is reported (regression R2); §7 an untimed month counts for days but
+never drags a start toward midnight; R1 the page-walk regression; §8 config is config and RULE TWO
+asserted against the source; §9 determinism; §10 the money cross-check both ways; **§11 THE UN-WIRING
+LOCK** — the tool must keep dereferencing the module and must not re-implement its arithmetic, the
+only table it may INSERT into is `storeops.shift_templates` (never `storeops.shifts` directly), and
+no second module in `app/modules/storeops` may define `weekly_template` / `store_hours` /
+`house_pattern`. CI job *Schedule from work history* in `carrier-vocab-guard.yml`.
+
+**Owner-facing SQL (surfaced, NOT applied):**
+`/mnt/project-files/rep-schedule/RUN_rep_schedule_from_history_2026-10-03.sql` — numbered steps:
+read-only previews, `pay_rate = 17.00` for the ten, the 63 template rows (idempotent
+`ON CONFLICT … DO UPDATE`), a verify, the UI path for turning templates into shifts, the relief-rep
+note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
+
+
 ## 16. Cross-reference: by TABLE
 
 | Table | Written by | Read by |
@@ -5610,6 +5735,8 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
 | `storeops.salary_expense_config` (mig `435` — RULE TWO: `line_label`, `expense_type`, `book_scheduled_fallback`, `book_no_data_as_zero`) | one row per org, house defaults seeded; absent row == house defaults | `storeops.router._salary_expense_config` → `salary_expense.resolve_config`. §14s |
+| `storeops.shift_templates` (mig `040` — per-employee canonical week: `weekday` 0=Mon..6=Sun, `store_code`, `start_time`/`end_time`/`scheduled_hours`; UNIQUE (org, employee, weekday, store)) | `POST /storeops/shift-templates/save-week` (a week's shifts → the template) and `POST /storeops/shift-templates/apply` (the template → `storeops.shifts` for a week; dedup-safe, skips approved time off, canonicalises the employee id) — **the ONLY writers of shifts from a template**; rows may also be seeded as owner-run DATA from `schedule_from_history` (§14v) | `GET /storeops/shift-templates` (scope-keyset narrowed); Schedule page toolbar "📌 Apply template" / "Save week as template" (`frontend/src/app/(platform)/storeops/schedule/page.tsx`) |
+| `storeops.schedule_templates` (mig `003:88`) | **DEAD — no code reads or writes it.** The live mechanism is `storeops.shift_templates` above (§14v duplicate check) | — |
 | `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the finance rents-due/recurring-expenses reader `GET /account/liabilities-due` (`account/liabilities_due.rent_due_rows`/`insurance_due_rows` computing FROM `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` — the §14 read contract honored, never re-derived; gated `can_see_lease`, ACH columns never selected) |
 | `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
 | `storeops.insurance_policy` + `insurance_policy_store` (mig `964` — ONE policy covering MANY stores; `premium` here is INFORMATIONAL, no money reader reads this table) | `POST/PUT/DELETE /storeops/insurance-policies`, `PUT /storeops/insurance-policies/stores` (all gated `can_see_lease`, store codes validated against this org's `storeops.stores`) | `GET /storeops/insurance-policies`; `GET /storeops/store-lease` (`policies` covering that store); `router._expiry_subjects` → expiry notices + the `storeops_doc_expiry` attention providers |
@@ -5910,6 +6037,8 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | `POST /supply/orders/{id}/confirm-manual` · `POST /supply/orders/{id}/status` (§36) — type the vendor's confirmation number (always available; email seam noted); move a supply PO through the 301 lifecycle (e.g. cancel a draft) | `supply/router.confirm_manual` → `ordering_logic.manual_confirmation` → `store.record_confirmation`; `order_status` → `store.set_status` | `supply/orders` |
 | `GET /supply/summary` (§36) — the store-operations dashboard tiles: `open_orders`, `spend_mtd` (vendor-confirmed total when captured), `savings_mtd` (the optimizer's saving vs the best single vendor), `vendors_needing_attention` + reasons, page links | `supply/router.summary` → `ordering_logic.vendor_attention` / `summary_tiles` | the store-operations dashboard (§35) |
 
+| `GET /storeops/shift-templates` · `POST /storeops/shift-templates/save-week` · `POST /storeops/shift-templates/apply` | `storeops/router.py:3954-4065` | the ONE recurring-schedule mechanism — a per-employee canonical week, and the only path that turns one into `storeops.shifts` (§14v) |
+
 ## 18. Cross-reference: by METRIC / KPI
 
 | Metric | Source table.column | Reader function |
@@ -6072,6 +6201,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 | Which route books rep commission, and what happens to the other one (`replaced` / `no_replacement` / `not_applicable`) | `commcalc.rep_commissions` is AUTHORITATIVE (owner 2026-09-08 "Rep commision should go in p&l") — the `rep_comm` P&L line / GP `−Rep Pay`. A `store_expenses` row named in `account_config.labour_commission_expense_names` (mig `994`, house default `'{}'`) is the duplicate and stops booking, per store-month, ONLY where rep commission exists to replace it | `commcalc/labour_coverage.suppression_plan` → `account/coa.build_inputs` (skips the row; `rep_comm` line `note`) **and** `commcalc/gp_report.calc_gp_report` (`commission_suppression_names` → `exp_total`; payload `labour_commission_suppressed`). ONE decision, two readers — they can never suppress differently. Proof `harness_labour_coverage.py` §H (§4) |
 | Overhead salary / commission of staff attached to NO store (DM, market manager) — per store, and who got paid how much | `storeops.employees` (salaried + active + blank `home_store`) × the covered store set (`org_span_for_manager` → `employees.org_unit_id` subtree → org-wide) ÷ the configured `basis`. Commission = `commcalc.management_incentive_payout` (§9), **never recomputed**. Company = the SUM of the store cells and nothing else | `storeops/overhead_allocation.py` (`classify_employee` / `covered_stores` / `allocate` / `build_overhead` / `company_total` / `reconcile_manual`) → `account/coa.build_inputs` → P&L lines **`overhead_wages`** + **`overhead_comm`**, `auto_opt`, store grain, sited under `wages`. Config `account_config.overhead_config` (mig `997`, house default `mode='off'` ⇒ books nothing). Proof `harness_overhead_allocation.py` (52 checks) (§14t) |
 | Store salary coverage state for a month (`entered` / `derived_actual` / `derived_scheduled` / `carried` / `not_measured` / `no_staff`) | `commcalc.store_expenses` authoritative payroll rows (ruling-K2 predicate, minus flat allocations) + `storeops.shifts` hours (actual else scheduled) + `expenses_effective` carry answer | `commcalc/labour_coverage.labour_coverage` → `GET /gp/{period}` key `labour_coverage` and the P&L `wages` line `note` (§4, mig `992`). Computes NO dollars — the amounts stay with `coa.derive_wage_cells` |
+| Scheduled hours per rep per month (and the hourly rate it implies against an entered monthly salary) | `storeops.shift_templates` × the calendar; evidence from `commcalc.raw_sales` first/last `trans_ts` per store·rep·day | `storeops/schedule_from_history.py` `weekly_template` / `monthly_hours` / `rate_check` — the ONE derivation (§14v); proof `harness_schedule_from_history.py` |
 | Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
 | Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |
 | Expiry notice window (per lease / policy / COI) | **MAX**(the document's own requirement — `store_lease.lease_notice_days` / `insurance_policy.notice_days` — and the org floor `tenants.doc_expiry_notice_days`, house 60; migs `964`/`966`). MAX, not override: 90/180 beats the floor, 30 never drops below it | `doc_intel.resolve_notice_days` → `doc_intel.expiry_alerts` (ladder `milestones_for`, ASCENDING = the tightest milestone crossed fires) → `GET /storeops/doc-expiry`, the daily sweep `_run_doc_expiry`, and the `storeops_doc_expiry` attention providers; dedupe in `storeops.alert_log` |
