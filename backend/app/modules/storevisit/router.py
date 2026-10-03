@@ -6,7 +6,7 @@ only the storage PATH, served to the UI as a short-lived signed URL. Tables live
 """
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from datetime import datetime, timezone
@@ -408,11 +408,41 @@ def update_visit(visit_id: str, payload: UpdateVisitIn, org_id: str = ORG_ID):
 
 
 @router.post("/visits/{visit_id}/submit")
-def submit_visit(visit_id: str, org_id: str = ORG_ID):
+def submit_visit(visit_id: str, background: BackgroundTasks = None, org_id: str = ORG_ID):
+    """Complete the visit — and tell the managers NOW.
+
+    OWNER, 2026-10-03: *"every sore visti as soon as it is uploaded should be emailed as soon as the
+    visti is completed"*. So the alert fires on THIS event, not on the next tick of the hourly sweep.
+
+    IT IS THE SAME ONE PATH, not a second send. `_run_store_visit_alerts` scoped to this visit does
+    the whole job — the same recipients, the same digests, the same `alert_log` dedup, the same
+    draft purchase order — so there is no second renderer and no second fan-out to drift. The hourly
+    sweep stays as the SAFETY NET rather than the trigger: it catches a visit whose immediate send
+    could not go out (a channel down, a tenant that switched the alert on afterwards), and the dedup
+    key being (visit, item) means a visit already announced here is never announced twice.
+
+    IN THE BACKGROUND, and that is deliberate. A visit is submitted from a phone, often on a store's
+    wifi, and the rep must get their confirmation whether or not an email provider answers. A send
+    that fails leaves no `alert_log` row, so the next sweep retries it — which is exactly what
+    "an alert that reached nobody is not already alerted" already means everywhere else here."""
     sb().table("store_visits").update({
         "status": "submitted", "submitted_at": _now(), "updated_at": _now(),
     }).eq("id", visit_id).eq("org_id", org_id).execute()
-    return get_visit(visit_id, org_id)
+    out = get_visit(visit_id, org_id)
+    if background is not None:
+        background.add_task(_alert_on_submit, org_id, visit_id)
+    return out
+
+
+async def _alert_on_submit(org_id, visit_id):
+    """The on-submit send, deferred. NEVER raises: a visit is already saved by the time this runs,
+    and an alerting failure must not surface as a failed submit or a 500 in the background runner."""
+    try:
+        res = await _run_store_visit_alerts(org_id_filter=org_id, respect_enabled=True,
+                                           dry_run=False, visit_id=visit_id)
+        print(f"storevisit on-submit alert for {visit_id}: {res}")
+    except Exception as e:
+        print(f"WARN storevisit on-submit alert for {visit_id} failed: {e}")
 
 
 # ── Photo upload (clean-store photo or a per-item photo) ──────────────────────────────────
@@ -537,3 +567,437 @@ try:
     from . import attention_providers  # noqa: F401
 except Exception as _e:
     print("storevisit.attention_providers registration skipped:", _e)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# STORE VISIT FOLLOW-THROUGH ALERTS (owner ask 2026-10-03) — the to-do digest, the separate
+# accessory notification, and the DRAFT purchase order.
+#
+# The decisions are all in `visit_alerts` (pure, DB-free, proven by harness_storevisit_alerts.py).
+# Everything here is I/O: read the visit's own rows, resolve recipients through the ONE fan-out
+# (`commcalc/manager_digest`), send on the channels the tenant configured, and record the dedup row
+# in `storeops.alert_log` — the same four steps the ePay, zero-sales and follow-up sweeps take.
+# NO second fan-out, no second dedup table, no second PO path.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+class PutVisitAlertConfigIn(LaxModel):
+    store_visit_alert_enabled: Any = None
+    store_visit_alert_channels: Any = None
+    store_visit_alert_lookback_days: Any = None
+    store_visit_alert_min_items: Any = None
+    store_visit_accessory_alert_enabled: Any = None
+    store_visit_accessory_channels: Any = None
+    store_visit_accessory_vendor_id: Any = None
+    store_visit_accessory_po_mode: Any = None
+
+
+def _tenant_row(org_id):
+    """The tenant's row, or {} — its own defensive read (the mig-313 posture), so a database that has
+    not run the alert migration resolves to the house defaults (which are OFF) instead of 500ing."""
+    try:
+        rows = (sb().table("tenants").select("*").eq("org_id", org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def _recipient_rows(org_id):
+    """THE tenant's notification list — `storeops.alert_recipient` (mig 089), the same table and the
+    same editor (the Cash & Closing Alerts page) every other alert scope uses. Never a second list."""
+    try:
+        return (sb().table("alert_recipient").select("*").eq("org_id", org_id)
+                .execute().data) or []
+    except Exception:
+        return []
+
+
+@router.get("/alerts/config")
+def get_visit_alert_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The tenant's store-visit alert settings, the resolved effective config (house defaults where
+    nothing is set), and the notification list as it stands — including whether the DM-and-above
+    default is in force, which is what a tenant gets when it has configured no list at all."""
+    from app.modules.storevisit import visit_alerts as _va
+    from app.modules.commcalc import manager_digest as _md
+    cfg = _va.resolve_config(_tenant_row(org_id))
+    rows = _recipient_rows(org_id)
+
+    def _list(scope):
+        mine = [r for r in rows
+                if str(r.get("scope") or "").strip().lower() in (scope, "all")]
+        return {"scope": scope, "rows": mine,
+                "dm_and_above_default": _md.use_hierarchy(mine),
+                "named": _md.named_extras(mine, scope, cfg["channels"])}
+
+    return {"config": {k: (list(v) if isinstance(v, tuple) else v) for k, v in cfg.items()},
+            "kinds": [{"key": k, "label": lbl} for (k, lbl) in _va.KINDS],
+            "todo": _list(_va.ALERT_SCOPE), "accessories": _list(_va.ACCESSORY_SCOPE),
+            "po_modes": list(_va.PO_MODES)}
+
+
+@router.put("/alerts/config")
+def put_visit_alert_config(body: PutVisitAlertConfigIn, authorization: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    """Set the tenant's store-visit alert settings. Same permission as every other store-visit
+    setting. The recipient LIST itself is edited where it already lives (the alert-recipient
+    endpoints) — this never becomes a second editor for it."""
+    if not _can_edit_visit_setting(_caller_perms(authorization)):
+        raise HTTPException(403, "Editing store-visit alert settings is permission-restricted.")
+    row = {k: getattr(body, k) for k in body.model_fields_set}
+    if not row:
+        return get_visit_alert_config(authorization, org_id)
+    for col in ("store_visit_alert_channels", "store_visit_accessory_channels"):
+        if col in row:
+            from app.modules.commcalc import manager_digest as _md
+            row[col] = list(_md.normalize_channels(row[col]))
+    row["org_id"] = org_id
+    try:
+        sb().table("tenants").upsert(row, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"run migration 1047 first (storeops.tenants store-visit alerts): {e}")
+    return get_visit_alert_config(authorization, org_id)
+
+
+def _visit_window(org_id, cfg, visit_id=None):
+    """The submitted visits a sweep is answering for, with their child rows read in ONE batch each.
+    Returns (visits, responses, action_items, plan, accessories) — every list already org-scoped."""
+    from datetime import timedelta
+    client = sb()
+    if visit_id:
+        visits = (client.table("store_visits").select("*")
+                  .eq("org_id", org_id).eq("id", visit_id).limit(1).execute().data) or []
+    else:
+        since = (datetime.now(timezone.utc)
+                 - timedelta(days=int(cfg["lookback_days"]))).date().isoformat()
+        visits = (client.table("store_visits").select("*")
+                  .eq("org_id", org_id).eq("status", "submitted")
+                  .gte("submitted_at", since).order("submitted_at", desc=True)
+                  .limit(500).execute().data) or []
+    ids = [v.get("id") for v in visits if v.get("id")]
+    if not ids:
+        return visits, [], [], [], []
+
+    def _kids(table):
+        out = []
+        for i in range(0, len(ids), 100):
+            try:
+                out.extend(client.table(table).select("*").eq("org_id", org_id)
+                           .in_("visit_id", ids[i:i + 100]).execute().data or [])
+            except Exception as e:
+                print(f"WARN storevisit alerts could not read {table}: {e}")
+        return out
+
+    return (visits, _kids("store_visit_responses"), _kids("visit_action_items"),
+            _kids("visit_action_plan"), _kids("store_visit_accessories"))
+
+
+def _accessory_unit_costs(org_id, vendor_id, lines):
+    """{merge key: unit cost} from whatever price the tenant actually has on file for this vendor.
+
+    The catalog snapshot is NOT read here: `supply/store.latest_rows` is its one home and already
+    knows to take only the newest run per vendor rather than mixing yesterday's prices into today's
+    order. Defensive because that table arrives with migration 1021, which not every database has
+    run — a missing table yields no prices, and `visit_alerts.po_draft` then NAMES every unpriced
+    line instead of quietly pricing it at zero and calling the total complete."""
+    if not vendor_id or not lines:
+        return {}
+    try:
+        from app.modules.supply import store as _supply_store
+        # The ROOT client: `supply/store.t()` applies the schema itself, so handing it an
+        # already-schema'd client would ask for commcalc.commcalc and read nothing.
+        rows, _seen = _supply_store.latest_rows(get_supabase(), org_id, [vendor_id])
+    except Exception as e:
+        print(f"WARN store-visit accessory prices unavailable: {e}")
+        return {}
+    by_name = {}
+    for r in (rows or []):
+        key = " ".join(str(r.get("name") or "").lower().split())
+        val = r.get("price")
+        if key and val is not None and key not in by_name:
+            by_name[key] = val
+    return {ln["key"]: by_name[ln["key"]] for ln in lines if ln.get("key") in by_name}
+
+
+def _accessory_po_for_visits(org_id, cfg, visits, accessory_rows, who=None, dry_run=True):
+    """One DRAFT purchase order per visit that asked for accessories, raised against the tenant's
+    configured vendor through the ONE PO path (`supply/store.create_order`, mig-301 tables).
+
+    IDEMPOTENT by `purchase_order.store_visit_id`: a visit gets one draft, however many times the
+    sweep runs. NOTHING IS SENT — `status` is 'draft' and no transport to the vendor exists. A
+    tenant with `po_mode` 'off' (the default, and what an unconfigured vendor resolves to) gets
+    none at all, and the reason rides in the result."""
+    from app.modules.storevisit import visit_alerts as _va
+    if cfg["po_mode"] != "draft":
+        return {"created": [], "skipped": "po_mode is off",
+                "reason": cfg.get("po_mode_reason")}
+    vmap = {v.get("id"): v for v in visits}
+    by_visit = {}
+    for r in (accessory_rows or []):
+        by_visit.setdefault(r.get("visit_id"), []).append(r)
+    if not by_visit:
+        return {"created": [], "skipped": "no accessories were asked for"}
+    root = get_supabase()
+    vendor_id = cfg["accessory_vendor_id"]
+    vendor_name = None
+    try:
+        # The vendor roster has ONE reader (`supply/store.vendor_by_id`); this does not become a
+        # second one. The root client, because that module applies the schema itself.
+        from app.modules.supply import store as _supply_store
+        vendor_name = (_supply_store.vendor_by_id(root, org_id, vendor_id) or {}).get("name")
+    except Exception as e:
+        print(f"WARN store-visit accessory vendor unreadable: {e}")
+    if not vendor_name:
+        return {"created": [], "skipped": "the configured accessory vendor no longer exists"}
+    have = set()
+    try:
+        rows = (root.schema("commcalc").table("purchase_order").select("store_visit_id")
+                .eq("org_id", org_id).eq("source", _va.PO_SOURCE)
+                .in_("store_visit_id", [v for v in by_visit if v]).execute().data) or []
+        have = {r.get("store_visit_id") for r in rows}
+    except Exception as e:
+        # Unreadable is not "none exist": raising a second draft for every visit because the
+        # idempotency read failed would be worse than raising none. Refuse the batch and say why.
+        return {"created": [], "skipped": f"could not check for existing drafts: {str(e)[:120]}"}
+    created, planned = [], []
+    for vid, rows in sorted(by_visit.items(), key=lambda kv: str(kv[0])):
+        if not vid or vid in have:
+            continue
+        v = vmap.get(vid) or {}
+        lines = _va.accessory_lines(rows, vmap)
+        if not lines:
+            continue
+        draft = _va.po_draft(lines, vendor_id, vendor_name,
+                             unit_costs=_accessory_unit_costs(org_id, vendor_id, lines),
+                             ship_to_store=v.get("store_code"), market=v.get("market"))
+        planned.append({"visit_id": vid, "store_code": v.get("store_code"),
+                        "lines": len(draft["lines"]), "total": draft["total"],
+                        "total_is_floor": draft["total_is_floor"], "unpriced": draft["unpriced"]})
+        if dry_run:
+            continue
+        try:
+            from app.modules.supply import store as _supply_store
+            res = _supply_store.create_order(
+                root, org_id, draft, None, who=who,
+                source=_va.PO_SOURCE,
+                extra={"store_visit_id": vid, "ship_to_store": v.get("store_code"),
+                       "market": v.get("market"),
+                       "notes": "Raised from store visit {0} on {1}.".format(
+                           vid, (v.get("submitted_at") or "")[:10])})
+            res.update({"visit_id": vid, "vendor_name": vendor_name,
+                        "total_is_floor": draft["total_is_floor"],
+                        "unpriced": draft["unpriced"]})
+            created.append(res)
+        except Exception as e:
+            print(f"WARN store-visit accessory PO for visit {vid} failed: {e}")
+            planned[-1]["error"] = str(e)[:200]
+    return {"created": created, "planned": planned, "vendor_name": vendor_name,
+            "status": "draft", "sent_to_vendor": False}
+
+
+async def _fan_out(scope, plan, org_id, so, channels_ok, dry_run):
+    """Send ONE scope's planned digests and record the dedup rows. The single place this module
+    talks to a channel. Returns (sent, skipped, planned_rows)."""
+    email_ok, wa_ok = channels_ok
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    from app.modules.storeops.router import _lateness_already_sent, _lateness_record_sent
+    sent = skipped = 0
+    out = []
+    for dg in plan["digests"]:
+        addrs = dg.get("addresses") or ({"email": dg["to"]} if dg.get("to") else {})
+        new_items = [it for it in dg["items"]
+                     if not _lateness_already_sent(so, org_id, scope, it["ref_key"])]
+        if not new_items:
+            skipped += 1
+            out.append({"to": dg["to"], "addresses": addrs, "already_sent": True})
+            continue
+        built = dg["rebuild"](dg["to_name"], new_items)
+        out.append({"to": dg["to"], "addresses": addrs, "already_sent": False,
+                    "subject": built["subject"], "items": len(new_items)})
+        if dry_run:
+            continue
+        delivered = []
+        if "email" in addrs and email_ok:
+            try:
+                await email_resend.send_email(to=addrs["email"], subject=built["subject"],
+                                              html=built["html"])
+                delivered.append("email")
+            except Exception as e:
+                print(f"WARN {scope} email to {addrs['email']} failed: {e}")
+        if "whatsapp" in addrs and wa_ok:
+            try:
+                # data=b"" is the text-only rung: a business-initiated message takes the approved
+                # template, never a free-form text Meta accepts with a 200 and silently drops.
+                res = await whatsapp_meta.send_document_detailed(
+                    addrs["whatsapp"], b"", "text/plain", f"{scope}.txt", built["text"])
+                if res.get("message_id"):
+                    delivered.append("whatsapp")
+            except Exception as e:
+                print(f"WARN {scope} WhatsApp to {addrs['whatsapp']} failed: {e}")
+        if delivered:
+            for it in new_items:
+                _lateness_record_sent(so, org_id, scope, it["ref_key"],
+                                      addrs.get("email") or addrs.get("whatsapp"))
+            sent += 1
+        out[-1]["delivered"] = delivered
+    return sent, skipped, out
+
+
+async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_run=True,
+                                  visit_id=None, who=None):
+    """The store-visit follow-through sweep: the to-do digest to the DM and everyone above (plus the
+    tenant's own notification list), the separate accessory notification, and the draft purchase
+    order. Recipients, dedup and channels all come from `manager_digest`. NEVER raises."""
+    from app.modules.storevisit import visit_alerts as _va
+    from app.modules.commcalc import manager_digest as _md
+    from app.modules.storeops.router import _managers_above_dm
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    from app.core.base_url import base_url
+    root = get_supabase()
+    so = root.schema("storeops")
+    try:
+        tenants = so.table("tenants").select("*").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    channels_ok = (email_resend.is_configured(), whatsapp_meta.is_configured())
+    try:
+        link = (base_url() or "").rstrip("/") + "/storeops/visits"
+    except Exception:
+        link = None
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        cfg = _va.resolve_config(t)
+        if respect_enabled and not (cfg["enabled"] or cfg["accessory_enabled"]):
+            continue
+        try:
+            visits, responses, action_items, plan_rows, acc_rows = _visit_window(oid, cfg, visit_id)
+        except Exception as e:
+            results.append({"org_id": oid, "error": str(e)[:200]})
+            continue
+        by_visit_resp, by_visit_item, by_visit_plan = {}, {}, {}
+        for src, dest in ((responses, by_visit_resp), (action_items, by_visit_item),
+                          (plan_rows, by_visit_plan)):
+            for r in src:
+                dest.setdefault(r.get("visit_id"), []).append(r)
+        todos = []
+        for v in visits:
+            its = _va.todo_items(v, by_visit_resp.get(v.get("id")),
+                                 by_visit_item.get(v.get("id")), by_visit_plan.get(v.get("id")))
+            if len(its) >= cfg["min_items"]:
+                todos.extend(its)
+        summary = _va.summarize(todos)
+        # Work recorded against no store cannot be followed up with any manager. It is COUNTED and
+        # named in the footer, never dropped — the §15z rule applied to visit ownership.
+        no_store = [it for it in todos if not it.get("store_code")]
+        todos = [it for it in todos if it.get("store_code")]
+        summary["totals"]["no_store"] = len(no_store)
+        rows = _recipient_rows(oid)
+        labels = _va.kind_labels()
+        res = {"org_id": oid, "visits": len(visits), "todo_open": summary["totals"]["open"],
+               "no_store": len(no_store), "totals": summary["totals"],
+               "channels": list(cfg["channels"]), "enabled": cfg["enabled"],
+               "accessory_enabled": cfg["accessory_enabled"], "po_mode": cfg["po_mode"],
+               "email_configured": channels_ok[0], "whatsapp_configured": channels_ok[1],
+               "dry_run": dry_run}
+        if cfg.get("po_mode_reason"):
+            res["po_mode_reason"] = cfg["po_mode_reason"]
+
+        # ── 1. the to-do digest ──────────────────────────────────────────────────────────────
+        if (cfg["enabled"] or not respect_enabled) and todos:
+            scope_rows = [r for r in rows if str(r.get("scope") or "").strip().lower()
+                          in (_va.ALERT_SCOPE, "all")]
+
+            def _build(name, its, _s=summary, _l=labels):
+                return _va.build_digest(name, its, totals=_s["totals"], labels=_l, link=link)
+
+            stores = {i["store_code"] for i in todos if i.get("store_code")}
+            fan = _md.plan_digests(
+                todos, {s: _managers_above_dm(oid, s) for s in stores},
+                # NOT the date: a store visit is an EVENT, so its to-do list is announced once and
+                # re-announced only for work that is new. The visit id is in the key tail.
+                "", scope=_va.ALERT_SCOPE, build=_build, key_parts=_va.key_parts,
+                channels=cfg["channels"],
+                extra_recipients=_md.named_extras(scope_rows, _va.ALERT_SCOPE, cfg["channels"]),
+                use_tree=_md.use_hierarchy(scope_rows))
+            for dg in fan["digests"]:
+                dg["rebuild"] = _build
+            s, k, planned = await _fan_out(_va.ALERT_SCOPE, fan, oid, so, channels_ok, dry_run)
+            res["todo"] = {"sent": s, "skipped": k, "recipients": planned}
+
+        # ── 2. the DRAFT purchase order, before the accessory notification names it ──────────
+        po = _accessory_po_for_visits(oid, cfg, visits, acc_rows, who=who, dry_run=dry_run)
+        res["accessory_po"] = po
+
+        # ── 3. the separate accessory notification ──────────────────────────────────────────
+        acc_lines = _va.accessory_lines(acc_rows, {v.get("id"): v for v in visits})
+        if (cfg["accessory_enabled"] or not respect_enabled) and acc_lines:
+            scope_rows = [r for r in rows if str(r.get("scope") or "").strip().lower()
+                          in (_va.ACCESSORY_SCOPE, "all")]
+            first_po = (po.get("created") or [None])[0]
+
+            def _build_acc(name, lns, _v=po.get("vendor_name"), _p=first_po):
+                return _va.build_accessory_digest(name, lns, vendor_name=_v, link=link, po=_p)
+
+            stores = {l["store_code"] for l in acc_lines if l.get("store_code")}
+            fan = _md.plan_digests(
+                acc_lines, {s: _managers_above_dm(oid, s) for s in stores}, "",
+                scope=_va.ACCESSORY_SCOPE, build=_build_acc,
+                key_parts=_va.accessory_key_parts, channels=cfg["accessory_channels"],
+                extra_recipients=_md.named_extras(scope_rows, _va.ACCESSORY_SCOPE,
+                                                  cfg["accessory_channels"]),
+                use_tree=_md.use_hierarchy(scope_rows))
+            for dg in fan["digests"]:
+                dg["rebuild"] = _build_acc
+            s, k, planned = await _fan_out(_va.ACCESSORY_SCOPE, fan, oid, so, channels_ok, dry_run)
+            res["accessories"] = {"lines": len(acc_lines), "sent": s, "skipped": k,
+                                  "recipients": planned}
+        elif acc_lines:
+            res["accessories"] = {"lines": len(acc_lines), "sent": 0, "skipped": 0,
+                                  "note": "the accessory notification is switched off"}
+        results.append(res)
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+@router.get("/visits/{visit_id}/todos")
+def visit_todos(visit_id: str, org_id: str = ORG_ID):
+    """READ-ONLY: what this visit left to be done, and what it asked to order. The same rows the
+    digest is built from, so what a manager reads in the alert and what the board shows cannot
+    disagree."""
+    from app.modules.storevisit import visit_alerts as _va
+    visits, responses, items, plan, acc = _visit_window(org_id, _va.HOUSE_CONFIG, visit_id)
+    if not visits:
+        raise HTTPException(404, "visit not found")
+    v = visits[0]
+    todos = _va.todo_items(v, responses, items, plan)
+    return {"visit_id": visit_id, "store_code": v.get("store_code"), "status": v.get("status"),
+            "items": todos, "summary": _va.summarize(todos),
+            "labels": _va.kind_labels(),
+            "accessories": _va.accessory_lines(acc, {v.get("id"): v})}
+
+
+@router.post("/alerts/run-due")
+async def visit_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated pg_cron entrypoint. Every switched-on tenant's recently submitted visits are
+    checked; `alert_log` dedup means a given visit item is announced once, so the tick can be as
+    frequent as the tenant wants without repeating itself."""
+    from app.core.run_secret import verify_notify_secret
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_store_visit_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/alerts/run-now")
+async def visit_alerts_run_now(send: bool = False, visit_id: str = None,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable gate. DEFAULTS TO A DRY
+    RUN — it returns exactly who WOULD be messaged, on which channels, about which visits, and what
+    the draft purchase order would contain, sending nothing and creating nothing. Dedup is always
+    honoured, and no purchase order is ever transmitted to a supplier by any path here."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_store_visit_alerts(org_id_filter=org_id, respect_enabled=False,
+                                         dry_run=not send, visit_id=visit_id,
+                                         who=mgr.get("email"))

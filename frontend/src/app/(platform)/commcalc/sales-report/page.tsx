@@ -1,4 +1,21 @@
 'use client'
+
+// PLAIN-ENGLISH COPY for the bill-payment fee policy, keyed by the server's own vocabulary. The
+// VALUES are never spelled here as a list — they arrive in `billpay_fee_policies` — and an unknown
+// key falls back to the raw value, so a value a later release adds still renders rather than
+// disappearing from the radio group. `FEE_POLICY_CHARGED_VALUE` is the one key this page has to
+// recognise, because the "what is it called" field is only worth showing when there IS a fee.
+const FEE_POLICY_CHARGED_VALUE = 'yes'
+const FEE_POLICY_COPY: Record<string, string> = {
+  yes: 'Yes — we charge a fee',
+  no: 'No — we charge no fee',
+  unknown: 'Not answered yet',
+}
+const FEE_POLICY_NOTE: Record<string, string> = {
+  yes: 'A day with bill payments and no fee line will be reported as missing sales data, not as a store shortfall.',
+  no: 'Days with no fee line are treated as correct, so these stores are measured on their own takings.',
+  unknown: 'Until this is answered, days with bill payments and no fee line are not assessed and no store is asked about them.',
+}
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, getActiveOrg, localToday } from '@/lib/client'
@@ -69,6 +86,15 @@ export default function SalesReportPage() {
   // box=device-unit "box" departments (mig 218) · setup=device set-up-fee keywords (mig 217) ·
   // billpay=bill-payment product/item values for the conversion metric (mig 214).
   const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[]; a: string[]; box: string[]; setup: string[]; billpay: string[] }>({ d: [], c: [], p: [], a: [], box: [], setup: [], billpay: [] })
+  // THE BILL-PAYMENT SERVICE FEE, both halves (owner ask 2026-10-03). `feePolicy` is this company's
+  // DECLARED answer to "do you charge one?" and `feeDescs` is what its fee line is called. The
+  // allowed policy values come from the server (`billpay_fee_policies`) — this page never spells
+  // them, so the one home stays the only place that vocabulary exists.
+  const [feePolicy, setFeePolicy] = useState('')
+  const [feePolicyOpts, setFeePolicyOpts] = useState<string[]>([])
+  const [feePolicyDefault, setFeePolicyDefault] = useState('')
+  const [feeDescs, setFeeDescs] = useState<string[]>([])
+  const [feeDescInput, setFeeDescInput] = useState('')
   const [accMsg, setAccMsg] = useState('')
   const [kwInput, setKwInput] = useState('')
   const [setupInput, setSetupInput] = useState('')
@@ -111,10 +137,14 @@ export default function SalesReportPage() {
     // Sales Report + the Sales-by-Product resolver both read. Non-fatal: if the report isn't present the
     // sales-field departments still show.
     const _pq = orgParam() ? `?${orgParam().slice(1)}` : ''
+    // The fee policy and vocabulary are READ FROM THE CONFIG ENDPOINT, which resolves both through
+    // their own one homes, instead of being re-resolved into /sales-fields. Non-fatal: pre-migration
+    // it answers the defaults, and the rest of the modal still opens.
     Promise.all([
       api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`),
       api(`/api/v1/commcalc/product-sales-departments/${encodeURIComponent(period)}${_pq}`).catch(() => null),
-    ]).then(([f, pd]: any[]) => {
+      api(`/api/v1/commcalc/accessory-config${orgParam() ? `?${orgParam().slice(1)}` : ''}`).catch(() => null),
+    ]).then(([f, pd, cfg]: any[]) => {
       // Union the Sales-by-Product departments into f.departments (dedup, case-insensitive), keeping the
       // sales-field order first so nothing that showed before moves.
       const extra = ((pd && pd.departments) || []).map((d: any) => d.department).filter(Boolean)
@@ -132,6 +162,11 @@ export default function SalesReportPage() {
       setGpOn(!!f.apply_to_gp)
       setCatCats(f.catalog_accessory_categories || [])
       setCatOpts(f.catalog_categories || [])
+      setFeePolicy(String((cfg && cfg.billpay_fee_charged) || ''))
+      setFeePolicyOpts(Array.isArray(cfg?.billpay_fee_policies) ? cfg.billpay_fee_policies : [])
+      setFeePolicyDefault(String((cfg && cfg.billpay_fee_policy_default) || ''))
+      setFeeDescs(Array.isArray(cfg?.billpay_fee_product_desc) ? cfg.billpay_fee_product_desc : [])
+      setFeeDescInput('')
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
   }
   async function saveAccCfg() {
@@ -146,6 +181,11 @@ export default function SalesReportPage() {
         departments: accSel.d, categories: accSel.c, product_keywords: kws, acima_tenders: accSel.a,
         box_departments: accSel.box, setup_fee_keywords: setupKws, contract_type_map: ctMap,
         billpay_products: accSel.billpay,
+        // Sent only when the server offered the vocabulary, so a pre-migration backend is never
+        // asked to store a value it has no column for.
+        ...(feePolicyOpts.length ? { billpay_fee_charged: feePolicy || feePolicyDefault } : {}),
+        billpay_fee_product_desc: Array.from(new Set([...feeDescs,
+          ...feeDescInput.split(',').map(x => x.trim()).filter(Boolean)])),
         box_count_buckets: boxBuckets,
         catalog_classify_enabled: catOn, catalog_accessory_categories: catCats,
         apply_to_gp: gpOn }) })
@@ -711,6 +751,51 @@ export default function SalesReportPage() {
                         ))
                     })()}
                   </div>
+                </div>
+                {/* THE BILL-PAYMENT SERVICE FEE (owner ask 2026-10-03) — two settings, because they
+                    answer two different questions and the second one is the one the comparison
+                    depends on. "Do you charge a fee?" is DECLARED here rather than guessed from the
+                    data: a day with bill payments and no fee line means the figures are right if
+                    this company charges none, means the sales feed is incomplete if it does, and
+                    cannot be judged either way until somebody says. While it is unanswered no store
+                    is asked about those days — which is why one company's fee wording can never
+                    become another company's blanket shortfall. Changes no arithmetic and no pay. */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment service fee <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(does this company charge customers a fee on a bill payment? The cash declaration check compares what reps declared against the sales data, and it needs this answer to read a day with no fee line correctly. No pay change.)</span></div>
+                  {feePolicyOpts.length === 0
+                    ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>not available yet on this server</div>
+                    : <>
+                        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 6 }}>
+                          {feePolicyOpts.map((v: string) => (
+                            <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
+                              <input type="radio" name="billpay_fee_charged" checked={(feePolicy || feePolicyDefault) === v}
+                                disabled={!accCanEdit} onChange={() => setFeePolicy(v)} />
+                              {FEE_POLICY_COPY[v] || v}
+                            </label>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11, color: (feePolicy || feePolicyDefault) === feePolicyDefault ? 'var(--accent)' : 'var(--text3)' }}>
+                          {FEE_POLICY_NOTE[feePolicy || feePolicyDefault] || ''}
+                        </div>
+                        {/* What the fee line is CALLED here, and only asked for when there is one to
+                            name. Empty means "use the standard wording", which follows a change to
+                            it — not "none", which is the setting above. */}
+                        {(feePolicy || feePolicyDefault) === FEE_POLICY_CHARGED_VALUE && (
+                          <div style={{ marginTop: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>What the fee line is called <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(the wording that appears on the sales data for the fee, e.g. the words in its product description. Separate several with commas. Leave empty to use the standard wording.)</span></div>
+                            <input className="input" style={{ fontSize: 13, width: '100%' }} disabled={!accCanEdit}
+                              value={feeDescInput} placeholder={feeDescs.length ? feeDescs.join(', ') : 'using the standard wording'}
+                              onChange={e => setFeeDescInput(e.target.value)} />
+                            {feeDescs.length > 0 && (
+                              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
+                                Currently: <b>{feeDescs.join(', ')}</b>.{' '}
+                                <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 6px' }} disabled={!accCanEdit}
+                                  onClick={() => { setFeeDescs([]); setFeeDescInput('') }}>use the standard wording</button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>}
                 </div>
                 {/* CONTRACT TYPE -> activation bucket — map the tenant's OBSERVED Contract Type values to
                     the activation buckets so a Total/non-Boost POS whose labels differ from the built-in

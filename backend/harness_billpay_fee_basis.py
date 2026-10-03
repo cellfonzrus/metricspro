@@ -31,7 +31,22 @@ WHAT THIS PINS
      caller is byte-identical;
   F. migration 1045's text is tied to the code it configures;
   G. THE BUILD LOCK: no call site re-adds the legs for itself, and no second copy appears;
-  H. every lock in F and G is ARMED -- each is shown to fail when the thing it guards is broken.
+  H. every lock in F and G is ARMED -- each is shown to fail when the thing it guards is broken;
+  J. THE FEE POLICY (owner ask 2026-10-03) -- whether a tenant charges a bill-payment fee is a
+     DECLARED per-org fact with one home, "no fee line" is interpreted in exactly one place, a basis
+     the policy says is understated is never compared against a rep and never netted from a drawer,
+     an UNANSWERED policy changes nothing anywhere, and the settings screen can set it;
+  K. every lock in J is ARMED too.
+
+THE SECOND INVESTIGATION, 2026-10-03, which J exists because of. The fee correction above is right
+for the house org and silent for the other live tenant, and the measurement says why: the house org
+rings a fee leg on 736 of 772 September store-days ($14,184 -- removing it collapses agreement from
+348 store-days to 20), and the other tenant rings one on 0 of 371, where removing the leg leaves the
+classification IDENTICAL. So "no fee line" carried no information, and the system was reading it as
+a shortfall: 226 of that tenant's 371 store-days came out under-declared. Its real cause is not a
+fee at all -- 217 of its 373 September closings declare bill-pay cash of $0.00 against real POS
+bill-pay activity -- and that cause is REPORTED, not absorbed. The class of defect is inferring a
+fact from the absence of data; the fix is to ask the org.
 
 PURE: stdlib only, no DB, no network.  Run: `cd backend && python3 harness_billpay_fee_basis.py`
 """
@@ -355,6 +370,289 @@ check("H6 control: the lock scans SPACING-PRESERVING text -- the token-joined fo
 check("H7 control: both scanners still strip prose, so neither can be satisfied by a docstring",
       "owner" not in code_text(_HOME).lower() and "owner" not in code_only(_HOME).lower()
       and "owner" in open(_HOME).read().lower())
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== J. THE FEE POLICY -- a declared fact, one home, dereferenced ==")
+from app.modules.closing import billpay_declaration_alerts as BDA   # noqa: E402
+
+# ── J1-J6 the policy resolver: anything unrecognised is UNKNOWN, never a guess either way ─────────
+check("J1 the three policy values exist and unknown is the HOUSE default",
+      MR.FEE_POLICIES == ("yes", "no", "unknown") and MR.HOUSE_FEE_POLICY == MR.FEE_POLICY_UNKNOWN)
+check("J2 an unset / blank / None policy resolves to unknown, not to either answer",
+      all(MR.resolve_fee_policy(v) == MR.FEE_POLICY_UNKNOWN for v in (None, "", "   ", {}, 0, [])))
+check("J3 a value is normalised by case and whitespace, so a hand-typed row still reads",
+      MR.resolve_fee_policy("  YES ") == MR.FEE_POLICY_CHARGED
+      and MR.resolve_fee_policy("No") == MR.FEE_POLICY_NOT_CHARGED)
+check("J4 a junk or FUTURE value resolves to unknown rather than to a comparison",
+      MR.resolve_fee_policy("maybe") == MR.FEE_POLICY_UNKNOWN
+      and MR.resolve_fee_policy("true") == MR.FEE_POLICY_UNKNOWN)
+check("J5 the policy is never a boolean -- True must not read as 'yes'",
+      MR.resolve_fee_policy(True) == MR.FEE_POLICY_UNKNOWN
+      and MR.resolve_fee_policy(False) == MR.FEE_POLICY_UNKNOWN)
+check("J6 the resolver is PURE -- the same input twice gives the same answer and mutates nothing",
+      MR.resolve_fee_policy("yes") == MR.resolve_fee_policy("yes") == "yes")
+
+# ── J7-J16 the state machine: "no fee line" is THREE facts, and they stay apart ───────────────────
+_ACTIVE = {"count": 15, "amount": 1410.81, "cash": 1410.81}
+_ACTIVE_FEE = {"count": 15, "amount": 1410.81, "cash": 1406.81, "fee_cash": 4.0, "fee_lines": 2}
+_IDLE = {"count": 0, "amount": 0.0, "cash": 0.0}
+check("J7 no slot at all is no_feed -- absence of a feed is never a fee finding",
+      MR.billpay_fee_state(None, "yes") == MR.FEE_STATE_NO_FEED
+      and MR.billpay_fee_state(None, "no") == MR.FEE_STATE_NO_FEED)
+check("J8 a fee leg present reads as charged, whatever the policy says it should be",
+      MR.billpay_fee_state(_ACTIVE_FEE, "yes") == MR.FEE_STATE_CHARGED
+      and MR.billpay_fee_state(_ACTIVE_FEE, "unknown") == MR.FEE_STATE_CHARGED)
+check("J9 a fee leg present while the policy says NONE is the policy-contradiction state",
+      MR.billpay_fee_state(_ACTIVE_FEE, "no") == MR.FEE_STATE_UNEXPECTED)
+check("J10 policy 'no' + bill activity + no fee line is EXPECTED, which is the whole ask",
+      MR.billpay_fee_state(_ACTIVE, "no") == MR.FEE_STATE_NOT_CHARGED)
+check("J11 policy 'yes' + bill activity + no fee line is a FEED defect, not a store's problem",
+      MR.billpay_fee_state(_ACTIVE, "yes") == MR.FEE_STATE_LINE_MISSING)
+check("J12 an UNANSWERED policy + bill activity + no fee line asks the question, it does not answer it",
+      MR.billpay_fee_state(_ACTIVE, None) == MR.FEE_STATE_POLICY_UNANSWERED
+      and MR.billpay_fee_state(_ACTIVE, "unknown") == MR.FEE_STATE_POLICY_UNANSWERED)
+check("J13 THE THREE FACTS ARE DISTINCT -- the same store-day reads differently under each policy, "
+      "which is the defect this closes",
+      len({MR.billpay_fee_state(_ACTIVE, p) for p in MR.FEE_POLICIES}) == 3)
+check("J14 a store-day that rang NO bill payments is idle, never a missing-fee finding -- there was "
+      "nothing to charge a fee on",
+      MR.billpay_fee_state(_IDLE, "yes") == MR.FEE_STATE_IDLE
+      and MR.billpay_fee_state(_IDLE, "unknown") == MR.FEE_STATE_IDLE)
+check("J15 a bare figure (a processor total) carries no fee detail, so no fee claim is made of it",
+      MR.billpay_fee_state(238.0, "yes") == MR.FEE_STATE_NOT_APPLICABLE)
+check("J16 a fee counted only in LINES, or only on the card leg, still counts as charged -- the "
+      "cash leg being zero is not the absence of a fee",
+      MR.billpay_fee_state({"count": 3, "amount": 90.0, "fee": 4.0}, "yes") == MR.FEE_STATE_CHARGED
+      and MR.billpay_fee_state({"count": 3, "amount": 90.0, "fee_lines": 1}, "yes")
+      == MR.FEE_STATE_CHARGED)
+
+# ── J17-J21 comparability: ONE home decides it, and the unsafe states are the two unsafe ones ─────
+check("J17 every state the machine can return is declared in FEE_STATES",
+      all(MR.billpay_fee_state(sl, p) in MR.FEE_STATES
+          for sl in (None, 238.0, _IDLE, _ACTIVE, _ACTIVE_FEE, {})
+          for p in (None, "yes", "no", "unknown", "junk")))
+check("J18 exactly the two unsafe states are not comparable -- a feed defect and an open question",
+      {st for st in MR.FEE_STATES if not MR.billpay_basis_comparable(st)}
+      == {MR.FEE_STATE_LINE_MISSING, MR.FEE_STATE_POLICY_UNANSWERED, MR.FEE_STATE_NO_FEED})
+check("J19 a CONTRADICTED policy is still comparable -- a fee that rang is real cash, so the "
+      "arithmetic stands and it is the config that is reported",
+      MR.billpay_basis_comparable(MR.FEE_STATE_UNEXPECTED))
+check("J20 an unrecognised state is NOT comparable, so a future state fails safe",
+      not MR.billpay_basis_comparable("something_new") and not MR.billpay_basis_comparable(None))
+check("J21 comparability is asked of the home, never re-derived: the alert module names no state "
+      "tuple of its own",
+      "FEE_STATES_COMPARABLE" not in code_text("app/modules/closing/billpay_declaration_alerts.py"))
+
+# ── J22-J29 the classifier: an unsafe basis is never a rep's error, and says WHICH problem it is ──
+_T = 1.0
+check("J22 pre-policy behaviour is byte-identical -- no fee_state means classify as before",
+      BDA.classify(0.0, 1008.0, _T) == BDA.CLASS_UNDER
+      and BDA.classify(71.0, 71.0, _T) == BDA.CLASS_AGREE
+      and BDA.classify(692.0, 290.67, _T) == BDA.CLASS_OVER
+      and BDA.classify(50.0, None, _T) == BDA.CLASS_NO_POS)
+check("J23 policy 'no' + no fee line: the gap STANDS and the store is asked about it -- the measured "
+      "tenant's 226 under-declared store-days do not vanish",
+      BDA.classify(0.0, 1008.0, _T, fee_state=MR.FEE_STATE_NOT_CHARGED) == BDA.CLASS_UNDER)
+check("J24 policy 'yes' + no fee line: the SAME figures are a feed defect, not an under-declaration",
+      BDA.classify(0.0, 1008.0, _T, fee_state=MR.FEE_STATE_LINE_MISSING) == BDA.CLASS_FEE_MISSING)
+check("J25 an UNANSWERED policy parks the same store-day as a question, distinct from the feed defect",
+      BDA.classify(0.0, 1008.0, _T, fee_state=MR.FEE_STATE_POLICY_UNANSWERED)
+      == BDA.CLASS_FEE_POLICY_UNSET
+      and BDA.CLASS_FEE_POLICY_UNSET != BDA.CLASS_FEE_MISSING)
+check("J26 THE WHOLE POINT: one store-day, one set of figures, three different findings by policy",
+      len({BDA.classify(0.0, 1008.0, _T, fee_state=MR.billpay_fee_state(_ACTIVE, p))
+           for p in MR.FEE_POLICIES}) == 3)
+check("J27 no feed beats everything -- an absent basis is no_pos_figure whatever the fee state is",
+      all(BDA.classify(0.0, None, _T, fee_state=st) == BDA.CLASS_NO_POS for st in MR.FEE_STATES))
+check("J28 neither fee class is ALERTABLE, and both are refused -- an unsafe basis never reaches a "
+      "manager's chase list",
+      BDA.CLASS_FEE_MISSING not in BDA.ALERTABLE
+      and BDA.CLASS_FEE_POLICY_UNSET not in BDA.ALERTABLE
+      and BDA.CLASS_FEE_MISSING in BDA.REFUSED_AS_ALERT
+      and BDA.CLASS_FEE_POLICY_UNSET in BDA.REFUSED_AS_ALERT)
+check("J29 a contradicted policy is still compared, so real cash is never excused by a stale setting",
+      BDA.classify(0.0, 1008.0, _T, fee_state=MR.FEE_STATE_UNEXPECTED) == BDA.CLASS_UNDER)
+
+# ── J30-J37 the digest: a refusal is COUNTED and SAID, in one wording both renderings read ────────
+_SD = [
+    {"store_code": "A", "close_date": "2026-09-21", "declared": 0.0, "pos_basis": 1008.0,
+     "fee_state": MR.FEE_STATE_NOT_CHARGED, "bill_txns": 16},
+    {"store_code": "B", "close_date": "2026-09-21", "declared": 0.0, "pos_basis": 873.97,
+     "fee_state": MR.FEE_STATE_LINE_MISSING, "bill_txns": 19},
+    {"store_code": "C", "close_date": "2026-09-21", "declared": 0.0, "pos_basis": 500.0,
+     "fee_state": MR.FEE_STATE_POLICY_UNANSWERED, "bill_txns": 9},
+    {"store_code": "D", "close_date": "2026-09-21", "declared": 100.0, "pos_basis": 96.0,
+     "fee_state": MR.FEE_STATE_UNEXPECTED, "bill_txns": 4},
+    {"store_code": "E", "close_date": "2026-09-21", "declared": 10.0, "pos_basis": None,
+     "fee_state": MR.FEE_STATE_NO_FEED},
+]
+_found = BDA.alert_items(_SD, tolerance=_T)
+check("J30 only the two assessable store-days are alerted on, of five",
+      [i["store_code"] for i in _found["items"]] == ["D", "A"], _found["items"])
+check("J31 every class is counted, including the ones nobody is asked about",
+      _found["counts"][BDA.CLASS_FEE_MISSING] == 1
+      and _found["counts"][BDA.CLASS_FEE_POLICY_UNSET] == 1
+      and _found["counts"][BDA.CLASS_NO_POS] == 1
+      and _found["counts"][BDA.CLASS_UNDER] == 1
+      and _found["counts"][BDA.CLASS_OVER] == 1, _found["counts"])
+check("J32 the refused block names all three reasons separately, so each has its own remedy",
+      set(_found["refused"]) == set(BDA.UNASSESSED)
+      and all(_found["refused"][c] == 1 for c in BDA.UNASSESSED), _found["refused"])
+check("J33 the policy contradiction is an ADVISORY, never a class -- it was compared normally",
+      _found["advisories"][BDA.CLASS_FEE_UNEXPECTED_ADVISORY] == 1
+      and BDA.CLASS_FEE_UNEXPECTED_ADVISORY not in BDA.GAP_CLASSES)
+check("J34 nothing is lost: every store-day lands in exactly one class",
+      sum(_found["counts"].values()) == len(_SD))
+_dg = BDA.build_digest("Sam", _found["items"], counts=_found["counts"], label="2026-09-21",
+                       advisories=_found["advisories"])
+check("J35 both the feed defect and the open question are SAID in the digest, not merely counted",
+      BDA.unassessed_sentence(BDA.CLASS_FEE_MISSING, 1) in _dg["html"]
+      and BDA.unassessed_sentence(BDA.CLASS_FEE_POLICY_UNSET, 1) in _dg["text"])
+check("J36 the two renderings carry the SAME sentences -- one wording, one home",
+      all(BDA.unassessed_sentence(c, n) in _dg["html"]
+          and BDA.unassessed_sentence(c, n) in _dg["text"]
+          for c, n in BDA.unassessed_counts(_found["counts"])))
+check("J37 the refusal wording names no tenant, carrier or product (RULE TWO in the copy too)",
+      not any(w in " ".join(BDA.UNASSESSED_NOTES.values()).lower()
+              for w in ("boost", "luxelink", "vidapay", "epay", "total wireless", "rtr")))
+
+# ── J38-J42 the netting basis: an understated figure is never subtracted from a drawer ────────────
+check("J38 the trusted basis equals the plain one whenever the policy does not forbid it",
+      all(MR.pos_billpay_cash_trusted(_ACTIVE_FEE, p) == MR.pos_billpay_cash(_ACTIVE_FEE)
+          for p in MR.FEE_POLICIES))
+check("J39 policy 'yes' + no fee line: the basis is WITHHELD, so nothing is netted from the drawer",
+      MR.pos_billpay_cash_trusted(_ACTIVE, "yes") is None
+      and MR.pos_billpay_cash(_ACTIVE) == 1410.81)
+check("J40 AN UNANSWERED POLICY CHANGES NOTHING -- a money-adjacent subtraction never moves on a guess",
+      MR.pos_billpay_cash_trusted(_ACTIVE, None) == MR.pos_billpay_cash(_ACTIVE)
+      and MR.pos_billpay_cash_trusted(_ACTIVE, "unknown") == MR.pos_billpay_cash(_ACTIVE))
+check("J41 policy 'no' keeps netting on its own takings",
+      MR.pos_billpay_cash_trusted(_ACTIVE, "no") == MR.pos_billpay_cash(_ACTIVE))
+check("J42 only the positively-understated state withholds the basis",
+      MR.FEE_STATES_BASIS_UNDERSTATED == (MR.FEE_STATE_LINE_MISSING,))
+
+# ── J43-J52 THE BUILD LOCK: no caller spells a policy value or re-derives the interpretation ──────
+_POLICY_LITERALS = ('"yes"', "'yes'", '"no"', "'no'", '"unknown"', "'unknown'")
+# WHICH TEXT EACH FILE IS SCANNED FOR. The closing router is tens of thousands of lines and the
+# words yes/no occur all over it in unrelated code, so its scan is anchored to the fee neighbourhood;
+# the pure alert module is small enough to scan WHOLE. A None anchor means the whole file, and the
+# fragment is asserted non-empty by K8 below -- an anchor that stops matching is how a lock starts
+# passing because it looked at nothing, which is exactly what happened to this check in its first cut
+# (the alert module spells "billpay_fee" nowhere, so its fragment was empty and the lock was vacuous).
+_POLICY_CALLERS = {"app/modules/closing/router.py": "billpay_fee",
+                   "app/modules/closing/billpay_declaration_alerts.py": None}
+
+
+def _policy_fragment(path, anchor):
+    body = code_text(path)
+    if anchor is None:
+        return body
+    return "".join(body.split(anchor)[1:])[:4000] if anchor in body else ""
+
+
+for _pth, _anchor in _POLICY_CALLERS.items():
+    _frag = _policy_fragment(_pth, _anchor)
+    check(f"J43 {_pth.split('/')[-1]} spells no fee-policy VALUE of its own",
+          _frag and not any(lit in _frag for lit in _POLICY_LITERALS),
+          [lit for lit in _POLICY_LITERALS if lit in _frag])
+_home2 = code_text(_HOME)
+check("J44 the home DOES spell them (so J43 restricts something real, and is not vacuous)",
+      all(lit in _home2 for lit in ('"yes"', '"no"', '"unknown"')))
+check("J45 'no fee line' is interpreted in exactly ONE function -- one def, one home",
+      _home2.count("def billpay_fee_state") == 1
+      and code_text("app/modules/closing/billpay_declaration_alerts.py").count(
+          "def billpay_fee_state") == 0)
+_cr2 = code_text("app/modules/closing/router.py")
+check("J46 the sweep dereferences the state machine rather than reading the fee leg itself",
+      "_mr.billpay_fee_state(slot, policy)" in _cr2)
+check("J47 the netting basis dereferences the POLICY-GATED accessor, not the plain one",
+      "pos_billpay_cash_trusted" in _cr2)
+check("J48 the policy is read by the ONE reader, which lives beside the vocabulary reader",
+      code_only("app/modules/commcalc/router.py").count("def _billpay_fee_policy") == 1
+      and code_only("app/modules/commcalc/router.py").count("def _billpay_fee_tokens") == 1)
+check("J49 the policy is read ONCE PER WINDOW, not once per store-day",
+      _cr2.count("_billpay_fee_policy(client, org_id)") == 1)
+check("J50 the classifier asks the home whether a state is comparable, by name",
+      "billpay_basis_comparable" in code_text("app/modules/closing/billpay_declaration_alerts.py"))
+check("J51 RULE TWO: no tenant, carrier or product name anywhere in the policy mechanism",
+      not any(w in (_home2 + code_text("app/modules/closing/billpay_declaration_alerts.py")).lower()
+              for w in ("boost", "luxelink", "vidapay", "t-cetra", "total wireless")))
+# `code_text`, not `code_only`: the token-joined form inserts spaces around the dot and would never
+# match a dotted name, which is the H6 mistake in a new costume.
+_ccr = code_text("app/modules/commcalc/router.py")
+check("J52 the API offers the vocabulary from the home, so the screen cannot spell its own",
+      "_mr_cfg.FEE_POLICIES" in _ccr and "_mr_cfg.HOUSE_FEE_POLICY" in _ccr)
+check("J52' the API also VALIDATES against the home, so a typo is rejected rather than stored as "
+      "a silent 'unknown'",
+      "not in _mr_cfg.FEE_POLICIES" in _ccr)
+
+# -- J60-J62 the POLICY and the VOCABULARY are two facts, and neither grew a third reader ----------
+# 19.42's own lock (harness_billpay_fee_one_home_lock.py, merged 2026-10-03) owns "WHICH product_desc
+# is the fee". This one owns "IS there a fee". Complementary, not duplicate -- and these checks keep
+# them from quietly becoming the same thing, or from each sprouting its own read of one column.
+check("J60 the two facts live in DIFFERENT columns, so the two locks cannot drift into guarding the "
+      "same thing",
+      "billpay_fee_charged" in _ccr and "billpay_fee_product_desc" in _ccr)
+check("J61 the settings screen reads the DECLARED vocabulary off the ONE whole-row config load, not "
+      "a third round trip for the same cell (4b.1)",
+      "billpay_fee_descs_raw" in _ccr
+      # FIVE: derived once, named as its own key on the returned config (two on that line), then
+      # read by the GET and by the PUT's untouched-field path. A SIXTH would be a new reader.
+      and code_only("app/modules/commcalc/router.py").count("billpay_fee_descs_raw") == 5,
+      code_only("app/modules/commcalc/router.py").count("billpay_fee_descs_raw"))
+check("J62 the RAW cell and the RESOLVED vocabulary are both derived from that one read, so "
+      "'inheriting the house wording' stays distinguishable from 'pinned to it'",
+      "billpay_fee_descs_raw" in _ccr and "resolve_fee_descs" in _ccr)
+
+# ── J53-J59 migration 1046 is tied to the code it configures ──────────────────────────────────────
+_m46 = open("../database/migrations/1046_billpay_fee_charged.sql").read()
+check("J53 it adds the column the reader reads, additively and idempotently",
+      "billpay_fee_charged" in _m46 and "ADD COLUMN IF NOT EXISTS" in _m46)
+check("J54 its default is the UNANSWERED value, so applying it judges nobody",
+      "DEFAULT 'unknown'" in _m46)
+check("J55 the database constrains the value to the SAME three the code knows",
+      all(f"'{v}'" in _m46 for v in MR.FEE_POLICIES) and "CHECK (billpay_fee_charged IN" in _m46)
+check("J56 it declares a REVERT, as every migration here must", "-- REVERT:" in _m46)
+check("J57 it performs no backfill and moves no money",
+      "INSERT INTO" not in _m46.upper()
+      and "UPDATE " not in _m46.upper().replace("DO UPDATE", ""))
+check("J58 it names the one home every caller must dereference",
+      "billpay_fee_state" in _m46 and "billpay_basis_comparable" in _m46)
+check("J59 it states the cause it does NOT claim to fix, rather than implying it does",
+      "does not claim to fix" in _m46 and "does not hide" in _m46)
+
+print("\n== K. the J locks are ARMED -- each fails when the thing it guards breaks ==")
+check("K1 control: the policy-literal scan DOES match when a value is spelled",
+      any(lit in 'if policy == "yes":' for lit in _POLICY_LITERALS))
+check("K2 control: ... and does not match a correct dereference, so a good caller is never flagged",
+      not any(lit in "st = _mr.billpay_fee_state(slot, policy)" for lit in _POLICY_LITERALS))
+check("K3 control: the state machine really is load-bearing -- stubbing it to one answer would "
+      "collapse J13's three findings into one",
+      len({MR.FEE_STATE_NOT_CHARGED, MR.FEE_STATE_LINE_MISSING,
+           MR.FEE_STATE_POLICY_UNANSWERED}) == 3)
+check("K4 control: classify WITHOUT a fee_state cannot return either fee class, so the pre-policy "
+      "path provably cannot be reached by the new code",
+      {BDA.classify(d, b, _T) for d, b in ((0.0, 1008.0), (692.0, 290.67), (71.0, 71.0),
+                                           (5.0, None))}
+      .isdisjoint({BDA.CLASS_FEE_MISSING, BDA.CLASS_FEE_POLICY_UNSET}))
+check("K5 control: the refusal registry is keyed by the classes it claims to cover -- a class added "
+      "without a sentence would leave a silent refusal",
+      set(BDA.UNASSESSED_NOTES) == set(BDA.UNASSESSED))
+check("K6 control: an unassessed class with a ZERO count is not stated, so the footer never claims "
+      "a refusal that did not happen",
+      BDA.unassessed_counts({c: 0 for c in BDA.UNASSESSED}) == [])
+check("K7 control: the singular/plural of a refusal sentence actually differs, so the count is "
+      "really interpolated rather than the wording being fixed",
+      BDA.unassessed_sentence(BDA.CLASS_FEE_MISSING, 1)
+      != BDA.unassessed_sentence(BDA.CLASS_FEE_MISSING, 2))
+check("K8 control: the fragment J43 scans is non-empty in BOTH files, so neither lock can pass "
+      "because it looked at nothing",
+      all(_policy_fragment(_p, _a) for _p, _a in _POLICY_CALLERS.items()),
+      {_p: len(_policy_fragment(_p, _a)) for _p, _a in _POLICY_CALLERS.items()})
+check("K9 control: the anchored fragment is genuinely NARROWER than the whole file, so the anchor "
+      "is doing work rather than silently scanning everything",
+      len(_policy_fragment("app/modules/closing/router.py", "billpay_fee"))
+      < len(code_text("app/modules/closing/router.py")))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 for f in FAIL:

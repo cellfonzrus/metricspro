@@ -186,15 +186,30 @@ def catalog_rows_by_ids(client, org_id, ids):
 
 
 # ── orders (commcalc.purchase_order — the mig-301 lifecycle, reused) ────────────────────────────────
-def create_order(client, org_id, draft, cart_ref, who=None):
-    """One purchase_order (+ lines) for one vendor of a supply cart. Number from next_po_number."""
+def create_order(client, org_id, draft, cart_ref, who=None, source=None, extra=None):
+    """One purchase_order (+ lines) for one vendor, numbered from next_po_number, status draft.
+
+    THE ONE HOME for "a basket of lines becomes a purchase order". A supply cart was its first
+    caller; a store visit's accessory list (`storevisit/visit_alerts`, source `store_visit`) is the
+    second, and a second copy of this insert would be two PO paths that drift — exactly the
+    duplicate defect the index rules forbid.
+
+    `source` names where the basket came from (the mig-301 `source` column, which every reader
+    already filters on); `extra` is that caller's own header columns. The BASE row uses mig-301
+    columns only, and the supply-cart columns (`shipping_estimate`, `supply_cart_ref`, `supply_meta`,
+    all added by mig `1021`) are written ONLY for a supply cart — so a caller on a database where
+    1021 has not been applied is not broken by columns it does not use."""
     from app.modules.asset.purchase_orders import _next_po_number
+    source = source or L.SUPPLY_SOURCE
     po_number = _next_po_number(client, org_id)
     row = {"org_id": org_id, "po_number": po_number, "order_date": datetime.now(timezone.utc).date().isoformat(),
            "vendor_id": draft["vendor_id"], "vendor_name_snapshot": draft.get("vendor_name"), "status": "draft",
-           "subtotal": draft["subtotal"], "total": draft["total"], "shipping_estimate": draft["shipping_estimate"],
-           "source": L.SUPPLY_SOURCE, "supply_cart_ref": cart_ref, "supply_meta": draft["meta"],
-           "buyer": who, "created_by": who}
+           "subtotal": draft["subtotal"], "total": draft["total"],
+           "source": source, "buyer": who, "created_by": who}
+    if source == L.SUPPLY_SOURCE:
+        row.update({"shipping_estimate": draft["shipping_estimate"],
+                    "supply_cart_ref": cart_ref, "supply_meta": draft["meta"]})
+    row.update({k: v for k, v in (extra or {}).items() if v is not None})
     res = t(client, PO_TABLE).insert(row).execute()
     po_id = (res.data or [{}])[0].get("id")
     lines = [{**ln, "org_id": org_id, "po_id": po_id, "qty_received": 0} for ln in draft["lines"]]
