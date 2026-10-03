@@ -454,6 +454,28 @@ check("J12 control: the RULE TWO scan can fail — a word that IS in the module 
       "accessory" in _low)
 check("J13 control: the scan dropped the prose (the docstring's 'owner ask' is gone)",
       "owner ask" in open(VA_PATH).read().lower() and "owner ask" not in _low)
+_sub = rt[rt.index("def submit_visit("):rt.index("async def _alert_on_submit(")]
+_hook = rt[rt.index("async def _alert_on_submit("):]
+_hook = _hook[:_hook.index("\n@router") if "\n@router" in _hook else len(_hook)]
+check("J15 the owner's 'email as soon as the visit is completed' fires on the SUBMIT event, not on "
+      "the next tick of the sweep", "background.add_task(_alert_on_submit" in _sub)
+check("J16 LOCK: the on-submit send is the SAME ONE PATH — it calls the sweep scoped to that visit "
+      "and renders, resolves and dedups nothing of its own",
+      "_run_store_visit_alerts(" in _hook and "visit_id=visit_id" in _hook
+      and not any(s in _hook for s in ("plan_digests", "build_digest", "send_email",
+                                       "send_document", "alert_log", "create_order")))
+check("J17 the on-submit send is BACKGROUNDED, so a rep on store wifi gets their confirmation "
+      "whether or not an email provider answers",
+      "background.add_task(" in _sub and "await _run_store_visit_alerts" not in _sub)
+check("J18 the visit is SAVED before the alert is queued — an alerting failure can never cost a "
+      "submitted visit", _sub.index('"status": "submitted"') < _sub.index("background.add_task("))
+check("J19 the on-submit send NEVER raises: the visit is already saved by the time it runs",
+      "try:" in _hook and "except Exception" in _hook)
+check("J20 it still respects the tenant's switch — an on-submit send is not a way around OFF",
+      "respect_enabled=True" in _hook and "dry_run=False" in _hook)
+check("J21 the hourly sweep is kept as the SAFETY NET, not removed in favour of the event — a send "
+      "that failed leaves no alert_log row and the sweep retries it",
+      "run-due" in rt and "_run_store_visit_alerts(respect_enabled=True, dry_run=False)" in rt)
 check("J14 control: the router block really was isolated (it holds the sweep and not the whole file)",
       "_run_store_visit_alerts" in blk and "def upload_photo" not in blk)
 

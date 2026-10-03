@@ -6,7 +6,7 @@ only the storage PATH, served to the UI as a short-lived signed URL. Tables live
 """
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from datetime import datetime, timezone
@@ -408,11 +408,41 @@ def update_visit(visit_id: str, payload: UpdateVisitIn, org_id: str = ORG_ID):
 
 
 @router.post("/visits/{visit_id}/submit")
-def submit_visit(visit_id: str, org_id: str = ORG_ID):
+def submit_visit(visit_id: str, background: BackgroundTasks = None, org_id: str = ORG_ID):
+    """Complete the visit — and tell the managers NOW.
+
+    OWNER, 2026-10-03: *"every sore visti as soon as it is uploaded should be emailed as soon as the
+    visti is completed"*. So the alert fires on THIS event, not on the next tick of the hourly sweep.
+
+    IT IS THE SAME ONE PATH, not a second send. `_run_store_visit_alerts` scoped to this visit does
+    the whole job — the same recipients, the same digests, the same `alert_log` dedup, the same
+    draft purchase order — so there is no second renderer and no second fan-out to drift. The hourly
+    sweep stays as the SAFETY NET rather than the trigger: it catches a visit whose immediate send
+    could not go out (a channel down, a tenant that switched the alert on afterwards), and the dedup
+    key being (visit, item) means a visit already announced here is never announced twice.
+
+    IN THE BACKGROUND, and that is deliberate. A visit is submitted from a phone, often on a store's
+    wifi, and the rep must get their confirmation whether or not an email provider answers. A send
+    that fails leaves no `alert_log` row, so the next sweep retries it — which is exactly what
+    "an alert that reached nobody is not already alerted" already means everywhere else here."""
     sb().table("store_visits").update({
         "status": "submitted", "submitted_at": _now(), "updated_at": _now(),
     }).eq("id", visit_id).eq("org_id", org_id).execute()
-    return get_visit(visit_id, org_id)
+    out = get_visit(visit_id, org_id)
+    if background is not None:
+        background.add_task(_alert_on_submit, org_id, visit_id)
+    return out
+
+
+async def _alert_on_submit(org_id, visit_id):
+    """The on-submit send, deferred. NEVER raises: a visit is already saved by the time this runs,
+    and an alerting failure must not surface as a failed submit or a 500 in the background runner."""
+    try:
+        res = await _run_store_visit_alerts(org_id_filter=org_id, respect_enabled=True,
+                                           dry_run=False, visit_id=visit_id)
+        print(f"storevisit on-submit alert for {visit_id}: {res}")
+    except Exception as e:
+        print(f"WARN storevisit on-submit alert for {visit_id} failed: {e}")
 
 
 # ── Photo upload (clean-store photo or a per-item photo) ──────────────────────────────────

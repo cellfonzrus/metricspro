@@ -16616,6 +16616,19 @@ along and `is_overdue` is computed, never assumed — a step with no date is nev
 with no reason recorded; and a missing clean-store photo, as ONE evidence item. Work recorded against
 no store is **counted in the digest footer**, never dropped — the §15z ownership rule applied to visits.
 
+**THE SEND IS ON THE SUBMIT EVENT, not on a tick.** Owner, 2026-10-03: *"every sore visti as soon
+as it is uploaded should be emailed as soon as the visti is completed"*. `POST
+/storevisit/visits/{id}/submit` queues `_alert_on_submit`, which calls the SAME
+`_run_store_visit_alerts` scoped to that one visit — the same recipients, the same digests, the same
+`alert_log` dedup, the same draft PO. There is no second send path to drift, and
+`harness_storevisit_alerts.py` §J16 **fails the build** if that hook ever renders, resolves or dedups
+anything of its own. It runs in a BackgroundTask and never raises: a visit is submitted from a phone
+on a store's wifi, and the rep gets their confirmation whether or not an email provider answers. The
+visit is saved BEFORE the alert is queued, so an alerting failure can never cost a submitted visit.
+The hourly sweep is kept as the **safety net rather than the trigger** — a send that failed leaves no
+`alert_log` row, so the next tick retries it, and it also catches visits submitted while the alert was
+switched off. That is "an alert that reached nobody is not already alerted" (§19) applied here.
+
 **The dedup tail is `(visit, item)` and deliberately NOT the date.** A store visit is an EVENT, not a
 daily state, so its to-do list is announced once and re-announced only for work that is new. That is
 the one place this differs from §47.13/§47.14, which are daily digests and key on the date.
@@ -16660,12 +16673,12 @@ which channels, and what the draft PO would contain, sending and creating nothin
 what the code implements) and `commcalc.purchase_order.store_visit_id` with its partial unique index.
 Applying it changes no behaviour: nothing sends and no PO is created until a tenant switches it on.
 
-**Proof.** `harness_storevisit_alerts.py` (122 checks, stdlib only, DB-free): A config degradation,
+**Proof.** `harness_storevisit_alerts.py` (129 checks, stdlib only, DB-free): A config degradation,
 B what counts as open work, C the DM-and-above default and the notification list, D one digest per
 recipient however found, E the (visit, item) dedup, F the accessory merge, G the draft PO and its
 unpriced floor, H the digests (both renderings, HTML escaping, the unowned footer), I migration `1046`
-tied to the code, J the locks — one fan-out, one dedup, one recipient list, one PO insert, RULE TWO,
-each with an armed control. Beyond the harness, the **real sweep was driven end to end** over a stub
+tied to the code, J the locks — one fan-out, one dedup, one recipient list, one PO insert, the on-submit
+hook holding none of its own, RULE TWO — each with an armed control. Beyond the harness, the **real sweep was driven end to end** over a stub
 client: 5 open items across 2 visits, 3 recipients (the DM, the manager above, and the tenant's named
 row — the accessory digest correctly reaching only the two on that scope), 2 draft POs priced from the
 catalog, and **no second PO on a re-run**. That run is also what caught two real wiring defects before
