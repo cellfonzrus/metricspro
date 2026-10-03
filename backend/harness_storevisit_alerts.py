@@ -23,7 +23,7 @@ WHAT THIS PINS
      dropped, and the total says it is a floor;
   H. the digests — both renderings carry the same facts, free text is escaped, and the unowned
      footer is present whenever work has no store;
-  I. migration 1046 is tied to the code it configures and is OFF by default;
+  I. migration 1047 is tied to the code it configures and is OFF by default;
   J. NO second fan-out, NO second dedup, NO second recipient list, NO second PO insert, RULE TWO,
      and the locks are ARMED (each has a control that proves the scan can fail).
 
@@ -75,7 +75,7 @@ VA_PATH = "app/modules/storevisit/visit_alerts.py"
 RT_PATH = "app/modules/storevisit/router.py"
 MD_PATH = "app/modules/commcalc/manager_digest.py"
 SUPPLY_PATH = "app/modules/supply/store.py"
-MIG = "../database/migrations/1046_store_visit_alerts.sql"
+MIG = "../database/migrations/1047_store_visit_alerts.sql"
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n== A. config: per tenant, house defaults, OFF on deploy, bad values degrade ==")
@@ -377,7 +377,7 @@ check("H14 an empty list still renders rather than raising",
       V.build_digest("D", [])["subject"] and V.build_accessory_digest("D", [])["subject"])
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-print("\n== I. migration 1046 is tied to the code it configures ==")
+print("\n== I. migration 1047 is tied to the code it configures ==")
 mig = open(MIG).read()
 for col in ("store_visit_alert_enabled", "store_visit_alert_channels",
             "store_visit_alert_lookback_days", "store_visit_alert_min_items",
@@ -402,9 +402,9 @@ check("I8 it does NOT create a second recipient table or a second dedup table",
       "CREATE TABLE" not in mig)
 check("I9 the schema cache is reloaded, or PostgREST would 404 the new columns",
       "NOTIFY pgrst" in mig)
-check("I10 the migration number is unique in the tree",
+check("I10 the migration number is unique in the tree (1046 was taken by PR #376 the same day)",
       len([1 for p in __import__("os").listdir("../database/migrations")
-           if p.startswith("1046_")]) == 1)
+           if p.startswith("1047_")]) == 1)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n== J. no second mechanism — the LOCKS ==")

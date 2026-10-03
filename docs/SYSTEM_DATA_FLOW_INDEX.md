@@ -5448,8 +5448,8 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 
 ## 16. Cross-reference: by TABLE
 
-- `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.15).
-- `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.15, mig 1046).
+- `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
+- `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
@@ -5650,7 +5650,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
-- `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.15).
+- `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
@@ -5917,7 +5917,7 @@ never folded into a total; §F `unbound_spellings`, including the alias row as t
 
 ## 18. Cross-reference: by METRIC / KPI
 
-- **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.15).
+- **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.16).
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
@@ -16576,7 +16576,7 @@ and the unknown band, D the roll-up with unowned work counted, E escalation and 
 I no second fan-out / dedup / scheduler, RULE TWO, and the armed controls — verified to bite by
 breaking the store-resolver dereference and the `plan_digests` call and watching §I12 and §I1 fail.
 
-### 47.15 STORE VISIT FOLLOW-THROUGH — the to-do alert, the separate accessory notification, and the draft purchase order (owner 2026-10-03, mig `1046`)
+### 47.16 STORE VISIT FOLLOW-THROUGH — the to-do alert, the separate accessory notification, and the draft purchase order (owner 2026-10-03, mig `1047`)
 
 Owner, verbatim: *"based on the store visits need to create an email and whats app alert to the dm and
 all people above to send them a lit of all items which are needed to be done , also create a
@@ -16669,14 +16669,14 @@ the board cannot disagree) · `POST /storevisit/alerts/run-due` (secret-gated ho
 /storevisit/alerts/run-now` (manager, **dry run by default** — says exactly who would be messaged, on
 which channels, and what the draft PO would contain, sending and creating nothing).
 
-**Migration `1046`** — config on `storeops.tenants` (every switch OFF, `po_mode` CHECK-constrained to
+**Migration `1047`** — config on `storeops.tenants` (every switch OFF, `po_mode` CHECK-constrained to
 what the code implements) and `commcalc.purchase_order.store_visit_id` with its partial unique index.
 Applying it changes no behaviour: nothing sends and no PO is created until a tenant switches it on.
 
 **Proof.** `harness_storevisit_alerts.py` (129 checks, stdlib only, DB-free): A config degradation,
 B what counts as open work, C the DM-and-above default and the notification list, D one digest per
 recipient however found, E the (visit, item) dedup, F the accessory merge, G the draft PO and its
-unpriced floor, H the digests (both renderings, HTML escaping, the unowned footer), I migration `1046`
+unpriced floor, H the digests (both renderings, HTML escaping, the unowned footer), I migration `1047`
 tied to the code, J the locks — one fan-out, one dedup, one recipient list, one PO insert, the on-submit
 hook holding none of its own, RULE TWO — each with an armed control. Beyond the harness, the **real sweep was driven end to end** over a stub
 client: 5 open items across 2 visits, 3 recipients (the DM, the manager above, and the tenant's named

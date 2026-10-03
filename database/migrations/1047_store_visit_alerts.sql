@@ -1,4 +1,4 @@
--- 1046_store_visit_alerts.sql — STORE VISIT FOLLOW-THROUGH: the to-do alert, the separate accessory
+-- 1047_store_visit_alerts.sql — STORE VISIT FOLLOW-THROUGH: the to-do alert, the separate accessory
 -- notification, and the DRAFT purchase order raised from a visit's accessory list.
 --
 -- OWNER ASK 2026-10-03, verbatim:
@@ -110,7 +110,7 @@ NOTIFY pgrst, 'reload schema';
 --       headers := jsonb_build_object('Content-Type','application/json','X-Notify-Secret','<NOTIFY_RUN_SECRET>'),
 --       body    := '{}'::jsonb); $$);
 
-SELECT 'Migration 1046 complete — store-visit to-do alert, accessory notification and draft '
+SELECT 'Migration 1047 complete — store-visit to-do alert, accessory notification and draft '
        'purchase order config on storeops.tenants (all OFF), plus '
        'commcalc.purchase_order.store_visit_id. Nothing sends and no PO is created until a tenant '
        'switches it on; the recipient list is the existing storeops.alert_recipient table, and a '

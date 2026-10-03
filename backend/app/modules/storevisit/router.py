@@ -652,7 +652,7 @@ def put_visit_alert_config(body: PutVisitAlertConfigIn, authorization: str = Hea
     try:
         sb().table("tenants").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
-        raise HTTPException(400, f"run migration 1046 first (storeops.tenants store-visit alerts): {e}")
+        raise HTTPException(400, f"run migration 1047 first (storeops.tenants store-visit alerts): {e}")
     return get_visit_alert_config(authorization, org_id)
 
 
