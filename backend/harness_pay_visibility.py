@@ -905,14 +905,17 @@ for _n in ast.walk(ast.parse(_upd_src)):
             _EMP_FIELDS = ast.literal_eval(_n.value)
         if "_PAY_GATED_FIELDS" in _t:
             _GATED = ast.literal_eval(_n.value)
-_upd = _load(("storeops", "router.py"), "update_employee",
-             _ns(EMP_FIELDS=_EMP_FIELDS, _PAY_GATED_FIELDS=_GATED,
-                 _PAY_LOGGED_FIELDS=("pay_rate", "pay_basis", "pay_amount", "termination_date"),
-                 _require_manager=lambda *a, **k: {"role": "district_manager"},
-                 _log_payroll_change=lambda *a, **k: None,
-                 _who_for_log=lambda *a, **k: {},
-                 _ensure_employee_id=lambda row: row,
-                 payroll_salary=types.SimpleNamespace(PAY_BASES=("hourly", "salary"))))
+_upd_ns = _ns(EMP_FIELDS=_EMP_FIELDS, _PAY_GATED_FIELDS=_GATED,
+              _PAY_LOGGED_FIELDS=("pay_rate", "pay_basis", "pay_amount", "termination_date"),
+              PAY_WRITE_REFUSED="refused",
+              _require_manager=lambda *a, **k: {"role": "district_manager"},
+              _log_payroll_change=lambda *a, **k: None,
+              _who_for_log=lambda *a, **k: {},
+              _ensure_employee_id=lambda row: row,
+              payroll_salary=types.SimpleNamespace(PAY_BASES=("hourly", "salary")))
+# update_employee's pay-write policy now lives in the shared gate (§19.44) — load the REAL one beside it.
+_load(("storeops", "router.py"), "gate_pay_write", _upd_ns)
+_upd = _load(("storeops", "router.py"), "update_employee", _upd_ns)
 check("K6-0: update_employee located, and EMP_FIELDS/_PAY_GATED_FIELDS read from the shipped module",
       (_upd is not None, "pay_rate" in (_GATED or ())), (True, True))
 

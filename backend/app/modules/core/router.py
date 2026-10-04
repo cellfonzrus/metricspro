@@ -2582,14 +2582,24 @@ def _ensure_employee(client, org_id, email, full_name=None, store_code=None, emp
     if email in emp_emails:
         return False
     try:
-        client.schema("storeops").table("employees").insert({
+        r = client.schema("storeops").table("employees").insert({
             "org_id": org_id, "name": (full_name or email), "email": email,
             "home_store": store_code or None, "is_active": True,
         }).execute()
         emp_emails.add(email)
-        return True
     except Exception:
         return False
+    # THE ONE MINT (§19.45): a person added here used to get NO business employee_id — every other
+    # create path minted E<pk>, this one did not, and such a person's first payroll change-log row was
+    # written with employee_id NULL (Vzone id 237, 2026-10-02). Lazy import: core keeps no import-time
+    # dependency on storeops; a failure leaves the row unminted (the change-log helper mints on use).
+    try:
+        from app.modules.storeops.router import _ensure_employee_id
+        for rec in (getattr(r, "data", None) or []):
+            _ensure_employee_id(rec)
+    except Exception:
+        pass
+    return True
 
 
 def _pay_visible(authorization: str, org_id: str) -> bool:

@@ -103,8 +103,11 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID,
                              x_active_org: str = Header(default="")):
     """Create a person from HR. Body: name (req), email?, phone?, home_store?, job title (role)?,
     pay_rate?, employee_id?, plus optional app fields: role_name (RBAC role), market?, store_code?,
-    store_codes?[], create_login?. De-dupes by email. Returns the employee + any login temp password."""
-    from app.modules.storeops.router import EMP_FIELDS, _ensure_employee_id
+    store_codes?[], create_login?. De-dupes by email. Returns the employee + any login temp password.
+    Pay fields pass storeops' `gate_pay_write` (§19.44) — the same gate as every employee pay write:
+    from a caller who may not see pay they are not written, and the reply names them in
+    `pay_fields_ignored` so HR · People can say so."""
+    from app.modules.storeops.router import EMP_FIELDS, _ensure_employee_id, gate_pay_write
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name required")
@@ -112,14 +115,16 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID,
     email = (body.get("email") or "").strip().lower()
 
     emp = None
+    pay_fields_ignored = []
     if email:
         ex = (so.table("employees").select("*").eq("org_id", org_id)
               .ilike("email", email).limit(1).execute().data) or []
         emp = ex[0] if ex else None
     if not emp:
         row = {k: body[k] for k in EMP_FIELDS if k in body}
-        row["org_id"] = org_id
         row["name"] = name
+        row, pay_fields_ignored = gate_pay_write(row, authorization, org_id)
+        row["org_id"] = org_id
         if email:
             row["email"] = email
         if row.get("is_active") is None:
@@ -172,9 +177,12 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID,
     # whoever posted a matching email. Strip the echo for a caller who may not see pay.
     if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
         _payvis.strip_pay(emp)
-    return {"employee": emp, "assigned_role": assigned, "login": login, "invite": invite,
-            "note": (None if email or not (role or has_scope)
-                     else "Role/scope ignored — an email is required to assign a role or create a login.")}
+    out = {"employee": emp, "assigned_role": assigned, "login": login, "invite": invite,
+           "note": (None if email or not (role or has_scope)
+                    else "Role/scope ignored — an email is required to assign a role or create a login.")}
+    if pay_fields_ignored:
+        out["pay_fields_ignored"] = pay_fields_ignored
+    return out
 
 
 @router.patch("/employees/{emp_id}")

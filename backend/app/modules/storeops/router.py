@@ -56,6 +56,7 @@ from app.modules.storeops.payroll_identity import (
 )
 from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
+from app.modules.storeops import payroll_log_identity as _log_identity
 from app.modules.storeops.lunch_deduction import (
     get_lunch_config as _lunch_get_config,
     get_tenant_lunch_config as _lunch_get_tenant_config,
@@ -1086,15 +1087,26 @@ def _who_for_log(authorization, org_id=ORG_ID):
 
 def _log_payroll_change(org_id, *, field, entry_point, employee_id=None, employee_name=None,
                          store_code=None, work_date=None, before=None, after=None,
-                         source_table=None, source_id=None, who=None, reason=None):
-    """Append ONE row to storeops.payroll_change_log. `who` = a dict from `_who_for_log` (or
+                         source_table=None, source_id=None, who=None, reason=None, employee_row=None):
+    """Append ONE row to storeops.payroll_change_log — the table's ONLY writer (locked,
+    `harness_payroll_log_identity_lock.py`). `who` = a dict from `_who_for_log` (or
     `_require_manager`'s return, which carries the same email/role keys) — pass {} or None for a
     system-triggered change (e.g. the pg_cron force-clockout sweep). Never raises: a missing
-    migration/table degrades to "no log row written", never a 500 on the real payroll write."""
+    migration/table degrades to "no log row written", never a 500 on the real payroll write.
+
+    WHO THE ROW IS ABOUT comes from the STORED employee, never from the caller's loose values (§19.45):
+    `payroll_log_identity.resolve_log_identity` reads `employee_row` (pass it whenever you hold the
+    stored row — required when `source_table='employees'`) or finds the person org-scoped from
+    `employee_id` / the employees `source_id`, mints a missing business id through the one mint, and
+    only falls back to `employee_id` / `employee_name` / `store_code` as hints when no one is found."""
     try:
+        ident = _log_identity.resolve_log_identity(
+            sb(), org_id, employee_row=employee_row, employee_id=employee_id,
+            employee_name=employee_name, store_code=store_code, source_table=source_table,
+            source_id=source_id, mint=_ensure_employee_id)
         row = {
-            "org_id": org_id, "employee_id": employee_id, "employee_name": employee_name,
-            "store_code": store_code, "work_date": (str(work_date)[:10] if work_date else None),
+            "org_id": org_id, "employee_id": ident["employee_id"], "employee_name": ident["employee_name"],
+            "store_code": ident["store_code"], "work_date": (str(work_date)[:10] if work_date else None),
             "field": field, "before_value": (None if before is None else str(before)),
             "after_value": (None if after is None else str(after)),
             "entry_point": entry_point, "source_table": source_table, "source_id": (str(source_id) if source_id else None),
@@ -2208,6 +2220,48 @@ _PAY_LOGGED_FIELDS = ("pay_rate", "pay_basis", "pay_amount", "termination_date")
 # 'termination_date' are not money and stay readable (see payroll_change_log above).
 _PAY_MONEY_LOG_FIELDS = ("pay_rate", "pay_amount")
 
+# The ONE refusal sentence of the pay-write gate (user-facing: it reaches the page as the error text).
+PAY_WRITE_REFUSED = ("Your role can't set pay, so nothing was saved. Pay can only be set by someone "
+                     "allowed to see it — an admin can turn on 'Employee pay rates & gross pay' for "
+                     "your role in Roles & Access.")
+
+
+def gate_pay_write(rows, authorization, org_id):
+    """THE ONE PAY-WRITE GATE — every path that writes a `_PAY_GATED_FIELDS` column of
+    storeops.employees calls this BEFORE its write (index §19.44, owner decision 2026-10-03: "only
+    people allowed to see pay may set pay when adding employees").
+
+    Before this, the policy lived inline in `update_employee` alone, and the CREATE paths
+    (`POST /storeops/employees`, `POST /storeops/employees/bulk`, `POST /hr/employees`) wrote
+    `pay_rate` with no check at all, while `bulk_payscale` checked only `_require_manager` — so a
+    manager below the org's pay line could set a rate by adding a person, or mass-set rates by upload.
+    One question ("may this caller write pay?") had four answers. Now it has this one.
+
+    `rows` is ONE write payload (a dict) or a LIST of them (a bulk write); what comes back has the
+    same shape. The policy is exactly `update_employee`'s (owner directive 2026-09-10), now shared:
+      · no pay-gated key in any payload  -> unchanged, no auth resolved at all;
+      · otherwise `_require_manager` first (401 / 403 for a non-manager, as before);
+      · a caller the org lets SEE pay (`pay_visibility.can_see_pay`, the per-org config) -> unchanged;
+      · a caller who may not -> the pay keys are DROPPED from every payload and NAMED back in the
+        returned list (the endpoint replies with it as `pay_fields_ignored`, so the page can say so);
+      · ...and when dropping them leaves NOTHING to write in any payload (a pay-only edit, a payscale
+        upload) -> 403 `PAY_WRITE_REFUSED`, rather than a 200 that did nothing.
+    Returns (rows, pay_fields_ignored). Never mutates the caller's dicts."""
+    single = isinstance(rows, dict)
+    payloads = [rows] if single else [r for r in (rows or []) if isinstance(r, dict)]
+    touched = set()
+    for p in payloads:
+        touched |= _PAY_GATED_FIELDS & set(p)
+    if not touched:
+        return rows, []
+    _require_manager(authorization, org_id)
+    if _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        return rows, []
+    cleaned = [{k: v for k, v in p.items() if k not in _PAY_GATED_FIELDS} for p in payloads]
+    if not any(cleaned):
+        raise HTTPException(403, PAY_WRITE_REFUSED)
+    return (cleaned[0] if single else cleaned), sorted(touched)
+
 
 class BulkCreateEmployeesIn(LaxModel):
     employees: Any = None
@@ -2215,12 +2269,17 @@ class BulkCreateEmployeesIn(LaxModel):
 
 
 @router.post("/employees/bulk")
-def bulk_create_employees(body: BulkCreateEmployeesIn, org_id: str = ORG_ID):
+def bulk_create_employees(body: BulkCreateEmployeesIn, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
     """Bulk-create employees from a filled template (new-tenant setup). Body: {employees:[{...}]}.
-    Skips blank-name rows and any employee_id that already exists (so re-upload is idempotent)."""
+    Skips blank-name rows and any employee_id that already exists (so re-upload is idempotent).
+    Pay columns in the sheet pass `gate_pay_write` (§19.44): from a caller who may not see pay they
+    are dropped from every row and named back as `pay_fields_ignored`; the people are still added."""
     rows_in = body.employees or body.rows or []
     if not isinstance(rows_in, list):
         raise HTTPException(400, "employees must be a list")
+    rows_in = [{k: e[k] for k in EMP_FIELDS if k in e} for e in rows_in if isinstance(e, dict)]
+    rows_in, pay_fields_ignored = gate_pay_write(rows_in, authorization, org_id)
     existing = {str(e.get("employee_id")) for e in
                 (sb().table("employees").select("employee_id").eq("org_id", org_id).execute().data or [])
                 if e.get("employee_id")}
@@ -2247,16 +2306,25 @@ def bulk_create_employees(body: BulkCreateEmployeesIn, org_id: str = ORG_ID):
         for rec in (r.data or []):
             _ensure_employee_id(rec)   # so bulk-added people are assignable in the org
         inserted += len(r.data or chunk)
-    return {"inserted": inserted, "skipped": skipped}
+    out = {"inserted": inserted, "skipped": skipped}
+    if pay_fields_ignored:
+        out["pay_fields_ignored"] = pay_fields_ignored
+    return out
 
 
 def _ensure_employee_id(rec: dict) -> dict:
     """Every employee needs a stable employee_id to be placed in the org tree or assigned a role /
-    manager. Auto-generate one (E<pk>) when it's missing, so no employee is unassignable."""
+    manager. Auto-generate one (E<pk>) when it's missing, so no employee is unassignable.
+    THE ONE MINT: every insert into storeops.employees passes its returned row here (locked by
+    `harness_payroll_log_identity_lock.py`, §19.45) — a person without a business id is the person
+    whose first payroll change-log row used to say employee_id NULL."""
     if rec and rec.get("id") and not str(rec.get("employee_id") or "").strip():
         gen = f"E{rec['id']}"
         try:
-            sb().table("employees").update({"employee_id": gen}).eq("id", rec["id"]).execute()
+            q = sb().table("employees").update({"employee_id": gen}).eq("id", rec["id"])
+            if rec.get("org_id"):
+                q = q.eq("org_id", rec["org_id"])
+            q.execute()
             rec["employee_id"] = gen
         except Exception:
             pass
@@ -2264,11 +2332,13 @@ def _ensure_employee_id(rec: dict) -> dict:
 
 
 @router.post("/employees")
-def create_employee(emp: dict, org_id: str = ORG_ID):
-    """Create an employee (StoreOps Admin)."""
+def create_employee(emp: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Create an employee (StoreOps Admin). Pay fields pass `gate_pay_write` (§19.44): from a caller
+    who may not see pay they are not written and the reply names them in `pay_fields_ignored`."""
     row = {k: emp[k] for k in EMP_FIELDS if k in emp}
     if not (row.get("name") or "").strip():
         raise HTTPException(400, "name required")
+    row, pay_fields_ignored = gate_pay_write(row, authorization, org_id)
     row["org_id"] = org_id
     if row.get("is_active") is None:
         row["is_active"] = True
@@ -2277,7 +2347,15 @@ def create_employee(emp: dict, org_id: str = ORG_ID):
     if not (row.get("employee_id") or "").strip():
         row.pop("employee_id", None)
     r = sb().table("employees").insert(row).execute()
-    return _ensure_employee_id(r.data[0]) if r.data else row
+    out = _ensure_employee_id(r.data[0]) if r.data else row
+    # PostgREST echoes the whole row: a caller who may not see pay must not get it back either.
+    if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        out = dict(out)
+        _payvis.strip_pay(out)
+    if pay_fields_ignored:
+        out = dict(out)
+        out["pay_fields_ignored"] = pay_fields_ignored
+    return out
 
 
 @router.patch("/employees/{emp_id}")
@@ -2308,17 +2386,9 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
     # discarding someone's typed work is the failure this house has already been burned by). Not a
     # 403: refusing the whole call would break editing a name. Config-reversible like everything else
     # here — a role listed in pay_visible_roles, or holding `employee_pay_rates`, writes pay as before.
-    pay_fields_ignored = []
-    if _PAY_GATED_FIELDS & set(row):
-        _require_manager(authorization, org_id)
-        if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
-            pay_fields_ignored = sorted(_PAY_GATED_FIELDS & set(row))
-            row = {k: v for k, v in row.items() if k not in _PAY_GATED_FIELDS}
-            if not row:
-                raise HTTPException(403, "Pay fields are restricted for your role (org pay-visibility "
-                                         "policy) — nothing else in this update to apply. An admin can "
-                                         "add your role to the pay-visibility roles in the company settings "
-                                         "or grant 'employee_pay_rates'.")
+    # The policy itself lives in `gate_pay_write` (§19.44) — the SAME gate every employee pay writer
+    # calls; this endpoint was its first home and its behavior is unchanged.
+    row, pay_fields_ignored = gate_pay_write(row, authorization, org_id)
     # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
     if "employee_id" in row and not (row.get("employee_id") or "").strip():
         row["employee_id"] = None
@@ -2355,15 +2425,17 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
     if not r.data:
         raise HTTPException(404, "employee not found")
     after = r.data[0]
+    # Mint the business id BEFORE anything records this person (§19.45). It used to run after the
+    # change-log loop below, so a person with no employee_id yet (added through Roles & Access) got
+    # their first pay edit logged with employee_id NULL — and E<pk> minted a moment later.
+    out = _ensure_employee_id(after)
     if before is not None:
         who = _who_for_log(authorization, org_id)
         for f in _PAY_LOGGED_FIELDS:
             if f in row and str(before.get(f) or "") != str(after.get(f) or ""):
-                _log_payroll_change(org_id, field=f, entry_point="pay_basis_change",
-                                     employee_id=after.get("employee_id"), employee_name=after.get("name"),
+                _log_payroll_change(org_id, field=f, entry_point="pay_basis_change", employee_row=after,
                                      before=before.get(f), after=after.get(f),
                                      source_table="employees", source_id=after.get("id"), who=who)
-    out = _ensure_employee_id(after)
     # PAY VISIBILITY (mig 434, owner directive 2026-09-10): PostgREST echoes the FULL row back, so
     # an ordinary edit (a phone number, a home store) handed the caller that person's pay_rate /
     # pay_amount even when they may not see pay. Strip the ECHO — the write itself is unchanged and
@@ -2519,12 +2591,17 @@ def bulk_payscale(body: BulkPayscaleIn, authorization: str = Header(default=""),
     previously rewrote every rate with ZERO change-log trail (unlike the single-row PATCH, which logs
     via _log_payroll_change) — a DM could silently mass-edit pay with no ✎ audit marker anywhere.
     Each successfully-updated row now logs the SAME way, entry_point='bulk_payscale', best-effort
-    (a log-write failure never blocks the actual rate update, matching every other hook's posture)."""
+    (a log-write failure never blocks the actual rate update, matching every other hook's posture).
+    PAY-WRITE GATE (§19.44): the manager check alone let a manager BELOW the org's pay line mass-set
+    rates they may not see. Every payload this endpoint writes is `{pay_rate}` and nothing else, so it
+    passes `gate_pay_write` as exactly that — a caller who may not see pay is refused (403) outright."""
     _require_manager(authorization, org_id)
     rows = body.rows or body.employees or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
-    emps = sb().table("employees").select("id,employee_id,name,pay_rate").eq("org_id", org_id).execute().data or []
+    gate_pay_write([{"pay_rate": (rw or {}).get("pay_rate") if isinstance(rw, dict) else None}
+                    for rw in rows], authorization, org_id)
+    emps = sb().table("employees").select("id,org_id,employee_id,name,pay_rate,home_store").eq("org_id", org_id).execute().data or []
     by_eid = {str(e.get("employee_id")): e for e in emps if e.get("employee_id")}
     by_name = {(e.get("name") or "").strip().lower(): e for e in emps}
     who = _who_for_log(authorization, org_id)
@@ -2544,8 +2621,7 @@ def bulk_payscale(body: BulkPayscaleIn, authorization: str = Header(default=""),
         sb().table("employees").update({"pay_rate": rate}).eq("id", match["id"]).eq("org_id", org_id).execute()
         updated += 1
         if str(before_rate or "") != str(rate):
-            _log_payroll_change(org_id, field="pay_rate", entry_point="bulk_payscale",
-                                 employee_id=match.get("employee_id"), employee_name=match.get("name"),
+            _log_payroll_change(org_id, field="pay_rate", entry_point="bulk_payscale", employee_row=match,
                                  before=before_rate, after=rate,
                                  source_table="employees", source_id=match.get("id"), who=who)
     return {"updated": updated, "errors": errors, "total": len(rows)}
@@ -6238,8 +6314,7 @@ def set_employee_lunch_config(emp_id: str, body: dict, authorization: str = Head
         who = _who_for_log(authorization, org_id)
         for col in ("lunch_deduction_enabled", "lunch_deduction_minutes"):
             if col in row and str(before.get(col)) != str(saved.get(col)):
-                _log_payroll_change(org_id, field=col, entry_point="lunch_deduction_config",
-                                     employee_id=before.get("employee_id"), employee_name=before.get("name"),
+                _log_payroll_change(org_id, field=col, entry_point="lunch_deduction_config", employee_row=saved,
                                      before=before.get(col), after=saved.get(col), source_table="employees",
                                      source_id=emp_id, who=who, reason="per-employee override")
     return {"ok": True, "employee_id": saved.get("employee_id"),
@@ -7430,6 +7505,11 @@ def delete_manual_hours(mid: str, authorization: str = Header(default=""), org_i
     before = (sb().table("manual_hours").select("*").eq("org_id", org_id).eq("id", mid)
               .limit(1).execute().data or [{}])[0]
     sb().table("manual_hours").delete().eq("org_id", org_id).eq("id", mid).execute()
+    # A repeat DELETE of an entry that is already gone changed nothing, so it records nothing (§19.45) —
+    # the same `if before:` guard delete_shift has. Without it a double-click logged a "delete" with no
+    # person, no date and no hours (11 such rows in one tenant's live log, 2026-08-07..08-20).
+    if not before:
+        return {"ok": True}
     try:
         who = _who_for_log(authorization, org_id)
         _log_payroll_change(org_id, field="manual_hours", entry_point="manual_hours_delete",

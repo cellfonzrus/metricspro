@@ -133,6 +133,32 @@ export interface RowSaveResult {
  *  if one is missing from this list. */
 export const NOT_SAVED_KEYS = ['pay_fields_ignored'] as const
 
+/** Why a NOT_SAVED_KEYS field was not written — the one sentence every screen shows for it. */
+export const NOT_SAVED_WHY = 'the server refused to write it (pay is restricted for your role)'
+
+/** THE reader of NOT_SAVED_KEYS: every field a reply names as accepted-but-not-written (deduped, in
+ *  order). `notPersisted` and every create / upload screen read the reply through this, so a field the
+ *  server drops with a 200 can never read as saved anywhere (§19.37 rows, §19.44 creates). */
+export function notSavedFields(response: unknown): string[] {
+  const reply = response && typeof response === 'object' ? (response as Record<string, unknown>) : null
+  const out: string[] = []
+  for (const k of NOT_SAVED_KEYS) {
+    const v = reply ? reply[k] : null
+    if (Array.isArray(v)) for (const f of v) if (!out.includes(String(f))) out.push(String(f))
+  }
+  return out
+}
+
+/** One line for a create / upload reply that left fields unwritten ('' when it wrote everything):
+ *  " · NOT saved: pay rate — your role can't set pay. An admin can turn on 'Employee pay rates & gross
+ *  pay' for your role in Roles & Access." */
+export function notSavedNote(response: unknown): string {
+  const fields = notSavedFields(response)
+  if (!fields.length) return ''
+  const names = fields.map(f => f.replace(/_/g, ' ')).join(', ')
+  return ` · NOT saved: ${names} — your role can't set pay. An admin can turn on 'Employee pay rates & gross pay' for your role in Roles & Access.`
+}
+
 const _shown = (v: unknown) => (v === null || v === undefined || v === '' ? 'nothing' : String(v))
 const _norm = (v: unknown) => (v === null || v === undefined ? '' : typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v).trim())
 
@@ -152,16 +178,12 @@ export function sameStoredValue(sent: unknown, stored: unknown): boolean {
 export function notPersisted(w: RowWrite, response: unknown): NotKept[] {
   const out: NotKept[] = []
   const reply = response && typeof response === 'object' ? (response as Record<string, unknown>) : null
-  const dropped = new Set<string>()
-  for (const k of NOT_SAVED_KEYS) {
-    const v = reply ? reply[k] : null
-    if (Array.isArray(v)) for (const f of v) dropped.add(String(f))
-  }
+  const dropped = new Set<string>(notSavedFields(response))
   const echo = w.echo || {}
   for (const field of Object.keys(w.body || {})) {
     const key = Object.prototype.hasOwnProperty.call(echo, field) ? echo[field] : null
     if (dropped.has(field) || (key && dropped.has(key))) {
-      out.push({ field, why: 'the server refused to write it (pay is restricted for your role)' })
+      out.push({ field, why: NOT_SAVED_WHY })
     } else if (!key) {
       out.push({ field, why: 'nothing in the reply can confirm it was saved' })
     } else if (!reply || !Object.prototype.hasOwnProperty.call(reply, key)) {

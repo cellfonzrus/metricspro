@@ -4333,7 +4333,9 @@ as a market-grant keyset member; ambiguity fails closed):
     DESTROYED that person's rate. Pay fields from a caller who cannot see pay are now DROPPED from
     the write and named back in the response as `pay_fields_ignored` (never silently discarded); a
     PAY-ONLY update from such a caller is refused 403. `_require_manager`/`_PAY_GATED_FIELDS` are
-    unchanged and still run first. Config-reversible by the same two knobs. `/admin/roles`
+    unchanged and still run first. **Since §19.44 (2026-10-03) this policy is ONE function,
+    `storeops/router.py::gate_pay_write`, called by every employee pay writer** — create, bulk create, PATCH,
+    bulk payscale and HR create (lock `harness_pay_write_gate_lock.py`). Config-reversible by the same two knobs. `/admin/roles`
     `saveDetails` also stops sending the key when the server withheld it.
   - **The line drawn (owner's rule 2):** the gate is PER-EMPLOYEE pay. Store-level labour aggregates
     a DM runs their stores on are deliberately NOT stripped — `overhead_allocation`'s
@@ -4369,6 +4371,10 @@ as a market-grant keyset member; ambiguity fails closed):
   **A 2xx is not proof (§19.37, 2026-10-02):** each slice declares `echo` (the reply keys carrying the stored
   values) and `rowSave.runRowSave` counts a slice saved only when `notPersisted` finds nothing — a field the server
   names in `pay_fields_ignored`, leaves out, or stored differently fails the save by name. Lock §8 of the same harness.
+- **Who a payroll change-log row is about (§19.45, 2026-10-03).** `_log_payroll_change` is the only writer of
+  `storeops.payroll_change_log`; every row's `employee_id` / `employee_name` / `store_code` comes from the STORED
+  employee via `storeops/payroll_log_identity.resolve_log_identity` (org-scoped; mints a missing business id through
+  `_ensure_employee_id` first). Every insert into `storeops.employees` mints. Lock `harness_payroll_log_identity_lock.py`.
 - **Employees & Pay is a MENU ITEM (§19.40, owner 2026-10-02).** NAV `Payroll & HR` → **Employees & Pay** →
   `/hr?tab=employees` — a deep-link entry that gates exactly as `/hr` (`rbac.canSeeItem` delegates via
   `deepLinkPage`); `/hr`'s tab lives in the URL through the one reader `lib/useUrlTab.ts`; the `/payroll` hub has the
@@ -5636,6 +5642,9 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `storeops.employees.pay_rate` / `pay_basis` / `pay_amount` / `termination_date` — EVERY writer passes `storeops/router.py::gate_pay_write` first (§19.44): `POST /storeops/employees`, `POST /storeops/employees/bulk`, `PATCH /storeops/employees/{id}` (+ `PATCH /hr/employees/{id}`), `POST /storeops/employees/bulk-payscale`, `POST /hr/employees`; `employee_id` is minted by the one `_ensure_employee_id` after EVERY insert, incl. the Roles path `core._ensure_employee` (§19.45) | the create / edit / upload handlers named | unchanged (§14 pay visibility) |
+| `storeops.payroll_change_log` (mig `414`) — ONE writer, `storeops/router.py::_log_payroll_change`; its `employee_id` / `employee_name` / `store_code` are built by `storeops/payroll_log_identity.resolve_log_identity` from the stored employee (§19.45); `DELETE /manual-hours/{mid}` no longer logs a repeat delete | 20 call sites (storeops router + `payroll_approval`) | `GET /storeops/payroll-change-log`; `payroll_actual_hours_detail` edit markers |
+| `storeops.payroll_change_log_id_backfill` (mig `1054`, **NOT applied**) — the exact rows mig 1054 filled (`log_id`, `org_id`, `filled_employee_id`, `source_employee_pk`), kept so the backfill reverts exactly | mig `1054` only | the mig's own `-- REVERT:` |
 | `module_graph.FACTS` (code registry — **no table**) — **which files answer the same question, and who reads each one.** `homes` is declared (a ruling cannot be inferred); `callers` is a SNAPSHOT derived from the AST import graph, so it cannot go stale by hand; `index` and `locks` point at the section documenting the fact and the harness enforcing it | code (`--bless` regenerates the snapshot; `harness_module_graph_guard.py` fails the build on any drift) | `connected()` / `impact_report()`; the ten locks that took their `HOME` off a literal (`home_under_app`, `homes_for`); `.github/workflows/module-graph-guard.yml` both jobs — §50 |
 | `commcalc.purchase_order.external_ref` / `external_url` / `external_pushed_at` / `external_error` (mig `1053`) — **where a pushed draft landed on the VENDOR's side, and why one did not.** `external_ref` is the idempotency key, because the vendor API has none: a PO carrying one is never pushed again. A failure is recorded here, not only logged (§19.41) | `storevisit/router._push_accessory_pos` — the only writer | the same, as its idempotency read — §51 |
 | `commcalc.po_vendor.portal_config->order_transport->customer` (JSON on the same existing column — **no new column, no new table**) — **who the order is FOR on the vendor's side**: `mode` `none`\|`per_store`, `email_domain`, `tags` (wholesale / retail — the vendor's price list and payment terms hang off them), `country_code`, `note`. `none` is the default and names nobody | the supply vendor editor (validated by `vendor_customer.validate_customer`, dereferenced by `order_transport.validate_transport`) | `vendor_customer.customer_for_store` — the ONE derivation, read by the customer export AND by every draft order; locked by `harness_order_transport.py` §I — §51.8 |
@@ -5797,8 +5806,8 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
-| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
-| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)**; **store OPTION lists compose ONLY through `build_store_options`/`org_store_options` — or `fold_store_spellings` for a caller's own list — so one physical store is offered once (§13e, CI job `store-option-fold`)** |
+| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, pay-write gated by `gate_pay_write` like every other pay writer — §19.44; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
+| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards**, **store IDENTITY — §13d: one physical store must resolve to ONE canonical key; the invariant's one home is `account/store_identity_audit.py::audit` (placeholder address / roster-without-mapping / split keys), locked by `harness_store_mapping_identity.py` (CI `store-identity-proof`); repair = the owner-run runbook `store_identity_merge_1800_1115.sql` (#346 + the B-60TH step), deliberately NOT a second migration** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
@@ -5849,6 +5858,9 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `POST /storeops/employees` · `POST /storeops/employees/bulk` · `POST /hr/employees` — pay fields pass the ONE pay-write gate: dropped and named in `pay_fields_ignored` for a caller who may not see pay (people still added), 403 for a non-manager sending pay; the StoreOps create echo is pay-stripped | `storeops/router.py::create_employee` / `bulk_create_employees` (now take `authorization`), `hr/router.py::hr_create_employee` → `gate_pay_write` | §19.44 |
+| `POST /storeops/employees/bulk-payscale` — was manager-only; now also refused (403 `PAY_WRITE_REFUSED`) for a manager below the org's pay line · `PATCH /storeops/employees/{id}` — same policy, now from the shared gate | `storeops/router.py::bulk_payscale` / `update_employee` → `gate_pay_write` | §19.44 |
+| `DELETE /storeops/manual-hours/{mid}` — a repeat delete of an entry already gone logs nothing (reply unchanged) · every payroll change-log write (no route added) builds its identity from the stored employee | `storeops/router.py::delete_manual_hours`, `_log_payroll_change` → `payroll_log_identity.resolve_log_identity` | §19.45 |
 | `GET /commcalc/vip/summary` · `GET /commcalc/vip/invoices` (DISTRIBUTOR INVOICES) — additive `date_from` / `date_to` (inclusive days over `created_on`) + `stores` / `markets` (PIPE-separated); both now read ONE selector, so the table always adds up to the tiles; `/summary` also serves `unresolved` (the invoices a store/market selection could not bind) | `commcalc/router.vip_summary` / `vip_invoices_list` → `router._vip_select` → pure `commcalc/vip_invoice_filter.py` + `account.statement_filter.resolve_store_matcher` | §15v |
 | `GET /commcalc/vip/filter-options` — additionally serves `markets` (`core.scope.org_market_options`) and `stores` (`org_store_options`, one option per physical store + only the distributor spellings the matcher cannot bind, via `statement_filter.unbound_spellings`) | `commcalc/router.vip_filter_options` | §15v, §13c, §13e |
 | *(no endpoint added)* — `POST /commcalc/epay/sweep/run-due` / `run` are unchanged in shape; the run's `success` is now decided on `rows_landed` rather than on the status word, so an unverified zero records an ATTEMPT instead of advancing `last_run_at` | `router._do_epay_sweep` → `epay_sweep.run_epay_sweep` (ledger settled before reporting) | §19.41 |
@@ -6126,6 +6138,8 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |
+| **Who is a payroll change-log row about?** (employee number, name, store) | `storeops.employees.employee_id` / `name` / `home_store` of the STORED person (event store for shifts / punches) | `storeops/payroll_log_identity.resolve_log_identity`, called only by `_log_payroll_change`; lock `harness_payroll_log_identity_lock.py` (§19.45) |
 | **What else answers this question?** — asked of a changed file, by the build. 12 facts / 72 edges today; a 13th connected piece cannot land without being registered and its siblings named | `module_graph.connected(path)` (role, question, homes, siblings, index refs, locks) | ONE home the graph; dereferenced by `harness_module_graph_guard.py` (316 checks, 9 armed controls) and by ten existing locks; reported per pull request by the `impact` job — §50. Found two locks no workflow ran (`harness_alert_autofix`, `harness_ingest_freshness`), both now wired |
 | **Who is this store on the vendor's side?** — the customer an order names, and the customer the vendor's own list is seeded with | `vendor_customer.customer_for_store(decl, store)` → `customer_rows` / `import_csv` | ONE home `supply/vendor_customer.py`, dereferenced by `GET /supply/vendors/{id}/customers[.csv]` and by `storevisit/router._push_accessory_pos`; lock `harness_order_transport.py` §I (27 checks) — §51.8 |
 | **What does this vendor charge for an item today, over its API route?** | `shopify_draft_order.read_products` → `catalog_rows` → `store.land_catalog(…, "api")` | the SAME lander and the SAME `commcalc.vendor_catalog_price` snapshot the kit upload and portal walk use; the reader judges no availability class, pack size or item key — `ordering_logic.normalize_catalog_row` does, for every route. Lock `harness_order_transport.py` §H — §51.7 |
@@ -6308,6 +6322,87 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.45 **THE EMPLOYEE NUMBER WAS MISSING FROM THE PAYROLL CHANGE LOG — a log row says WHO from the stored record
+(owner 2026-10-03, Vzone; fixed).** **Evidence (live, read-only):** `storeops.payroll_change_log` rows at
+2026-10-02T21:23:19 (`entry_point='pay_basis_change'`, `source_id='237'`, `employee_name='Shweta'`) have `employee_id` NULL
+while `storeops.employees` id 237 holds `E237`; the same save wrote `E240` for id 240. `core.access_log` has the PATCHes
+(277, 278, 279, 237, 240, all 200). The pay slice (`EMP_PAY_SLICE`) never sends `employee_id`, so the body did not clear
+it: 237 had **no business id at all** when it was saved. **Root cause:** `storeops/router.py::update_employee` logged
+`after.get("employee_id")` — the UPDATE's echo — and only AFTER the loop ran `_ensure_employee_id(after)`, which minted
+`E237`. 237 had none because `core/router.py::_ensure_employee` (a person added through Roles & Access) inserted the
+roster row **without minting**, unlike every other create path. **The class:** a change-log row's identity came from
+whatever its caller happened to hold — an UPDATE echo, a shift's snapshot name, a punch's raw `employee_id` (the Schedule
+page stores the NUMERIC pk there, §14 `payroll_identity`), an hours-approval row — never from the stored person.
+**The design fix (one home, dereferenced):** `_log_payroll_change` is the table's ONLY writer (20 call sites, every
+entry point: `pay_basis_change`, `bulk_payscale`, `lunch_deduction_config`, `shift_edit`, `shift_swap`,
+`timeclock_override`, `clock_out_stale_auto`, `force_clockout_manual`/`_cron`, `timeclock_permission_approve`,
+`manual_hours_add`/`_delete`, `payroll_approval`) and it builds every row's `employee_id` / `employee_name` / `store_code`
+through **`storeops/payroll_log_identity.resolve_log_identity`**: the stored `storeops.employees` row — handed over as
+`employee_row=` when the caller holds it, else found ORG-SCOPED by business id, then the employees pk
+(`source_table='employees'`), then a numeric pk only when no one owns that string as a business id (the
+`business_id_alias_map` collision rule) — and a person with no business id is minted through the ONE mint
+(`_ensure_employee_id`, now org-scoped) BEFORE the row is built. The stored id and name win; the caller's values are
+hints used only when nobody is found (a deleted person, a tenant-level row). The store is the EVENT's store when there is
+one (a shift / punch), else the person's home store — so employee-level rows (pay edits, lunch overrides) now carry a
+store and a store-scoped manager sees them in the log (dollar values stay redacted below the pay line, §14 DM sweep).
+`update_employee` mints before it logs; `bulk_payscale` / per-employee lunch override pass the stored row;
+`core._ensure_employee` mints. **Sibling found and fixed:** `DELETE /storeops/manual-hours/{mid}` logged a repeat delete
+of an entry already gone (a double-click) as a "delete" with no person, date or hours — 11 such rows in Luxelink's live log
+(2026-08-07..08-20); it now records nothing when nothing was deleted (`delete_shift`'s existing `if before:` guard).
+**Why not `app.core.identity.resolve_employee`** (the declared SSOT): Phase-1 dormant (wired into nothing), keyed on
+`entity_id` (a row without one is skipped) and served from a 30 s cache that would still hold 237 WITHOUT the id minted a
+moment earlier — it would reproduce this exact defect; the helper reads the record as it is now, by the same keys.
+**Live counts (read-only, 2026-10-03):** 3,098 log rows; 18 with `employee_id` NULL — **6 `source_table='employees'`, all
+resolvable** (house 1: id 231→E231; Vzone 2: 237→E237; NY LOGISTICS 3: 270→E270), 11 Luxelink phantom repeat-deletes and
+1 Luxelink tenant-level lunch row (both correctly person-less; REPORTED, not filled). **Backfill:** mig
+`1054_payroll_change_log_employee_id_backfill.sql` (**NOT applied** — owner applies) records each fill in
+`storeops.payroll_change_log_id_backfill` then sets `employee_id` from the same-org employees record; idempotent,
+org-scoped, exact `-- REVERT:` (tested on a scratch Postgres: apply ×2, revert). **Lock:**
+`backend/harness_payroll_log_identity_lock.py` (CI job *Employee pay writes + change-log identity*) — L1 nothing but
+`_log_payroll_change` writes / builds a log row under `backend/app`; L2 it calls `resolve_log_identity(employee_row=…,
+mint=_ensure_employee_id)` before its insert and the row's identity keys are the helper's answer; L3 every
+`source_table='employees'` call passes `employee_row=`; L4 every insert into `storeops.employees` passes its result to
+`_ensure_employee_id`; L5 the helper's read is org-scoped; L6 no migration INSERTs log rows; controls C1–C11 (C1 the pre-fix
+inserter, C8 the pre-fix Roles insert → RED). Run against `main` it fails L2–L5. **Proof:**
+`backend/harness_employee_write_proof.py` §B (the owner's save reproduced with the transcribed pre-fix tail → NULL, then
+E237 through the shipped path; every sibling writer; org scoping; the collision rule; a failing roster read still writes
+the row).
+
+§19.44 **PAY LOCK ON CREATE — only someone allowed to see pay may SET it, on every path (owner decision 2026-10-03:
+"yes … add the pay lock").** Reported by the §19.37 trace: `POST /storeops/employees`, `POST /storeops/employees/bulk` and
+`POST /hr/employees` wrote `pay_rate` (and any `pay_basis` / `pay_amount` / `termination_date` sent) with NO pay check,
+while `PATCH /storeops/employees/{id}` applied the 2026-09-10 rule inline and `POST /storeops/employees/bulk-payscale`
+checked only `_require_manager` — so a manager below the org's pay line could set a rate by ADDING a person, or mass-set
+rates by upload. **The class:** a pay write gated on one entry point and not the others — one question ("may this caller
+write pay?"), four answers. **The design fix (one home):** `storeops/router.py::gate_pay_write(rows, authorization,
+org_id)` — `update_employee`'s policy moved, not changed: no `_PAY_GATED_FIELDS` key → untouched (no auth resolved);
+else `_require_manager` (401/403 as before); a caller `pay_visibility.can_see_pay` admits (the per-org config:
+`pay_visible_roles`, `pay_visibility`, the `employee_pay_rates` grant) → untouched; otherwise the pay keys are DROPPED from
+every payload and named back as `pay_fields_ignored`, and when nothing else is left to write (a pay-only edit, a payscale
+upload) → 403 `PAY_WRITE_REFUSED`. Every writer calls it before its write: `create_employee`, `bulk_create_employees`
+(per row; people still added), `update_employee`, `bulk_payscale` (its payloads are `{pay_rate}` only → refused below the
+line), `hr_create_employee` (via the import). `create_employee` also strips pay from its echo (a select-all row, same as
+the PATCH echo). **Writers checked and not pay (no gate needed):** `core._ensure_employee` (name/email/store),
+HR intake propagation (`_PROPAGATABLE` — locked to hold no pay column), lunch / face configs, face-consent stamping,
+merge/delete/org-unit/is_active updates, the mint. **Frontend:** the reply is read through ONE reader,
+`lib/rowSave.ts::notSavedFields` (which `notPersisted` now uses too) and `notSavedNote`, so a dropped pay field is SAID —
+HR · People: *"⚠️ Saved {name} · NOT saved: pay rate — your role can't set pay. An admin can turn on 'Employee pay rates
+& gross pay' for your role in Roles & Access."*; StoreOps Admin / Setup add + bulk upload append the same note. HR ·
+People now sends `pay_rate` only when typed, and the two StoreOps add forms (which have NO pay input) stop sending
+`pay_rate: 0` for everyone they add. A refused payscale upload shows the server's sentence: *"Your role can't set pay, so
+nothing was saved. Pay can only be set by someone allowed to see it — an admin can turn on 'Employee pay rates & gross pay'
+for your role in Roles & Access."* (replaces the 2026-09-10 text that named the grant key). **Lock:**
+`backend/harness_pay_write_gate_lock.py` — G1 the gate calls `_require_manager` + `can_see_pay` and refuses; G2 every
+function under `backend/app` that writes `storeops.employees` with a payload that can carry a gated column (a literal
+naming one, a `**` spread, `EMP_FIELDS`, or a gated column named in code) calls `gate_pay_write` BEFORE the write — the
+set is read from the shipped `_PAY_GATED_FIELDS`; G3 only the gate reads that set; G4 `_PROPAGATABLE` holds no gated
+column; G5 every frontend create screen reads the reply through `notSavedNote`/`notSavedFields`; G6 `rowSave` has one
+reader of `NOT_SAVED_KEYS`; controls C1–C12 (C1 the pre-fix `create_employee` → RED). Run against `main` it fails G1, G2b
+(all five writers), G3, G5b, G6. **Proof:** `backend/harness_employee_write_proof.py` §A (the real handlers, exec'd: a DM
+/ store manager creating with a rate → added, rate not written, named; admin / market manager / a granted store manager →
+written; the org listing its DM role → written; a rep → 403; bulk and HR create the same; payscale → 403 below the line;
+PATCH unchanged). `harness_pay_visibility.py` §K6 now loads the real gate beside `update_employee`.
 
 §19.40 **"EMPLOYEES & PAY" IS A MENU ITEM — a link that opens a TAB names a tab its page has (owner 2026-10-02).**
 Owner: *make "Employees & Pay" its own menu item, and fix the stale wording that points people to the wrong place to
@@ -6790,7 +6885,7 @@ dropped with a 200 there (their success is still status-based — moving them on
 `PATCH /hr/employees/{id}` delegates to `update_employee` (same reply) and has no browser caller. **Reported, not
 fixed here (another class, owner decision):** `POST /storeops/employees`, `POST /storeops/employees/bulk` and
 `POST /hr/employees` write `pay_rate` with NO pay gate at all (create paths), unlike the PATCH and bulk-payscale —
-rule 4 says pay writes are gated server-side. **Lock:** `backend/harness_row_save_lock.py` §8 (CI job *One row, one
+rule 4 says pay writes are gated server-side. **Closed 2026-10-03 by §19.44** (one gate on every pay writer). **Lock:** `backend/harness_row_save_lock.py` §8 (CI job *One row, one
 save*) — every `EMP_*_SLICE` declares an `echo` whose reply keys are exactly its `fields`; `RowSlice.echo` is
 required; `runRowSave` calls `notPersisted` before its single `.saved.push`; every `…_ignored` reply key in
 `storeops/router.py` / `hr/router.py` is in `NOT_SAVED_KEYS`; every slice user runs `runRowSave`; planted controls
