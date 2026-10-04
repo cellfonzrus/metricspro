@@ -4283,64 +4283,65 @@ def _org_admin_recipients(client, org_id):
 
 
 async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=None, force=False):
-    """Send an alert to the scope's recipients via email + WhatsApp, DEDUPED by (scope, ref_key) via
-    storeops.alert_log so a cron doesn't re-alert every tick. Best-effort; returns a summary dict."""
-    if not force:
-        try:
-            seen = (client.schema("storeops").table("alert_log").select("id,recipients")
-                    .eq("org_id", org_id).eq("scope", scope).eq("ref_key", ref_key).limit(50).execute().data) or []
-            # AN ALERT THAT REACHED NOBODY IS NOT "ALREADY ALERTED" (2026-09-20). The dedup used to count
-            # ANY prior row, including one written when zero messages actually went out — no recipients
-            # configured, or every channel unconfigured/failing. The condition was then never re-reported
-            # for that ref_key, so the quietest possible failure (nobody heard, and the log says we told
-            # them) was also the stickiest. Only a row that actually DELIVERED suppresses a re-send.
-            if any((r.get("recipients") or "").strip() for r in seen):
-                return {"skipped": "already alerted", "ref_key": ref_key}
-        except Exception:
-            pass
+    """Send an alert to the scope's recipients on email + WhatsApp, DEDUPED per recipient and per
+    CHANNEL through the one send record (`storeops/alert_log.py`, migration 1051). Best-effort;
+    never raises; returns a summary dict.
+
+    Before 1051 this held its own select/insert pair and wrote ONE row per (scope, ref_key) naming
+    everybody as soon as any single message went out. Two things were wrong with that and both are
+    fixed by dereferencing the shared home: a recipient whose address failed was recorded as told,
+    and a channel that failed was never retried even though the tenant had asked for it.
+
+    AN ALERT THAT REACHED NOBODY IS NOT "ALREADY ALERTED" (2026-09-20) — kept, and now exact: only
+    a channel that actually carried the message to a given address suppresses a re-send to that
+    address on that channel.
+    """
+    from app.modules.notify import digest_delivery as _delivery
+    from app.modules.storeops import alert_log as _alert_log
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    so = client.schema("storeops")
     recips = _alert_recipients(client, org_id, scope, store_code)
     if not recips:
-        # RECORD THE SILENCE. Previously this returned with no trace at all, so "this tenant has nobody
-        # to tell" was invisible everywhere — no row, no banner, no count. The row is written with an
-        # empty `recipients`, which the dedup above deliberately does NOT treat as delivered: the moment
-        # a recipient exists (or an admin is added), the next occurrence alerts for real.
-        try:
-            client.schema("storeops").table("alert_log").insert(
-                {"org_id": org_id, "scope": scope, "ref_key": ref_key, "recipients": "",
-                 "detail": {"subject": subject, "count": 0, "suppressed": "no_recipients",
-                            "note": ("nobody is configured to receive this scope, and the tenant has no "
-                                     "active admin with an email address to fall back to")}}).execute()
-        except Exception:
-            pass
+        # RECORD THE SILENCE. "This tenant has nobody to tell" was invisible before — no row, no
+        # banner, no count. The row carries no channel and no recipients, which the dedup rule
+        # deliberately does NOT treat as delivered: the moment a recipient exists (or an admin is
+        # added), the next occurrence alerts for real.
+        _alert_log.record_silence(
+            so, org_id, scope, ref_key,
+            detail={"subject": subject, "count": 0, "suppressed": "no_recipients",
+                    "note": ("nobody is configured to receive this scope, and the tenant has no "
+                             "active admin with an email address to fall back to")})
         return {"sent": 0, "suppressed": "no_recipients",
                 "detail": "no recipients configured for scope " + scope}
     html = "<p>" + text.replace("\n", "<br>") + "</p>"
-    sent, tos = 0, []
+    built = {"subject": subject, "html": html, "text": text}
+    carried = set() if force else _alert_log.sent_pairs(so, org_id, scope, ref_keys=[ref_key])
+    channels_ok = {"email": email_resend.is_configured(),
+                   "whatsapp": whatsapp_meta.is_configured()}
+    sent, tos, skipped = 0, [], 0
     for r in recips:
+        addrs = {}
         em = (r.get("email") or "").strip()
-        if r.get("via_email", True) and em:
-            try:
-                from app.modules.notify.channels import email_resend
-                if email_resend.is_configured():
-                    await email_resend.send_email(em, subject, html)
-                    sent += 1; tos.append(em)
-            except Exception:
-                pass
         wa = (r.get("whatsapp") or "").strip()
+        if r.get("via_email", True) and em:
+            addrs["email"] = em
         if r.get("via_whatsapp") and wa:
-            try:
-                from app.modules.notify.channels import whatsapp_meta
-                if whatsapp_meta.is_configured():
-                    await whatsapp_meta.send_document(wa, b"", "text/plain", "alert.txt", text)
-                    sent += 1; tos.append(wa)
-            except Exception:
-                pass
-    try:
-        client.schema("storeops").table("alert_log").insert(
-            {"org_id": org_id, "scope": scope, "ref_key": ref_key,
-             "recipients": ", ".join(tos), "detail": {"subject": subject, "count": sent}}).execute()
-    except Exception:
-        pass
+            addrs["whatsapp"] = wa
+        if not addrs:
+            continue
+        row = await _delivery.deliver_recipient(
+            so, org_id, scope, addresses=addrs, items=[{"ref_key": ref_key}], carried=carried,
+            channels_ok=channels_ok, build=lambda _n, _i, _b=built: _b,
+            to_name=r.get("name"), wa_filename="alert.txt",
+            detail={"subject": subject})
+        if row["already_sent"]:
+            skipped += 1
+            continue
+        for ch in (row.get("delivered") or []):
+            sent += 1
+            tos.append(addrs[ch])
+    if not sent and skipped:
+        return {"skipped": "already alerted", "ref_key": ref_key}
     return {"sent": sent, "recipients": tos, "ref_key": ref_key}
 
 
@@ -10489,8 +10490,9 @@ def derive_closing_due(date: str = "", x_notify_secret: str = Header(default="")
 #   • the hourly pg_cron tick + a tenant-local HH:MM send time defaulting to 10:30 → the mig-433
 #     convention, with the due decision itself now in `manager_digest.due_now` so three sweeps stop
 #     spelling the comparison three times;
-#   • dedup rows → the existing `storeops.alert_log` via `_lateness_already_sent` /
-#     `_lateness_record_sent`. No new alert table, no second dedup rule;
+#   • dedup rows → the existing `storeops.alert_log` through its one home,
+#     `storeops/alert_log.py`, driven by `notify/digest_delivery.py`. No new alert table, no
+#     second dedup rule, and since migration 1051 the record names the CHANNEL that carried it;
 #   • the declared figure → `billpay_pickup.declared_billpay_in_force` (reps' split with the DM's
 #     verified correction applied), so a manager is never chased about a store-day they fixed;
 #   • the POS figure → `metric_recon.pos_billpay_cash`, the one home that includes the customer
@@ -10509,8 +10511,8 @@ async def _run_billpay_declaration_alerts(org_id_filter=None, respect_enabled=Tr
     switched it on, compares the declared figure in force against the POS basis for the configured
     lookback, plans ONE digest per manager (DM ∪ above-DM) and sends it on each channel that can
     actually reach them, deduped per (recipient, store, day, class). NEVER raises."""
-    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
-                                             _lateness_already_sent, _lateness_record_sent)
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
+    from app.modules.notify import digest_delivery as _delivery
     from app.modules.commcalc import manager_digest as _md
     from app.modules.commcalc import metric_recon as _mr
     from app.modules.notify.channels import email_resend, whatsapp_meta
@@ -10572,64 +10574,25 @@ async def _run_billpay_declaration_alerts(org_id_filter=None, respect_enabled=Tr
             continue
         stores = {i["store_code"] for i in items if i.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        def _build_bda(name, its, _c=counts, _m=cfg["max_rows"], _l=label, _a=advisories):
+            return _bda.build_digest(name, its, counts=_c, max_rows=_m, label=_l,
+                                     advisories=_a)
+
         plan = _md.plan_digests(
             items, hierarchy, today.isoformat(), scope=_bda.ALERT_SCOPE,
-            build=lambda name, its: _bda.build_digest(name, its, counts=counts,
-                                                      max_rows=cfg["max_rows"], label=label,
-                                                      advisories=advisories),
-            key_parts=_bda.key_parts, channels=cfg["channels"])
-        sent = skipped = 0
-        planned = []
-        for dg in plan["digests"]:
-            addrs = dg.get("addresses") or ({"email": dg["to"]} if dg.get("to") else {})
-            new_items = [it for it in dg["items"]
-                         if not _lateness_already_sent(so, oid, _bda.ALERT_SCOPE, it["ref_key"])]
-            if not new_items:
-                skipped += 1
-                planned.append({"to": dg["to"], "addresses": addrs, "already_sent": True})
-                continue
-            built = _bda.build_digest(dg["to_name"], new_items, counts=counts,
-                                      max_rows=cfg["max_rows"], label=label,
-                                      advisories=advisories)
-            # STRUCTURED, never a pre-joined display string — the dry-run preview is rendered by a
-            # human-facing screen, which owns presentation (the zero-sales rule verbatim).
-            planned.append({"to": dg["to"], "addresses": addrs, "already_sent": False,
-                            "subject": built["subject"],
-                            "items": [{"store_code": i["store_code"], "close_date": i["close_date"],
-                                       "gap_class": i["gap_class"], "gap": i["gap"],
-                                       "declared": i["declared"], "pos_basis": i["pos_basis"]}
-                                      for i in new_items]})
-            if dry_run:
-                continue
-            # A channel that is not configured is NOT a channel that was tried. Each leg records its
-            # own outcome, and the dedup row is written only when at least one leg actually carried
-            # the digest — so a WhatsApp number with no account behind it can never mark a finding
-            # "escalated" and hide it from tomorrow's run.
-            delivered = []
-            if "email" in addrs and email_ok:
-                try:
-                    await email_resend.send_email(to=addrs["email"], subject=built["subject"],
-                                                  html=built["html"])
-                    delivered.append("email")
-                except Exception as e:
-                    print(f"WARN billpay declaration digest email to {addrs['email']} failed: {e}")
-            if "whatsapp" in addrs and wa_ok:
-                try:
-                    # data=b"" is the module's own text-only path: no file to attach, so the ladder
-                    # resolves to the approved template, which IS deliverable business-initiated.
-                    res = await whatsapp_meta.send_document_detailed(
-                        addrs["whatsapp"], b"", "text/plain", "billpay-declarations.txt",
-                        built["text"])
-                    if res.get("message_id"):
-                        delivered.append("whatsapp")
-                except Exception as e:
-                    print(f"WARN billpay declaration digest WhatsApp to {addrs['whatsapp']} "
-                          f"failed: {e}")
-            if delivered:
-                for it in new_items:
-                    _lateness_record_sent(so, oid, _bda.ALERT_SCOPE, it["ref_key"],
-                                          addrs.get("email") or addrs.get("whatsapp"))
-                sent += 1
+            build=_build_bda, key_parts=_bda.key_parts, channels=cfg["channels"])
+        # ONE home for "carry it and record what each channel did" — notify/digest_delivery.py.
+        # A channel that is not configured is NOT a channel that was tried, and a channel that
+        # failed is still owed the finding: each leg records only its own outcome, so a WhatsApp
+        # number with no account behind it can never mark a finding escalated and hide it.
+        # STRUCTURED preview rows, never pre-joined display text: the view owns presentation.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, _bda.ALERT_SCOPE, plan["digests"], build=_build_bda,
+            wa_filename="billpay-declarations.txt",
+            channels_ok={"email": email_ok, "whatsapp": wa_ok}, dry_run=dry_run,
+            preview_item=lambda i: {"store_code": i["store_code"], "close_date": i["close_date"],
+                                    "gap_class": i["gap_class"], "gap": i["gap"],
+                                    "declared": i["declared"], "pos_basis": i["pos_basis"]})
         results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(items),
                         "counts": counts, "refused": refused, "advisories": advisories,
                         "fee_policy": meta.get("fee_policy"),

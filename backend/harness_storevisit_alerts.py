@@ -424,8 +424,10 @@ check("J3 LOCK: the sweep writes NO digest markup of its own — one renderer, s
       "cannot drift", "<table" not in blk and "<p>" not in blk)
 check("J4 LOCK: the notification list is read from the ONE table, in ONE place",
       blk.count('table("alert_recipient")') == 1)
-check("J5 LOCK: the dedup trail is the EXISTING alert_log pair, never a second insert",
-      '_lateness_already_sent' in blk and '_lateness_record_sent' in blk
+check("J5 LOCK: the dedup trail is the ONE send record, never a second insert — and since "
+      "mig 1051 it names the channel, so a failed WhatsApp is still owed the finding",
+      '_delivery.deliver_digests(' in blk
+      and '_lateness_already_sent' not in blk and '_lateness_record_sent' not in blk
       and 'table("alert_log")' not in blk)
 check("J6 LOCK: the purchase order goes through the ONE PO path — no insert into the PO tables here",
       "_supply_store.create_order(" in blk

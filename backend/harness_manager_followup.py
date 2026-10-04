@@ -313,18 +313,24 @@ check("I2 ... and does not roll its own DM-∪-above walk", '"above"' not in _bl
       and "org_chain" not in _blk)
 check("I3 recipients come from the org tree helper, never a typed list",
       "_managers_above_dm(" in _blk)
-check("I4 dedup rows go through the EXISTING alert_log helpers under this module's own scope",
-      "_lateness_already_sent(so, oid, _fu.ALERT_SCOPE" in _blk
-      and "_lateness_record_sent(so, oid, _fu.ALERT_SCOPE" in _blk)
+check("I4 delivery and the dedup record go through the ONE home under this module's own scope "
+      "(mig 1051: the record names the channel that carried it, so a failed channel retries)",
+      "_delivery.deliver_digests(" in _blk and "_fu.ALERT_SCOPE" in _blk
+      and "_lateness_already_sent" not in _blk and "_lateness_record_sent" not in _blk)
 check("I5 no new alert table is introduced", "alert_log" not in _blk)
 check("I6 the due-time rule is the shared one, not a comparison written here",
       "_md.due_now(" in _blk)
+_DELIVERY = code_text("app/modules/notify/digest_delivery.py")
 check("I7 WhatsApp goes through the window-safe home, NEVER send_text -- a free-form 10:30 send "
-      "returns 200 with a wamid and Meta silently drops it (the 2026-08-05 incident)",
-      "send_document_detailed" in _blk and "send_text" not in _blk)
+      "returns 200 with a wamid and Meta silently drops it (the 2026-08-05 incident). Since mig "
+      "1051 the ladder lives in the ONE delivery home, so this holds for every sweep at once",
+      "send_document_detailed" in _DELIVERY and "send_text" not in _DELIVERY
+      and "send_document_detailed" not in _blk)
 check("I8 a dedup row is written only when a channel actually DELIVERED, so an unconfigured "
-      "channel cannot mark a follow-up sent and hide it tomorrow",
-      "if delivered:" in _blk)
+      "channel cannot mark a follow-up sent and hide it tomorrow -- and since mig 1051 the row "
+      "names THAT channel, so a channel that failed is still owed the finding",
+      'if not leg["delivered"]:' in _DELIVERY and "continue" in _DELIVERY
+      and "_log.record_sent(" in _DELIVERY)
 check("I9 the manual trigger DEFAULTS TO A DRY RUN", "dry_run=not send" in _blk)
 check("I10 the cron entrypoint is secret-gated", "verify_notify_secret(x_notify_secret)" in _blk)
 check("I11 a queue whose read FAILED reports truncated rather than 'there is none' -- absence is "
@@ -378,7 +384,7 @@ check("I19 the module is PURE: no DB, no network, no framework at import time",
       not any(s in _fu_text for s in ("import requests", "supabase", "fastapi", "httpx")))
 check("I20 LOCK: the sweep does not build its own digest text -- one renderer, so email and "
       "WhatsApp cannot drift",
-      _blk.count("_fu.build_digest(") == 2 and "<table" not in _blk)
+      _blk.count("_fu.build_digest(") == 1 and "<table" not in _blk)
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 for f in FAIL:

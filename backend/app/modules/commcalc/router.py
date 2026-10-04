@@ -17504,10 +17504,10 @@ async def _run_manager_followup_alerts(org_id_filter=None, respect_enabled=True,
     """The daily Follow Up With Managers sweep: ONE digest per manager of the work their stores owe,
     oldest first, with anything past the escalation age also reaching the manager ABOVE them.
     Recipients, dedup, channels and the due-time rule all come from `manager_digest`. NEVER raises."""
-    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
-                                             _lateness_already_sent, _lateness_record_sent)
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
     from app.modules.commcalc import manager_digest as _md
     from app.modules.commcalc import manager_followup as _fu
+    from app.modules.notify import digest_delivery as _delivery
     from app.modules.notify.channels import email_resend, whatsapp_meta
     from app.core.base_url import base_url
     root = get_supabase()
@@ -17550,55 +17550,21 @@ async def _run_manager_followup_alerts(org_id_filter=None, respect_enabled=True,
         stores = {i["store_code"] for i in follow if i.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
         labels = _fu.source_labels()
+        def _build(name, its, _t=summary["totals"], _l=labels, _k=link, _u=meta["truncated"]):
+            return _fu.build_digest(name, its, totals=_t, labels=_l, link=_k, unavailable=_u)
+
         plan = _md.plan_digests(
-            follow, hierarchy, today, scope=_fu.ALERT_SCOPE,
-            build=lambda name, its: _fu.build_digest(name, its, totals=summary["totals"],
-                                                     labels=labels, link=link,
-                                                     unavailable=meta["truncated"]),
+            follow, hierarchy, today, scope=_fu.ALERT_SCOPE, build=_build,
             key_parts=_fu.key_parts, channels=cfg["channels"])
-        sent = skipped = 0
-        planned = []
-        for dg in plan["digests"]:
-            addrs = dg.get("addresses") or ({"email": dg["to"]} if dg.get("to") else {})
-            new_items = [it for it in dg["items"]
-                         if not _lateness_already_sent(so, oid, _fu.ALERT_SCOPE, it["ref_key"])]
-            if not new_items:
-                skipped += 1
-                planned.append({"to": dg["to"], "addresses": addrs, "already_sent": True})
-                continue
-            built = _fu.build_digest(dg["to_name"], new_items, totals=summary["totals"],
-                                     labels=labels, link=link, unavailable=meta["truncated"])
-            planned.append({"to": dg["to"], "addresses": addrs, "already_sent": False,
-                            "subject": built["subject"],
-                            "items": [{"store_code": i["store_code"], "source": i["source"],
-                                       "open": i["open"], "oldest_days": i["oldest_days"],
-                                       "band": i["band"], "escalated": i["escalated"]}
-                                      for i in new_items]})
-            if dry_run:
-                continue
-            delivered = []
-            if "email" in addrs and email_ok:
-                try:
-                    await email_resend.send_email(to=addrs["email"], subject=built["subject"],
-                                                  html=built["html"])
-                    delivered.append("email")
-                except Exception as e:
-                    print(f"WARN manager follow-up email to {addrs['email']} failed: {e}")
-            if "whatsapp" in addrs and wa_ok:
-                try:
-                    # data=b"" is the text-only rung: a business-initiated 10:30 message takes the
-                    # approved template, never a free-form text Meta accepts and silently drops.
-                    res = await whatsapp_meta.send_document_detailed(
-                        addrs["whatsapp"], b"", "text/plain", "followup.txt", built["text"])
-                    if res.get("message_id"):
-                        delivered.append("whatsapp")
-                except Exception as e:
-                    print(f"WARN manager follow-up WhatsApp to {addrs['whatsapp']} failed: {e}")
-            if delivered:
-                for it in new_items:
-                    _lateness_record_sent(so, oid, _fu.ALERT_SCOPE, it["ref_key"],
-                                          addrs.get("email") or addrs.get("whatsapp"))
-                sent += 1
+        # ONE home for "carry it and record what each channel did" — see notify/digest_delivery.py.
+        # STRUCTURED preview rows, never pre-joined display text: the view owns presentation.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, _fu.ALERT_SCOPE, plan["digests"], build=_build,
+            wa_filename="followup.txt",
+            channels_ok={"email": email_ok, "whatsapp": wa_ok}, dry_run=dry_run,
+            preview_item=lambda i: {"store_code": i["store_code"], "source": i["source"],
+                                    "open": i["open"], "oldest_days": i["oldest_days"],
+                                    "band": i["band"], "escalated": i["escalated"]})
         results.append({"org_id": oid, "sent": sent, "skipped": skipped,
                         "followups": len(follow),
                         "escalated": sum(1 for i in follow if i["escalated"]),
@@ -43918,8 +43884,8 @@ async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True,
     per flagged store, plans one digest per manager, and sends them deduped via storeops.alert_log
     (scope 'epay_discrepancy', ref_key incorporating tenant+store+date+kind so a discrepancy escalates
     once/day). Marks the run on the tenant row. NEVER raises."""
-    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
-                                              _lateness_already_sent, _lateness_record_sent)
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
+    from app.modules.notify import digest_delivery as _delivery
     from app.modules.commcalc import epay_alerts as _ea
     from app.modules.notify.channels import email_resend
     root = get_supabase()
@@ -43953,30 +43919,14 @@ async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True,
         stores = {f["store_code"] for f in flags if f.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
         plan = _ea.plan_emails(flags, hierarchy, today)
-        sent = skipped = 0
-        planned = []
-        for dg in plan["digests"]:
-            # Dedup per (store, date, kind) for THIS recipient — keep only items not already sent today,
-            # so a discrepancy escalates once/day and a NEW gap found later the same day still sends.
-            new_items = [it for it in dg["items"]
-                         if not _lateness_already_sent(so, oid, "epay_discrepancy", it["ref_key"])]
-            if not new_items:
-                skipped += 1
-                planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
-                continue
-            built = _ea.build_digest(dg["to_name"], new_items)
-            planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
-                            "items": [f"{i['store_code']} {i['close_date']} {i['kind']}" for i in new_items]})
-            if dry_run:
-                continue
-            if email_ok:
-                try:
-                    await email_resend.send_email(to=dg["to"], subject=built["subject"], html=built["html"])
-                    for it in new_items:
-                        _lateness_record_sent(so, oid, "epay_discrepancy", it["ref_key"], dg["to"])
-                    sent += 1
-                except Exception:
-                    pass
+        # Dedup per (store, date, kind) for THIS recipient ON THIS CHANNEL — a discrepancy escalates
+        # once a day, a NEW gap found later the same day still sends, and a channel that failed is
+        # still owed it. One home: notify/digest_delivery.py.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, "epay_discrepancy", plan["digests"], build=_ea.build_digest,
+            wa_filename="epay-discrepancies.txt",
+            channels_ok={"email": email_ok, "whatsapp": False}, dry_run=dry_run,
+            preview_item=lambda i: f"{i['store_code']} {i['close_date']} {i['kind']}")
         if not dry_run:
             _epay_mark_run(so, oid, today,
                            f"sent {sent}, skipped {skipped}, {len(flags)} flagged store-day(s)")
@@ -44354,8 +44304,8 @@ async def _run_zero_sales_alerts(org_id_filter=None, respect_enabled=True, dry_r
     its own surface (§20 import health), and mailing a District Manager about it as if it were a
     sales figure is exactly the false chase this report exists to prevent. The count of such scopes
     rides in the digest footer so a thin email is never read as a healthy estate."""
-    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
-                                             _lateness_already_sent, _lateness_record_sent)
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
+    from app.modules.notify import digest_delivery as _delivery
     from app.modules.notify.channels import email_resend
     root = get_supabase()
     so = root.schema("storeops")
@@ -44397,34 +44347,19 @@ async def _run_zero_sales_alerts(org_id_filter=None, respect_enabled=True, dry_r
         stores = {i["store_code"] for i in items if i.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
         plan = _zs.plan_emails(items, hierarchy, today.isoformat(), not_assessed=not_assessed)
-        sent = skipped = 0
-        planned = []
-        for dg in plan["digests"]:
-            new_items = [it for it in dg["items"]
-                         if not _lateness_already_sent(so, oid, _zs.ALERT_SCOPE, it["ref_key"])]
-            if not new_items:
-                skipped += 1
-                planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
-                continue
-            built = _zs.build_digest(dg["to_name"], new_items, not_assessed=not_assessed)
-            # STRUCTURED, never a pre-joined display string. The dry-run preview is rendered by a
-            # human-facing screen, and a backend that ships formatted text forces that screen to
-            # either print the raw payload or re-parse prose. The view owns presentation.
-            planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
-                            "items": [{"store_code": i["store_code"], "grain": i["grain"],
-                                       "label": i["label"], "zero_days": i["zero_days"]}
-                                      for i in new_items]})
-            if dry_run:
-                continue
-            if email_ok:
-                try:
-                    await email_resend.send_email(to=dg["to"], subject=built["subject"],
-                                                  html=built["html"])
-                    for it in new_items:
-                        _lateness_record_sent(so, oid, _zs.ALERT_SCOPE, it["ref_key"], dg["to"])
-                    sent += 1
-                except Exception:
-                    pass
+
+        def _build_zs(name, its, _na=not_assessed):
+            return _zs.build_digest(name, its, not_assessed=_na)
+
+        # STRUCTURED preview rows, never a pre-joined display string: a backend that ships formatted
+        # text forces the screen to print the raw payload or re-parse prose. The view owns
+        # presentation. Delivery and the per-channel record: notify/digest_delivery.py.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, _zs.ALERT_SCOPE, plan["digests"], build=_build_zs,
+            wa_filename="zero-sales.txt",
+            channels_ok={"email": email_ok, "whatsapp": False}, dry_run=dry_run,
+            preview_item=lambda i: {"store_code": i["store_code"], "grain": i["grain"],
+                                    "label": i["label"], "zero_days": i["zero_days"]})
         results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(items),
                         "not_assessed": not_assessed, "email_configured": email_ok,
                         "planned": planned if dry_run else None})
