@@ -834,17 +834,23 @@ async def _push_accessory_pos(org_id, cfg, created):
         out["skipped"] = f"the {route['kind']} route is not one a sweep drives"
         return out
 
-    token = ""
+    # The token is ASKED FOR, never read from a column. Since 2026-01-01 a vendor API credential is
+    # a client id and secret exchanged for a ~24h token, so a caller that read a stored string
+    # would be correct only until that token expired. `api_credential` is the one home for the
+    # question and mints on demand (index §51.2).
+    from app.modules.supply import api_credential as _cred
     try:
         login = _supply_store.login_row_full(root, org_id, (vendor or {}).get("data_source_id"))
-        token = str((login or {}).get("password") or "")
     except Exception as e:
         out["skipped"] = f"the vendor credential is unreadable: {str(e)[:120]}"
         return out
+    got = await _cred.access_token(root, org_id, login, (route.get("config") or {}).get("host"))
+    token = got["token"]
     if not token:
-        out["skipped"] = ("no credential is stored for this vendor — the admin API token goes in "
-                          "its login row, never in config")
+        out["skipped"] = got["error"] or "no usable credential for this vendor"
         return out
+    if got["error"]:                      # minted but not cached — usable now, say so
+        out["credential_note"] = got["error"]
 
     dialect = str((route.get("config") or {}).get("dialect") or "")
     if dialect != _shopify.DIALECT:

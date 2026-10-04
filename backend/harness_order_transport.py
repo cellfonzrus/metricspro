@@ -43,6 +43,7 @@ sys.path.insert(0, HERE)
 
 from app.modules.supply import order_transport as OT          # noqa: E402
 from app.modules.supply import shopify_draft_order as SH       # noqa: E402
+from app.modules.supply import api_credential as CRED           # noqa: E402
 
 passed, failed = 0, 0
 
@@ -249,18 +250,30 @@ def _run(cfg, po_rows, created, *, vendor=VENDOR, token="shpat_test", push_resul
         return push_result or {"ok": True, "external_ref": "D1", "external_url": "https://x/i",
                                "external_name": "#D1", "error": ""}
 
-    keep = (R.get_supabase, SS.vendor_by_id, SS.login_row_full, R._shopify.push_draft_order)
+    import app.modules.supply.api_credential as CR
+
+    async def fake_token(_c, _o, login, host, **kw):
+        calls.append({"minted_for": host})
+        return ({"token": token, "error": "", "minted": True} if token
+                else {"token": "", "error": "no API credential is stored for this vendor",
+                      "minted": False})
+
+    keep = (R.get_supabase, SS.vendor_by_id, SS.login_row_full,
+            R._shopify.push_draft_order, CR.access_token)
     R.get_supabase = lambda: client
     SS.vendor_by_id = lambda *a, **k: vendor
-    SS.login_row_full = lambda *a, **k: ({"password": token} if token else {})
+    SS.login_row_full = lambda *a, **k: ({"id": "src1", "username": "cid", "password": "csec"}
+                                         if token else {})
     R._shopify.push_draft_order = fake_push
+    CR.access_token = fake_token
     try:
         out = asyncio.get_event_loop().run_until_complete(
             R._push_accessory_pos(ORG, cfg, created))
     finally:
         (R.get_supabase, SS.vendor_by_id, SS.login_row_full,
-         R._shopify.push_draft_order) = keep
-    return out, client, calls
+         R._shopify.push_draft_order, CR.access_token) = keep
+    pushes = [c for c in calls if "minted_for" not in c]
+    return out, client, pushes
 
 
 CFG_PUSH = {"po_mode": "draft_push", "accessory_vendor_id": "v1"}
@@ -363,6 +376,86 @@ with _tf.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") a
 ok("order_transport" not in code_text(_probe),
    "F-armed code_text strips comments AND docstrings, so a rule ABOUT a pattern is not the pattern")
 os.unlink(_probe)
+
+# ── G — the credential home: a token is ASKED FOR, never read from a column ─────────────────────
+print("\n§G  the credential (client id + secret -> a short-lived token)")
+import json as _json
+import time as _time
+
+NOW = 1_000_000.0
+FRESH = {"id": "s1", "username": "cid", "password": "csec",
+         "session_state": _json.dumps({"access_token": "tok-A", "expires_at": NOW + 86400})}
+STALE = dict(FRESH, session_state=_json.dumps({"access_token": "tok-A",
+                                               "expires_at": NOW + 60}))
+NONE_ = {"id": "s1", "username": "cid", "password": "csec"}
+
+ok(CRED.usable(FRESH, now=NOW) == "tok-A", "G1 a token with hours left is used as it is")
+ok(CRED.usable(STALE, now=NOW) == "",
+   "G2 a token expiring within the refresh margin is NOT used — one that dies mid-request is a "
+   "failure a human has to read about")
+ok(CRED.usable(NONE_, now=NOW) == "", "G3 no cached token, nothing to use")
+ok(CRED.usable(dict(FRESH, session_state="{not json"), now=NOW) == "",
+   "G4 an unreadable cache is the same as none — it must cause a mint, never an exception on a "
+   "path whose job is to send an order")
+ok(CRED.cached(dict(FRESH, session_state={"access_token": "t", "expires_at": NOW + 99999}))
+   ["access_token"] == "t", "G5 the cache is read whether it arrives as JSON text or a dict")
+ok(CRED.has_credential(NONE_) and not CRED.has_credential({"username": "cid"}),
+   "G6 'can we mint' needs BOTH halves — a cached token alone does not count, it expires")
+ok(CRED.mint_body(NONE_) == {"client_id": "cid", "client_secret": "csec",
+                             "grant_type": "client_credentials"},
+   "G7 the exchange asks for exactly the client-credentials grant")
+ok(CRED.token_endpoint("x.myshopify.com") == "https://x.myshopify.com/admin/oauth/access_token",
+   "G8 against the store's own token endpoint")
+
+patch = CRED.store_patch({"access_token": "tok-B", "expires_in": 86399, "scope": "write_draft_orders"},
+                         now=NOW)
+blob = _json.loads(patch["session_state"])
+ok(list(patch) == ["session_state"],
+   "G9 an exchange writes back ONLY the cache — rewriting the credential on a read path is how "
+   "credentials get lost")
+ok(abs(blob["expires_at"] - (NOW + 86399)) < 1, "G10 the expiry is absolute, not a duration")
+ok(CRED.store_patch({"access_token": "t", "expires_in": 999_999_999}, now=NOW)
+   and _json.loads(CRED.store_patch({"access_token": "t", "expires_in": 999_999_999},
+                                    now=NOW)["session_state"])["expires_at"]
+   <= NOW + CRED.MAX_LIFETIME_SECONDS,
+   "G11 a nonsense lifetime is capped — a vendor must not pin a dead token in place for a year")
+ok(CRED.store_patch({"expires_in": 99}) == {}, "G12 no token, nothing written")
+ok(CRED.store_patch({"access_token": "t", "expires_in": "oops"}, now=NOW)
+   and _json.loads(CRED.store_patch({"access_token": "t", "expires_in": "oops"},
+                                    now=NOW)["session_state"])["expires_at"] == NOW,
+   "G13 an unparseable lifetime expires immediately rather than never")
+
+d = CRED.describe(FRESH, now=NOW)
+ok(d["has_credential"] and d["has_token"] and d["usable"] and d["expires_in"] > 0,
+   "G14 a screen can learn that a credential exists and when it expires")
+ok("access_token" not in _json.dumps(d) and "tok-A" not in _json.dumps(d),
+   "G15 and NEVER the token itself")
+
+cred_src = code_text(os.path.join(APP, "modules", "supply", "api_credential.py"))
+ok(cred_src.count("client_secret") == 1 and "password" in cred_src,
+   "G16 the secret is named in ONE place in the home — the exchange body")
+ok("res.text" not in cred_src and "res.json()" in cred_src,
+   "G17 a refused exchange never echoes the response body — it can contain what was sent")
+
+_rt = code_text(os.path.join(APP, "modules", "storevisit", "router.py"))
+ok("_cred.access_token(" in _rt and '.get("password")' not in _rt,
+   "G18 LOCK: the sweep ASKS for a token — it never reads a credential column itself, which was "
+   "correct only while vendors issued permanent tokens")
+# Excused by name, with the reason written down: vision/google_sdm.py performs its own OAuth
+# exchange for a camera feed. It is not a vendor ORDER credential, shares no caller with one, and
+# predates this home. Any OTHER file that mints a token is the duplicate this lock exists to catch.
+CRED_EXCHANGE_EXCUSED = (
+    os.path.join(APP, "modules", "supply", "api_credential.py"),   # the one home
+    os.path.join(APP, "modules", "vision", "google_sdm.py"),       # camera OAuth, not an order route
+)
+_others = [f for f in py_files() if f not in CRED_EXCHANGE_EXCUSED
+           and re.search(r"grant_type|admin/oauth/access_token", code_text(f))]
+ok(not _others, f"G19 LOCK: ONE place performs a vendor-order credential exchange {_others}")
+ok(all(os.path.exists(f) for f in CRED_EXCHANGE_EXCUSED),
+   "G19b every excused file still exists — a stale excuse is a hole in the lock")
+ok(bool(re.search(r"grant_type|admin/oauth/access_token",
+                  'body = {"grant_type": "client_credentials"}')),
+   "G19-armed the exchange scan matches a real second exchange")
 
 print("\n" + "=" * 78)
 print(f"{passed} passed, {failed} failed")
