@@ -75,6 +75,7 @@ VA_PATH = "app/modules/storevisit/visit_alerts.py"
 RT_PATH = "app/modules/storevisit/router.py"
 MD_PATH = "app/modules/commcalc/manager_digest.py"
 SUPPLY_PATH = "app/modules/supply/store.py"
+OT_PATH = "app/modules/supply/order_transport.py"   # the one home for a vendor's order route (mig 1053)
 MIG = "../database/migrations/1047_store_visit_alerts.sql"
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -306,9 +307,19 @@ check("F8 the lines are stably ordered, so one order reads the same twice",
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n== G. the purchase order is a DRAFT, and never claims a price it does not have ==")
-check("G1 there is no 'submit' mode — no transport to a supplier exists, and a mode that silently "
-      "did nothing would be worse than refusing the word",
-      "submit" not in V.PO_MODES and set(V.PO_MODES) == {"off", "draft"})
+# RE-POINTED 2026-10-04 (mig 1053), not weakened. A transport to a vendor's own store NOW exists,
+# so the old wording ("no transport exists") was about to become a comforting falsehood. The RULING
+# it protected is unchanged and is asserted harder here: there is still no 'submit', and the one
+# mode that reaches the vendor creates a DRAFT on their side — order_transport.push_enabled refuses
+# any route that would PLACE an order, however the tenant configures it.
+check("G1 there is still no 'submit' mode — the only mode that reaches a vendor DRAFTS there, and "
+      "a route that would place an order is refused for an unattended sweep",
+      "submit" not in V.PO_MODES and set(V.PO_MODES) == {"off", "draft", "draft_push"}
+      and set(V.PO_DRAFT_MODES) == {"draft", "draft_push"})
+_ot_src = open(OT_PATH, encoding="utf-8").read()
+check("G1b the refusal is in the ONE home, keyed on the route placing an order — not on a mode "
+      "name this file could rename out from under it",
+      "sends_on_its_own" in _ot_src and "def push_enabled" in _ot_src)
 po = V.po_draft(lines, "vend-1", "Supplier",
                 unit_costs={"clear case": 3.5}, ship_to_store="S1", market="M")
 check("G2 a priced line is extended by quantity",
@@ -429,11 +440,23 @@ check("J5 LOCK: the dedup trail is the ONE send record, never a second insert �
       '_delivery.deliver_digests(' in blk
       and '_lateness_already_sent' not in blk and '_lateness_record_sent' not in blk
       and 'table("alert_log")' not in blk)
-check("J6 LOCK: the purchase order goes through the ONE PO path — no insert into the PO tables here",
+# RE-POINTED 2026-10-04 (mig 1053): the push step reads the PO it just wrote and stamps the
+# vendor's reference on it. That is not a second CREATION path, which is what this lock is for, so
+# the two reads and the one stamp are named here rather than the lock being loosened to "anything
+# goes". A bare insert into either table still fails.
+_po_reads = ('table("purchase_order").select("store_visit_id")',
+             'table("purchase_order")\n                   .select("id,po_number,notes,external_ref")',
+             'table("purchase_order_line")\n                     .select("device_model,qty_ordered,unit_cost")',
+             'table("purchase_order").update(patch)')
+_blk_po = blk
+for _r in _po_reads:
+    _blk_po = _blk_po.replace(_r, "")
+check("J6 LOCK: a purchase order is CREATED only through the ONE PO path — this file inserts into "
+      "neither PO table, and the push step only stamps the vendor's reference on a PO already written",
       "_supply_store.create_order(" in blk
-      and 'table("purchase_order")' not in blk.replace(
-          'table("purchase_order").select("store_visit_id")', "")
-      and "purchase_order_line" not in blk)
+      and 'table("purchase_order")' not in _blk_po
+      and "purchase_order_line" not in _blk_po
+      and ".insert(" not in blk)
 check("J7 LOCK: the ONE PO path still numbers from the ONE numbering home",
       "_next_po_number" in sup and "create_order" in sup)
 check("J8 LOCK: the supply-cart-only columns are written ONLY for a supply cart, so a caller on a "

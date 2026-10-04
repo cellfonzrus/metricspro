@@ -8,6 +8,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
 from app.core.database import get_supabase
+# The ONE dialect module for a vendor order API. WHICH dialect a vendor speaks is a config value
+# read through supply/order_transport, never a name decided here (RULE TWO).
+from app.modules.supply import shopify_draft_order as _shopify
 from app.core.schemas import LaxModel
 from datetime import datetime, timezone
 import uuid
@@ -721,11 +724,13 @@ def _accessory_po_for_visits(org_id, cfg, visits, accessory_rows, who=None, dry_
     configured vendor through the ONE PO path (`supply/store.create_order`, mig-301 tables).
 
     IDEMPOTENT by `purchase_order.store_visit_id`: a visit gets one draft, however many times the
-    sweep runs. NOTHING IS SENT — `status` is 'draft' and no transport to the vendor exists. A
+    sweep runs. NOTHING IS ORDERED — `status` stays 'draft'. Raising the draft is all this does;
+    pushing it to the vendor is `_push_accessory_pos`, a separate step under `po_mode`
+    'draft_push', which creates a DRAFT on the vendor's side and still places nothing. A
     tenant with `po_mode` 'off' (the default, and what an unconfigured vendor resolves to) gets
     none at all, and the reason rides in the result."""
     from app.modules.storevisit import visit_alerts as _va
-    if cfg["po_mode"] != "draft":
+    if cfg["po_mode"] not in _va.PO_DRAFT_MODES:
         return {"created": [], "skipped": "po_mode is off",
                 "reason": cfg.get("po_mode_reason")}
     vmap = {v.get("id"): v for v in visits}
@@ -792,6 +797,104 @@ def _accessory_po_for_visits(org_id, cfg, visits, accessory_rows, who=None, dry_
             "status": "draft", "sent_to_vendor": False}
 
 
+
+async def _push_accessory_pos(org_id, cfg, created):
+    """Push each freshly raised draft PO to the vendor over the route THAT VENDOR declares.
+
+    The route is read once from `supply/order_transport.transport_for` — this function knows no
+    vendor, store or dialect by name (RULE TWO), and decides nothing about whether sending is
+    allowed: `order_transport.push_enabled` rules on that, and refuses any route that would PLACE
+    an order rather than draft one.
+
+    IDEMPOTENT by `purchase_order.external_ref` (mig 1053): a PO that already carries one is never
+    pushed again, because the vendor API has no idempotency key of its own. A push that fails is
+    RECORDED on the PO in `external_error`, not merely logged — a draft that never reached the
+    vendor must be visible, not silently absent (§19.41).
+    """
+    from app.modules.supply import order_transport as _ot
+    from app.modules.supply import store as _supply_store
+    out = {"pushed": [], "skipped": None, "failed": []}
+    if cfg.get("po_mode") != "draft_push" or not created:
+        out["skipped"] = "po_mode does not ask for a push"
+        return out
+    root = get_supabase()
+    vendor = None
+    try:
+        vendor = _supply_store.vendor_by_id(root, org_id, cfg["accessory_vendor_id"])
+    except Exception as e:
+        out["skipped"] = f"the vendor row is unreadable: {str(e)[:120]}"
+        return out
+    route = _ot.transport_for(vendor)
+    ok, why = _ot.push_enabled(route, True)
+    if not ok:
+        out["skipped"] = why
+        return out
+    if route["kind"] != "api":
+        # A portal route is a scripted browser walk and is driven by a person, not by this sweep.
+        out["skipped"] = f"the {route['kind']} route is not one a sweep drives"
+        return out
+
+    token = ""
+    try:
+        login = _supply_store.login_row_full(root, org_id, (vendor or {}).get("data_source_id"))
+        token = str((login or {}).get("password") or "")
+    except Exception as e:
+        out["skipped"] = f"the vendor credential is unreadable: {str(e)[:120]}"
+        return out
+    if not token:
+        out["skipped"] = ("no credential is stored for this vendor — the admin API token goes in "
+                          "its login row, never in config")
+        return out
+
+    dialect = str((route.get("config") or {}).get("dialect") or "")
+    if dialect != _shopify.DIALECT:
+        out["skipped"] = f"no module speaks the dialect {dialect!r}"
+        return out
+
+    for rec in created:
+        po_id = (rec or {}).get("id") or (rec or {}).get("po_id")
+        if not po_id:
+            continue
+        try:
+            row = (root.schema("commcalc").table("purchase_order")
+                   .select("id,po_number,notes,external_ref").eq("org_id", org_id)
+                   .eq("id", po_id).limit(1).execute().data or [None])[0]
+        except Exception as e:
+            out["failed"].append({"po_id": po_id, "error": f"unreadable: {str(e)[:120]}"})
+            continue
+        if not row or str(row.get("external_ref") or "").strip():
+            continue                     # already pushed; the vendor has it
+        # The lines come from the PO we just wrote, not from the draft that produced it: what the
+        # vendor is shown must be what our books say, or the two drift the moment either is edited.
+        try:
+            lines = (root.schema("commcalc").table("purchase_order_line")
+                     .select("device_model,qty_ordered,unit_cost").eq("org_id", org_id)
+                     .eq("po_id", po_id).order("line_no").execute().data) or []
+        except Exception as e:
+            out["failed"].append({"po_id": po_id, "error": f"lines unreadable: {str(e)[:120]}"})
+            continue
+        res = await _shopify.push_draft_order(
+            route["config"], token, row,
+            [{"name": ln.get("device_model"), "qty": ln.get("qty_ordered"),
+              # A zero unit cost on an accessory line means "nobody could price it" — the draft PO
+              # records it as a floor (§47.16). Passing None keeps the dialect's "(price to
+              # confirm)" wording instead of asserting the item is free.
+              "unit_cost": (ln.get("unit_cost") if float(ln.get("unit_cost") or 0) > 0 else None)}
+             for ln in lines])
+        patch = ({"external_ref": res["external_ref"], "external_url": res["external_url"],
+                  "external_pushed_at": _now(), "external_error": None}
+                 if res["ok"] else {"external_error": res["error"][:500]})
+        try:
+            (root.schema("commcalc").table("purchase_order").update(patch)
+             .eq("org_id", org_id).eq("id", po_id).execute())
+        except Exception as e:
+            out["failed"].append({"po_id": po_id, "error": f"unrecordable: {str(e)[:120]}"})
+            continue
+        (out["pushed"] if res["ok"] else out["failed"]).append(
+            {"po_id": po_id, "po_number": row.get("po_number"),
+             "external_ref": res["external_ref"], "external_url": res["external_url"],
+             "error": res["error"] or None})
+    return out
 
 
 async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_run=True,
@@ -886,6 +989,10 @@ async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_
         # ── 2. the DRAFT purchase order, before the accessory notification names it ──────────
         po = _accessory_po_for_visits(oid, cfg, visits, acc_rows, who=who, dry_run=dry_run)
         res["accessory_po"] = po
+        # The push is a separate step on purpose: raising the draft here must not depend on the
+        # vendor's system being up, and a dry run never speaks to anybody.
+        if not dry_run:
+            po["vendor_push"] = await _push_accessory_pos(oid, cfg, po.get("created") or [])
 
         # ── 3. the separate accessory notification ──────────────────────────────────────────
         acc_lines = _va.accessory_lines(acc_rows, {v.get("id"): v for v in visits})

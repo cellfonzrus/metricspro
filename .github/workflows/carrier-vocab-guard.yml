@@ -682,6 +682,9 @@ jobs:
       - name: Run the Follow Up With Managers lock (the pending-job vocabulary is dereferenced from the compliance registry; an age we cannot read is unknown, never 0; unowned work is counted, not dropped; the dedup key re-escalates on ageing — index §47.14)
         working-directory: backend
         run: python3 harness_manager_followup.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the vendor order-route lock (one declared route per vendor, one API dialect selected by config, a credential never in config, a draft on the vendor's side and never a placed order — index §51, mig 1053)
+        working-directory: backend
+        run: python3 harness_order_transport.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the store-visit follow-through lock (DM-and-above is the default and cannot be lost; one fan-out, one dedup, one recipient list, one PO insert; the draft PO names an unpriced line rather than dropping it; no 'submit' mode — index §47.16)
         working-directory: backend
         run: python3 harness_storevisit_alerts.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

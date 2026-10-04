@@ -5636,6 +5636,8 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.purchase_order.external_ref` / `external_url` / `external_pushed_at` / `external_error` (mig `1053`) — **where a pushed draft landed on the VENDOR's side, and why one did not.** `external_ref` is the idempotency key, because the vendor API has none: a PO carrying one is never pushed again. A failure is recorded here, not only logged (§19.41) | `storevisit/router._push_accessory_pos` — the only writer | the same, as its idempotency read — §51 |
+| `commcalc.po_vendor.portal_config->order_transport` (JSON on an existing column — **no new column**) — **how an order reaches this vendor**: `none` / `portal` (derived from an existing `ordering` recipe) / `api` with a `dialect`, `host` and `version`. A credential here is REFUSED, never stored | the supply vendor editor (validated by `order_transport.validate_transport`) | `order_transport.transport_for` — the ONE resolver; locked by `harness_order_transport.py` (74) — §51 |
 | `commcalc.report_definitions` — gains **`arrears_days`** and **`empty_stale_after_days`** (mig `1042`): how many days late a source posts, and how long an unbroken run of zero-row pulls stays believable. Per org, per `report_key`, NULL inherits the house default in `empty_pull_verdict`. **No new table** — the day-grain sweep window is now `max(refresh_days, arrears_days)`, which is what stops a one-day window being asked of an in-arrears feed forever | mig `1042` (the house `comp_report` row set to 7); Connectors / report registry | `router._registry_report_cfg` via `_REGISTRY_SWEEP_COLS` → `epay_sweep._expand_jobs` (the window floor) and `epay_sweep._empty_cfg_evidence` → `empty_pull_verdict.classify_empty_pull` — §19.41 |
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
 | `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
@@ -6118,6 +6120,7 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **How does an order reach this vendor, and may a sweep send it?** — two separate facts: whether the route can reach them at all, and whether using it PLACES an order | `order_transport.transport_for(vendor)` + `push_enabled(route, switch)` | ONE home `supply/order_transport.py`; the only dialect is `supply/shopify_draft_order.py`, selected by a config VALUE (RULE TWO); lock `harness_order_transport.py` (74) — §51. Nothing is switched on: `po_mode` is `off` for every tenant and no vendor declares a route |
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
@@ -17506,3 +17509,100 @@ never reported. Five mutations armed, all caught.
 
 **No money math touched.** Every figure is a timestamp, a count or a lamp. Registry:
 `docs/SELF_HEALING_REGISTRY.md`. Index: §49.
+
+## 51. A VENDOR'S ORDER ROUTE — declared once, and it never places an order unattended (owner 2026-10-03/04, mig 1053)
+
+Owner: the store-visit accessory list should reach the vendor's own store. That vendor is a Shopify
+store the owner runs, so an admin API is available — the good case, because Shopify has no API for
+*buying from* a store, only for running one.
+
+**The class, not the instance.** The instance is one vendor with one API. The class is that **"how
+does an order reach this vendor" is a fact about that vendor and needs one home.** Before this,
+exactly one route existed — a scripted browser walk (`ordering_logic.parse_recipe`, §41) — and it
+was *implied* rather than declared, so a second route could only arrive as a sibling branch at every
+call site. §47.16 shipped the draft PO with the honest note that "no transport to a supplier's own
+store exists in this platform". This is that transport, and that note is corrected in migration 1053
+rather than left to mislead.
+
+### 51.1 One home: `supply/order_transport.py`
+
+`transport_for(vendor)` → `{kind, config, reason, can_send, sends_on_its_own}`. Pure; no I/O.
+
+| kind | where it comes from |
+|------|---------------------|
+| `none` | the house default, and what an unreadable or **invalid** declaration resolves to, with the reason carried. Refusing to send always beats guessing how. |
+| `portal` | **derived** from an `ordering` recipe the vendor already carries (§41) — no existing vendor has to restate its route to keep it. |
+| `api` | declared on `commcalc.po_vendor.portal_config->order_transport`, naming a `dialect`, `host` and `version`. |
+
+**RULE TWO throughout:** no vendor, store, brand or dialect name is branched on in code. The dialect
+is a *value* in a config row.
+
+**`can_send` and `sends_on_its_own` are two facts, deliberately.** The first is "can this route
+reach the vendor at all"; the second is "does using it PLACE an order". `push_enabled(route, switch)`
+requires the tenant's switch ON, the route reachable, **and the route not to place an order** — so a
+route that would spend money is refused for an unattended sweep however loudly it is configured. A
+person drives that one.
+
+**A credential in a declaration is an ERROR, not something stripped quietly** — stripping teaches
+whoever typed it that it was accepted. The token lives in the vendor's `commcalc.data_source` login
+row (`po_vendor.data_source_id`), in a column of `commcalc/router._SOURCE_SECRETS`, so it never
+leaves the backend and never appears in a read. Same posture as `normalize_portal_config` (§41).
+
+### 51.2 One dialect: `supply/shopify_draft_order.py`
+
+A **draft order** is a basket the merchant reviews, edits and then invoices. Creating one places no
+order, charges nothing and emails nobody — **this module never calls the invoice-send endpoint**,
+which is the only call that would reach anyone, and a build lock proves nothing anywhere does.
+
+- `validate_target` refuses a pretty custom domain (a token is issued against the permanent
+  `*.myshopify.com` one, and a custom domain can be moved) and a malformed API version (a version
+  left to a default moves under you when the vendor retires it).
+- `draft_order_payload` is pure. An **unpriced** line is carried at `0.00` with "(price to confirm)"
+  in its title, never dropped — a basket missing the item nobody could price silently under-orders,
+  the same ruling the draft PO already follows (§47.16).
+- `read_result` keeps the reference, the URL and the name, and **nothing else**: the response echoes
+  the whole basket and keeping it would put the vendor's data in our PO row.
+
+### 51.3 Idempotency is ours, not theirs
+
+This API has no idempotency key, so a retry would make a second basket. The key is our own record:
+`commcalc.purchase_order.external_ref` (mig 1053, partial unique index). A PO carrying one is never
+pushed again. The tag on the vendor's basket (`metricspro-po-…`) is for the human looking at their
+admin — matching on a tag we would have to list-and-scan would be a second source of truth for a
+fact our own row already holds.
+
+**A failed push is RECORDED on the PO** (`external_error`), not merely logged: a draft that never
+reached the vendor must be visible rather than silently absent — the §19.41 ruling that a sweep's
+status is not a record of what it did. A failure records no reference, so the next run retries it.
+
+### 51.4 The mode, and what a dry run does
+
+`storeops.tenants.store_visit_accessory_po_mode` gains `draft_push` beside `off` and `draft`. There
+is still **deliberately no `submit`**. `draft_push` raises the draft here and creates a draft on the
+vendor's side; the push is a **separate step** (`storevisit/router._push_accessory_pos`) so that
+raising the draft never depends on the vendor's system being up, and **a dry run speaks to nobody**.
+
+### 51.5 The lock
+
+`backend/harness_order_transport.py` — **74 checks**, DB-free, stdlib only, in the
+`carrier-vocab-guard` job. §A the route resolves from config with a safe default · §B a credential in
+a declaration is refused, nested ones too · §C the dialect's host, version, money and unpriced-line
+rules · §D the three separate facts behind "may a sweep send this" · §E the **real**
+`_push_accessory_pos` over a stub client: pushed once, recorded, idempotent by `external_ref`, a
+refusal recorded on the PO, `draft` mode pushing nothing, no credential no push · §F six locks (one
+resolver, one dialect, no invoice-send anywhere, the dialect never reads a credential, no brand name
+in either home, the migration tied to the code), each with an armed control.
+
+**Two existing checks in `harness_storevisit_alerts.py` were RE-POINTED, not weakened**, because
+this change made their *wording* false while their *ruling* held: G1 asserted "no transport to a
+supplier exists" and now asserts that there is still no `submit` and that the refusal lives in
+`push_enabled` keyed on the route placing an order; J6 asserted "no PO table access here" and now
+asserts the narrower truth — a PO is **created** only through the one path, and the push step may
+only stamp a reference on a PO already written. 130 checks, green.
+
+### 51.6 Status
+
+Code is complete and proved. **Nothing is switched on**: `po_mode` stays `off` for every tenant, no
+vendor declares a route, and no credential is stored. Migration 1053 is **written and surfaced, not
+applied**. Still outstanding: the owner's Shopify admin API token and version, which go into Supabase
+by hand, never through chat.
