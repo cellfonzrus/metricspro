@@ -59,6 +59,11 @@ import functools
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
 FE = os.path.join(os.path.dirname(ROOT), "frontend", "src", "app", "(platform)", "commcalc")
@@ -67,7 +72,7 @@ DRILL = "modules/commcalc/commission_drilldown.py"
 ISR = "modules/commcalc/inventory_sold_recon.py"
 CORE = "modules/core/router.py"
 STOREOPS = "modules/storeops/router.py"
-HOME = "modules/commcalc/payout_audience.py"
+HOME = home_under_app("payout_audience")     # the graph is the one home for the ruling
 ROUTER = "modules/commcalc/router.py"
 # (file, function) → the dereference an EMPLOYEE-facing surface must carry
 SURFACES = {

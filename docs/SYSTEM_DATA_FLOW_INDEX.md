@@ -5636,6 +5636,7 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `module_graph.FACTS` (code registry — **no table**) — **which files answer the same question, and who reads each one.** `homes` is declared (a ruling cannot be inferred); `callers` is a SNAPSHOT derived from the AST import graph, so it cannot go stale by hand; `index` and `locks` point at the section documenting the fact and the harness enforcing it | code (`--bless` regenerates the snapshot; `harness_module_graph_guard.py` fails the build on any drift) | `connected()` / `impact_report()`; the ten locks that took their `HOME` off a literal (`home_under_app`, `homes_for`); `.github/workflows/module-graph-guard.yml` both jobs — §50 |
 | `commcalc.report_definitions` — gains **`arrears_days`** and **`empty_stale_after_days`** (mig `1042`): how many days late a source posts, and how long an unbroken run of zero-row pulls stays believable. Per org, per `report_key`, NULL inherits the house default in `empty_pull_verdict`. **No new table** — the day-grain sweep window is now `max(refresh_days, arrears_days)`, which is what stops a one-day window being asked of an in-arrears feed forever | mig `1042` (the house `comp_report` row set to 7); Connectors / report registry | `router._registry_report_cfg` via `_REGISTRY_SWEEP_COLS` → `epay_sweep._expand_jobs` (the window floor) and `epay_sweep._empty_cfg_evidence` → `empty_pull_verdict.classify_empty_pull` — §19.41 |
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
 | `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11. **Also gains the rest of the submit form (mig `1052`: `acc_sale`, the three counts, `remarks`, `envelope_picture`) plus the configured-tender jsonb**, so a blocked try can be resumed — read by `closing/unfinished_day.resume_entry` via `GET /closing/resume`, and by `_closing_summary_for_date` / `closing_rollup` / `_run_closing_missing_alerts` through `unfinished_day.describe` to tell "nobody submitted" apart from "submitted and sent back to recount" — §29.12 |
@@ -6122,6 +6123,7 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **What else answers this question?** — asked of a changed file, by the build. 12 facts / 72 edges today; a 13th connected piece cannot land without being registered and its siblings named | `module_graph.connected(path)` (role, question, homes, siblings, index refs, locks) | ONE home the graph; dereferenced by `harness_module_graph_guard.py` (316 checks, 9 armed controls) and by ten existing locks; reported per pull request by the `impact` job — §50. Found two locks no workflow ran (`harness_alert_autofix`, `harness_ingest_freshness`), both now wired |
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
@@ -17625,3 +17627,90 @@ never reported. Five mutations armed, all caught.
 
 **No money math touched.** Every figure is a timestamp, a count or a lamp. Registry:
 `docs/SELF_HEALING_REGISTRY.md`. Index: §49.
+
+## 50. THE MODULE GRAPH — "what else answers this question?", asked by the build (owner directive 2026-10-04)
+
+Owner: *"one hand does not talk to the other and we need to build a check mechanism via the index and
+registry we created that everytime an update or extension of a module is done all connected pieces get
+updated automatically, the tree should be interlinked properly."*
+
+**The class.** A shared fact gains a caller, or a second derivation, and nothing tells the author that
+other pieces answer the same question. It is how the alert send record reached FOUR implementations
+(§15.1), and the audit that followed found the same shape in three more places: `_caller` defined in
+8 files in 5 variants (marketing's copy has already lost the `"id"` field), HTML/PDF escaping written
+out in 8 files, the email transport touched in 16. The duplicate-check rule in `CLAUDE.md` was the only
+house rule with **no automated enforcement** — it was discipline, and discipline leaves no trace when
+skipped.
+
+**The second-order instance, which is the interesting one.** Fifteen `harness_*_lock.py` files each
+held their own `HOME = "modules/commcalc/line_class.py"` literal plus a hand-typed list of callers.
+That is fifteen private copies of "what depends on what" — the duplicate defect wearing the shape of
+its own cure. None was queryable, none was interlinked, every one was hand-maintained.
+
+### 50.1 One home for the graph
+
+`backend/app/modules/core/module_graph.py` — pure data and pure functions, stdlib only, so a lock may
+dereference it without importing the application. Per fact:
+
+| Field | Hand-declared or derived | Why |
+|-------|--------------------------|-----|
+| `homes` | **declared** | the file(s) allowed to answer this question. A ruling cannot be inferred. |
+| `callers` | **derived, snapshotted** | every file that imports a home and the name it binds it to. `harness_module_graph_guard.py` recomputes it from the import graph (AST, not grep — a docstring that mentions `alert_log` is not a dependency) and fails the build on any difference. |
+| `index` | declared | the section(s) here that document it. The guard checks each resolves. |
+| `locks` | declared | the harness(es) that enforce it. The forbidden-pattern rules **stay in those locks** — copying them here would be the very defect the file exists to stop. |
+
+Seeded with **12 facts and 72 edges**: `alert_send_record`, `alert_channel_ladder`, `feed_lineage`,
+`ma_reported_income`, `closing_cash_era`, `line_class`, `commission_ledger_identity`,
+`payout_audience`, `paramount_kpi`, `column_tolerance`, `multimonth_offer`, `landing_identity`.
+
+`connected(path)` answers "I am changing this file — what else is wired to it?" in one call;
+`impact_report(paths)` renders that for a human reading a pull request.
+
+### 50.2 The guard, and what each check would have caught
+
+`backend/harness_module_graph_guard.py` — **316 checks**, DB-free, run by
+`.github/workflows/module-graph-guard.yml`:
+
+- **A** the snapshot matches the real import graph. A NEW connected piece **fails the build**, naming
+  the siblings it now has to be true for. This is the mechanism the directive asks for.
+- **B** the name a caller binds a home to has not drifted (an alias rename, or a caller that dropped
+  the import while keeping its own copy, is a change to the wiring and gets reviewed).
+- **C** no caller merely *imports* a home — it must USE it. A dead import is a caller that has gone
+  back to deriving the fact itself.
+- **D/G** every home exists and is not a stub; one home answers one question; a home is never also
+  a caller of its own fact.
+- **E** INDEX INTERLINK — every index reference on a fact resolves to a real section of this file.
+  A fact documented nowhere is a fact the next person re-derives.
+- **F** LOCK INTERLINK — every lock a fact names exists **and is run by a workflow**. This check
+  found two that were not: `harness_alert_autofix.py` and `harness_ingest_freshness.py` only ever ran
+  when somebody ran them by hand. Both are now wired (`carrier-vocab-guard`, `lineage-guard`).
+- **H1/H2** no lock keeps a private HOME literal outside the graph, and a lock the graph names
+  dereferences it. **H2 is the anti-un-wiring for the graph itself** — writing a registry and leaving
+  the callers on their literals is not a fix (§19.18, three times).
+- **Z** nine armed controls: each check is re-run against a deliberately broken graph and must FAIL.
+  A check that cannot fail is not a check (§24).
+
+Ten locks were taken off their literals onto `home_under_app(key)` / `homes_for(key)` in the same
+change: `activation_event`, `any_columns`, `landing_identity`, `ledger_identity`, `line_class`,
+`ma_income_one_home`, `mi_residual_store_grain`, `multimonth_offer`, `paramount_kpi`,
+`payout_audience`. Three keep a declared HOME that is deliberately not a graph home, each excused by
+name with a reason (`tender_vocab` — a vocabulary inside a router, no import edge; `vendor_price_compare`
+— a directory; `operator_entry_enforcement` — a test org UUID).
+
+### 50.3 The second job: the hand that talks to the other hand
+
+`module-graph-guard.yml` has a **report-only** `impact` job that prints into the pull request summary
+every fact the changed files are wired to and every sibling that answers the same question. It never
+fails a build. The guard makes a new edge impossible to land silently; the impact report makes the
+existing edges impossible to miss.
+
+### 50.4 What this deliberately does NOT do
+
+It does not edit the connected pieces. Nothing can safely rewrite a caller, and a mechanism that
+pretended to would be worse than none. What breaks the "one hand does not talk to the other" loop is
+that the other hand is now **named, in CI, before the merge**.
+
+**The wider debt, for context.** CI runs **119 of 447** harnesses; the rest are registered on
+`backend/harness_unrun_pending.txt`, which `harness_ci_pipefail_lock.py` pins and allows only to
+SHRINK. Paying off the two locks check F found lowered that pin from 328 to **326**. Check F covers
+the locks the graph names; the debt list covers the rest.

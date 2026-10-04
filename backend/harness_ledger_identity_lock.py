@@ -49,10 +49,15 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BE_APP = os.path.join(ROOT, "backend", "app")
 FE = os.path.join(ROOT, "frontend", "src")
-HOME = "modules/commcalc/commission_ledger.py"
+HOME = home_under_app("commission_ledger_identity")   # the graph is the one home
 PERIOD_HOME = "modules/account/_period.py"
 ROUTER = "modules/commcalc/router.py"
 INTAKE = "modules/commcalc/onboarding_intake.py"
