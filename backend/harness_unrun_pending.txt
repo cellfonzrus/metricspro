@@ -23,7 +23,6 @@ harness_ai_assist_async.py
 harness_ai_guard_purposes.py
 harness_ai_meter_offloop.py
 harness_ai_usage.py
-harness_alert_autofix.py
 harness_ambiguous_tenant.py
 harness_approval_pay_cycle.py
 harness_approvals_adapters.py
@@ -160,7 +159,6 @@ harness_impersonation.py
 harness_import_batches.py
 harness_import_health.py
 harness_inactive_store_filter.py
-harness_ingest_freshness.py
 harness_ingest_partition_replace.py
 harness_intake_partial_save.py
 harness_inventory_sold_recon.py

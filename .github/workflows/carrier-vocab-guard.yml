@@ -211,6 +211,8 @@ on:
       # index §29.11 — the closing-refusal lock reads the router, the two pure modules, its own
       # proof, migration 1037 and the Management Review screen
       - "backend/harness_closing_submit_refusal.py"
+      - "backend/harness_closing_unfinished_day.py"
+      - "backend/app/modules/closing/unfinished_day.py"
       - "backend/app/modules/closing/submit_refusal.py"
       - "backend/app/modules/closing/dedup_key.py"
       - "backend/harness_report_kind_lock.py"
@@ -691,6 +693,9 @@ jobs:
       - name: Run the per-channel send-record lock (an alert's record names the CHANNEL that carried it, so a failed WhatsApp is still owed the finding; one send record, one delivery ladder, no sweep keeping a private copy — index §15.1, §15.2)
         working-directory: backend
         run: python3 harness_alert_channel_record.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the alert auto-fix lock (an alert that can be fixed says how, and a recorded silence suppresses nothing — index §15.1)
+        working-directory: backend
+        run: python3 harness_alert_autofix.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1003,6 +1008,27 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_submit_refusal.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE UNFINISHED-DAY LOCK (index §29.12) imports the real closing router (closing_resume,
+  # _log_attempt, _closing_summary_for_date), so it needs the backend's dependencies and its own job
+  # — the same reason closing-refusal-lock above has one. It FAILS THE BUILD if a blocked submit ever
+  # starts writing a provisional closing row (which would put money the gate has already judged wrong
+  # in front of all 51 readers of daily_closing), if the rep-facing resume endpoint ever reveals the
+  # POS figure or the variance, or if a caller re-derives "no closing row means nobody submitted"
+  # instead of asking closing/unfinished_day.
+  closing-unfinished-day-lock:
+    name: Unfinished closing day lock (a started day is never blank, and never money)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the unfinished-day lock (started-and-not-finished is its own state; an un-corrected entry reaches no money report — index §29.12)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_unfinished_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with

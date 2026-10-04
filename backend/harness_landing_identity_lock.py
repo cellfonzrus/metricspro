@@ -42,6 +42,11 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from app.modules.commcalc import landing_identity as LI          # stdlib + report_kinds only
 from app.modules.commcalc import column_mapping as CM
@@ -50,7 +55,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FE = os.path.join(ROOT, "frontend", "src")
 BE_APP = os.path.join(ROOT, "backend", "app")
 BE_CC = os.path.join(BE_APP, "modules", "commcalc")
-HOME = "modules/commcalc/landing_identity.py"
+HOME = home_under_app("landing_identity")    # the graph is the one home for the ruling
 SCREENLINK = "components/ScreenLink.tsx"
 SHOWS_IN = "components/ShowsIn.tsx"
 HOOK = "lib/report-kinds.ts"

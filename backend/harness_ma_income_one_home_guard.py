@@ -30,13 +30,17 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import homes_for  # noqa: E402
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
 
-HOMES = (
-    os.path.join("app", "modules", "account", "ma_store_pnl.py"),
-    os.path.join("app", "modules", "account", "residual_subs.py"),
-)
+# The ruling lives in the module graph (one home for "what else answers this question"), not in a
+# literal here — owner directive 2026-10-04.
+HOMES = tuple(os.path.join(*h.split("/")) for h in homes_for("ma_reported_income"))
 
 # ── CHECK 1 — an income total built from the MA money columns, outside the homes ─────────────────
 # (a) the shared component list aggregated directly;
