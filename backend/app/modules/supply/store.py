@@ -337,3 +337,18 @@ def set_favorite_qty(client, org_id, keys, qty):
     for k in keys:
         t(client, FAVORITE_TABLE).update({"reorder_qty": qty}).eq("org_id", org_id) \
             .eq("vendor_id", k["vendor_id"]).eq("item_key", k["item_key"]).execute()
+
+
+# ── the tenant's own store list (what the vendor's customer list is seeded from) ────────────────────
+STORE_SCHEMA = "storeops"
+STORE_TABLE = "stores"
+STORE_COLS = "store_code,address,market,phone,is_active"
+
+
+def load_store_roster(client, org_id, active_only=True):
+    """This org's stores, and ONLY this org's: the vendor customer export reads it, so a missing
+    org filter here would hand one tenant's addresses to another's vendor."""
+    q = (client.schema(STORE_SCHEMA).table(STORE_TABLE).select(STORE_COLS).eq("org_id", org_id))
+    if active_only:
+        q = q.eq("is_active", True)
+    return q.order("store_code").execute().data or []

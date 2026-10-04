@@ -5637,7 +5637,8 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 | Table | Written by | Read by |
 |-------|-----------|---------|
 | `commcalc.purchase_order.external_ref` / `external_url` / `external_pushed_at` / `external_error` (mig `1053`) — **where a pushed draft landed on the VENDOR's side, and why one did not.** `external_ref` is the idempotency key, because the vendor API has none: a PO carrying one is never pushed again. A failure is recorded here, not only logged (§19.41) | `storevisit/router._push_accessory_pos` — the only writer | the same, as its idempotency read — §51 |
-| `commcalc.po_vendor.portal_config->order_transport` (JSON on an existing column — **no new column**) — **how an order reaches this vendor**: `none` / `portal` (derived from an existing `ordering` recipe) / `api` with a `dialect`, `host` and `version`. A credential here is REFUSED, never stored | the supply vendor editor (validated by `order_transport.validate_transport`) | `order_transport.transport_for` — the ONE resolver; locked by `harness_order_transport.py` (74) — §51 |
+| `commcalc.po_vendor.portal_config->order_transport->customer` (JSON on the same existing column — **no new column, no new table**) — **who the order is FOR on the vendor's side**: `mode` `none`\|`per_store`, `email_domain`, `tags` (wholesale / retail — the vendor's price list and payment terms hang off them), `country_code`, `note`. `none` is the default and names nobody | the supply vendor editor (validated by `vendor_customer.validate_customer`, dereferenced by `order_transport.validate_transport`) | `vendor_customer.customer_for_store` — the ONE derivation, read by the customer export AND by every draft order; locked by `harness_order_transport.py` §I — §51.8 |
+| `commcalc.po_vendor.portal_config->order_transport` (JSON on an existing column — **no new column**) — **how an order reaches this vendor**: `none` / `portal` (derived from an existing `ordering` recipe) / `api` with a `dialect`, `host` and `version`. A credential here is REFUSED, never stored | the supply vendor editor (validated by `order_transport.validate_transport`) | `order_transport.transport_for` — the ONE resolver; locked by `harness_order_transport.py` (143) — §51 |
 | `commcalc.report_definitions` — gains **`arrears_days`** and **`empty_stale_after_days`** (mig `1042`): how many days late a source posts, and how long an unbroken run of zero-row pulls stays believable. Per org, per `report_key`, NULL inherits the house default in `empty_pull_verdict`. **No new table** — the day-grain sweep window is now `max(refresh_days, arrears_days)`, which is what stops a one-day window being asked of an in-arrears feed forever | mig `1042` (the house `comp_report` row set to 7); Connectors / report registry | `router._registry_report_cfg` via `_REGISTRY_SWEEP_COLS` → `epay_sweep._expand_jobs` (the window floor) and `epay_sweep._empty_cfg_evidence` → `empty_pull_verdict.classify_empty_pull` — §19.41 |
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
 | `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
@@ -6120,7 +6121,10 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
-| **How does an order reach this vendor, and may a sweep send it?** — two separate facts: whether the route can reach them at all, and whether using it PLACES an order | `order_transport.transport_for(vendor)` + `push_enabled(route, switch)` | ONE home `supply/order_transport.py`; the only dialect is `supply/shopify_draft_order.py`, selected by a config VALUE (RULE TWO); lock `harness_order_transport.py` (74) — §51. Nothing is switched on: `po_mode` is `off` for every tenant and no vendor declares a route |
+| **Who is this store on the vendor's side?** — the customer an order names, and the customer the vendor's own list is seeded with | `vendor_customer.customer_for_store(decl, store)` → `customer_rows` / `import_csv` | ONE home `supply/vendor_customer.py`, dereferenced by `GET /supply/vendors/{id}/customers[.csv]` and by `storevisit/router._push_accessory_pos`; lock `harness_order_transport.py` §I (27 checks) — §51.8 |
+| **What does this vendor charge for an item today, over its API route?** | `shopify_draft_order.read_products` → `catalog_rows` → `store.land_catalog(…, "api")` | the SAME lander and the SAME `commcalc.vendor_catalog_price` snapshot the kit upload and portal walk use; the reader judges no availability class, pack size or item key — `ordering_logic.normalize_catalog_row` does, for every route. Lock `harness_order_transport.py` §H — §51.7 |
+| **What bearer token do I use for this vendor right now?** | `api_credential.access_token(client, org_id, login_row, host)` | ONE home `supply/api_credential.py`; client id + secret on the vendor's `commcalc.data_source` row exchanged for a ~24h token, cached in `session_state`, re-minted inside the refresh margin. `describe()` never returns the token. Lock `harness_order_transport.py` §G — §51.6 |
+| **How does an order reach this vendor, and may a sweep send it?** — two separate facts: whether the route can reach them at all, and whether using it PLACES an order | `order_transport.transport_for(vendor)` + `push_enabled(route, switch)` | ONE home `supply/order_transport.py`; the only dialect is `supply/shopify_draft_order.py`, selected by a config VALUE (RULE TWO); lock `harness_order_transport.py` (143) — §51. Nothing is switched on: `po_mode` is `off` for every tenant and no vendor declares a route |
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
@@ -17584,7 +17588,7 @@ raising the draft never depends on the vendor's system being up, and **a dry run
 
 ### 51.5 The lock
 
-`backend/harness_order_transport.py` — **74 checks**, DB-free, stdlib only, in the
+`backend/harness_order_transport.py` — **143 checks**, DB-free, stdlib only, in the
 `carrier-vocab-guard` job. §A the route resolves from config with a safe default · §B a credential in
 a declaration is refused, nested ones too · §C the dialect's host, version, money and unpriced-line
 rules · §D the three separate facts behind "may a sweep send this" · §E the **real**
@@ -17600,9 +17604,76 @@ supplier exists" and now asserts that there is still no `submit` and that the re
 asserts the narrower truth — a PO is **created** only through the one path, and the push step may
 only stamp a reference on a PO already written. 130 checks, green.
 
-### 51.6 Status
+### 51.6 The credential: one home, minted on demand
 
-Code is complete and proved. **Nothing is switched on**: `po_mode` stays `off` for every tenant, no
-vendor declares a route, and no credential is stored. Migration 1053 is **written and surfaced, not
-applied**. Still outstanding: the owner's Shopify admin API token and version, which go into Supabase
-by hand, never through chat.
+`backend/app/modules/supply/api_credential.py` — **"what bearer token do I use right now?"**. Shopify
+stopped issuing permanent tokens to custom apps created from a store admin (the flow was removed
+2026-01-01); an app created in the Dev Dashboard carries a **client id + client secret** exchanged for
+a token that lives about 24 hours. A caller that read a stored string would therefore be correct only
+until the first expiry.
+
+- **Reuses the credential store, no new column**: the vendor's `commcalc.data_source` login row holds
+  `username` = client id, `password` = client secret, `session_state` = the minted token and its
+  expiry. All three are already in `commcalc/router._SOURCE_SECRETS`, so none is ever returned by a
+  read.
+- `access_token(client, org_id, login_row, host)` returns a usable token, minting when the cached one
+  is inside `REFRESH_MARGIN_SECONDS` of expiry. An unreadable cache means **absent**, never an error:
+  it causes a mint. `describe()` tells a screen that a credential exists and when it expires, and
+  **never the token**.
+- `mint_body` is the only place `client_secret` is named, and a refused exchange never echoes the
+  response body — it can contain what was sent.
+
+### 51.7 The vendor's catalog over the same route
+
+`shopify_draft_order.read_products` / `catalog_rows` read the vendor's product list through the SAME
+validated target the orders go to, and land through **`supply/store.land_catalog`** — the one lander
+the kit upload and the portal walk already use, with `source` = `api` (`vendor_catalog_price` needs no
+migration for it). One row per **variant**, because a variant is what gets priced and ordered.
+
+The reader REPORTS the vendor's facts (name, sku, price, compare-at price, quantity, inventory policy)
+and judges **none** of them: availability class, pack size, minimum order and the item key are all
+decided by `ordering_logic.normalize_catalog_row`, as they are for every other catalog route — a
+second judgement here would drift from the portal route's prices on the same comparison screen.
+
+| `POST /supply/vendors/{id}/catalog/api-read` — read this vendor's prices now over its declared API route | `supply/router.read_vendor_catalog_api` → `api_credential.access_token` → `shopify_draft_order.read_products` → `store.land_catalog(…, "api")` | the supply vendors page |
+
+### 51.8 Who the order is for: `supply/vendor_customer.py`
+
+Owner 2026-10-04: *"the store list from the metrics pro will be uploaded as a customer list in shopify
+also to enable placing an order … they have to set up as wholesale customers or retail customers to
+set up the payment method, once that is set up the order can be placed."*
+
+**The class, not the instance.** An order is placed FOR somebody, and who that somebody is on the
+vendor's side is a fact about the store. Two places deriving it differently is the drift the house
+rules forbid: the export would seed one address and the order would ask for another, and the vendor
+would hold two customers for one store with the payment terms on the wrong one. So the identity is
+derived once, by `customer_for_store`, and **both** callers dereference it.
+
+- **Config, never code, and no new column**: the rule lives inside the route it belongs to,
+  `po_vendor.portal_config.order_transport.customer` = `{mode, email_domain, tags, country_code,
+  note}`. `mode` `none` (the default) means an order names nobody and the export is refused with a
+  reason — never a guessed customer reaching a real vendor. `order_transport.validate_transport`
+  dereferences `vendor_customer.validate_customer`, so a rule added there is enforced without that
+  file being touched.
+- **Why a derived email**: `storeops.stores` carries no email, and the vendor matches a customer by
+  email, so one must exist and be STABLE — the store code at a tenant-declared domain, lower-cased
+  (a code differing only by case already produced a phantom store here, §19.x; it would produce a
+  twin customer the same way). It is a routing identity, not a mailbox invented for a person.
+- **No PII is invented**: the export carries what the store row already holds (code, address, phone)
+  plus the tenant's declared tags. `Accepts Email Marketing` is always `no`.
+- **The tenant decides wholesale vs retail**, not this platform: the tags ride into the vendor's own
+  customer list, and the price list and payment terms hang off them there.
+
+| `GET /supply/vendors/{id}/customers` · `GET /supply/vendors/{id}/customers.csv` — who each store is on the vendor's side, as JSON or in the vendor's own import columns; a store that cannot be named is REPORTED with the reason | `supply/router.vendor_customers` / `vendor_customers_csv` → `store.load_store_roster` (org-scoped) → `vendor_customer.customer_rows` / `import_csv` | the supply vendors page |
+
+Every read is org-scoped: `load_store_roster` filters `org_id`, so one tenant's addresses can never
+reach another tenant's vendor. The vendor roster was already strict (`store.load_vendors` filters
+`org_id` with no house-org fallback), which is why a tenant only ever sees its own suppliers.
+
+### 51.9 Status
+
+Code is complete and proved (`harness_order_transport.py`, **143 checks**: §G the credential home,
+§H the catalog read through the one lander, §I the customer home, each with armed controls).
+**Nothing is switched on**: `po_mode` stays `off` for every tenant, no vendor declares a route, and no
+credential is stored. Migration 1053 is **written and surfaced, not applied**. Still outstanding: the
+owner's Shopify **client id and client secret**, which go into Supabase by hand, never through chat.

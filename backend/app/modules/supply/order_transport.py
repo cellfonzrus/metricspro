@@ -34,6 +34,8 @@ Pure: no I/O, no client, no network. The caller fetches rows and does the sendin
 """
 from __future__ import annotations
 
+from app.modules.supply import vendor_customer as _customer   # the one home for "who is the customer"
+
 KINDS = ("none", "portal", "api")
 
 # An API dialect this platform can speak. A dialect the code does not implement resolves to `none`
@@ -98,6 +100,9 @@ def validate_transport(decl) -> list:
             if not _s(api.get("version")):
                 errors.append(f"{CONFIG_KEY}.api.version is required when kind is 'api' — an API "
                               f"version left to a default moves under you when the vendor retires it")
+    # The customer rule is NOT re-validated here — it is dereferenced from its own home, so a rule
+    # added there is enforced on this declaration without this file being touched.
+    errors += [f"{CONFIG_KEY}.{e}" for e in _customer.validate_customer(decl.get(_customer.CONFIG_KEY))]
     return errors
 
 
@@ -117,7 +122,11 @@ def _portal_route(vendor) -> dict:
 def transport_for(vendor) -> dict:
     """THE ANSWER, for one vendor row. Always a dict; never raises.
 
-    {kind, config, reason, can_send, sends_on_its_own}
+    {kind, config, reason, can_send, sends_on_its_own, customer}
+
+    `customer` is the declared rule for WHO the order is for, read by `vendor_customer` — carried
+    here rather than fetched separately so the export that seeds the vendor's customer list and the
+    order that names a customer can never read two different rules.
 
     `can_send` is whether this route can reach the vendor at all. `sends_on_its_own` is whether
     using it PLACES an order — false for a draft route, which is what makes a draft route safe to
@@ -139,6 +148,7 @@ def transport_for(vendor) -> dict:
             # EXPLICIT, because it turns an unattended sweep into a spending action.
             places = bool(api.get("places_order"))
             return {"kind": "api", "config": api, "can_send": True, "sends_on_its_own": places,
+                    "customer": dict(decl.get(_customer.CONFIG_KEY) or {}),
                     "reason": f"declared api route, dialect {api.get('dialect')}"}
         if kind == "portal":
             return _portal_route(vendor) or {

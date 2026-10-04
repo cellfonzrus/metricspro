@@ -26,6 +26,14 @@ WHAT FAILS THE BUILD
      the credential is never read from config, and migration 1053 is tied to the code. Each with an
      armed control.
 
+  G  the CREDENTIAL has one home: the sweep asks for a token and never reads a credential column,
+     and only one place performs the exchange.
+  H  the vendor's CATALOG arrives through the lander every other catalog route already uses — the
+     reader reports the vendor's facts and judges none of them, so the API route's prices cannot
+     drift from the portal route's on the same screen.
+  I  WHO the order is for has one home: the customer the export seeds and the customer an order
+     names are derived by the same function, so the vendor never holds two customers for one store.
+
 Run: python3 backend/harness_order_transport.py     (stdlib only, no DB, no network)
 """
 from __future__ import annotations
@@ -43,6 +51,7 @@ sys.path.insert(0, HERE)
 
 from app.modules.supply import order_transport as OT          # noqa: E402
 from app.modules.supply import shopify_draft_order as SH       # noqa: E402
+from app.modules.supply import vendor_customer as VC            # noqa: E402
 from app.modules.supply import api_credential as CRED           # noqa: E402
 
 passed, failed = 0, 0
@@ -456,6 +465,143 @@ ok(all(os.path.exists(f) for f in CRED_EXCHANGE_EXCUSED),
 ok(bool(re.search(r"grant_type|admin/oauth/access_token",
                   'body = {"grant_type": "client_credentials"}')),
    "G19-armed the exchange scan matches a real second exchange")
+
+# ══ §H  THE CATALOG READ — one lander, no second judgement ═══════════════════════════════════════════
+print("\n§H  the vendor's catalog arrives through the existing lander")
+CFG = {"host": "a-store.myshopify.com", "version": "2026-07"}
+ok(SH.products_endpoint(CFG).startswith("https://a-store.myshopify.com/admin/api/2026-07/products.json"),
+   "H1 the product list is read from the SAME validated target the orders go to")
+try:
+    SH.products_endpoint({"host": "shop.example.com", "version": "2026-07"})
+    ok(False, "H2 a custom domain is refused for the catalog read too")
+except ValueError:
+    ok(True, "H2 a custom domain is refused for the catalog read too")
+ok("limit=250" in SH.products_endpoint(CFG) and "limit=250" in SH.products_endpoint(CFG, limit=9999),
+   "H3 the page size is clamped to what the vendor allows")
+
+_P = {"products": [{"title": "Case", "handle": "case", "body_html": "<p>Nice  case</p>", "variants": [
+    {"title": "Default Title", "sku": "C1", "price": "4.50", "compare_at_price": "9.99",
+     "inventory_quantity": 7, "inventory_management": "shopify"},
+    {"title": "Black", "price": "5.00", "inventory_quantity": 0, "inventory_policy": "continue",
+     "inventory_management": "shopify"},
+    {"title": "White", "price": "6.00", "inventory_quantity": 0, "inventory_policy": "deny",
+     "inventory_management": "shopify"},
+    {"title": "Untracked", "price": "7.00"}]}]}
+_rows = SH.catalog_rows(_P, host=CFG["host"])
+ok(len(_rows) == 4, "H4 one row per VARIANT — a variant is what gets ordered and priced")
+ok(_rows[0]["name"] == "Case", "H5 the vendor's placeholder variant title is not repeated in the name")
+ok(_rows[1]["name"] == "Case — Black", "H6 a real variant is named")
+ok(_rows[0]["sku"] == "C1" and _rows[0]["price"] == "4.50" and _rows[0]["list_price"] == "9.99",
+   "H7 sku, price and the vendor's own compare-at price are reported")
+ok(_rows[0]["description"] == "Nice case" and "<" not in _rows[0]["description"],
+   "H8 the vendor's HTML description is flattened, never rendered")
+ok(_rows[0]["url"] == "https://a-store.myshopify.com/products/case",
+   "H9 the row links back to the vendor's own page")
+ok(_rows[1]["stock_text"] == "Backorder" and _rows[2]["stock_text"] == "Out of stock",
+   "H10 the vendor's two stock facts are REPORTED (quantity and policy), not interpreted")
+ok(_rows[3]["stock_text"] == "In stock" and _rows[3]["stock_qty"] is None,
+   "H11 an untracked variant is available with no quantity claimed")
+ok(all("availability" not in r and "item_key" not in r and "pack_qty" not in r for r in _rows),
+   "H12 the reader decides NO availability class, pack size or item key — ordering_logic does, as "
+   "it does for every other catalog route")
+import app.modules.supply.ordering_logic as _OL
+_clean, _rej = _OL.normalize_catalog_rows(_rows)
+ok(len(_clean) == 4 and not _rej and all(r.get("item_key") for r in _clean),
+   "H13 the rows land through the SHARED normaliser unchanged — same keys, same classes")
+ok(SH.catalog_rows({"products": [{"title": "X", "variants": []}]}) == []
+   and SH.catalog_rows(None) == [] and SH.catalog_rows({"products": [None]}) == [],
+   "H14 a product with no variants, and junk, read as nothing rather than raising")
+ok(SH.next_page('<https://h/x?page_info=abc>; rel="next", <https://h/y>; rel="previous"')
+   == "https://h/x?page_info=abc", "H15 paging follows the VENDOR's cursor")
+ok(SH.next_page('<https://h/y>; rel="previous"') == "" and SH.next_page(None) == "",
+   "H16 no next page means stop")
+
+_rt_sup = code_text(os.path.join(APP, "modules", "supply", "router.py"))
+ok('store.land_catalog(client, org_id, vendor_id, read["rows"], "api")' in _rt_sup,
+   "H17 LOCK: the API read lands through store.land_catalog — the ONE lander the upload and portal "
+   "routes already use, so one snapshot table holds every vendor's prices")
+# The lineage registry NAMES the table as a registered feed (§36) and writes nothing — a declaration
+# is the opposite of a second writer, and removing it would un-register the feed.
+CATALOG_NAMING_EXCUSED = (
+    os.path.join(APP, "modules", "supply", "store.py"),                      # the one lander
+    os.path.join(APP, "modules", "commcalc", "data_lineage_registry.py"),    # declares, never writes
+)
+_landers = [f for f in py_files() if f not in CATALOG_NAMING_EXCUSED
+            and "vendor_catalog_price" in code_text(f)]
+ok(not _landers, f"H18 LOCK: nothing else writes the catalog table {_landers}")
+ok("vendor_catalog_price" in 'x.table("vendor_catalog_price").insert(r)',
+   "H18-armed the catalog-writer scan matches a real second writer")
+ok(all(os.path.exists(f) for f in CATALOG_NAMING_EXCUSED),
+   "H18b every excused file still exists — a stale excuse is a hole in the lock")
+
+# ══ §I  WHO THE ORDER IS FOR — one home, read by the export and by the order ═════════════════════════
+print("\n§I  the customer the export seeds is the customer an order names")
+DECL = {"mode": "per_store", "email_domain": "stores.example.com", "tags": ["wholesale"]}
+ST = {"store_code": "B-1115", "address": "1 Main St", "phone": "5551234", "market": "NY Metro"}
+ok(VC.validate_customer(DECL) == [], "I1 a complete rule validates")
+ok(VC.validate_customer(None) == [] and VC.validate_customer({}) == [],
+   "I2 absent is legal and means no customer — not an error")
+ok(any("email_domain is required" in e for e in VC.validate_customer({"mode": "per_store"})),
+   "I3 per_store without a domain is refused: the vendor matches a customer by email")
+ok(any("not a domain" in e for e in
+       VC.validate_customer({"mode": "per_store", "email_domain": "not a domain"})),
+   "I4 a domain that is not a domain is refused")
+ok(VC.validate_customer({"mode": "sometimes"}), "I5 an unknown mode is refused")
+ok(any("comma" in e for e in VC.validate_customer({**DECL, "tags": ["a,b"]})),
+   "I6 a tag containing a comma is refused — it would split into two labels on the vendor's side")
+ok(VC.validate_customer({**DECL, "country_code": "USA"}), "I7 a three-letter country is refused")
+
+C = VC.customer_for_store(DECL, ST)
+ok(C["email"] == "b-1115@stores.example.com", "I8 the address is derived from the store code")
+ok(VC.customer_for_store(DECL, {"store_code": "b-1115"})["email"] == C["email"],
+   "I9 and is case-insensitive — a code differing only by case produced a phantom store here once, "
+   "and would produce a twin customer the same way")
+ok(C["company"] == "B-1115" and C["address1"] == "1 Main St" and C["phone"] == "5551234",
+   "I10 the export carries what the store row already holds, nothing invented")
+ok("wholesale" in C["tags"], "I11 the tenant's declared labels ride along — the vendor's price list "
+   "and payment terms hang off them, and this platform never decides which store is wholesale")
+ok(VC.customer_for_store({}, ST) == {} and VC.customer_for_store({"mode": "none"}, ST) == {},
+   "I12 no rule means NO customer — never a guessed one")
+ok(VC.customer_for_store({"mode": "per_store"}, ST) == {},
+   "I13 an invalid rule names nobody rather than half a customer")
+ok(VC.customer_for_store(DECL, {"store_code": "  "}) == {}, "I14 a store with no code names nobody")
+
+_cust, _skip = VC.customer_rows(DECL, [ST, {"store_code": ""}])
+ok(len(_cust) == 1 and len(_skip) == 1 and _skip[0]["reason"],
+   "I15 a store that cannot be named is REPORTED with the reason — a store missing from the "
+   "vendor's customer list is a store nobody can order for")
+_csv = VC.import_csv(DECL, [ST])
+ok(_csv.splitlines()[0] == ",".join(VC.CSV_COLUMNS), "I16 the vendor's own import columns, in order")
+ok(_csv.count("\n") == 2 and "b-1115@stores.example.com" in _csv, "I17 one line per store")
+ok(",no," in _csv, "I18 a store's routing address never consents to marketing")
+ok(VC.import_csv({}, [ST]).count("\n") == 1, "I19 no rule exports no customers, only the header")
+
+_pay = SH.draft_order_payload({"po_number": "PO-9"}, [{"name": "Case", "qty": 1, "unit_cost": 2}],
+                              customer=C)["draft_order"]
+ok(_pay["email"] == C["email"], "I20 the order names the SAME address the export seeded")
+ok(_pay["shipping_address"]["company"] == "B-1115" and "email" not in _pay["shipping_address"],
+   "I21 the store's address rides with it")
+_none = SH.draft_order_payload({"po_number": "PO-9"}, [{"name": "Case", "qty": 1, "unit_cost": 2}])
+ok("email" not in _none["draft_order"] and "shipping_address" not in _none["draft_order"],
+   "I22 with nobody named the draft is still valid — the merchant assigns it")
+ok(SH.customer_block({"company": "X"}) == {},
+   "I23 a customer with no address names nobody: the vendor would create a nameless twin")
+
+_vc_src = code_text(os.path.join(APP, "modules", "supply", "vendor_customer.py"))
+ok("import httpx" not in _vc_src and "get_supabase" not in _vc_src,
+   "I24 the customer home is pure — no client, no network")
+_derivers = [f for f in py_files() if f != os.path.join(APP, "modules", "supply", "vendor_customer.py")
+             and "email_domain" in code_text(f)]
+ok(not _derivers,
+   f"I25 LOCK: ONE place derives a vendor-side customer address {_derivers}")
+ok("email_domain" in 'addr = code + "@" + cfg["email_domain"]',
+   "I25-armed the address-derivation scan matches a real second derivation")
+_sweep = code_text(os.path.join(APP, "modules", "storevisit", "router.py"))
+ok("_vc.customer_for_store(" in _sweep,
+   "I26 LOCK: the sweep DEREFERENCES the customer home rather than building an address — writing "
+   "the registry and leaving the caller on its own derivation is not a fix (§19.18)")
+ok("customer=" in _sweep and "ship_to_store" in _sweep,
+   "I27 and keys it on the store the draft already ships to")
 
 print("\n" + "=" * 78)
 print(f"{passed} passed, {failed} failed")

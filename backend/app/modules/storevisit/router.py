@@ -857,13 +857,26 @@ async def _push_accessory_pos(org_id, cfg, created):
         out["skipped"] = f"no module speaks the dialect {dialect!r}"
         return out
 
+    # WHO the order is for is read from the same one home the customer export reads
+    # (`vendor_customer`, §51.5), keyed on the store the draft already ships to. A store the rule
+    # cannot name gets a draft with no customer rather than a guessed one — the merchant assigns it.
+    from app.modules.supply import vendor_customer as _vc
+    cust_decl = route.get("customer") or {}
+    stores_by_code = {}
+    if cust_decl:
+        try:
+            stores_by_code = {str(st.get("store_code") or "").strip(): st
+                              for st in _supply_store.load_store_roster(root, org_id)}
+        except Exception as e:
+            out["customer_note"] = f"the store roster is unreadable: {str(e)[:120]}"
+
     for rec in created:
         po_id = (rec or {}).get("id") or (rec or {}).get("po_id")
         if not po_id:
             continue
         try:
             row = (root.schema("commcalc").table("purchase_order")
-                   .select("id,po_number,notes,external_ref").eq("org_id", org_id)
+                   .select("id,po_number,notes,external_ref,ship_to_store").eq("org_id", org_id)
                    .eq("id", po_id).limit(1).execute().data or [None])[0]
         except Exception as e:
             out["failed"].append({"po_id": po_id, "error": f"unreadable: {str(e)[:120]}"})
@@ -886,7 +899,9 @@ async def _push_accessory_pos(org_id, cfg, created):
               # records it as a floor (§47.16). Passing None keeps the dialect's "(price to
               # confirm)" wording instead of asserting the item is free.
               "unit_cost": (ln.get("unit_cost") if float(ln.get("unit_cost") or 0) > 0 else None)}
-             for ln in lines])
+             for ln in lines],
+            customer=_vc.customer_for_store(
+                cust_decl, stores_by_code.get(str(row.get("ship_to_store") or "").strip())))
         patch = ({"external_ref": res["external_ref"], "external_url": res["external_url"],
                   "external_pushed_at": _now(), "external_error": None}
                  if res["ok"] else {"external_error": res["error"][:500]})

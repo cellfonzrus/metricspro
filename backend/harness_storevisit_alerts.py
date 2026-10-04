@@ -445,7 +445,7 @@ check("J5 LOCK: the dedup trail is the ONE send record, never a second insert â€
 # the two reads and the one stamp are named here rather than the lock being loosened to "anything
 # goes". A bare insert into either table still fails.
 _po_reads = ('table("purchase_order").select("store_visit_id")',
-             'table("purchase_order")\n                   .select("id,po_number,notes,external_ref")',
+             'table("purchase_order")\n                   .select("id,po_number,notes,external_ref,ship_to_store")',
              'table("purchase_order_line")\n                     .select("device_model,qty_ordered,unit_cost")',
              'table("purchase_order").update(patch)')
 _blk_po = blk

@@ -74,11 +74,106 @@ def endpoint(cfg) -> str:
             f"/admin/api/{_s(cfg.get('version'))}/draft_orders.json")
 
 
+def products_endpoint(cfg, *, limit=250) -> str:
+    """The product-list URL. The same validated target as the order endpoint, so a vendor whose
+    orders go to one store can never have its prices read from another."""
+    errors = validate_target(cfg)
+    if errors:
+        raise ValueError("; ".join(errors))
+    n = max(1, min(int(limit or 250), 250))
+    return (f"https://{_s(cfg.get('host')).lower()}"
+            f"/admin/api/{_s(cfg.get('version'))}/products.json?limit={n}&status=active")
+
+
+def _availability(variant) -> tuple:
+    """(stock_text, stock_qty). The vendor's own two facts, left as facts: `ordering_logic`
+    classifies them, and classifying here too would be a second home for that judgement."""
+    qty = variant.get("inventory_quantity")
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        qty = None
+    policy = _s(variant.get("inventory_policy")).lower()
+    tracked = _s(variant.get("inventory_management")) != ""
+    if not tracked:
+        return "In stock", None                 # untracked means the vendor always fills it
+    if qty is None:
+        return "", None
+    if qty > 0:
+        return f"{qty} in stock", qty
+    return ("Backorder" if policy == "continue" else "Out of stock"), qty
+
+
+def catalog_rows(data, *, host="") -> list:
+    """Products → the rows `supply.store.land_catalog` already lands. PURE, and deliberately thin:
+    it REPORTS the vendor's name, sku, price and stock and nothing else. Pack size, minimum order,
+    availability wording and the item key are all decided by `ordering_logic.normalize_catalog_row`,
+    which every other catalog route already goes through — a second derivation of any of them here
+    would drift from the portal route's prices on the same screen.
+
+    One row per VARIANT, because a variant is what gets ordered and priced. A variant whose title
+    is the vendor's placeholder for "no variants" is not named twice in the product title.
+    """
+    out = []
+    for prod in ((data or {}).get("products") or []):
+        if not isinstance(prod, dict):
+            continue
+        title = _s(prod.get("title"))
+        handle = _s(prod.get("handle"))
+        body = re.sub(r"<[^>]+>", " ", _s(prod.get("body_html")))
+        body = re.sub(r"\s+", " ", body).strip()
+        url = f"https://{_s(host).lower()}/products/{handle}" if (host and handle) else ""
+        for var in (prod.get("variants") or []):
+            if not isinstance(var, dict):
+                continue
+            vt = _s(var.get("title"))
+            name = title if (not vt or vt.lower() == "default title") else f"{title} — {vt}"
+            stock_text, qty = _availability(var)
+            out.append({
+                "name": name,
+                "sku": _s(var.get("sku")),
+                "price": var.get("price"),
+                "list_price": var.get("compare_at_price"),
+                "stock_qty": qty,
+                "stock_text": stock_text,
+                "url": url,
+                "description": body,
+            })
+    return out
+
+
+def next_page(link_header) -> str:
+    """The vendor's cursor for the next page, or "". Paging is the vendor's own: a page count we
+    kept would read a stale slice the moment they add a product."""
+    for part in _s(link_header).split(","):
+        bits = part.split(";")
+        if len(bits) < 2 or 'rel="next"' not in part:
+            continue
+        u = bits[0].strip()
+        if u.startswith("<") and u.endswith(">"):
+            return u[1:-1]
+    return ""
+
+
 def tag_for(po_number) -> str:
     return TAG_PREFIX + re.sub(r"[^A-Za-z0-9_-]+", "-", _s(po_number)).strip("-").lower()
 
 
-def draft_order_payload(po, lines, *, note=None) -> dict:
+def customer_block(customer) -> dict:
+    """This platform's customer identity (`vendor_customer.customer_for_store`) in the vendor's
+    shape. The identity itself is NEVER derived here — one home decides who the customer is, and
+    this maps it, so the list the tenant uploaded and the order that names a customer agree."""
+    c = customer or {}
+    email = _s(c.get("email"))
+    if not email:
+        return {}
+    return {"email": email, "first_name": _s(c.get("company")) or "Store", "last_name": "Store",
+            "company": _s(c.get("company")), "phone": _s(c.get("phone")),
+            "address1": _s(c.get("address1")),
+            "country_code": _s(c.get("country_code")).upper() or "US"}
+
+
+def draft_order_payload(po, lines, *, note=None, customer=None) -> dict:
     """The request body. PURE — this is the part worth proving, and it is proved DB-free.
 
     An UNPRICED line is carried at 0.00 and said so in its title, never dropped: a basket missing
@@ -106,6 +201,12 @@ def draft_order_payload(po, lines, *, note=None) -> dict:
         "note": _s(note or po.get("notes")),
         "use_customer_default_address": False,
     }
+    # A customer is named only when one home could name it. An order with no customer is still a
+    # valid draft the merchant can assign by hand — a GUESSED customer is not recoverable.
+    cb = customer_block(customer)
+    if cb:
+        body["email"] = cb["email"]
+        body["shipping_address"] = {k: v for k, v in cb.items() if k != "email" and v}
     return {"draft_order": body}
 
 
@@ -122,7 +223,7 @@ def read_result(data) -> dict:
     }
 
 
-async def push_draft_order(cfg, token, po, lines, *, note=None, timeout=30) -> dict:
+async def push_draft_order(cfg, token, po, lines, *, note=None, customer=None, timeout=30) -> dict:
     """Create ONE draft order. The only place this dialect speaks to the network.
 
     Returns {ok, external_ref, external_url, external_name, error}. It never raises for a vendor-side
@@ -137,7 +238,7 @@ async def push_draft_order(cfg, token, po, lines, *, note=None, timeout=30) -> d
     except ValueError as e:
         out["error"] = str(e)
         return out
-    payload = draft_order_payload(po, lines, note=note)
+    payload = draft_order_payload(po, lines, note=note, customer=customer)
     if not payload["draft_order"]["line_items"]:
         out["error"] = "nothing to order"
         return out
@@ -155,6 +256,46 @@ async def push_draft_order(cfg, token, po, lines, *, note=None, timeout=30) -> d
         out.update(read_result(res.json()))
         if not out["ok"]:
             out["error"] = "the vendor accepted the request but named no draft order"
+    except Exception as e:                       # noqa: BLE001 — a transport failure is a result
+        out["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+    return out
+
+
+async def read_products(cfg, token, *, timeout=30, max_pages=40) -> dict:
+    """Read the vendor's whole product list. READ-ONLY: GET only, and the only other call this
+    module makes is the draft-order POST — there is no path from here to placing an order.
+
+    Returns {ok, rows, pages, error}. `rows` are the shape `store.land_catalog` lands, so the
+    prices arrive in the SAME snapshot table, through the SAME lander, as the portal and upload
+    routes. A page that fails stops the read with the reason: a half-read catalog landed as a run
+    would read as "the vendor dropped those items".
+    """
+    out = {"ok": False, "rows": [], "pages": 0, "error": ""}
+    if not _s(token):
+        out["error"] = "no credential is stored for this vendor"
+        return out
+    try:
+        url = products_endpoint(cfg)
+    except ValueError as e:
+        out["error"] = str(e)
+        return out
+    host = _s(cfg.get("host")).lower()
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as cx:
+            while url and out["pages"] < max_pages:
+                res = await cx.get(url, headers={"X-Shopify-Access-Token": _s(token)})
+                if res.status_code >= 400:
+                    out["error"] = f"vendor refused ({res.status_code}): {res.text[:200]}"
+                    return out
+                out["rows"] += catalog_rows(res.json(), host=host)
+                out["pages"] += 1
+                url = next_page(res.headers.get("Link") or res.headers.get("link"))
+        out["ok"] = True
+        if out["pages"] >= max_pages and url:
+            out["error"] = (f"stopped after {max_pages} pages — the catalog is larger than this "
+                            f"read allows and the landed run would be partial")
+            out["ok"] = False
     except Exception as e:                       # noqa: BLE001 — a transport failure is a result
         out["error"] = f"{type(e).__name__}: {str(e)[:160]}"
     return out
