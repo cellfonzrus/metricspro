@@ -5264,9 +5264,8 @@ dedup-per-recipient rule and the `ref_key` SPELLING were only ever implemented i
 (`ref_key(scope, today, email, *parts)` · `recipients_for` · `plan_digests`), which **both**
 `epay_alerts` and `zero_sales` dereference — ePay's key is byte-identical (pinned,
 `harness_zero_sales_lock.py` c10 + `harness_epay_alerts.py`). Zero-sales writes
-`storeops.alert_log` scope `'zero_sales'` through the SAME `_lateness_already_sent` /
-`_lateness_record_sent` helpers; no new alert table, no second dedup rule, no second recipient
-resolution. **A `not_reported` scope is NEVER emailed as a sales alert** — that is a pipeline failure
+`storeops.alert_log` scope `'zero_sales'` through the SAME send record (see §15.1); no new alert
+table, no second dedup rule, no second recipient resolution. **A `not_reported` scope is NEVER emailed as a sales alert** — that is a pipeline failure
 with its own surface (§20 import health); the digest footer states how many scopes could not be
 assessed, so a thin email is never read as a healthy estate.
 
@@ -5571,6 +5570,65 @@ read-only previews, `pay_rate = 17.00` for the ten, the 63 template rows (idempo
 note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 
 
+### 15.1 THE SEND RECORD — "has this finding reached this recipient, on this channel?"
+
+**Owner decision 2026-10-04** (decision card, *"Fix it properly"*), after the store-visit alerts went
+live: every alert recorded "sent" as soon as **any** channel delivered. A digest whose email went out
+and whose WhatsApp failed was marked done and the WhatsApp was **never retried** — the tenant had
+asked for both channels and got one, silently, forever. The reported instance was the store-visit
+digest; the CLASS was every alert in the estate.
+
+**ONE HOME:** `backend/app/modules/storeops/alert_log.py`. It is the only file that reads or writes
+`storeops.alert_log`. Four separate implementations preceded it, each with its own idea of what
+"already sent" means, and that is why the defect survived three rewrites:
+
+| the old copy | what was wrong with it |
+|---|---|
+| `storeops/router._lateness_already_sent` / `_lateness_record_sent` | no channel on the row — the defect itself. **Deleted**, not wrapped |
+| `storeops/router._expiry_already_sent` + its own insert | one row naming every contact as soon as ONE address worked, so a bounced contact was counted as told |
+| `closing/_send_alert`'s own select/insert pair | same, plus one person's success suppressed the alert for **everybody else** on that finding |
+| the four fan-out loops (follow-up, ePay, zero-sales, bill-pay declarations) | four copies of the same ladder; three sent on both channels, two on email only |
+
+**What a row means now:** this scope's finding `ref_key` was CARRIED to `recipients` over `channel`.
+Written only after that channel actually delivered — *an alert that reached nobody is not "already
+alerted"* (the 2026-09-20 rule, kept and now exact). `channel` is **required**: `record_sent` raises
+rather than write a row that does not say how it was carried. A row with no channel is either a
+recorded SILENCE (nobody configured to tell) or a legacy row migration `1051` could not classify;
+either way it satisfies no channel, which is the honest reading.
+
+**Recipient matching** tolerates the pre-1051 rows written as a joined list, so switching to
+per-recipient records re-alerts nobody already told.
+
+Migration `1051_alert_log_channel.sql` — additive, idempotent, `-- REVERT:` noted. Adds
+`storeops.alert_log.channel`, a CHECK limiting it to what the code can speak, the lookup index, and
+a backfill setting `channel='email'` on every row with an email-shaped recipient (measured
+read-only 2026-10-04: 709 rows, 706 email-shaped, 3 recorded silences).
+
+### 15.2 DIGEST DELIVERY — carry it on each channel, record what each channel did
+
+**ONE HOME:** `backend/app/modules/notify/digest_delivery.py`. `pending_by_channel` (PURE) decides
+what each channel still owes a recipient; `deliver_recipient` is the ladder; `deliver_digests` is the
+fan-out over `manager_digest.plan_digests` output. Every alert sweep in the estate dereferences it:
+the lateness sweep, doc expiry, the manager follow-up digest, the ePay discrepancy digest, the
+zero-sales digest, the bill-pay declaration digest, the two store-visit digests, and
+`closing/_send_alert`.
+
+Not parameterised: that a channel is spoken to only when it is **configured AND reachable**; that
+the record is written per channel and only after that channel delivered; and that an **unconfigured**
+channel is not a channel that was tried, so it records nothing and is offered again next run. A
+caller supplies its subject/body builder and nothing else about delivery.
+
+**"Already sent" means every reachable channel is square — never "no channel is configured."**
+Collapsing those two let an estate with no credentials report its whole backlog as delivered; found
+by driving the real sweeps on 2026-10-04 and pinned as §D8.
+
+Proof: `backend/harness_alert_channel_record.py` — **66 checks, stdlib only, DB-free**, in the
+carrier-vocab-guard job. §A row semantics · §B what each channel owes · §C the real
+`deliver_recipient` over a stub client, including the retry carrying WhatsApp only · §D the fan-out
+and the dry run · §E a record with no channel cannot be written · §F a recorded silence suppresses
+nothing · §G migration `1051` tied to the code · §H eight locks, each with an armed control.
+
+
 ## 16. Cross-reference: by TABLE
 
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
@@ -5691,11 +5749,12 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | `core.billing_statement` (mig `975`; FROZEN itemized statements incl. the `complete` flag) | `POST /billing/statement/close` | `statement.build_statement(frozen=)` — read, NEVER recomputed |
 | `storeops.pricing_package` / `storeops.tenants.package_key` (mig `908`, REUSED) | existing `/billing/*` pricing endpoints | the PLAN TIERS (free/starter/premium are ROWS, not an enum) + the monthly-fee line on every statement |
 | `commcalc.zero_sales_config` (mig `1016`, **NOT applied**; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) |
-| `storeops.alert_log` — **scope `'billpay_declaration'`** (mig `433` table, no new table) | `closing/router._run_billpay_declaration_alerts` via the SAME `_lateness_record_sent` | `_lateness_already_sent`; the ref_key SPELLING is `manager_digest.ref_key`, the third scope to dereference it. A row is written ONLY when a channel actually delivered, so a dead channel cannot mark a finding escalated (§47.13) |
+| `storeops.alert_log` — **the `channel` column** (mig `1051`) | `storeops/alert_log.record_sent` / `record_silence` — the ONLY writer of this table | `storeops/alert_log.already_sent` / `sent_pairs` — the ONLY readers, reached through `notify/digest_delivery.py`. A row says WHICH CHANNEL carried the finding to WHICH address, so a channel that failed is still owed it (§15.1, §15.2) |
+| `storeops.alert_log` — **scope `'billpay_declaration'`** (mig `433` table, no new table) | `closing/router._run_billpay_declaration_alerts` via the ONE send record (§15.1, `storeops/alert_log.py`) driven by `notify/digest_delivery.py` | the ref_key SPELLING is `manager_digest.ref_key`, the third scope to dereference it. A row is written ONLY when a channel actually delivered, so a dead channel cannot mark a finding escalated (§47.13) |
 | `storeops.tenants` — **the bill-pay declaration-alert config** (mig `1043`: `billpay_declaration_alerts_enabled` / `_alert_time` / `_alert_tolerance` / `_alert_channels` / `_alert_lookback_days` / `_alert_last_run` / `_alert_last_detail`; house defaults in `billpay_declaration_alerts.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `billpay_declaration_alerts.resolve_config` → `_run_billpay_declaration_alerts`; the send time is compared by `manager_digest.due_now` (§47.13) |
-| `storeops.alert_log` — **scope `'manager_followup'`** (mig `433` table, no new table) | `commcalc/router._run_manager_followup_alerts` via the SAME `_lateness_record_sent` | `_lateness_already_sent`; the ref_key SPELLING is `manager_digest.ref_key`, the fourth scope to dereference it. The key tail is (store, queue, age BAND), so a follow-up re-escalates when the work AGES but not when its count ticks by one. A row is written ONLY when a channel actually delivered (§47.14) |
+| `storeops.alert_log` — **scope `'manager_followup'`** (mig `433` table, no new table) | `commcalc/router._run_manager_followup_alerts` via the ONE send record (§15.1, `storeops/alert_log.py`) driven by `notify/digest_delivery.py` | the ref_key SPELLING is `manager_digest.ref_key`, the fourth scope to dereference it. The key tail is (store, queue, age BAND), so a follow-up re-escalates when the work AGES but not when its count ticks by one. A row is written ONLY when a channel actually delivered (§47.14) |
 | `storeops.tenants` — **the Follow Up With Managers config** (mig `1044`: `manager_followup_enabled` / `_time` / `_channels` / `_escalate_after_days` / `_show_oldest` / `_min_items` / `_last_run` / `_last_detail`; house defaults in `manager_followup.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `manager_followup.resolve_config` → `_run_manager_followup_alerts`; the send time is compared by `manager_digest.due_now` (§47.14) |
-| `storeops.alert_log` — **scope `'zero_sales'`** (mig `433` table, no new table) | `router._run_zero_sales_alerts` via the EXISTING `storeops.router._lateness_record_sent` | `_lateness_already_sent` — dedup per (recipient, store, last-zero-day, grain:scope); the ref_key SPELLING is `manager_digest.ref_key`, the one home both this and scope `'epay_discrepancy'` dereference (§15z) |
+| `storeops.alert_log` — **scope `'zero_sales'`** (mig `433` table, no new table) | `router._run_zero_sales_alerts` via the ONE send record (§15.1) driven by `notify/digest_delivery.py` | dedup per (recipient, store, last-zero-day, grain:scope); the ref_key SPELLING is `manager_digest.ref_key`, the one home both this and scope `'epay_discrepancy'` dereference (§15z) |
 | `storeops.shifts` — **as the TRADING-DAY fact** (§15z) | storeops scheduling (§14) | THE one read on this path is `labour_coverage.load_shift_hours_range` (mig-free); `load_shift_hours` (month grain, §4 labour coverage) delegates to it, and `router._zero_sales_core` calls it for the range grain. `targets_engine.scope_hours_by_day` (§5) is the same fact for Daily Targets' `open_days`. There is NO store trading-calendar table |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`); **CARD SETTLEMENT RECON** (`external_credit_recon.declared_cells` on the tender columns the org's `closing_tender_def.processor_key` routes — house map `t_ext_cc`→external_cc, `t_credit`→pos_merchant — → `GET /closing/external-credit-recon`, mig `960`/`961`, §12) |
@@ -16691,7 +16750,7 @@ app and email the next morning at 1030 am - nothing hardcoded"*.
 |---|---|---|
 | the recipients (DM ∪ above) | `commcalc/manager_digest.recipients_for` → `storeops/org_chain` | nothing |
 | one digest per manager, dedup, `ref_key` spelling | `commcalc/manager_digest.plan_digests` | a `channels` argument |
-| the dedup rows | `storeops.alert_log` + `_lateness_already_sent` / `_lateness_record_sent` | scope `'billpay_declaration'` |
+| the dedup rows | `storeops.alert_log` through its ONE home `storeops/alert_log.py` (§15.1), driven by `notify/digest_delivery.py` (§15.2) | scope `'billpay_declaration'` |
 | a tenant-local HH:MM send time on an hourly tick | the mig-`433` convention (its own default is already 10:30) | `manager_digest.due_now`, so three sweeps stop spelling the compare three times |
 | the declared figure, DM corrections applied | `_billpay_position_core`'s inline block | factored to `billpay_pickup.declared_billpay_in_force`, now dereferenced by both |
 | the POS figure | `metric_recon.pos_billpay_cash` (§47.12) | nothing |
@@ -16789,7 +16848,7 @@ this module. What the follow-up adds is the two things a COUNT cannot give: **wh
 | what counts as a pending job | `commcalc/compliance_summary.CATEGORIES` | nothing — dereferenced |
 | the recipients (DM ∪ above) | `commcalc/manager_digest.recipients_for` → `storeops/org_chain` | nothing |
 | one digest per manager, dedup, the `ref_key` spelling, the unreachable-recipient skip | `commcalc/manager_digest.plan_digests` | nothing — the `channels` argument landed in §47.13 |
-| the dedup rows | `storeops.alert_log` + `_lateness_already_sent` / `_lateness_record_sent` | scope `'manager_followup'`, the fourth scope on the same table |
+| the dedup rows | `storeops.alert_log` through its ONE home `storeops/alert_log.py` (§15.1), driven by `notify/digest_delivery.py` (§15.2) | scope `'manager_followup'`, the fourth scope on the same table |
 | a tenant-local HH:MM send time on an hourly tick | the mig-`433` convention + `manager_digest.due_now` | nothing |
 | "which store_code is this string" | `_store_code_resolver` (§13) | nothing — dereferenced per queue |
 | the full list of any queue's items | the queue's own page, already linked from the registry | nothing — the digest LINKS it rather than reprinting it |
@@ -17017,7 +17076,7 @@ money, and a **DRAFT** that no code path in this platform transmits to a supplie
 | who hears about a store | `commcalc/manager_digest.recipients_for` — DM ∪ above-DM from `storeops.org_chain` (§48.7). That IS the owner's "the dm and all people above", so no new default was invented. |
 | the tenant's own notification list | `storeops.alert_recipient` (mig 089) — one table, one editor (the Cash & Closing Alerts page), new SCOPES as values: `store_visit_todo`, `store_visit_accessories`. **No new table.** |
 | the named list on top of the tree default | `manager_digest.named_extras` + `use_hierarchy` — the one home this change ADDS, because the rows previously had a single reader (`closing/_alert_recipients`) that also carried its own sending, its own dedup and a DM-only fallback. |
-| one digest per recipient, once per what | `manager_digest.plan_digests` + `storeops.alert_log` via `_lateness_already_sent` / `_lateness_record_sent`. No second fan-out, no second dedup. |
+| one digest per recipient, once per what | `manager_digest.plan_digests` + the ONE send record (§15.1) driven by `notify/digest_delivery.py` (§15.2). No second fan-out, no second dedup, and since mig `1051` the record names the CHANNEL that carried it. |
 | the purchase order | `commcalc.purchase_order`(+`_line`) (mig 301) through `supply/store.create_order` and `next_po_number` — the same table, numbering and draft→submitted lifecycle a supply cart uses, distinguished by `source = 'store_visit'`. A store-visit accessory list is not a different kind of PO. |
 | what a visit should contain | the visit's own rows. This module reads what the visit recorded; it does not decide what a visit should ask. |
 | the accessory price | `supply/store.latest_rows` (newest catalog run per vendor, mig `1021`). Named in one code file — `harness_supply_ordering.py` §L1 fails the build on a second reader, and did when this was first written against the table directly. |

@@ -147,14 +147,20 @@ ok("B1 the fallback is wired: no configured recipient falls through to the tenan
    "_org_admin_recipients(client, org_id)" in AR)
 ok("B2 configured recipients still WIN — the fallback runs only when nothing else resolved",
    "if not out:" in AR and AR.index("if not out:") > AR.index("alert_recipient"))
+# Since migration 1051 these rules live in the ONE send record (storeops/alert_log.py) rather than
+# inline here, and they got STRONGER: the dedup is now per recipient AND per channel, so one
+# person's successful email no longer suppresses the alert for everybody else on the same finding.
+_LOG = open("app/modules/storeops/alert_log.py").read()
 ok("B3 the dedup reads `recipients`, not just existence",
-   'select("id,recipients")' in SA)
+   '_alert_log.sent_pairs(' in SA and 'select("ref_key,channel,recipients")' in _LOG)
 ok("B4 …and only a row that actually DELIVERED suppresses a re-send",
-   'any((r.get("recipients") or "").strip() for r in seen)' in SA)
+   'if _s((row or {}).get("channel")).lower() != _s(channel).lower()' in _LOG
+   and 'return False' in _LOG)
 ok("B5 a suppressed alert is RECORDED, with the reason, instead of returning silently",
-   '"suppressed": "no_recipients"' in SA and 'table("alert_log").insert' in SA)
+   '"suppressed": "no_recipients"' in SA and '_alert_log.record_silence(' in SA
+   and 'def record_silence(' in _LOG)
 ok("B6 …and that record has empty recipients, so it can never masquerade as delivered",
-   '"recipients": "",' in SA)
+   '"recipients": "", "channel": None' in _LOG)
 
 print("\n§C  one alert per EPISODE, not one per day")
 SCAN = _func_src(ROUTER, "_scan_connector_health")

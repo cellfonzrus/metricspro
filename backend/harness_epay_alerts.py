@@ -46,6 +46,9 @@ HIER = {
 }
 
 
+_MISSING = object()
+
+
 # ── stateful fakes (storeops.tenants + storeops.alert_log) ────────────────────────────────────────
 class FakeQ:
     def __init__(self, store, table):
@@ -55,6 +58,7 @@ class FakeQ:
     def insert(self, payload): self.op = "insert"; self.payload = payload; return self
     def update(self, payload): self.op = "update"; self.payload = payload; return self
     def eq(self, col, val): self.filters[col] = val; return self
+    def in_(self, col, vals): self.filters[col] = list(vals); return self   # mig 1051 reads by scope IN (…)
     def limit(self, *a, **k): return self
     def order(self, *a, **k): return self
     def execute(self):
@@ -79,10 +83,13 @@ class StoreopsFake:
                 return []
         if q.table == "alert_log":
             if q.op == "select":
+                def _hit(r, col):
+                    want = q.filters.get(col, _MISSING)
+                    if want is _MISSING:
+                        return True
+                    return r.get(col) in want if isinstance(want, list) else r.get(col) == want
                 return [r for r in self.alert_log
-                        if r.get("org_id") == q.filters.get("org_id")
-                        and r.get("scope") == q.filters.get("scope")
-                        and r.get("ref_key") == q.filters.get("ref_key")]
+                        if all(_hit(r, c) for c in ("org_id", "scope", "ref_key"))]
             if q.op == "insert":
                 rows = q.payload if isinstance(q.payload, list) else [q.payload]
                 self.alert_log.extend(rows)

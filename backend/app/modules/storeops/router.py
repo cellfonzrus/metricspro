@@ -20,6 +20,7 @@ from app.core import scope as _cscope
 from . import org_chain
 from app.core import identity as _identity
 from app.modules.storeops import google_reviews as _gr
+from app.modules.storeops import alert_log as _alert_log   # the ONE send record (mig 1051)
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
     resolve_effective_config as pto_resolve_effective_config,
@@ -3791,18 +3792,30 @@ def _expiry_subjects(org_id, client=None):
     return subjects
 
 
-def _expiry_already_sent(client, org_id, keys):
-    """Which dedupe keys the EXISTING storeops.alert_log (mig 433) has already recorded. Reused, not
-    reinvented — the lateness alerts use the same table the same way."""
+EXPIRY_SCOPES = ("doc_expiry_lease", "doc_expiry_insurance")
+
+
+def _expiry_already_sent(client, org_id, keys, recipients_by_key=None):
+    """Which dedupe keys have already been CARRIED BY EMAIL to the people who would be told.
+
+    This used to be a second implementation of "already sent", counting any row for the key however
+    it was written. It now dereferences the one home (`storeops/alert_log.py`), so a milestone whose
+    email failed for one contact is still owed to that contact — the same per-channel, per-recipient
+    rule every other alert follows since migration 1051.
+    """
     if not keys:
         return set()
-    try:
-        rows = (client.table("alert_log").select("ref_key").eq("org_id", org_id)
-                .in_("scope", ["doc_expiry_lease", "doc_expiry_insurance"])
-                .in_("ref_key", list(keys)).limit(2000).execute().data) or []
-    except Exception:
-        return set()
-    return {str(r.get("ref_key")) for r in rows}
+    carried = _alert_log.sent_pairs(client, org_id, EXPIRY_SCOPES, ref_keys=list(keys))
+    out = set()
+    for k in keys:
+        want = {str(a or "").strip().lower()
+                for a in ((recipients_by_key or {}).get(k) or []) if str(a or "").strip()}
+        got = {a for (rk, ch, a) in carried if rk == str(k) and ch == "email"}
+        # No recipient list to compare against (a caller only asking "has this gone at all") keeps
+        # the old question; with one, the milestone is done only when EVERY contact had it.
+        if (want and want <= got) or (not want and got):
+            out.add(str(k))
+    return out
 
 
 def _due_expiry_alerts(org_id, client=None, today=None):
@@ -3814,7 +3827,9 @@ def _due_expiry_alerts(org_id, client=None, today=None):
     _types, notice_cfg = _tenant_doc_config(org_id, c)
     day = today or datetime.now(timezone.utc).date().isoformat()
     candidates = _di.expiry_alerts(day, subjects, notice_cfg)
-    sent = _expiry_already_sent(c, org_id, [a["dedupe_key"] for a in candidates])
+    sent = _expiry_already_sent(
+        c, org_id, [a["dedupe_key"] for a in candidates],
+        {a["dedupe_key"]: [r.get("email") for r in (a.get("recipients") or [])] for a in candidates})
     return [a for a in candidates if a["dedupe_key"] not in sent]
 
 
@@ -3848,6 +3863,7 @@ def get_doc_expiry(authorization: str = Header(default=""), org_id: str = ORG_ID
 async def _run_doc_expiry(org_id_filter=None, dry_run=False):
     """The expiry sweep: walk every tenant, send each due milestone once, log it. NEVER raises."""
     from app.modules.notify.channels import email_resend
+    from app.modules.notify import digest_delivery as _delivery
     client = sb()
     try:
         tenants = (client.table("tenants").select("org_id").execute().data) or []
@@ -3874,23 +3890,24 @@ async def _run_doc_expiry(org_id_filter=None, dry_run=False):
                             "to": [r["email"] for r in a["recipients"]], "subject": subject})
             if dry_run or not email_ok:
                 continue
+            # Delivered and recorded PER CONTACT through the one home. The pre-1051 code sent in
+            # its own loop and wrote one row naming everybody as soon as ONE address worked, so a
+            # contact whose address bounced was counted as told and never retried.
+            carried = _alert_log.sent_pairs(client, oid, EXPIRY_SCOPES,
+                                            ref_keys=[a["dedupe_key"]])
             ok = False
             for r in a["recipients"]:
-                try:
-                    await email_resend.send_email(to=r["email"], subject=subject, html=html)
+                row = await _delivery.deliver_recipient(
+                    client, oid, a["alert_scope"], addresses={"email": r["email"]},
+                    items=[{"ref_key": a["dedupe_key"]}], carried=carried,
+                    channels_ok={"email": email_ok, "whatsapp": False},
+                    build=lambda _n, _i, _s=subject, _h=html: {"subject": _s, "html": _h},
+                    to_name=r.get("name"), wa_filename="doc-expiry.txt",
+                    detail={"kind": a["subject_kind"], "expires_on": a["expires_on"],
+                            "milestone": a["milestone"]})
+                if row.get("delivered"):
                     ok = True
-                except Exception:
-                    pass
             if ok:
-                # Log AFTER a successful send: a failed send must be retried tomorrow, not swallowed.
-                try:
-                    client.table("alert_log").insert(
-                        {"org_id": oid, "scope": a["alert_scope"], "ref_key": a["dedupe_key"],
-                         "recipients": ", ".join(r["email"] for r in a["recipients"]),
-                         "detail": {"kind": a["subject_kind"], "expires_on": a["expires_on"],
-                                    "milestone": a["milestone"]}}).execute()
-                except Exception:
-                    pass
                 sent += 1
         results.append({"org_id": oid, "due": len(due), "sent": sent,
                         "email_configured": email_ok, "planned": planned if dry_run else None})
@@ -5613,20 +5630,12 @@ def _period_label(start_iso, end_iso):
         return f"{start_iso} – {end_iso}"
 
 
-def _lateness_already_sent(client, org_id, scope, ref_key):
-    try:
-        return bool((client.table("alert_log").select("id").eq("org_id", org_id)
-                     .eq("scope", scope).eq("ref_key", ref_key).limit(1).execute().data) or [])
-    except Exception:
-        return False
-
-
-def _lateness_record_sent(client, org_id, scope, ref_key, recipients):
-    try:
-        client.table("alert_log").insert({"org_id": org_id, "scope": scope, "ref_key": ref_key,
-                                          "recipients": recipients, "detail": {"kind": scope}}).execute()
-    except Exception:
-        pass
+# THE SEND RECORD LIVES IN ONE PLACE: `storeops/alert_log.py`, reached through
+# `notify/digest_delivery.py`. The two wrappers that used to sit here (`_lateness_already_sent` /
+# `_lateness_record_sent`) are gone: they recorded a send without saying which channel carried it,
+# which is the defect migration 1051 removes (owner decision 2026-10-04, "fix it properly"). Six
+# sweeps imported them; all six now dereference the one home, and no second name for the fact is
+# left for a later change to reach for.
 
 
 def _lateness_late_records(client, org_id, start, end, today):
@@ -5658,6 +5667,7 @@ async def _run_lateness_alerts(org_id_filter=None, respect_time=True, respect_en
     summaries + DM CAP emails, and sends them (deduped via storeops.alert_log). NEVER raises."""
     from app.modules.storeops import accountability_alerts as _ala
     from app.modules.notify.channels import email_resend
+    from app.modules.notify import digest_delivery as _delivery
     client = sb()
     try:
         tenants = (client.table("tenants").select("*").execute().data) or []
@@ -5689,23 +5699,24 @@ async def _run_lateness_alerts(org_id_filter=None, respect_time=True, respect_en
         plan = _ala.plan_emails(recs, hierarchy, today, _period_label(start, end))
         sent = skipped = 0
         planned = []
+        # Delivery and the per-channel record live in ONE home (notify/digest_delivery.py). This
+        # sweep is email-only, so the record simply says so; when a second channel is added here it
+        # inherits the retry rule rather than re-implementing it.
+        carried = _alert_log.sent_pairs(client, oid, ("lateness_am", "lateness_cap"))
         for spec in plan["summaries"] + plan["caps"]:
             scope = "lateness_am" if spec["kind"] == "manager_summary" else "lateness_cap"
-            already = _lateness_already_sent(client, oid, scope, spec["dedupe_key"])
+            row = await _delivery.deliver_recipient(
+                client, oid, scope, addresses={"email": spec["to"]},
+                items=[{"ref_key": spec["dedupe_key"]}], carried=carried,
+                channels_ok={"email": email_ok, "whatsapp": False},
+                build=lambda _n, _i, _sp=spec: {"subject": _sp["subject"], "html": _sp["html"]},
+                to_name=spec.get("to_name"), wa_filename="lateness.txt", dry_run=dry_run)
             planned.append({"kind": spec["kind"], "to": spec["to"], "to_name": spec.get("to_name"),
-                            "subject": spec["subject"], "already_sent": already})
-            if already:
+                            "subject": spec["subject"], "already_sent": row["already_sent"]})
+            if row["already_sent"]:
                 skipped += 1
-                continue
-            if dry_run:
-                continue
-            if email_ok:
-                try:
-                    await email_resend.send_email(to=spec["to"], subject=spec["subject"], html=spec["html"])
-                    _lateness_record_sent(client, oid, scope, spec["dedupe_key"], spec["to"])
-                    sent += 1
-                except Exception:
-                    pass
+            elif row.get("delivered"):
+                sent += 1
         if not dry_run:
             _lateness_mark_run(client, oid, today, f"sent {sent}, skipped {skipped}, {len(recs)} late record(s)")
         results.append({"org_id": oid, "sent": sent, "skipped": skipped, "late_employees": len(recs),

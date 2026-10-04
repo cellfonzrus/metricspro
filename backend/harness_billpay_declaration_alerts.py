@@ -297,14 +297,18 @@ _sw = code_text("app/modules/closing/router.py")
 check("H2 the sweep does not roll its own DM-∪-above loop",
       '"above"' not in _sw.split("_run_billpay_declaration_alerts")[-1].split("def _billpay_declaration_store_days")[0])
 check("H3 the sweep plans through the ONE fan-out", "_md.plan_digests(" in _sw)
-check("H4 the sweep writes dedup rows through the EXISTING alert_log helpers",
-      "_lateness_already_sent(so, oid, _bda.ALERT_SCOPE" in _sw
-      and "_lateness_record_sent(so, oid, _bda.ALERT_SCOPE" in _sw)
+check("H4 the sweep delivers and records through the ONE home (mig 1051: per channel, so a "
+      "failed WhatsApp is still owed the finding)",
+      "_delivery.deliver_digests(" in _sw and "_bda.ALERT_SCOPE" in _sw
+      and "_lateness_already_sent" not in _sw and "_lateness_record_sent" not in _sw)
 check("H5 no new alert table is introduced by the sweep",
       "alert_log" not in _sw.split("_run_billpay_declaration_alerts")[-1][:6000])
+_DELIVERY = code_text("app/modules/notify/digest_delivery.py")
 check("H6 WhatsApp goes through the window-safe home, NEVER send_text -- a free-form 10:30 send "
-      "returns 200 and is silently dropped (the 2026-08-05 incident)",
-      "send_document_detailed" in _sw and "send_text" not in _sw)
+      "returns 200 and is silently dropped (the 2026-08-05 incident). Since mig 1051 the ladder "
+      "lives in the ONE delivery home, so this holds for every sweep at once",
+      "send_document_detailed" in _DELIVERY and "send_text" not in _DELIVERY
+      and "send_document_detailed" not in _sw)
 check("H7 the declared side is the figure IN FORCE (DM corrections applied), so a manager is never "
       "chased about a store-day they already fixed",
       "declared_billpay_in_force" in _sw)
@@ -313,8 +317,9 @@ check("H8 the POS side dereferences the fee-corrected home, not a raw key",
 check("H9 control: the RULE TWO scan can fail -- a word that IS in the module is found",
       "declared" in _a)
 check("H10 control: a dedup row is written only when a channel actually delivered, so an "
-      "unconfigured channel cannot mark a finding escalated and hide it tomorrow",
-      "if delivered:" in _sw)
+      "unconfigured channel cannot mark a finding escalated and hide it tomorrow -- and since "
+      "mig 1051 the row names THAT channel, so a channel that failed is still owed the finding",
+      'if not leg["delivered"]:' in _DELIVERY and "_log.record_sent(" in _DELIVERY)
 check("H11 control: the alertable/refused split really partitions the vocabulary, so a new class "
       "cannot be silently neither",
       not (set(A.ALERTABLE) & set(A.REFUSED_AS_ALERT))

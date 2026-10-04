@@ -792,52 +792,6 @@ def _accessory_po_for_visits(org_id, cfg, visits, accessory_rows, who=None, dry_
             "status": "draft", "sent_to_vendor": False}
 
 
-async def _fan_out(scope, plan, org_id, so, channels_ok, dry_run):
-    """Send ONE scope's planned digests and record the dedup rows. The single place this module
-    talks to a channel. Returns (sent, skipped, planned_rows)."""
-    email_ok, wa_ok = channels_ok
-    from app.modules.notify.channels import email_resend, whatsapp_meta
-    from app.modules.storeops.router import _lateness_already_sent, _lateness_record_sent
-    sent = skipped = 0
-    out = []
-    for dg in plan["digests"]:
-        addrs = dg.get("addresses") or ({"email": dg["to"]} if dg.get("to") else {})
-        new_items = [it for it in dg["items"]
-                     if not _lateness_already_sent(so, org_id, scope, it["ref_key"])]
-        if not new_items:
-            skipped += 1
-            out.append({"to": dg["to"], "addresses": addrs, "already_sent": True})
-            continue
-        built = dg["rebuild"](dg["to_name"], new_items)
-        out.append({"to": dg["to"], "addresses": addrs, "already_sent": False,
-                    "subject": built["subject"], "items": len(new_items)})
-        if dry_run:
-            continue
-        delivered = []
-        if "email" in addrs and email_ok:
-            try:
-                await email_resend.send_email(to=addrs["email"], subject=built["subject"],
-                                              html=built["html"])
-                delivered.append("email")
-            except Exception as e:
-                print(f"WARN {scope} email to {addrs['email']} failed: {e}")
-        if "whatsapp" in addrs and wa_ok:
-            try:
-                # data=b"" is the text-only rung: a business-initiated message takes the approved
-                # template, never a free-form text Meta accepts with a 200 and silently drops.
-                res = await whatsapp_meta.send_document_detailed(
-                    addrs["whatsapp"], b"", "text/plain", f"{scope}.txt", built["text"])
-                if res.get("message_id"):
-                    delivered.append("whatsapp")
-            except Exception as e:
-                print(f"WARN {scope} WhatsApp to {addrs['whatsapp']} failed: {e}")
-        if delivered:
-            for it in new_items:
-                _lateness_record_sent(so, org_id, scope, it["ref_key"],
-                                      addrs.get("email") or addrs.get("whatsapp"))
-            sent += 1
-        out[-1]["delivered"] = delivered
-    return sent, skipped, out
 
 
 async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_run=True,
@@ -847,6 +801,7 @@ async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_
     order. Recipients, dedup and channels all come from `manager_digest`. NEVER raises."""
     from app.modules.storevisit import visit_alerts as _va
     from app.modules.commcalc import manager_digest as _md
+    from app.modules.notify import digest_delivery as _delivery
     from app.modules.storeops.router import _managers_above_dm
     from app.modules.notify.channels import email_resend, whatsapp_meta
     from app.core.base_url import base_url
@@ -858,7 +813,8 @@ async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_
         tenants = []
     if org_id_filter:
         tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
-    channels_ok = (email_resend.is_configured(), whatsapp_meta.is_configured())
+    channels_ok = {"email": email_resend.is_configured(),
+                   "whatsapp": whatsapp_meta.is_configured()}
     try:
         link = (base_url() or "").rstrip("/") + "/storeops/visits"
     except Exception:
@@ -899,7 +855,8 @@ async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_
                "no_store": len(no_store), "totals": summary["totals"],
                "channels": list(cfg["channels"]), "enabled": cfg["enabled"],
                "accessory_enabled": cfg["accessory_enabled"], "po_mode": cfg["po_mode"],
-               "email_configured": channels_ok[0], "whatsapp_configured": channels_ok[1],
+               "email_configured": channels_ok["email"],
+               "whatsapp_configured": channels_ok["whatsapp"],
                "dry_run": dry_run}
         if cfg.get("po_mode_reason"):
             res["po_mode_reason"] = cfg["po_mode_reason"]
@@ -921,9 +878,9 @@ async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_
                 channels=cfg["channels"],
                 extra_recipients=_md.named_extras(scope_rows, _va.ALERT_SCOPE, cfg["channels"]),
                 use_tree=_md.use_hierarchy(scope_rows))
-            for dg in fan["digests"]:
-                dg["rebuild"] = _build
-            s, k, planned = await _fan_out(_va.ALERT_SCOPE, fan, oid, so, channels_ok, dry_run)
+            s, k, planned = await _delivery.deliver_digests(
+                so, oid, _va.ALERT_SCOPE, fan["digests"], build=_build,
+                wa_filename="store-visit-todo.txt", channels_ok=channels_ok, dry_run=dry_run)
             res["todo"] = {"sent": s, "skipped": k, "recipients": planned}
 
         # ── 2. the DRAFT purchase order, before the accessory notification names it ──────────
@@ -948,9 +905,9 @@ async def _run_store_visit_alerts(org_id_filter=None, respect_enabled=True, dry_
                 extra_recipients=_md.named_extras(scope_rows, _va.ACCESSORY_SCOPE,
                                                   cfg["accessory_channels"]),
                 use_tree=_md.use_hierarchy(scope_rows))
-            for dg in fan["digests"]:
-                dg["rebuild"] = _build_acc
-            s, k, planned = await _fan_out(_va.ACCESSORY_SCOPE, fan, oid, so, channels_ok, dry_run)
+            s, k, planned = await _delivery.deliver_digests(
+                so, oid, _va.ACCESSORY_SCOPE, fan["digests"], build=_build_acc,
+                wa_filename="store-visit-accessories.txt", channels_ok=channels_ok, dry_run=dry_run)
             res["accessories"] = {"lines": len(acc_lines), "sent": s, "skipped": k,
                                   "recipients": planned}
         elif acc_lines:
