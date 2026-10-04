@@ -43,6 +43,51 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    'vendor_order_route': {
+        "question": 'How does an order actually reach this vendor, and may a sweep send it?',
+        "homes": ('app/modules/supply/order_transport.py',),
+        "index": ('51.1',),
+        "locks": ('harness_order_transport.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/storevisit/router.py': ('_ot',),
+            'app/modules/supply/router.py': ('_tr',),
+        },
+    },
+    'vendor_order_dialect': {
+        "question": 'What do I say to this vendor API, and what comes back?',
+        "homes": ('app/modules/supply/shopify_draft_order.py',),
+        "index": ('51.2', '51.7'),
+        "locks": ('harness_order_transport.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/storevisit/router.py': ('_shopify',),
+            'app/modules/supply/router.py': ('_shopify',),
+        },
+    },
+    'vendor_api_credential': {
+        "question": 'What bearer token do I use for this vendor right now?',
+        "homes": ('app/modules/supply/api_credential.py',),
+        "index": ('51.6',),
+        "locks": ('harness_order_transport.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/storevisit/router.py': ('_cred',),
+            'app/modules/supply/router.py': ('_cred',),
+        },
+    },
+    'vendor_customer_identity': {
+        "question": "Who is this store on the vendor's side?",
+        "homes": ('app/modules/supply/vendor_customer.py',),
+        "index": ('51.8',),
+        "locks": ('harness_order_transport.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/storevisit/router.py': ('_vc',),
+            'app/modules/supply/order_transport.py': ('_customer',),
+            'app/modules/supply/router.py': ('_vc',),
+        },
+    },
     'alert_send_record': {
         "question": 'Has this alert finding been carried to this address, over this channel?',
         "homes": ('app/modules/storeops/alert_log.py',),

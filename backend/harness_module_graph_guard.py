@@ -334,6 +334,34 @@ def armed_controls(derived) -> None:
     g.FACTS[key]["callers"].pop(sorted(g.FACTS[key]["callers"])[0], None)
     check(_fails(check_snapshot, g, derived), "Z-A a dropped caller must fail check A")
 
+    # Z-BLESS — the rewriter may never lose a fact. On 2026-10-04 it DID: a fact written with a
+    # one-line `"callers": {},` has no closing line of its own, so the span ran on to the NEXT
+    # fact's closing line and rewriting it deleted eleven facts, while the guard still printed OK.
+    # Both halves of the fix are armed, against a synthetic graph so the control cannot rot:
+    # the span may not cross a fact boundary, and the write is verified before it happens.
+    _synth = ("FACTS = {\n"
+              "    'first': {\n"
+              "        \"homes\": ('a.py',),\n"
+              "        \"callers\": {},\n"            # the destructive shape
+              "    },\n"
+              "    'second': {\n"
+              "        \"homes\": ('b.py',),\n"
+              "        \"callers\": {\n"
+              "            'c.py': ('x',),\n"
+              "        },\n"
+              "    },\n"
+              "}\n")
+    _naive = re.compile(r'(    %r: \{.*?"callers": \{).*?(\n        \},)' % 'first', re.S)
+    check(_naive.search(_synth) is not None and "'second'" in _naive.search(_synth).group(0),
+          "Z-BLESS0 control: the OLD span really did swallow the next fact")
+    _fixed = re.compile(r'(    %r: \{(?:(?!\n    \S).)*?"callers": \{)((?:(?!\n    \S).)*?)'
+                        r'(\n        \},)' % 'first', re.S)
+    _m = _fixed.search(_synth)
+    check(_m is None or "'second'" not in _m.group(0),
+          "Z-BLESS the fixed span never swallows another fact — the defect that gutted the graph")
+    check("REFUSING to write" in open(os.path.abspath(__file__), encoding="utf-8").read(),
+          "Z-BLESS2 and the write is verified before it happens, not trusted afterwards")
+
     g = _Graph(copy.deepcopy(base))
     first = sorted(g.FACTS[key]["callers"])[0]
     g.FACTS[key]["callers"][first] = ("_definitely_not_the_bound_name",)
@@ -401,16 +429,29 @@ def bless(derived) -> int:
             block.append("            %r: (%s%s)," % (f, nm, "," if len(names) == 1 else ""))
         block.append("        },")
         new = "\n".join(block)
-        pat = re.compile(r'(    %r: \{.*?"callers": \{).*?(\n        \},)' % key, re.S)
+        # The span may NOT cross into another fact. Without this, a fact written with an empty
+        # one-line `"callers": {},` has no closing `\n        },` of its own, so the scan ran on
+        # until it found the NEXT fact's — and rewriting that span DELETED every fact in between.
+        # It happened on 2026-10-04 and the guard still printed OK on the gutted graph, which is why
+        # the write is now verified below rather than trusted.
+        pat = re.compile(r'(    %r: \{(?:(?!\n    \S).)*?"callers": \{)((?:(?!\n    \S).)*?)'
+                         r'(\n        \},)' % key, re.S)
         m = pat.search(src)
         if not m:
             print(f"  !! could not locate the callers block for {key}", file=sys.stderr)
-            continue
+            return 1
         old = src[m.start():m.end()]
         rebuilt = old[:old.index('        "callers": {')] + new
         if old != rebuilt:
             src = src[:m.start()] + rebuilt + src[m.end():]
             changed += 1
+
+    # VERIFY BEFORE WRITING. A rewriter that can lose a fact must never be the thing that decides
+    # whether it did: the rebuilt source has to still declare every key it started with.
+    missing = [k for k in G.FACTS if ("    %r: {" % k) not in src]
+    if missing:
+        print(f"  !! REFUSING to write: the rewrite would lose {missing}", file=sys.stderr)
+        return 1
     open(path, "w", encoding="utf-8").write(src)
     print(f"blessed: {changed} fact(s) rewritten in app/modules/core/module_graph.py")
     return 0

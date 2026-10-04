@@ -54,7 +54,11 @@ PO_SOURCE = "store_visit"
 # A PO is a DRAFT and nothing more until a human sends it. 'submit' is deliberately NOT a mode: no
 # transport to a vendor's own store exists yet, and a mode that silently did nothing would be worse
 # than refusing the word. See the index entry for what integrating one needs.
-PO_MODES = ("off", "draft")
+PO_MODES = ("off", "draft", "draft_push")
+# The modes that raise a draft purchase order at all. `draft_push` additionally pushes it to the
+# vendor over the route that vendor declares (supply/order_transport, mig 1053) — a DRAFT on their
+# side too: nothing is charged and nobody is emailed. There is still no "submit".
+PO_DRAFT_MODES = ("draft", "draft_push")
 
 # ── THE TO-DO VOCABULARY (one home) ─────────────────────────────────────────────────────────────
 # What a visit can leave undone. A caller renders the label; nothing spells these strings itself.
@@ -78,7 +82,7 @@ HOUSE_CONFIG = {
     "accessory_enabled": False,
     "accessory_channels": ("whatsapp", "email"),
     "accessory_vendor_id": None,  # the commcalc.po_vendor row the accessory PO is raised against
-    "po_mode": "off",            # 'off' | 'draft' — never sends; see PO_MODES
+    "po_mode": "off",            # 'off' | 'draft' | 'draft_push' — never PLACES an order; see PO_MODES
 }
 
 
@@ -126,7 +130,7 @@ def resolve_config(tenant_row=None):
     # A draft PO with no vendor to raise it against is not a draft, it is a failure waiting to
     # happen at send time. Resolving it to 'off' here is the honest answer, and the caller reports
     # the reason rather than erroring on every sweep tick.
-    if out["po_mode"] == "draft" and not out["accessory_vendor_id"]:
+    if out["po_mode"] in PO_DRAFT_MODES and not out["accessory_vendor_id"]:
         out["po_mode"] = "off"
         out["po_mode_reason"] = "no accessory vendor is configured for this tenant"
     return out
