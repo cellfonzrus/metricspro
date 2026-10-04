@@ -11342,12 +11342,14 @@ def _connector_creds(client, org_id, cfg_table):
 
 
 # ── DAILY UPLOAD DUTY (mig 292, owner directive 2026-08-09) ─────────────────────────────────────
-_DUTY_DATE_COL = {          # newest-row column per target table, for deriving the missing range
-    'raw_ma_commission': 'created_at', 'raw_ma_fulfillment': 'created_at',
-    'raw_ma_daily_tx': 'created_at', 'raw_mi': 'created_at',
-    'raw_comp_report': 'begin_date', 'raw_payment_detail': 'payment_date',
-    'raw_sales': 'trans_date', 'daily_sales_feed': 'trans_date',
-}
+# WHICH COLUMN NAMES THE DAY THE DATA IS ABOUT is not decided here. This dict USED to be a second
+# copy of that fact (owner 2026-10-03: *"a fool proof system to avoid such fails"*), and a second copy
+# is a future divergence — it already disagreed with the live schema, calling `raw_ma_commission` and
+# `raw_ma_daily_tx` `created_at` (an ARRIVAL stamp) when both carry `tx_date`, so a duty's "missing
+# range" was measured from when we loaded rather than from what the data covered. The fact now lives
+# in `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` and this reads it; a table the registry declares
+# as period-keyed (None) falls back to the arrival column, which is all such a table can offer.
+# `harness_feed_watchdog.py` §D fails the build if this module re-grows its own copy.
 
 
 def _duty_defaults(client, org_id):
@@ -11362,7 +11364,7 @@ def _duty_defaults(client, org_id):
 def _duty_last_loaded(client, tbl, org_id):
     """Newest data date already in the target table, or None. Read-only and best-effort: a table the
     tenant has never loaded simply yields None, which the caller renders as "no data yet"."""
-    col = _DUTY_DATE_COL.get(tbl, 'created_at')
+    col = _lineage.data_date_column(tbl) or _lineage.freshness_column(tbl)
     try:
         rows = (client.schema('commcalc').table(tbl).select(col)
                 .eq('org_id', org_id).order(col, desc=True).limit(1).execute().data) or []
@@ -12545,13 +12547,18 @@ def _table_feed_freshness(client, org_id, table, date_col, label):
         return out
     if not out["rows"]:
         return out
-    try:
-        latest = (client.schema("commcalc").table(table).select(date_col)
-                  .eq("org_id", org_id).order(date_col, desc=True).limit(1).execute().data) or []
-        if latest:
-            out["latest_data_date"] = str(latest[0].get(date_col) or "")[:10] or None
-    except Exception:
-        pass
+    # `date_col` None is a DECLARATION from the registry, not an omission: the table is period-keyed
+    # (one snapshot per month, replaced not appended) or carries no populated row here, so no column
+    # names its own day. Such a feed is watched on ARRIVAL alone — `latest_data_date` stays None and
+    # the caller's wording degrades to "stopped arriving", which is the only honest reading.
+    if date_col:
+        try:
+            latest = (client.schema("commcalc").table(table).select(date_col)
+                      .eq("org_id", org_id).order(date_col, desc=True).limit(1).execute().data) or []
+            if latest:
+                out["latest_data_date"] = str(latest[0].get(date_col) or "")[:10] or None
+        except Exception:
+            pass
     ing_col = _lineage.freshness_column(table)
     try:
         newest = (client.schema("commcalc").table(table).select(ing_col)
@@ -12591,11 +12598,35 @@ def _data_freshness_report(client, org_id):
     carries, with `days_stale` and a `stale` flag (no data for yesterday/today). The shared core behind the
     GET endpoint, the auto-monitor, and the run-now button. Read-only; degrades gracefully."""
     today = _date.today()
+    # THE WATCHED SET IS DERIVED FROM THE REGISTRY, never listed here (owner 2026-10-03: *"a root cause
+    # analysis why this fails and a fool proof system to avoid such fails"*).
+    #
+    # This list USED to name three feeds — activation details, bill payments and sales — while
+    # `data_lineage_registry.INGEST_TABLES_BY_MODULE` registered more than twenty. Registering a feed
+    # therefore did not get it watched, and a feed nobody had listed could stop silently: measured
+    # 2026-10-03, `raw_comp_report` last carried data for 2026-08-06 and `asset_ledger` for 2026-09-23,
+    # and both were found weeks later by a human noticing a wrong number. That is not a monitor that
+    # missed a feed, it is a monitor that could not see it.
+    #
+    # `watched_feeds()` is the registry minus its DECLARED exclusions, so a feed registered today is
+    # watched today and the set cannot fall behind. `harness_feed_watchdog.py` fails the build if a
+    # registered table is neither watched nor excused, if a monthly archive is watched (the 2026-08-30
+    # false alarm), or if this call is replaced by a hand-written list again.
     feeds = [
         _custom_feed_freshness(client, org_id, "activation_details", "Activation Details (activation basis)"),
         _custom_feed_freshness(client, org_id, "bill_payment_transactions", "Bill Payment Transactions"),
         _sales_feed_freshness(client, org_id),
     ]
+    # The sales pair has its own probe above (it reports the live feed AND its monthly archive side by
+    # side), so it is not probed twice.
+    _already = {_lineage.freshness_source("sales")}
+    for wf in _lineage.watched_feeds():
+        if wf["table"] in _already:
+            continue
+        f = _table_feed_freshness(client, org_id, wf["table"], wf["data_date_column"],
+                                  _lineage.feed_label(wf["table"]))
+        f["cadence_days"] = wf["cadence_days"]
+        feeds.append(f)
     for f in feeds:
         ld = f.get("latest_data_date")
         d = None
@@ -12605,7 +12636,20 @@ def _data_freshness_report(client, org_id):
             except Exception:
                 d = None
         f["days_stale"] = d
-        f["stale"] = bool(f.get("rows")) and (d is None or d >= 2)
+        # LATE IS RELATIVE TO THE FEED'S OWN CADENCE, declared in the registry. One day's grace on top
+        # (a daily feed is late at 2 days, as it always was; a monthly snapshot is not late at 2 days,
+        # which is what made watching slow feeds impossible before).
+        cad = int(f.get("cadence_days") or _lineage.DEFAULT_FEED_CADENCE)
+        f.setdefault("cadence_days", cad)
+        if d is None and f.get("last_ingest_at"):
+            # Arrival-only feed: judge it on when a row last LANDED, since no column names its day.
+            try:
+                ia = _datetime.strptime(str(f["last_ingest_at"])[:10], "%Y-%m-%d").date()
+                f["days_stale"] = d = (today - ia).days
+                f["stale_basis"] = "arrival"
+            except Exception:
+                pass
+        f["stale"] = bool(f.get("rows")) and (d is None or d >= cad + 1)
     # Reports that arrived but matched NO import rule, persisted by the sweep (a renamed/unruled report whose
     # data never imported). Guarded — an absent column, no rows, or a parse miss all yield []. Aggregated
     # across the tenant's mailbox account(s), deduped.

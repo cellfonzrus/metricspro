@@ -5588,6 +5588,8 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
 | `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
+| `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `FEED_CADENCE_BY_TABLE` / `FEED_LABEL_BY_TABLE` / `NOT_WATCHED_REASONS` (code registry) — **which feeds are watched, how often each is due, which column names the day its DATA is about (distinct from the ARRIVAL column in `FRESHNESS_COLUMN_BY_TABLE`), and the human name each is reported under.** `watched_feeds()` is DERIVED from `INGEST_TABLES_BY_MODULE` minus the declared exclusions, so a registered feed is watched the same day — 22 watched, 24 excused with a reason, 0 unaccounted | code | `router._data_freshness_report` (the set, each cadence, each label), `router._duty_last_loaded` (`data_date_column()` → `freshness_column()` fallback; `_DUTY_DATE_COL` deleted); lock `harness_feed_watchdog.py` (50) — §19.43 |
+| `commcalc.asset_ledger` / `pos_tender_summary` / `inventory_value` — their **arrival** column, newly declared: these three have NO `created_at`, so the default left `last_ingest_at` None and the §19.18 arrival-vs-content diagnosis was dead on them | migrations (unchanged); `FRESHNESS_COLUMN_BY_TABLE` declares `uploaded_at` / `updated_at` / `updated_at` | `_table_feed_freshness` via `data_lineage_registry.freshness_column` — §19.43 |
 | `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
 | *(none — §40 One domain creates no table and touches no database; its facts are deploy config, see §18)* | — | — |
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
@@ -5787,6 +5789,7 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | `GET /commcalc/vip/summary` · `GET /commcalc/vip/invoices` (DISTRIBUTOR INVOICES) — additive `date_from` / `date_to` (inclusive days over `created_on`) + `stores` / `markets` (PIPE-separated); both now read ONE selector, so the table always adds up to the tiles; `/summary` also serves `unresolved` (the invoices a store/market selection could not bind) | `commcalc/router.vip_summary` / `vip_invoices_list` → `router._vip_select` → pure `commcalc/vip_invoice_filter.py` + `account.statement_filter.resolve_store_matcher` | §15v |
 | `GET /commcalc/vip/filter-options` — additionally serves `markets` (`core.scope.org_market_options`) and `stores` (`org_store_options`, one option per physical store + only the distributor spellings the matcher cannot bind, via `statement_filter.unbound_spellings`) | `commcalc/router.vip_filter_options` | §15v, §13c, §13e |
 | *(no endpoint added)* — `POST /commcalc/epay/sweep/run-due` / `run` are unchanged in shape; the run's `success` is now decided on `rows_landed` rather than on the status word, so an unverified zero records an ATTEMPT instead of advancing `last_run_at` | `router._do_epay_sweep` → `epay_sweep.run_epay_sweep` (ledger settled before reporting) | §19.41 |
+| *(no endpoint added)* — `GET /commcalc/data-freshness`, its auto-monitor and the run-now button are unchanged in shape; their feed SET is now derived from the registry rather than three names at the call site, and each row gains `cadence_days` (plus `stale_basis: "arrival"` on a feed with no data-date column). ⚠ **No notification channel is wired to this report** — a tenant still has to look; routing a stale-feed alarm into the digest is NOT in §19.43 | `router._data_freshness_report` → `_lineage.watched_feeds()` / `feed_cadence_days()` / `feed_label()` | §19.43 |
 | `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
 | `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
 | `GET /closing/attempts` — additive: `refusals`, `last_refusal_code`, `last_refusal_detail`, `last_refused_at` per group, `refused` / `refusal_code` / `refusal_detail` per try; `attempts` means REAL tries; a store-day whose only events are refusals always qualifies for `only_review=true` | `closing/router.closing_attempts` (dereferencing `submit_refusal.is_real_try`) | §29.11 |
@@ -6056,6 +6059,7 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
@@ -6383,6 +6387,71 @@ upload path** (the five manual loads above are the proof it works), or by a port
 
 **REPORTED, NOT FIXED, and NOT this cause:** `commcalc.asset_ledger` has nothing since 2026-09-23. It is not a
 sweep with an `empty_ok` leg, so the silent-zero class does not explain it; it needs its own look.
+
+§19.43 **A MONITOR THAT WATCHES A HAND-WRITTEN LIST OF FEEDS CANNOT SEE THE FEED THAT STOPPED — the
+watched set is now DERIVED from the registry (owner directive 2026-10-03; fixed, no migration).**
+
+Owner, after two feeds had died unnoticed: *"need a root cause analysis why this fails and a fool prrof
+system to avoid such fails ... this cna become a probelem if it is released as a subscription model"*.
+
+**THE TRIGGERING MISTAKE WAS MINE, and it is the same class.** Asked why September sales were missing, I
+queried `commcalc.raw_sales`, saw nothing after 2026-08-31, and reported that the POS sales feed had died.
+It had not: `daily_sales_feed` carried **September complete (22,914 rows, all 30 days) and October 1–3**,
+and `coa._sales_union_rows` already reads both tables merged, so no figure was ever affected. `raw_sales` is
+the MONTHLY archive, promoted at month close — exactly the false alarm `data_lineage_registry` was created
+for on 2026-08-30 ("stale since 8-09"). The registry held the right answer (`freshness_source('sales')`)
+and **nothing obliged a reader to ask it**. The schedule derivation of §14v made the identical error the
+same day, concluding nine reps' history ended on 31 August.
+
+**THE REAL DEFECT, one layer up.** `router._data_freshness_report` watched THREE feeds — activation
+details, bill payments and sales — named by hand at the call site, while `INGEST_TABLES_BY_MODULE`
+registered **more than twenty**. Registering a feed did not get it watched, so a feed nobody had listed
+could stop for weeks with no alarm. Measured 2026-10-03, house org: `raw_comp_report` last carried data for
+2026-08-06 (§19.41) and `asset_ledger` for 2026-09-23. Both were found by a human questioning a number.
+That is not a monitor that missed a feed; it is a monitor that could not see it. A third copy of the same
+class of fact sat in `router._DUTY_DATE_COL`, and it had already DRIFTED — calling `raw_ma_commission` and
+`raw_ma_daily_tx` `created_at`, an ARRIVAL stamp, when both carry `tx_date`, so a daily-upload duty
+measured its missing range from when we loaded rather than from what the data covered.
+
+**ONE FACT, ONE HOME, DEREFERENCED.** `data_lineage_registry` now carries, beside the arrival column it
+already held: `DATA_DATE_COLUMN_BY_TABLE` (which column names the day the DATA is about — a different
+question from which column says it ARRIVED, and the whole §19.18 diagnosis needs both),
+`FEED_CADENCE_BY_TABLE` + `DEFAULT_FEED_CADENCE` (how often a feed is due, so a monthly snapshot is not
+late at two days and a daily feed still is), `FEED_LABEL_BY_TABLE` (a watchdog line a tenant cannot read
+is a line nobody acts on; RULE TWO holds — our table and report names only), and `NOT_WATCHED_REASONS`.
+`watched_feeds()` is **derived** from `INGEST_TABLES_BY_MODULE` minus the declared exclusions, so a feed
+registered today is watched today and the list cannot fall behind the registry because it IS the registry.
+**22 feeds watched, 24 excused with a stated reason, 0 unaccounted.** Callers dereference: the monitor
+takes its set, each cadence and each label from the registry, and `_duty_last_loaded` reads
+`data_date_column()` with `freshness_column()` as its fallback; `_DUTY_DATE_COL` is deleted.
+
+**WHAT THE WIDER COVERAGE FOUND IMMEDIATELY** — three tables have **no `created_at` column at all**
+(`asset_ledger`, `pos_tender_summary`, `inventory_value`), so the default left `last_ingest_at` None and
+the arrival-vs-content discriminator was dead on three more feeds, §19.18 over again. Declared in
+`FRESHNESS_COLUMN_BY_TABLE` (`uploaded_at` / `updated_at`). Live, house org 2026-10-03, the watchdog now
+reads the asset ledger as **16 days late, data ending 2026-09-17 and the file last arriving 2026-09-28** —
+which is the actionable sentence ("it stopped arriving on the 28th"), not merely "something is stale".
+
+**A feed with no column naming its own day** (a period-keyed monthly snapshot such as `raw_mi`, or a table
+unpopulated on every org here) declares `None` and is watched on ARRIVAL alone. `None` is a DECLARATION:
+the lock requires an entry for every watched table, so a missing column is a stated fact, never a gap.
+
+**LOCK — `harness_feed_watchdog.py`, 50 checks, DB-free.** §A every registered ingest table is watched or
+excused with a reason ≥15 characters, and the two feeds whose silence caused this work are pinned as
+watched by name · §B no MONTHLY archive is ever watched, and every one is excused by name · §C cadence and
+data-date column declared for every watched feed, lateness judged against the feed's own cadence · §D the
+callers dereference and keep no second copy, `_DUTY_DATE_COL` must stay gone · §E every feed is nameable
+and the fallback never yields a bare identifier · §F the un-wiring lock — `watched_feeds()` must stay
+DERIVED from `INGEST_TABLES_BY_MODULE` and honour `NOT_WATCHED_REASONS`, the monitor's CODE may name no
+feed table (comments may, and §F4b proves the comment-stripper is not passing vacuously), and the registry
+must stay import-light. Verified red on the pre-change shape: replacing the derived loop with a literal
+fails §D1.
+
+**NOT FIXED HERE, AND SAID PLAINLY.** This makes a dead feed impossible to miss; it does not make a feed
+arrive, and it sends nothing. The report is read by `GET /commcalc/data-freshness`, its monitor and the
+run-now button — **no notification channel is wired to it**, so a tenant still has to look. Routing a
+stale-feed alarm into the existing digest is the obvious next step and is NOT in this change. The asset
+ledger's own silence since 2026-09-28 is now visible and still **unexplained** — it needs its own look.
 
 §19.42 **THE SERVICE FEE ON A BILL PAYMENT IS NOT A TRANSACTION A CONTRACT TYPE COULD HAVE DESCRIBED — the
 Sales Report asked the owner to map 693 walk-in bill payments "so they count as activations" (owner report

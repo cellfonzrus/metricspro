@@ -214,6 +214,14 @@ FRESHNESS_COLUMN_BY_TABLE = {
     # implicit in the one list that happened to know about it.
     "vip_paygo_payments": "swept_at",
     "vip_credit_memos": "swept_at",
+    # THESE THREE TABLES HAVE NO `created_at` AT ALL (measured against the live schema 2026-10-03), so
+    # the default left `last_ingest_at` None and the watchdog could only ever say "stopped arriving" —
+    # the §19.18 discriminator dead again, on three more feeds. Found the moment the watchdog began
+    # covering every registered feed instead of three: `asset_ledger` reported 16 days late with no
+    # arrival time to explain whether the file had stopped or its content had frozen.
+    "asset_ledger": "uploaded_at",
+    "pos_tender_summary": "updated_at",
+    "inventory_value": "updated_at",
 }
 
 # ── WHICH COLUMNS MUST CARRY A VALUE — the COMPLETENESS axis (owner defect 2026-09-26, index §19.28) ──
@@ -407,3 +415,220 @@ def display_sources(item: str = "sales") -> tuple:
     """The table(s) a DISPLAY aggregation reads for a logical item (the union of a live/monthly pair)."""
     pair = LIVE_VS_MONTHLY_PAIRS.get(item)
     return tuple(pair) if pair else (freshness_source(item),)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# WHICH FEEDS ARE WATCHED, AND HOW OFTEN EACH IS DUE — the watchdog's one home (owner 2026-10-03)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, after two feeds died unnoticed: *"need a root cause analysis why this fails and a fool proof
+# system to avoid such fails"*.
+#
+# THE CLASS, named. The registry above already knows every external feed. The freshness monitor watched
+# THREE of them — activation details, bill payments and sales — named by hand at the call site. So
+# registering a feed did not get it watched, and a feed nobody listed could stop for seven weeks with no
+# alarm: `raw_comp_report` last carried data on 2026-08-06 and `asset_ledger` on 2026-09-23, and BOTH
+# were found by a human noticing a wrong number weeks later. That is not a monitor that missed a feed;
+# it is a monitor that could not see it. The same shape as §19.18 three times over — the fact is written
+# down here and the caller kept its own copy.
+#
+# ONE FACT, ONE HOME, DEREFERENCED. A feed's cadence and its data-date column live HERE and callers READ
+# them. `watched_feeds()` is DERIVED from INGEST_TABLES_BY_MODULE, so a feed added to this registry is
+# watched the same day — the list cannot fall behind the registry because it IS the registry.
+#
+# LOCKED SO IT CANNOT UN-WIRE. `harness_feed_watchdog.py` fails the build when a registered ingest table
+# is neither watched nor explicitly excused here, when a MONTHLY archive is watched (the 2026-08-30 false
+# alarm), when a watched table has no declared data-date column, or when a caller re-implements either
+# map. An omission is therefore impossible; only a DECLARED exclusion, with its reason, compiles.
+
+# How many days without new data makes a feed late. A feed's cadence is a property OF THE FEED, so it is
+# declared, never inferred from how long the table has been quiet.
+CADENCE_DAILY = 1
+CADENCE_WEEKLY = 7
+CADENCE_MONTHLY = 31
+
+# ── WHICH COLUMN MEANS "THE DATE OF THE THING" ────────────────────────────────────────────────────
+# NOT the same question as FRESHNESS_COLUMN_BY_TABLE above, and the whole diagnosis needs both: that one
+# says when a row ARRIVED, this one says what day the DATA is about. An old arrival means the file
+# stopped coming; a recent arrival carrying an old data date means the file still comes and its content
+# is frozen — a different phone call, as `_table_feed_freshness` already documents.
+#
+# `None` means the table carries no single column naming its own day (it is period-keyed, or it is not
+# yet populated on any org here so no column can be declared honestly). Such a feed is watched on
+# ARRIVAL only. `None` is a DECLARATION — the lock requires an entry for every watched table, so a
+# missing column is a stated fact rather than a silent gap.
+DATA_DATE_COLUMN_BY_TABLE = {
+    # sales — the live hourly feed and its monthly archive (the archive is not watched; see below)
+    LIVE_SALES_FEED: "trans_date",
+    MONTHLY_SALES: "trans_date",
+    "raw_sales_invoice": "trans_date",
+    "raw_sales_invoice_tender": "trans_date",
+    # carrier / processor money feeds
+    "raw_payment_detail": "payment_date",
+    "raw_comp_report": "begin_date",          # the statement's own coverage start
+    "raw_ma_commission": "tx_date",
+    MA_DAILY_TX: "tx_date",
+    "raw_ma_fulfillment": "date_ordered",
+    # period-keyed snapshots: one snapshot per month, replaced not appended, so no row names a day
+    "raw_mi": None,
+    COMMISSION_PER_DEVICE_FEED: None,
+    # day-grain operational feeds
+    "raw_dlar_rep": "as_of_date",
+    "raw_dlar_store": "as_of_date",
+    "pos_tender_summary": "close_date",
+    "inventory_value": "as_of_date",
+    "asset_ledger": "acquired_date",          # when the distributor booked the unit to us
+    # Unpopulated on every org in this deployment, so no data-date column is declared from a real row.
+    # Watched on arrival; add the column here the day one lands (the lock makes that a conscious change).
+    EPAY_DAILY: None,
+    "merchant_settlement_day": None,
+    "merchant_settlement_batch": None,
+    "pos_builtin_daily_sales": None,
+    "raw_sales_product": None,
+    "royalty_report": None,
+    "ma_overview_upload": None,
+}
+
+# ── HOW OFTEN EACH WATCHED FEED IS DUE ────────────────────────────────────────────────────────────
+# The default is daily, deliberately: a feed nobody thought about is better watched too keenly than not
+# at all. A slower feed says so here.
+FEED_CADENCE_BY_TABLE = {
+    "raw_mi": CADENCE_MONTHLY,                # one monthly subscriber snapshot
+    COMMISSION_PER_DEVICE_FEED: CADENCE_MONTHLY,
+    "royalty_report": CADENCE_MONTHLY,        # the franchisor's monthly statement
+    "ma_overview_upload": CADENCE_MONTHLY,
+    "raw_ma_fulfillment": CADENCE_WEEKLY,
+    "inventory_value": CADENCE_WEEKLY,        # an aging snapshot, not a transaction stream
+}
+DEFAULT_FEED_CADENCE = CADENCE_DAILY
+
+# ── FEEDS DELIBERATELY NOT WATCHED, each with its reason ──────────────────────────────────────────
+# A registered ingest table absent from this map AND absent from DATA_DATE_COLUMN_BY_TABLE fails the
+# build. So this is the only way a feed goes unwatched, and it costs a sentence saying why.
+NOT_WATCHED_REASONS = {
+    # The monthly side of a LIVE_VS_MONTHLY pair. Watching it IS the 2026-08-30 false alarm: it moves
+    # only at month close, so it reads "stale" while the live feed is current. Measured 2026-10-03 —
+    # raw_sales' newest row was 2026-08-31 while daily_sales_feed carried that same day's trading.
+    MONTHLY_SALES: "monthly archive of the sales pair — freshness reads the live feed",
+    "pos_builtin_sales": "monthly archive of the pos_builtin pair — freshness reads the daily stream",
+    # Already watched, per report_key, by the custom-import probe — watching the shared JSONB table
+    # would answer for whichever report arrived last and hide the one that stopped.
+    CUSTOM_CAPTURE: "watched per report_key by the custom-import probe, not as one table",
+    # Reference data replaced wholesale when the catalog changes. It has no cadence to be late against.
+    "raw_catalog": "reference catalog, replaced on change — no arrival cadence",
+    "raw_categories": "reference catalog, replaced on change — no arrival cadence",
+    # Org setup / template uploads: they arrive when a human changes the org, not on a schedule.
+    "store_mapping": "org setup upload — arrives when the org changes, not on a cadence",
+    "storeops.employees": "org setup upload — arrives when the org changes, not on a cadence",
+    "storeops.stores": "org setup upload — arrives when the org changes, not on a cadence",
+    "storeops.store_alias": "org setup upload — arrives when the org changes, not on a cadence",
+    "storeops.store_merchant_id": "org setup upload — arrives when the org changes, not on a cadence",
+    "closing_tender_def": "org config sheet — arrives when the org changes it",
+    "closing_tender_map": "org config sheet — arrives when the org changes it",
+    "storeops.platform_billing_connector": "connector config row, not a data feed",
+    # Entered by people in the app, so an absence is a staffing fact, not a feed fault. The closing
+    # module raises its own exceptions for a missing declaration.
+    DAILY_CLOSING: "entered by employees in-app — the closing module reports a missing declaration",
+    # On-demand pulls with no promised cadence; a stale price list is a price question, not an outage.
+    "vendor_catalog_price": "on-demand vendor price pull — no promised cadence",
+    "storeops.google_review_store": "review sweep — a quiet week is not an outage",
+    "storeops.google_review_snapshot": "review sweep — a quiet week is not an outage",
+    "storeops.google_review_item": "review sweep — a quiet week is not an outage",
+    # Line children of a watched parent: the parent's arrival is the feed's arrival, and watching both
+    # would report one outage twice.
+    "royalty_report_line": "line child of royalty_report, which is watched",
+    # The `pos` schema is outside the commcalc-scoped probe's reach. Stated rather than omitted, so
+    # extending the probe to that schema is a visible change to this line.
+    "pos.sales": "pos schema — outside the commcalc-scoped probe; watch when the probe spans schemas",
+    "pos.receipt_imports": "pos schema — outside the commcalc-scoped probe",
+    "pos.customers": "pos schema — outside the commcalc-scoped probe",
+    "pos.activations": "pos schema — outside the commcalc-scoped probe",
+    "activation_rebate_ledger": "aggregate written by the pos module from its own feeds, not an ingest",
+}
+
+
+def data_date_column(table: str):
+    """PURE: the column naming the DAY THE DATA IS ABOUT for `table`, or None when the table carries no
+    such column (period-keyed, or unpopulated so none is declared). Distinct from freshness_column(),
+    which names when a row ARRIVED — see the header above."""
+    return DATA_DATE_COLUMN_BY_TABLE.get(table)
+
+
+def feed_cadence_days(table: str) -> int:
+    """PURE: how many days without new data makes `table` late. Declared per feed; daily by default."""
+    return int(FEED_CADENCE_BY_TABLE.get(table, DEFAULT_FEED_CADENCE))
+
+
+def is_monthly_archive(table: str) -> bool:
+    """PURE: True when `table` is the MONTHLY side of a live/monthly pair — the side a freshness check
+    must never measure."""
+    return any(table == pair[1] for pair in LIVE_VS_MONTHLY_PAIRS.values())
+
+
+def watched_feeds() -> tuple:
+    """PURE: every registered ingest feed a freshness check must cover, DERIVED from
+    INGEST_TABLES_BY_MODULE — so a feed registered today is watched today.
+
+    Each entry: {table, module, data_date_column, cadence_days}. `data_date_column` None means watch
+    ARRIVAL only. Tables named in NOT_WATCHED_REASONS are excluded, by declaration; the harness fails
+    the build on any registered table that is in neither place, so the set cannot quietly shrink."""
+    out = []
+    for module, tables in INGEST_TABLES_BY_MODULE.items():
+        for t in tables:
+            if t in NOT_WATCHED_REASONS:
+                continue
+            out.append({"table": t, "module": module,
+                        "data_date_column": data_date_column(t),
+                        "cadence_days": feed_cadence_days(t)})
+    return tuple(out)
+
+
+def unwatched_reason(table: str):
+    """PURE: why `table` is deliberately not watched, or None when it IS watched."""
+    return NOT_WATCHED_REASONS.get(table)
+
+
+# ── HOW A FEED IS NAMED TO A HUMAN ────────────────────────────────────────────────────────────────
+# A watchdog line a tenant cannot read is a line nobody acts on, and "raw_comp_report is 7 days late"
+# is not a sentence an owner should have to decode. RULE TWO holds: these are the names of OUR tables
+# and the reports they carry, never a carrier, tenant or product branch — the carrier-vocabulary guard
+# reads this file. Anything not named here derives a readable label from the table itself, so a new
+# feed is never unnamed; naming it well is a one-line change.
+FEED_LABEL_BY_TABLE = {
+    LIVE_SALES_FEED: "Sales transactions (live feed)",
+    MONTHLY_SALES: "Sales transactions (monthly reconciliation)",
+    "raw_payment_detail": "Payment detail",
+    "raw_comp_report": "Compensation report (commission basis)",
+    "raw_mi": "Subscriber base snapshot",
+    "raw_dlar_rep": "Daily activity by rep",
+    "raw_dlar_store": "Daily activity by store",
+    "raw_ma_commission": "Master-agent commission",
+    MA_DAILY_TX: "Master-agent daily transactions",
+    "raw_ma_fulfillment": "Master-agent fulfilment orders",
+    "pos_tender_summary": "Register tender summary",
+    "inventory_value": "Inventory aging snapshot",
+    "asset_ledger": "Asset lending ledger (device cost)",
+    COMMISSION_PER_DEVICE_FEED: "Per-device rebate history",
+    EPAY_DAILY: "Settlement transactions",
+    "merchant_settlement_day": "Card settlement by day",
+    "merchant_settlement_batch": "Card settlement by batch",
+    "raw_sales_product": "Sales by product",
+    "raw_sales_invoice": "Sales by invoice",
+    "raw_sales_invoice_tender": "Sales by invoice tender",
+    "pos_builtin_daily_sales": "In-house register sales (daily)",
+    "royalty_report": "Royalty statement",
+    "ma_overview_upload": "Master-agent overview",
+}
+
+
+def feed_label(table: str) -> str:
+    """PURE: the human name for `table` — the declared label, else one derived from the table name, so
+    every feed has a readable name and none is left as a bare identifier."""
+    lbl = FEED_LABEL_BY_TABLE.get(table)
+    if lbl:
+        return lbl
+    base = table.split(".")[-1]
+    for prefix in ("raw_", "pos_builtin_"):
+        if base.startswith(prefix):
+            base = base[len(prefix):]
+            break
+    return base.replace("_", " ").strip().capitalize() or table
