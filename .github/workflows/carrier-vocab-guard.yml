@@ -688,6 +688,9 @@ jobs:
       - name: Run the per-channel send-record lock (an alert's record names the CHANNEL that carried it, so a failed WhatsApp is still owed the finding; one send record, one delivery ladder, no sweep keeping a private copy — index §15.1, §15.2)
         working-directory: backend
         run: python3 harness_alert_channel_record.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the alert auto-fix lock (an alert that can be fixed says how, and a recorded silence suppresses nothing — index §15.1)
+        working-directory: backend
+        run: python3 harness_alert_autofix.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

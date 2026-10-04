@@ -21,10 +21,15 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
 FE = os.path.join(os.path.dirname(ROOT), "frontend", "src")
-HOME = "modules/commcalc/multimonth_config.py"
+HOME = home_under_app("multimonth_offer")    # the graph is the one home for the ruling
 FE_HOME = "app/(platform)/commcalc/_lib/multimonthOffer.ts"
 FE_HOOK = "app/(platform)/commcalc/_lib/multimonth.ts"
 OFFERS = re.compile(r"multi[\-‑ ]?month|multimonth|installment_comm_sale|residual_installment_comm", re.I)
