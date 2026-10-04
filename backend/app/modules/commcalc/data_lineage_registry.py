@@ -466,11 +466,11 @@ DATA_DATE_COLUMN_BY_TABLE = {
     "raw_payment_detail": "payment_date",
     "raw_comp_report": "begin_date",          # the statement's own coverage start
     "raw_ma_commission": "tx_date",
-    "raw_ma_daily_tx": "tx_date",
+    MA_DAILY_TX: "tx_date",
     "raw_ma_fulfillment": "date_ordered",
     # period-keyed snapshots: one snapshot per month, replaced not appended, so no row names a day
     "raw_mi": None,
-    "raw_vendor_rebate": None,
+    COMMISSION_PER_DEVICE_FEED: None,
     # day-grain operational feeds
     "raw_dlar_rep": "as_of_date",
     "raw_dlar_store": "as_of_date",
@@ -479,7 +479,7 @@ DATA_DATE_COLUMN_BY_TABLE = {
     "asset_ledger": "acquired_date",          # when the distributor booked the unit to us
     # Unpopulated on every org in this deployment, so no data-date column is declared from a real row.
     # Watched on arrival; add the column here the day one lands (the lock makes that a conscious change).
-    "raw_epay_daily_tx": None,
+    EPAY_DAILY: None,
     "merchant_settlement_day": None,
     "merchant_settlement_batch": None,
     "pos_builtin_daily_sales": None,
@@ -493,7 +493,7 @@ DATA_DATE_COLUMN_BY_TABLE = {
 # at all. A slower feed says so here.
 FEED_CADENCE_BY_TABLE = {
     "raw_mi": CADENCE_MONTHLY,                # one monthly subscriber snapshot
-    "raw_vendor_rebate": CADENCE_MONTHLY,
+    COMMISSION_PER_DEVICE_FEED: CADENCE_MONTHLY,
     "royalty_report": CADENCE_MONTHLY,        # the franchisor's monthly statement
     "ma_overview_upload": CADENCE_MONTHLY,
     "raw_ma_fulfillment": CADENCE_WEEKLY,
@@ -512,7 +512,7 @@ NOT_WATCHED_REASONS = {
     "pos_builtin_sales": "monthly archive of the pos_builtin pair — freshness reads the daily stream",
     # Already watched, per report_key, by the custom-import probe — watching the shared JSONB table
     # would answer for whichever report arrived last and hide the one that stopped.
-    "raw_custom_import": "watched per report_key by the custom-import probe, not as one table",
+    CUSTOM_CAPTURE: "watched per report_key by the custom-import probe, not as one table",
     # Reference data replaced wholesale when the catalog changes. It has no cadence to be late against.
     "raw_catalog": "reference catalog, replaced on change — no arrival cadence",
     "raw_categories": "reference catalog, replaced on change — no arrival cadence",
@@ -527,7 +527,7 @@ NOT_WATCHED_REASONS = {
     "storeops.platform_billing_connector": "connector config row, not a data feed",
     # Entered by people in the app, so an absence is a staffing fact, not a feed fault. The closing
     # module raises its own exceptions for a missing declaration.
-    "daily_closing": "entered by employees in-app — the closing module reports a missing declaration",
+    DAILY_CLOSING: "entered by employees in-app — the closing module reports a missing declaration",
     # On-demand pulls with no promised cadence; a stale price list is a price question, not an outage.
     "vendor_catalog_price": "on-demand vendor price pull — no promised cadence",
     "storeops.google_review_store": "review sweep — a quiet week is not an outage",
@@ -602,13 +602,13 @@ FEED_LABEL_BY_TABLE = {
     "raw_dlar_rep": "Daily activity by rep",
     "raw_dlar_store": "Daily activity by store",
     "raw_ma_commission": "Master-agent commission",
-    "raw_ma_daily_tx": "Master-agent daily transactions",
+    MA_DAILY_TX: "Master-agent daily transactions",
     "raw_ma_fulfillment": "Master-agent fulfilment orders",
     "pos_tender_summary": "Register tender summary",
     "inventory_value": "Inventory aging snapshot",
     "asset_ledger": "Asset lending ledger (device cost)",
-    "raw_vendor_rebate": "Per-device rebate history",
-    "raw_epay_daily_tx": "Settlement transactions",
+    COMMISSION_PER_DEVICE_FEED: "Per-device rebate history",
+    EPAY_DAILY: "Settlement transactions",
     "merchant_settlement_day": "Card settlement by day",
     "merchant_settlement_batch": "Card settlement by batch",
     "raw_sales_product": "Sales by product",

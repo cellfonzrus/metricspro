@@ -241,5 +241,24 @@ ok("F6 watched_feeds() is deterministic — same answer twice",
 ok("F7 every watched entry carries all four keys the caller reads",
    all(set(w) == {"table", "module", "data_date_column", "cadence_days"} for w in WATCHED.values()))
 
+# A TABLE THAT ALREADY HAS A CONSTANT MUST BE KEYED BY IT, never re-spelled as a literal. Caught in CI
+# the hard way: the first cut of these maps spelled `raw_vendor_rebate` three times and
+# `harness_inventory_integrity_lock.py` (d) went red — it requires the commission feed to be spelled
+# ONCE in this file, as `COMMISSION_PER_DEVICE_FEED`. That rule is right for every constant here, so
+# it is pinned for all of them rather than left as one harness's special case.
+_CONSTS = {name: val for name, val in vars(LIN).items()
+           if name.isupper() and isinstance(val, str) and not name.startswith("_")}
+_WATCHDOG_MAPS = (LIN.DATA_DATE_COLUMN_BY_TABLE, LIN.FEED_CADENCE_BY_TABLE,
+                  LIN.FEED_LABEL_BY_TABLE, LIN.NOT_WATCHED_REASONS)
+_reg_src = _src(REGISTRY)
+_after = _reg_src.split("WHICH FEEDS ARE WATCHED, AND HOW OFTEN EACH IS DUE", 1)[-1]
+_respelled = sorted({t for m in _WATCHDOG_MAPS for t in m
+                     if t in _CONSTS.values() and f'"{t}":' in _after})
+ok("F8 a table with a registry constant is keyed BY the constant, not re-spelled",
+   not _respelled,
+   f"re-spelled as literals: {_respelled} — use the constant (this is what turned CI red once)")
+ok("F8b …and the check is not vacuous — some watched table IS keyed by a constant",
+   any(t in _CONSTS.values() for m in _WATCHDOG_MAPS for t in m))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
