@@ -222,6 +222,18 @@ def db_with(tries, closing=None, resume_cols=True):
                                     "t_cash", "released_at", "correction_count", "dedup_key"]
     db.tables["closing_attempt"] = [dict(t) for t in tries]
     db.tables["daily_closing"] = [dict(closing)] if closing else []
+    # The store-identity tables the REAL resolver reads (account.coa.store_resolver), so the
+    # store-day key under test is the platform's own answer and not a harness stand-in. The
+    # B-1800 / '1800 Great Neck Rd' pair is the live shape measured 2026-10-04.
+    db.declared["store_mapping"] = ["org_id", "store_code", "store_address"]
+    db.declared["store_aliases"] = ["org_id", "alias", "store_code"]
+    db.tables["store_mapping"] = [
+        {"org_id": HOUSE, "store_code": "B-117", "store_address": "117 E Burnside Ave"},
+        {"org_id": HOUSE, "store_code": "B-1800", "store_address": "1800 Great Neck Rd"},
+    ]
+    db.tables["store_aliases"] = [
+        {"org_id": HOUSE, "alias": "1800 Great Neck rd", "store_code": "B-1800"},
+    ]
     cr.sb = lambda: db
     cr.get_supabase = lambda: db
     return db
@@ -360,6 +372,105 @@ check("H5d it writes no row and updates no money column",
 check("H5e it carries REVERT notes", _mig.count("-- REVERT") >= 2)
 check("H5f it never touches the closings table",
       "alter table commcalc.daily_closing" not in _mig.lower())
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== I. one store-day, one key — the submit trail and the closing row spell stores "
+      "differently ==")
+# MEASURED LIVE 2026-10-04, after mig 1052 was applied. Seven house store-days had an ACCEPTED
+# closing under `B-1800` and the attempt rows for the same submit, to the second, under
+# `1800GreatNeckRd`: the owner-run store_identity_merge runbook re-keyed the closings onto the
+# canonical code and left the audit trail on the spelling the picker sent. Joining the two tables on
+# the raw string therefore called seven FINISHED days AWAITING_CORRECTION — money already accepted
+# and banked, shown to a manager as a correction to chase. That is this section.
+
+check("I1 the module declares the key", callable(getattr(ud, "store_key", None)))
+check("I1b and it is pure — the resolver is handed in, never fetched",
+      "def store_key(resolve, store_code)" in MOD_SRC)
+
+_r8 = store_resolver_for_test = None
+from app.modules.account.coa import store_resolver as _real_resolver          # noqa: E402
+_idb = db_with([])
+_rs = _real_resolver(_idb, HOUSE)
+check("I2 the two live spellings of one store collapse to ONE key",
+      ud.store_key(_rs, "1800GreatNeckRd") == ud.store_key(_rs, "B-1800") != "")
+check("I2b and two DIFFERENT stores never collapse",
+      ud.store_key(_rs, "B-117") != ud.store_key(_rs, "B-1800"))
+check("I2c case alone is not a second store (the b-1115 phantom, index §13)",
+      ud.store_key(_rs, "b-117") == ud.store_key(_rs, "B-117"))
+check("I2d a store the resolver cannot place keeps its own raw code, never someone else's",
+      ud.store_key(_rs, "B-NOPE") == "B-NOPE")
+check("I3 no resolver at all degrades to the raw code rather than raising",
+      ud.store_key(None, " B-117 ") == "B-117")
+check("I3b a resolver that RAISES degrades the same way",
+      ud.store_key(lambda _: (_ for _ in ()).throw(RuntimeError("boom")), "B-117") == "B-117")
+check("I3c a blank store code keys to blank, never to a real store",
+      ud.store_key(_rs, None) == "" and ud.store_key(_rs, "  ") == "")
+
+# THE REGRESSION. The closing is filed under the canonical code, the tries under the twin spelling.
+# Before this key, /closing/resume saw no closing and offered the rep a finished day to redo.
+_db = db_with([try_row(1, store_code="1800GreatNeckRd", employee_name="Leslie Martinez",
+                       blocked=False, accepted=True)],
+              closing={"id": "c1", "org_id": HOUSE, "close_date": "2026-10-01",
+                       "store_code": "B-1800", "employee_name": "Leslie Martinez",
+                       "t_cash": 418.0})
+_res = cr.closing_resume(store_code="1800GreatNeckRd", employee_name="Leslie Martinez",
+                         close_date="2026-10-01", org_id=HOUSE)
+check("I4 a day CLOSED under the canonical code reads as finished from the twin spelling",
+      _res.get("state") == ud.FINISHED, detail=str(_res))
+check("I4b and nothing of the rep's is offered back for a day that is already closed",
+      not _res.get("resume"))
+# ...and the converse still works: a genuinely unfinished day is still offered back.
+_db = db_with([try_row(1, store_code="1800GreatNeckRd", employee_name="Leslie Martinez",
+                       acc_sale=120.0)])
+_res2 = cr.closing_resume(store_code="B-1800", employee_name="Leslie Martinez",
+                          close_date="2026-10-01", org_id=HOUSE)
+check("I4c while a day with tries and no closing is still resumable from EITHER spelling",
+      _res2.get("state") == ud.AWAITING_CORRECTION and _res2["resume"].get("acc_sale") == 120.0,
+      detail=str(_res2))
+
+# THE LOCK. Every reader that joins the two tables must go through the key. A raw-string compare
+# is how this defect got in, so it fails the build rather than being left to review.
+for _f in ("_closing_summary_for_date", "closing_rollup", "_run_closing_missing_alerts",
+           "closing_resume"):
+    _s = fn_src(_f)
+    check(f"I5 {_f} keys the store-day through unfinished_day.store_key",
+          "_unfinished.store_key(" in _s or "_sd_key(" in _s, detail=_f)
+check("I5b every reader asks unfinished_day for the state through the key",
+      all("_unfinished.store_key(" in fn_src(f) or "_sd_key(" in fn_src(f)
+          for f in ("_closing_summary_for_date", "closing_rollup", "_run_closing_missing_alerts",
+                    "closing_resume")))
+
+# THE NARROW LOCK, on exactly what can un-wire: the maps that GROUP attempt rows by store-day, and
+# the sets of closed store-days they are matched against, are BUILT from the key and nothing else.
+# If a later change groups them on a raw `store_code` again — which is how this defect got in — the
+# build fails here rather than the screen quietly calling a finished day unfinished. Names are
+# matched on word boundaries and are deliberately unique in this file (`_by_sd` was not: a dozen
+# unrelated envelope and deposit maps share that suffix).
+_KEYED_MAPS = ("_att_by_store", "_att_by_sd", "_att_by_sc", "_closed_att_sd", "_closed_keys")
+_bad_keyed = []
+for _ln in ROUTER_SRC.splitlines():
+    _l = _ln.strip()
+    if _l.startswith("#"):
+        continue
+    if not any(re.search(rf"\b{m}\b", _l) for m in _KEYED_MAPS):
+        continue
+    # Only lines that WRITE a key into one of them: a declaration, an iteration or a membership
+    # test keys nothing, and a lookup is covered by I4/I4c driving the real endpoint.
+    if ".setdefault(" not in _l and not re.search(r"\b(?:" + "|".join(_KEYED_MAPS) + r")\s*=", _l):
+        continue
+    if re.search(r"=\s*\{\s*\}\s*$", _l) or re.search(r"=\s*\{\},\s*\{\}\s*$", _l):
+        continue
+    if not ("store_key(" in _l or "_sd_key(" in _l or "_k," in _l or "(_k)" in _l):
+        _bad_keyed.append(_l)
+check("I5b-lock the attempt-by-store-day maps are BUILT from the key and nothing else",
+      not _bad_keyed, detail=" | ".join(_bad_keyed))
+check("I5b-lock2 and those map names are unique to this path, so the lock cannot miss one",
+      all(ROUTER_SRC.count(m) >= 2 for m in _KEYED_MAPS))
+check("I5c closing_resume no longer filters the two tables on the SENT spelling",
+      fn_src("closing_resume").count('.eq("store_code"') == 0)
+check("I5d the resolver is built by ONE helper, not inline per reader",
+      ROUTER_SRC.count("def _store_key_resolver") == 1
+      and ROUTER_SRC.count("from app.modules.account.coa import store_resolver") == 1)
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

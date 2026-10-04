@@ -168,6 +168,38 @@ def resume_entry(attempt_row) -> dict:
     return out
 
 
+def store_key(resolve, store_code) -> str:
+    """THE key a store-day is matched on when the submit trail is joined to the closing row.
+
+    NOT the raw `store_code`, and this is measured, not theoretical. On 2026-10-04 the house org had
+    seven store-days where `commcalc.closing_attempt` said `1800GreatNeckRd` and the accepted
+    `commcalc.daily_closing` row for the SAME submit, to the second, said `B-1800`: the owner-run
+    `store_identity_merge` runbook re-keyed the closing rows onto the canonical code and left the
+    audit trail on the spelling the picker had sent. A raw-string join therefore reported seven
+    FINISHED days as `AWAITING_CORRECTION`, each showing real money that had in fact been accepted
+    and banked — a manager sent to chase a correction that does not exist.
+
+    THE CLASS: a store's identity is spelled differently in different tables, and the platform
+    already has ONE answer to that (`account.coa.store_resolver` — exact address, then alias, then
+    the raw string as a code, then an unambiguous leading street number). So this dereferences that
+    resolver rather than comparing strings or adding a second normalizer; `resolve` is the callable
+    it returns, handed in by the caller because this module does no I/O. It also closes the
+    case-folding trap that made `b-1115` a phantom store (index §13), because the resolver folds case.
+
+    `resolve` None, or a store the resolver cannot place, falls back to the stripped raw code — the
+    pre-existing behaviour, so an unknown store still groups with itself and never with another.
+    """
+    raw = str(store_code or "").strip()
+    if not raw:
+        return ""
+    if resolve is None:
+        return raw
+    try:
+        return str(resolve(raw) or raw).strip() or raw
+    except Exception:
+        return raw
+
+
 def state_for(closing_row, attempt_rows) -> str:
     """THE ONE RULE. Which of `STATES` a store-day is in.
 

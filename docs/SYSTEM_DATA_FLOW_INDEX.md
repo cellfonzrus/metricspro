@@ -5851,6 +5851,7 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 | *(no endpoint added)* — `GET /commcalc/data-freshness`, its auto-monitor and the run-now button are unchanged in shape; their feed SET is now derived from the registry rather than three names at the call site, and each row gains `cadence_days` (plus `stale_basis: "arrival"` on a feed with no data-date column). ⚠ **No notification channel is wired to this report** — a tenant still has to look; routing a stale-feed alarm into the digest is NOT in §19.43 | `router._data_freshness_report` → `_lineage.watched_feeds()` / `feed_cadence_days()` / `feed_label()` | §19.43 |
 | `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
 | `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
+| `GET /closing/resume` / `GET /closing/rollup` / `GET /closing/summary` — all three match a store-day on `closing/unfinished_day.store_key(resolve, store_code)`, NOT the raw `store_code`: the submit trail and the closing row can spell one store two ways (measured live: `1800GreatNeckRd` vs `B-1800`, seven store-days), and a raw-string join reports a finished day as awaiting a correction | `closing/unfinished_day.store_key` over `account.coa.store_resolver`, built once per request by `closing/router._store_key_resolver` | §29.12 + §13 |
 | `GET /closing/resume` — what the rep already typed for a store-day with no closing yet, so a rep the close gate sent back comes back to a filled-in form. Answers with the REP'S OWN numbers only: no POS figure, no variance, no direction (locked by `harness_closing_unfinished_day.py` §H2) | `closing/router.closing_resume` over `closing/unfinished_day.state_for`/`resume_entry`; screen `ClosingSubmitForm` | §29.12 |
 | `GET /closing/rollup` — additive: `unfinished` (store-days started and not finished, with the entered money and the gate's recorded variance) + `unfinished_counts`. Reported BESIDE the money: an unfinished day writes no closing row, so `by_store`/`by_rep`/`totals` are byte-identical to before | `closing/router.closing_rollup` over `closing/unfinished_day.describe`/`summarize` | §29.12 |
 | `GET /closing/summary` — additive: `unfinished` on each no-closing store card, AND a card now exists for a store whose only evidence of the day is a blocked submit (the card loop was keyed on who clocked in or sold, so a DM covering the floor made the store vanish) | `closing/router._closing_summary_for_date` over `closing/unfinished_day.describe` | §29.12 |
@@ -12821,12 +12822,33 @@ declaration of which columns are money and which are the rest of the form. The t
 - `_log_attempt` — keeps the accessory sale, the three counts, the remarks, the envelope photo (mig `1052`) and the
   configured-tender jsonb, so try three is not retyping. Retyping everything is a reason to stop at two.
 
-**MIGRATION 1052 — SURFACED FOR OWNER APPROVAL, NOT APPLIED.** Six additive resume columns on
+**ONE STORE-DAY, ONE KEY — found by VERIFYING mig 1052 against live data, 2026-10-04.** Joining
+`commcalc.closing_attempt` to `commcalc.daily_closing` on the raw `store_code` is wrong, and was wrong in
+production: seven house store-days had an ACCEPTED closing under `B-1800` and the attempt rows for the same
+submit, to the second, under `1800GreatNeckRd`. The owner-run `store_identity_merge` runbook (§13) re-keyed the
+closing rows onto the canonical code and left the audit trail on the spelling the picker had sent. So the first
+cut of this package reported **15** unfinished store-days where **8** are real: four in August and three in
+September were FINISHED days, each shown to a manager as a correction to chase on money already accepted and
+banked. **The class** is that a store's identity is spelled differently in different tables — the roster carries
+canonical codes, the closings and the tries carry whatever the submit sent — and §13 already names that class.
+**The fix dereferences the platform's ONE answer**: `closing/unfinished_day.store_key(resolve, store_code)` over
+`account.coa.store_resolver` (exact address → alias → raw-is-a-code → unambiguous leading street number), built
+once per request by `closing/router._store_key_resolver` and used by all four readers. It also closes the
+case-folding trap that made `b-1115` a phantom store. A store the resolver cannot place keeps its own raw code,
+so an unknown store groups with itself and never with another; no resolver at all degrades to the raw code
+rather than failing the report. **Measured after the fix, live:** August 0, September 0, October 1 (B-117 /
+2026-10-01), and the seven genuine July days unchanged — and `GET /closing/resume` now answers `finished` from
+EITHER spelling of a closed day instead of offering the rep a day that is already closed.
+
+**MIGRATION 1052 — APPLIED 2026-10-04 (owner ran it).** Verified live: all six resume columns present on
+`commcalc.closing_attempt` and the `closing_attempt_store_day` index in place. Attempt rows written BEFORE it
+carry NULL in the six columns, so a resume of an older try hands back the tenders only — the degrade path (§G),
+not a fabricated zero. Original terms, unchanged: Six additive resume columns on
 `commcalc.closing_attempt` + one `(org_id, close_date, store_code)` index, `-- REVERT:` notes, a `DO` block that
 aborts unless all six landed. **It touches `commcalc.daily_closing` not at all and reads or writes no money
 column.** Unapplied, `_log_attempt` degrades to the mig-103 column set and still records every try (§G).
 
-**Lock: `backend/harness_closing_unfinished_day.py` — 83 checks, DB-free**, CI job `closing-unfinished-day-lock`.
+**Lock: `backend/harness_closing_unfinished_day.py` — 104 checks, DB-free**, CI job `closing-unfinished-day-lock`.
 §A–C pure, §D the regression (the live Burnside numbers through the real code: `awaiting_correction`, $2,826
 entered, $194.17 over — before this package those inputs produced no state at all), §E the money point, §F the real
 resume endpoint, §G degrade pre-mig-1052, **§H the wiring locks that fail the build**: a blocked submit may never
@@ -12835,6 +12857,13 @@ may spell a state string or re-derive the rule; the screen must word every state
 add every column the logger writes and touch no money column. **Verified to BITE:** inserting a provisional
 `daily_closing` row in the blocked branch turns §H1a red. §29.11's own `H4b` allow-list names these four readers
 explicitly and proves each one only asks this registry, so the two locks hold each other from both sides.
+**§I the store-day key**: the two live spellings collapse to one key and two different stores never do; the
+regression drives the REAL `/closing/resume` over the REAL `account.coa.store_resolver` (fixtures carrying the
+measured B-1800 / `1800 Great Neck Rd` shape) and proves a day closed under the canonical code reads as finished
+from the twin spelling; and a build-failing lock that the maps grouping attempt rows by store-day are BUILT from
+that key and nothing else. **Verified to BITE:** regrouping `_att_by_store` on the raw `store_code` turns §I5b
+red. `_by_sd` was renamed `_att_by_sd` because a dozen unrelated envelope and deposit maps in the same file share
+that suffix and a name-based lock could not have told them apart.
 
 **OPEN — reported, not fixed.** B-117 / 2026-10-01 is **still not closed**, and this package does not close it: the
 row needs Abid's third submit, and the **$194.17 cash overage is a real discrepancy** somebody should look at rather

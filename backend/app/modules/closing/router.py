@@ -962,13 +962,22 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         _atts = (_aq.limit(50000).execute().data) or []
     except Exception:
         _atts = []
-    _closed_sd = {(str(r.get("store_code") or ""), str(r.get("close_date") or "")) for r in rows}
-    _by_sd = {}
+    # THE KEY IS THE RESOLVED STORE, NOT THE RAW CODE (index §29.12). The submit trail and the
+    # closing row can spell the same store differently — measured live, seven B-1800 store-days — so
+    # a raw-string join reports a finished day as awaiting a correction. One home for that key:
+    # `unfinished_day.store_key`, over the platform's one store resolver.
+    _skey = _store_key_resolver(client, org_id)
+    def _sd_key(r):
+        return (_unfinished.store_key(_skey, r.get("store_code")), str(r.get("close_date") or ""))
+    _closed_att_sd = {_sd_key(r) for r in rows}
+    _att_by_sd = {}
     for _a in _atts:
-        _by_sd.setdefault((str(_a.get("store_code") or ""), str(_a.get("close_date") or "")), []).append(_a)
-    for (_sc, _cd), _rows_sd in sorted(_by_sd.items()):
-        if not _sc or (_sc, _cd) in _closed_sd:
+        _att_by_sd.setdefault(_sd_key(_a), []).append(_a)
+    for (_sc, _cd), _rows_sd in sorted(_att_by_sd.items()):
+        if not _sc or (_sc, _cd) in _closed_att_sd:
             continue
+        # Display the code the submitter actually used; the key above is only for matching.
+        _sc = str(_rows_sd[0].get("store_code") or "").strip() or _sc
         _st = _unfinished.describe(None, _rows_sd)
         # The address rides the attempt row itself, so an unfinished day names its store without a
         # roster lookup that would fail for exactly the stores missing from the roster.
@@ -1145,9 +1154,15 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                       .eq("org_id", org_id).eq("close_date", date).execute().data) or []
     except Exception:
         _att_today = []
-    _att_by_store = {}
+    # Grouped on the RESOLVED store, not the raw code: the submit trail and the closing row can
+    # spell one store two ways (index §29.12), and a raw-string join then shows a finished day as
+    # awaiting a correction. `unfinished_day.store_key` is the one home for that key.
+    _skey = _store_key_resolver(client, org_id)
+    _att_by_store, _att_raw_code = {}, {}
     for _a in _att_today:
-        _att_by_store.setdefault(str(_a.get("store_code") or ""), []).append(_a)
+        _k = _unfinished.store_key(_skey, _a.get("store_code"))
+        _att_by_store.setdefault(_k, []).append(_a)
+        _att_raw_code.setdefault(_k, str(_a.get("store_code") or "").strip())
 
     if org_ctx is None:
         org_ctx = _closing_summary_org_ctx(client, org_id)
@@ -1665,7 +1680,8 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "no_closing_submitted": True,
             # WHY there is no closing (index §29.12) — "nobody submitted" and "submitted, sent back
             # to recount, never returned" are opposite facts and this card showed both as blank.
-            "unfinished": _unfinished.describe(None, _att_by_store.get(str(code)) or []),
+            "unfinished": _unfinished.describe(
+                None, _att_by_store.get(_unfinished.store_key(_skey, code)) or []),
             "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
         })
 
@@ -1675,10 +1691,14 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     #    store simply vanished from the screen. That is the Burnside shape exactly: a district
     #    manager covering the floor submitted twice, was sent back to recount, and neither the
     #    closing nor the store appeared. A try is evidence the day happened; emit the card.
-    _emitted = {str(c.get("store_code") or "") for c in out}
-    for code, _atts in sorted(_att_by_store.items()):
-        if not code or code in closed_codes or code in _emitted:
+    # Both sides compared on the resolved key, so a store already on the screen under its canonical
+    # code is never emitted a second time under the spelling the picker happened to send.
+    _emitted = {_unfinished.store_key(_skey, c.get("store_code")) for c in out}
+    _closed_keys = {_unfinished.store_key(_skey, c) for c in closed_codes}
+    for _key, _atts in sorted(_att_by_store.items()):
+        if not _key or _key in _closed_keys or _key in _emitted:
             continue
+        code = _att_raw_code.get(_key) or _key
         meta = store_meta.get(code, {})
         mkt_bucket = _market_bucket(meta.get("market") or "")
         if market_set is not None and mkt_bucket.casefold() not in market_set:
@@ -2379,16 +2399,28 @@ def closing_resume(store_code: str = None, employee_name: str = None, close_date
     if not (store_code and (employee_name or "").strip()):
         return {"state": _unfinished.NOT_STARTED, "resume": {}, "tries": 0}
     client = sb()
+    # Matched on the RESOLVED store, not the raw code the form sent (index §29.12). The two tables
+    # can spell one store differently, and filtering each on the SENT spelling makes the pair
+    # disagree: the tries match and the closing does not, so a day that is CLOSED would be offered
+    # back to the rep to resume. Narrowed in the query by org/date/name — a single rep-day — and the
+    # store matched in Python through the one key.
+    _skey = _store_key_resolver(client, org_id)
+    _want = _unfinished.store_key(_skey, store_code)
+    _name = (employee_name or "").strip()
+
+    def _mine(rows):
+        return [r for r in (rows or [])
+                if _unfinished.store_key(_skey, r.get("store_code")) == _want]
     try:
-        closing = (client.schema("commcalc").table("daily_closing").select("id")
-                   .eq("org_id", org_id).eq("close_date", d).eq("store_code", store_code)
-                   .ilike("employee_name", (employee_name or "").strip()).execute().data) or []
+        closing = _mine((client.schema("commcalc").table("daily_closing").select("id,store_code")
+                         .eq("org_id", org_id).eq("close_date", d)
+                         .ilike("employee_name", _name).execute().data) or [])
     except Exception:
         closing = []
     try:
-        atts = (client.schema("commcalc").table("closing_attempt").select("*")
-                .eq("org_id", org_id).eq("close_date", d).eq("store_code", store_code)
-                .ilike("employee_name", (employee_name or "").strip()).execute().data) or []
+        atts = _mine((client.schema("commcalc").table("closing_attempt").select("*")
+                      .eq("org_id", org_id).eq("close_date", d)
+                      .ilike("employee_name", _name).execute().data) or [])
     except Exception:
         atts = []
     state = _unfinished.state_for(closing[0] if closing else None, atts)
@@ -5562,7 +5594,11 @@ async def _run_closing_missing_alerts(org_id=None):
         except Exception:
             pass
         stores = (c.schema("storeops").table("stores").select("store_code,address").eq("org_id", oid).execute().data) or []
-        closed = {(r.get("store_code") or "") for r in
+        # THE ROSTER, THE CLOSINGS AND THE TRIES ARE THREE VOCABULARIES (index §29.12 / §13). The
+        # roster carries canonical codes, the other two carry whatever the submit sent, and a
+        # raw-string compare then nags a store that DID close or DID try. Matched on the one key.
+        _skey = _store_key_resolver(c, oid)
+        closed = {_unfinished.store_key(_skey, r.get("store_code")) for r in
                   ((c.schema("commcalc").table("daily_closing").select("store_code")
                     .eq("org_id", oid).eq("close_date", today).execute().data) or [])}
         # WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035) — dereference the registry.
@@ -5584,15 +5620,16 @@ async def _run_closing_missing_alerts(org_id=None):
             _att_rows = []
         _att_by_sc = {}
         for _a in _att_rows:
-            _att_by_sc.setdefault(str(_a.get("store_code") or ""), []).append(_a)
+            _att_by_sc.setdefault(_unfinished.store_key(_skey, _a.get("store_code")), []).append(_a)
         for s in stores:
             sc = s.get("store_code")
-            if not sc or sc in closed:
+            _sk = _unfinished.store_key(_skey, sc)
+            if not sc or _sk in closed:
                 continue
             if not _closing_src.expects_rep_submission(_srcmap.get(str(sc), _closing_src.HOUSE_DEFAULT)):
                 continue
             _where = s.get("address") or sc
-            _st = _unfinished.describe(None, _att_by_sc.get(str(sc)) or [])
+            _st = _unfinished.describe(None, _att_by_sc.get(_sk) or [])
             if _st["state"] == _unfinished.AWAITING_CORRECTION:
                 _subject = f"Daily closing STARTED but not finished — {sc} ({today})"
                 _text = (f"The daily closing for {_where} was entered on {today} but the figures did "
@@ -8566,6 +8603,20 @@ def _refuse(client, org_id, d, body, code, detail="", tenders=None, message="") 
     except Exception as e:
         print(f"closing refusal log failed ({code}): {e}")
     raise HTTPException(r.status, r.message)
+
+
+def _store_key_resolver(client, org_id):
+    """`account.coa.store_resolver`'s resolve(), for keying a store-day across tables that spell the
+    store differently (index §29.12 / §13). Dereferenced, never re-implemented: that chain is the
+    platform's ONE answer to "which physical store is this string". Returns None if it cannot be
+    built, and `unfinished_day.store_key` then falls back to the raw code — degrade, never crash a
+    report over a store-name lookup."""
+    try:
+        from app.modules.account.coa import store_resolver
+        return store_resolver(client, org_id)
+    except Exception as e:
+        print("WARN closing store-day key resolver unavailable (falling back to raw codes):", e)
+        return None
 
 
 def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credit, b2b, dirs,
