@@ -40,6 +40,13 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/device-cost-recon', label: 'Device Cost Reconciliation', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', module: 'commissions', scopes: ['all', 'market'] },
   ] },
+  { category: 'Flags & Compliance', reports: [
+    { href: '/compliance', label: 'Flags & Compliance Dashboard', module: 'commissions', scopes: ['all', 'market'], desc: 'Per-queue open counts across every flag, exception and compliance queue on the platform — each count is the same query as the page that owns the queue, and a probe that fails shows "—" rather than a fake 0' },
+    // DM GATE mirrored 1:1 from the rbac.ts NAV row above: this catalog is the SECOND door to the
+    // same page, and clearedFor() gates it with canSeeItem() on THIS object — without the same
+    // `scopes` a store-scoped user would be shown a link the layout Guard then bounces.
+    { href: '/commcalc/manager-followup', label: 'Follow Up With Managers', module: 'commissions', scopes: ['all', 'market'], desc: 'Every pending job a manager owns, rolled up per store and queue with the age of the oldest — what has passed the escalation age reaches the manager above the owner too. Open items carrying no store are counted and named rather than dropped, and any queue that cannot yet be assigned per manager is listed with the reason, so the board is never read as "that is everything". A digest goes out daily at the configured time by WhatsApp and email.' },
+  ]},
   { category: 'Targets', reports: [
     { href: '/commcalc/targets', label: 'Daily Targets', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/action-plan', label: 'Action Plan', module: 'targets', scopes: ['all', 'market', 'store'] },

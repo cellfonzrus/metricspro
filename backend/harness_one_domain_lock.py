@@ -24,6 +24,26 @@ THIS FAILS THE BUILD WHEN:
   6. a backend endpoint that launches a browser (`require_browser_service()`) — synchronous work that can
      outrun the platform proxy's 120 s limit — is not matched by apiBase.ts's DIRECT_ROUTES. The set is
      READ from the backend routers, so an endpoint added tomorrow is covered without touching this file.
+  7. next.config.ts stops asserting the PRODUCTION configuration, or apiBase.ts stops exporting the rules
+     (index §40.10, owner incident 2026-10-03). Every fallback in apiBase.ts is written to keep a build
+     working when a variable is missing, which means a production build with no backend address silently
+     proxies the whole API to `http://localhost:8000` and ships: green deploy, rendering pages, every API
+     call dead. The fallbacks are right for `next dev` and for a preview and they stay; a PRODUCTION build
+     must assert what it cannot work without and FAIL. Without this rule the gate can be deleted and the
+     patchwork quietly returns.
+  8. the deploy-time reachability proof disappears (index §40.12, owner incident 2026-10-03). Rule 7's
+     gate is a PURE module: it can prove the backend origin is well-SHAPED, never that it RESOLVES. That
+     day it was shaped perfectly and named a host that does not exist, so every proxied call 502'd while
+     the pages rendered. A configuration fact that only fails at RUNTIME has to be proved against the
+     RUNNING deployment, so `scripts/check_deploy_reachability.py` and its workflow must exist, probe BOTH
+     rewrite prefixes, and require the backend's own payload rather than any HTTP 200.
+  9. the Guard in src/app/(platform)/layout.tsx treats an UNREADABLE enforcement flag as a value
+     (index §40.13, owner incident 2026-10-03). The flag that decides sign-in-or-open lives in the
+     database and reaches the browser over `GET /api/v1/core/auth-config`. The catch on that fetch
+     used to call `setFetchedEnforce(false)`, so a backend the browser could not reach rendered
+     `<PlatformShell open>`: the app dropped its sign-in gate, showed "Login not enforced" and had no
+     way to sign out, because a request failed. UNREADABLE IS NOT OFF. A failed read must set its own
+     state and the Guard must say it cannot reach the server, BEFORE the open-app and loading branches.
 Each rule has a negative control below: the rule is run on a synthetic violation and must fire.
 
 Stdlib only, DB-free, no network: `python3 backend/harness_one_domain_lock.py`.
@@ -39,6 +59,10 @@ FRONTEND = os.path.join(ROOT, "frontend")
 HOME = "src/lib/apiBase.ts"                     # the ONE home (relative to frontend/)
 ROUTING = "site-routing.ts"
 CONFIG = "next.config.ts"
+LAYOUT = "src/app/(platform)/layout.tsx"        # the Guard that decides open-app vs sign-in (§40.13)
+# Proved against the RUNNING deployment, because shape is all a build can check (§40.12).
+REACH_SCRIPT = "scripts/check_deploy_reachability.py"
+REACH_WORKFLOW = ".github/workflows/deploy-reachability.yml"
 LOCATION_VARS = ("NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_API_DIRECT_ORIGIN", "BACKEND_ORIGIN", "NEXT_PUBLIC_SITE_URL")
 SKIP_DIRS = {"node_modules", ".next", "out", "build", "scratchpad"}
 EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts")
@@ -128,6 +152,7 @@ def config_wiring(files):
     bad = []
     cfg, home, routing = files.get(CONFIG, ""), files.get(HOME, ""), files.get(ROUTING, "")
     client = files.get("src/lib/client.ts", "")
+    layout = files.get(LAYOUT, "")
     need = [
         (cfg, r"from\s+['\"]\./src/lib/apiBase['\"]", f"{CONFIG} does not import the one home ({HOME})"),
         (cfg, r"from\s+['\"]\./site-routing['\"]", f"{CONFIG} does not import {ROUTING}"),
@@ -142,13 +167,48 @@ def config_wiring(files):
         (routing, r"VERCEL_ENV\s*!==\s*'production'\)\s*return\s*\[\]", f"{ROUTING}: the redirect must be production-only (previews/localhost untouched)"),
         (routing, r"permanent:\s*true", f"{ROUTING}: the canonical-host redirect must be permanent (308)"),
         (client, r"apiUrl\(\s*withOrgScope\(path\)\s*,\s*'direct'\s*\)", "src/lib/client.ts: apiUpload must ask apiUrl(..., 'direct') — uploads must not ride the proxy"),
+        # Rule 7 — the production configuration gate (index §40.10).
+        (home, r"export\s+function\s+productionConfigProblems\b",
+         f"{HOME} no longer exports productionConfigProblems — a misconfigured production build would ship silently again"),
+        (home, r"if\s*\(isLocalHost\(backend\)\)",
+         f"{HOME}: productionConfigProblems must refuse a backend origin no browser can reach"),
+        (cfg, r"productionConfigProblems\(\s*API_ENV\s*,\s*process\.env\.VERCEL_ENV\s*===\s*[\"']production[\"']\s*\)",
+         f"{CONFIG} must call productionConfigProblems(API_ENV, VERCEL_ENV === 'production')"),
+        (cfg, r"CONFIG_PROBLEMS\.length\s*\)\s*\{\s*\n?\s*throw\s+new\s+Error",
+         f"{CONFIG} must THROW on a production config problem — reporting it without failing the build ships the dark deploy anyway"),
+        (home, r"export\s+const\s+CONFIG_PROBLEM_CODES\b",
+         f"{HOME} must export CONFIG_PROBLEM_CODES so the caller's message map can be checked against it"),
+        # Rule 9 — UNREADABLE IS NOT A VALUE (index §40.13, owner incident 2026-10-03). The §40.10 gate
+        # is a pure module: it can prove the backend origin is well-SHAPED, never that it RESOLVES. That
+        # day it was shaped perfectly and named a host that does not exist, so every proxied call 502'd —
+        # and the Guard read that failure as "enforcement is off" and opened the app.
+        (layout, r"setEnforceUnreadable\(true\)",
+         f"{LAYOUT}: a FAILED auth-config read must set its own unreadable state. Calling "
+         f"setFetchedEnforce(false) in the catch is the 2026-10-03 defect: an unreachable backend "
+         f"rendered <PlatformShell open> and the app dropped its sign-in gate because a request failed"),
+        (layout, r"enforce\s*===\s*null\s*&&\s*enforceUnreadable\)\s*return\s*<Notice",
+         f"{LAYOUT}: an unreadable enforcement flag must render the 'can't reach the server' notice "
+         f"BEFORE the open-app and loading branches — otherwise it falls through to one of them"),
     ]
+    # Every problem code the home can emit needs an operator sentence in the one caller. The codes stay in the
+    # home as DATA (index §19.38 keeps platform variable names out of shipped page copy); the sentences live in
+    # next.config.ts, which is build-time only and outside src/. A code with no sentence would throw
+    # "undefined" at the operator, so a missing one fails the build here.
+    for code in problem_codes(home):
+        if f'"{code}"' not in cfg and f"'{code}'" not in cfg:
+            bad.append(f"{CONFIG}: no operator message for config problem code {code!r} (it would read 'undefined')")
     for text, pattern, msg in need:
         if not re.search(pattern, text):
             bad.append(msg)
     if re.search(r"connect-src[^\"\n]*\*\.up\.", cfg):
         bad.append(f"{CONFIG}: a wildcard backend host is back in connect-src")
     return bad
+
+
+def problem_codes(home_text):
+    """The ConfigProblemCode values CONFIG_PROBLEM_CODES lists in the home."""
+    m = re.search(r"CONFIG_PROBLEM_CODES[^=]*=\s*\n?\s*\[(.*?)\]", home_text, re.S)
+    return re.findall(r"'([a-z][a-z0-9-]*)'", m.group(1)) if m else []
 
 
 # ── rule 6: every browser-launching endpoint is DIRECT ─────────────────────────────────────────────
@@ -243,6 +303,25 @@ def main():
     check("no `${origin}/api/v1…` outside the home", not origin_prefixers(files), origin_prefixers(files))
     print("4/5. the config installs the policy from the homes")
     check("rewrites, canonical redirect, connect-src, upload class all wired", not config_wiring(files), config_wiring(files))
+    print("8. reachability is proved against the RUNNING deployment (§40.12)")
+    # A build can only prove the origin is well-SHAPED. The 2026-10-03 host was shaped perfectly and
+    # did not resolve, so the proof has to run against what is actually serving.
+    reach_py = os.path.join(ROOT, REACH_SCRIPT)
+    reach_yml = os.path.join(ROOT, REACH_WORKFLOW)
+    check(f"{REACH_SCRIPT} exists", os.path.isfile(reach_py))
+    check(f"{REACH_WORKFLOW} exists and runs it", os.path.isfile(reach_yml)
+          and "check_deploy_reachability.py" in open(reach_yml, encoding="utf-8").read())
+    if os.path.isfile(reach_py):
+        reach_src = open(reach_py, encoding="utf-8").read()
+        # Both rewrite PREFIXES are separate rules in apiRewrites(); one can be dead while the other works.
+        check("it probes /health AND /api/v1 (the two rewrite prefixes are independent)",
+              '"/health"' in reach_src and '"/api/v1/core/auth-config"' in reach_src)
+        check("it requires the BACKEND's own payload, not merely HTTP 200",
+              '"commit"' in reach_src and '"rbac_enabled"' in reach_src)
+    if os.path.isfile(reach_yml):
+        check("the workflow probes only a SUCCESSFUL Production deployment",
+              "deployment_status.state == 'success'" in open(reach_yml, encoding="utf-8").read())
+
     print("6. every browser-launching endpoint is DIRECT")
     check("the backend declares browser-launching endpoints (the scan is not empty)", len(endpoints) >= 10,
           [f"found {len(endpoints)}"])
@@ -276,6 +355,33 @@ def main():
     broken[CONFIG] = files.get(CONFIG, "") + "\n// \"connect-src 'self' https://*.up.railway.app\"\n"
     check("control 4b: a wildcard backend host back in connect-src is caught",
           any("wildcard" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[CONFIG] = files.get(CONFIG, "").replace("throw new Error", "console.warn")
+    check("control 7: a next.config.ts that only WARNS instead of failing the build is caught",
+          any("must THROW" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[CONFIG] = re.sub(r"productionConfigProblems\([^)]*\)", "[]", files.get(CONFIG, ""))
+    check("control 7b: a next.config.ts that stops calling the gate at all is caught",
+          any("productionConfigProblems(API_ENV" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[HOME] = files.get(HOME, "").replace("export function productionConfigProblems", "function productionConfigProblems")
+    check("control 7c: a home that stops exporting the gate is caught",
+          any("no longer exports productionConfigProblems" in v for v in config_wiring(broken)))
+    check("control 7d: the home's problem codes are read (the scan is not empty)", len(problem_codes(files.get(HOME, ""))) >= 3,
+          problem_codes(files.get(HOME, "")))
+    broken = dict(files)
+    broken[HOME] = files.get(HOME, "").replace("'direct-origin-not-bare']", "'direct-origin-not-bare', 'a-new-code-nobody-worded']")
+    check("control 7e: a NEW problem code with no operator message in the config is caught",
+          any("a-new-code-nobody-worded" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[LAYOUT] = files.get(LAYOUT, "").replace("setEnforceUnreadable(true)", "setFetchedEnforce(false)")
+    check("control 9: a Guard that fails the enforcement read OPEN again is caught",
+          any("2026-10-03 defect" in v for v in config_wiring(broken)))
+    broken = dict(files)
+    broken[LAYOUT] = files.get(LAYOUT, "").replace(
+        "if (enforce === null && enforceUnreadable) return <Notice", "if (false) return <Notice")
+    check("control 9b: a Guard that stops rendering the unreachable notice is caught",
+          any("can't reach the server" in v for v in config_wiring(broken)))
     fake_router = ('router = APIRouter(prefix="/widgets")\n'
                    '@router.post("/{wid}/scrape")\n'
                    'def scrape(wid: str):\n'

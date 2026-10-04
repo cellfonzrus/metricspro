@@ -49,3 +49,6 @@ jobs:
       - name: Run lineage guard
         working-directory: backend
         run: python3 harness_data_lineage_guard.py | tee "$GITHUB_STEP_SUMMARY"
+      - name: Run the ingest-freshness lock (the one existing probe stays tied to the registry — index §19.18, §19.43)
+        working-directory: backend
+        run: python3 harness_ingest_freshness.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

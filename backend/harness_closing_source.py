@@ -168,6 +168,27 @@ check("THE BYTE-IDENTICAL CLAIM: with no config, plan_day derives NOTHING and le
       "to its reps", plan_house["derive"] == [] and plan_house["skipped"] == []
       and plan_house["rep_submits"] == codes)
 
+# ── H. normalize_store_codes — the multi-store write (owner 2026-10-03: "in store setup to assign the
+#    store it should be a drop down list to select multiple stores"). The dropdown can hand back one
+#    code, many, duplicates or blanks; the setting is still ONE row per store.
+check("one code is the one-element case (so 'several stores' is not a separate code path)",
+      cs.normalize_store_codes("B-1") == ["B-1"])
+check("a list of codes comes back in the order picked",
+      cs.normalize_store_codes(["B-2", "B-1", "B-3"]) == ["B-2", "B-1", "B-3"])
+check("a store offered twice in any casing is written ONCE",
+      cs.normalize_store_codes(["B-1", "b-1", " B-1 "]) == ["B-1"])
+check("blanks and None are dropped rather than writing an org-default row by accident",
+      cs.normalize_store_codes(["B-1", "", None, "   "]) == ["B-1"])
+check("an empty selection is the ORG DEFAULT (no codes), exactly as a blank store_code was",
+      cs.normalize_store_codes([]) == [] and cs.normalize_store_codes(None) == []
+      and cs.normalize_store_codes("") == [])
+check("whitespace around a pasted code never creates a second store",
+      cs.normalize_store_codes([" B-1", "B-1 "]) == ["B-1"])
+check("resolve answers for EVERY code a multi-store write covered",
+      all(cs.resolve([{"store_code": c, "source": cs.SOURCE_B2B_DERIVED}
+                      for c in cs.normalize_store_codes(["B-1", "b-1", "B-2"])], c)
+          == cs.SOURCE_B2B_DERIVED for c in ["B-1", "B-2"]))
+
 print()
 if FAILS:
     print(f"❌ {len(FAILS)} failure(s): {FAILS}")

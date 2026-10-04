@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField } from '../lib'
+import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField, StoreMultiSelect } from '../lib'
 import LeasePanel from './LeasePanel'
 import SalesTaxRateLink from '@/components/SalesTaxRateLink'
 
@@ -49,10 +49,20 @@ export default function StoreSetupPage() {
   // The endpoint has existed since the backfill PR; without a button the only way to run it was a
   // hand-made HTTP call, which is not a thing a tenant admin should have to do. Preview first is the
   // default posture: `dry_run` reports the whole span and writes nothing.
+  // SEVERAL STORES AT ONCE (owner 2026-10-03: "in store setup to assign the store it should be a drop
+  // down list to select multiple stores"). The per-row column stays — this is the same ONE setting,
+  // set for a selection instead of one row at a time, through the same ONE endpoint.
+  const [bulkSrcCodes, setBulkSrcCodes] = useState<string[]>([])
+  const [bulkSrcValue, setBulkSrcValue] = useState('b2b_derived')
   const [bfFrom, setBfFrom] = useState('')
   const [bfTo, setBfTo] = useState('')
   const [bfBusy, setBfBusy] = useState('')
   const [bfRes, setBfRes] = useState<any>(null)
+  // The panel reports its OWN progress and its OWN failure. It used to report both through the
+  // page-level `msg` at the very top of the screen, far above the button that was pressed, so a
+  // failed Preview looked like a button that did nothing (owner report 2026-10-03).
+  const [bfProg, setBfProg] = useState('')
+  const [bfErr, setBfErr] = useState('')
 
   async function loadAll() {
     setLoading(true)
@@ -208,23 +218,104 @@ export default function StoreSetupPage() {
     finally { setSrcBusy(b => ({ ...b, [key]: false })) }
   }
 
+  // ONE call for the whole selection: the endpoint takes `store_codes` and fans out through its own
+  // single row-writer, so picking ten stores cannot behave differently from picking one.
+  async function applyClosingSourceToStores() {
+    if (!bulkSrcCodes.length) { setMsg('Pick at least one store in the dropdown first.'); return }
+    const key = 'src-bulk'
+    setSrcBusy(b => ({ ...b, [key]: true }))
+    setMsg('')
+    try {
+      const body = bulkSrcValue
+        ? { store_codes: bulkSrcCodes, source: bulkSrcValue }
+        : { store_codes: bulkSrcCodes, clear: true }
+      const r = await api('/api/v1/closing/source-config', { method: 'PUT', body: JSON.stringify(body) })
+      const cs = await api('/api/v1/closing/source-config')
+      setSrcCfg(cs || null)
+      const label = bulkSrcValue
+        ? (srcCfg?.labels?.[bulkSrcValue] || CLOSING_SRC_LABEL[bulkSrcValue] || bulkSrcValue).toLowerCase()
+        : 'the company default'
+      setMsg(`${r?.count || bulkSrcCodes.length} store(s) set to ${label}: ${bulkSrcCodes.join(', ')}.`)
+    } catch (err: any) { setMsg('Could not set those stores: ' + (err?.message || err)) }
+    finally { setSrcBusy(b => ({ ...b, [key]: false })) }
+  }
+
   // One call per run; the server walks the span day by day through the SAME nightly sweep, so a
   // preview and a real run differ only in whether anything is written.
+  // WHY THE SPAN IS SENT IN CHUNKS (owner report 2026-10-03: "does not show anything in preview").
+  // A proxied request on the platform must produce its first byte within 120 s or the edge kills it
+  // with ROUTER_EXTERNAL_TARGET_ERROR (index §40.3). One call covering four months walks ~124 days of
+  // the sales feed and cannot answer inside that budget, so the single-call version could only ever
+  // fail on a real backfill — and the failure was reported at the top of the page, out of sight.
+  //
+  // THE CLASS, NOT THE INSTANCE: an admin action whose work grows with its input must not be ONE
+  // synchronous request. §40.3's registered answer for an endpoint that outruns the proxy is the
+  // DIRECT_ROUTES class, and derive-range was never in it — but direct would only move the ceiling
+  // and still show nothing for minutes. Bounded chunks cost the same total work, keep every request
+  // far inside the budget, show progress as they land, and leave the days already done DONE when one
+  // chunk fails. The endpoint is unchanged: still the ONE range endpoint, never a per-day loop.
+  const BACKFILL_CHUNK_DAYS = 7
+
+  function backfillChunks(from: string, to: string, size = BACKFILL_CHUNK_DAYS): { start: string; end: string }[] {
+    const DAY = 86400000
+    const t0 = Date.parse(`${from}T00:00:00Z`)
+    const t1 = Date.parse(`${to}T00:00:00Z`)
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 < t0) return []
+    const iso = (t: number) => new Date(t).toISOString().slice(0, 10)
+    const out: { start: string; end: string }[] = []
+    for (let t = t0; t <= t1; t += size * DAY) {
+      out.push({ start: iso(t), end: iso(Math.min(t + (size - 1) * DAY, t1)) })
+    }
+    return out
+  }
+
+  function addTotals(into: any, from: any) {
+    const out = { ...(into || {}) }
+    for (const k of Object.keys(from || {})) out[k] = (Number(out[k]) || 0) + (Number(from[k]) || 0)
+    return out
+  }
+
   async function runBackfill(dryRun: boolean) {
-    if (!bfFrom || !bfTo) { setMsg('Pick both a start and an end date for the backfill.'); return }
+    setBfErr('')
+    if (!bfFrom || !bfTo) { setBfErr('Pick both a start and an end date for the backfill.'); return }
+    const chunks = backfillChunks(bfFrom, bfTo)
+    if (!chunks.length) { setBfErr('The end date is before the start date.'); return }
     setBfBusy(dryRun ? 'preview' : 'run')
     setMsg('')
     setBfRes(null)
-    try {
-      const q = `start=${encodeURIComponent(bfFrom)}&end=${encodeURIComponent(bfTo)}&dry_run=${dryRun ? 'true' : 'false'}`
-      const r = await api(`/api/v1/closing/derive-range?${q}`, { method: 'POST' })
-      setBfRes(r)
-      const t = r?.totals || {}
-      setMsg(dryRun
-        ? `Preview only, nothing written: ${t.wrote || 0} day-stores would be written, ${t.unchanged || 0} already current, ${t.kept_manual || 0} left as submitted, ${t.skipped || 0} with no feed.`
-        : `Backfill done: ${t.wrote || 0} written, ${t.updated || 0} refreshed, ${t.unchanged || 0} already current, ${t.kept_manual || 0} left as submitted, ${t.skipped || 0} with no feed.`)
-    } catch (err: any) { setMsg('Backfill failed: ' + (err?.message || err)) }
-    finally { setBfBusy('') }
+    const agg: any = { start: bfFrom, end: bfTo, dry_run: dryRun, days: 0, days_with_feed: 0,
+                       totals: {}, per_day: [], failed: [] }
+    let i = 0
+    for (const c of chunks) {
+      i++
+      setBfProg(`${dryRun ? 'Checking' : 'Filling in'} ${c.start} to ${c.end} — part ${i} of ${chunks.length}…`)
+      try {
+        const q = `start=${encodeURIComponent(c.start)}&end=${encodeURIComponent(c.end)}&dry_run=${dryRun ? 'true' : 'false'}`
+        const r = await api(`/api/v1/closing/derive-range?${q}`, { method: 'POST' })
+        agg.days += Number(r?.days) || 0
+        agg.days_with_feed += Number(r?.days_with_feed) || 0
+        agg.totals = addTotals(agg.totals, r?.totals)
+        agg.per_day = [...agg.per_day, ...(r?.per_day || [])]
+        agg.failed = [...agg.failed, ...(r?.failed || [])]
+        setBfRes({ ...agg, partial: i < chunks.length })   // show what has landed so far
+      } catch (err: any) {
+        // Honest about what DID happen: the days already covered stay covered, and the rest is named.
+        setBfErr(`Stopped at ${c.start} to ${c.end} (part ${i} of ${chunks.length}): `
+                 + (err?.message || err)
+                 + (i > 1 ? ` — the ${agg.days} day(s) before it ${dryRun ? 'were checked' : 'were filled in'} and are not lost.`
+                          : ''))
+        setBfProg('')
+        setBfBusy('')
+        return
+      }
+    }
+    setBfProg('')
+    setBfRes({ ...agg, partial: false })
+    const t = agg.totals || {}
+    setMsg(dryRun
+      ? `Preview only, nothing written: ${t.wrote || 0} day-stores would be written, ${t.unchanged || 0} already current, ${t.kept_manual || 0} left as submitted, ${t.skipped || 0} with no feed.`
+      : `Backfill done: ${t.wrote || 0} written, ${t.updated || 0} refreshed, ${t.unchanged || 0} already current, ${t.kept_manual || 0} left as submitted, ${t.skipped || 0} with no feed.`)
+    setBfBusy('')
   }
 
   // ---- bulk STORE setup ----
@@ -306,6 +397,36 @@ export default function StoreSetupPage() {
               unchanged. If the feed has not landed for a day, nothing is written and the day is reported
               as missing — it is never filled in with zeros.
             </p>
+            {/* Several stores at once — the shared checkbox dropdown (../lib -> CheckboxDropdown),
+                so an admin switching nine stores picks nine and presses one button. */}
+            <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Set several stores at once</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <StoreMultiSelect stores={stores} value={bulkSrcCodes} onChange={setBulkSrcCodes}
+                  width={300} placeholder="Select stores…" disabled={!!srcBusy['src-bulk']} />
+                <span style={{ fontSize: 13, color: 'var(--text2)' }}>take their daily closing from</span>
+                <select style={{ ...sel, width: 240 }} value={bulkSrcValue}
+                  disabled={!!srcBusy['src-bulk']}
+                  onChange={e => setBulkSrcValue(e.target.value)}>
+                  {(srcCfg?.sources || ['rep_entry', 'b2b_derived']).map(v =>
+                    <option key={v} value={v}>{srcCfg?.labels?.[v] || CLOSING_SRC_LABEL[v] || v}</option>)}
+                  <option value="">Company default ({srcCfg?.labels?.[srcCfg?.org_default || 'rep_entry']
+                    || CLOSING_SRC_LABEL[srcCfg?.org_default || 'rep_entry']})</option>
+                </select>
+                <button className="btn" disabled={!!srcBusy['src-bulk'] || !bulkSrcCodes.length}
+                  onClick={applyClosingSourceToStores}
+                  title="Applies this one setting to every store ticked in the dropdown">
+                  {srcBusy['src-bulk'] ? 'Saving…' : `Apply to ${bulkSrcCodes.length || 0} store(s)`}
+                </button>
+              </div>
+              <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '8px 0 0' }}>
+                Each store&apos;s own setting is still shown in the <strong>Daily closing</strong> column
+                below, and changing it there still works — this is the same setting for a whole
+                selection. Choosing <strong>Company default</strong> removes those stores&apos; own
+                setting so they follow the company default again.
+              </p>
+            </div>
+
             {/* Fill in past days for the feed-derived stores. Preview first — it writes nothing. */}
             <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Fill in past days</div>
@@ -331,11 +452,30 @@ export default function StoreSetupPage() {
                 rather than written, and running it twice over the same dates changes nothing the second
                 time. Start with <strong>Preview</strong> — it writes nothing.
               </p>
+              {/* Progress and failure BESIDE the button, not at the top of the page. */}
+              {bfProg && (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)' }}>{bfProg}</div>
+              )}
+              {bfErr && (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger, #c00)' }}>{bfErr}</div>
+              )}
               {bfRes && (
                 <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)' }}>
                   <div>
                     {bfRes.dry_run ? 'Preview' : 'Filled in'} {bfRes.start} to {bfRes.end}
+                    {bfRes.partial ? ' (so far)' : ''}
                     {' — '}{bfRes.days} days, {bfRes.days_with_feed} with sales-feed data.
+                  </div>
+                  {/* WHAT IT WOULD WRITE, in the panel. These counts are the whole point of a
+                      preview and they used to appear only in the page-level message at the top of
+                      the screen, which is the same "reported away from the button" defect as the
+                      failure line above (owner report 2026-10-03). */}
+                  <div style={{ marginTop: 4 }}>
+                    {bfRes.dry_run ? 'Would write' : 'Written'}: {bfRes.totals?.wrote || 0}
+                    {' · '}{bfRes.dry_run ? 'would refresh' : 'refreshed'}: {bfRes.totals?.updated || 0}
+                    {' · '}already current: {bfRes.totals?.unchanged || 0}
+                    {' · '}left as a rep submitted it: {bfRes.totals?.kept_manual || 0}
+                    {' · '}skipped, no feed for that store: {bfRes.totals?.skipped || 0}
                   </div>
                   {(bfRes.per_day || []).filter((d: any) => !d.b2b_has_data).length > 0 && (
                     <div style={{ marginTop: 4 }}>

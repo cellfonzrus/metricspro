@@ -1,0 +1,91 @@
+name: module-graph-guard
+
+# THE MODULE GRAPH (owner directive 2026-10-04): *"one hand does not talk to the other and we need to
+# build a check mechanism via the index and registry we created that everytime an update or extension
+# of a module is done all connected pieces get updated automatically, the tree should be interlinked
+# properly."*
+#
+# Two jobs, deliberately different in kind:
+#
+#   · GUARD (enforcing, fails the build) — the caller snapshot in app/modules/core/module_graph.py
+#     still matches the real import graph, every caller still USES the home it imports, every fact
+#     resolves to a real section of docs/SYSTEM_DATA_FLOW_INDEX.md, every lock it names exists and is
+#     run by a workflow, and no harness holds a private HOME outside the graph. So a new connected
+#     piece CANNOT land silently: the build fails until the author registers it and says what else it
+#     now has to be true for.
+#
+#   · IMPACT (report-only) — prints, into the pull request's summary, every fact the changed files
+#     are wired to and the siblings that answer the same question. This is the hand talking to the
+#     other hand; it never fails a build on its own.
+#
+# Dependency-free by design: the graph is pure data and the guard is stdlib only, so this runs on bare
+# Python in seconds with no pip install.
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/**"
+      - "backend/harness_*.py"
+      - "docs/SYSTEM_DATA_FLOW_INDEX.md"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/**"
+      - "backend/harness_*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: module-graph-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every step runs under `bash -eo pipefail` (GitHub's explicit-bash shell). Without this the default
+# `bash -e` has NO pipefail, so `python3 harness_x.py | tee …` passes even when the harness fails —
+# locked by backend/harness_ci_pipefail_lock.py.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  module-graph-guard:
+    name: The graph is complete, current and interlinked
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the module-graph guard
+        working-directory: backend
+        run: python3 harness_module_graph_guard.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  impact:
+    name: What else answers this question?
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Connected pieces for the files this pull request changes
+        working-directory: backend
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          # Two dots, never three: this repo squash-merges, so a three-dot range resolves to a merge
+          # base that lands BEFORE its own squash and renders merged content as new (CLAUDE.md).
+          mapfile -t changed < <(git diff --name-only "$base" "$head" -- 'backend/app/**' || true)
+          if [ "${#changed[@]}" -eq 0 ]; then
+            echo "No backend/app file changed — nothing to interlink." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo '### Connected pieces — these answer the same question as the files you changed'
+            echo
+            echo '```'
+            python3 harness_module_graph_guard.py --impact "${changed[@]}"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

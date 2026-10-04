@@ -1,4 +1,4 @@
-"""LOCK — a payroll change-log row says WHO from the stored employee record (index §19.42).
+"""LOCK — a payroll change-log row says WHO from the stored employee record (index §19.45).
 
   python3 backend/harness_payroll_log_identity_lock.py
 
@@ -285,7 +285,7 @@ check("C9 an un-scoped helper read -> RED", not helper_org_scoped(
 check("C10 a SQL function inserting log rows -> RED; a comment mentioning it -> GREEN",
       (sql_log_writers({"x.sql": "INSERT INTO storeops.payroll_change_log (org_id) VALUES (1);"}),
        sql_log_writers({"y.sql": "-- INSERT INTO storeops.payroll_change_log is done by the app"})) == (["x.sql"], []))
-check("C11 a table that merely STARTS with the name (mig 1041's own ledger) is not the log -> GREEN",
+check("C11 a table that merely STARTS with the name (mig 1054's own ledger) is not the log -> GREEN",
       sql_log_writers({"z.sql": "insert into storeops.payroll_change_log_id_backfill (log_id) select 1;"}) == [])
 
 print(f"\n{PASS} passed, {FAIL} failed")

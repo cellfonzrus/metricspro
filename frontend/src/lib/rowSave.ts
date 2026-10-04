@@ -138,7 +138,7 @@ export const NOT_SAVED_WHY = 'the server refused to write it (pay is restricted 
 
 /** THE reader of NOT_SAVED_KEYS: every field a reply names as accepted-but-not-written (deduped, in
  *  order). `notPersisted` and every create / upload screen read the reply through this, so a field the
- *  server drops with a 200 can never read as saved anywhere (§19.37 rows, §19.41 creates). */
+ *  server drops with a 200 can never read as saved anywhere (§19.37 rows, §19.44 creates). */
 export function notSavedFields(response: unknown): string[] {
   const reply = response && typeof response === 'object' ? (response as Record<string, unknown>) : null
   const out: string[] = []

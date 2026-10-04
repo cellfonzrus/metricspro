@@ -8,6 +8,7 @@ import re
 import functools as _functools
 import uuid as _uuid_mod   # _caller_uid: an actor id is a UUID or None, never a sentinel (index §19.34)
 from app.core.database import get_supabase
+from app.modules.commcalc import vip_invoice_filter as _vip_filter
 from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api → clean 503 on browser endpoints
                                     browser_allowed as _browser_allowed,
                                     browser_service_url as _browser_service_url,
@@ -17,6 +18,7 @@ from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
+from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -3024,11 +3026,23 @@ async def upload_vip_invoices(file: UploadFile = File(...), org_id: str = ORG_ID
 
 
 # ── VIP invoice reports ──────────────────────────────────────────────────────
-VIP_FEE_COLS = ['shipping', 'discount', 'other_cost', 'other_deductions', 'tax']
+# RULE FIVE (§3d) retrofit 2026-10-03 (owner: "add date range and market with standard filters for
+# distributor invoices"). The core set — date RANGE + market + store multi-select — is applied by the
+# ONE shared selector `vip_invoice_filter`, read by BOTH /vip/summary and /vip/invoices so the table
+# can never disagree with the tiles above it. The market/store half is resolved through the org's one
+# store-spelling vocabulary (`statement_filter.resolve_store_matcher` → `core.scope.market_index`),
+# the same home the P&L filter reads — `vip_invoices.location` is the DISTRIBUTOR's own spelling of a
+# store address and this table has no market column. Month / distributor-spelling / status stay as
+# appended module facets (the core set is never substituted).
+VIP_FEE_COLS = _vip_filter.FEE_COLS          # dereferenced: one fee-bucket list, not a second copy
 
 
 def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"):
-    """Paginated fetch of vip_invoices (Supabase caps at 1000 rows/request)."""
+    """Paginated fetch of vip_invoices (Supabase caps at 1000 rows/request).
+
+    Only the three facets PostgREST can answer exactly (period spelling, the distributor's own
+    location string, status) are pushed down here. The date window and the market/store selection
+    are applied in Python by `_vip_select`, because a market is not a column on this table."""
     PAGE, out, frm = 1000, [], 0
     while True:
         q = client.schema('commcalc').table('vip_invoices').select(cols).eq('org_id', org_id)
@@ -3046,11 +3060,37 @@ def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"
     return out
 
 
+def _vip_select(client, org_id, *, period="", location="", status="", date_from="", date_to="",
+                stores="", markets="", cols="*"):
+    """THE in-scope invoice set for this org and this filter selection: (kept, unresolved).
+
+    `stores` / `markets` are PIPE-separated ('|') multi-selects — a store address may itself contain
+    a comma — and are resolved by `statement_filter.resolve_store_matcher`, so any spelling the
+    picker can offer (code, address variant, POS alias, unambiguous street number) binds the
+    distributor's own spelling of the same store. A spelling the vocabulary cannot bind is returned
+    as `unresolved` and REPORTED by the caller, never guessed into a market."""
+    rows = _vip_fetch(client, org_id, period or None, location or None, status or None, cols=cols)
+    matcher = None
+    if (stores or "").strip() or (markets or "").strip():
+        from app.modules.account.statement_filter import resolve_store_matcher
+        matcher, _explicit, _markets = resolve_store_matcher(client, org_id, stores, markets)
+    return _vip_filter.select(rows, store_matcher=matcher, date_from=date_from, date_to=date_to)
+
+
 @router.get("/vip/filter-options")
 def vip_filter_options(org_id: str = ORG_ID):
-    """Distinct stores / periods / statuses for the VIP page filter bar."""
+    """Options for the VIP page filter bar: the module facets (distributor spellings / periods /
+    statuses, built from the values the data actually has — pick-don't-type, RULE THREE) plus the
+    standard bar's `markets` and `stores`.
+
+    `markets` and `stores` are NOT derived here: they are read from `core.scope.org_market_options` /
+    `org_store_options`, the same org roster the P&L and every other standard filter bar offers. A
+    picker built from this table's own `location` strings would offer a market this report cannot
+    resolve, and one store under each of its spellings — the two defects §13e and §4 already fixed
+    once each."""
     require_org(org_id)
-    rows = _vip_fetch(sb(), org_id, cols="location,period,period_year,period_month,status")
+    client = sb()
+    rows = _vip_fetch(client, org_id, cols="location,period,period_year,period_month,status")
     locations = sorted({r['location'] for r in rows if r.get('location')})
     statuses = sorted({r['status'] for r in rows if r.get('status')})
     pmap = {}
@@ -3058,63 +3098,59 @@ def vip_filter_options(org_id: str = ORG_ID):
         if r.get('period'):
             pmap[r['period']] = (r.get('period_year') or 0, r.get('period_month') or 0)
     periods = sorted(pmap, key=lambda p: pmap[p], reverse=True)
-    return {"locations": locations, "periods": periods, "statuses": statuses}
+    from app.core import scope as _core_scope
+    from app.modules.account.statement_filter import unbound_spellings
+    markets = _core_scope.org_market_options(client, org_id)
+    # One option per PHYSICAL store (§13e), PLUS only those distributor spellings the MATCHER cannot
+    # bind — asked of the matcher's own vocabulary (`unbound_spellings`), never of a second squash.
+    # Measured on production 2026-10-03: 29 distinct locations, 26 bound, so the picker offers the
+    # org's 31 stores plus 3 unmapped spellings — and those 3 stay selectable (the explicit half of
+    # `build_store_matcher` matches a selection verbatim) instead of being silently unreachable.
+    idx = _core_scope.market_index(client, org_id)
+    stores = _core_scope.org_store_options(client, org_id,
+                                           present=unbound_spellings(idx, locations))
+    return {"locations": locations, "periods": periods, "statuses": statuses,
+            "markets": markets, "stores": stores}
 
 
 @router.get("/vip/summary")
-async def vip_summary(org_id: str = ORG_ID, period: str = "", location: str = "", status: str = ""):
-    """Totals, fees-by-type (invoice money buckets), and per-store breakdown."""
+async def vip_summary(org_id: str = ORG_ID, period: str = "", location: str = "", status: str = "",
+                      date_from: str = "", date_to: str = "", stores: str = "", markets: str = ""):
+    """Totals, fees-by-type (invoice money buckets), and per-store breakdown over the SAME in-scope
+    set `/vip/invoices` lists — one selector, so the tiles always add up to the table.
+
+    `date_from`/`date_to` are inclusive YYYY-MM-DD days over `created_on`; `stores`/`markets` are
+    pipe-separated. The response also carries `unresolved` — the invoices a store/market selection
+    could not bind to the org vocabulary — so the screen reports them instead of shrinking a total
+    without saying why."""
     require_org(org_id)
-    cols = "location,sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total"
-    rows = _vip_fetch(sb(), org_id, period or None, location or None, status or None, cols=cols)
-
-    def f(v):
-        try:
-            return float(v or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    totals = {"invoices": len(rows), "sub_total": 0.0, "grand_total": 0.0}
-    for c in VIP_FEE_COLS:
-        totals[c] = 0.0
-    by_store: dict = {}
-    for r in rows:
-        loc = r.get('location') or '—'
-        s = by_store.setdefault(loc, {"location": loc, "invoices": 0, "sub_total": 0.0,
-                                      "grand_total": 0.0, **{c: 0.0 for c in VIP_FEE_COLS}})
-        s["invoices"] += 1
-        s["sub_total"] += f(r.get('sub_total'))
-        s["grand_total"] += f(r.get('grand_total'))
-        totals["sub_total"] += f(r.get('sub_total'))
-        totals["grand_total"] += f(r.get('grand_total'))
-        for c in VIP_FEE_COLS:
-            v = f(r.get(c))
-            s[c] += v
-            totals[c] += v
-    totals["fees_total"] = sum(totals[c] for c in VIP_FEE_COLS)
-    by_store_list = sorted(by_store.values(), key=lambda x: x["grand_total"], reverse=True)
-    return {"totals": totals,
-            "fees_by_type": {c: totals[c] for c in VIP_FEE_COLS},
-            "by_store": by_store_list}
+    kept, unresolved = _vip_select(
+        sb(), org_id, period=period, location=location, status=status,
+        date_from=date_from, date_to=date_to, stores=stores, markets=markets,
+        cols=_vip_filter.SUMMARY_COLS)
+    return _vip_filter.summarize(kept, unresolved)
 
 
 @router.get("/vip/invoices")
 async def vip_invoices_list(org_id: str = ORG_ID, period: str = "", location: str = "",
-                            status: str = "", limit: int = 2000, offset: int = 0):
-    """Invoice list for the table + Excel/PDF export (newest first)."""
+                            status: str = "", limit: int = 2000, offset: int = 0,
+                            date_from: str = "", date_to: str = "", stores: str = "",
+                            markets: str = ""):
+    """Invoice list for the table + Excel/PDF export (newest first), over the SAME in-scope set
+    `/vip/summary` totals. Both read `_vip_select`; neither writes its own filter chain.
+
+    Paging is applied AFTER the selection (a market is not a column, so PostgREST cannot page it),
+    which is why the ordering is done here too — newest `created_on` first, exactly as before."""
     require_org(org_id)
-    q = sb().schema('commcalc').table('vip_invoices').select(
-        "vip_id,invoice_number,order_number,location,status,created_on,due_date,"
-        "sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total,period"
-    ).eq('org_id', org_id)
-    if period:
-        q = q.in_('period', _pvariants(period))
-    if location:
-        q = q.eq('location', location)
-    if status:
-        q = q.eq('status', status)
+    kept, _unresolved = _vip_select(
+        sb(), org_id, period=period, location=location, status=status,
+        date_from=date_from, date_to=date_to, stores=stores, markets=markets,
+        cols="vip_id,invoice_number,order_number,location,status,created_on,due_date,"
+             "sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total,period")
+    kept.sort(key=lambda r: str(r.get('created_on') or ''), reverse=True)
     lim = min(max(limit, 1), 5000)
-    return (q.order('created_on', desc=True).range(offset, offset + lim - 1).execute().data) or []
+    off = max(offset, 0)
+    return kept[off:off + lim]
 
 
 @router.get("/vip/invoice/{vip_id}")
@@ -3362,7 +3398,8 @@ def _registry_auto_map(client, org_id):
 
 # Columns the sweep reads per report. Kept as a literal list so a pre-290 database (which lacks the
 # schedule columns) can be detected and degraded gracefully rather than 400-ing the whole sweep.
-_REGISTRY_SWEEP_COLS = ('report_key,auto,refresh_months,refresh_days,'
+_REGISTRY_SWEEP_COLS = ('report_key,auto,refresh_months,refresh_days,arrears_days,'
+                        'empty_stale_after_days,'
                         'sweep_hour,sweep_minute,sweep_timezone,sweep_next_run_at')
 
 
@@ -11305,12 +11342,14 @@ def _connector_creds(client, org_id, cfg_table):
 
 
 # ── DAILY UPLOAD DUTY (mig 292, owner directive 2026-08-09) ─────────────────────────────────────
-_DUTY_DATE_COL = {          # newest-row column per target table, for deriving the missing range
-    'raw_ma_commission': 'created_at', 'raw_ma_fulfillment': 'created_at',
-    'raw_ma_daily_tx': 'created_at', 'raw_mi': 'created_at',
-    'raw_comp_report': 'begin_date', 'raw_payment_detail': 'payment_date',
-    'raw_sales': 'trans_date', 'daily_sales_feed': 'trans_date',
-}
+# WHICH COLUMN NAMES THE DAY THE DATA IS ABOUT is not decided here. This dict USED to be a second
+# copy of that fact (owner 2026-10-03: *"a fool proof system to avoid such fails"*), and a second copy
+# is a future divergence — it already disagreed with the live schema, calling `raw_ma_commission` and
+# `raw_ma_daily_tx` `created_at` (an ARRIVAL stamp) when both carry `tx_date`, so a duty's "missing
+# range" was measured from when we loaded rather than from what the data covered. The fact now lives
+# in `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` and this reads it; a table the registry declares
+# as period-keyed (None) falls back to the arrival column, which is all such a table can offer.
+# `harness_feed_watchdog.py` §D fails the build if this module re-grows its own copy.
 
 
 def _duty_defaults(client, org_id):
@@ -11325,7 +11364,7 @@ def _duty_defaults(client, org_id):
 def _duty_last_loaded(client, tbl, org_id):
     """Newest data date already in the target table, or None. Read-only and best-effort: a table the
     tenant has never loaded simply yields None, which the caller renders as "no data yet"."""
-    col = _DUTY_DATE_COL.get(tbl, 'created_at')
+    col = _lineage.data_date_column(tbl) or _lineage.freshness_column(tbl)
     try:
         rows = (client.schema('commcalc').table(tbl).select(col)
                 .eq('org_id', org_id).order(col, desc=True).limit(1).execute().data) or []
@@ -12508,13 +12547,18 @@ def _table_feed_freshness(client, org_id, table, date_col, label):
         return out
     if not out["rows"]:
         return out
-    try:
-        latest = (client.schema("commcalc").table(table).select(date_col)
-                  .eq("org_id", org_id).order(date_col, desc=True).limit(1).execute().data) or []
-        if latest:
-            out["latest_data_date"] = str(latest[0].get(date_col) or "")[:10] or None
-    except Exception:
-        pass
+    # `date_col` None is a DECLARATION from the registry, not an omission: the table is period-keyed
+    # (one snapshot per month, replaced not appended) or carries no populated row here, so no column
+    # names its own day. Such a feed is watched on ARRIVAL alone — `latest_data_date` stays None and
+    # the caller's wording degrades to "stopped arriving", which is the only honest reading.
+    if date_col:
+        try:
+            latest = (client.schema("commcalc").table(table).select(date_col)
+                      .eq("org_id", org_id).order(date_col, desc=True).limit(1).execute().data) or []
+            if latest:
+                out["latest_data_date"] = str(latest[0].get(date_col) or "")[:10] or None
+        except Exception:
+            pass
     ing_col = _lineage.freshness_column(table)
     try:
         newest = (client.schema("commcalc").table(table).select(ing_col)
@@ -12554,11 +12598,35 @@ def _data_freshness_report(client, org_id):
     carries, with `days_stale` and a `stale` flag (no data for yesterday/today). The shared core behind the
     GET endpoint, the auto-monitor, and the run-now button. Read-only; degrades gracefully."""
     today = _date.today()
+    # THE WATCHED SET IS DERIVED FROM THE REGISTRY, never listed here (owner 2026-10-03: *"a root cause
+    # analysis why this fails and a fool proof system to avoid such fails"*).
+    #
+    # This list USED to name three feeds — activation details, bill payments and sales — while
+    # `data_lineage_registry.INGEST_TABLES_BY_MODULE` registered more than twenty. Registering a feed
+    # therefore did not get it watched, and a feed nobody had listed could stop silently: measured
+    # 2026-10-03, `raw_comp_report` last carried data for 2026-08-06 and `asset_ledger` for 2026-09-23,
+    # and both were found weeks later by a human noticing a wrong number. That is not a monitor that
+    # missed a feed, it is a monitor that could not see it.
+    #
+    # `watched_feeds()` is the registry minus its DECLARED exclusions, so a feed registered today is
+    # watched today and the set cannot fall behind. `harness_feed_watchdog.py` fails the build if a
+    # registered table is neither watched nor excused, if a monthly archive is watched (the 2026-08-30
+    # false alarm), or if this call is replaced by a hand-written list again.
     feeds = [
         _custom_feed_freshness(client, org_id, "activation_details", "Activation Details (activation basis)"),
         _custom_feed_freshness(client, org_id, "bill_payment_transactions", "Bill Payment Transactions"),
         _sales_feed_freshness(client, org_id),
     ]
+    # The sales pair has its own probe above (it reports the live feed AND its monthly archive side by
+    # side), so it is not probed twice.
+    _already = {_lineage.freshness_source("sales")}
+    for wf in _lineage.watched_feeds():
+        if wf["table"] in _already:
+            continue
+        f = _table_feed_freshness(client, org_id, wf["table"], wf["data_date_column"],
+                                  _lineage.feed_label(wf["table"]))
+        f["cadence_days"] = wf["cadence_days"]
+        feeds.append(f)
     for f in feeds:
         ld = f.get("latest_data_date")
         d = None
@@ -12568,7 +12636,20 @@ def _data_freshness_report(client, org_id):
             except Exception:
                 d = None
         f["days_stale"] = d
-        f["stale"] = bool(f.get("rows")) and (d is None or d >= 2)
+        # LATE IS RELATIVE TO THE FEED'S OWN CADENCE, declared in the registry. One day's grace on top
+        # (a daily feed is late at 2 days, as it always was; a monthly snapshot is not late at 2 days,
+        # which is what made watching slow feeds impossible before).
+        cad = int(f.get("cadence_days") or _lineage.DEFAULT_FEED_CADENCE)
+        f.setdefault("cadence_days", cad)
+        if d is None and f.get("last_ingest_at"):
+            # Arrival-only feed: judge it on when a row last LANDED, since no column names its day.
+            try:
+                ia = _datetime.strptime(str(f["last_ingest_at"])[:10], "%Y-%m-%d").date()
+                f["days_stale"] = d = (today - ia).days
+                f["stale_basis"] = "arrival"
+            except Exception:
+                pass
+        f["stale"] = bool(f.get("rows")) and (d is None or d >= cad + 1)
     # Reports that arrived but matched NO import rule, persisted by the sweep (a renamed/unruled report whose
     # data never imported). Guarded — an absent column, no rows, or a parse miss all yield []. Aggregated
     # across the tenant's mailbox account(s), deduped.
@@ -13569,6 +13650,26 @@ def _accessory_config_uncached(client, org_id):
     gp_acc_basis = "sales"
     if str(_ac.get("gp_acc_basis") or "").strip().lower() in ("sales", "gp"):
         gp_acc_basis = str(_ac["gp_acc_basis"]).strip().lower()
+    # THE BILL-PAYMENT SERVICE-FEE VOCABULARY, DEREFERENCED (index §19.42, 2026-10-03). Which
+    # product_desc means "the fee the store charged for taking this bill payment" has exactly ONE home —
+    # `epay_fee_recon.resolve_fee_descs` over the per-org mig-1045 column `billpay_fee_product_desc`,
+    # house default `HOUSE_FEE_DESCS`. It is carried on the resolved config so every classifier reading
+    # this row READS that fact instead of re-deciding it; the whole-row read above means no extra
+    # round trip. Blank / missing column / any failure -> the house tuple, so an unset tenant is
+    # byte-identical.
+    try:
+        from app.modules.commcalc import epay_fee_recon as _fr_cfg
+        billpay_fee_descs = _fr_cfg.resolve_fee_descs(_ac.get("billpay_fee_product_desc") if got else None)
+    except Exception:
+        billpay_fee_descs = ()
+    # THE RAW CELL IS CARRIED TOO, beside the resolved tuple and off the SAME read (owner ask
+    # 2026-10-03). The settings screen needs what this org actually DECLARED, because "inheriting the
+    # house wording" and "pinned to the same words" resolve identically and only one of them follows
+    # a house change. Deriving it here rather than in a reader of its own keeps the column at one
+    # whole-row read (§4b.1) instead of a third round trip for the same cell.
+    _fee_raw = _ac.get("billpay_fee_product_desc") if got else None
+    billpay_fee_descs_raw = ([str(t).strip() for t in _fee_raw if str(t or "").strip()]
+                             if isinstance(_fee_raw, (list, tuple)) else [])
     catalog_classifier = None
     if catalog_classify_enabled:
         try:
@@ -13601,6 +13702,8 @@ def _accessory_config_uncached(client, org_id):
             "apply_to_gp": apply_to_gp,
             "definition_drives_pay": definition_drives_pay,
             "gp_acc_basis": gp_acc_basis,
+            "billpay_fee_descs": tuple(billpay_fee_descs),
+            "billpay_fee_descs_raw": billpay_fee_descs_raw,
             "catalog_classifier": catalog_classifier}
 
 
@@ -14816,8 +14919,14 @@ def _do_epay_sweep(org_id, only=None):
         # That used to be reported as a flat 'ok' (the failed report looked imported) — call it 'partial'
         # so the connectors page and the attention feed can tell the operator WHICH report is missing.
         _errs = (res or {}).get('errors') if isinstance(res, dict) else None
+        # SUCCESS IS WHAT LANDED, not what the status word says (§19.21/§19.41). A run whose only
+        # outcome was a zero the sweep could not vouch for imported nothing, so it records an
+        # ATTEMPT — otherwise `last_run_at` goes on advancing while the feed is dead, which is
+        # exactly how two months of statements went missing with a green connector above them.
+        _landed = int((res or {}).get('rows_landed') or 0) if isinstance(res, dict) else 0
         _epay_set_status(client, org_id, 'partial' if _errs else 'ok',
-                         (f"PARTIAL — {res}" if _errs else f"OK — {res}"), mark_run=True)
+                         (f"PARTIAL — {res}" if _errs else f"OK — {res}"), mark_run=True,
+                         success=_landed > 0)
     except epay_sweep.EpayLoginError as e:
         _epay_set_status(client, org_id, 'error', str(e), mark_run=True)
     except epay_sweep.EpayPortalError as e:
@@ -17207,6 +17316,287 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
             "feed_vintage": _dlar_slice_vintage(client, org_id, cperiod),
             "note": ("No store DLAR rows for this period — store-grain KPIs unavailable; "
                      "rep grain shown from computed commissions.") if not dlar_rows else None}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# FOLLOW UP WITH MANAGERS (owner ask 2026-10-03) — the pending work each manager owns, aged.
+#
+# Owner: "all pending jobs assigned to the managers will be followed up via this module" + "alert
+# the management via a whats app message for all followup items with the managers".
+#
+# WHAT "ALL PENDING JOBS" MEANS IS NOT DEFINED HERE. It is `compliance_summary.CATEGORIES`, the
+# registry the Flags & Compliance dashboard already counts off, which `manager_followup.sources()`
+# dereferences. This glue adds only the item-level read each queue needs so an item can be
+# ATTRIBUTED to a manager and AGED — the two things a count cannot give.
+#
+# WHAT IS HONESTLY NOT ATTRIBUTABLE, SAID OUT LOUD RATHER THAN OMITTED. Three queues carry a store
+# and a date on their own rows and are attributed per manager. One (`ingest_quarantine`) carries a
+# RAW store string that by definition did not resolve to a store — that is what put it in
+# quarantine — so it can never be attributed to a store's manager, and saying otherwise would be a
+# guess. The rest are counted by the dashboard through in-process handlers that return a period's
+# rows rather than an ageable per-item queue; attributing them needs per-queue work this change does
+# not pretend to have done. Every one of them is listed in `not_attributed` on the payload and in
+# the digest footer, so a manager can never read this board as "that is everything".
+_FOLLOWUP_ITEM_CAP = 80000      # a ceiling, with `truncated` reported — never a silent partial roll-up
+
+# The three queues whose own rows carry a store and a date, so an item can be attributed to a
+# manager and aged. Together with `_FOLLOWUP_NOT_ATTRIBUTED` below this must cover the WHOLE
+# registry: a queue that is in neither is a queue nobody is told about, which is the silent-partial
+# defect this module exists to prevent. The harness fails the build if the two stop partitioning
+# `compliance_summary.CATEGORIES`, and `_followup_items` refuses to read a queue not declared here.
+_FOLLOWUP_ATTRIBUTED = ("commission_flags", "pay_discrepancy", "ops_chargebacks")
+
+_FOLLOWUP_NOT_ATTRIBUTED = {
+    "ingest_quarantine":
+        "the quarantined store string never resolved to a store, so it has no manager — that is "
+        "what quarantined it",
+    "attendance_exceptions": "counted per pay period by the attendance handler, not yet per manager",
+    "hours_approval": "counted as DM/HR totals by the payroll-approval handler, not yet per manager",
+    "approvals_pending": "counted by the approvals engine, not yet per manager",
+    "deposit_accountability": "counted as store-days by the accountability board, not yet aged",
+    "billpay_coverage": "counted as month exceptions by the coverage report, not yet aged",
+    "statement_staleness": "an org-level yes/no, not a per-manager queue",
+}
+
+
+def _followup_paged(q_factory, cap=_FOLLOWUP_ITEM_CAP):
+    """Page a PostgREST select to `cap` rows. Returns (rows, truncated). A read that fails returns
+    ([], True) — 'we could not see it', never ([], False) which would read as 'there is none'."""
+    rows, page = [], 0
+    while True:
+        try:
+            got = (q_factory().range(page * 1000, (page + 1) * 1000 - 1).execute().data) or []
+        except Exception as e:
+            print(f"WARN manager follow-up read failed on page {page}: {e}")
+            return rows, True
+        rows += got
+        if len(got) < 1000:
+            return rows, False
+        page += 1
+        if len(rows) >= cap:
+            return rows, True
+
+
+def _followup_items(client, org_id, period=None):
+    """Every pending item that can be attributed to a store and aged, as
+    `manager_followup.summarize` wants them. Returns (items, meta).
+
+    ONE read per queue, selecting only the columns the roll-up needs — a follow-up board that pulls
+    whole rows of a 67,000-row queue is a board nobody loads twice."""
+    items, meta = [], {"truncated": [], "unavailable": [], "read": {}}
+    # A QUEUE DOES NOT GET TO INVENT A STORE KEY. `flags` carries a real `store_code`; the
+    # discrepancy engine's `store` is the POS string it was reconciled under ('3 Palisade Ave
+    # Yonkers'), which no org-tree lookup can resolve to a manager. So every queue's store goes
+    # through the SAME `_store_code_resolver` the Daily-Targets actuals ride (§13) — the one home for
+    # "which store_code is this string" — instead of this module deciding for itself. Without it the
+    # 57 live follow-ups keyed on addresses would have resolved NO manager and the digest would have
+    # been silently empty, which is the kind of quiet nothing this module exists to prevent.
+    try:
+        _resolve_store = _store_code_resolver(client, org_id)
+    except Exception as e:
+        print(f"WARN manager follow-up could not build the store resolver: {e}")
+        _resolve_store = None
+
+    def _store_of(raw):
+        """The store_code for a queue's store string. An unresolvable string stays as it came rather
+        than being guessed at a code: it lands in the UNATTRIBUTED bucket and is REPORTED, which is
+        honest, where a guess would send a manager after a store that is not theirs."""
+        v = str(raw or "").strip()
+        if not v:
+            return None
+        if _resolve_store is None:
+            return v
+        try:
+            return _resolve_store(v) or v
+        except Exception:
+            return v
+
+    def _add(key, rows, truncated, store_key, date_key, label_key):
+        # A queue is read only if it is DECLARED attributable. Adding a read without declaring it
+        # would put a queue in neither list, and nobody would be told it was partial.
+        if key not in _FOLLOWUP_ATTRIBUTED:
+            raise RuntimeError(f"follow-up queue {key!r} is not declared in _FOLLOWUP_ATTRIBUTED")
+        meta["read"][key] = len(rows)
+        if truncated:
+            meta["truncated"].append(key)
+        for r in rows or []:
+            items.append({"source": key,
+                          "store_code": _store_of((r or {}).get(store_key)),
+                          "opened_at": (r or {}).get(date_key) if date_key else None,
+                          "label": (r or {}).get(label_key) if label_key else None,
+                          "ref": (r or {}).get("id")})
+
+    # Commission flags — the big one: 67,344 open for the house org on 2026-10-03, oldest 117 days.
+    rows, trunc = _followup_paged(
+        lambda: (client.schema("commcalc").table("flags")
+                 .select("id,store_code,created_at,flag_type")
+                 .eq("org_id", org_id).eq("status", flag_persist.STATUS_OPEN)
+                 .order("created_at", desc=False)))
+    _add("commission_flags", rows, trunc, "store_code", "created_at", "flag_type")
+
+    # Pay discrepancy — no created_at on the row, so it is aged by the activation date it is about,
+    # which is the honest available date. Rows without one age to unknown, never to today.
+    rows, trunc = _followup_paged(
+        lambda: (client.schema("commcalc").table("discrepancy_results")
+                 .select("id,store,activation_date,comp_type")
+                 .eq("org_id", org_id).eq("status", "open")))
+    _add("pay_discrepancy", rows, trunc, "store", "activation_date", "comp_type")
+
+    # Ops chargebacks awaiting a decision.
+    rows, trunc = _followup_paged(
+        lambda: (client.schema("commcalc").table("ops_chargeback")
+                 .select("id,store_code,created_at,reason")
+                 .eq("org_id", org_id).eq("status", "pending")))
+    _add("ops_chargebacks", rows, trunc, "store_code", "created_at", "reason")
+
+    meta["not_attributed"] = dict(_FOLLOWUP_NOT_ATTRIBUTED)
+    return items, meta
+
+
+@router.get("/manager-followup")
+def manager_followup_board(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """FOLLOW UP WITH MANAGERS — the pending work per store and queue, aged, with what is past the
+    escalation age first. Span-scoped to the caller's own stores through the SAME keyset every other
+    manager surface uses. READ-ONLY.
+
+    `not_attributed` names every queue whose open items this board cannot assign to a manager, with
+    the reason; `truncated` names any queue whose read hit the row ceiling, and `unattributed` counts
+    the items that carry no store at all. None of those is folded into the totals, and none is
+    hidden: a board that silently answered for seven of ten queues would be worse than no board."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.commcalc import manager_followup as _fu
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    today = _datetime.now(_timezone.utc).date().isoformat()
+    cfg = _fu.resolve_config(_followup_tenant_row(client, org_id))
+    items, meta = _followup_items(client, org_id)
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        # A span-scoped caller sees their own stores. Items with NO store are kept: they are the
+        # ones nobody owns, and hiding them from the person who could assign one is the defect.
+        items = [i for i in items
+                 if not i.get("store_code") or in_keyset(ks, i.get("store_code"))]
+    summary = _fu.summarize(items, today, config=cfg)
+    follow = _fu.followup_items(summary, config=cfg)
+    return {"as_of": today, "config": {k: (list(v) if isinstance(v, tuple) else v)
+                                       for k, v in cfg.items()},
+            "totals": summary["totals"], "by_source": summary["by_source"],
+            "items": follow, "labels": _fu.source_labels(),
+            "sources": [{"key": k, "label": lbl, "href": href, "meaning": d}
+                        for (k, lbl, href, d) in _fu.sources()],
+            "not_attributed": meta["not_attributed"], "truncated": meta["truncated"],
+            "read": meta["read"]}
+
+
+def _followup_tenant_row(client, org_id):
+    """The tenant's follow-up config row, or {} — its own defensive read (the mig-313 posture), so a
+    pre-migration schema resolves to the house defaults instead of failing the board."""
+    try:
+        rows = (client.schema("storeops").table("tenants").select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+async def _run_manager_followup_alerts(org_id_filter=None, respect_enabled=True,
+                                       respect_time=True, dry_run=False):
+    """The daily Follow Up With Managers sweep: ONE digest per manager of the work their stores owe,
+    oldest first, with anything past the escalation age also reaching the manager ABOVE them.
+    Recipients, dedup, channels and the due-time rule all come from `manager_digest`. NEVER raises."""
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
+    from app.modules.commcalc import manager_digest as _md
+    from app.modules.commcalc import manager_followup as _fu
+    from app.modules.notify import digest_delivery as _delivery
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    from app.core.base_url import base_url
+    root = get_supabase()
+    so = root.schema("storeops")
+    try:
+        tenants = so.table("tenants").select("*").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    wa_ok = whatsapp_meta.is_configured()
+    try:
+        link = (base_url() or "").rstrip("/") + "/commcalc/manager-followup"
+    except Exception:
+        link = None
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        cfg = _fu.resolve_config(t)
+        if respect_enabled and not cfg["enabled"]:
+            continue
+        now_local = _datetime.now(_timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date().isoformat()
+        if respect_time and not _md.due_now(now_local.strftime("%H:%M"), cfg["send_time"]):
+            continue
+        try:
+            items, meta = _followup_items(root, oid)
+        except Exception as e:
+            results.append({"org_id": oid, "error": str(e)[:200]})
+            continue
+        summary = _fu.summarize(items, today, config=cfg)
+        follow = _fu.followup_items(summary, config=cfg)
+        if not follow:
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "followups": 0,
+                            "totals": summary["totals"]})
+            continue
+        stores = {i["store_code"] for i in follow if i.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        labels = _fu.source_labels()
+        def _build(name, its, _t=summary["totals"], _l=labels, _k=link, _u=meta["truncated"]):
+            return _fu.build_digest(name, its, totals=_t, labels=_l, link=_k, unavailable=_u)
+
+        plan = _md.plan_digests(
+            follow, hierarchy, today, scope=_fu.ALERT_SCOPE, build=_build,
+            key_parts=_fu.key_parts, channels=cfg["channels"])
+        # ONE home for "carry it and record what each channel did" — see notify/digest_delivery.py.
+        # STRUCTURED preview rows, never pre-joined display text: the view owns presentation.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, _fu.ALERT_SCOPE, plan["digests"], build=_build,
+            wa_filename="followup.txt",
+            channels_ok={"email": email_ok, "whatsapp": wa_ok}, dry_run=dry_run,
+            preview_item=lambda i: {"store_code": i["store_code"], "source": i["source"],
+                                    "open": i["open"], "oldest_days": i["oldest_days"],
+                                    "band": i["band"], "escalated": i["escalated"]})
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped,
+                        "followups": len(follow),
+                        "escalated": sum(1 for i in follow if i["escalated"]),
+                        "totals": summary["totals"], "truncated": meta["truncated"],
+                        "send_time": cfg["send_time"], "channels": list(cfg["channels"]),
+                        "escalate_after_days": cfg["escalate_after_days"],
+                        "email_configured": email_ok, "whatsapp_configured": wa_ok,
+                        "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+@router.post("/manager-followup/alerts/run-due")
+async def manager_followup_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated HOURLY pg_cron entrypoint. Each tick asks every switched-on tenant whether its
+    configured send time has arrived in its own local day; `alert_log` dedup stops every later tick.
+    Mirrors the zero-sales and ePay sweeps exactly — same dedup table, same recipient rule."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_manager_followup_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/manager-followup/alerts/run-now")
+async def manager_followup_run_now(send: bool = False, authorization: str = Header(default=""),
+                                   org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable and time gates. DEFAULTS
+    TO A DRY RUN — it returns exactly who WOULD be messaged, on which channels, and about which
+    stores and queues, sending nothing. Dedup is always honoured."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_manager_followup_alerts(org_id_filter=org_id, respect_enabled=False,
+                                              respect_time=False, dry_run=not send)
 
 
 @router.get("/compliance-summary")
@@ -24931,7 +25321,17 @@ def get_accessory_config(org_id: str = ORG_ID):
             "catalog_accessory_categories": c["catalog_accessory_categories_list"],
             "apply_to_gp": c.get("apply_to_gp", False),
             "definition_drives_pay": c.get("definition_drives_pay", False),
-            "gp_acc_basis": c.get("gp_acc_basis", "sales")}
+            "gp_acc_basis": c.get("gp_acc_basis", "sales"),
+            # THE BILL-PAYMENT SERVICE FEE, both halves of it (owner ask 2026-10-03). Resolved
+            # through their own one homes, so this payload can never disagree with what the reports
+            # read: the VOCABULARY (mig 1045 — what the fee line is called here, empty = the house
+            # wording) and the POLICY (mig 1046 — whether there is a fee at all). Both are read by
+            # the same defensive readers the sweeps use, so a pre-migration schema renders the
+            # defaults instead of failing the settings screen.
+            "billpay_fee_product_desc": c.get("billpay_fee_descs_raw") or [],
+            "billpay_fee_charged": _billpay_fee_policy(sb(), org_id),
+            "billpay_fee_policies": list(_mr_cfg.FEE_POLICIES),
+            "billpay_fee_policy_default": _mr_cfg.HOUSE_FEE_POLICY}
 
 
 class PutAccessoryConfigIn(LaxModel):
@@ -24951,6 +25351,8 @@ class PutAccessoryConfigIn(LaxModel):
     apply_to_gp: Any = None
     definition_drives_pay: Any = None
     gp_acc_basis: Any = None
+    billpay_fee_product_desc: Any = None   # mig 1045: what this org's bill-payment fee line is called
+    billpay_fee_charged: Any = None        # mig 1046: 'yes' | 'no' | 'unknown' — IS there a fee?
 
 
 @router.put("/accessory-config")
@@ -25098,18 +25500,39 @@ def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, autho
         row["gp_acc_basis"] = _gb
     else:
         row["gp_acc_basis"] = str(cur.get("gp_acc_basis") or "sales")
+    # BILL-PAYMENT FEE VOCABULARY (mig 1045) — what this org's fee line is called. Empty resolves to
+    # the house wording in the one home, so clearing it is "inherit", never "blank".
+    if "billpay_fee_product_desc" in body.model_fields_set:
+        row["billpay_fee_product_desc"] = [str(x).strip() for x in (body.billpay_fee_product_desc or [])
+                                           if str(x).strip()]
+    else:
+        row["billpay_fee_product_desc"] = cur.get("billpay_fee_descs_raw") or []
+    # BILL-PAYMENT FEE POLICY (mig 1046) — does this org charge one at all? PICK-DON'T-TYPE: the
+    # vocabulary is the one home's `FEE_POLICIES`, never a list spelled here, and a value outside it
+    # is REJECTED rather than stored, because a typo would resolve to 'unknown' and quietly park
+    # every store-day the owner meant to have assessed.
+    if "billpay_fee_charged" in body.model_fields_set:
+        _fp = str(body.billpay_fee_charged or "").strip().lower()
+        if _fp not in _mr_cfg.FEE_POLICIES:
+            raise HTTPException(400, "billpay_fee_charged must be one of: "
+                                     + ", ".join(_mr_cfg.FEE_POLICIES))
+        row["billpay_fee_charged"] = _fp
+    else:
+        row["billpay_fee_charged"] = _billpay_fee_policy(client, org_id)
     # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
     # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
     # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge', catalog →
     # disabled/legacy classification).
-    _new313 = ["activation_details_rules"]
+    _new1046 = ["billpay_fee_charged"]
+    _new1045 = _new1046 + ["billpay_fee_product_desc"]
+    _new313 = _new1045 + ["activation_details_rules"]
     _new930 = _new313 + ["gp_acc_basis"]
     _new276 = _new930 + ["definition_drives_pay"]
     _new250 = _new276 + ["apply_to_gp"]
     _new231 = _new250 + ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
     _drop_final = _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], _new313, _new930, _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
+    for _drop in ([], _new1046, _new1045, _new313, _new930, _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)
@@ -27374,17 +27797,19 @@ def _txn_activation_candidate(lines, acfg, is_excluded=None):
     receipts. Acting on that note would have invented an activation rule that swept every bill payment
     into the activation count. The note has to earn its alarm, or it trains the owner to ignore it.
 
-    NOTHING IS HARD-CODED HERE. All three tests are the tenant's own config, already curated elsewhere in
+    NOTHING IS HARD-CODED HERE. All FOUR tests are the tenant's own config, already curated elsewhere in
     this same page: `is_excluded` is the payout_exclusion_map predicate (the RTR rule is a seeded, editable,
-    WORD-anchored config row — not a branch), the bill-payment list is `billpay_products`, and the accessory
-    test is `_is_accessory`, the very classifier the report aggregates accessory revenue with. A tenant with
-    none of them configured gets `is_excluded=None` + an empty accessory config, every line reads
-    activation-capable, and the count is byte-identical to the old behaviour.
+    WORD-anchored config row — not a branch), the bill-payment list is `billpay_products`, the bill-payment
+    SERVICE-FEE vocabulary is `acfg['billpay_fee_descs']` (the mig-1045 per-org column resolved through the
+    one registry, `epay_fee_recon.resolve_fee_descs`), and the accessory test is `_is_accessory`, the very
+    classifier the report aggregates accessory revenue with. A tenant with none of them configured gets
+    `is_excluded=None` + the HOUSE fee vocabulary + an empty accessory config.
 
     An exclusion rule keyed on a column the DISPLAY projection does not carry (sku / tender_type) simply
     never hits — `exclusion_hit` skips a blank value — so this can only ever UNDER-suppress, never
     wrongly hide a real gap."""
     bp = (acfg or {}).get('billpay_products') or set()
+    _fee_descs = (acfg or {}).get('billpay_fee_descs') or ()
     for l in lines or ():
         try:
             if is_excluded is not None and is_excluded(l):
@@ -27394,6 +27819,23 @@ def _txn_activation_candidate(lines, acfg, is_excluded=None):
             # conversion metric can never disagree about what a walk-in recharge is.
             _p = str(l.get('product_desc') or '').strip().lower()
             if _p and (_p in bp if bp else any(_t in _p for _t in _BILLPAY_DEFAULT_TOKENS)):
+                continue
+            # THE SERVICE FEE ON A BILL PAYMENT IS NOT A THING A CONTRACT TYPE COULD HAVE DESCRIBED
+            # (index §19.42; live evidence 2026-10-03). The house org rings the customer fee as its own
+            # sales line — department 'Bill Payments', category 'Other Charge' — beside the RTR payment
+            # line. The payment line is suppressed above (the RTR exclusion / the bill-pay vocabulary),
+            # but the FEE line was not, so every single walk-in bill payment read as an activation-capable
+            # transaction with a blank contract type: 690 of the 693 October alarms, 4,142 of 4,206 in
+            # September, 4,270 of 4,315 in August. The banner told the owner to "map them so they count
+            # as activations" — which, acted on, would have swept bill payments into the activation count:
+            # exactly the failure `_txn_activation_candidate` exists to prevent, on the other tenant.
+            # The fee vocabulary is NOT re-decided here. It is the ONE registry fact every other fee
+            # reader already dereferences (epay_fee_recon.resolve_fee_descs over the mig-1045 per-org
+            # column, carried on acfg['billpay_fee_descs']) — the P&L booking in account/coa.py, the
+            # fee reconciliation and the pickup-netting basis read the same home. An org whose config
+            # resolves to no vocabulary at all (() — only reachable if the registry import fails) keeps
+            # the pre-change behaviour.
+            if _fee_descs and _p and any(_t in _p for _t in _fee_descs):
                 continue
             if _is_accessory(l.get('department'), l.get('category'), l.get('product_desc'), acfg):
                 continue
@@ -27410,7 +27852,8 @@ def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sampl
         resolve to None (not activation/upgrade/byod, not a swap) -> map them in the ct-map.
       blank_ct_transactions : distinct tids with a blank-ct line and NO ct-based activation on any line.
       blank_ct_non_activation : of those, how many could not have been an activation at all — every line
-        is either tenant-EXCLUDED (the RTR / bill-payment map) or an ACCESSORY. Reported, never alarmed
+        is tenant-EXCLUDED (the RTR / bill-payment map), the bill-payment SERVICE FEE, or an ACCESSORY.
+        Reported, never alarmed
         on: mapping these would count bill payments as activations. See _txn_activation_candidate.
       blank_ct_unrecovered  : of those, how many are activation-CAPABLE, were not rescued by the per-org
         activation_rules, and therefore really are unclassified (still 0).
@@ -31141,6 +31584,44 @@ def _billpay_tender_tokens(client, org_id):
             "classify": _mr.classify_tender}
 
 
+def _billpay_fee_tokens(client, org_id):
+    """Per-org product_desc vocabulary for the customer bill-payment SERVICE FEE (owner ask
+    2026-10-03; mig 1045 column billpay_fee_product_desc on accessory_config). Own defensive read,
+    the mig-313 / mig-944 posture: a pre-1042 schema, a missing row, a blank list or ANY failure
+    resolves to `epay_fee_recon.HOUSE_FEE_DESCS`, so a tenant that has configured nothing keeps the
+    behaviour that shipped. Returns a tuple of lower-cased tokens; NEVER raises."""
+    from app.modules.commcalc import epay_fee_recon as _fr
+    cfg = None
+    try:
+        row = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                           lambda q: q.eq("org_id", org_id)).row or {}
+        cfg = row.get("billpay_fee_product_desc")
+    except Exception:
+        cfg = None
+    return _fr.resolve_fee_descs(cfg)
+
+
+def _billpay_fee_policy(client, org_id):
+    """THE org's DECLARED answer to "do you charge customers a bill-payment service fee?" (owner ask
+    2026-10-03; mig 1046 column billpay_fee_charged on accessory_config). Own defensive read, the
+    mig-313 / mig-944 / mig-1045 posture: a pre-1046 schema, a missing row, a junk value or ANY
+    failure resolves through the ONE home to `metric_recon.HOUSE_FEE_POLICY` — never to a guess in
+    either direction, because an unanswered question must not be answered by code. The sibling of
+    `_billpay_fee_tokens` above: that one answers what the fee line is CALLED, this one whether there
+    is one at all, and the second question is the one the comparison depends on. NEVER raises."""
+    from app.modules.commcalc import metric_recon as _mr
+    cell = None
+    try:
+        # ANY SUBSET OF COLUMNS (index §4b.1): the row is read WHOLE, so neither mig-1045's
+        # vocabulary nor mig-1046's policy can hide the other behind one missing column.
+        row = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                           lambda q: q.eq("org_id", org_id)).row or {}
+        cell = row.get("billpay_fee_charged")
+    except Exception:
+        cell = None
+    return _mr.resolve_fee_policy(cell)
+
+
 def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
     """Per-(canonical store, DAY) bill payments from the email-ingested SALES TRANSACTIONS — the
     DAY-grain sibling of `_billpay_sales_by_store` (owner 2026-09-02 #2: "the total of bill
@@ -31164,6 +31645,7 @@ def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
         k = (st or "—", str(dday or "")[:10])
         slot = out.setdefault(k, {"amount": 0.0, "count": 0, "card": 0.0, "cash": 0.0,
                                   "mixed": 0.0, "other": 0.0, "tendered": 0.0,
+                                  "fee": 0.0, "fee_cash": 0.0, "fee_lines": 0,
                                   "_name": (a.get("store") or st or "—")})
         slot["count"] += int(a.get("bill_qty") or 0)
         slot["amount"] = round(slot["amount"] + float(a.get("bill_amt") or 0.0), 2)
@@ -31171,6 +31653,29 @@ def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
                          ("bill_amt_mixed", "mixed"), ("bill_amt_other", "other"),
                          ("bill_amt_tendered", "tendered")):
             slot[dst] = round(slot[dst] + float(a.get(src) or 0.0), 2)
+    # THE CUSTOMER SERVICE FEE (owner ask 2026-10-03), from the SAME union rows already in hand --
+    # no second read, no second store canonicalisation (same `ckey_fn`), and deliberately NOT inside
+    # `_sales_cell_agg`: the exec `bill_payment` rule EXCLUDES the fee's category on purpose, because
+    # a service charge is not a bill payment. The drawer, however, holds it. See
+    # `metric_recon.pos_billpay_cash` -- the one home that adds the two legs for a cash basis.
+    try:
+        from app.modules.commcalc import epay_fee_recon as _fr
+        fees = _fr.aggregate_fee_cash(rows, ckey_fn, tokens=_billpay_fee_tokens(client, org_id),
+                                      tender_cfg=tender_cfg)
+    except Exception as _fe:
+        print(f"WARN _billpay_sales_by_store_day fee aggregation failed: {_fe}")
+        fees = {}
+    for k, f in (fees or {}).items():
+        kk = (k[0] or "—", str(k[1] or "")[:10])
+        # A fee line on a store-day with NO bill-pay line is still the drawer's money, so the
+        # store-day is created rather than dropped -- an absent bill line is not a reason to lose
+        # cash the rep has to declare.
+        slot = out.setdefault(kk, {"amount": 0.0, "count": 0, "card": 0.0, "cash": 0.0,
+                                   "mixed": 0.0, "other": 0.0, "tendered": 0.0,
+                                   "fee": 0.0, "fee_cash": 0.0, "fee_lines": 0, "_name": kk[0]})
+        slot["fee"] = round(slot["fee"] + float(f.get("fee") or 0.0), 2)
+        slot["fee_cash"] = round(slot["fee_cash"] + float(f.get("fee_cash") or 0.0), 2)
+        slot["fee_lines"] += int(f.get("lines") or 0)
     return out, len(rows)
 
 
@@ -43379,8 +43884,8 @@ async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True,
     per flagged store, plans one digest per manager, and sends them deduped via storeops.alert_log
     (scope 'epay_discrepancy', ref_key incorporating tenant+store+date+kind so a discrepancy escalates
     once/day). Marks the run on the tenant row. NEVER raises."""
-    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
-                                              _lateness_already_sent, _lateness_record_sent)
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
+    from app.modules.notify import digest_delivery as _delivery
     from app.modules.commcalc import epay_alerts as _ea
     from app.modules.notify.channels import email_resend
     root = get_supabase()
@@ -43414,30 +43919,14 @@ async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True,
         stores = {f["store_code"] for f in flags if f.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
         plan = _ea.plan_emails(flags, hierarchy, today)
-        sent = skipped = 0
-        planned = []
-        for dg in plan["digests"]:
-            # Dedup per (store, date, kind) for THIS recipient — keep only items not already sent today,
-            # so a discrepancy escalates once/day and a NEW gap found later the same day still sends.
-            new_items = [it for it in dg["items"]
-                         if not _lateness_already_sent(so, oid, "epay_discrepancy", it["ref_key"])]
-            if not new_items:
-                skipped += 1
-                planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
-                continue
-            built = _ea.build_digest(dg["to_name"], new_items)
-            planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
-                            "items": [f"{i['store_code']} {i['close_date']} {i['kind']}" for i in new_items]})
-            if dry_run:
-                continue
-            if email_ok:
-                try:
-                    await email_resend.send_email(to=dg["to"], subject=built["subject"], html=built["html"])
-                    for it in new_items:
-                        _lateness_record_sent(so, oid, "epay_discrepancy", it["ref_key"], dg["to"])
-                    sent += 1
-                except Exception:
-                    pass
+        # Dedup per (store, date, kind) for THIS recipient ON THIS CHANNEL — a discrepancy escalates
+        # once a day, a NEW gap found later the same day still sends, and a channel that failed is
+        # still owed it. One home: notify/digest_delivery.py.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, "epay_discrepancy", plan["digests"], build=_ea.build_digest,
+            wa_filename="epay-discrepancies.txt",
+            channels_ok={"email": email_ok, "whatsapp": False}, dry_run=dry_run,
+            preview_item=lambda i: f"{i['store_code']} {i['close_date']} {i['kind']}")
         if not dry_run:
             _epay_mark_run(so, oid, today,
                            f"sent {sent}, skipped {skipped}, {len(flags)} flagged store-day(s)")
@@ -43815,8 +44304,8 @@ async def _run_zero_sales_alerts(org_id_filter=None, respect_enabled=True, dry_r
     its own surface (§20 import health), and mailing a District Manager about it as if it were a
     sales figure is exactly the false chase this report exists to prevent. The count of such scopes
     rides in the digest footer so a thin email is never read as a healthy estate."""
-    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
-                                             _lateness_already_sent, _lateness_record_sent)
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
+    from app.modules.notify import digest_delivery as _delivery
     from app.modules.notify.channels import email_resend
     root = get_supabase()
     so = root.schema("storeops")
@@ -43858,34 +44347,19 @@ async def _run_zero_sales_alerts(org_id_filter=None, respect_enabled=True, dry_r
         stores = {i["store_code"] for i in items if i.get("store_code")}
         hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
         plan = _zs.plan_emails(items, hierarchy, today.isoformat(), not_assessed=not_assessed)
-        sent = skipped = 0
-        planned = []
-        for dg in plan["digests"]:
-            new_items = [it for it in dg["items"]
-                         if not _lateness_already_sent(so, oid, _zs.ALERT_SCOPE, it["ref_key"])]
-            if not new_items:
-                skipped += 1
-                planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
-                continue
-            built = _zs.build_digest(dg["to_name"], new_items, not_assessed=not_assessed)
-            # STRUCTURED, never a pre-joined display string. The dry-run preview is rendered by a
-            # human-facing screen, and a backend that ships formatted text forces that screen to
-            # either print the raw payload or re-parse prose. The view owns presentation.
-            planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
-                            "items": [{"store_code": i["store_code"], "grain": i["grain"],
-                                       "label": i["label"], "zero_days": i["zero_days"]}
-                                      for i in new_items]})
-            if dry_run:
-                continue
-            if email_ok:
-                try:
-                    await email_resend.send_email(to=dg["to"], subject=built["subject"],
-                                                  html=built["html"])
-                    for it in new_items:
-                        _lateness_record_sent(so, oid, _zs.ALERT_SCOPE, it["ref_key"], dg["to"])
-                    sent += 1
-                except Exception:
-                    pass
+
+        def _build_zs(name, its, _na=not_assessed):
+            return _zs.build_digest(name, its, not_assessed=_na)
+
+        # STRUCTURED preview rows, never a pre-joined display string: a backend that ships formatted
+        # text forces the screen to print the raw payload or re-parse prose. The view owns
+        # presentation. Delivery and the per-channel record: notify/digest_delivery.py.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, _zs.ALERT_SCOPE, plan["digests"], build=_build_zs,
+            wa_filename="zero-sales.txt",
+            channels_ok={"email": email_ok, "whatsapp": False}, dry_run=dry_run,
+            preview_item=lambda i: {"store_code": i["store_code"], "grain": i["grain"],
+                                    "label": i["label"], "zero_days": i["zero_days"]})
         results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(items),
                         "not_assessed": not_assessed, "email_configured": email_ok,
                         "planned": planned if dry_run else None})

@@ -105,7 +105,7 @@ export default function EmployeeSetupPage() {
     setMsg('')
     try {
       // No pay field on this screen, so none is sent (it used to send pay_rate 0 for everyone added
-      // here). Pay is set on HR → Employees & Pay; the reply still says if a field was not written (§19.41).
+      // here). Pay is set on HR → Employees & Pay; the reply still says if a field was not written (§19.44).
       const res = await api('/api/v1/storeops/employees', { method: 'POST', body: JSON.stringify({ ...newEmp, phone: ph }) })
       setMsg(`Added ${newEmp.name}${notSavedNote(res)}`)
       setNewEmp({ name: '', employee_id: '', home_store: '', email: '', phone: '' })

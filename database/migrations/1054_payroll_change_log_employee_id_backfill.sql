@@ -1,5 +1,5 @@
--- 1041_payroll_change_log_employee_id_backfill.sql — fill the employee number on change-log rows that
--- were written without it (index §19.42). Numbered, idempotent, additive. NOT APPLIED — the owner applies.
+-- 1054_payroll_change_log_employee_id_backfill.sql — fill the employee number on change-log rows that
+-- were written without it (index §19.45). Numbered, idempotent, additive. NOT APPLIED — the owner applies.
 --
 -- ⚠️ DATA BACKFILL — SURFACED FOR OWNER APPROVAL BEFORE APPLYING. No money column is read or written:
 -- it sets `storeops.payroll_change_log.employee_id` (an identity) on rows where it is NULL, and only
@@ -48,8 +48,8 @@ create table if not exists storeops.payroll_change_log_id_backfill (
   applied_at         timestamptz not null default now()
 );
 comment on table storeops.payroll_change_log_id_backfill is
-  'Rows of storeops.payroll_change_log whose NULL employee_id migration 1041 filled from the same-org '
-  'storeops.employees record (index §19.42). Exists so the backfill can be reverted exactly.';
+  'Rows of storeops.payroll_change_log whose NULL employee_id migration 1054 filled from the same-org '
+  'storeops.employees record (index §19.45). Exists so the backfill can be reverted exactly.';
 
 grant select, insert, update, delete on storeops.payroll_change_log_id_backfill to service_role;
 alter table storeops.payroll_change_log_id_backfill enable row level security;

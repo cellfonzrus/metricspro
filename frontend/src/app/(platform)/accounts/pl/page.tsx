@@ -16,6 +16,7 @@ import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_c
 import PLRangeExport from '../_components/PLRangeExport'
 import PLPerStorePrint from '../_components/PLPerStorePrint'
 import { PL_COLUMNS, PL_SECTION_TITLE as SECTION_TITLE, plQuery, plStatementRows } from '../_components/plStatement'
+import { scopeDisplay, statementScopeDisplay } from '../_components/scopeFinancials'
 
 function PLInner() {
   const { period, periods } = usePeriod()
@@ -66,12 +67,16 @@ function PLInner() {
   const marketOpts: string[] = useMemo(() => fopts.markets || [], [fopts])
 
   const st = data?.statement
+  // THE scope's display name — one read of the backend's one home (scopeFinancials, index §13b.1).
+  // Never `scope_label || scope`: that showed `company:<uuid>` whenever the stored label was
+  // missing or stale (owner report 2026-10-03).
+  const scopeName = statementScopeDisplay(data, scopes, scope)
   const sec = (t: string) => (st?.sections || []).find((s: any) => s.type === t)
 
   // RULE FOUR (§3c) export. DISPLAY/EXPORT ONLY — figures come straight from the computed snapshot.
   function plMeta(): StatementMeta {
     return {
-      reportName: 'Profit & Loss', scopeLabel: st?.scope_label || scope, period, basis: 'Cash basis',
+      reportName: 'Profit & Loss', scopeLabel: scopeName, period, basis: 'Cash basis',
       computed: !!data?.computed, computedAt: data?.computed_at,
       newestIngestAt: data?.newest_ingest_at, stale: !!data?.stale,
     }
@@ -90,7 +95,7 @@ function PLInner() {
       : scopes
     if (breakdown.length > 0) {
       sheets.push({ name: 'By Scope', rows: breakdown, columns: [
-        { header: 'Scope', get: (r: any) => r.scope_label || r.scope_key },
+        { header: 'Scope', get: (r: any) => scopeDisplay(r) },
         { header: 'Revenue', get: (r: any) => r.revenue, money: true },
         { header: 'Gross Profit', get: (r: any) => r.gross_profit, money: true },
         { header: 'Net Income', get: (r: any) => r.net_income, money: true },
@@ -104,26 +109,26 @@ function PLInner() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📈 Profit &amp; Loss</h1>
-          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>{period} · cash basis · {st?.scope_label || scope}</p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>{period} · cash basis · {scopeName}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <select className="select" value={scope} onChange={e => setScope(e.target.value)}>
-            {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{(s.scope_label || s.scope_key).substring(0, 50)}</option>)}
-            {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
+            {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{scopeDisplay(s).substring(0, 50)}</option>)}
+            {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scopeName}</option>}
           </select>
           {st && <ReportExportBar
-            title={`Profit & Loss — ${st?.scope_label || scope}`}
+            title={`Profit & Loss — ${scopeName}`}
             subtitle={statementSubtitle(plMeta())}
             filename={`pl-${(data?.filtered ? 'filtered' : scope).replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
             sheets={plSheets()} />}
           {/* MONTH RANGE export (owner 2026-09-26, index §4c): the same scope + store / market filter,
               one column per month + a Total, every month the single-month P&L read above. */}
-          <PLRangeExport period={period} periods={periods} scope={scope} scopeLabel={st?.scope_label || scope}
+          <PLRangeExport period={period} periods={periods} scope={scope} scopeLabel={scopeName}
             stores={filt.stores} markets={filt.markets} />
           {/* PRINT EACH STORE (owner 2026-10-01, index §4d): one printed page per store — the stores picked
               in the Store filter, else every store the filter / company covers — each page that store alone. */}
           <PLPerStorePrint period={period} scope={scope}
-            companyLabel={(scopes.find((s: any) => s.scope_key === scope)?.scope_label) || scope}
+            companyLabel={scopeName}
             stores={filt.stores} markets={filt.markets} allStores={storeOpts.map(o => o.id)} storeMarket={storeMarket} />
         </div>
       </div>

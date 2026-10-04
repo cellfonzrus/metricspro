@@ -32,6 +32,11 @@ import re
 import sys
 import types
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import homes_for  # noqa: E402
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
 # STDLIB ONLY. `account.engine` is imported for the REAL `_assemble` / `_scoped` scoping code — the
@@ -336,7 +341,7 @@ ck_true("E10 the migration writes no money row (no DML against raw_mi or account
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n§F  ONE HOME, DEREFERENCED — fails the build if a caller un-wires or a copy appears")
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-HOME = "app/modules/account/residual_subs.py"
+HOME = homes_for("ma_reported_income")[1]    # the graph is the one home for the ruling
 
 
 def read(rel):

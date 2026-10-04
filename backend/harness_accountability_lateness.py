@@ -35,22 +35,33 @@ R._biz_tz_for = lambda org_id: _dt.timezone.utc
 
 
 class FakeQ:
-    def __init__(self, data): self._data = data
+    def __init__(self, data, sink=None): self._data, self._sink, self._ins = data, sink, None
     def select(self, *a, **k): return self
     def eq(self, *a, **k): return self
+    def in_(self, *a, **k): return self      # mig 1051: the send record is read by scope IN (…)
     def limit(self, *a, **k): return self
-    def insert(self, *a, **k): return self
+    def insert(self, row): self._ins = row; return self
     def update(self, *a, **k): return self
     def execute(self):
         class _R: pass
-        r = _R(); r.data = self._data; return r
+        r = _R()
+        if self._ins is not None and self._sink is not None:
+            self._sink.append(self._ins)
+            r.data = []
+        else:
+            r.data = self._data
+        return r
 
 
 class FakeClient:
+    """Stateful for alert_log, because since mig 1051 a send record only suppresses a re-send when
+    it names the CHANNEL and the ADDRESS it reached. A hand-made {"id": …} row models a pre-1051
+    row, which deliberately suppresses nothing — so the dedupe is now proved by the real
+    round-trip: run it for real, then run it again."""
     def __init__(self, tenant, already_sent): self.tenant, self.already = tenant, already_sent
     def table(self, name):
         if name == "tenants": return FakeQ([self.tenant])
-        if name == "alert_log": return FakeQ(self.already)   # [] = nothing sent yet
+        if name == "alert_log": return FakeQ(self.already, sink=self.already)
         return FakeQ([])
 
 
@@ -91,15 +102,24 @@ async def main():
     res4 = await R._run_lateness_alerts(respect_time=False, respect_enabled=False, dry_run=True)
     ok("A9 run-now previews even when disabled", res4["ran"] == 1, res4)
 
-    # dedupe: an alert_log row already present for a recipient marks it already_sent.
-    dana_cap_key = None
-    for p in planned:
-        pass
-    R.sb = lambda: FakeClient(TENANT, [{"id": "x"}])   # every lookup returns a row → all already sent
+    # dedupe: once a channel has actually CARRIED the alert, that recipient is already_sent.
+    from app.modules.notify import digest_delivery as _dd
+    _real_send, _real_cfg = _dd._send, email_resend.is_configured
+    email_resend.is_configured = lambda: True
+    async def _carried(ch, _addr, _built, _fn):
+        return True
+    _dd._send = _carried
+    log = []
+    R.sb = lambda: FakeClient(TENANT, log)
+    res5a = await R._run_lateness_alerts(dry_run=False)
+    ok("A10a the real run carries the alert and records it per channel",
+       res5a["results"][0]["sent"] > 0 and len(log) > 0
+       and all(r.get("channel") == "email" and r.get("recipients") for r in log), log[:2])
     res5 = await R._run_lateness_alerts(dry_run=True)
     p5 = res5["results"][0]["planned"] or []
-    ok("A10 dedupe marks recipients already_sent when alert_log has a row",
+    ok("A10 dedupe marks recipients already_sent once a channel has carried it",
        len(p5) > 0 and all(p["already_sent"] for p in p5), p5)
+    _dd._send, email_resend.is_configured = _real_send, _real_cfg
 
 
 asyncio.run(main())

@@ -1,4 +1,4 @@
-"""LOCK — every write of a pay-gated employee column goes through ONE gate (index §19.41).
+"""LOCK — every write of a pay-gated employee column goes through ONE gate (index §19.44).
 
   python3 backend/harness_pay_write_gate_lock.py
 

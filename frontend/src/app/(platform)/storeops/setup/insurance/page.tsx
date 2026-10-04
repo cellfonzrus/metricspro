@@ -18,7 +18,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { sel } from '../lib'
+import { sel, StoreMultiSelect } from '../lib'
 import ExtractionReview from './ExtractionReview'
 
 const lbl: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }
@@ -111,9 +111,9 @@ export default function InsurancePoliciesPage() {
     flag(p.id, false)
   }
 
-  async function toggleStore(p: any, code: string) {
-    const cur: string[] = p.store_codes || []
-    const next = cur.includes(code) ? cur.filter(c => c !== code) : [...cur, code]
+  // The dropdown hands back the WHOLE selection, so this saves the list it was given — the same
+  // PUT the per-store checkboxes used, with no per-store round trip.
+  async function setPolicyStores(p: any, next: string[]) {
     setPolicies(ps => ps.map(x => x.id === p.id ? { ...x, store_codes: next } : x))
     try {
       await api(`/api/v1/storeops/insurance-policies/stores?policy_id=${encodeURIComponent(p.id)}`, {
@@ -380,14 +380,15 @@ export default function InsurancePoliciesPage() {
             {tab === 'stores' && (
               <div style={{ marginTop: 10, padding: 10, background: 'var(--surface2)', borderRadius: 8 }}>
                 <div style={{ ...lbl, marginBottom: 6 }}>Stores this one policy covers</div>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  {stores.map((s: any) => (
-                    <label key={s.id || s.store_code} style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 13 }}>
-                      <input type="checkbox" checked={(p.store_codes || []).includes(s.store_code)}
-                        onChange={() => toggleStore(p, s.store_code)} />
-                      {s.store_code}{s.is_active === false ? ' (inactive)' : ''}
-                    </label>
-                  ))}
+                {/* THE shared checkbox dropdown (../lib -> components/CheckboxDropdown), not a wall of
+                    checkboxes: typing filters the list, and the closed box says how many are picked. */}
+                <StoreMultiSelect stores={stores} value={p.store_codes || []} width={320}
+                  placeholder="Select the stores this policy covers…"
+                  onChange={next => setPolicyStores(p, next)} />
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>
+                  {(p.store_codes || []).length === 0
+                    ? 'No stores yet — open the dropdown and tick every store this one policy covers.'
+                    : `Covers ${(p.store_codes || []).join(', ')}`}
                 </div>
               </div>
             )}

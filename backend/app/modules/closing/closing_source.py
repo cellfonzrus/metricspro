@@ -59,6 +59,31 @@ def normalize(value) -> str:
     return v if v in SOURCES else HOUSE_DEFAULT
 
 
+def normalize_store_codes(value) -> list:
+    """One store code, or many, → the de-duplicated list of codes a setting write applies to.
+
+    The screen lets an admin pick SEVERAL stores in one dropdown (owner 2026-10-03: *"in store setup to
+    assign the store it should be a drop down list to select multiple stores"*), and the setting is
+    still ONE fact per store — so the endpoint takes a list and writes each store through the same one
+    row-writer instead of growing a second bulk path. Pure, so the fan-out is proved without a database.
+
+    Blanks are dropped, surrounding whitespace is stripped, and a code repeated in any casing is kept
+    ONCE in the order first seen (a dropdown that offers the same store twice must not write it twice).
+    """
+    out: list = []
+    seen = set()
+    for raw in (value if isinstance(value, (list, tuple, set)) else [value]):
+        code = str(raw or "").strip()
+        if not code:
+            continue
+        key = code.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(code)
+    return out
+
+
 def resolve(cfg_rows, store_code=None) -> str:
     """THE RESOLVER. `cfg_rows` are the org's `commcalc.closing_source_config` rows (the caller does the
     read); the row with a blank `store_code` is the org default, a row matching `store_code`

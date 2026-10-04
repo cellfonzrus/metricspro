@@ -556,6 +556,14 @@ def _acct_slug(s: str) -> str:
     return out or "scope"
 
 
+def _acct_scope_display(data, scope, st):
+    """THE scope display name for a scheduled account statement — `scope_display` as the read
+    stamped it (`coa.scope_display_label`, §13b.1), falling back to the one home itself. Never the
+    stored label alone and never the raw `scope_key`: `company:<uuid>` is not a company name."""
+    from app.modules.account import coa
+    return (data or {}).get("scope_display") or coa.scope_display_label(scope, (st or {}).get("scope_label"))
+
+
 def _stmt_rows(st: dict, sec_labels: dict, subtotal_prefix: str) -> list:
     rows = []
     for s in (st.get("sections") or []):
@@ -585,7 +593,10 @@ async def _account_pl(org_id, f):
     rows.append({"section": "Totals", "line": "Gross Profit", "amount": st.get("gross_profit")})
     rows.append({"section": "Totals", "line": "Net Operating Income", "amount": st.get("net_operating_income")})
     rows.append({"section": "Totals", "line": "Net Income", "amount": st.get("net_income")})
-    return {"title": f"Profit & Loss — {st.get('scope_label') or scope}",
+    # THE display name through the one home (§13b.1): `GET /account/pl/{period}` stamps
+    # `scope_display` off the canonical entity inventory, so a scheduled P&L is never titled
+    # `company:<uuid>` because the snapshot's stored label was missing or stale (owner 2026-10-03).
+    return {"title": f"Profit & Loss — {_acct_scope_display(data, scope, st)}",
             "subtitle": f"{period} · cash basis",
             "filename": f"pl-{_acct_slug(scope)}-{period.replace(' ', '-')}",
             "sheets": [{"name": "P&L", "rows": rows, "columns": _ACCT_COLS}]}
@@ -605,7 +616,7 @@ async def _account_balance_sheet(org_id, f):
     sub = f"{period} · point-in-time"
     if not st.get("balanced"):
         sub += f" · OUT OF BALANCE by ${abs(st.get('imbalance') or 0):,.2f}"
-    return {"title": f"Balance Sheet — {st.get('scope_label') or scope}", "subtitle": sub,
+    return {"title": f"Balance Sheet — {_acct_scope_display(data, scope, st)}", "subtitle": sub,
             "filename": f"balance-sheet-{_acct_slug(scope)}-{period.replace(' ', '-')}",
             "sheets": [{"name": "Balance Sheet", "rows": rows, "columns": _ACCT_COLS}]}
 

@@ -1,4 +1,4 @@
-"""PROOF (DB-free, stdlib only) — two employee-write defects, fixed as designs (index §19.41, §19.42).
+"""PROOF (DB-free, stdlib only) — two employee-write defects, fixed as designs (index §19.44, §19.45).
 
   python3 backend/harness_employee_write_proof.py
 

@@ -47,10 +47,15 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BE_APP = os.path.join(ROOT, "backend", "app")
 FE = os.path.join(ROOT, "frontend", "src")
-HOME = "modules/commcalc/line_class.py"
+HOME = home_under_app("line_class")          # the graph is the one home for the ruling
 STAGE2 = "app/(platform)/onboarding/intake/stage2.tsx"
 STEP_FILE = "app/(platform)/onboarding/intake/line-class-step.tsx"
 LOGIC_FILE = "app/(platform)/onboarding/intake/line-class-logic.ts"

@@ -646,4 +646,6 @@ def centers_cost_view(period: str, org_id: str = ORG_ID, scope: str = "consolida
         return {"computed": False, "note": st.get("note")}
     cs = C.load_centers(client, org_id)
     view = C.cost_center_view(st["pl"], C.tag_index(C.load_line_tags(client, org_id)), cs)
-    return {"computed": True, "period": st["period"], "scope": st["scope"], "scope_label": st.get("scope_label"), **view}
+    # `scope_display` = THE one home's answer (§13b.1), carried from statement_engine.statement.
+    return {"computed": True, "period": st["period"], "scope": st["scope"],
+            "scope_label": st.get("scope_label"), "scope_display": st.get("scope_display"), **view}

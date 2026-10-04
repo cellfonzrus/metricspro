@@ -1,4 +1,4 @@
-"""WHO a payroll change-log row is about — ONE home, read from the STORED employee record (index §19.42).
+"""WHO a payroll change-log row is about — ONE home, read from the STORED employee record (index §19.45).
 
 THE DEFECT (owner report 2026-10-03, Vzone): two `storeops.payroll_change_log` rows written by one
 save at 2026-10-02T21:23:19 (entry_point 'pay_basis_change', source_id '237', employee_name 'Shweta')

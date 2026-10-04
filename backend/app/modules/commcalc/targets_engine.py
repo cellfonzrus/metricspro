@@ -463,6 +463,26 @@ def build_action_items(scope_result: dict, conversion: dict | None,
 #
 # PURE (no I/O). The caller decides WHICH stores are in scope (the scope_keyset span) — this function
 # never sees a permission, a token or an org.
+def attainment_pct(monthly, achieved):
+    """How much of a target has been achieved, as a PERCENT, or None when there is no target to be a
+    percent OF. THE ONE FORMULA (owner directive 2026-09-20, "one fact, one home"): the area roll-up
+    below and the DM visit plan (`storevisit/visit_plan`, which ranks stores by how far under target
+    they are) both read it here, so "attainment" cannot mean two things in two places. A zero or
+    missing monthly target returns None — never 0% (a store nobody set a target for is not a store
+    failing its target) and never 100%. PURE."""
+    m = safe_float(monthly)
+    if not m or m <= 0:
+        return None
+    return round(100.0 * safe_float(achieved) / m, 1)
+
+
+def attainment_fraction(monthly, achieved):
+    """`attainment_pct` as a 0–1 fraction (1.0 = on target), or None. Same single formula — the visit
+    plan scores on a fraction and must not re-divide. PURE."""
+    pct = attainment_pct(monthly, achieved)
+    return None if pct is None else pct / 100.0
+
+
 def aggregate_stores(store_rows: list[dict]) -> dict:
     """Collective (area-level) target roll-up over already-computed per-store summary rows.
 
@@ -504,8 +524,7 @@ def aggregate_stores(store_rows: list[dict]) -> dict:
             acc[k] = round(acc[k], dec)
         acc['setup_fee_mtd'] = round(acc['setup_fee_mtd'], 2)
         acc['need_net'] = round(max(0.0, acc['monthly'] - acc['achieved_mtd']), dec)
-        acc['attainment_pct'] = (round(100.0 * acc['achieved_mtd'] / acc['monthly'], 1)
-                                 if acc['monthly'] > 0 else None)
+        acc['attainment_pct'] = attainment_pct(acc['monthly'], acc['achieved_mtd'])
         cats[cat] = acc
 
     # Area conversion = Σboxes ÷ Σbill-pays across the span (a ratio of sums, never a mean of ratios —

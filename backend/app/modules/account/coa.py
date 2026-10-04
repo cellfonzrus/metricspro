@@ -36,6 +36,7 @@ from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import epay_fee_recon as _epay_fee
 from app.modules.account import _period
+from app.modules.account import device_cogs as _device_cogs
 # Canonical finance period parser lives in _period; re-exported here so existing
 # `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
 from app.modules.account._period import parse_period  # noqa: F401
@@ -67,7 +68,13 @@ def _warn(what, exc):
 # sets exactly ⇒ Boost stays byte-identical. See `_sales_classifier`.
 DEVICE_DEPTS = {"Android - XP", "IPHONE - XP", "TABLET - XP"}
 ACCESSORY_DEPT = "Ondigo"
-VIP_FEE_CATS = {"PROCESSING FEE", "SHIPPING", "SIM KIT"}
+# ONE HOME, DEREFERENCED (owner directive 2026-09-20). This vocabulary decides which asset-ledger
+# rows are a FEE rather than a handset, and it is read by three places that must agree to the cent:
+# this `vip_fees` booking, `device_cogs._vip_sold_cost` (the COGS side) and
+# `balance_sheet.asset_ledger_unsold_cells` (the asset side). A literal copy here was the second one;
+# it is now a dereference, and `harness_device_inventory_cogs.py` §G9 fails the build if a third
+# appears anywhere in the account package.
+VIP_FEE_CATS = set(_device_cogs.FEE_CATEGORIES)
 # Accounting rule (user-set 2026-06-20): accessory COGS is a flat 20% of gross accessory
 # sales, NOT the per-line recorded cost (B2B accessory lines often carry no cost → GP looked
 # inflated). Commission payout still treats accessories as 100% of gross sales separately.
@@ -367,6 +374,101 @@ def filter_org_scopes(scopes, own_company_ids, key="scope_key"):
                 continue
         out.append(s)
     return out
+
+
+# ── THE ONE HOME for a scope's DISPLAY NAME (owner report 2026-10-03) ────────────────────────────
+# Owner (verbatim): "the app shows the company id not the name of the company in the settings to
+# choose the company to work in."
+#
+# THE CLASS (not the instance). A scope's display name was a COPY: `commcalc.account_statements`
+# .scope_label is written once at COMPUTE time and every finance surface rendered
+# `scope_label || scope_key`. `scope_key` for a company scope is the literal string
+# `company:<uuid>`, so the moment the copy was missing or stale — a company renamed after the
+# snapshot, a snapshot computed before the company was named, a hand-written row — the user was
+# shown a raw uuid. The fix is not "repair the P&L page": a display name for an entity is a
+# DEREFERENCE of the canonical company inventory (§13b `org_companies`), with the stored copy only
+# as a fallback, and the raw key NEVER rendered to a human. One home, every caller wired, locked by
+# `backend/harness_scope_label_lock.py` so a new `scope_label || scope_key` cannot reappear.
+#
+# RULE TWO: the table below is keyed by scope FAMILY, never by tenant, company or carrier. A family
+# whose identifier is opaque (a uuid) may never render that identifier; a family whose identifier is
+# itself the human name (a store address, a profit-center code) may.
+SCOPE_FAMILIES = {
+    # family: (identifier is human-readable, generic fallback word)
+    "company": (False, "Unnamed company"),
+    "store": (True, "Store"),
+    "profit_center": (True, "Profit center"),
+}
+# Scope keys that are not `family:ident` at all — the whole key IS the family.
+SCOPE_SINGLETONS = {
+    "consolidated": "Consolidated (all companies)",
+    "filtered": "Filtered",
+}
+SCOPE_UNKNOWN = "Unknown scope"
+
+
+def companies_by_id(companies):
+    """PURE: {company id (str): current name} from a `org_companies` result. A blank name is NOT an
+    entry — an entity nobody has named yet must fall through to the stored label / generic word
+    rather than render an empty option."""
+    out = {}
+    for c in (companies or []):
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id") or "").strip()
+        name = str(c.get("name") or "").strip()
+        if cid and name:
+            out[cid] = name
+    return out
+
+
+def scope_display_label(scope_key, stored_label=None, companies=None):
+    """PURE — THE ONE answer to "what do we call this scope on screen?".
+
+    Resolution order, for every surface in finance (dropdowns, page titles, export covers,
+    scheduled-report titles, drill-down headers):
+      1. the CANONICAL registry for the scope's family — for `company:<id>`, the org's own current
+         entity name from `org_companies` (pass its rows as `companies`);
+      2. the stored `scope_label` copy, when it is non-blank AND not just the key echoed back;
+      3. the key's own identifier, but ONLY for a family whose identifier is human-readable by
+         construction (a store address, a profit-center code);
+      4. a generic family word ("Unnamed company"), never a raw key or uuid.
+
+    `companies` may be omitted by a pure caller that has no registry at hand; the result then
+    degrades to step 2+ and still never returns `company:<uuid>`.
+    """
+    key = str(scope_key or "").strip()
+    label = str(stored_label or "").strip()
+    if label == key:          # a snapshot that stored the key as its own label carries no name
+        label = ""
+    if not key:
+        return label or SCOPE_UNKNOWN
+    if key in SCOPE_SINGLETONS:
+        return label or SCOPE_SINGLETONS[key]
+    family, sep, ident = key.partition(":")
+    ident = ident.strip()
+    if not sep:
+        return label or SCOPE_SINGLETONS.get(family) or SCOPE_UNKNOWN
+    human_ident, generic = SCOPE_FAMILIES.get(family, (False, SCOPE_UNKNOWN))
+    if family == "company" and ident:
+        name = companies_by_id(companies).get(ident)
+        if name:
+            return name
+    if label:
+        return label
+    if human_ident and ident:
+        return ident
+    return generic
+
+
+def label_scopes(scopes, companies=None, key="scope_key", stored="scope_label",
+                 out="scope_display"):
+    """PURE: stamp `out` on every scope dict with `scope_display_label`. The helper every API
+    response that ships a scope list calls, so no renderer has to know the rule."""
+    for s in (scopes or []):
+        if isinstance(s, dict):
+            s[out] = scope_display_label(s.get(key), s.get(stored), companies)
+    return scopes
 
 
 def store_company_map(client, org_id):
@@ -915,7 +1017,22 @@ def build_inputs(client, org_id, period):
     service_fee_products = acct_cfg["service_fee_products"]   # mig 613; empty ⇒ nothing booked
     payroll_names = acct_cfg["payroll_expense_names"]         # mig 621 K2; empty ⇒ nothing changes
     payroll_routes = acct_cfg["payroll_expense_routes"]       # mig 621 K2; optional line override
-    device_cogs_mode = acct_cfg["device_cogs_mode"]           # mig 621 K3; 'off' ⇒ POS-only (pre-621)
+    # ── THE ONE DEVICE-COST BASIS (mig 1041, owner report 2026-10-03, index §42.5) ──────────────
+    # `device_cogs_mode` (mig 621) is NOT read here any more. It is read in ONE place —
+    # `device_cogs.load_basis` → `resolve_device_cost_basis` — which returns the whole decision:
+    # which basis, which cogs_mode, whether the PayGo CASH line leaves COGS, and whether the BS
+    # inventory line comes from the same ledger. Those three cannot be set independently, so they
+    # cannot drift apart (harness_device_inventory_cogs.py §G fails the build if a caller stops
+    # dereferencing this, or branches on `device_cogs_mode` on its own).
+    # UNDECLARED (every org today) reproduces the pre-1041 behaviour byte for byte.
+    try:
+        _basis = _device_cogs.load_basis(client, org_id)
+    except Exception as _e:
+        _warn("device-cost basis unreadable — the legacy POS basis is kept", _e)
+        _basis = {"basis": "undeclared", "source": "unreadable", "cogs_mode": "off",
+                  "accrual": False, "suppress_cash_cogs": False, "ledger_inventory": False,
+                  "legacy_cogs_mode": None, "double_book_risk": False}
+    device_cogs_mode = _basis["cogs_mode"]
 
     # ── mig 314 (owner spec 2026-09-02): MA store attribution + per-org P&L line labels ─────────
     # Loaded for EVERY org (the label override applies to Boost too); all defaults OFF ⇒
@@ -1375,7 +1492,6 @@ def build_inputs(client, org_id, period):
     # to the line so a $0 is never mistaken for a measurement. See device_cogs.py for the figures.
     _dev = {"active": False, "meta": {"mode": device_cogs_mode}}
     try:
-        from app.modules.account import device_cogs as _device_cogs
         _dev = _device_cogs.resolve(client, org_id, period_keys, pm, py,
                                     _in_period, resolve_store, device_cogs_mode,
                                     ma_acct_index=_ma_acct_index)
@@ -1395,7 +1511,7 @@ def build_inputs(client, org_id, period):
     else:
         for _st, _amt in pos_device_cost.items():
             add("device_cost", _st, _amt)
-    L["device_cost"]["meta"] = _dev.get("meta") or {}
+    L["device_cost"]["meta"] = {**(_dev.get("meta") or {}), "device_cost_basis": _basis}
     # RULING K3(b) — a DECLARED zero must say so on the statement. `meta` alone never reached a reader
     # (`engine._assemble` rebuilds each line from key/label/amount/kind/detail, and `_scoped` drops
     # zero-valued detail), so an honest zero rendered identically to a measured one. `note` is the
@@ -1448,6 +1564,10 @@ def build_inputs(client, org_id, period):
     except Exception:
         pass
 
+    # The cash settlement this period that the accrual basis took OUT of COGS. Reported on the line
+    # (never silently dropped) so the owner can see what moved and reconcile it against `owed_vip`.
+    _suppressed_cash = 0.0
+
     # vip_paygo_payments — cash paid to VIP this period (approved batches), a COGS line. Company-wide.
     # NOTE: the PayGo `dealer` field is the VIP DEALER ACCOUNT (one legal entity — e.g. "Cellular
     # Services Dot net LLC (228 N Wood Ave, Syosset, NY 11791)"), NOT a retail store: 176/178 batches
@@ -1465,12 +1585,31 @@ def build_inputs(client, org_id, period):
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,amount_overdue,batch_type,period",
                             {"org_id": org_id, "period": period_keys}):
             if (r.get("batch_type") or "").lower() == "approved":
-                add("vip_device_pay", None, r.get("amount"))
+                # SUPPRESSED BY THE SAME RESOLUTION that turned the accrual basis on — never by a
+                # second config row anybody can forget (index §42.5 ⑴). On the accrual basis the
+                # handset is expensed ONCE, at sale, from the asset landing; this cash is the
+                # SETTLEMENT of the `owed_vip` liability the same ledger already books, so taking it
+                # out of COGS loses no money — it moves from an expense to a payable relief.
+                if not _basis["suppress_cash_cogs"]:
+                    add("vip_device_pay", None, r.get("amount"))
+                else:
+                    _suppressed_cash = round(_suppressed_cash + safe_float(r.get("amount")), 2)
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,batch_type", {"org_id": org_id}):
             if (r.get("batch_type") or "").lower() == "pending":
                 add("owed_vip", None, r.get("amount"))
     except Exception:
         pass
+
+    if _basis["suppress_cash_cogs"]:
+        L["vip_device_pay"]["meta"] = {
+            "device_cost_basis": _basis["basis"], "suppressed_cash_settlement": _suppressed_cash}
+        if _suppressed_cash:
+            L["vip_device_pay"]["note"] = (
+                "$%s of distributor device payments settled this period is NOT expensed here. On the "
+                "asset-landing (accrual) basis the handset is expensed once, in the month it sold, on "
+                "Device cost. This cash settles the Owed to distributor liability the same ledger "
+                "books, so it relieves a payable rather than adding an expense."
+                % ("{:,.2f}".format(_suppressed_cash)))
 
     # rep_commissions — rep commissions paid (opex)
     try:

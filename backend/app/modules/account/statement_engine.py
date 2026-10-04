@@ -42,6 +42,7 @@ from datetime import datetime, timezone
 
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account import coa, balance_sheet, _period
+from app.modules.account import device_cogs
 # NOTE: `engine` (the assembler/narrator/persistor this module reuses) is imported LAZILY inside
 # the functions that need it — engine.py pulls app.core.config at import time, and keeping it off
 # this module's import path is what lets the stdlib proof harness exercise the pure parts
@@ -123,6 +124,19 @@ def _fetch_asset_ledger_open(client, org_id):
     return out
 
 
+class _LedgerInventoryEmpty(Exception):
+    """Internal control flow: the asset landing produced no units as of the statement date, so the
+    configured inventory basis stands and the reason is already recorded in meta."""
+
+
+def _fetch_asset_ledger_unsold(client, org_id):
+    """The columns the ASSET half needs (mig 1041). Same table, same org scope, same paginated
+    reader as the payable half above — one feed, two readings, no second fetch path."""
+    return coa._fetch_all(client, "asset_ledger",
+                          "esn_imei,store,category,owed_to_vip,acquired_date,date_sold",
+                          {"org_id": org_id})
+
+
 def _earliest_taxed_sale_date(client, org_id):
     """The org's earliest sale line that CARRIED tax ('YYYY-MM-DD'), or ''. Two cheap indexed reads
     (one per side of the sales union), org-scoped, one row each — never a scan.
@@ -147,11 +161,16 @@ def _earliest_taxed_sale_date(client, org_id):
     return best
 
 
-def carrier_payable_preset(client, org_id):
-    """The distributor-payable basis this org's CARRIER declares, or ''. REUSES the mig-945/953
+def carrier_finance_preset(client, org_id, key):
+    """THE ONE carrier-preset read for finance bases, keyed by `key` ('distributor_payable' for mig
+    954, 'device_cost' for mig 1041). One home: a second preset store or a second carrier normalizer
+    is the duplicate defect the index rules forbid, so every finance basis that wants a carrier-level
+    default comes through here.
+
+    The basis this org's CARRIER declares, or ''. REUSES the mig-945/953
     carrier-preset machinery end to end (duplicate-check gate — no second preset store, no second
     carrier normalizer): house-org rows in `commcalc.ui_label_override` under
-    scope 'finance_basis:<carrier code>', key 'distributor_payable', with the carrier code coming
+    scope 'finance_basis:<carrier code>', key `key`, with the carrier code coming
     from `report_labels.normalize_carrier_code` over the org's own `commcalc.carrier` rows (mig 038,
     written by the onboarding "Carrier Selection" step). Lazy auto-assign: a NEW tenant that picks
     its carrier at setup resolves correctly the first time a statement is built, with no setup hook.
@@ -166,7 +185,7 @@ def carrier_payable_preset(client, org_id):
         scopes = [f"finance_basis:{c}" for c in codes]
         presets = (client.schema("commcalc").table("ui_label_override")
                    .select("scope,key,label").eq("org_id", _rl.HOUSE_ORG)
-                   .in_("scope", scopes).eq("key", "distributor_payable")
+                   .in_("scope", scopes).eq("key", key)
                    .limit(50).execute().data) or []
         by_scope = {str(r.get("scope") or ""): str(r.get("label") or "").strip()
                     for r in presets}
@@ -177,6 +196,12 @@ def carrier_payable_preset(client, org_id):
     except Exception:
         return ""
     return ""
+
+
+def carrier_payable_preset(client, org_id):
+    """The mig-954 distributor-payable preset. A thin dereference of `carrier_finance_preset` —
+    kept so the existing callers read unchanged, NOT a second mechanism."""
+    return carrier_finance_preset(client, org_id, "distributor_payable")
 
 
 def build_inputs_full(client, org_id, period):
@@ -351,7 +376,52 @@ def build_inputs_full(client, org_id, period):
             coa._warn("sales tax payable booking failed — line left empty", e)
 
     # ── inventory basis (config-driven; 'report' default = byte-identical) ──────────────────────
-    if cfg["inventory_basis"] == "devices":
+    # mig 1041: the DEVICE-COST BASIS decides this when it is the accrual basis. Same resolution,
+    # same read — `statement_engine` does not have its own opinion about the device basis and does
+    # not read `device_cogs_mode`. `ledger_inventory` is True only on 'asset_ledger', and it then
+    # OVERRIDES `inventory_basis`, because accrual COGS relieving an inventory measured by a
+    # different feed at a different cost basis is the §42.3 gap, not a configuration choice.
+    try:
+        dev_basis = device_cogs.load_basis(client, org_id)
+    except Exception as e:
+        coa._warn("device-cost basis unreadable — inventory basis left as configured", e)
+        dev_basis = {"basis": "undeclared", "ledger_inventory": False, "accrual": False,
+                     "suppress_cash_cogs": False, "source": "unreadable", "double_book_risk": False}
+    meta["device_cost_basis"] = dev_basis
+    if dev_basis.get("ledger_inventory") and meta["as_of"]:
+        try:
+            led = _fetch_asset_ledger_unsold(client, org_id)
+            cells, amet = balance_sheet.asset_ledger_unsold_cells(led, meta["as_of"])
+            resolve = coa.store_resolver(client, org_id)
+            inv_rows = coa._fetch_all(client, "inventory_value",
+                                      "store,swept_value,manual_value", {"org_id": org_id})
+            eff = balance_sheet.apply_inventory_basis(inv_rows, cells, "asset_ledger", resolve)
+            # A ledger that produced NO units is a feed problem, not a $0 inventory. Zeroing an asset
+            # line because an upload is late would be exactly the "fix that hides the defect" CLAUDE.md
+            # forbids, so the configured basis is kept and the fallback is REPORTED.
+            if not amet.get("units"):
+                amet["fell_back_to_configured_basis"] = True
+                amet["reason"] = ("the asset landing produced no units as of this date — the "
+                                  "configured inventory basis is kept rather than booking a $0 asset "
+                                  "off a feed that has not delivered")
+                meta["inventory_asset_ledger"] = amet
+                raise _LedgerInventoryEmpty()
+            inputs["inventory"]["by_store"] = {st: _round(v["value"]) for st, v in eff.items()}
+            inputs["inventory"]["label"] = "Inventory — unsold devices (asset landing)"
+            if amet.get("snapshot_basis"):
+                inputs["inventory"]["note"] = (
+                    "The asset landing ledger is a wipe-and-reinsert CURRENT snapshot and has been "
+                    "pruned, so this as-of value is a snapshot-basis ESTIMATE of what was on hand on "
+                    "%s — it measures the rows that survived pruning, not every unit invoiced."
+                    % amet["as_of"])
+            meta["inventory_asset_ledger"] = amet
+            meta["inventory_basis"] = "asset_ledger"
+            meta["inventory_basis_forced_by"] = "device_cost_basis=asset_ledger"
+        except _LedgerInventoryEmpty:
+            pass                          # already recorded in meta; the configured basis stands
+        except Exception as e:
+            coa._warn("asset-ledger inventory unavailable — configured basis kept", e)
+    elif cfg["inventory_basis"] == "devices":
         try:
             dev_rows = coa._fetch_all(client, "inventory_aging_device",
                                       "store,unit_cost,on_hand,as_of_date", {"org_id": org_id})
@@ -590,11 +660,16 @@ def statement(client, org_id, period, scope="consolidated", kinds=("pl", "balanc
     match = next((s for s in scopes if s[0] == scope), None)
     if match is None:
         return {"period": period, "scope": scope, "computed": False,
+                "scope_display": coa.scope_display_label(scope, None, companies),
                 "note": "unknown scope for this org"}
     scope_key, scope_label, stores_in_scope, include_cw = match
     pl, bs, cf = _assemble_scope(client, org_id, period, inputs, journal, matcher,
                                  scope_key, scope_label, stores_in_scope, include_cw, company_of)
     out = {"period": period, "scope": scope_key, "scope_label": scope_label, "computed": True,
+           # THE display name through the one home (§13b.1) — `companies` here IS the canonical
+           # enumeration (coa.company_assignment ⇒ org_companies), so an on-demand statement titles
+           # itself with the entity's current name and never with `company:<uuid>`.
+           "scope_display": coa.scope_display_label(scope_key, scope_label, companies),
            "on_demand": True, "computed_at": datetime.now(timezone.utc).isoformat(),
            "meta": meta}
     if "pl" in kinds:

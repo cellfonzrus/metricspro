@@ -913,7 +913,7 @@ _upd_ns = _ns(EMP_FIELDS=_EMP_FIELDS, _PAY_GATED_FIELDS=_GATED,
               _who_for_log=lambda *a, **k: {},
               _ensure_employee_id=lambda row: row,
               payroll_salary=types.SimpleNamespace(PAY_BASES=("hourly", "salary")))
-# update_employee's pay-write policy now lives in the shared gate (§19.41) — load the REAL one beside it.
+# update_employee's pay-write policy now lives in the shared gate (§19.44) — load the REAL one beside it.
 _load(("storeops", "router.py"), "gate_pay_write", _upd_ns)
 _upd = _load(("storeops", "router.py"), "update_employee", _upd_ns)
 check("K6-0: update_employee located, and EMP_FIELDS/_PAY_GATED_FIELDS read from the shipped module",

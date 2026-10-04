@@ -307,6 +307,26 @@ def put_inventory_values(body: PutInventoryValuesIn, org_id: str = ORG_ID):
 
 
 # ── per-org accounting config (booking rates — mig 611) ────────────────────────────────────────
+def _device_cost_basis_config(client, org_id):
+    """The resolved DEVICE-COST basis for the finance-config screen (mig 1041): what the org has
+    SET, what its carrier PRESET says, what therefore RESOLVES, and every consequence of it. Reads
+    the ONE home (`device_cogs.load_basis`) — this endpoint has no opinion of its own and does not
+    read `device_cogs_mode`. Read-only and best-effort."""
+    from app.modules.account import device_cogs as _dc
+    out = {"bases": list(_dc.DEVICE_COST_BASES)}
+    try:
+        resolved = _dc.load_basis(client, org_id)
+        out.update({"resolved": resolved,
+                    "resolved_basis": resolved["basis"],
+                    "source": resolved["source"],
+                    "suppresses_cash_cogs_line": resolved["suppress_cash_cogs"],
+                    "forces_ledger_inventory": resolved["ledger_inventory"],
+                    "double_book_risk": resolved["double_book_risk"]})
+    except Exception as e:
+        out["note"] = f"unavailable: {type(e).__name__}"
+    return out
+
+
 def _distributor_payable_config(client, org_id):
     """The resolved distributor-payable mapping for the tenant-setup / finance-config screen:
     what the org has SET, what its carrier PRESET says, what therefore RESOLVES, and the valid
@@ -402,7 +422,9 @@ def get_config(org_id: str = ORG_ID):
             # mig 954 — the distributor-payable tenant mapping, RESOLVED (so the setup screen shows
             # what a tenant that has set nothing will actually book, not a blank), with the
             # pick-don't-type option lists for both the basis and its target line.
-            "distributor_payable": _distributor_payable_config(sb(), org_id)}
+            "distributor_payable": _distributor_payable_config(sb(), org_id),
+            # mig 1041 — THE ONE device-cost basis, RESOLVED, with every consequence it carries.
+            "device_cost": _device_cost_basis_config(sb(), org_id)}
 
 
 class AccountPutConfigIn(LaxModel):
@@ -411,6 +433,8 @@ class AccountPutConfigIn(LaxModel):
     payroll_expense_names: Any = None
     payroll_expense_routes: Any = None
     device_cogs_mode: Any = None
+    # mig 1041 — THE ONE device-cost basis (owner report 2026-10-03). MONEY-TOUCHING.
+    device_cost_basis: Any = None
     # mig 954 — the TENANT-SETUP mapping (owner directive 2026-09-04 §C: "these should be mapped
     # when setting up the new tenant for proper reporting")
     distributor_payable_basis: Any = None
@@ -497,6 +521,22 @@ def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
         if mode not in ("off", "auto", "invoice", "pos"):
             raise HTTPException(400, "device_cogs_mode must be one of: off, auto, invoice, pos")
         row["device_cogs_mode"] = mode
+    # mig 1041 — THE ONE DEVICE-COST BASIS. Declaring 'asset_ledger' moves the handset from the
+    # point-of-sale figure to the distributor's per-unit charge at sale, takes the PayGo CASH line
+    # out of COGS, and books the BS inventory line from the same ledger — one declaration, three
+    # inseparable consequences (`device_cogs.resolve_device_cost_basis`). MONEY-TOUCHING: every
+    # period computed afterwards RESTATES, so the caller must recompute and the owner must approve.
+    # An EXPLICIT null clears it back to "not declared", which restores the pre-1041 behaviour.
+    if "device_cost_basis" in body.model_fields_set:
+        from app.modules.account import device_cogs as _dccfg
+        if body.device_cost_basis in (None, ""):
+            row["device_cost_basis"] = None
+        else:
+            b = str(body.device_cost_basis).strip().lower()
+            if b not in _dccfg.DEVICE_COST_BASES:
+                raise HTTPException(400, "device_cost_basis must be one of: "
+                                         + ", ".join(_dccfg.DEVICE_COST_BASES))
+            row["device_cost_basis"] = b
     # ── TENANT-SETUP MAPPING (owner directive 2026-09-04 §C, mig 954) ───────────────────────────
     # Which feed answers "what do we owe the distributor", and which Balance-Sheet line it books to
     # (a per-tenant COST-CENTRE choice, §B). MONEY-TOUCHING — the caller must recompute afterwards.
@@ -609,6 +649,14 @@ async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "",
 
 
 # ── read snapshots ────────────────────────────────────────────────────────────────────────────
+def _scope_display(scope_key, stored_label, org_id):
+    """The scope's DISPLAY NAME for a statement read — `coa.scope_display_label` (THE one home,
+    §13b.1) over this org's canonical entity inventory. Owner report 2026-10-03: every statement
+    surface used to render `scope_label || scope_key`, so a missing or stale stored label showed the
+    user `company:<uuid>`. The stored label is now only a fallback; the raw key is never rendered."""
+    return coa.scope_display_label(scope_key, stored_label, coa.org_companies(sb(), org_id))
+
+
 def _read(period, st_type, scope, org_id):
     rows = (sb().schema("commcalc").table("account_statements").select("*")
             .eq("org_id", org_id).eq("period", period).eq("statement_type", st_type)
@@ -626,10 +674,13 @@ def _filtered_read(period, st_type, scope, stores, markets, org_id):
     stale = autocompute.staleness(sb(), org_id, period,
                                   computed_at=(base.get("computed_at") if base else None))
     if not base:
-        return {"period": period, "scope": "filtered", "computed": False, "filtered": True, **stale}
+        return {"period": period, "scope": "filtered", "computed": False, "filtered": True,
+                "scope_display": _scope_display("filtered", None, org_id), **stale}
     f = statement_filter.filtered_statement(sb(), org_id, period, st_type, scope, stores, markets)
     return {"period": period, "computed": True, "narrative": None, "model": None,
-            "crosscheck_ok": None, **f, **stale}
+            "crosscheck_ok": None, **f, **stale,
+            "scope_display": _scope_display(f.get("scope_key") or "filtered",
+                                            f.get("scope_label"), org_id)}
 
 
 def pl_single_month(period, scope="consolidated", stores="", markets="", org_id=ORG_ID):
@@ -647,8 +698,10 @@ def pl_single_month(period, scope="consolidated", stores="", markets="", org_id=
     # when a fresh upload has landed since (or the books were never computed). Never changes numbers.
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False, **stale}
+        return {"period": period, "scope": scope, "computed": False,
+                "scope_display": _scope_display(scope, None, org_id), **stale}
     return {"period": period, "scope": scope, "computed": True,
+            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
             "statement": row["payload"], "narrative": row.get("narrative"),
             "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
 
@@ -691,6 +744,7 @@ async def get_pl_range(period_from: str, period_to: str = "", scope: str = "cons
     # the export layout travels WITH the grid, so the page's Excel / CSV / PDF and the scheduled report render
     # the one layout `pl_range.export_sheet` owns — no renderer lays the months out a second time.
     return {"period_from": months[0], "period_to": months[-1], "scope": scope, **out,
+            "scope_display": _scope_display(scope, out.get("scope_label"), org_id),
             "sheets": [pl_range.export_sheet(out), pl_range.notes_sheet(out)]}
 
 
@@ -703,8 +757,10 @@ async def get_bs(period: str, scope: str = "consolidated", stores: str = "", mar
     row = _read(period, "balance_sheet", scope, org_id)
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False, **stale}
+        return {"period": period, "scope": scope, "computed": False,
+                "scope_display": _scope_display(scope, None, org_id), **stale}
     return {"period": period, "scope": scope, "computed": True,
+            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
             "statement": row["payload"], "narrative": row.get("narrative"),
             "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
 
@@ -718,8 +774,10 @@ async def get_cf(period: str, scope: str = "consolidated", org_id: str = ORG_ID)
     row = _read(period, "cash_flow", scope, org_id)
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False, **stale}
+        return {"period": period, "scope": scope, "computed": False,
+                "scope_display": _scope_display(scope, None, org_id), **stale}
     return {"period": period, "scope": scope, "computed": True,
+            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
             "statement": row["payload"], "model": row.get("model"), **stale}
 
 
@@ -1057,11 +1115,17 @@ def overview(period: str, org_id: str = ORG_ID):
             s["cash_flow_tied"] = p.get("tied")
         s["computed_at"] = r.get("computed_at")
         s["model"] = r.get("model")
+    # THE DISPLAY NAME (owner report 2026-10-03, §13b.1): every scope row carries `scope_display`,
+    # resolved by `coa.scope_display_label` against the canonical `companies` enumeration already
+    # read above — so this dropdown shows the entity's CURRENT name even when the snapshot's stored
+    # `scope_label` is null or predates a rename, and can never show `company:<uuid>`. Sorting uses
+    # the same resolved name, so the list reads alphabetically by what the user actually sees.
+    labelled = coa.label_scopes(list(scopes.values()), companies)
     return {"period": period, "computed": bool(rows), "companies": companies,
-            "scopes": sorted(scopes.values(),
+            "scopes": sorted(labelled,
                              key=lambda x: (0 if x["scope_key"] == "consolidated"
                                             else 1 if x["scope_key"].startswith("company:") else 2,
-                                            x.get("scope_label") or ""))}
+                                            x.get("scope_display") or ""))}
 
 
 # ── Narrative banner (owner 2026-08-29 modernization track) ──────────────────────────────────────
@@ -1337,10 +1401,13 @@ async def financial_analysis(months: int = 12, authorization: str = Header(defau
 
     try:
         rows = await run_in_threadpool(_rows)   # bulk Supabase read off the event loop (SEV-1 rule)
-        own_ids = await run_in_threadpool(
-            lambda: {str(c["id"]) for c in coa.org_companies(sb(), org_id)})
+        companies = await run_in_threadpool(lambda: coa.org_companies(sb(), org_id))
+        own_ids = {str(c["id"]) for c in companies}
+        # the per-company comparison series label through THE one home (§13b.1) — a renamed entity
+        # relabels its own series instead of charting `company:<uuid>`.
         return {"org_id": org_id, **analysis.assemble(rows, months=months,
-                                                      own_company_ids=own_ids)}
+                                                      own_company_ids=own_ids,
+                                                      companies=companies)}
     except Exception as e:
         raise HTTPException(500, f"analysis failed: {type(e).__name__}: {e}")
 

@@ -168,7 +168,7 @@ jobs:
         run: node prove_row_save.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   employee-write-locks:
-    # EMPLOYEE PAY WRITES + CHANGE-LOG IDENTITY (2026-10-03, index §19.41 / §19.42). The pay-write rule lived inline in
+    # EMPLOYEE PAY WRITES + CHANGE-LOG IDENTITY (2026-10-03, index §19.44 / §19.45). The pay-write rule lived inline in
     # PATCH /employees alone — the create, bulk-create, HR-create and payscale-upload paths wrote pay with no "may this
     # caller see pay?" check. And the payroll change log took WHO from whatever its caller held: Vzone's id 237 was logged
     # with no employee number because the business id was minted after the row was written. The locks (stdlib): every

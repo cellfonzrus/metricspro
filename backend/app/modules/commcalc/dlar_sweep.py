@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 # THE one home of "which columns must carry a value" (index §19.18 arrival/content, §19.28 completeness).
 from app.modules.commcalc import data_lineage_registry as _lineage
+from app.modules.commcalc import empty_pull_verdict as _empty_verdict
 from app.modules.commcalc import auto_calc as _auto_calc   # the ONE post-landing hook (index §6l)
 
 import requests
@@ -519,9 +520,13 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
     # session or a portal layout change. Aborting BEFORE the wipe (instead of "OK — 0 stores") keeps
     # an empty/auth-degraded pull from zeroing the live commission period that gets auto-recalc'd.
     if not store_rows and not rep_rows:
-        raise DlarPortalError(
-            "DLAR returned 0 store and 0 rep rows — aborting before wiping the period (likely an "
-            "expired session or portal change, not a real empty month). Period left untouched.")
+        # The DECISION is not re-implemented here: "is this zero the source's own answer?" has ONE
+        # home (`empty_pull_verdict`) and this sweep dereferences it, declaring only the fact that is
+        # true of THIS feed — a zero is never legitimate for it. The sentence comes back from the
+        # shared home so every surface words it the same way (index §19.41).
+        _v = _empty_verdict.classify_empty_pull(
+            empty_allowed=False, label="the advocate/store report pull (0 store + 0 rep rows)")
+        raise DlarPortalError(_v["sentence"] + " Period left untouched.")
 
     # Wipe-and-insert the period (replaces the manual monthly upload), per table, but never let a
     # drastically-smaller pull REPLACE a populated table (partial-collapse guard).

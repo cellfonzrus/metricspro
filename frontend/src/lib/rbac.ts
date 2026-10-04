@@ -527,6 +527,12 @@ export const NAV: NavGroup[] = [
   // D1 tile layout (house layout seeded by mig 948). Same zero-RBAC-change duplicate rule as above.
   { group: 'Flags & Compliance', module: 'commissions', items: [
     { href: '/compliance', label: 'Flags & Compliance Dashboard', icon: '🛡️', module: 'commissions', scopes: ['all', 'market'] },
+    // FOLLOW UP WITH MANAGERS (owner 2026-10-03, index §47.14). Its home is this group because what
+    // it follows up ON is this group's queues: the board rolls the SAME registry
+    // (compliance_summary.CATEGORIES) up per manager and queue with an age, which is the one thing
+    // the dashboard's counts cannot give. Scopes are byte-identical to the dashboard's, so this
+    // changes what is REACHABLE and nothing about who may see it; the server span-scopes the rows.
+    { href: '/commcalc/manager-followup', label: 'Follow Up With Managers', icon: '📌', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -808,6 +814,7 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'], tileOnly: true },
+    { href: '/storeops/visits/plan', label: 'DM Visit Plan', icon: '🗺️', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/reviews', label: 'Google Reviews', icon: '⭐', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/storeops/reviews/config', label: 'Reviews Setup', icon: '⚙️', module: 'storeops', scopes: ['all'], tileOnly: true },
     { href: '/storeops/reports', label: 'Reports', icon: '📋', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
@@ -1233,6 +1240,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/storeops/shift-extensions', 'ops'], ['/storeops/timeclock-permissions', 'ops'], ['/storeops/hours-budget', 'ops'], ['/storeops/timeclock', 'ops'],
   ['/storeops/attendance', 'ops'],
   ['/storeops/employees', 'ops'], ['/storeops/team', 'ops'], ['/storeops/visits', 'ops'], ['/storeops/reports', 'ops'],
+  ['/storeops/visits/plan', 'ops'],
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
   ['/closing/tender-recon', 'ops'], ['/closing/tender-recon-3way', 'ops'], ['/closing/accessory-recon', 'ops'],
   ['/closing/pickup', 'ops'], ['/closing/billpay-pickup', 'ops'],

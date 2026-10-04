@@ -46,9 +46,14 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BE_APP = os.path.join(ROOT, "backend", "app")
-HOME = "modules/commcalc/paramount_kpi.py"
+HOME = home_under_app("paramount_kpi")       # the graph is the one home for the ruling
 HOME_ABS = os.path.join(BE_APP, "modules", "commcalc", "paramount_kpi.py")
 ROUTER_ABS = os.path.join(BE_APP, "modules", "commcalc", "router.py")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "carrier-vocab-guard.yml")

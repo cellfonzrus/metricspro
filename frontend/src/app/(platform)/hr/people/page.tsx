@@ -4,6 +4,7 @@ import { api } from '@/lib/client'
 import { notSavedNote } from '@/lib/rowSave'
 import { apiCached, CONFIG, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { StoreMultiSelect } from '@/components/StoreMultiSelect'
 
 // HR · People — the single front door to ADD a person. Creates the StoreOps roster row (+ a stable
 // employee_id), and — if a role/scope + email is given — assigns the RBAC role and (optionally)
@@ -44,7 +45,7 @@ export default function HRPeoplePage() {
   useEffect(() => { loadAll() }, [])
 
   const set = (patch: any) => setF((v: any) => ({ ...v, ...patch }))
-  const toggleStore = (code: string) => set({ store_codes: f.store_codes.includes(code) ? f.store_codes.filter((c: string) => c !== code) : [...f.store_codes, code] })
+
 
   async function create() {
     if (!f.name.trim()) { setMsg('Name is required.'); return }
@@ -66,7 +67,7 @@ export default function HRPeoplePage() {
       }) })
       const inv = r.invite
       const invMsg = inv ? (inv.ok ? (inv.emailed ? ' · onboarding invite emailed ✉️' : ` · invite ready (${inv.email_note || 'send manually'})`) : ` · invite issue: ${inv.error || 'failed'}`) : ''
-      // A pay rate the server did not write (the caller's role may not set pay, §19.41) is said, never
+      // A pay rate the server did not write (the caller's role may not set pay, §19.44) is said, never
       // swallowed: the person was added, the rate was not.
       const payNote = notSavedNote(r)
       setMsg(`${payNote ? '⚠️' : '✅'} Saved ${f.name}${r.assigned_role ? ` → ${r.assigned_role}` : ''}${invMsg}${r.note ? ` — ${r.note}` : ''}${payNote}`)
@@ -163,14 +164,13 @@ export default function HRPeoplePage() {
         </div>
         <div style={{ marginTop: 12 }}>
           <div style={{ ...lbl, marginBottom: 6 }}>Stores covered (floaters can cover several)</div>
-          <div style={{ display: 'flex', gap: '6px 14px', flexWrap: 'wrap', maxHeight: 120, overflowY: 'auto', padding: 8, border: '1px solid var(--border)', borderRadius: 8 }}>
-            {stores.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No stores found</span>}
-            {stores.map(s => (
-              <label key={s.store_code} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                <input type="checkbox" checked={f.store_codes.includes(s.store_code)} onChange={() => toggleStore(s.store_code)} /> {s.store_code}
-              </label>
-            ))}
-          </div>
+          {/* THE shared store multi-select (components/StoreMultiSelect) — the same dropdown Store
+              Setup uses. This was a scrolling wall of checkboxes, which is the sibling of the control
+              the owner asked to be a dropdown (2026-10-03); one fixed and the other not is the same
+              defect wearing a hat (CLAUDE.md, "find the siblings before you ship"). */}
+          <StoreMultiSelect stores={stores} value={f.store_codes || []} width={320}
+            placeholder={stores.length ? 'Select stores…' : 'No stores found'}
+            onChange={next => set({ store_codes: next })} />
         </div>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 14, flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>

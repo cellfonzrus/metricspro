@@ -312,6 +312,223 @@ def classify_tender(tender_type, card_tokens=None, cash_tokens=None):
     return "other"
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE POS BILL-PAYMENT CASH IN THE DRAWER -- ONE HOME, DEREFERENCED (owner ask 2026-10-03)
+#
+# THE CLASS OF DEFECT THIS CLOSES, named rather than its instance. "How much bill-payment cash did
+# the POS record for this store-day" was answered by reading the bill-pay map's raw `cash` key at
+# every call site. That key is the BILL lines' cash leg only: the customer SERVICE FEE is a separate
+# sales line which the exec `bill_payment` rule deliberately excludes (house config
+# `exclude_category: ['other charge']`, which is the fee line's own category). The exclusion is
+# correct for the bill-payment METRIC and wrong for the DRAWER, because the fee is cash the rep took
+# from the customer and must declare. Two questions, one number, so they drifted.
+#
+# MEASURED CONSEQUENCE (read-only, September 2026, house org): of 535 store-days only NINE agreed
+# between the rep's declaration and the POS figure. Adding the fee cash back closes 100 store-days
+# to the cent and 212 more to within a dollar -- 312 of 530, and $7,599 of the $18,657 total gap.
+# The residue is genuine: 218 store-days where the declaration really is wrong, which is what a
+# district manager should be chasing instead of a column that disagrees nine times out of ten.
+#
+# WHY IT MUST BE DEREFERENCED AND NOT COPIED: the pickup netting basis, the three-way recon's Leg B
+# and the envelope's own cash-from-sales column all answer this one question. A second copy of the
+# "add the fee back" arithmetic in any of them is the divergence the house rules forbid, so this is
+# the only place that arithmetic is written. `harness_billpay_fee_basis.py` section C FAILS THE BUILD
+# if a caller goes back to reading the raw key for a basis, or if a second copy appears.
+def pos_billpay_cash(slot):
+    """THE POS bill-payment CASH for one store-day: the bill lines' cash leg PLUS the customer
+    service-fee cash. `slot` is a `_billpay_sales_by_store_day` value ({'cash','fee_cash',...}).
+
+    ABSENCE IS NOT ZERO. `None` (no slot at all) returns None, so a caller can tell "the feed has
+    nothing for this store-day" from "the store-day had no bill-pay cash" -- the distinction the
+    netting basis turns into `basis='none'` rather than subtracting a fabricated zero. A slot that
+    EXISTS but carries no `fee_cash` contributes 0.0 for the fee, which is honest: the feed reported
+    for that store-day and held no fee cash in it. PURE."""
+    if slot is None:
+        return None
+    if not isinstance(slot, dict):
+        try:
+            return round(float(slot or 0.0), 2)
+        except (TypeError, ValueError):
+            return None
+    def _n(v):
+        try:
+            return float(v or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    return round(_n(slot.get("cash")) + _n(slot.get("fee_cash")), 2)
+
+
+def pos_billpay_total(slot):
+    """THE POS bill-payment TOTAL for one store-day, ALL tenders: the bill lines plus the customer
+    service fee. The three-way recon's Leg B grain, and the sibling of `pos_billpay_cash`.
+
+    WHY THE SAME CORRECTION APPLIES HERE. Leg A of that recon is the rep's declared
+    `epay_on_cash + epay_on_credit`, which INCLUDES the fee the customer handed over whichever way
+    they paid. Comparing it against the bill lines alone reports a variance on nearly every
+    store-day, exactly as the cash basis did. Same question, same fix, same home -- fixing only the
+    cash leg would have left this one wrong, which is the "one of them fixed and the other not"
+    defect the house rules name. None stays None: an absent leg is never a fabricated zero. PURE."""
+    if slot is None:
+        return None
+    if not isinstance(slot, dict):
+        try:
+            return round(float(slot or 0.0), 2)
+        except (TypeError, ValueError):
+            return None
+    def _n(v):
+        try:
+            return float(v or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    return round(_n(slot.get("amount")) + _n(slot.get("fee")), 2)
+
+
+def pos_billpay_fee_cash(slot):
+    """Just the service-fee cash leg of a store-day, for a report that must SHOW what was added back
+    rather than quietly folding it in. None when there is no slot. PURE."""
+    if not isinstance(slot, dict):
+        return None
+    try:
+        return round(float(slot.get("fee_cash") or 0.0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# DOES THIS TENANT CHARGE A BILL-PAYMENT FEE? — A DECLARED FACT, ONE HOME, DEREFERENCED
+# (owner ask 2026-10-03, verbatim: "we should build a user defined line if tehy take fee for bill
+# payments or not and if they dont it should calculate accordingly so there is not balmnket error on
+# a different tenant … all user defnined platform wide no hardcoding")
+#
+# THE CLASS OF DEFECT, named rather than the instance that surfaced it. `pos_billpay_cash` above adds
+# the service-fee leg to the bill lines, and a store-day with NO fee leg contributes 0.0 for it. That
+# is arithmetically honest and epistemically blind, because "no fee leg" is THREE different facts
+# wearing one face:
+#   1. the tenant charges no bill-payment fee at all — there is nothing to ring, and the basis is
+#      exactly right;
+#   2. the tenant DOES charge one and the feed did not ring it, or the org's fee vocabulary does not
+#      match its wording — the basis is UNDERSTATED and every store-day reads as under-declared;
+#   3. nobody has ever said which, so neither reading can honestly be preferred.
+# Guessing between them is precisely how one tenant's fee wording turns into another tenant's blanket
+# accusation. So the question is ASKED of the org rather than inferred from its data: a declared
+# per-org value, resolved here and nowhere else, with the STATES below telling a caller whether the
+# POS basis is even comparable against a rep's declaration — and, when it is not, whose problem it is.
+#
+# WHY A STATE AND NOT A BOOLEAN. A caller has to distinguish "do not alert, nobody has answered the
+# question" from "do not alert, the feed is broken" from "alert, this is a real declaration gap":
+# three remedies with three different owners. A boolean collapses them, and the caller then
+# re-derives the distinction at its own call site — the copied-fact divergence the house rules forbid.
+#
+# MEASURED 2026-10-03, read-only, September 2026, through the system's own helpers:
+#   • The house org rings its fee on 736 of 772 store-days, $14,184 in the month; remove the leg and
+#     agreement collapses from 348 store-days to 20. The fee is real, rung, and load-bearing.
+#   • The other live tenant rings it on 0 of 371 store-days, and recomputing the whole month with the
+#     fee leg removed leaves the classification IDENTICAL. Its $57,905 gap is therefore NOT a fee
+#     problem: 217 of its 373 closings declare bill-pay cash of $0.00 against real POS bill-pay
+#     activity. Declaring its policy moves not a cent of that gap — what it stops is the SYSTEM
+#     offering a fee-shaped explanation for a gap that has a different, real, reportable cause.
+#
+# RULE TWO: no tenant, carrier or product name is spelled here or at any caller. The value is a
+# config row with a house default, and that default is UNKNOWN precisely because an unanswered
+# question must not be answered by code — an unconfigured tenant is never blanket-accused, and is
+# never silently exonerated either: it is COUNTED and the question is put to its owner.
+FEE_POLICY_CHARGED = "yes"
+FEE_POLICY_NOT_CHARGED = "no"
+FEE_POLICY_UNKNOWN = "unknown"
+FEE_POLICIES = (FEE_POLICY_CHARGED, FEE_POLICY_NOT_CHARGED, FEE_POLICY_UNKNOWN)
+HOUSE_FEE_POLICY = FEE_POLICY_UNKNOWN
+
+# What the fee leg of ONE store-day means, once the org's declared policy is taken into account.
+FEE_STATE_NO_FEED = "no_feed"                       # no slot at all — nothing was reported
+FEE_STATE_NOT_APPLICABLE = "fee_not_applicable"     # a bare figure (a processor total): no fee detail
+FEE_STATE_IDLE = "no_billpay_activity"              # the feed reported, and rang no bill payments
+FEE_STATE_CHARGED = "fee_charged"                   # a fee leg is present, as the policy expects
+FEE_STATE_NOT_CHARGED = "fee_not_charged"           # policy says none is charged, and none rang
+FEE_STATE_LINE_MISSING = "fee_line_missing"         # policy says one IS charged, and none rang
+FEE_STATE_POLICY_UNANSWERED = "fee_policy_unanswered"   # nobody has said, and none rang
+FEE_STATE_UNEXPECTED = "fee_not_expected"           # policy says none is charged, and one rang
+FEE_STATES = (FEE_STATE_NO_FEED, FEE_STATE_NOT_APPLICABLE, FEE_STATE_IDLE, FEE_STATE_CHARGED,
+              FEE_STATE_NOT_CHARGED, FEE_STATE_LINE_MISSING, FEE_STATE_POLICY_UNANSWERED,
+              FEE_STATE_UNEXPECTED)
+
+# THE STATES IN WHICH THE POS BASIS MAY BE COMPARED against a rep's declaration — the one place this
+# judgement is written. `FEE_STATE_UNEXPECTED` IS comparable: a fee line that rang is real cash in the
+# drawer whatever the config row claims, so the arithmetic stands and it is the CONFIG that is
+# reported. The two excluded states are excluded because the basis itself is unsafe: one is a feed
+# defect, the other an unanswered question, and neither is a rep's fault.
+FEE_STATES_COMPARABLE = (FEE_STATE_NOT_APPLICABLE, FEE_STATE_IDLE, FEE_STATE_CHARGED,
+                         FEE_STATE_NOT_CHARGED, FEE_STATE_UNEXPECTED)
+
+
+def resolve_fee_policy(value=None):
+    """THE org's declared bill-payment-fee policy: one of `FEE_POLICIES`. Anything unrecognised —
+    None, blank, a pre-migration schema, a typo, a value from a newer release — resolves to
+    `HOUSE_FEE_POLICY` (unknown), never to a guess in either direction. PURE."""
+    v = str(value or "").strip().lower()
+    return v if v in FEE_POLICIES else HOUSE_FEE_POLICY
+
+
+def billpay_fee_state(slot, policy=None):
+    """ONE store-day's fee situation, as a `FEE_STATES` member. `slot` is a
+    `_billpay_sales_by_store_day` value; `policy` is the org's declared value, normalised here so a
+    caller can hand over the raw config cell. PURE, and the ONLY place "no fee leg" is interpreted.
+
+    ABSENCE IS NOT ZERO, applied to the fee rather than the amount: a store-day that rang no bill
+    payments at all is `no_billpay_activity` (there was nothing to charge a fee on, so no policy is
+    contradicted), which is NOT the same fact as a store-day with real bill-pay activity and no fee
+    line — and that one splits again on whether the org has said it charges a fee."""
+    pol = resolve_fee_policy(policy)
+    if slot is None:
+        return FEE_STATE_NO_FEED
+    if not isinstance(slot, dict):
+        return FEE_STATE_NOT_APPLICABLE
+    def _n(v):
+        try:
+            return float(v or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    has_fee = bool(slot.get("fee_lines")) or _n(slot.get("fee")) > 0 or _n(slot.get("fee_cash")) > 0
+    if has_fee:
+        return FEE_STATE_UNEXPECTED if pol == FEE_POLICY_NOT_CHARGED else FEE_STATE_CHARGED
+    active = bool(slot.get("count")) or _n(slot.get("amount")) > 0 or _n(slot.get("cash")) > 0
+    if not active:
+        return FEE_STATE_IDLE
+    if pol == FEE_POLICY_NOT_CHARGED:
+        return FEE_STATE_NOT_CHARGED
+    if pol == FEE_POLICY_CHARGED:
+        return FEE_STATE_LINE_MISSING
+    return FEE_STATE_POLICY_UNANSWERED
+
+
+# The states in which the POS basis is positively KNOWN to be understated, because the org has
+# declared that it charges a fee and no fee line reached the feed. `fee_policy_unanswered` is
+# deliberately NOT here: an unanswered question is not knowledge, and a money-adjacent subtraction
+# must not change behaviour on a guess. So applying the migration changes nothing anywhere until an
+# owner answers 'yes' and a feed then stops ringing the fee.
+FEE_STATES_BASIS_UNDERSTATED = (FEE_STATE_LINE_MISSING,)
+
+
+def pos_billpay_cash_trusted(slot, policy=None):
+    """`pos_billpay_cash` GATED on the org's declared fee policy: the same figure, or None when the
+    policy says it must be understated (a fee the org charges did not ring, so the drawer held more
+    bill-pay cash than the feed can account for).
+
+    FOR A CALLER THAT SUBTRACTS THE FIGURE rather than merely comparing it — the pickup netting
+    basis. Netting an understated figure leaves a store looking short of cash it never had, which is
+    the blanket error this whole mechanism exists to stop; None is the netting path's existing,
+    honest "no basis" answer, which the envelope already explains. It DEREFERENCES the arithmetic
+    home above rather than re-adding the legs. PURE."""
+    if billpay_fee_state(slot, policy) in FEE_STATES_BASIS_UNDERSTATED:
+        return None
+    return pos_billpay_cash(slot)
+
+
+def billpay_basis_comparable(fee_state):
+    """May the POS bill-pay basis for this store-day be compared against the rep's declaration?
+    The one home for that judgement, so no caller re-derives which states are safe. PURE."""
+    return str(fee_state or "") in FEE_STATES_COMPARABLE
+
+
 def ma_billpay_predicate(order_types=None, exact_products=None, product_tokens=None):
     """PURE factory: row → is this carrier DAILY-TX row a BILL PAYMENT? A row qualifies when its
     order_type is in the configured family (default {'Sales Order'}) AND its product matches the
@@ -371,9 +588,13 @@ def reconcile_billpay_three_way_days(declared_by_sd, sales_by_sd, processor_by_s
     tol = abs(float(tolerance_amt or 0.0))
 
     def _amt(m, k):
+        """Dereferences `pos_billpay_total` for a sales/processor SLOT, so Leg B carries the customer
+        service fee that Leg A's declaration already includes (owner ask 2026-10-03). A slot with no
+        `fee` key resolves to its `amount` exactly as before, so every pre-fee caller and fixture is
+        byte-identical."""
         v = m.get(k)
         if isinstance(v, dict):
-            return float(v.get("amount", 0.0) or 0.0)
+            return float(pos_billpay_total(v) or 0.0)
         return float(v or 0.0)
 
     keys = set(declared_by_sd)

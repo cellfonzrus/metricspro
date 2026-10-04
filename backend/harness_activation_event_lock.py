@@ -30,10 +30,15 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
 FE = os.path.join(os.path.dirname(ROOT), "frontend", "src", "app", "(platform)", "commcalc")
-HOME = "modules/commcalc/line_class.py"
+HOME = home_under_app("line_class")          # the graph is the one home for the ruling
 DEFS = ("line_event_keys", "activation_events", "activation_units",
         # "HOW MANY NEW ACTIVATIONS" and "which unit does not count" — the owner's 2026-09-27 ruling.
         # One home, same file, same lock: a second copy of either is the same defect as a second event.

@@ -311,10 +311,20 @@ for rel, allowed in EXPECTED_DELTA.items():
 #   roster is read with `select("*")` instead of a salary-columns block falling back to an hourly
 #   block (the class that made the live P&L read `feeds` after the owner chose the ledger). Same rows
 #   into the same `derive_wage_cells`; harness_any_columns.py §C pins the wage cells byte-identical.
+#   statement_filter.py +{unbound_spellings} (2026-10-03, index §15v) — WHICH OF A FEED'S STORE
+#   SPELLINGS THE MATCHER CANNOT BIND, asked for a PICKER, not for a statement. Added because the
+#   Distributor Invoices report needed the market filter this module already owns, and its store
+#   picker has to know which distributor spellings nothing binds (they stay selectable, and the
+#   report reports them rather than folding them into a market's total). It reads `_codes_for_selection`
+#   — the same vocabulary the P&L filter resolves with, which is precisely why it lives here instead of
+#   being a second copy somewhere else. It is PURE, it books nothing, and NOTHING in this file calls
+#   it: the delta check directly below proves no existing function changed, so every P&L and Balance
+#   Sheet number this module produces is byte-identical. Proven by
+#   backend/harness_vip_invoice_filter.py §F and backend/harness_pl_filter_semantics.py (unchanged).
 MONEY_MODULE_DELTA = {
     f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store"}, {"_lcov_mod", "build_inputs.add_comm"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
-    f"{MOD}/account/statement_filter.py": (set(), set()),
+    f"{MOD}/account/statement_filter.py": (set(), {"unbound_spellings"}),
 }
 for rel, (allowed, allowed_new) in MONEY_MODULE_DELTA.items():
     base_f, now_f = funcs(read_base(rel)), funcs(read_now(rel))

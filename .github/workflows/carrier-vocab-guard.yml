@@ -17,6 +17,16 @@ name: carrier-vocab-guard
 #
 # Dependency-free: the guard statically scans frontend/src on bare Python — no pip install.
 #
+# THE BILL-PAYMENT FEE POLICY (index §47.15, owner 2026-10-03) rides the EXISTING
+# harness_billpay_fee_basis.py rather than a sibling lock (the duplicate-check gate), as sections J/K:
+# whether a tenant charges a bill-payment fee is a DECLARED per-org fact resolved in ONE home
+# (commcalc/metric_recon.resolve_fee_policy / billpay_fee_state / billpay_basis_comparable), "no fee
+# line" is interpreted in exactly one function, and a basis the policy says is understated is neither
+# compared against a rep's declaration nor netted out of a drawer. The build FAILS if a caller spells
+# a policy value, re-derives which states are comparable, stops dereferencing the state machine, or
+# puts the plain accessor back into the netting basis — and K8/K9 fail the build if either lock's own
+# scan ever starts matching nothing.
+#
 # THE ENVELOPE-BASIS WIRING RULES (index §47.8, owner 2026-10-02) were folded INTO the existing
 # harness_envelope_receipt_basis.py rather than shipped as a sibling lock (the duplicate-check gate): the Management
 # Envelope Receipt's cash-basis selector read `daily_closing.epay_on_cash` while BOTH of its callers
@@ -162,6 +172,10 @@ on:
       - "frontend/prove_one_domain.mjs"
       - "frontend/package-lock.json"
       - "backend/harness_one_domain_lock.py"
+      # index §40.12 — rule 8 locks these two, so a change to either must run the lock that guards it
+      # (the §13e lesson: a job behind an allowlist that does not name its own subject skips silently).
+      - "scripts/check_deploy_reachability.py"
+      - ".github/workflows/deploy-reachability.yml"
       - "backend/harness_cors_policy.py"
       - "backend/app/core/cors_policy.py"
       - "backend/app/modules/payables/router.py"
@@ -185,6 +199,11 @@ on:
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/harness_account_expenses_one_home.py"
+      # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
+      - "backend/harness_scope_label.py"
+      - "backend/harness_scope_label_lock.py"
+      - "backend/app/modules/account/coa.py"
+      - "frontend/prove_scope_label.mjs"
       - "backend/app/modules/account/analysis.py"
       - "backend/app/modules/account/statement_engine.py"
       - "backend/app/modules/account/router.py"
@@ -192,6 +211,8 @@ on:
       # index §29.11 — the closing-refusal lock reads the router, the two pure modules, its own
       # proof, migration 1037 and the Management Review screen
       - "backend/harness_closing_submit_refusal.py"
+      - "backend/harness_closing_unfinished_day.py"
+      - "backend/app/modules/closing/unfinished_day.py"
       - "backend/app/modules/closing/submit_refusal.py"
       - "backend/app/modules/closing/dedup_key.py"
       - "backend/harness_report_kind_lock.py"
@@ -367,6 +388,28 @@ on:
       - "backend/harness_dm_verify_range_cost.py"
       - "backend/harness_screen_link_guard.py"
       - "backend/harness_envelope_receipt_basis.py"
+      - "backend/harness_billpay_fee_basis.py"
+      - "backend/harness_billpay_declaration_alerts.py"
+      - "backend/app/modules/closing/billpay_declaration_alerts.py"
+      - "backend/app/modules/commcalc/manager_digest.py"
+      - "database/migrations/1043_billpay_declaration_alerts.sql"
+      - "backend/harness_manager_followup.py"
+      - "backend/app/modules/storevisit/visit_alerts.py"
+      - "backend/app/modules/storevisit/router.py"
+      - "backend/app/modules/supply/store.py"
+      - "database/migrations/1047_store_visit_alerts.sql"
+      - "backend/harness_storevisit_alerts.py"
+      - "backend/app/modules/storeops/alert_log.py"
+      - "backend/app/modules/notify/digest_delivery.py"
+      - "database/migrations/1051_alert_log_channel.sql"
+      - "backend/harness_alert_channel_record.py"
+      - "backend/app/modules/commcalc/manager_followup.py"
+      - "backend/app/modules/commcalc/compliance_summary.py"
+      - "database/migrations/1044_manager_followup.sql"
+      - "backend/app/modules/commcalc/epay_fee_recon.py"
+      - "backend/app/modules/commcalc/metric_recon.py"
+      - "database/migrations/1045_billpay_fee_product_desc.sql"
+      - "database/migrations/1046_billpay_fee_charged.sql"
       - "backend/harness_accountability_chain.py"
       - "backend/harness_org_chain.py"
       - "backend/app/modules/storeops/org_chain.py"
@@ -435,12 +478,20 @@ on:
       - "backend/app/modules/closing/deposit_recon.py"
       - "frontend/src/app/(platform)/closing/envelope-report/page.tsx"
       - "backend/harness_browser_sweep_kinds.py"
+      - "backend/harness_feed_watchdog.py"
+      - "backend/harness_empty_pull_verdict.py"
+      - "backend/app/modules/commcalc/empty_pull_verdict.py"
+      - "backend/app/modules/commcalc/epay_sweep.py"
+      - "backend/app/modules/commcalc/dlar_sweep.py"
+      - "database/migrations/1042_report_arrears_window.sql"
       - "database/migrations/1021_supply_ordering.sql"
       - "backend/app/modules/account/pl_range.py"
       - "backend/app/modules/notify/finance_reports.py"
       - "backend/app/modules/notify/render.py"
       - "backend/harness_pl_range.py"
       - "backend/harness_pl_range_lock.py"
+      - "backend/harness_pl_filter_semantics.py"
+      - "backend/app/modules/account/statement_filter.py"
       - "backend/harness_export_xss_upload.py"
       # index §19.40 — the nav deep-link lock reads every page, NAV, ScreenLink, backend notices and the help docs
       - "backend/harness_nav_deep_link_lock.py"
@@ -448,6 +499,21 @@ on:
       - "frontend/src/**"
       - "backend/app/**/*.py"
       - "backend/app/data/support_docs_seed.json"
+      # index §13e — the store-option fold, and §13d — the store-identity proof: each lock's own
+      # harness and runbook. The two globs above already cover everything under backend/app, but a
+      # harness at the backend ROOT and a runbook are not under them, so a change to the very thing
+      # a lock guards would SKIP that lock — the un-wiring these locks exist to prevent.
+      - "backend/harness_store_option_fold.py"
+      - "backend/harness_store_mapping_identity.py"
+      - "database/runbooks/store_identity_merge_1800_1115.sql"
+      # index §19.26 — the distributor-invoice filter lock (same reason as the two above: its
+      # harness sits at the backend ROOT, outside the backend/app glob it guards)
+      - "backend/harness_vip_invoice_filter.py"
+      # index §47.17 — the DM visit plan proof. Its harness sits at the backend ROOT and it parses the
+      # seed out of migration 1050, so a change to EITHER must run the proof that guards them (same
+      # §13e lesson as the three above).
+      - "backend/harness_dm_visit_plan.py"
+      - "database/migrations/1050_dm_visit_quota_and_assignment.sql"
   push:
     branches: [main]
     paths:
@@ -485,6 +551,12 @@ jobs:
       - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)
         working-directory: backend
         run: python3 harness_account_expenses_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
+        working-directory: backend
+        run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the scope display-name proof (a null / stale stored label renders the company's CURRENT name; no uuid ever rendered)
+        working-directory: backend
+        run: python3 harness_scope_label.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the report-kind lock (every upload surface reads the registry; no second list)
         working-directory: backend
         run: python3 harness_report_kind_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -527,6 +599,14 @@ jobs:
       - name: Run the P&L month-range lock (a multi-month P&L loops THE single-month read; it computes no line; no second range path — index §4c)
         working-directory: backend
         run: python3 harness_pl_range_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §4 — the P&L store/market filter. This harness shipped with the 2026-09-02 market fix
+      # but was never wired into CI, so nothing failed the build when a filter half stopped
+      # dereferencing the canonical store vocabulary — which is exactly how the 2026-10-03
+      # code-selection defect ("device cost is not being added to the p&l of 5619/6149/6507/1710")
+      # reached the owner. Stdlib-only and DB-free.
+      - name: Run the P&L filter-semantics proof (one store vocabulary; a code / alias / variant selection binds its snapshot; fail-closed on ambiguity — index §4)
+        working-directory: backend
+        run: python3 harness_pl_filter_semantics.py | tee -a "$GITHUB_STEP_SUMMARY"
       # index §4a / §4a.1 / §4a.2 — the MA money, the month-of-life LEG and the ladder's RUNG
       # convention each have ONE home. These locks shipped with #270/#272 but were never wired into
       # CI, so nothing failed the build when a caller stopped dereferencing them. Wiring them is the
@@ -595,6 +675,24 @@ jobs:
       - name: Run the envelope-receipt basis + counted-by lock (one basis vocabulary dereferenced from deposit_recon; the columns a pure reader dereferences are declared beside it and every caller selects that declaration; a count is scored on the basis the counter saw; the counter is the real actor shown as a person — index §47 / §47.8)
         working-directory: backend
         run: python3 harness_envelope_receipt_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the bill-pay FEE basis lock (the POS bill-payment figure includes the customer service fee, added in ONE home and dereferenced; no caller re-adds the legs — index §47.12)
+        working-directory: backend
+        run: python3 harness_billpay_fee_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the bill-pay declaration-alert lock (only a person's problem is alerted; a store-day with no POS figure is refused by name and counted; WhatsApp takes the window-safe path — index §47.13)
+        working-directory: backend
+        run: python3 harness_billpay_declaration_alerts.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Follow Up With Managers lock (the pending-job vocabulary is dereferenced from the compliance registry; an age we cannot read is unknown, never 0; unowned work is counted, not dropped; the dedup key re-escalates on ageing — index §47.14)
+        working-directory: backend
+        run: python3 harness_manager_followup.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the store-visit follow-through lock (DM-and-above is the default and cannot be lost; one fan-out, one dedup, one recipient list, one PO insert; the draft PO names an unpriced line rather than dropping it; no 'submit' mode — index §47.16)
+        working-directory: backend
+        run: python3 harness_storevisit_alerts.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the per-channel send-record lock (an alert's record names the CHANNEL that carried it, so a failed WhatsApp is still owed the finding; one send record, one delivery ladder, no sweep keeping a private copy — index §15.1, §15.2)
+        working-directory: backend
+        run: python3 harness_alert_channel_record.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the alert auto-fix lock (an alert that can be fixed says how, and a recorded silence suppresses nothing — index §15.1)
+        working-directory: backend
+        run: python3 harness_alert_autofix.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -634,6 +732,12 @@ jobs:
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the silent-zero lock (a sweep's reported status is not a record of what it did — one home for "is this zero the source's own answer?", every empty_ok leg routed through it, the window never narrower than the arrears, success is what landed — index §19.41)
+        working-directory: backend
+        run: python3 harness_empty_pull_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
+        working-directory: backend
+        run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the browser-work lock (the declared browser sweeps + every module outside commcalc that launches a browser equal what the code does; browser endpoints require the browser service — index §19.23a / §36)
         working-directory: backend
         run: python3 harness_browser_sweep_kinds.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -662,6 +766,26 @@ jobs:
       - name: Run the closing-source lock (one registry, one read, one resolver, one writer, four dereferencing callers, house default unchanged — index §19.39)
         working-directory: backend
         run: python3 harness_closing_source_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.42 — THE SERVICE FEE ON A BILL PAYMENT IS NOT AN ACTIVATION (owner report 2026-10-03).
+      # "Which product_desc is the bill-payment service fee" has ONE home (commcalc/epay_fee_recon.py over
+      # the per-org mig-1045 column) and the Sales Report's "could this have been an activation?" predicate
+      # must keep dereferencing it instead of re-deciding it — 690 of 693 October alarms were walk-in bill
+      # payments surviving on their fee line alone. The behavioural PROOF imports the app, so it runs in its
+      # own job below with the backend's dependencies; this lock is stdlib-only.
+      - name: Run the bill-pay fee one-home lock (one registry, one resolution, the dereferencing callers, no second copy — index §19.42)
+        working-directory: backend
+        run: python3 harness_billpay_fee_one_home_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §47.17 — THE DM DAILY VISIT QUOTA AND THE FRIDAY-EVENING FILL (owner 2026-10-03, mig 1050).
+      # Every failure mode here is a legal value that renders perfectly: a store with no target scored as
+      # 0% ranks FIRST (so the fill sends DMs to the stores nobody set a target for) and scored as 100%
+      # DISAPPEARS; a fill without the uniqueness rule grows a DM's Monday every hour; a fill that
+      # "assigns the week" silently replaces what a manager chose. None of those raises and none fails a
+      # build. This also carries the one-home locks the change ships with: ONE attainment division in
+      # targets_engine, no second org-tree walk, no recount of a store's sales, and the carrier
+      # deliverables dropdown dereferencing commcalc.carrier_kpi_metric. stdlib only, DB-free.
+      - name: Run the DM visit plan proof (the owner's 2/day editable; the seed parsed out of mig 1050; activations → accessories → KPI; a store with no target is neither 0% nor 100%; top-up not replace; idempotent; never outside a DM's span — index §47.17)
+        working-directory: backend
+        run: python3 harness_dm_visit_plan.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE ONE-DOMAIN PROOF (index §40) loads the REAL next.config.ts through Next's own config loader, validates the
   # routes with Next's own loadCustomRoutes and evaluates requests with Next's own matchers: a production request on the
@@ -696,6 +820,21 @@ jobs:
         working-directory: frontend
         run: node prove_nav_deep_link.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # THE SCOPE DISPLAY-NAME PROOF, frontend half (index §13b.1) drives the REAL
+  # accounts/_components/scopeFinancials.ts under Node 22 (type stripping; the module imports nothing, so no
+  # npm install): a company scope whose stored label is null or stale renders a NAME, and no function of the
+  # one home can emit a uuid or a raw `family:` key for any input.
+  scope-label-proof:
+    name: Scope display-name proof (the picker shows a name, never a company id)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the scope display-name proof (the real scopeFinancials.ts; the regression; the leak matrix)
+        working-directory: frontend
+        run: node prove_scope_label.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
   # dependencies installed (the guard job above stays dependency-free). DB-free; no network beyond pip.
@@ -713,6 +852,14 @@ jobs:
         run: python3 harness_customer_master.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # These two import the app (FastAPI) — they run here, where the backend's dependencies are installed. In the
       # dependency-free guard job they crashed on every run, and the missing pipefail hid it (index §19.25).
+      # MOVED here 2026-10-04 from the dependency-free guard job, where §E crashed on `import fastapi`
+      # before a single check in that section ran. Exactly the trap the comment above names (§19.25):
+      # §E drives the REAL `_push_accessory_pos`, which imports the router, which imports FastAPI, so
+      # it belongs in the job that installs the backend's dependencies. Stubbing the framework to keep
+      # it in the other job would have proved a stand-in instead of the shipped function.
+      - name: Run the vendor order-route lock (one declared route per vendor, one API dialect selected by config, a credential never in config, the catalog landed by the ONE lander, one customer identity for the export and the order, a draft on the vendor's side and never a placed order — index §51, mig 1053)
+        working-directory: backend
+        run: python3 harness_order_transport.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
         working-directory: backend
         run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -760,6 +907,12 @@ jobs:
       - name: Run the closing-source backfill proof (every day once; one sweep not a second derivation; empty days reported; idempotent; a human's row survives; bounds refuse)
         working-directory: backend
         run: python3 harness_closing_source_backfill.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §19.39 — SEVERAL STORES AT ONCE over the real endpoint (owner 2026-10-03: the store
+      # dropdown is a multi-select). The risk in "many" is all in the fan-out: a store written twice,
+      # a store missed, or a half-applied save reported as success.
+      - name: Run the closing-source multi-store proof (many is one N times; no store written twice; empty selection is the org default; clearing a selection; the gate still gates; a bad source writes nothing)
+        working-directory: backend
+        run: python3 harness_closing_source_multistore.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend
@@ -809,6 +962,34 @@ jobs:
         shell: bash
         run: python3 harness_store_mapping_identity.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
+  store-option-fold:
+    name: Store options — each physical store offered once (DB-free, the real composer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-option fold proof (the duplicate union reproduced; one option per physical store; an unbindable spelling is never dropped; both callers must keep dereferencing code_groups — index §13e)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_store_option_fold.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  vip-invoice-filter:
+    name: Distributor invoices — one selector, one store vocabulary (DB-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the distributor-invoice filter proof (the tiles and the table read ONE selector; the date window's fail-closed regression reproduced; the market half must keep dereferencing statement_filter.resolve_store_matcher; unresolved spellings are reported, never folded into a total — index §19.26)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_vip_invoice_filter.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
   # THE CLOSING-REFUSAL LOCK (index §29.11, owner bug report 2026-10-02 "we cannot see the daily closing which was
   # submitted"). A daily closing that is REFUSED used to store nothing at all — not even in commcalc.closing_attempt,
   # the submit audit trail — so "I submitted it" versus "we see nothing" was unresolvable for any store, rep or tenant.
@@ -832,6 +1013,27 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_submit_refusal.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE UNFINISHED-DAY LOCK (index §29.12) imports the real closing router (closing_resume,
+  # _log_attempt, _closing_summary_for_date), so it needs the backend's dependencies and its own job
+  # — the same reason closing-refusal-lock above has one. It FAILS THE BUILD if a blocked submit ever
+  # starts writing a provisional closing row (which would put money the gate has already judged wrong
+  # in front of all 51 readers of daily_closing), if the rep-facing resume endpoint ever reveals the
+  # POS figure or the variance, or if a caller re-derives "no closing row means nobody submitted"
+  # instead of asking closing/unfinished_day.
+  closing-unfinished-day-lock:
+    name: Unfinished closing day lock (a started day is never blank, and never money)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the unfinished-day lock (started-and-not-finished is its own state; an un-corrected entry reaches no money report — index §29.12)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_unfinished_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with
@@ -953,3 +1155,39 @@ jobs:
       - name: Run the device inventory→COGS proof (unsold sits, sold moves, once; the identity closes; the cash line double-counts — index §42)
         working-directory: backend
         run: python3 harness_device_inventory_cogs.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE BILL-PAY FEE / ACTIVATION-CANDIDATE PROOF (index §19.42) drives the REAL
+  # router._classification_gaps / _txn_activation_candidate / _accessory_config_uncached over in-memory rows
+  # and a fake one-row config client: 690 bill payments raise no banner, the one genuine blank-contract-type
+  # activation still does, a tenant that rings no fee line is unchanged. It imports the app, so it runs in
+  # its own job with the backend's dependencies.
+  billpay-fee-activation-proof:
+    name: Bill-pay fee / activation-candidate proof (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the bill-pay fee / activation-candidate proof (the 690 stay silent; the real gap is still reported; the other tenant byte-identical — index §19.42)
+        working-directory: backend
+        run: python3 harness_billpay_fee_not_activation.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SCHEDULE-FROM-WORK-HISTORY PROOF (index §14v) drives the REAL
+  # storeops/schedule_from_history.py over in-memory transaction rows: the calendar arithmetic against
+  # date.weekday(), nearest-rank percentiles with OUTWARD rounding (the derived shift always contains the
+  # observed one), relief gets no recurring rows, both readings of the coverage denominator, no invented
+  # measurement, the store-alias and lost-page regressions, and the UN-WIRING LOCK — the tool must keep
+  # dereferencing the module and storeops.shift_templates stays the only table it inserts into, so a
+  # sibling schedule-generation path fails the build. stdlib only, DB-free.
+  schedule-from-history-proof:
+    name: Schedule from work history (DB-free, the real module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the schedule-from-history proof (the inference is stated and outward-rounded; relief is not a weekly commitment; one derivation, one destination table — index §14v)
+        working-directory: backend
+        run: python3 harness_schedule_from_history.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

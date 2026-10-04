@@ -20,6 +20,7 @@ from app.core import scope as _cscope
 from . import org_chain
 from app.core import identity as _identity
 from app.modules.storeops import google_reviews as _gr
+from app.modules.storeops import alert_log as _alert_log   # the ONE send record (mig 1051)
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
     resolve_effective_config as pto_resolve_effective_config,
@@ -1093,7 +1094,7 @@ def _log_payroll_change(org_id, *, field, entry_point, employee_id=None, employe
     system-triggered change (e.g. the pg_cron force-clockout sweep). Never raises: a missing
     migration/table degrades to "no log row written", never a 500 on the real payroll write.
 
-    WHO THE ROW IS ABOUT comes from the STORED employee, never from the caller's loose values (§19.42):
+    WHO THE ROW IS ABOUT comes from the STORED employee, never from the caller's loose values (§19.45):
     `payroll_log_identity.resolve_log_identity` reads `employee_row` (pass it whenever you hold the
     stored row — required when `source_table='employees'`) or finds the person org-scoped from
     `employee_id` / the employees `source_id`, mints a missing business id through the one mint, and
@@ -2227,7 +2228,7 @@ PAY_WRITE_REFUSED = ("Your role can't set pay, so nothing was saved. Pay can onl
 
 def gate_pay_write(rows, authorization, org_id):
     """THE ONE PAY-WRITE GATE — every path that writes a `_PAY_GATED_FIELDS` column of
-    storeops.employees calls this BEFORE its write (index §19.41, owner decision 2026-10-03: "only
+    storeops.employees calls this BEFORE its write (index §19.44, owner decision 2026-10-03: "only
     people allowed to see pay may set pay when adding employees").
 
     Before this, the policy lived inline in `update_employee` alone, and the CREATE paths
@@ -2272,7 +2273,7 @@ def bulk_create_employees(body: BulkCreateEmployeesIn, authorization: str = Head
                           org_id: str = ORG_ID):
     """Bulk-create employees from a filled template (new-tenant setup). Body: {employees:[{...}]}.
     Skips blank-name rows and any employee_id that already exists (so re-upload is idempotent).
-    Pay columns in the sheet pass `gate_pay_write` (§19.41): from a caller who may not see pay they
+    Pay columns in the sheet pass `gate_pay_write` (§19.44): from a caller who may not see pay they
     are dropped from every row and named back as `pay_fields_ignored`; the people are still added."""
     rows_in = body.employees or body.rows or []
     if not isinstance(rows_in, list):
@@ -2315,7 +2316,7 @@ def _ensure_employee_id(rec: dict) -> dict:
     """Every employee needs a stable employee_id to be placed in the org tree or assigned a role /
     manager. Auto-generate one (E<pk>) when it's missing, so no employee is unassignable.
     THE ONE MINT: every insert into storeops.employees passes its returned row here (locked by
-    `harness_payroll_log_identity_lock.py`, §19.42) — a person without a business id is the person
+    `harness_payroll_log_identity_lock.py`, §19.45) — a person without a business id is the person
     whose first payroll change-log row used to say employee_id NULL."""
     if rec and rec.get("id") and not str(rec.get("employee_id") or "").strip():
         gen = f"E{rec['id']}"
@@ -2332,7 +2333,7 @@ def _ensure_employee_id(rec: dict) -> dict:
 
 @router.post("/employees")
 def create_employee(emp: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Create an employee (StoreOps Admin). Pay fields pass `gate_pay_write` (§19.41): from a caller
+    """Create an employee (StoreOps Admin). Pay fields pass `gate_pay_write` (§19.44): from a caller
     who may not see pay they are not written and the reply names them in `pay_fields_ignored`."""
     row = {k: emp[k] for k in EMP_FIELDS if k in emp}
     if not (row.get("name") or "").strip():
@@ -2385,7 +2386,7 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
     # discarding someone's typed work is the failure this house has already been burned by). Not a
     # 403: refusing the whole call would break editing a name. Config-reversible like everything else
     # here — a role listed in pay_visible_roles, or holding `employee_pay_rates`, writes pay as before.
-    # The policy itself lives in `gate_pay_write` (§19.41) — the SAME gate every employee pay writer
+    # The policy itself lives in `gate_pay_write` (§19.44) — the SAME gate every employee pay writer
     # calls; this endpoint was its first home and its behavior is unchanged.
     row, pay_fields_ignored = gate_pay_write(row, authorization, org_id)
     # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
@@ -2424,7 +2425,7 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
     if not r.data:
         raise HTTPException(404, "employee not found")
     after = r.data[0]
-    # Mint the business id BEFORE anything records this person (§19.42). It used to run after the
+    # Mint the business id BEFORE anything records this person (§19.45). It used to run after the
     # change-log loop below, so a person with no employee_id yet (added through Roles & Access) got
     # their first pay edit logged with employee_id NULL — and E<pk> minted a moment later.
     out = _ensure_employee_id(after)
@@ -2591,7 +2592,7 @@ def bulk_payscale(body: BulkPayscaleIn, authorization: str = Header(default=""),
     via _log_payroll_change) — a DM could silently mass-edit pay with no ✎ audit marker anywhere.
     Each successfully-updated row now logs the SAME way, entry_point='bulk_payscale', best-effort
     (a log-write failure never blocks the actual rate update, matching every other hook's posture).
-    PAY-WRITE GATE (§19.41): the manager check alone let a manager BELOW the org's pay line mass-set
+    PAY-WRITE GATE (§19.44): the manager check alone let a manager BELOW the org's pay line mass-set
     rates they may not see. Every payload this endpoint writes is `{pay_rate}` and nothing else, so it
     passes `gate_pay_write` as exactly that — a caller who may not see pay is refused (403) outright."""
     _require_manager(authorization, org_id)
@@ -3867,18 +3868,30 @@ def _expiry_subjects(org_id, client=None):
     return subjects
 
 
-def _expiry_already_sent(client, org_id, keys):
-    """Which dedupe keys the EXISTING storeops.alert_log (mig 433) has already recorded. Reused, not
-    reinvented — the lateness alerts use the same table the same way."""
+EXPIRY_SCOPES = ("doc_expiry_lease", "doc_expiry_insurance")
+
+
+def _expiry_already_sent(client, org_id, keys, recipients_by_key=None):
+    """Which dedupe keys have already been CARRIED BY EMAIL to the people who would be told.
+
+    This used to be a second implementation of "already sent", counting any row for the key however
+    it was written. It now dereferences the one home (`storeops/alert_log.py`), so a milestone whose
+    email failed for one contact is still owed to that contact — the same per-channel, per-recipient
+    rule every other alert follows since migration 1051.
+    """
     if not keys:
         return set()
-    try:
-        rows = (client.table("alert_log").select("ref_key").eq("org_id", org_id)
-                .in_("scope", ["doc_expiry_lease", "doc_expiry_insurance"])
-                .in_("ref_key", list(keys)).limit(2000).execute().data) or []
-    except Exception:
-        return set()
-    return {str(r.get("ref_key")) for r in rows}
+    carried = _alert_log.sent_pairs(client, org_id, EXPIRY_SCOPES, ref_keys=list(keys))
+    out = set()
+    for k in keys:
+        want = {str(a or "").strip().lower()
+                for a in ((recipients_by_key or {}).get(k) or []) if str(a or "").strip()}
+        got = {a for (rk, ch, a) in carried if rk == str(k) and ch == "email"}
+        # No recipient list to compare against (a caller only asking "has this gone at all") keeps
+        # the old question; with one, the milestone is done only when EVERY contact had it.
+        if (want and want <= got) or (not want and got):
+            out.add(str(k))
+    return out
 
 
 def _due_expiry_alerts(org_id, client=None, today=None):
@@ -3890,7 +3903,9 @@ def _due_expiry_alerts(org_id, client=None, today=None):
     _types, notice_cfg = _tenant_doc_config(org_id, c)
     day = today or datetime.now(timezone.utc).date().isoformat()
     candidates = _di.expiry_alerts(day, subjects, notice_cfg)
-    sent = _expiry_already_sent(c, org_id, [a["dedupe_key"] for a in candidates])
+    sent = _expiry_already_sent(
+        c, org_id, [a["dedupe_key"] for a in candidates],
+        {a["dedupe_key"]: [r.get("email") for r in (a.get("recipients") or [])] for a in candidates})
     return [a for a in candidates if a["dedupe_key"] not in sent]
 
 
@@ -3924,6 +3939,7 @@ def get_doc_expiry(authorization: str = Header(default=""), org_id: str = ORG_ID
 async def _run_doc_expiry(org_id_filter=None, dry_run=False):
     """The expiry sweep: walk every tenant, send each due milestone once, log it. NEVER raises."""
     from app.modules.notify.channels import email_resend
+    from app.modules.notify import digest_delivery as _delivery
     client = sb()
     try:
         tenants = (client.table("tenants").select("org_id").execute().data) or []
@@ -3950,23 +3966,24 @@ async def _run_doc_expiry(org_id_filter=None, dry_run=False):
                             "to": [r["email"] for r in a["recipients"]], "subject": subject})
             if dry_run or not email_ok:
                 continue
+            # Delivered and recorded PER CONTACT through the one home. The pre-1051 code sent in
+            # its own loop and wrote one row naming everybody as soon as ONE address worked, so a
+            # contact whose address bounced was counted as told and never retried.
+            carried = _alert_log.sent_pairs(client, oid, EXPIRY_SCOPES,
+                                            ref_keys=[a["dedupe_key"]])
             ok = False
             for r in a["recipients"]:
-                try:
-                    await email_resend.send_email(to=r["email"], subject=subject, html=html)
+                row = await _delivery.deliver_recipient(
+                    client, oid, a["alert_scope"], addresses={"email": r["email"]},
+                    items=[{"ref_key": a["dedupe_key"]}], carried=carried,
+                    channels_ok={"email": email_ok, "whatsapp": False},
+                    build=lambda _n, _i, _s=subject, _h=html: {"subject": _s, "html": _h},
+                    to_name=r.get("name"), wa_filename="doc-expiry.txt",
+                    detail={"kind": a["subject_kind"], "expires_on": a["expires_on"],
+                            "milestone": a["milestone"]})
+                if row.get("delivered"):
                     ok = True
-                except Exception:
-                    pass
             if ok:
-                # Log AFTER a successful send: a failed send must be retried tomorrow, not swallowed.
-                try:
-                    client.table("alert_log").insert(
-                        {"org_id": oid, "scope": a["alert_scope"], "ref_key": a["dedupe_key"],
-                         "recipients": ", ".join(r["email"] for r in a["recipients"]),
-                         "detail": {"kind": a["subject_kind"], "expires_on": a["expires_on"],
-                                    "milestone": a["milestone"]}}).execute()
-                except Exception:
-                    pass
                 sent += 1
         results.append({"org_id": oid, "due": len(due), "sent": sent,
                         "email_configured": email_ok, "planned": planned if dry_run else None})
@@ -5689,20 +5706,12 @@ def _period_label(start_iso, end_iso):
         return f"{start_iso} – {end_iso}"
 
 
-def _lateness_already_sent(client, org_id, scope, ref_key):
-    try:
-        return bool((client.table("alert_log").select("id").eq("org_id", org_id)
-                     .eq("scope", scope).eq("ref_key", ref_key).limit(1).execute().data) or [])
-    except Exception:
-        return False
-
-
-def _lateness_record_sent(client, org_id, scope, ref_key, recipients):
-    try:
-        client.table("alert_log").insert({"org_id": org_id, "scope": scope, "ref_key": ref_key,
-                                          "recipients": recipients, "detail": {"kind": scope}}).execute()
-    except Exception:
-        pass
+# THE SEND RECORD LIVES IN ONE PLACE: `storeops/alert_log.py`, reached through
+# `notify/digest_delivery.py`. The two wrappers that used to sit here (`_lateness_already_sent` /
+# `_lateness_record_sent`) are gone: they recorded a send without saying which channel carried it,
+# which is the defect migration 1051 removes (owner decision 2026-10-04, "fix it properly"). Six
+# sweeps imported them; all six now dereference the one home, and no second name for the fact is
+# left for a later change to reach for.
 
 
 def _lateness_late_records(client, org_id, start, end, today):
@@ -5734,6 +5743,7 @@ async def _run_lateness_alerts(org_id_filter=None, respect_time=True, respect_en
     summaries + DM CAP emails, and sends them (deduped via storeops.alert_log). NEVER raises."""
     from app.modules.storeops import accountability_alerts as _ala
     from app.modules.notify.channels import email_resend
+    from app.modules.notify import digest_delivery as _delivery
     client = sb()
     try:
         tenants = (client.table("tenants").select("*").execute().data) or []
@@ -5765,23 +5775,24 @@ async def _run_lateness_alerts(org_id_filter=None, respect_time=True, respect_en
         plan = _ala.plan_emails(recs, hierarchy, today, _period_label(start, end))
         sent = skipped = 0
         planned = []
+        # Delivery and the per-channel record live in ONE home (notify/digest_delivery.py). This
+        # sweep is email-only, so the record simply says so; when a second channel is added here it
+        # inherits the retry rule rather than re-implementing it.
+        carried = _alert_log.sent_pairs(client, oid, ("lateness_am", "lateness_cap"))
         for spec in plan["summaries"] + plan["caps"]:
             scope = "lateness_am" if spec["kind"] == "manager_summary" else "lateness_cap"
-            already = _lateness_already_sent(client, oid, scope, spec["dedupe_key"])
+            row = await _delivery.deliver_recipient(
+                client, oid, scope, addresses={"email": spec["to"]},
+                items=[{"ref_key": spec["dedupe_key"]}], carried=carried,
+                channels_ok={"email": email_ok, "whatsapp": False},
+                build=lambda _n, _i, _sp=spec: {"subject": _sp["subject"], "html": _sp["html"]},
+                to_name=spec.get("to_name"), wa_filename="lateness.txt", dry_run=dry_run)
             planned.append({"kind": spec["kind"], "to": spec["to"], "to_name": spec.get("to_name"),
-                            "subject": spec["subject"], "already_sent": already})
-            if already:
+                            "subject": spec["subject"], "already_sent": row["already_sent"]})
+            if row["already_sent"]:
                 skipped += 1
-                continue
-            if dry_run:
-                continue
-            if email_ok:
-                try:
-                    await email_resend.send_email(to=spec["to"], subject=spec["subject"], html=spec["html"])
-                    _lateness_record_sent(client, oid, scope, spec["dedupe_key"], spec["to"])
-                    sent += 1
-                except Exception:
-                    pass
+            elif row.get("delivered"):
+                sent += 1
         if not dry_run:
             _lateness_mark_run(client, oid, today, f"sent {sent}, skipped {skipped}, {len(recs)} late record(s)")
         results.append({"org_id": oid, "sent": sent, "skipped": skipped, "late_employees": len(recs),
@@ -6641,7 +6652,10 @@ def org_chain_inputs(org_id, store_code=None):
             "levels": _read("org_levels", "id,name"),
             "units": _read("org_units", "id,name,level_id,parent_id,code"),
             "managers": _read("org_managers", "unit_id,employee_id"),
-            "employees": _read("employees", "employee_id,name,email"),
+            # `phone` is read so an alert can reach a manager on WhatsApp too (owner 2026-10-03).
+            # Additive: every existing consumer keys on email. Which channel actually reaches a
+            # recipient is decided in ONE place, `commcalc/manager_digest.addresses_for`.
+            "employees": _read("employees", "employee_id,name,email,phone"),
             "market_by_code": overlay}
 
 
@@ -7491,7 +7505,7 @@ def delete_manual_hours(mid: str, authorization: str = Header(default=""), org_i
     before = (sb().table("manual_hours").select("*").eq("org_id", org_id).eq("id", mid)
               .limit(1).execute().data or [{}])[0]
     sb().table("manual_hours").delete().eq("org_id", org_id).eq("id", mid).execute()
-    # A repeat DELETE of an entry that is already gone changed nothing, so it records nothing (§19.42) —
+    # A repeat DELETE of an entry that is already gone changed nothing, so it records nothing (§19.45) —
     # the same `if before:` guard delete_shift has. Without it a double-click logged a "delete" with no
     # person, no date and no hours (11 such rows in one tenant's live log, 2026-08-07..08-20).
     if not before:

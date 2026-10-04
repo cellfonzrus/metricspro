@@ -43,9 +43,14 @@ import os
 import re
 import sys
 
+# The ruling for which file is the one home lives in the module graph (index 50), not in a
+# literal here — owner directive 2026-10-04 "the tree should be interlinked properly".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.modules.core.module_graph import home_under_app  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BE = os.path.join(ROOT, "backend", "app")
-HOME = "core/column_tolerant.py"
+HOME = home_under_app("column_tolerance")    # the graph is the one home for the ruling
 MSP = "modules/account/ma_store_pnl.py"
 LP = "modules/account/ledger_pnl.py"
 COA = "modules/account/coa.py"

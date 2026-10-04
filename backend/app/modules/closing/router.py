@@ -33,6 +33,7 @@ from . import closer_resolution
 from . import billpay_netting
 from . import submit_refusal as _refusal
 from . import dedup_key as _dedup
+from . import unfinished_day as _unfinished
 from . import closing_source as _closing_src
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -944,11 +945,52 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     # retail-ops-24: keyset scoping now happens up in the accumulation loop (row admission), so `bs`/
     # `br` are already restricted to the caller's span — no second filter needed here, and `grand`/
     # `verified_keys`/`submitted_keys` (computed from the SAME kept_rows) are consistent with them.
+    # ── STORE-DAYS SOMEBODY STARTED AND DID NOT FINISH (owner 2026-10-04, index §29.12) ───────────
+    #    Reported BESIDE the money, never inside it. The owner's instruction was that a day must not
+    #    be blank; his answer on the money was "not until corrected", and this shape makes that
+    #    structural rather than a rule somebody has to remember: an unfinished day writes no
+    #    `daily_closing` row, so it cannot reach `by_store`, `by_rep` or `totals` — every figure above
+    #    is byte-identical to before this package. `unfinished` is a separate list for the tile and
+    #    the badge. The state is decided only by closing/unfinished_day.describe.
+    unfinished_days = []
+    try:
+        _aq = (client.schema("commcalc").table("closing_attempt").select("*").eq("org_id", org_id))
+        if period:
+            _aq = _aq.eq("period", period)
+        else:
+            _aq = _aq.gte("close_date", date_from).lte("close_date", date_to)
+        _atts = (_aq.limit(50000).execute().data) or []
+    except Exception:
+        _atts = []
+    # THE KEY IS THE RESOLVED STORE, NOT THE RAW CODE (index §29.12). The submit trail and the
+    # closing row can spell the same store differently — measured live, seven B-1800 store-days — so
+    # a raw-string join reports a finished day as awaiting a correction. One home for that key:
+    # `unfinished_day.store_key`, over the platform's one store resolver.
+    _skey = _store_key_resolver(client, org_id)
+    def _sd_key(r):
+        return (_unfinished.store_key(_skey, r.get("store_code")), str(r.get("close_date") or ""))
+    _closed_att_sd = {_sd_key(r) for r in rows}
+    _att_by_sd = {}
+    for _a in _atts:
+        _att_by_sd.setdefault(_sd_key(_a), []).append(_a)
+    for (_sc, _cd), _rows_sd in sorted(_att_by_sd.items()):
+        if not _sc or (_sc, _cd) in _closed_att_sd:
+            continue
+        # Display the code the submitter actually used; the key above is only for matching.
+        _sc = str(_rows_sd[0].get("store_code") or "").strip() or _sc
+        _st = _unfinished.describe(None, _rows_sd)
+        # The address rides the attempt row itself, so an unfinished day names its store without a
+        # roster lookup that would fail for exactly the stores missing from the roster.
+        _addr = next((r.get("store_address") for r in _rows_sd if r.get("store_address")), None)
+        unfinished_days.append({"store_code": _sc, "close_date": _cd,
+                                "store_address": _addr, "store_name": _addr or _sc, **_st})
     return {
         "period": period, "date_from": date_from, "date_to": date_to,
         "by_store": bs, "by_rep": br, "totals": finalize(grand),
         "verified_keys": len(verified_keys & submitted_keys), "submitted_keys": len(submitted_keys),
         "market_filter_skipped": market_filter_skipped,
+        "unfinished": unfinished_days,
+        "unfinished_counts": _unfinished.summarize(unfinished_days),
     }
 
 
@@ -1102,6 +1144,25 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     before — byte-identical either way."""
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    # WHAT SOMEBODY STARTED AND DID NOT FINISH (owner 2026-10-04, index §29.12). A store-day with no
+    # closing row is NOT the same fact as a store-day nobody submitted: the close gate may have sent
+    # the rep back to recount and they may not have returned, in which case real declared money and a
+    # real variance are sitting in the submit trail. One read per date, grouped by store; the state
+    # itself is decided only by closing/unfinished_day.describe.
+    try:
+        _att_today = (client.schema("commcalc").table("closing_attempt").select("*")
+                      .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    except Exception:
+        _att_today = []
+    # Grouped on the RESOLVED store, not the raw code: the submit trail and the closing row can
+    # spell one store two ways (index §29.12), and a raw-string join then shows a finished day as
+    # awaiting a correction. `unfinished_day.store_key` is the one home for that key.
+    _skey = _store_key_resolver(client, org_id)
+    _att_by_store, _att_raw_code = {}, {}
+    for _a in _att_today:
+        _k = _unfinished.store_key(_skey, _a.get("store_code"))
+        _att_by_store.setdefault(_k, []).append(_a)
+        _att_raw_code.setdefault(_k, str(_a.get("store_code") or "").strip())
 
     if org_ctx is None:
         org_ctx = _closing_summary_org_ctx(client, org_id)
@@ -1617,6 +1678,48 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "partial_closing": closer_resolution.partial_closing(
                 worked=worked, submitted=(), closing_mode=closing_mode, money_ok=None),
             "no_closing_submitted": True,
+            # WHY there is no closing (index §29.12) — "nobody submitted" and "submitted, sent back
+            # to recount, never returned" are opposite facts and this card showed both as blank.
+            "unfinished": _unfinished.describe(
+                None, _att_by_store.get(_unfinished.store_key(_skey, code)) or []),
+            "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
+        })
+
+    # ── A STORE-DAY WITH TRIES AND NOBODY ON THE ROSTER (index §29.12). The loop above is keyed on
+    #    `who` and skips a store where no rep clocked in or sold (`if not worked: continue`), so a
+    #    store whose only evidence of the day is a blocked submit produced NO card at all — the
+    #    store simply vanished from the screen. That is the Burnside shape exactly: a district
+    #    manager covering the floor submitted twice, was sent back to recount, and neither the
+    #    closing nor the store appeared. A try is evidence the day happened; emit the card.
+    # Both sides compared on the resolved key, so a store already on the screen under its canonical
+    # code is never emitted a second time under the spelling the picker happened to send.
+    _emitted = {_unfinished.store_key(_skey, c.get("store_code")) for c in out}
+    _closed_keys = {_unfinished.store_key(_skey, c) for c in closed_codes}
+    for _key, _atts in sorted(_att_by_store.items()):
+        if not _key or _key in _closed_keys or _key in _emitted:
+            continue
+        code = _att_raw_code.get(_key) or _key
+        meta = store_meta.get(code, {})
+        mkt_bucket = _market_bucket(meta.get("market") or "")
+        if market_set is not None and mkt_bucket.casefold() not in market_set:
+            continue
+        if store_set is not None and code.upper() not in store_set:
+            continue
+        _state = _unfinished.describe(None, _atts)
+        _who_tried = _state.get("employee_name") or ""
+        if rep_set is not None and _who_tried.casefold() not in rep_set:
+            continue
+        out.append({
+            "store_code": code, "store_name": meta.get("address") or code,
+            "store_address": meta.get("address"), "market": mkt_bucket, "close_date": date,
+            "reps": [], "totals": None, "gate_status": None,
+            "scheduled_count": len(sched_by_store.get(code, set())), "missing_reps": [],
+            "worked_reps": [], "worked_count": 0, "scheduled_no_show": [], "worked_unscheduled": [],
+            "cross_login": [], "closing_mode": closing_mode, "closer": _who_tried or None,
+            "closer_source": "attempted", "closer_assigned": None,
+            "closer_assigned_off_roster": False, "closer_assigned_did_not_work": False,
+            "closer_note": None, "partial_closing": False,
+            "no_closing_submitted": True, "unfinished": _state,
             "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
         })
 
@@ -2273,6 +2376,63 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         recon["flags"] = rep_flags + [f"Envelope photo reads {_usd(ocr_mismatch['ocr_cash'])} vs {_usd(declared_cash)} entered"]
     return {**saved, "accepted": True, "recon": recon, "envelope_url": _signed_envelope(saved.get("envelope_picture")),
             "expense_lines": inserted_expense_lines}
+
+
+@router.get("/resume")
+def closing_resume(store_code: str = None, employee_name: str = None, close_date: str = None,
+                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """WHAT THE REP ALREADY TYPED for a store-day that has no closing yet (index §29.12).
+
+    The submit form calls this on open so a rep sent back to recount comes back to a filled-in form
+    instead of a blank one. Abid stopped at try two of three on 2026-10-01; retyping the accessory
+    sale, the counts, the remarks and the photo for a third attempt is a reason to stop, and the
+    owner's instruction was that the entry must not be lost.
+
+    WHAT THIS DELIBERATELY DOES NOT RETURN. The close gate tells a rep the DIRECTION of a mismatch
+    and never the amount — not the POS figure, not the variance, not the attempt count (see
+    `_REP_MISMATCH_RETRY` and `_log_attempt`'s docstring: "the rep never sees the amounts"). This
+    endpoint is rep-facing, so it answers with the rep's OWN numbers only. `unfinished_day.variance`
+    is never called here, and `harness_closing_unfinished_day.py` §H fails the build if the POS or
+    variance keys ever appear in this response.
+    """
+    d = _date(close_date) or _biz_today_iso()
+    if not (store_code and (employee_name or "").strip()):
+        return {"state": _unfinished.NOT_STARTED, "resume": {}, "tries": 0}
+    client = sb()
+    # Matched on the RESOLVED store, not the raw code the form sent (index §29.12). The two tables
+    # can spell one store differently, and filtering each on the SENT spelling makes the pair
+    # disagree: the tries match and the closing does not, so a day that is CLOSED would be offered
+    # back to the rep to resume. Narrowed in the query by org/date/name — a single rep-day — and the
+    # store matched in Python through the one key.
+    _skey = _store_key_resolver(client, org_id)
+    _want = _unfinished.store_key(_skey, store_code)
+    _name = (employee_name or "").strip()
+
+    def _mine(rows):
+        return [r for r in (rows or [])
+                if _unfinished.store_key(_skey, r.get("store_code")) == _want]
+    try:
+        closing = _mine((client.schema("commcalc").table("daily_closing").select("id,store_code")
+                         .eq("org_id", org_id).eq("close_date", d)
+                         .ilike("employee_name", _name).execute().data) or [])
+    except Exception:
+        closing = []
+    try:
+        atts = _mine((client.schema("commcalc").table("closing_attempt").select("*")
+                      .eq("org_id", org_id).eq("close_date", d)
+                      .ilike("employee_name", _name).execute().data) or [])
+    except Exception:
+        atts = []
+    state = _unfinished.state_for(closing[0] if closing else None, atts)
+    if state != _unfinished.AWAITING_CORRECTION:
+        # Nothing to resume: either the day is closed, nobody tried, or every try was turned away
+        # before the gate (a turned-away submit never reached the money, so there is nothing of the
+        # rep's to hand back).
+        return {"state": state, "resume": {}, "tries": 0}
+    last = _unfinished.latest_try(atts)
+    return {"state": state, "resume": _unfinished.resume_entry(last),
+            "tries": len([a for a in atts if _unfinished.is_real_try(a)]),
+            "last_try_at": last.get("created_at")}
 
 
 @router.patch("/row/{row_id}")
@@ -4283,64 +4443,65 @@ def _org_admin_recipients(client, org_id):
 
 
 async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=None, force=False):
-    """Send an alert to the scope's recipients via email + WhatsApp, DEDUPED by (scope, ref_key) via
-    storeops.alert_log so a cron doesn't re-alert every tick. Best-effort; returns a summary dict."""
-    if not force:
-        try:
-            seen = (client.schema("storeops").table("alert_log").select("id,recipients")
-                    .eq("org_id", org_id).eq("scope", scope).eq("ref_key", ref_key).limit(50).execute().data) or []
-            # AN ALERT THAT REACHED NOBODY IS NOT "ALREADY ALERTED" (2026-09-20). The dedup used to count
-            # ANY prior row, including one written when zero messages actually went out — no recipients
-            # configured, or every channel unconfigured/failing. The condition was then never re-reported
-            # for that ref_key, so the quietest possible failure (nobody heard, and the log says we told
-            # them) was also the stickiest. Only a row that actually DELIVERED suppresses a re-send.
-            if any((r.get("recipients") or "").strip() for r in seen):
-                return {"skipped": "already alerted", "ref_key": ref_key}
-        except Exception:
-            pass
+    """Send an alert to the scope's recipients on email + WhatsApp, DEDUPED per recipient and per
+    CHANNEL through the one send record (`storeops/alert_log.py`, migration 1051). Best-effort;
+    never raises; returns a summary dict.
+
+    Before 1051 this held its own select/insert pair and wrote ONE row per (scope, ref_key) naming
+    everybody as soon as any single message went out. Two things were wrong with that and both are
+    fixed by dereferencing the shared home: a recipient whose address failed was recorded as told,
+    and a channel that failed was never retried even though the tenant had asked for it.
+
+    AN ALERT THAT REACHED NOBODY IS NOT "ALREADY ALERTED" (2026-09-20) — kept, and now exact: only
+    a channel that actually carried the message to a given address suppresses a re-send to that
+    address on that channel.
+    """
+    from app.modules.notify import digest_delivery as _delivery
+    from app.modules.storeops import alert_log as _alert_log
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    so = client.schema("storeops")
     recips = _alert_recipients(client, org_id, scope, store_code)
     if not recips:
-        # RECORD THE SILENCE. Previously this returned with no trace at all, so "this tenant has nobody
-        # to tell" was invisible everywhere — no row, no banner, no count. The row is written with an
-        # empty `recipients`, which the dedup above deliberately does NOT treat as delivered: the moment
-        # a recipient exists (or an admin is added), the next occurrence alerts for real.
-        try:
-            client.schema("storeops").table("alert_log").insert(
-                {"org_id": org_id, "scope": scope, "ref_key": ref_key, "recipients": "",
-                 "detail": {"subject": subject, "count": 0, "suppressed": "no_recipients",
-                            "note": ("nobody is configured to receive this scope, and the tenant has no "
-                                     "active admin with an email address to fall back to")}}).execute()
-        except Exception:
-            pass
+        # RECORD THE SILENCE. "This tenant has nobody to tell" was invisible before — no row, no
+        # banner, no count. The row carries no channel and no recipients, which the dedup rule
+        # deliberately does NOT treat as delivered: the moment a recipient exists (or an admin is
+        # added), the next occurrence alerts for real.
+        _alert_log.record_silence(
+            so, org_id, scope, ref_key,
+            detail={"subject": subject, "count": 0, "suppressed": "no_recipients",
+                    "note": ("nobody is configured to receive this scope, and the tenant has no "
+                             "active admin with an email address to fall back to")})
         return {"sent": 0, "suppressed": "no_recipients",
                 "detail": "no recipients configured for scope " + scope}
     html = "<p>" + text.replace("\n", "<br>") + "</p>"
-    sent, tos = 0, []
+    built = {"subject": subject, "html": html, "text": text}
+    carried = set() if force else _alert_log.sent_pairs(so, org_id, scope, ref_keys=[ref_key])
+    channels_ok = {"email": email_resend.is_configured(),
+                   "whatsapp": whatsapp_meta.is_configured()}
+    sent, tos, skipped = 0, [], 0
     for r in recips:
+        addrs = {}
         em = (r.get("email") or "").strip()
-        if r.get("via_email", True) and em:
-            try:
-                from app.modules.notify.channels import email_resend
-                if email_resend.is_configured():
-                    await email_resend.send_email(em, subject, html)
-                    sent += 1; tos.append(em)
-            except Exception:
-                pass
         wa = (r.get("whatsapp") or "").strip()
+        if r.get("via_email", True) and em:
+            addrs["email"] = em
         if r.get("via_whatsapp") and wa:
-            try:
-                from app.modules.notify.channels import whatsapp_meta
-                if whatsapp_meta.is_configured():
-                    await whatsapp_meta.send_document(wa, b"", "text/plain", "alert.txt", text)
-                    sent += 1; tos.append(wa)
-            except Exception:
-                pass
-    try:
-        client.schema("storeops").table("alert_log").insert(
-            {"org_id": org_id, "scope": scope, "ref_key": ref_key,
-             "recipients": ", ".join(tos), "detail": {"subject": subject, "count": sent}}).execute()
-    except Exception:
-        pass
+            addrs["whatsapp"] = wa
+        if not addrs:
+            continue
+        row = await _delivery.deliver_recipient(
+            so, org_id, scope, addresses=addrs, items=[{"ref_key": ref_key}], carried=carried,
+            channels_ok=channels_ok, build=lambda _n, _i, _b=built: _b,
+            to_name=r.get("name"), wa_filename="alert.txt",
+            detail={"subject": subject})
+        if row["already_sent"]:
+            skipped += 1
+            continue
+        for ch in (row.get("delivered") or []):
+            sent += 1
+            tos.append(addrs[ch])
+    if not sent and skipped:
+        return {"skipped": "already alerted", "ref_key": ref_key}
     return {"sent": sent, "recipients": tos, "ref_key": ref_key}
 
 
@@ -5433,7 +5594,11 @@ async def _run_closing_missing_alerts(org_id=None):
         except Exception:
             pass
         stores = (c.schema("storeops").table("stores").select("store_code,address").eq("org_id", oid).execute().data) or []
-        closed = {(r.get("store_code") or "") for r in
+        # THE ROSTER, THE CLOSINGS AND THE TRIES ARE THREE VOCABULARIES (index §29.12 / §13). The
+        # roster carries canonical codes, the other two carry whatever the submit sent, and a
+        # raw-string compare then nags a store that DID close or DID try. Matched on the one key.
+        _skey = _store_key_resolver(c, oid)
+        closed = {_unfinished.store_key(_skey, r.get("store_code")) for r in
                   ((c.schema("commcalc").table("daily_closing").select("store_code")
                     .eq("org_id", oid).eq("close_date", today).execute().data) or [])}
         # WHO PRODUCES THIS STORE'S CLOSING (owner 2026-10-02, mig 1035) — dereference the registry.
@@ -5442,19 +5607,48 @@ async def _run_closing_missing_alerts(org_id=None):
         # Its own failure mode (the feed never landed) is reported by the derivation sweep's
         # `skipped[].reason` and by the stale-store attention provider, not by this alert.
         _srcmap = _closing_source_map(c, oid, [str(s.get("store_code") or "") for s in stores])
+        # STARTED AND NOT FINISHED IS NOT "NOT SUBMITTED" (owner 2026-10-04, index §29.12). A rep the
+        # close gate sent back to recount HAS submitted; telling them nobody did is a false
+        # accusation and buries the thing that actually needs doing, which is the correction. The day
+        # is still open either way, so the alert still fires — it just says the true thing. The state
+        # is decided only by closing/unfinished_day.describe; no amount or variance reaches the copy,
+        # because this alert goes to the store as well as the DM.
+        try:
+            _att_rows = (c.schema("commcalc").table("closing_attempt").select("*")
+                         .eq("org_id", oid).eq("close_date", today).execute().data) or []
+        except Exception:
+            _att_rows = []
+        _att_by_sc = {}
+        for _a in _att_rows:
+            _att_by_sc.setdefault(_unfinished.store_key(_skey, _a.get("store_code")), []).append(_a)
         for s in stores:
             sc = s.get("store_code")
-            if not sc or sc in closed:
+            _sk = _unfinished.store_key(_skey, sc)
+            if not sc or _sk in closed:
                 continue
             if not _closing_src.expects_rep_submission(_srcmap.get(str(sc), _closing_src.HOUSE_DEFAULT)):
                 continue
+            _where = s.get("address") or sc
+            _st = _unfinished.describe(None, _att_by_sc.get(_sk) or [])
+            if _st["state"] == _unfinished.AWAITING_CORRECTION:
+                _subject = f"Daily closing STARTED but not finished — {sc} ({today})"
+                _text = (f"The daily closing for {_where} was entered on {today} but the figures did "
+                         f"not match, so it was sent back to be corrected and has not been "
+                         f"resubmitted. Nothing is recorded for the day until it is. Open the "
+                         f"closing again — the numbers already entered are still there.")
+            elif _st["state"] == _unfinished.TURNED_AWAY:
+                _subject = f"Daily closing could not be submitted — {sc} ({today})"
+                _text = (f"Somebody tried to submit the daily closing for {_where} on {today} and it "
+                         f"was turned away, so nothing is recorded for the day. The reason is on the "
+                         f"Management Review screen.")
+            else:
+                _subject = f"Daily closing NOT submitted — {sc} ({today})"
+                _text = (f"The daily closing for {_where} was not submitted by the "
+                         f"{dl} deadline on {today}. The closing must be submitted before the store closes.")
             res = await _send_alert(
-                c, oid, "closing_missing",
-                subject=f"Daily closing NOT submitted — {sc} ({today})",
-                text=(f"The daily closing for {s.get('address') or sc} was not submitted by the "
-                      f"{dl} deadline on {today}. The closing must be submitted before the store closes."),
+                c, oid, "closing_missing", subject=_subject, text=_text,
                 ref_key=f"{sc}|{today}", store_code=sc)
-            results.append({"org_id": oid, "store": sc, **res})
+            results.append({"org_id": oid, "store": sc, "state": _st["state"], **res})
     return {"checked": len(tens), "alerts": [r for r in results if r.get("sent")]}
 
 
@@ -5755,12 +5949,28 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # accessory column below needs it either way (owner 2026-09-08: the split should come from the
     # POS, not the employee's declaration, even though the envelope keeps showing the whole drawer).
     _bp_days = sorted({str(e.get("close_date") or "")[:10] for e in out if e.get("close_date")})
-    _bp_cash, _bp_src = {}, "none"
+    _bp_cash, _bp_src, _bp_fee = {}, "none", {}
     if _bp_days:
         try:
             _sales_bp, _s_src, _s_key = _sales_billpay_for_days(client, org_id, _bp_days)
             if _sales_bp:
-                _bp_cash = {k: _f(v.get("cash")) for k, v in _sales_bp.items()}
+                # THE ONE HOME for "POS bill-payment cash in the drawer" (owner ask 2026-10-03):
+                # the bill lines' cash leg PLUS the customer service-fee cash, which the rep took
+                # and declares. Reading the raw `cash` key here is what made 526 of 535 September
+                # store-days disagree with the declaration -- see metric_recon.pos_billpay_cash.
+                from app.modules.commcalc import metric_recon as _mr_basis
+                from app.modules.commcalc.router import _billpay_fee_policy as _bp_pol_fn
+                # GATED ON THE ORG'S DECLARED FEE POLICY (owner ask 2026-10-03). This path
+                # SUBTRACTS the figure from the drawer, so an understated basis leaves a store
+                # looking short of cash it never had -- the same blanket error the declaration
+                # digest refuses, in the sibling caller that answers the same question. The gate
+                # bites only when the org has positively declared that it charges a fee and no fee
+                # line reached the feed; an unanswered policy keeps today's behaviour exactly,
+                # because a money-adjacent subtraction must not change on a guess.
+                _bp_pol = _bp_pol_fn(client, org_id)
+                _bp_cash = {k: _mr_basis.pos_billpay_cash_trusted(v, _bp_pol)
+                            for k, v in _sales_bp.items()}
+                _bp_fee = {k: _mr_basis.pos_billpay_fee_cash(v) for k, v in _sales_bp.items()}
                 _bp_src, _bp_key = f"sales:{_s_src}", _s_key
             else:
                 _proc_bp, _p_src, _p_key = _pos_billpay_for_days(client, org_id, _bp_days)
@@ -5813,6 +6023,10 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             e["billpay_pos_disagrees"] = (bool(_res.get("pos_disagrees"))
                                           if _res.get("pos_gap") is not None else None)
             e["billpay_pos_gap"] = _res.get("pos_gap")
+            # What the service fee contributed to the POS basis, so a reader can see the correction
+            # instead of a number that silently changed (owner ask 2026-10-03). None when the feed
+            # has no store-day at all -- never a zero that reads as "there was no fee".
+            e["billpay_pos_fee_cash"] = _bp_fee.get((_bp_key(_sd[0]), _sd[1])) if _bp_fee else None
             e["billpay_note"] = billpay_netting.envelope_note(_res, id(e)) if _net_on else None
             if _net_on:
                 e["cash"] = _row.get("net", e.get("cash"))
@@ -6744,24 +6958,10 @@ def _billpay_position_core(client, org_id, as_of, store_list, emp_list, ks):
     drows = dq.limit(200000).execute().data or []
     if emp_list:
         drows = [r for r in drows if (r.get("employee_name") or "").strip().lower() in emp_list]
-    decl = _bp.declared_billpay_by_store_day(drows)
-
-    # DM verified-correction overlay (TKT-1030) — dm_epay_cash replaces the store-day's declared
-    # bill-pay cash. Best-effort; a failure leaves the reps' raw split (same posture as
-    # _cash_position_core's overlay).
-    try:
-        _ov = _verified_overlay.build_overlay_map(
-            client, org_id, {d for days in decl.values() for d in days})
-        if _ov:
-            ovmap = {}
-            for _code, _days in decl.items():
-                for _dday in _days:
-                    _dm = _ov.get((_verified_overlay._norm(_code), str(_dday)[:10]))
-                    if _dm and _dm.get("dm_epay_cash") is not None:
-                        ovmap[(_code, _dday)] = _verified_overlay._f(_dm["dm_epay_cash"])
-            _bp.apply_billpay_overlay(decl, ovmap)
-    except Exception:
-        pass
+    # The reps' declared split WITH the DM's verified correction applied (TKT-1030) — one home,
+    # `billpay_pickup.declared_billpay_in_force`, which the morning declaration-exception sweep
+    # dereferences too rather than keeping a second copy of the sequence.
+    decl = _bp.declared_billpay_in_force(client, org_id, drows)
 
     pq = (client.schema("commcalc").table("billpay_pickup")
           .select("store_code,employee_name,close_date,amount,picked_up,picked_up_at,deposited_at")
@@ -7362,6 +7562,16 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
         _pc_hit = pos_billpay.get((_ckey(code) or code, dday)) if pos_billpay else None
         if _pc_hit is not None:
             _twC[(code, dday)] = _pc_hit
+    # THE FEE POLICY IS DELIBERATELY NOT APPLIED TO LEG B HERE, and this is the excusal rather than
+    # an oversight (owner ask 2026-10-03; the "find the siblings" rule). Leg B is the same POS
+    # bill-pay question the declaration digest and the netting basis ask, and the same understated
+    # basis would read as a spurious 'mismatch'. But this function's honest-gap semantics are
+    # PER-RANGE booleans (`sales_present`): a store-day dropped from the map while the feed is
+    # present becomes an honest 0.0, which is further from the truth than the understated figure.
+    # Expressing "present but not trustworthy" needs a third per-store-day state inside a money
+    # reconciliation, which the house surfaces for approval rather than slipping in beside this
+    # change. Until then nothing here moves: the gate bites only on a declared 'yes', and no tenant
+    # has declared one.
     _tw_rows, _tw_sum = _mr.reconcile_billpay_three_way_days(
         _twA, _twB, _twC, tolerance_amt=_f(tolerance),
         sales_present=sales_present, processor_present=bool(pos_billpay))
@@ -8395,6 +8605,20 @@ def _refuse(client, org_id, d, body, code, detail="", tenders=None, message="") 
     raise HTTPException(r.status, r.message)
 
 
+def _store_key_resolver(client, org_id):
+    """`account.coa.store_resolver`'s resolve(), for keying a store-day across tables that spell the
+    store differently (index §29.12 / §13). Dereferenced, never re-implemented: that chain is the
+    platform's ONE answer to "which physical store is this string". Returns None if it cannot be
+    built, and `unfinished_day.store_key` then falls back to the raw code — degrade, never crash a
+    report over a store-name lookup."""
+    try:
+        from app.modules.account.coa import store_resolver
+        return store_resolver(client, org_id)
+    except Exception as e:
+        print("WARN closing store-day key resolver unavailable (falling back to raw codes):", e)
+        return None
+
+
 def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credit, b2b, dirs,
                  attempt_no, blocked, accepted, auto_accepted):
     """Record ONE submission try. Management review reads these (with amounts + the true B2B variance);
@@ -8412,9 +8636,37 @@ def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credi
             "b2b_cash": (b2b or {}).get("cash"), "b2b_credit": (b2b or {}).get("card"),
             "cash_dir": dirs.get("cash"), "credit_dir": dirs.get("credit"),
             "blocked": bool(blocked), "accepted": bool(accepted), "auto_accepted": bool(auto_accepted),
+            # EVERYTHING THE REP TYPED, not only the money (owner 2026-10-04, mig 1052, index §29.12).
+            # A blocked try used to keep the tenders and drop the rest, so a rep coming back for try
+            # three retyped the accessory sale, the counts, the remarks and the photo — which is a
+            # reason to give up at two, and Abid did. The columns are declared ONCE, by
+            # unfinished_day.ENTRY_COLUMNS, and `resume_entry` reads them back.
+            **{k: body.get(k) for k in _unfinished.ENTRY_COLUMNS if body.get(k) not in (None, "")},
+            # Configured (non-standard) tenders, in the same jsonb shape the submit endpoint accepts,
+            # so a tenant that defined its own tenders resumes them too. The column has existed since
+            # mig 103 and nothing wrote it; writing it costs no migration.
+            **({"tenders": body["tenders"]} if isinstance(body.get("tenders"), dict) and body.get("tenders") else {}),
         }).execute()
     except Exception as e:
-        print("closing attempt log failed:", e)
+        # Mig 1052 not run: the entry columns do not exist yet. Keep the try — the money and the
+        # variance are what the gate acted on — rather than losing the record of the attempt over
+        # the fields that are only there to spare the rep retyping. Degrade, never drop.
+        try:
+            client.schema("commcalc").table("closing_attempt").insert({
+                "org_id": org_id, "close_date": d, "period": d[:7],
+                "store_code": body.get("store_code"), "store_address": body.get("store_address"),
+                "sfid": body.get("sfid"), "employee_name": body.get("employee_name"),
+                "attempt_no": attempt_no,
+                "entered_cash": round(_f(declared_cash), 2), "entered_credit": round(_f(declared_credit), 2),
+                "t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
+                "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"],
+                "t_acima": tenders["acima"],
+                "b2b_cash": (b2b or {}).get("cash"), "b2b_credit": (b2b or {}).get("card"),
+                "cash_dir": dirs.get("cash"), "credit_dir": dirs.get("credit"),
+                "blocked": bool(blocked), "accepted": bool(accepted), "auto_accepted": bool(auto_accepted),
+            }).execute()
+        except Exception as e2:
+            print("closing attempt log failed:", e, "| degrade also failed:", e2)
 
 
 def _caller_perms(client, authorization: str) -> dict:
@@ -8664,6 +8916,16 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
     return out
 
 
+def _better_code(candidate, current, master_codes) -> bool:
+    """Deterministic winner when two store_codes claim one address or one street number: the code
+    the store MASTER (`storeops.stores`) knows wins, else the alphabetically-first. Used so a feed
+    row never lands on a different code just because the rows came back in a different order."""
+    cm, mm = candidate in master_codes, current in master_codes
+    if cm != mm:
+        return cm
+    return candidate < current
+
+
 def _addr_resolver(client, org_id):
     """A store-name/address → store_code resolver, shared by the B2B and X-report tender aggregations.
 
@@ -8684,14 +8946,27 @@ def _addr_resolver(client, org_id):
       1. an EXPLICIT `commcalc.store_aliases` row — an admin has confirmed this spelling IS this store
          (the Store-Matching screen writes these; mig 988 seeds the X-report's names). Outranks every
          heuristic, exactly as it does in `commcalc.router._store_code_resolver`.
-      2. the storeops MASTER address.
-      3. the store_mapping address (the house canon, and where the LUX-* twins live).
-      4. an unambiguous leading street-number.
+      2. the string IS a known store_code (see below).
+      3. the storeops MASTER address.
+      4. the store_mapping address (the house canon, and where the LUX-* twins live).
+      5. an unambiguous leading street-number.
 
-    Steps 2-4 are unchanged in kind; only their ORDER and the master source are new, and a store whose
-    two sources agree resolves identically either way."""
+    Steps 3-5 are unchanged in kind; only their ORDER and the master source are new, and a store whose
+    two sources agree resolves identically either way.
+
+    STEP 2 ADDED 2026-10-02, and WHY it was missing for so long. This resolver only ever matched a
+    bare store CODE by accident: a `store_mapping` row whose `store_address` held the code itself
+    (the §13d placeholder DEFECT) indexed that code as an address, so `'B-2778'` resolved — until
+    the §13d repair gave that row a real address and the string resolved to None. The feed string
+    was never the problem; the resolver's reliance on a broken row was. A store_code is the
+    identity the rest of the platform WRITES (`coa.store_resolver` has had "the raw string IS a
+    store_code" in its own chain all along), so it is matched here explicitly rather than left to
+    depend on a data defect that is now, correctly, gone. Additive: it can only resolve a string
+    that resolved to None before, since every earlier step still runs first."""
     alias_to_code, so_addr_to_code, addr_to_code = {}, {}, {}
     num_to_code, num_counts = {}, {}
+
+    master_codes = set()
 
     def _idx(rows, code_col, addr_col, target):
         for r in rows or []:
@@ -8699,11 +8974,20 @@ def _addr_resolver(client, org_id):
             addr = (r.get(addr_col) or "").strip()
             if not (code and addr):
                 continue
-            target.setdefault(addr.lower(), code)
+            # TWO CODES AT ONE ADDRESS is now an ordinary shape, not a defect: §13d merges a closed
+            # store onto its successor's address, so both codes carry it. Row order must not decide
+            # which one a feed row lands on, so the winner is the code the store MASTER knows (the
+            # identity the rest of the platform writes — the same survivor rule `/closing/stores`
+            # uses to collapse twins), then the alphabetically-first, deterministically.
+            cur = target.get(addr.lower())
+            if cur is None or _better_code(code, cur, master_codes):
+                target[addr.lower()] = code
             nk = _num_key(addr)
             if nk:
                 num_counts[nk] = num_counts.get(nk, 0) + 1
-                num_to_code.setdefault(nk, code)
+                cur_n = num_to_code.get(nk)
+                if cur_n is None or _better_code(code, cur_n, master_codes):
+                    num_to_code[nk] = code
 
     def _read(schema, table, cols):
         try:
@@ -8712,17 +8996,30 @@ def _addr_resolver(client, org_id):
         except Exception:
             return []   # a missing/unreadable source costs precision, never an exception in a recon
 
-    _idx(_read("commcalc", "store_aliases", "store_code,alias"), "store_code", "alias", alias_to_code)
-    _idx(_read("storeops", "stores", "store_code,address"), "store_code", "address", so_addr_to_code)
-    _idx(_read("commcalc", "store_mapping", "store_code,store_address"),
-         "store_code", "store_address", addr_to_code)
+    alias_rows = _read("commcalc", "store_aliases", "store_code,alias")
+    master_rows = _read("storeops", "stores", "store_code,address")
+    mapping_rows = _read("commcalc", "store_mapping", "store_code,store_address")
+    master_codes |= {(r.get("store_code") or "").strip() for r in master_rows
+                     if (r.get("store_code") or "").strip()}
+    _idx(alias_rows, "store_code", "alias", alias_to_code)
+    _idx(master_rows, "store_code", "address", so_addr_to_code)
+    _idx(mapping_rows, "store_code", "store_address", addr_to_code)
+    # Step 2: every store_code either vocabulary knows, lowercased -> the code as written. The store
+    # MASTER wins a case/spacing collision, for the same reason it wins the twin collapse above.
+    code_to_code = {}
+    for rowset, col in ((mapping_rows, "store_code"), (alias_rows, "store_code"),
+                        (master_rows, "store_code")):
+        for r in rowset or []:
+            c = (r.get(col) or "").strip()
+            if c:
+                code_to_code[c.lower()] = c
 
     def resolve(store_str):
         s = (store_str or "").strip()
         if not s:
             return None
         low = s.lower()
-        for m in (alias_to_code, so_addr_to_code, addr_to_code):
+        for m in (alias_to_code, code_to_code, so_addr_to_code, addr_to_code):
             c = m.get(low)
             if c:
                 return c
@@ -10121,40 +10418,27 @@ def get_closing_source_config(store_code: str = "", org_id: str = ORG_ID):
 
 class PutClosingSourceIn(LaxModel):
     store_code: Any = None     # blank / omitted → the ORG DEFAULT row
+    store_codes: Any = None    # SEVERAL stores in one call (the Store Setup multi-select dropdown)
     source: Any = None         # 'rep_entry' | 'b2b_derived'
-    clear: Any = False         # with a store_code: drop the override so the store follows the org default
+    clear: Any = False         # with a store code: drop the override so the store follows the org default
 
 
-@router.put("/source-config")
-def put_closing_source_config(payload: PutClosingSourceIn, org_id: str = ORG_ID,
-                              authorization: str = Header(default="")):
-    """Set the org default or ONE store's override. Gated to the same 'closing' settings area as the
-    tender / count-field config (a market-scoped caller must not be able to switch off a store's
-    closing submissions). The owner's *"could be changed later at any time by the tenant admin"* is
-    this endpoint — nothing about the setting is write-once."""
-    require_org(org_id)
-    client = sb()
-    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
-        raise HTTPException(403, "Changing a store's daily-closing source is permission-restricted.")
-    code = str(payload.store_code or "").strip() or None
-    rows = _closing_source_rows(client, org_id)
-    if payload.clear:
-        if not code:
-            raise HTTPException(400, "The org default cannot be cleared — set it to a source instead.")
-        try:
-            (client.schema("commcalc").table("closing_source_config").delete()
-             .eq("org_id", org_id).eq("store_code", code).execute())
-        except Exception as e:
-            print(f"WARN closing source override clear failed (org {org_id}, store {code}): {e}")
-            raise HTTPException(400, "Could not clear this store's daily-closing setting. The setting "
-                                     "is not available on this tenant yet — contact support.")
-        return {"ok": True, "store_code": code, "cleared": True,
-                "source": _closing_src.resolve([r for r in rows if r.get("store_code") != code], code)}
-    raw = str(payload.source or "").strip().lower()
-    if raw not in _closing_src.SOURCES:
-        raise HTTPException(400, f"source must be one of {', '.join(_closing_src.SOURCES)}")
-    row = {"org_id": org_id, "store_code": code, "source": raw, "updated_at": _now(),
-           "updated_by": _caller_email(client, authorization)}
+def _closing_source_clear_one(client, org_id: str, code: str) -> None:
+    """Drop ONE store's override. The only delete of `closing_source_config` in the codebase."""
+    try:
+        (client.schema("commcalc").table("closing_source_config").delete()
+         .eq("org_id", org_id).eq("store_code", code).execute())
+    except Exception as e:
+        print(f"WARN closing source override clear failed (org {org_id}, store {code}): {e}")
+        raise HTTPException(400, "Could not clear this store's daily-closing setting. The setting "
+                                 "is not available on this tenant yet — contact support.")
+
+
+def _closing_source_write_one(client, org_id: str, rows: list, code, raw: str, email) -> None:
+    """Set ONE store's override (or the org default when `code` is None). THE ONE WRITER of
+    `closing_source_config` — a multi-store save fans out through this, so "several stores at once"
+    cannot grow a second, differently-behaved write path."""
+    row = {"org_id": org_id, "store_code": code, "source": raw, "updated_at": _now(), "updated_by": email}
     found = [r for r in rows
              if (str(r.get("store_code") or "").strip().upper() or None) == (code.upper() if code else None)]
     try:
@@ -10167,7 +10451,52 @@ def put_closing_source_config(payload: PutClosingSourceIn, org_id: str = ORG_ID,
         print(f"WARN closing source save failed (org {org_id}, store {code}): {e}")
         raise HTTPException(400, "Could not save the daily-closing setting. The setting is not "
                                  "available on this tenant yet — contact support.")
-    return {"ok": True, "store_code": code, "source": raw, "scope": "store" if code else "org_default"}
+
+
+@router.put("/source-config")
+def put_closing_source_config(payload: PutClosingSourceIn, org_id: str = ORG_ID,
+                              authorization: str = Header(default="")):
+    """Set the org default, ONE store's override, or SEVERAL stores' overrides in one call.
+
+    Owner 2026-10-03: *"in store setup to assign the store it should be a drop down list to select
+    multiple stores"* — the screen picks many stores, so this ONE endpoint takes many codes
+    (`store_codes`) and fans them out through `_closing_source_write_one`. It is not a second bulk
+    endpoint: one store is the one-element case, and `store_code` still works unchanged.
+
+    Gated to the same 'closing' settings area as the tender / count-field config (a market-scoped
+    caller must not be able to switch off a store's closing submissions). The owner's *"could be
+    changed later at any time by the tenant admin"* is this endpoint — nothing here is write-once.
+    """
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Changing a store's daily-closing source is permission-restricted.")
+    # One code or many, de-duplicated by the registry — no store is written twice because a dropdown
+    # offered it twice, and an all-blank selection is the ORG DEFAULT, exactly as before.
+    codes = _closing_src.normalize_store_codes(
+        payload.store_codes if payload.store_codes is not None else payload.store_code)
+    rows = _closing_source_rows(client, org_id)
+    if payload.clear:
+        if not codes:
+            raise HTTPException(400, "The org default cannot be cleared — set it to a source instead.")
+        for code in codes:
+            _closing_source_clear_one(client, org_id, code)
+        left = [r for r in rows
+                if str(r.get("store_code") or "").strip().upper()
+                not in {c.upper() for c in codes}]
+        return {"ok": True, "store_code": codes[0], "store_codes": codes, "cleared": True,
+                "count": len(codes),
+                "source": _closing_src.resolve(left, codes[0]),
+                "sources": {c: _closing_src.resolve(left, c) for c in codes}}
+    raw = str(payload.source or "").strip().lower()
+    if raw not in _closing_src.SOURCES:
+        raise HTTPException(400, f"source must be one of {', '.join(_closing_src.SOURCES)}")
+    email = _caller_email(client, authorization)
+    for code in (codes or [None]):
+        _closing_source_write_one(client, org_id, rows, code, raw, email)
+    return {"ok": True, "store_code": codes[0] if codes else None, "store_codes": codes,
+            "count": len(codes) or 1, "source": raw,
+            "scope": "store" if codes else "org_default"}
 
 
 # ── The derivation sweep ─────────────────────────────────────────────────────────────────────────
@@ -10383,6 +10712,214 @@ def derive_closing_due(date: str = "", x_notify_secret: str = Header(default="")
 # provider function itself lazily imports back into this module at CALL time, never at import time,
 # so there is no closing<->attention_providers circular import); guarded so a deploy that hasn't run
 # migration 717 (core.import_feed) yet — or is simply missing the file for some other reason — never
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# BILL-PAY DECLARATION EXCEPTIONS — the morning digest to DM and above (owner ask 2026-10-03)
+#
+# Owner, verbatim: "the system should create that report and send it to the dm and all above via
+# whats app and email the next morning at 1030 am - nothing hardcoded".
+#
+# NOTHING NEW WAS BUILT THAT ALREADY EXISTED (the duplicate-check gate). The sweep shape, the
+# recipient rule, the dedup table and the due-time convention are all the house's:
+#   • recipients, one-digest-per-manager, the unreachable-recipient skip and the ref_key spelling →
+#     `commcalc/manager_digest` (the ONE fan-out ePay and zero-sales already ride);
+#   • the hourly pg_cron tick + a tenant-local HH:MM send time defaulting to 10:30 → the mig-433
+#     convention, with the due decision itself now in `manager_digest.due_now` so three sweeps stop
+#     spelling the comparison three times;
+#   • dedup rows → the existing `storeops.alert_log` through its one home,
+#     `storeops/alert_log.py`, driven by `notify/digest_delivery.py`. No new alert table, no
+#     second dedup rule, and since migration 1051 the record names the CHANNEL that carried it;
+#   • the declared figure → `billpay_pickup.declared_billpay_in_force` (reps' split with the DM's
+#     verified correction applied), so a manager is never chased about a store-day they fixed;
+#   • the POS figure → `metric_recon.pos_billpay_cash`, the one home that includes the customer
+#     service fee (§47.12 — without it this digest would have alerted on 526 of 535 store-days);
+#   • the classification, thresholds and wording → `closing/billpay_declaration_alerts` (pure).
+#
+# WHATSAPP IS SENT THE WAY THE HOUSE LEARNED TO SEND IT. A 10:30 digest is business-initiated and
+# therefore almost always OUTSIDE Meta's 24-hour service window, where a free-form text returns HTTP
+# 200 with a real message id and is then silently dropped (the 2026-08-05 incident, documented in
+# `notify/whatsapp_window`). So the WhatsApp leg goes through `whatsapp_meta.send_document_detailed`,
+# the one home that walks the template ladder and REPORTS which rung carried the message — never
+# `send_text`, which would look like it worked and deliver nothing.
+async def _run_billpay_declaration_alerts(org_id_filter=None, respect_enabled=True,
+                                          respect_time=True, dry_run=False):
+    """The daily bill-pay declaration-exception sweep. Iterates tenants, skips unless the tenant has
+    switched it on, compares the declared figure in force against the POS basis for the configured
+    lookback, plans ONE digest per manager (DM ∪ above-DM) and sends it on each channel that can
+    actually reach them, deduped per (recipient, store, day, class). NEVER raises."""
+    from app.modules.storeops.router import _managers_above_dm, _biz_tz_for
+    from app.modules.notify import digest_delivery as _delivery
+    from app.modules.commcalc import manager_digest as _md
+    from app.modules.commcalc import metric_recon as _mr
+    from app.modules.notify.channels import email_resend, whatsapp_meta
+    from . import billpay_declaration_alerts as _bda
+    from . import billpay_pickup as _bp
+    from . import envelope_report as _er
+    client = sb()
+    so = client.schema("storeops")
+    try:
+        tenants = so.table("tenants").select("*").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    wa_ok = whatsapp_meta.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        cfg = _bda.resolve_config(t)
+        if respect_enabled and not cfg["enabled"]:
+            continue
+        now_local = datetime.now(timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date()
+        if respect_time and not _md.due_now(now_local.strftime("%H:%M"), cfg["send_time"]):
+            continue   # the tenant's configured minute has not arrived in ITS day yet
+        start = (today - timedelta(days=cfg["lookback_days"])).isoformat()
+        end = (today - timedelta(days=1)).isoformat()
+        if end < start:
+            start = end
+        try:
+            store_days, meta = _billpay_declaration_store_days(client, oid, start, end)
+        except Exception as e:
+            results.append({"org_id": oid, "error": str(e)[:200]})
+            continue
+        found = _bda.alert_items(store_days, tolerance=cfg["tolerance"])
+        items, counts = found["items"], found["counts"]
+        refused, advisories = found["refused"], found["advisories"]
+        label = end if start == end else f"{start} to {end}"
+        # A REFUSAL IS NOT A SILENCE. Nothing alertable can still mean something went wrong that is
+        # nobody's declaration: the org says it charges a bill-payment fee and no fee line came
+        # through, so the comparison figure was too low to use. That is a live-data defect and it is
+        # REPORTED -- it rides every result payload below (the board and the dry-run preview render
+        # it) and is logged here, rather than being folded into a manager's chase list where a feed
+        # problem would read as a store's problem. It deliberately does NOT raise a digest of its
+        # own: a second notification path for the same morning is the duplicate the house rules
+        # forbid, and the existing import-health surface (§20) owns feed defects.
+        if refused.get(_bda.CLASS_FEE_MISSING):
+            print(f"WARN billpay declaration sweep org={oid} window={label}: "
+                  f"{refused[_bda.CLASS_FEE_MISSING]} store-day(s) unassessable -- the org is set to "
+                  f"charge a bill-payment fee and no fee line reached the sales feed")
+        if not items:
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "flagged": 0,
+                            "counts": counts, "refused": refused, "advisories": advisories,
+                            "fee_policy": meta.get("fee_policy"),
+                            "window": label, "pos_source": meta.get("source")})
+            continue
+        stores = {i["store_code"] for i in items if i.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        def _build_bda(name, its, _c=counts, _m=cfg["max_rows"], _l=label, _a=advisories):
+            return _bda.build_digest(name, its, counts=_c, max_rows=_m, label=_l,
+                                     advisories=_a)
+
+        plan = _md.plan_digests(
+            items, hierarchy, today.isoformat(), scope=_bda.ALERT_SCOPE,
+            build=_build_bda, key_parts=_bda.key_parts, channels=cfg["channels"])
+        # ONE home for "carry it and record what each channel did" — notify/digest_delivery.py.
+        # A channel that is not configured is NOT a channel that was tried, and a channel that
+        # failed is still owed the finding: each leg records only its own outcome, so a WhatsApp
+        # number with no account behind it can never mark a finding escalated and hide it.
+        # STRUCTURED preview rows, never pre-joined display text: the view owns presentation.
+        sent, skipped, planned = await _delivery.deliver_digests(
+            so, oid, _bda.ALERT_SCOPE, plan["digests"], build=_build_bda,
+            wa_filename="billpay-declarations.txt",
+            channels_ok={"email": email_ok, "whatsapp": wa_ok}, dry_run=dry_run,
+            preview_item=lambda i: {"store_code": i["store_code"], "close_date": i["close_date"],
+                                    "gap_class": i["gap_class"], "gap": i["gap"],
+                                    "declared": i["declared"], "pos_basis": i["pos_basis"]})
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(items),
+                        "counts": counts, "refused": refused, "advisories": advisories,
+                        "fee_policy": meta.get("fee_policy"),
+                        "window": label, "pos_source": meta.get("source"),
+                        "send_time": cfg["send_time"], "tolerance": cfg["tolerance"],
+                        "channels": list(cfg["channels"]),
+                        "email_configured": email_ok, "whatsapp_configured": wa_ok,
+                        "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+def _billpay_declaration_store_days(client, org_id, start, end):
+    """The per-(store, day) pair the digest compares: the declared bill-pay cash IN FORCE against the
+    POS basis. Returns (store_days, meta).
+
+    Both sides come from their own one home — `billpay_pickup.declared_billpay_in_force` and
+    `metric_recon.pos_billpay_cash` over the shared `_sales_billpay_for_days` — so this function
+    JOINS two answers and derives neither. A store-day the sales feed never covered carries
+    `pos_basis=None`, which the classifier refuses to alert on and counts instead."""
+    from app.modules.commcalc import metric_recon as _mr
+    from app.modules.commcalc.router import _billpay_fee_policy
+    from . import billpay_pickup as _bp
+    from . import envelope_report as _er
+    # THE ORG'S DECLARED FEE POLICY, read once for the whole window from its own one home. It never
+    # changes the arithmetic below -- it decides whether a store-day whose feed rang no fee line may
+    # be compared against a declaration at all, and when it may not, which of two different
+    # problems it is. Read here rather than per row so a config read cannot scale with store-days.
+    policy = _billpay_fee_policy(client, org_id)
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select(_er.CLOSING_SELECT).eq("org_id", org_id)
+            .gte("close_date", start).lte("close_date", end)
+            .limit(100000).execute().data) or []
+    decl = _bp.declared_billpay_in_force(client, org_id, rows)
+    days = sorted({str(r.get("close_date") or "")[:10] for r in rows if r.get("close_date")})
+    pos, src, ckey = {}, "none", (lambda x: x)
+    if days:
+        try:
+            pos, src, ckey = _sales_billpay_for_days(client, org_id, days)
+        except Exception as e:
+            print(f"WARN billpay declaration sweep could not read the sales bill-pay figure: {e}")
+            pos, src, ckey = {}, "none", (lambda x: x)
+    names = {}
+    for r in rows:
+        code = (str(r.get("store_code") or "").strip())
+        if code and r.get("store_name"):
+            names.setdefault(code, r.get("store_name"))
+    out = []
+    for code, by_day in (decl or {}).items():
+        if code == "?":
+            continue      # a closing with no store cannot be assigned to a manager
+        for dday, amount in by_day.items():
+            slot = None
+            if pos:
+                try:
+                    slot = pos.get((ckey(code), dday))
+                except Exception:
+                    slot = None
+            out.append({"store_code": code, "store_name": names.get(code, code),
+                        "close_date": dday, "declared": amount,
+                        "pos_basis": _mr.pos_billpay_cash(slot),
+                        "fee_cash": _mr.pos_billpay_fee_cash(slot),
+                        "fee_state": _mr.billpay_fee_state(slot, policy),
+                        "bill_txns": (slot or {}).get("count") if isinstance(slot, dict) else None})
+    return out, {"source": src, "store_days": len(out), "fee_policy": policy}
+
+
+@router.post("/billpay-declaration-alerts/run-due")
+async def billpay_declaration_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated HOURLY pg_cron entrypoint. Each tick asks every switched-on tenant whether its
+    own configured send time has arrived in its own local day; the first tick at or after it sends,
+    and `alert_log` dedup stops every later tick that day. Mirrors `/commcalc/zero-sales/alerts/
+    run-due` and `/commcalc/epay/alerts/run-due` exactly — same dedup table, same recipient rule."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_billpay_declaration_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/billpay-declaration-alerts/run-now")
+async def billpay_declaration_alerts_run_now(send: bool = False,
+                                             authorization: str = Header(default=""),
+                                             org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable gate AND the time gate.
+    DEFAULTS TO A DRY RUN — it returns exactly who WOULD be messaged, on which channels, and about
+    which store-days, sending nothing. Dedup is always honoured, so a real send cannot duplicate the
+    morning run."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_billpay_declaration_alerts(org_id_filter=org_id, respect_enabled=False,
+                                                 respect_time=False, dry_run=not send)
+
+
 # breaks this module's own endpoints.
 try:
     from . import attention_providers  # noqa: F401

@@ -285,6 +285,98 @@ def vendor_catalog(vendor_id: str, limit: int = 500, org_id: str = ORG_ID):
     return {"migrated": True, "seen_at": seen.get(vendor_id), "total": len(rows), "rows": rows[:max(1, min(limit, 5000))]}
 
 
+# ══ CATALOG READ (route c — the vendor's own order API; no browser needed) ═══════════════════════════
+@router.post("/vendors/{vendor_id}/catalog/api-read")
+async def read_vendor_catalog_api(vendor_id: str, org_id: str = ORG_ID):
+    """Read this vendor's prices through the API route it already declares for ORDERS (§51), and land
+    them with the SAME lander every other catalog route uses (store.land_catalog → ONE snapshot
+    table). Nothing vendor-specific is spelled here: the route and its dialect are config values.
+
+    A vendor without an `api` route gets a reason, never a fallback: guessing an endpoint is how a
+    read reaches the wrong store.
+    """
+    from app.modules.supply import api_credential as _cred
+    from app.modules.supply import order_transport as _tr
+    from app.modules.supply import shopify_draft_order as _shopify
+    client = sb()
+    try:
+        v = store.vendor_by_id(client, org_id, vendor_id)
+    except Exception as e:
+        _migration_guard(e)
+    if not v:
+        raise HTTPException(404, "Vendor not found.")
+    route = _tr.transport_for(v)
+    if route.get("kind") != "api":
+        raise HTTPException(400, f"This vendor has no API route — {route.get('reason')}")
+    cfg = route.get("config") or {}
+    if cfg.get("dialect") != _shopify.DIALECT:
+        raise HTTPException(400, f"No reader for dialect {cfg.get('dialect')!r}.")
+    if not v.get("data_source_id"):
+        raise HTTPException(400, "Save this vendor's API credential first (Supply → Vendors → Login).")
+    login = store.login_row_full(client, org_id, v["data_source_id"])
+    if not login:
+        raise HTTPException(400, "This vendor's login row is missing.")
+    got = await _cred.access_token(client, org_id, login, cfg.get("host"))
+    if not got.get("token"):
+        raise HTTPException(400, f"No usable credential: {got.get('error')}")
+    read = await _shopify.read_products(cfg, got["token"])
+    if not read.get("ok"):
+        raise HTTPException(502, f"The vendor's catalog could not be read: {read.get('error')}")
+    try:
+        landed = store.land_catalog(client, org_id, vendor_id, read["rows"], "api")
+    except Exception as e:
+        _migration_guard(e)
+        raise HTTPException(500, str(e)[:400])
+    return {"pages": read.get("pages"), **landed}
+
+
+# ══ THE VENDOR'S CUSTOMER LIST (seeded from this tenant's own stores) ════════════════════════════════
+@router.get("/vendors/{vendor_id}/customers")
+def vendor_customers(vendor_id: str, org_id: str = ORG_ID):
+    """Who each of this tenant's stores is on the vendor's side, by the rule the vendor declares
+    (§51). A store that cannot be named is REPORTED with the reason — a store missing from the
+    vendor's customer list is a store nobody can order for."""
+    from app.modules.supply import order_transport as _tr
+    from app.modules.supply import vendor_customer as _vc
+    client = sb()
+    try:
+        v = store.vendor_by_id(client, org_id, vendor_id)
+    except Exception as e:
+        _migration_guard(e)
+    if not v:
+        raise HTTPException(404, "Vendor not found.")
+    decl = (_tr.transport_for(v) or {}).get("customer") or {}
+    stores = store.load_store_roster(client, org_id)
+    customers, skipped = _vc.customer_rows(decl, stores)
+    return {"declared": bool(decl), "errors": _vc.validate_customer(decl), "stores": len(stores),
+            "customers": customers, "skipped": skipped, "tags": _vc.tags_for(decl)}
+
+
+@router.get("/vendors/{vendor_id}/customers.csv")
+def vendor_customers_csv(vendor_id: str, org_id: str = ORG_ID):
+    """The same list as a file, in the vendor's own import columns. The tenant uploads it once, then
+    sets each customer's price list and payment terms on the vendor's side — this platform never
+    decides which of its own stores the vendor treats as wholesale."""
+    from fastapi.responses import PlainTextResponse
+    from app.modules.supply import order_transport as _tr
+    from app.modules.supply import vendor_customer as _vc
+    client = sb()
+    try:
+        v = store.vendor_by_id(client, org_id, vendor_id)
+    except Exception as e:
+        _migration_guard(e)
+    if not v:
+        raise HTTPException(404, "Vendor not found.")
+    decl = (_tr.transport_for(v) or {}).get("customer") or {}
+    errors = _vc.validate_customer(decl)
+    if errors or not decl:
+        raise HTTPException(400, "; ".join(errors) or "This vendor declares no customer rule.")
+    text = _vc.import_csv(decl, store.load_store_roster(client, org_id))
+    name = f"customers-{vendor_id[:8]}.csv"
+    return PlainTextResponse(text, media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 # ══ CATALOG UPLOAD (route a — the kit's products.json / products.csv; no browser needed) ═════════════
 @router.post("/catalog/upload")
 async def catalog_upload(file: UploadFile = File(...), vendor_id: str = Form(default=""), org_id: str = ORG_ID,

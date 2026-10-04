@@ -104,7 +104,7 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID,
     """Create a person from HR. Body: name (req), email?, phone?, home_store?, job title (role)?,
     pay_rate?, employee_id?, plus optional app fields: role_name (RBAC role), market?, store_code?,
     store_codes?[], create_login?. De-dupes by email. Returns the employee + any login temp password.
-    Pay fields pass storeops' `gate_pay_write` (§19.41) — the same gate as every employee pay write:
+    Pay fields pass storeops' `gate_pay_write` (§19.44) — the same gate as every employee pay write:
     from a caller who may not see pay they are not written, and the reply names them in
     `pay_fields_ignored` so HR · People can say so."""
     from app.modules.storeops.router import EMP_FIELDS, _ensure_employee_id, gate_pay_write
