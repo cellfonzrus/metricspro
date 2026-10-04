@@ -5775,6 +5775,9 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | `commcalc.po_vendor` **+ mig `1021` columns** (§36): `portal_url`, `catalog_urls[]`, `portal_config` (a vendors.json block + optional `ordering` recipe; a credential key is refused), `free_shipping_threshold`, `shipping_fee_below_threshold`, `delivery_days_min/max` (tenant-defined; CHECK: a portal vendor carries threshold + max days), `data_source_id` → commcalc.data_source, `is_price_source` | `POST/PATCH /supply/vendors` (`ordering_logic.validate_vendor`), `PUT /supply/vendors/{id}/login` (links data_source_id); the Purchase Orders vendor endpoints (`/asset/po/vendors`) unchanged | `supply/store.load_vendors` / `vendor_by_id` / `vendor_for_source` → every /supply endpoint, `ordering_logic.optimize_cart` (terms), `vendor_scrape_config`, `parse_recipe` |
 | `commcalc.purchase_order` **+ mig `1021` columns** (§36): `vendor_order_ref`, `vendor_order_total`, `shipping_estimate`, `supply_cart_ref`, `supply_meta` (line links, threshold, delivery, plan saving), `cart_evidence` (vendor cart total, lines added, screenshot), `confirmation` (method live_capture\|live_submit\|manual, page, screenshot, who/when), `submitted_by`, `submitted_at`; supply rows carry `source='supply_cart'` | `supply/store.create_order` (one per vendor of a placed cart; `next_po_number`), `save_cart_evidence` (order session), `record_confirmation` / `set_status` (the 301 lifecycle rule) | `GET /supply/orders(/{id})`, `GET /supply/summary` (`ordering_logic.summary_tiles`); the Purchase Orders pages see them as ordinary POs |
 
+| `storeops.dm_visit_priority_rule` | `1050` | the tenant-configurable DM visit priority order (activations → accessories → KPI, seeded); the dropdown's OPTIONS are not here — they are dereferenced from `targets_engine.CATEGORIES` + `commcalc.carrier_kpi_metric` (§47.17) |
+| `storeops.dm_visit_assignment` | `1050` | which store a DM is assigned on which day, `manual` or `auto`, with the reason the priority rules picked it; unique on (org, date, DM, store), which is what makes the hourly fill idempotent (§47.17) |
+
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
@@ -6043,6 +6046,9 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | `GET /supply/summary` (§36) — the store-operations dashboard tiles: `open_orders`, `spend_mtd` (vendor-confirmed total when captured), `savings_mtd` (the optimizer's saving vs the best single vendor), `vendors_needing_attention` + reasons, page links | `supply/router.summary` → `ordering_logic.vendor_attention` / `summary_tiles` | the store-operations dashboard (§35) |
 
 | `GET /storeops/shift-templates` · `POST /storeops/shift-templates/save-week` · `POST /storeops/shift-templates/apply` | `storeops/router.py:3954-4065` | the ONE recurring-schedule mechanism — a per-employee canonical week, and the only path that turns one into `storeops.shifts` (§14v) |
+| `GET /storevisit/dm-visit-performance` | the market manager's monitor: per DM per quota day required / assigned / completed / shortfall, the next priority picks with reasons, plus unowned and unmeasured stores (§47.17) |
+| `GET /storevisit/visit-priority-options` | the carrier-specific deliverables dropdown — `targets_engine.CATEGORIES` ∪ this org's `carrier_kpi_metric` rows; a tenant adds a deliverable on the KPI screen and it appears here (§47.17) |
+| `POST /storevisit/visit-assignments/auto-fill` | the Friday-evening fill; DRY RUN by default, tops a DM-day up to quota without replacing a manual pick (§47.17) |
 
 ## 18. Cross-reference: by METRIC / KPI
 
@@ -6219,6 +6225,10 @@ note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 | **Which products match the POS product filters — and which are in stock at this store** (the register's product picker and the product catalog; owner 2026-09-24) | `pos.products.department_id / category_id / system_category / manufacturer / inventory_type` + `pos.inventory_serial.status = 'in_stock'` / `pos.inventory_standard.qty_on_hand > 0` | **ONE home** `pos/product_filters.py` (`list_rows`, `apply`, `EQ_FILTERS`, `in_stock_product_ids`) behind `GET /pos/products`; ONE component `frontend …/pos/product-filters.tsx` (`ProductFilters`, `productFilterParams`) on both pages — §33 |
 
 ---
+
+| DM visit quota attainment | `storeops.dm_visit_assignment` + `storeops.store_visits` vs `storeops.tenants.dm_visit_quota_per_day` | `storevisit/visit_plan.quota_status` — required / assigned / completed / shortfall per (DM × day); a store logged twice is ONE visit, and a visit to an unassigned store still counts (§47.17) |
+| store visit priority score | the Daily Targets store summary + `commcalc.kpi_actual`, through `targets_engine.attainment_fraction` | `storevisit/visit_plan.rank_stores` — Σ weight × deficit over the tenant's `dm_visit_priority_rule` rows; a store with no target scores NEITHER 0% nor 100% and sorts last (§47.17) |
+| target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
 
@@ -17026,6 +17036,106 @@ they shipped: the catalog and PO calls were handed an already-schema'd client (`
 `_next_po_number` apply the schema themselves, so `commcalc.commcalc` would have read nothing and
 numbered no PO), and the accessory list's merged lines recorded only the first contributing visit.
 
+### 47.17 THE DM DAILY VISIT QUOTA, AND WHO PICKS THE STORES WHEN NOBODY DID (owner 2026-10-03, mig `1050`)
+
+Owner, verbatim: *"each Dm is required to do 2 store visists every day , confuhgurable by each tenant ,
+set uo 2 for now editable in the system, the Market manager to monitor the dm performance and assign
+them the stores, if there are no stores assigned by friday evening then assign stores to the dm based on
+where the performance is low in an order of priority specailly where the activations and accessories
+sales are low , then kpi , all these should be confgurable by the tenant , nothing harcoded, create
+these for now and give options to assign other deliverables as a drop down menu to add to the priorty
+list, it could be sales items like edge in luxelink or xfinity in boost , the drop down will be carrier
+spefici"*.
+
+**DUPLICATE CHECK — stated for the build gate.** There was no visit quota and no DM↔store visit
+assignment anywhere. Four facts the ask needs DID already have one home each, and every one is
+**dereferenced**, never copied:
+
+| What the ask needs | Where it already lived | What was added |
+|---|---|---|
+| which stores a DM owns | `storeops/org_chain.dm_by_store` (§48.7) — THE org-tree walk | nothing — read **inverted** by `visit_plan.invert_dm_by_store` |
+| a store's activations / accessory $ / upgrades / BYOD, achieved vs target | `commcalc/targets_engine` through `GET /commcalc/targets/{period}/summary` (§5) | nothing — the handler is called in-process; **no store's sales are recounted** |
+| attainment % of a target | computed inline inside `targets_engine.aggregate_stores` | **factored out** to `targets_engine.attainment_pct` / `attainment_fraction`, so the area roll-up and the visit plan share ONE formula |
+| which extra deliverables a carrier pushes (the owner's dropdown) | `commcalc.carrier_kpi_metric` (mig `060`), the per-carrier KPI registry | nothing — **the dropdown IS that registry**, read for the org's own carrier |
+| the DM's visit record (was the work done) | `storeops.store_visits` (mig `027`) | nothing — the quota board counts those rows |
+| the tenant's business clock for "Friday evening" | `storeops/router._biz_tz_for` | nothing |
+| the hourly-tick + tenant-local HH:MM convention | mig `433` | nothing |
+
+**THE DROPDOWN IS NOT A LIST OF SALES ITEMS.** `GET /storevisit/visit-priority-options` returns the
+Daily Targets categories ∪ this org's `carrier_kpi_metric` rows for **its own carrier** plus the
+carrier-neutral default set. A tenant whose carrier pushes an extra deliverable adds it on the KPI
+metrics screen it already has and it appears in the dropdown with **no schema change and no code
+change** — which is why no carrier's product name appears anywhere in this subsystem (RULE TWO; the
+owner's own two examples live only inside their quoted ask, between `OWNER-QUOTE-BEGIN` /
+`OWNER-QUOTE-END` markers that `harness_dm_visit_plan.py` §I strips before scanning every other line
+for a brand). A rule may not be saved against a metric no registry offers — it would rank every store
+`unmeasured` and still read as a working priority list.
+
+**THE PRIORITY ORDER IS ROWS.** `storeops.dm_visit_priority_rule` (org, carrier, `sort`, `basis`,
+`metric_key`, `weight`, `direction`), seeded exactly as the owner asked — activations (weight 3) →
+accessory sales (2) → KPI (1) — and inherited by any tenant with no rows of its own from
+`visit_plan.HOUSE_PRIORITY_RULES`. The **weight** is what makes it an ORDER rather than a blend; the
+harness parses the seed OUT of migration `1050`, so the seed and the house default cannot drift. A
+`basis` of `kpi_all` is the mean attainment across the registry's active metrics — the owner's "then
+kpi" without this module choosing which KPIs count.
+
+**THE HONESTY RULE (§15z), AND THE TRAP IT CLOSES.** A store with no target and no measured value has
+attainment `None`. Scored as 0% it ranks **first**, so the Friday fill sends two DMs a day to the
+stores nobody set a target for; scored as 100% it **disappears** from the priority list. Neither
+raises, neither fails a build, and both read as a working priority order. So it is **neither**: it
+contributes nothing to the score, sorts **last**, and is named in `unmeasured_stores` in every payload.
+Stores whose org tree yields no DM come back in `unowned_stores` for the same reason — nobody can be
+assigned them, and that is the finding.
+
+**WHAT A MANAGER ASSIGNED IS NEVER OVERWRITTEN.** The fill is per **(DM × date)** and only **tops a
+day up** to the quota, so a market manager who assigned one of two visits gets the second filled, not
+their choice replaced. It never leaves a DM's span (a store outside it is refused on the manual
+endpoint too), never repeats a store across the filled window, and reports the slots it could not fill
+in `short` rather than leaving a quota looking met. The unique index
+`(org_id, visit_date, dm_employee_id, store_code)` is what makes it safe on an hourly tick: the second
+run collides on every row it would re-add and writes nothing.
+
+**Tables (mig `1050`, additive, no money read or written).** `storeops.tenants` +
+`dm_visit_quota_enabled` / `dm_visit_quota_per_day` (**2**) / `dm_visit_quota_days` (Mon–Fri) /
+`dm_visit_assign_auto_enabled` / `dm_visit_assign_deadline_dow` (**5 = Friday**) /
+`dm_visit_assign_deadline_time` (**'17:00'** tenant-local) / `dm_visit_assign_horizon_days` (**7**) /
+`_last_run` / `_last_detail`; `storeops.dm_visit_priority_rule`; `storeops.dm_visit_assignment`
+(`source` manual|auto, `status` open|visited|skipped, `priority_rank`/`_score`/`_reason`/`_detail` — a
+DM sent somewhere by a machine is owed the reason).
+
+| endpoint | |
+|---|---|
+| `GET` / `PUT /storevisit/visit-quota-config` | the quota, the deadline and the horizon; PUT is permission-gated through this module's own `_can_edit_visit_setting` |
+| `GET /storevisit/visit-priority-rules` | the order in force, with `is_default` and any `rejected` rule |
+| `GET /storevisit/visit-priority-options` | **the carrier-specific dropdown** — two registries read, with `already_used` so it never offers a duplicate |
+| `PUT` / `DELETE /storevisit/visit-priority-rules` | add / edit / deactivate one rule |
+| `GET` / `POST` / `PATCH` / `DELETE /storevisit/visit-assignments` | the calendar; POST refuses a store outside the DM's span |
+| `GET /storevisit/dm-visit-performance` | **the market manager's monitor** — per DM per quota day: required / assigned / completed / shortfall, the next picks with their reasons, and the findings |
+| `POST /storevisit/visit-assignments/auto-fill` | **defaults to a DRY RUN** returning the whole plan with every reason |
+| `POST /storevisit/visit-assignments/auto-fill/run-due` | secret-gated hourly pg_cron; each tenant's own deadline weekday + local time is compared in the handler, so ONE job serves every timezone |
+| `GET /storevisit/visit-plan/health` | is mig `1050` applied, and what is in force |
+
+**Frontend:** `/storeops/visits/plan` — the quota, the priority list with the dropdown, the per-DM
+quota board, the live preview of what the order would pick, and a closing panel naming what the board
+**cannot** answer for (unowned stores, unmeasured stores, rejected rules, and the span divergence
+below).
+
+**THE SIBLING THIS CHANGE DOES NOT FIX, SAID OUT LOUD.** Two mechanisms already answer "which stores
+does a DM own": the org tree (`org_chain`, used here) and the **markets granted on a DM's login**
+(`storeops/target_attribution.dm_roster_from_app_users`, used by the accessory-target attribution,
+§6-adjacent). That is a pre-existing duplicate on a money-adjacent path, so this change neither
+re-walks nor silently picks a winner: it uses the org tree and **reports the disagreement** in
+`span_divergence` on the board. Unifying them is its own change.
+
+**Proof.** `backend/harness_dm_visit_plan.py` (142 checks, stdlib only, DB-free), wired into the
+carrier-vocab-guard job. Sections: A the config and every invalid value's fallback (0 is a legal
+quota; nothing degrades to "no quota"), B the seed parsed out of mig `1050` == `HOUSE_PRIORITY_RULES`,
+C the ranking in the owner's order with weight and direction proven to be real knobs, D the honesty
+rule, E the quota board (a DM with nothing is a present zero; an unassigned visit still counts), F the
+deadline on the tenant's own clock, G the fill — top-up not replace, idempotence by running the planner
+twice, never outside a span, never a repeated store, shortfalls reported, H **the one-home locks** (one
+attainment division in `targets_engine`, no second org-tree walk, no sales recount, the dropdown reading
+`carrier_kpi_metric`), I RULE TWO over the module, the router, the migration and the page.
 
 ## 48. THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN — done or not, when, by whom (owner 2026-10-02)
 

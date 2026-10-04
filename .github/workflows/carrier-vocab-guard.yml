@@ -502,6 +502,11 @@ on:
       # index §19.26 — the distributor-invoice filter lock (same reason as the two above: its
       # harness sits at the backend ROOT, outside the backend/app glob it guards)
       - "backend/harness_vip_invoice_filter.py"
+      # index §47.17 — the DM visit plan proof. Its harness sits at the backend ROOT and it parses the
+      # seed out of migration 1050, so a change to EITHER must run the proof that guards them (same
+      # §13e lesson as the three above).
+      - "backend/harness_dm_visit_plan.py"
+      - "database/migrations/1050_dm_visit_quota_and_assignment.sql"
   push:
     branches: [main]
     paths:
@@ -754,6 +759,17 @@ jobs:
       - name: Run the bill-pay fee one-home lock (one registry, one resolution, the dereferencing callers, no second copy — index §19.42)
         working-directory: backend
         run: python3 harness_billpay_fee_one_home_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §47.17 — THE DM DAILY VISIT QUOTA AND THE FRIDAY-EVENING FILL (owner 2026-10-03, mig 1050).
+      # Every failure mode here is a legal value that renders perfectly: a store with no target scored as
+      # 0% ranks FIRST (so the fill sends DMs to the stores nobody set a target for) and scored as 100%
+      # DISAPPEARS; a fill without the uniqueness rule grows a DM's Monday every hour; a fill that
+      # "assigns the week" silently replaces what a manager chose. None of those raises and none fails a
+      # build. This also carries the one-home locks the change ships with: ONE attainment division in
+      # targets_engine, no second org-tree walk, no recount of a store's sales, and the carrier
+      # deliverables dropdown dereferencing commcalc.carrier_kpi_metric. stdlib only, DB-free.
+      - name: Run the DM visit plan proof (the owner's 2/day editable; the seed parsed out of mig 1050; activations → accessories → KPI; a store with no target is neither 0% nor 100%; top-up not replace; idempotent; never outside a DM's span — index §47.17)
+        working-directory: backend
+        run: python3 harness_dm_visit_plan.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE ONE-DOMAIN PROOF (index §40) loads the REAL next.config.ts through Next's own config loader, validates the
   # routes with Next's own loadCustomRoutes and evaluates requests with Next's own matchers: a production request on the
