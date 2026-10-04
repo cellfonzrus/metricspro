@@ -626,11 +626,31 @@ _log_fn = next(n for n in ast.walk(_tree)
                if isinstance(n, ast.FunctionDef) and n.name == "_log_attempt")
 # `_log_attempt` writes, and `closing_attempts` REPORTS (and does its own separation, locked by H5).
 # Any OTHER reader of the table is a second way of counting tries, which is what H4 forbids.
+#
+# THE UNFINISHED-DAY READERS (index §29.12, owner 2026-10-04) are allowed BY NAME. They read the
+# same table for a different question — "did somebody start this store-day and not finish it?" —
+# and they answer it by handing the rows to `closing/unfinished_day.describe`, which dereferences
+# `submit_refusal.is_real_try` rather than counting tries itself. That is why they are not a second
+# counter. `harness_closing_unfinished_day.py` §H3 locks them to the registry from the other side,
+# so neither can drift: adding a reader here without wiring it there fails that harness instead.
+_UNFINISHED_READERS = ("_closing_summary_for_date", "closing_rollup", "_run_closing_missing_alerts",
+                       "closing_resume")
 _allowed_spans = [_count_span, range(_log_fn.lineno, (_log_fn.end_lineno or _log_fn.lineno) + 1),
                   range(_att_fn.lineno, (_att_fn.end_lineno or _att_fn.lineno) + 1)]
+for _nm in _UNFINISHED_READERS:
+    _fn = next((n for n in ast.walk(_tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == _nm), None)
+    if _fn is not None:
+        _allowed_spans.append(range(_fn.lineno, (_fn.end_lineno or _fn.lineno) + 1))
 _outside = [x for x in _raw_count if not any(x[0] in sp for sp in _allowed_spans)]
 check("H4b nothing outside the counter, the writer and the report reads closing_attempt",
       not _outside, detail=str(_outside))
+for _nm in _UNFINISHED_READERS:
+    _fn = next((n for n in ast.walk(_tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == _nm), None)
+    _src = "\n".join(_lines[_fn.lineno - 1:(_fn.end_lineno or _fn.lineno)]) if _fn else ""
+    check(f"H4b-allow {_nm} reads the table only to ask unfinished_day, never to count tries",
+          bool(_src) and "_unfinished." in _src and "_real_attempt_count" not in _src)
 check("H4c _real_attempt_count dereferences submit_refusal.is_real_try",
       "_refusal.is_real_try" in "\n".join(_lines[_count_fn.lineno - 1:_count_fn.end_lineno]))
 

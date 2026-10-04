@@ -5638,7 +5638,7 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 |-------|-----------|---------|
 | `commcalc.report_definitions` — gains **`arrears_days`** and **`empty_stale_after_days`** (mig `1042`): how many days late a source posts, and how long an unbroken run of zero-row pulls stays believable. Per org, per `report_key`, NULL inherits the house default in `empty_pull_verdict`. **No new table** — the day-grain sweep window is now `max(refresh_days, arrears_days)`, which is what stops a one-day window being asked of an in-arrears feed forever | mig `1042` (the house `comp_report` row set to 7); Connectors / report registry | `router._registry_report_cfg` via `_REGISTRY_SWEEP_COLS` → `epay_sweep._expand_jobs` (the window floor) and `epay_sweep._empty_cfg_evidence` → `empty_pull_verdict.classify_empty_pull` — §19.41 |
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
-| `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11 |
+| `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11. **Also gains the rest of the submit form (mig `1052`: `acc_sale`, the three counts, `remarks`, `envelope_picture`) plus the configured-tender jsonb**, so a blocked try can be resumed — read by `closing/unfinished_day.resume_entry` via `GET /closing/resume`, and by `_closing_summary_for_date` / `closing_rollup` / `_run_closing_missing_alerts` through `unfinished_day.describe` to tell "nobody submitted" apart from "submitted and sent back to recount" — §29.12 |
 | `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1037`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1037` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
 | *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
@@ -5851,6 +5851,10 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 | *(no endpoint added)* — `GET /commcalc/data-freshness`, its auto-monitor and the run-now button are unchanged in shape; their feed SET is now derived from the registry rather than three names at the call site, and each row gains `cadence_days` (plus `stale_basis: "arrival"` on a feed with no data-date column). ⚠ **No notification channel is wired to this report** — a tenant still has to look; routing a stale-feed alarm into the digest is NOT in §19.43 | `router._data_freshness_report` → `_lineage.watched_feeds()` / `feed_cadence_days()` / `feed_label()` | §19.43 |
 | `GET /core/attention` item `storeops_no_payscale` (no route added) — its `deep_link` is now `/hr?tab=employees` ("Set pay rates (HR → Employees & Pay)") instead of `/hr` (the Total Comp tab), and its sentence names HR → Employees & Pay instead of HR → People | `storeops/attention.py::_p_no_payscale` | §19.40 |
 | `POST /closing/row` — every refusal now RECORDS itself before it answers (8 paths: the close date, the closer gate's two, the photo upload, the photo-required gate, the three duplicate refusals, the two expense ones, and the new `identity_missing`); a submit with no store or no employee name is refused instead of written unprotected; `attempt_no` counts REAL tries only | `closing/router.create_row` → `_refuse` → pure `closing/submit_refusal` + `closing/dedup_key` | §29.11 |
+| `GET /closing/resume` / `GET /closing/rollup` / `GET /closing/summary` — all three match a store-day on `closing/unfinished_day.store_key(resolve, store_code)`, NOT the raw `store_code`: the submit trail and the closing row can spell one store two ways (measured live: `1800GreatNeckRd` vs `B-1800`, seven store-days), and a raw-string join reports a finished day as awaiting a correction | `closing/unfinished_day.store_key` over `account.coa.store_resolver`, built once per request by `closing/router._store_key_resolver` | §29.12 + §13 |
+| `GET /closing/resume` — what the rep already typed for a store-day with no closing yet, so a rep the close gate sent back comes back to a filled-in form. Answers with the REP'S OWN numbers only: no POS figure, no variance, no direction (locked by `harness_closing_unfinished_day.py` §H2) | `closing/router.closing_resume` over `closing/unfinished_day.state_for`/`resume_entry`; screen `ClosingSubmitForm` | §29.12 |
+| `GET /closing/rollup` — additive: `unfinished` (store-days started and not finished, with the entered money and the gate's recorded variance) + `unfinished_counts`. Reported BESIDE the money: an unfinished day writes no closing row, so `by_store`/`by_rep`/`totals` are byte-identical to before | `closing/router.closing_rollup` over `closing/unfinished_day.describe`/`summarize` | §29.12 |
+| `GET /closing/summary` — additive: `unfinished` on each no-closing store card, AND a card now exists for a store whose only evidence of the day is a blocked submit (the card loop was keyed on who clocked in or sold, so a DM covering the floor made the store vanish) | `closing/router._closing_summary_for_date` over `closing/unfinished_day.describe` | §29.12 |
 | `GET /closing/attempts` — additive: `refusals`, `last_refusal_code`, `last_refusal_detail`, `last_refused_at` per group, `refused` / `refusal_code` / `refusal_detail` per try; `attempts` means REAL tries; a store-day whose only events are refusals always qualifies for `only_review=true` | `closing/router.closing_attempts` (dereferencing `submit_refusal.is_real_try`) | §29.11 |
 | **Every JSON response** (no route added) — a MESSAGE-key value carrying a RUNTIME database / hosting error (`setup_notice.SYSTEM_INTERNAL`: duplicate key, violates … constraint, permission denied for table, an error dict `'code': '23505'`, `postgrest…APIError`, a `*.supabase.co` host) reaches a non-super-admin as `SYSTEM_NOTICE` from that sentence on; data rows never read; the original to the server log | `core/setup_notice.SetupNoticeMiddleware` (unchanged registration) | §19.38 |
 | **Every JSON response** (no route added) — a MESSAGE-key value (`detail`, `note`, `hint`, `error`, … — `setup_notice.MESSAGE_KEYS`, never a data row / list) carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; data cells are never read; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
@@ -6122,6 +6126,7 @@ nothing · §G migration `1051` tied to the code · §H eight locks, each with a
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
+| **Store-days started and not finished** (per store-day) — somebody submitted, the close gate sent them back to recount, and they did not return: `unfinished` / `unfinished_counts` on `GET /closing/rollup`, the `unfinished` block on each `GET /closing/summary` store card, the DM-verify banner. Carries the entered money and the gate's OWN recorded variance (never recomputed). **NOT a money figure**: an unfinished day writes no `commcalc.daily_closing` row, so it reaches no cash, recon or P&L total (owner chose "not until corrected", 2026-10-04). Distinct from **turned away** below (refused before the gate) and from **not submitted** (nobody tried) | `closing/unfinished_day.state_for`/`describe` over `commcalc.closing_attempt` + `commcalc.daily_closing` | §29.12 |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
 | **What a customer is told when the database errors, and what a data feed is called** — never a table, schema, env var or hosting vendor: "Something went wrong saving or loading this. Check the entry and try again, or contact support if it keeps happening."; a feed by its plain name ("MI & ATU report", "monthly sales upload") | — | backend `core/setup_notice.py` (`SYSTEM_INTERNAL`, `is_system_internal`, `SYSTEM_NOTICE`); frontend `lib/sourceLabels.ts` (`sourceLabel`); lock `harness_carrier_vocab_guard.py` §INFRA (§19.38) |
 | **Any per-store figure (sales, GP, commission, P&L store column, closing cash)** | splits in two when ONE store resolves to two canonical keys — a `commcalc.store_mapping` row whose address box holds the store CODE, or a `storeops.stores` store with no mapping row at all (§13d). Checked by `account/store_identity_audit.py::audit` over the REAL `coa.store_resolver`; `[]` is the invariant. Repair: runbook `store_identity_merge_1800_1115.sql` (owner-run, #346 + the B-60TH step). Live 2026-10-02: `B-1800`, `B-1115`, `B-60TH`, `B-2778` (closed → B-1598); `Cellular Services` is a COMPANY, exempt by dereferencing `commcalc.companies` |
@@ -12751,6 +12756,120 @@ code comment during the merge itself.
 **OPEN — reported, not fixed.** Which of the nine refusals Abid actually hit cannot be known: the refusals that
 predate this fix left nothing behind, which is the defect. `require_photo_if_cash` being on org-wide makes the
 photo gate the likeliest. From the next refusal on, the answer is on the Management Review screen.
+
+
+### 29.12 A STORE-DAY SOMEBODY STARTED AND DID NOT FINISH READ AS A STORE-DAY NOBODY WORKED (owner bug report 2026-10-04)
+
+Owner, verbatim: *"If the stops the reform entering the 1st closing and tells them to correct it, the rep tries
+again but stops at 2 or even after the 1st attempt, the system should say to correct the entries like it does but
+also save the last entered data in thr system so the system is not blank at any time like what happened with
+Abid"*
+
+**LIVE EVIDENCE FIRST (read-only, before a line was written).** B-117 / `2026-10-01`, employee **"Rana"**:
+
+| what was there | value |
+|---|---|
+| `commcalc.closing_attempt` rows | **two, two seconds apart, both `blocked`** (attempt_no 1 and 2) |
+| entered cash vs POS | **$2,826.00** vs $2,631.83 → **$194.17 OVER** (`cash_dir` 'over') |
+| entered credit vs POS | **$270.00** vs $146.59 → **$123.41 OVER** (`credit_dir` 'over') |
+| also entered | `t_zelle` $225.00 |
+| `commcalc.daily_closing` for that store-day | **none** |
+
+The 3-try close gate blocks tries 1–2 and auto-accepts the 3rd (§29.11 counts the tries). He stopped at two. Oct 2
+and Oct 3 ARE stored and DO render — verified by driving the real `closing_rollup` (B-117, 2 days, $3,863 cash) and
+`closing_summary`. Only Oct 1 is absent, and it is absent because it was never written.
+
+**THE MONEY WAS NEVER LOST.** `commcalc.closing_attempt` has carried every entered tender, the POS figure it was
+compared against and the variance direction since mig `103`. What was wrong was that every reader took **"no
+closing row" to mean "nobody submitted"**, when it can equally mean **"somebody submitted and the gate sent them
+back"** — opposite operational facts (one needs a nag, the other holds real declared cash and needs a correction),
+indistinguishable platform-wide. On the DM-verify screen the store did not appear **at all**: the card loop is keyed
+on who clocked in or sold (`if not worked: continue`), and a district manager covering the floor is not on that
+roster. That is the whole of "we cannot see it".
+
+**DUPLICATE CHECK (build gate).** Searched the index and the code for an existing mechanism before building.
+`commcalc.closing_attempt` + `GET /closing/attempts` (§29.11) already store and report what a rep tried → **REUSED**;
+the entry is not stored a second time. `harness_intake_fakes.FakeDB` is the house's shared in-memory client →
+**REUSED** rather than a fourth fake client. The localStorage draft already in `ClosingSubmitForm` → **EXTENDED**,
+not replaced: it survives the camera reloading the PWA and nothing else, so the server resume sits beside it and
+only offers itself when there is no local draft.
+
+**NO PROVISIONAL CLOSING ROW — and that is the design, not a shortcut.** Writing the blocked entry into
+`commcalc.daily_closing` would have been the obvious reading of the owner's words and is the wrong fix twice over:
+a second home for "what did the rep declare", beside the attempt trail that already holds it (the sibling
+derivation the index rules forbid), and known-wrong money in front of all **51** readers of that table. Asked on
+2026-10-04 whether an un-corrected entry should count in cash totals, the owner chose **"not until corrected"**.
+Because an unfinished day writes no closing row, that is now **structural** rather than a rule somebody must
+remember — every figure in `by_store` / `by_rep` / `totals` is byte-identical to before this package.
+
+**ONE FACT, ONE HOME.** `closing/unfinished_day.py` (pure; no I/O, no client, no framework) is the only place that
+decides what an unfinished store-day is: `state_for` → one of `not_started` / `awaiting_correction` / `turned_away`
+/ `finished`, `describe` (state + label + the entered money + the gate's own recorded variance), `resume_entry`,
+`is_finished` (the predicate a money reader honours), `summarize`. `TENDER_COLUMNS` and `ENTRY_COLUMNS` are the one
+declaration of which columns are money and which are the rest of the form. The try/refusal rule is
+`submit_refusal.is_real_try`, dereferenced — never a second copy.
+
+**WIRED (the callers that had each assumed it independently):**
+
+- `_closing_summary_for_date` — the no-closing card now says WHY, and a store with tries but nobody on the roster
+  **gets a card at all** (the Burnside shape).
+- `closing_rollup` — `unfinished` + `unfinished_counts`, reported BESIDE the money and never inside it.
+- `_run_closing_missing_alerts` — stops telling a rep who did submit that nobody did; the day is still open, so the
+  alert still fires, it just says the true thing. No amount reaches that copy (it goes to the store too).
+- `GET /closing/resume` + the submit form — the rep comes back to a filled-in form. **It answers with the rep's own
+  numbers only**: no POS figure, no variance, no direction. The gate tells a rep the direction and never the
+  amount, and that rule holds here; `harness_closing_unfinished_day.py` §H2 fails the build if it stops holding.
+- `_log_attempt` — keeps the accessory sale, the three counts, the remarks, the envelope photo (mig `1052`) and the
+  configured-tender jsonb, so try three is not retyping. Retyping everything is a reason to stop at two.
+
+**ONE STORE-DAY, ONE KEY — found by VERIFYING mig 1052 against live data, 2026-10-04.** Joining
+`commcalc.closing_attempt` to `commcalc.daily_closing` on the raw `store_code` is wrong, and was wrong in
+production: seven house store-days had an ACCEPTED closing under `B-1800` and the attempt rows for the same
+submit, to the second, under `1800GreatNeckRd`. The owner-run `store_identity_merge` runbook (§13) re-keyed the
+closing rows onto the canonical code and left the audit trail on the spelling the picker had sent. So the first
+cut of this package reported **15** unfinished store-days where **8** are real: four in August and three in
+September were FINISHED days, each shown to a manager as a correction to chase on money already accepted and
+banked. **The class** is that a store's identity is spelled differently in different tables — the roster carries
+canonical codes, the closings and the tries carry whatever the submit sent — and §13 already names that class.
+**The fix dereferences the platform's ONE answer**: `closing/unfinished_day.store_key(resolve, store_code)` over
+`account.coa.store_resolver` (exact address → alias → raw-is-a-code → unambiguous leading street number), built
+once per request by `closing/router._store_key_resolver` and used by all four readers. It also closes the
+case-folding trap that made `b-1115` a phantom store. A store the resolver cannot place keeps its own raw code,
+so an unknown store groups with itself and never with another; no resolver at all degrades to the raw code
+rather than failing the report. **Measured after the fix, live:** August 0, September 0, October 1 (B-117 /
+2026-10-01), and the seven genuine July days unchanged — and `GET /closing/resume` now answers `finished` from
+EITHER spelling of a closed day instead of offering the rep a day that is already closed.
+
+**MIGRATION 1052 — APPLIED 2026-10-04 (owner ran it).** Verified live: all six resume columns present on
+`commcalc.closing_attempt` and the `closing_attempt_store_day` index in place. Attempt rows written BEFORE it
+carry NULL in the six columns, so a resume of an older try hands back the tenders only — the degrade path (§G),
+not a fabricated zero. Original terms, unchanged: Six additive resume columns on
+`commcalc.closing_attempt` + one `(org_id, close_date, store_code)` index, `-- REVERT:` notes, a `DO` block that
+aborts unless all six landed. **It touches `commcalc.daily_closing` not at all and reads or writes no money
+column.** Unapplied, `_log_attempt` degrades to the mig-103 column set and still records every try (§G).
+
+**Lock: `backend/harness_closing_unfinished_day.py` — 104 checks, DB-free**, CI job `closing-unfinished-day-lock`.
+§A–C pure, §D the regression (the live Burnside numbers through the real code: `awaiting_correction`, $2,826
+entered, $194.17 over — before this package those inputs produced no state at all), §E the money point, §F the real
+resume endpoint, §G degrade pre-mig-1052, **§H the wiring locks that fail the build**: a blocked submit may never
+write a provisional closing row; the rep-facing endpoint may never reveal the POS figure or the variance; no caller
+may spell a state string or re-derive the rule; the screen must word every state and invent none; the migration must
+add every column the logger writes and touch no money column. **Verified to BITE:** inserting a provisional
+`daily_closing` row in the blocked branch turns §H1a red. §29.11's own `H4b` allow-list names these four readers
+explicitly and proves each one only asks this registry, so the two locks hold each other from both sides.
+**§I the store-day key**: the two live spellings collapse to one key and two different stores never do; the
+regression drives the REAL `/closing/resume` over the REAL `account.coa.store_resolver` (fixtures carrying the
+measured B-1800 / `1800 Great Neck Rd` shape) and proves a day closed under the canonical code reads as finished
+from the twin spelling; and a build-failing lock that the maps grouping attempt rows by store-day are BUILT from
+that key and nothing else. **Verified to BITE:** regrouping `_att_by_store` on the raw `store_code` turns §I5b
+red. `_by_sd` was renamed `_att_by_sd` because a dozen unrelated envelope and deposit maps in the same file share
+that suffix and a name-based lock could not have told them apart.
+
+**OPEN — reported, not fixed.** B-117 / 2026-10-01 is **still not closed**, and this package does not close it: the
+row needs Abid's third submit, and the **$194.17 cash overage is a real discrepancy** somebody should look at rather
+than have the platform absorb. Three harnesses are red on `main` and unchanged by this PR —
+`harness_closing_submissions` (legacy-row tender fallback), `harness_closing_hardening` (B1e/B1f oracle) and
+`harness_closing_reports_span_scope` (7B) — confirmed by stashing these changes and re-running.
 
 
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)
