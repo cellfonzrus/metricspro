@@ -7638,6 +7638,24 @@ harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exact
 no-deps job). Proven both ways: replaying the bad step into the workflow text reproduces the violation and names
 `app/modules/closing/router.py imports fastapi`; 28 checks, 9 of them negative controls.
 
+§19.25d **THE FOURTH OF THE SAME CLASS — a harness that imported the app INSIDE a helper (2026-10-04).**
+`harness_order_transport.py` §E drives the REAL `_push_accessory_pos` over a stub client, and did its
+`import app.modules.storevisit.router` inside that helper rather than at module level. The lock added for §19.25
+follows MODULE-LEVEL imports only, by a stated design: a function body cannot break module LOAD. True, and beside
+the point — the step still died on `ModuleNotFoundError: No module named 'fastapi'` at §E's first check, having
+printed §A–§D as passes. The lock read green; CI read red. That is the one thing a lock must never do, and it is now
+the fourth time this class has landed (§19.25, 19.25b, 19.25c, this).
+
+**The ruling was NARROWED, not the lock loosened.** `harness_ci_pipefail_lock._lazy_imports` now contributes the
+HARNESS's own function-body imports as seeds to the same reachability walk. Still excused, because neither can
+mislead: a `try:`-guarded import, and a lazy import inside an app module the harness merely reaches — that one
+really is only run if that code path runs. Measured across the 82 harnesses in dependency-free jobs: this change
+flags **exactly one**, the defect itself, and nothing else. Four armed controls pin both halves of the ruling
+(a lazy import in the harness is RED, transitively RED, try-guarded green, lazy-inside-a-reached-module green).
+The harness moved to `carrier-vocab-guard.yml`'s `customer-master-proof` job, which installs the backend's
+dependencies, as the comment there already said this class of harness must.
+
+
 §19.25c **A GUARD WENT STALE AND NOTHING NOTICED, BECAUSE NOTHING RAN IT (owner-directed, 2026-09-27).**
 `harness_activation_bucketing.py` check **F3** had been RED on `main` for ~3 weeks. It grepped the SOURCE TEXT of
 `router._activation_details_rules` for the literal `.eq("org_id", org_id)`. PR #279 did the right thing and removed
@@ -17795,8 +17813,11 @@ raising the draft never depends on the vendor's system being up, and **a dry run
 
 ### 51.5 The lock
 
-`backend/harness_order_transport.py` — **143 checks**, DB-free, stdlib only, in the
-`carrier-vocab-guard` job. §A the route resolves from config with a safe default · §B a credential in
+`backend/harness_order_transport.py` — **143 checks**, DB-free, no network, in the
+`customer-master-proof` job of `carrier-vocab-guard` (NOT the dependency-free guard job: §E drives
+the real `_push_accessory_pos`, which imports the router, which imports FastAPI — see §19.25, where
+this is the fourth instance of that class and where the lock was narrowed so the next one fails
+locally instead of in CI). §A the route resolves from config with a safe default · §B a credential in
 a declaration is refused, nested ones too · §C the dialect's host, version, money and unpriced-line
 rules · §D the three separate facts behind "may a sweep send this" · §E the **real**
 `_push_accessory_pos` over a stub client: pushed once, recorded, idempotent by `external_ref`, a

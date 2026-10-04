@@ -173,6 +173,40 @@ def _first_party(module, read_source):
     return None
 
 
+def _lazy_imports(src):
+    """The imports inside function bodies. These cannot break module LOAD, which is why
+    `_module_level_imports` skips them — but a harness that imports the app inside a helper dies on
+    the first check that calls it, which is the same defect arriving later.
+
+    FOUND 2026-10-04, the fourth of this class: `harness_order_transport.py` drives the real
+    `_push_accessory_pos`, and did its `import app.modules.storevisit.router` inside that test
+    helper. This lock said green; CI said ModuleNotFoundError on line one of §E. A `try:` guard
+    still excuses it, as it does above.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    guarded = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try):
+            for n in ast.walk(node):
+                guarded.add(id(n))
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for n in ast.walk(node):
+            if id(n) in guarded:
+                continue
+            if isinstance(n, ast.Import):
+                found.extend(a.name for a in n.names)
+            elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                found.append(n.module)
+                found.extend("%s.%s" % (n.module, a.name) for a in n.names)
+    return found
+
+
 def unrunnable(harness_name, read_source, wheels):
     """→ "<file> imports <module>" for the first module-level chain that needs a wheel, else None.
     Follows `app.*` imports, because the defect arrived transitively: harness → app → fastapi."""
@@ -180,10 +214,15 @@ def unrunnable(harness_name, read_source, wheels):
     if head_src is None:
         return None
     stubs = _stubbed_modules(head_src)
-    seen, queue = set(), [(harness_name, head_src)]
+    # The HEAD harness contributes its lazy imports as well as its module-level ones; everything
+    # reached from there is followed by module load, as before.
+    seen, queue = set(), [(harness_name, head_src, True)]
     while queue:
-        where, src = queue.pop(0)
-        for module in _module_level_imports(src):
+        where, src, is_head = queue.pop(0)
+        mods = _module_level_imports(src)
+        if is_head:
+            mods = mods + _lazy_imports(src)
+        for module in mods:
             head = module.split(".")[0]
             if head in wheels or module in wheels:
                 if head in stubs or module in stubs:
@@ -199,7 +238,7 @@ def unrunnable(harness_name, read_source, wheels):
                 seen.add(module)
                 nxt = _first_party(module, read_source)
                 if nxt:
-                    queue.append(nxt)
+                    queue.append((nxt[0], nxt[1], False))
     return None
 
 
@@ -354,9 +393,26 @@ def main():
     check("a try-guarded import cannot break the load → green",
           misplaced({"x.yml": nodeps}, fake({
               "harness_z.py": "try:\n    import pandas\nexcept ImportError:\n    pandas = None\n"}), W) == [])
-    check("an import inside a function is lazy → green",
+    # RE-POINTED 2026-10-04, the ruling NARROWED rather than the lock loosened. "Lazy" was taken to
+    # mean "harmless", because a function-body import cannot break module load. It can still break
+    # the harness: harness_order_transport.py imported the app inside a test helper and died on §E's
+    # first check while this lock read green. So a lazy import in the HARNESS is now a violation; a
+    # try-guarded one is still excused, and so is one inside an app module the harness reaches, which
+    # really is only run if that code path runs.
+    check("a lazy import in the HARNESS still needs the wheel → RED",
+          bool(misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "def f():\n    import pandas\n    return pandas\n"}), W)))
+    check("and so does one reaching the app transitively from a helper → RED",
+          bool(misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "def f():\n    import app.modules.closing.router as r\n    return r\n",
+              "app/modules/closing/router.py": "from fastapi import APIRouter\n"}), W)))
+    check("a try-guarded lazy import is still excused → green",
           misplaced({"x.yml": nodeps}, fake({
-              "harness_z.py": "def f():\n    import pandas\n    return pandas\n"}), W) == [])
+              "harness_z.py": "def f():\n    try:\n        import pandas\n    except ImportError:\n        pandas = None\n"}), W) == [])
+    check("a lazy import INSIDE a reached app module is still lazy → green",
+          misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "import app.modules.closing.helper\n",
+              "app/modules/closing/helper.py": "def f():\n    import pandas\n    return pandas\n"}), W) == [])
     check("a stub the harness installs itself → green",
           misplaced({"x.yml": nodeps}, fake({
               "harness_z.py": 'import sys, types\nsys.modules["fastapi"] = types.ModuleType("fastapi")\n'
