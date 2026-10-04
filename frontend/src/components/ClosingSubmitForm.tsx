@@ -228,6 +228,61 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const lockedName = prefillName || (defaultEmployeeName || '').trim()
   const employeeName = pickAny ? (f.employee_name || (nameTouched ? '' : prefillName)) : lockedName
 
+  // ── WHAT THE REP ALREADY TYPED, FROM THE SERVER (index §29.12, owner 2026-10-04) ───────────────
+  //    The draft above is localStorage: it survives the camera reloading the PWA, and nothing else.
+  //    A rep the close gate sent back to recount often comes back later, on another device, or after
+  //    the browser has been cleared — and then try three means retyping everything, which is a
+  //    reason to stop at two. Abid stopped at two on 2026-10-01 and the day stayed empty.
+  //    So the server hands back the last try's own entry. It returns the REP'S OWN numbers only:
+  //    no POS figure, no variance, no attempt count beyond how many tries they made — the gate tells
+  //    a rep the direction of a mismatch and never the amount, and that rule holds here.
+  const [serverResume, setServerResume] = useState<{ resume: Record<string, any>; tries: number } | null>(null)
+  useEffect(() => {
+    const sc = f.store_code, nm = (employeeName || '').trim(), dt = f.close_date
+    if (!sc || !nm || !dt) { setServerResume(null); return }
+    let live = true
+    const qs = new URLSearchParams({ store_code: sc, employee_name: nm, close_date: dt })
+    api(`/api/v1/closing/resume?${qs.toString()}`)
+      .then((d: any) => {
+        if (!live) return
+        const r = d?.resume || {}
+        setServerResume(d?.state === 'awaiting_correction' && Object.keys(r).length
+          ? { resume: r, tries: d.tries || 0 } : null)
+      })
+      .catch(() => { if (live) setServerResume(null) })
+    return () => { live = false }
+  }, [f.store_code, f.close_date, employeeName])
+
+  function applyServerResume() {
+    const r = serverResume?.resume; if (!r) return
+    setF(prev => {
+      const next: any = { ...prev }
+      for (const k of [...MONEY_KEYS, 'acc_sale', 'upgrade_count', 'new_line_count',
+                       'postpaid_count', 'remarks', 'envelope_picture'] as (keyof State)[]) {
+        const v = (r as any)[k]
+        if (v !== undefined && v !== null && v !== '') next[k] = String(v)
+      }
+      return next as State
+    })
+    // Configured tenders (mig 111): the standard seven come off the t_* keys, a custom one out of
+    // the same `tenders` jsonb the submit endpoint accepts — so a tenant with its own tenders
+    // resumes them rather than getting a form that looks restored but is missing amounts.
+    if (tdefs) {
+      setTv(prev => {
+        const next = { ...prev }
+        for (const d of tdefs) {
+          const v = STD_KEYS.includes(d.tender_key)
+            ? (r as any)['t_' + d.tender_key]
+            : ((r as any).tenders || {})[d.tender_key]
+          if (v !== undefined && v !== null && v !== '') next[d.tender_key] = String(v)
+        }
+        return next
+      })
+    }
+    if ((r as any).envelope_picture) setEnvPreview('')
+    setServerResume(null)
+  }
+
   const enteredCash = parseFloat(tdefs ? (tv['cash'] || '') : f.t_cash) || 0
   const ocrNum = parseFloat(ocrCash) || 0
   const ocrMismatch = ocrCash !== '' && Math.abs(ocrNum - enteredCash) > 1
@@ -497,6 +552,17 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           </div>
           <button className="btn btn-primary" style={{ fontSize: 13 }}
             onClick={() => startTour(coach.tour_slug || 'closing-submit')}>🎓 Walk me through it</button>
+        </div>
+      )}
+      {!resumeDraft && serverResume && (
+        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 20 }}>✎</span>
+          <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: '#92400e' }}>
+            <b>This closing was sent back to be corrected.</b> Nothing is recorded for the day yet.
+            What you entered {serverResume.tries === 1 ? 'last time' : `on your last of ${serverResume.tries} tries`} is still saved — bring it back, change what needs changing, and submit again.
+          </div>
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={applyServerResume}>Bring it back</button>
+          <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => setServerResume(null)}>Enter it fresh</button>
         </div>
       )}
       {resumeDraft && (

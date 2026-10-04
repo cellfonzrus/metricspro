@@ -656,7 +656,31 @@ export default function DailyClosingVerify() {
               </div>
             </div>
 
-            {s.no_closing_submitted && (
+            {/* WHY there is no closing (index §29.12, owner 2026-10-04). "Nobody submitted" and
+                "submitted, sent back to recount, never came back" are opposite facts and this card
+                showed both as the same red banner — which is how Burnside's 2026-10-01 looked like a
+                store nobody worked while $2,826 of declared cash sat in the submit trail. The state
+                is the server's (closing/unfinished_day); the screen only words it. */}
+            {s.no_closing_submitted && s.unfinished?.state === 'awaiting_correction' && (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#92400e', background: '#fef3c7', padding: '6px 10px', borderRadius: 8 }}>
+                ✎ Entered, awaiting correction — {s.unfinished.employee_name || 'a rep'} entered{' '}
+                {fmt(s.unfinished.entered?.declared_cash)} cash on {s.unfinished.tries === 1 ? 'one try' : `${s.unfinished.tries} tries`} and
+                {' '}was sent back to recount. Nothing is recorded for the day until it is resubmitted.
+                {s.unfinished.variance?.has_pos && (s.unfinished.variance.cash || s.unfinished.variance.credit) ? (
+                  <span style={{ fontWeight: 400 }}>
+                    {' '}Off by {fmt(Math.abs(s.unfinished.variance.cash || 0))} on cash
+                    {s.unfinished.variance.cash > 0 ? ' (over)' : s.unfinished.variance.cash < 0 ? ' (short)' : ''}
+                    {s.unfinished.variance.credit ? `, ${fmt(Math.abs(s.unfinished.variance.credit))} on credit${s.unfinished.variance.credit > 0 ? ' (over)' : ' (under)'}` : ''}.
+                  </span>
+                ) : null}
+              </div>
+            )}
+            {s.no_closing_submitted && s.unfinished?.state === 'turned_away' && (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#92400e', background: '#fef3c7', padding: '6px 10px', borderRadius: 8 }}>
+                ⚠ {s.unfinished.turned_away} submit{s.unfinished.turned_away > 1 ? 's' : ''} turned away for this store — nothing was recorded. The reason is on Management Review.
+              </div>
+            )}
+            {s.no_closing_submitted && (!s.unfinished || s.unfinished.state === 'not_started') && (
               <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#b42318', background: '#fde8e8', padding: '6px 10px', borderRadius: 8 }}>
                 🚫 No closing submitted for this store — but {s.worked_reps?.join(', ') || 'reps'} worked here today.
               </div>

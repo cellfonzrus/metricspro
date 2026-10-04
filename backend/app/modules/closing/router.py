@@ -33,6 +33,7 @@ from . import closer_resolution
 from . import billpay_netting
 from . import submit_refusal as _refusal
 from . import dedup_key as _dedup
+from . import unfinished_day as _unfinished
 from . import closing_source as _closing_src
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -944,11 +945,43 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     # retail-ops-24: keyset scoping now happens up in the accumulation loop (row admission), so `bs`/
     # `br` are already restricted to the caller's span — no second filter needed here, and `grand`/
     # `verified_keys`/`submitted_keys` (computed from the SAME kept_rows) are consistent with them.
+    # ── STORE-DAYS SOMEBODY STARTED AND DID NOT FINISH (owner 2026-10-04, index §29.12) ───────────
+    #    Reported BESIDE the money, never inside it. The owner's instruction was that a day must not
+    #    be blank; his answer on the money was "not until corrected", and this shape makes that
+    #    structural rather than a rule somebody has to remember: an unfinished day writes no
+    #    `daily_closing` row, so it cannot reach `by_store`, `by_rep` or `totals` — every figure above
+    #    is byte-identical to before this package. `unfinished` is a separate list for the tile and
+    #    the badge. The state is decided only by closing/unfinished_day.describe.
+    unfinished_days = []
+    try:
+        _aq = (client.schema("commcalc").table("closing_attempt").select("*").eq("org_id", org_id))
+        if period:
+            _aq = _aq.eq("period", period)
+        else:
+            _aq = _aq.gte("close_date", date_from).lte("close_date", date_to)
+        _atts = (_aq.limit(50000).execute().data) or []
+    except Exception:
+        _atts = []
+    _closed_sd = {(str(r.get("store_code") or ""), str(r.get("close_date") or "")) for r in rows}
+    _by_sd = {}
+    for _a in _atts:
+        _by_sd.setdefault((str(_a.get("store_code") or ""), str(_a.get("close_date") or "")), []).append(_a)
+    for (_sc, _cd), _rows_sd in sorted(_by_sd.items()):
+        if not _sc or (_sc, _cd) in _closed_sd:
+            continue
+        _st = _unfinished.describe(None, _rows_sd)
+        # The address rides the attempt row itself, so an unfinished day names its store without a
+        # roster lookup that would fail for exactly the stores missing from the roster.
+        _addr = next((r.get("store_address") for r in _rows_sd if r.get("store_address")), None)
+        unfinished_days.append({"store_code": _sc, "close_date": _cd,
+                                "store_address": _addr, "store_name": _addr or _sc, **_st})
     return {
         "period": period, "date_from": date_from, "date_to": date_to,
         "by_store": bs, "by_rep": br, "totals": finalize(grand),
         "verified_keys": len(verified_keys & submitted_keys), "submitted_keys": len(submitted_keys),
         "market_filter_skipped": market_filter_skipped,
+        "unfinished": unfinished_days,
+        "unfinished_counts": _unfinished.summarize(unfinished_days),
     }
 
 
@@ -1102,6 +1135,19 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     before — byte-identical either way."""
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    # WHAT SOMEBODY STARTED AND DID NOT FINISH (owner 2026-10-04, index §29.12). A store-day with no
+    # closing row is NOT the same fact as a store-day nobody submitted: the close gate may have sent
+    # the rep back to recount and they may not have returned, in which case real declared money and a
+    # real variance are sitting in the submit trail. One read per date, grouped by store; the state
+    # itself is decided only by closing/unfinished_day.describe.
+    try:
+        _att_today = (client.schema("commcalc").table("closing_attempt").select("*")
+                      .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    except Exception:
+        _att_today = []
+    _att_by_store = {}
+    for _a in _att_today:
+        _att_by_store.setdefault(str(_a.get("store_code") or ""), []).append(_a)
 
     if org_ctx is None:
         org_ctx = _closing_summary_org_ctx(client, org_id)
@@ -1617,6 +1663,43 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "partial_closing": closer_resolution.partial_closing(
                 worked=worked, submitted=(), closing_mode=closing_mode, money_ok=None),
             "no_closing_submitted": True,
+            # WHY there is no closing (index §29.12) — "nobody submitted" and "submitted, sent back
+            # to recount, never returned" are opposite facts and this card showed both as blank.
+            "unfinished": _unfinished.describe(None, _att_by_store.get(str(code)) or []),
+            "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
+        })
+
+    # ── A STORE-DAY WITH TRIES AND NOBODY ON THE ROSTER (index §29.12). The loop above is keyed on
+    #    `who` and skips a store where no rep clocked in or sold (`if not worked: continue`), so a
+    #    store whose only evidence of the day is a blocked submit produced NO card at all — the
+    #    store simply vanished from the screen. That is the Burnside shape exactly: a district
+    #    manager covering the floor submitted twice, was sent back to recount, and neither the
+    #    closing nor the store appeared. A try is evidence the day happened; emit the card.
+    _emitted = {str(c.get("store_code") or "") for c in out}
+    for code, _atts in sorted(_att_by_store.items()):
+        if not code or code in closed_codes or code in _emitted:
+            continue
+        meta = store_meta.get(code, {})
+        mkt_bucket = _market_bucket(meta.get("market") or "")
+        if market_set is not None and mkt_bucket.casefold() not in market_set:
+            continue
+        if store_set is not None and code.upper() not in store_set:
+            continue
+        _state = _unfinished.describe(None, _atts)
+        _who_tried = _state.get("employee_name") or ""
+        if rep_set is not None and _who_tried.casefold() not in rep_set:
+            continue
+        out.append({
+            "store_code": code, "store_name": meta.get("address") or code,
+            "store_address": meta.get("address"), "market": mkt_bucket, "close_date": date,
+            "reps": [], "totals": None, "gate_status": None,
+            "scheduled_count": len(sched_by_store.get(code, set())), "missing_reps": [],
+            "worked_reps": [], "worked_count": 0, "scheduled_no_show": [], "worked_unscheduled": [],
+            "cross_login": [], "closing_mode": closing_mode, "closer": _who_tried or None,
+            "closer_source": "attempted", "closer_assigned": None,
+            "closer_assigned_off_roster": False, "closer_assigned_did_not_work": False,
+            "closer_note": None, "partial_closing": False,
+            "no_closing_submitted": True, "unfinished": _state,
             "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
         })
 
@@ -2273,6 +2356,51 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         recon["flags"] = rep_flags + [f"Envelope photo reads {_usd(ocr_mismatch['ocr_cash'])} vs {_usd(declared_cash)} entered"]
     return {**saved, "accepted": True, "recon": recon, "envelope_url": _signed_envelope(saved.get("envelope_picture")),
             "expense_lines": inserted_expense_lines}
+
+
+@router.get("/resume")
+def closing_resume(store_code: str = None, employee_name: str = None, close_date: str = None,
+                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """WHAT THE REP ALREADY TYPED for a store-day that has no closing yet (index §29.12).
+
+    The submit form calls this on open so a rep sent back to recount comes back to a filled-in form
+    instead of a blank one. Abid stopped at try two of three on 2026-10-01; retyping the accessory
+    sale, the counts, the remarks and the photo for a third attempt is a reason to stop, and the
+    owner's instruction was that the entry must not be lost.
+
+    WHAT THIS DELIBERATELY DOES NOT RETURN. The close gate tells a rep the DIRECTION of a mismatch
+    and never the amount — not the POS figure, not the variance, not the attempt count (see
+    `_REP_MISMATCH_RETRY` and `_log_attempt`'s docstring: "the rep never sees the amounts"). This
+    endpoint is rep-facing, so it answers with the rep's OWN numbers only. `unfinished_day.variance`
+    is never called here, and `harness_closing_unfinished_day.py` §H fails the build if the POS or
+    variance keys ever appear in this response.
+    """
+    d = _date(close_date) or _biz_today_iso()
+    if not (store_code and (employee_name or "").strip()):
+        return {"state": _unfinished.NOT_STARTED, "resume": {}, "tries": 0}
+    client = sb()
+    try:
+        closing = (client.schema("commcalc").table("daily_closing").select("id")
+                   .eq("org_id", org_id).eq("close_date", d).eq("store_code", store_code)
+                   .ilike("employee_name", (employee_name or "").strip()).execute().data) or []
+    except Exception:
+        closing = []
+    try:
+        atts = (client.schema("commcalc").table("closing_attempt").select("*")
+                .eq("org_id", org_id).eq("close_date", d).eq("store_code", store_code)
+                .ilike("employee_name", (employee_name or "").strip()).execute().data) or []
+    except Exception:
+        atts = []
+    state = _unfinished.state_for(closing[0] if closing else None, atts)
+    if state != _unfinished.AWAITING_CORRECTION:
+        # Nothing to resume: either the day is closed, nobody tried, or every try was turned away
+        # before the gate (a turned-away submit never reached the money, so there is nothing of the
+        # rep's to hand back).
+        return {"state": state, "resume": {}, "tries": 0}
+    last = _unfinished.latest_try(atts)
+    return {"state": state, "resume": _unfinished.resume_entry(last),
+            "tries": len([a for a in atts if _unfinished.is_real_try(a)]),
+            "last_try_at": last.get("created_at")}
 
 
 @router.patch("/row/{row_id}")
@@ -5443,19 +5571,47 @@ async def _run_closing_missing_alerts(org_id=None):
         # Its own failure mode (the feed never landed) is reported by the derivation sweep's
         # `skipped[].reason` and by the stale-store attention provider, not by this alert.
         _srcmap = _closing_source_map(c, oid, [str(s.get("store_code") or "") for s in stores])
+        # STARTED AND NOT FINISHED IS NOT "NOT SUBMITTED" (owner 2026-10-04, index §29.12). A rep the
+        # close gate sent back to recount HAS submitted; telling them nobody did is a false
+        # accusation and buries the thing that actually needs doing, which is the correction. The day
+        # is still open either way, so the alert still fires — it just says the true thing. The state
+        # is decided only by closing/unfinished_day.describe; no amount or variance reaches the copy,
+        # because this alert goes to the store as well as the DM.
+        try:
+            _att_rows = (c.schema("commcalc").table("closing_attempt").select("*")
+                         .eq("org_id", oid).eq("close_date", today).execute().data) or []
+        except Exception:
+            _att_rows = []
+        _att_by_sc = {}
+        for _a in _att_rows:
+            _att_by_sc.setdefault(str(_a.get("store_code") or ""), []).append(_a)
         for s in stores:
             sc = s.get("store_code")
             if not sc or sc in closed:
                 continue
             if not _closing_src.expects_rep_submission(_srcmap.get(str(sc), _closing_src.HOUSE_DEFAULT)):
                 continue
+            _where = s.get("address") or sc
+            _st = _unfinished.describe(None, _att_by_sc.get(str(sc)) or [])
+            if _st["state"] == _unfinished.AWAITING_CORRECTION:
+                _subject = f"Daily closing STARTED but not finished — {sc} ({today})"
+                _text = (f"The daily closing for {_where} was entered on {today} but the figures did "
+                         f"not match, so it was sent back to be corrected and has not been "
+                         f"resubmitted. Nothing is recorded for the day until it is. Open the "
+                         f"closing again — the numbers already entered are still there.")
+            elif _st["state"] == _unfinished.TURNED_AWAY:
+                _subject = f"Daily closing could not be submitted — {sc} ({today})"
+                _text = (f"Somebody tried to submit the daily closing for {_where} on {today} and it "
+                         f"was turned away, so nothing is recorded for the day. The reason is on the "
+                         f"Management Review screen.")
+            else:
+                _subject = f"Daily closing NOT submitted — {sc} ({today})"
+                _text = (f"The daily closing for {_where} was not submitted by the "
+                         f"{dl} deadline on {today}. The closing must be submitted before the store closes.")
             res = await _send_alert(
-                c, oid, "closing_missing",
-                subject=f"Daily closing NOT submitted — {sc} ({today})",
-                text=(f"The daily closing for {s.get('address') or sc} was not submitted by the "
-                      f"{dl} deadline on {today}. The closing must be submitted before the store closes."),
+                c, oid, "closing_missing", subject=_subject, text=_text,
                 ref_key=f"{sc}|{today}", store_code=sc)
-            results.append({"org_id": oid, "store": sc, **res})
+            results.append({"org_id": oid, "store": sc, "state": _st["state"], **res})
     return {"checked": len(tens), "alerts": [r for r in results if r.get("sent")]}
 
 
@@ -8429,9 +8585,37 @@ def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credi
             "b2b_cash": (b2b or {}).get("cash"), "b2b_credit": (b2b or {}).get("card"),
             "cash_dir": dirs.get("cash"), "credit_dir": dirs.get("credit"),
             "blocked": bool(blocked), "accepted": bool(accepted), "auto_accepted": bool(auto_accepted),
+            # EVERYTHING THE REP TYPED, not only the money (owner 2026-10-04, mig 1052, index §29.12).
+            # A blocked try used to keep the tenders and drop the rest, so a rep coming back for try
+            # three retyped the accessory sale, the counts, the remarks and the photo — which is a
+            # reason to give up at two, and Abid did. The columns are declared ONCE, by
+            # unfinished_day.ENTRY_COLUMNS, and `resume_entry` reads them back.
+            **{k: body.get(k) for k in _unfinished.ENTRY_COLUMNS if body.get(k) not in (None, "")},
+            # Configured (non-standard) tenders, in the same jsonb shape the submit endpoint accepts,
+            # so a tenant that defined its own tenders resumes them too. The column has existed since
+            # mig 103 and nothing wrote it; writing it costs no migration.
+            **({"tenders": body["tenders"]} if isinstance(body.get("tenders"), dict) and body.get("tenders") else {}),
         }).execute()
     except Exception as e:
-        print("closing attempt log failed:", e)
+        # Mig 1052 not run: the entry columns do not exist yet. Keep the try — the money and the
+        # variance are what the gate acted on — rather than losing the record of the attempt over
+        # the fields that are only there to spare the rep retyping. Degrade, never drop.
+        try:
+            client.schema("commcalc").table("closing_attempt").insert({
+                "org_id": org_id, "close_date": d, "period": d[:7],
+                "store_code": body.get("store_code"), "store_address": body.get("store_address"),
+                "sfid": body.get("sfid"), "employee_name": body.get("employee_name"),
+                "attempt_no": attempt_no,
+                "entered_cash": round(_f(declared_cash), 2), "entered_credit": round(_f(declared_credit), 2),
+                "t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
+                "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"],
+                "t_acima": tenders["acima"],
+                "b2b_cash": (b2b or {}).get("cash"), "b2b_credit": (b2b or {}).get("card"),
+                "cash_dir": dirs.get("cash"), "credit_dir": dirs.get("credit"),
+                "blocked": bool(blocked), "accepted": bool(accepted), "auto_accepted": bool(auto_accepted),
+            }).execute()
+        except Exception as e2:
+            print("closing attempt log failed:", e, "| degrade also failed:", e2)
 
 
 def _caller_perms(client, authorization: str) -> dict:
