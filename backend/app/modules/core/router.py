@@ -2921,12 +2921,22 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
     idx = _scope.market_index(client, org_id)
     granted = [m.strip() for m in str((app_user or {}).get("market") or "").split(",") if m.strip()]
     unresolved = [m for m in granted if not (idx.get("by_market") or {}).get(m.lower())]
+    # This page's whole purpose is to answer "what will this login ACTUALLY see", so it may not
+    # compute that itself — it DEREFERENCES the one home the reports read (owner 2026-10-05, index
+    # §14x). A diagnostic that re-derives the span is worse than no diagnostic: it would keep
+    # printing the pin answer after the gate moved to evidence, and an admin would trust it.
     if scope == "all":
         reporting = {"unrestricted": True, "stores": [], "why": "role scope = all stores (company-wide)"}
     else:
-        codes = _scope.reporting_span_codes(client, org_id, app_user, scope, org_unit_codes=unit_codes)
-        reporting = {"unrestricted": False, "stores": sorted(codes),
-                     "why": f"role scope = {scope}"}
+        _vp = dict(perms or {})
+        _vp["scope"] = scope
+        codes, why = _scope.visible_store_codes(
+            client, org_id, role_perms=_vp, app_user=app_user, org_unit_codes=unit_codes)
+        if codes is None:
+            reporting = {"unrestricted": True, "stores": [], "why": why}
+        else:
+            reporting = {"unrestricted": False, "stores": sorted(codes),
+                         "why": f"role scope = {scope} · {why}"}
     # ── GRANT SEPARATION (ruling #6) + OWN STORE (ruling #7) ────────────────────────────────────
     # ADDITIVE fields. `grants` answers "which half of this person's grant produced which stores",
     # so an administrator can see — without logging in as anyone — that a store-scoped manager is
@@ -2936,12 +2946,12 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
     brk = _scope.login_grant_breakdown(client, org_id, app_user)
     own_store, own_note = [], ""
     if scope == "self":
-        hs = _scope.employee_home_store(client, org_id, eid) if eid else ""
-        own_store = sorted(_scope.self_store_codes(client, org_id, app_user, employee_home_store=hs))
-        own_note = ("their own store only — market grants are deliberately NOT used for a "
-                    "self-scoped person" if own_store
-                    else "NO resolvable store — this person's own-store scope is empty; pick their "
-                         "store in the Store column")
+        # Was the PIN (`self_store_codes` + the roster `home_store`). The owner's 2026-10-05
+        # directive says a pin is not an answer to "whose performance may I see", so this reads the
+        # same `reporting` answer resolved above rather than keeping a second, staler basis of its
+        # own. Kept as a field because the roles page labels it for the self tier specifically.
+        own_store = list(reporting.get("stores") or [])
+        own_note = reporting.get("why") or ""
     # The employee PICKER bound for this login — resolved by the same helper the picker endpoint
     # uses, so this page can answer "why is my dropdown empty / why can I see 25 people".
     _roster = _scope.roster_keyset(

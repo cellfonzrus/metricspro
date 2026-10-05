@@ -5710,6 +5710,85 @@ sites already rely on.
   applying it (see §19.18's sibling note on 1015).
 
 
+### 14x. A SPAN IS EVIDENCE, NOT A PIN — and a per-rep report is their own numbers (owner directive 2026-10-05)
+
+Owner, on seeing §14w land: *"the store pin is not desired, the employee shoudl have teh visibility
+in the store they have been schduled and actually worked and only their numbers, the concept of home
+store does not apply for vistibility into the performance of the store"*.
+
+- **THE CLASS.** `app_users.store_code` / `store_codes` and `employees.home_store` are SETUP — what
+  somebody typed on a form once. They were serving as the answer to a question about the present:
+  where is this person, therefore whose numbers are theirs to read. Measured read-only 2026-10-05
+  across both tenants: of the 71 logins declaring `people_visibility = 'self'`, **64 have a shift or
+  a punch at a store no pin names**, and **7 are pinned to a store they have never once worked**. A
+  span is now resolved from EVIDENCE, of exactly two kinds: the roster said be there (a shift), or
+  the clock says they were there (a punch).
+- **TWO DIMENSIONS, ONE DECLARATION, SHIPPED TOGETHER.** The same `people_visibility` fact answers
+  both halves of the owner's sentence, and either half alone is a regression:
+  | | question | home |
+  |---|---|---|
+  | store | which stores' rows reach me at all? | `core.scope.visible_store_codes` |
+  | person | whose rows among them are mine to read? | `core.scope.visible_people_keyset` (§14w) |
+  Evidence makes an individual contributor's store list **WIDER** — 84 pinned stores become 354
+  worked — because reps are moved around constantly. That is safe only because the person filter
+  reads the same declaration: more stores, and at every one of them only their own rows.
+- **ONE EVIDENCE REGISTRY.** `core.scope.WORKED_AT_SOURCES` is the one statement of what records a
+  person being somewhere (table, store column, date column, soft-delete filter). Both directions
+  dereference it — `worked_store_codes` (employee → stores) and `reporting_employee_ids` (stores →
+  employees) — so a third kind of evidence, a column rename or a second soft-delete flag lands in
+  both or in neither. Before this directive only the second existed and it carried that knowledge
+  inline.
+- **`caller_scope` decides nothing.** It dereferences `visible_store_codes` and holds no pin, market,
+  `home_store` or evidence scan of its own. `since`/`until` are optional pass-throughs (~90 call
+  sites predate them); a surface that knows its period should pass it, so "which stores can I see
+  for September" reads as "where I was in September".
+- **A MANAGER KEEPS THEIR ASSIGNED STORE** (`people_visibility = 'span'`): there the pin means "the
+  store this person RUNS", a different fact, and the only record of it while the org tree is unwired
+  (§14w). Measured: 4 of 17 span-tier logins — two store managers, two DMs — have never been
+  scheduled at a store they manage, so evidence alone would take it from them. Assigned-OR-worked for
+  a manager; worked, full stop, for an individual contributor. Keyed off the declared tier, never a
+  role name (RULE TWO).
+- **`employees.home_store` is still read by `reporting_employee_ids`, deliberately.** There it
+  answers "who is ASSIGNED to my store", a fair reading of *"if any employee works under him"*. The
+  owner's sentence rules it out as an answer to "whose PERFORMANCE may I see", which is the store
+  dimension.
+- **THE SALES REPORT'S ROWS ARE PER REP** — one per (store, salesperson, day), carrying that named
+  person's revenue, GP and accessory revenue. So a store gate alone was never the owner's sentence:
+  the moment a login resolved a shared store it read every colleague's money by name. `sales_report`
+  now also gates the person through the existing one-homes (`_caller_rep_keys` +
+  `payout_audience.mine_only`; `salesperson` was already in `REP_NAME_FIELDS`, so no new predicate),
+  and **totals are summed after both filters** — summing before would print the company's revenue
+  under a rep's name. Its gate also **fails closed**: it used to swallow every exception and fall
+  through to unrestricted.
+- **TWO SIBLINGS HAD NO ACCESS GATE OF ANY KIND** — found by asking what ELSE answers this question,
+  the same way §14w found the ungated staffing heat map:
+  - `GET /sales-report/detail` took **no `authorization` parameter at all**, and takes a store and a
+    rep NAME off the query string: any signed-in caller could read any store's any rep's
+    transactions, including customer name, phone (`mdn`) and device serial. That made the report's
+    own gate decorative — the cell was hidden and the data behind it was one URL away. Now gated on
+    store, on the requested rep (`requested_rep_is_mine`), and on the ROWS (`mine_only`), because a
+    blank `salesperson=` asks for nothing and would otherwise return the whole cell.
+  - `GET /sales-report/narrative` likewise took no caller, so a rep's banner totalled the company's
+    revenue, activations and gross profit in sentences above a gated grid. "Display-only" is not a
+    reason to skip a gate. `_sales_narrative` now takes the keyset and applies it to the same cells.
+- **Proof:** `backend/harness_people_visibility.py` — **65 checks, DB-free, over the real endpoints**
+  (`sales_report`, `sales_report_detail`, `sales_report_narrative`, `_sales_narrative`, plus §14w's
+  schedule set). §J is the basis test: a fixture whose roster store is B-7 and whose only shift is at
+  B-8 must resolve B-8, which is the only way to tell the two bases apart; §J6 pins that a pin plus a
+  `home_store` plus no evidence resolves NOTHING (the 7 live logins) and that empty stays a deny-all;
+  §J7 that the scan is window-bounded; §J8 that a cancelled shift is not evidence. §K8–K8e run the
+  real sales report: the rep reaches both stores they worked, reads only their own rows at each, and
+  their totals are their own. §L1–L7 reproduce the two ungated endpoints.
+- **Lock:** `backend/harness_people_visibility_lock.py` — **47 checks, stdlib only.** Fails the build
+  if `caller_scope` grows a basis of its own, if either ruling is copied, if the two directions stop
+  sharing `WORKED_AT_SOURCES` or spell a table name themselves, if an empty evidence answer becomes
+  the unrestricted `None`, if the people ruling re-derives the store dimension or reads `home_store`
+  again, if a per-rep store-keyed report carries one dimension without the other, if the sales
+  report's gate goes back to failing open, or if its totals move before the filters. Two planted
+  controls verified: reverting the basis fails 4 checks; dropping the person half fails 10b. Same CI
+  job, *People visibility*.
+- **No migration.** The declaration this reads is the one migration 1058 (§14w) already wrote.
+
 ### 15.1 THE SEND RECORD — "has this finding reached this recipient, on this channel?"
 
 **Owner decision 2026-10-04** (decision card, *"Fix it properly"*), after the store-visit alerts went

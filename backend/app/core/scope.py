@@ -1313,6 +1313,87 @@ def in_keyset(keyset, *vals) -> bool:
     return any(_up(v) in keyset for v in vals)
 
 
+# ── WHERE WAS THIS PERSON? — the one EVIDENCE registry (owner directive 2026-10-05) ──────────────
+#
+# THE INSTANCE. *"the store pin is not desired, the employee shoudl have teh visibility in the store
+# they have been schduled and actually worked and only their numbers, the concept of home store does
+# not apply for vistibility into the performance of the store"*
+#
+# THE CLASS. "Which store is this person at?" was answered from DECLARED SETUP — `app_users.store_code`,
+# `app_users.store_codes`, `employees.home_store`. A pin is what somebody typed on a form once; it is
+# not a record of where the person was, and it drifts the moment anybody moves. Measured 2026-10-05
+# across both live tenants: the 71 logins whose role declares `people_visibility = 'self'` carry 84
+# pinned stores between them and were actually scheduled or clocked in at 354 — 64 of them have
+# evidence at a store no pin names, and 7 are pinned to a store they have never once worked.
+#
+# So a reporting span is resolved from EVIDENCE, and the evidence is of exactly two kinds: the roster
+# said be there (a shift), or the clock says they were there (a punch).
+#
+# ONE FACT, ONE HOME. Two questions read those same two tables from opposite ends:
+#   "which PEOPLE were at these stores?"  -> reporting_employee_ids  (store keyset -> employee_ids)
+#   "which STORES was this person at?"    -> worked_store_codes      (employee_id  -> store codes)
+# Before this directive only the first existed, and it carried the table/column/soft-delete knowledge
+# inline. Both now dereference ONE registry, so a third kind of evidence — or a column rename, or a
+# second soft-delete flag — lands in both or in neither. A private copy of this tuple in either
+# function is the divergence the house rules forbid, and the lock harness fails the build on one.
+WORKED_AT_SOURCES = (
+    # table,     store column,  date column,   rows to keep
+    ("shifts",  "store_code",  "shift_date",  {"is_deleted": False}),  # the roster said be there
+    ("timelog", "store_code",  "work_date",   {}),                     # the clock says they were
+)
+
+
+def _worked_at_query(client, org_id: str, table: str, store_col: str, date_col: str,
+                     keep: dict, *, since=None, until=None):
+    """The ONE way either direction reads an evidence table: same columns, same soft-delete filter,
+    same date window. `since`/`until` bound the scan — unbounded, this is a full-history read."""
+    q = (client.schema("storeops").table(table)
+         .select(f"employee_id,{store_col},{date_col}").eq("org_id", org_id))
+    for col, val in (keep or {}).items():
+        q = q.eq(col, val)
+    if since:
+        q = q.gte(date_col, since)
+    if until:
+        q = q.lte(date_col, until)
+    return q
+
+
+def worked_store_codes(client, org_id: str, employee_id, *, since=None, until=None) -> set:
+    """The store(s) this person was SCHEDULED at or ACTUALLY WORKED at — the evidence answer to
+    "which stores may they see", replacing the pin answer `self_store_codes` gave.
+
+    Returns a SET, possibly EMPTY, **never None**: empty means "no evidence this person was anywhere",
+    and it must stay a deny-all, because `None` is the unrestricted sentinel everywhere in this module
+    and handing it back for a rep with no shifts would open the whole tenant. Live, 7 of the 71
+    self-visibility logins have neither a shift nor a punch anywhere; they see nothing on a
+    store-keyed report, and that is reported as a setup gap rather than papered over with a grant.
+
+    Both the raw stored value and its resolved canonical code are returned, so a legacy free-text
+    spelling ('Nostrand') still matches its own rows alongside the code it resolves to.
+
+    Best-effort per source: a missing table or column degrades that half to empty, never a 500."""
+    eid = _norm(employee_id)
+    if not eid:
+        return set()
+    raw: set = set()
+    for table, store_col, date_col, keep in WORKED_AT_SOURCES:
+        try:
+            q = _worked_at_query(client, org_id, table, store_col, date_col, keep,
+                                 since=since, until=until)
+            for r in (q.eq("employee_id", eid).limit(50000).execute().data or []):
+                if _norm(r.get(store_col)):
+                    raw.add(_norm(r[store_col]))
+        except Exception as e:                                      # pragma: no cover - I/O guard
+            print(f"WARN core.scope worked_store_codes {table} read failed: {e}")
+    codes: set = set()
+    for v in raw:
+        codes.add(v)
+        code, _status, _detail = resolve_store_grant(client, org_id, v)
+        if code:
+            codes.add(code)
+    return {c for c in codes if c}
+
+
 def reporting_employee_ids(client, org_id: str, keyset, *, since=None, until=None) -> set:
     """employee_ids visible inside a REPORTING keyset — by HOME STORE **union WHERE THEY ACTUALLY
     WORKED** (a shift or a time-log at a store inside the span).
@@ -1337,17 +1418,13 @@ def reporting_employee_ids(client, org_id: str, keyset, *, since=None, until=Non
                 ids.add(str(e["employee_id"]))
     except Exception as e:                                          # pragma: no cover - I/O guard
         print(f"WARN core.scope reporting_employee_ids employees read failed: {e}")
-    for table, store_col, date_col in (("shifts", "store_code", "shift_date"),
-                                       ("timelog", "store_code", "work_date")):
+    # The worked-at half DEREFERENCES the evidence registry — it does not carry its own copy of
+    # which tables, which columns or which soft-delete flag record a person being somewhere. The
+    # other direction (`worked_store_codes`) reads the same registry, so neither can drift.
+    for table, store_col, date_col, keep in WORKED_AT_SOURCES:
         try:
-            q = (client.schema("storeops").table(table)
-                 .select(f"employee_id,{store_col},{date_col}").eq("org_id", org_id))
-            if table == "shifts":
-                q = q.eq("is_deleted", False)   # a deleted shift never widens a span
-            if since:
-                q = q.gte(date_col, since)
-            if until:
-                q = q.lte(date_col, until)
+            q = _worked_at_query(client, org_id, table, store_col, date_col, keep,
+                                 since=since, until=until)
             for r in (q.limit(50000).execute().data or []):
                 if r.get("employee_id") and in_keyset(keyset, r.get(store_col)):
                     ids.add(str(r["employee_id"]))
@@ -1446,6 +1523,12 @@ def visible_people_keyset(client, org_id: str, *, role_perms, app_user, employee
     MARKET GRANTS BIND ONLY FOR A SCOPE THAT CAN USE A MARKET — the same line `self_store_codes` and
     `roster_keyset` already draw. A DM (`scope = 'market'`) gets their market; a store-scoped manager
     gets their own store(s) plus any org unit they actually manage, and their market pin is ignored.
+
+    `employee_home_store` IS ACCEPTED AND DELIBERATELY NOT READ (owner 2026-10-05: *"the concept of
+    home store does not apply for vistibility into the performance of the store"*). It stays in the
+    signature because ~a dozen call sites pass it and silently dropping the keyword would be a
+    TypeError at request time; the store dimension now comes from `visible_store_codes`, which reads
+    evidence. Do not re-wire it: the lock harness fails the build if this function reads it again.
     """
     vis = people_visibility(role_perms)
     me = self_employee_ids(app_user)
@@ -1455,19 +1538,15 @@ def visible_people_keyset(client, org_id: str, *, role_perms, app_user, employee
         return set(me), ("own shifts only" if me else
                          "own shifts only — and this login carries NO employee_id, so nothing "
                          "resolves: link it to an employee record")
-    try:
-        scope = str((role_perms or {}).get("scope") or "").strip().lower()
-    except Exception:                                               # pragma: no cover - purity guard
-        scope = ""
-    if scope in ("market", "region", "regional"):
-        codes = set(org_unit_codes or []) | login_grant_codes(client, org_id, app_user)
-        why = "the market(s) / org-unit(s) this login manages"
-    else:
-        codes = set(org_unit_codes or []) | self_store_codes(
-            client, org_id, app_user, employee_home_store=employee_home_store)
-        why = ("own store(s) + any org unit this login manages — a market pin is NOT read for a "
-               "store-scoped role")
-    codes = {c for c in codes if c}
+    # The SPAN tier's store dimension is NOT re-derived here — it dereferences `visible_store_codes`,
+    # the one home for "whose stores reach this login" (owner 2026-10-05). Before that it carried its
+    # own `self_store_codes` call, which is exactly the second copy that drifts: when the span was
+    # re-based on evidence, a private copy here would have left a manager's PEOPLE list on the pins
+    # while their REPORT moved to worked-at, and the two answers would disagree about the same person.
+    codes, why = visible_store_codes(client, org_id, role_perms=role_perms, app_user=app_user,
+                                     org_unit_codes=org_unit_codes, since=since, until=until)
+    if codes is None:                                               # pragma: no cover - ALL returns above
+        return None, why
     if not codes:
         return set(me), ("NO RESOLVABLE STORE for this login — showing own shifts only; pin this "
                          "person's store on their login or their employee record")
@@ -1475,3 +1554,78 @@ def visible_people_keyset(client, org_id: str, *, role_perms, app_user, employee
                                  widen_codes_to_keys(client, org_id, codes),
                                  since=since, until=until) or set()
     return {str(i) for i in ids} | set(me), why
+
+
+# ── Q1, RE-BASED ON EVIDENCE — "whose STORES' numbers may this login see?" (owner 2026-10-05) ────
+#
+# THE INSTANCE. *"the store pin is not desired, the employee shoudl have teh visibility in the store
+# they have been schduled and actually worked and only their numbers, the concept of home store does
+# not apply for vistibility into the performance of the store"*
+#
+# THE CLASS, stated so nobody re-derives it. A pin (`app_users.store_code` / `store_codes`) and a
+# roster field (`employees.home_store`) are SETUP: what somebody typed on a form, once. They were
+# being used as the answer to a question about the present — where is this person, therefore whose
+# numbers are theirs to read. The two drift the moment anybody is moved, and measured live they have:
+# 64 of 71 self-visibility logins have evidence at a store no pin names, and 7 are pinned to a store
+# they have never worked. So the span is resolved from EVIDENCE (`worked_store_codes`), and the pin
+# survives only where it means something other than "where this person is".
+#
+# TWO DIMENSIONS, ONE DECLARATION. The same `people_visibility` fact now answers both halves, which
+# is the only reason the second half of the owner's sentence ("and only their numbers") lands:
+#   visible_store_codes   -> WHICH STORES' rows reach me at all        (this function)
+#   visible_people_keyset -> WHOSE rows among them are mine to read    (above)
+# An individual contributor gets a WIDER store list under this ruling than under the pins — live, 84
+# pinned stores become 354 worked, because reps are moved around constantly. That is only safe
+# because the person filter runs on the same declaration: they see more stores and, at every one of
+# them, only their own numbers. Shipping either half alone is a regression, and the lock harness
+# fails the build if a store-keyed per-rep report takes one without the other.
+#
+# WHY A MANAGER KEEPS THEIR PIN. For a people_visibility-'span' role the pin is not "where this
+# person is", it is "the store this person RUNS" — a different fact, and the only record of it when
+# the org tree is unwired (it resolves a manager for 6 of 29 house stores and 0 of 20 Luxelink).
+# Measured 2026-10-05: 4 of the 17 span-tier logins (two store managers, two DMs) have never once
+# been scheduled at a store they manage, so evidence alone would take the store they run away from
+# them. They get assigned-or-worked; an individual contributor gets worked, full stop. That split is
+# keyed off the DECLARED tier, never off a role name — RULE TWO.
+def visible_store_codes(client, org_id: str, *, role_perms, app_user, org_unit_codes=None,
+                        employee_id=None, since=None, until=None):
+    """(codes, why) — the store_codes whose rows may reach this login at all.
+
+    `None` codes means UNRESTRICTED (the 'all' tier). Otherwise a SET, possibly EMPTY, and empty is a
+    deny-all: a login with no evidence and no grant sees no store's rows rather than every store's.
+
+    `since`/`until` bound the evidence scan to the window being reported, so "which stores can I see
+    for September" is "where I was in September" — and so this never becomes a full-history read.
+
+    Never raises: every source degrades to empty rather than to unrestricted."""
+    vis = people_visibility(role_perms)
+    if vis == PEOPLE_ALL:
+        return None, "role people_visibility 'all' — every store"
+    eid = _norm(employee_id) or _norm((app_user or {}).get("employee_id"))
+    worked = worked_store_codes(client, org_id, eid, since=since, until=until)
+    if vis == PEOPLE_SELF:
+        # EVIDENCE ONLY. No pin, no home_store, no market — the owner's directive in one line.
+        codes = {c for c in worked if c}
+        if codes:
+            return codes, "the store(s) this person was scheduled at or clocked in at"
+        return set(), ("NO shift and NO punch anywhere for this login, so no store's rows resolve — "
+                       "schedule them, or link the login to the right employee record")
+    try:
+        scope = str((role_perms or {}).get("scope") or "").strip().lower()
+    except Exception:                                               # pragma: no cover - purity guard
+        scope = ""
+    if scope in ("market", "region", "regional"):
+        granted = login_grant_codes(client, org_id, app_user)
+        why = "the market(s) / org-unit(s) this login manages, plus anywhere they worked"
+    else:
+        # A market pin still never widens a store-scoped role (owner 2026-10-05, the earlier half of
+        # this ruling): `self_store_codes` is read for the PINS only, with `employee_home_store=None`
+        # so the roster field cannot grant a store to a login that resolves none.
+        granted = self_store_codes(client, org_id, app_user, employee_home_store=None)
+        why = ("the store(s) this login is assigned to or worked at, plus any org unit they manage — "
+               "a market pin is NOT read for a store-scoped role")
+    codes = {c for c in (set(org_unit_codes or []) | granted | worked) if c}
+    if not codes:
+        return set(), ("NO resolvable store for this login — assign their store on the login or "
+                       "schedule them somewhere")
+    return codes, why

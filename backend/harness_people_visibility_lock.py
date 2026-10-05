@@ -66,6 +66,18 @@ def read(rel):
         return fh.read()
 
 
+def code_of(src):
+    """`src` with comment lines and docstrings removed — crude, and enough for a literal scan.
+
+    Every check that asserts a name is ABSENT must run on this, not on the raw source: these
+    functions carry long explanations that name the very mechanisms they no longer use (that is
+    the point of the explanation), and three checks have now been tripped by their own prose.
+    """
+    body = "\n".join(l for l in src.split("\n") if not l.lstrip().startswith("#"))
+    body = re.sub(r'"""[\s\S]*?"""', "", body)
+    return re.sub(r"'''[\\s\\S]*?'''", "", body)
+
+
 def py_files():
     for root, dirs, files in os.walk(os.path.join(HERE, "app")):
         dirs[:] = [d for d in dirs if d != "__pycache__"]
@@ -75,7 +87,8 @@ def py_files():
 
 
 # ── 1. the ruling has ONE home ───────────────────────────────────────────────────────────────────
-for fn in ("people_visibility", "visible_people_keyset"):
+for fn in ("people_visibility", "visible_people_keyset", "visible_store_codes",
+           "worked_store_codes"):
     homes = [p for p in py_files() if re.search(rf"^def {fn}\(", read(p), re.M)]
     check(f"1. `{fn}` is defined ONLY in {RULING_HOME}", homes == [RULING_HOME], str(homes))
 
@@ -101,10 +114,25 @@ check("5b. and NOT _caller_span_codes, which unions the login's market pin",
 scope_src = read(RULING_HOME)
 ruling = re.search(r"^def visible_people_keyset\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
 ruling = ruling.group(0) if ruling else ""
-check("5c. the ruling reads a market grant only inside its market/region branch",
-      ruling.count("login_grant_codes") == 1
-      and re.search(r'scope in \("market", "region", "regional"\)[\s\S]{0,200}login_grant_codes', ruling)
-      is not None)
+store_ruling = re.search(r"^def visible_store_codes\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
+store_ruling = store_ruling.group(0) if store_ruling else ""
+check("5c. the market grant is read in ONE place — inside the store ruling's market/region branch "
+      "— and nowhere else in either ruling",
+      store_ruling.count("login_grant_codes") == 1
+      and re.search(r'scope in \("market", "region", "regional"\)[\s\S]{0,240}login_grant_codes',
+                    store_ruling) is not None
+      and "login_grant_codes" not in ruling,
+      f"store={store_ruling.count('login_grant_codes')} people={ruling.count('login_grant_codes')}")
+ruling_code = code_of(ruling)
+check("5d. the PEOPLE ruling does not re-derive the store dimension — it dereferences "
+      "visible_store_codes, so a manager's people list and their report cannot disagree about the "
+      "same person (owner 2026-10-05)",
+      "visible_store_codes" in ruling_code and "self_store_codes" not in ruling_code,
+      [l for l in ruling_code.split("\n") if "self_store_codes" in l])
+check("5e. and it no longer reads employees.home_store, which the owner ruled out as an answer to "
+      "'whose performance may I see' — the parameter stays for its callers but is unused",
+      not re.search(r"employee_home_store\s*=\s*employee_home_store", ruling_code),
+      [l for l in ruling_code.split("\n") if "employee_home_store" in l])
 
 # ── 3 & 4. every person-keyed GET either asks, or is excused ─────────────────────────────────────
 lines = router.split("\n")
@@ -181,15 +209,51 @@ check("7b. when people-visibility restricts, it returns on the PERSON set BEFORE
       "store keyset — a stacked store gate would hide a rep's own shift at a store they covered",
       gate.index("keep_visible_people") < gate.index("scope_keyset"), "order")
 
-# ── 8. a market pin does not widen a store-scoped REPORTING span (the sales report) ──────────────
+# ── 8. the REPORTING span is EVIDENCE, resolved in one home (owner 2026-10-05) ───────────────────
+# *"the store pin is not desired, the employee shoudl have teh visibility in the store they have
+# been schduled and actually worked ... the concept of home store does not apply"*.
 cs = re.search(r"^def caller_scope\(.*?(?=^def |\Z)", router, re.M | re.S)
 cs = cs.group(0) if cs else ""
-check("8a. caller_scope resolves a scope-'store' span through self_store_codes",
-      "self_store_codes" in cs)
-check("8b. and reaches _login_extra_codes (which unions MARKET pins) only for a wider scope",
-      cs.index("self_store_codes") < cs.index("_login_extra_codes"), "order")
-check("8c. it does NOT read employees.home_store into a reporting span (that would GRANT a store "
-      "to a login which resolves none today)", "employee_home_store=None" in cs, cs[-400:])
+cs_code = code_of(cs)
+check("8a. caller_scope DECIDES NOTHING — it dereferences core.scope.visible_store_codes, the one "
+      "home for 'whose stores reach this login'",
+      "visible_store_codes" in cs_code, cs_code[-400:])
+check("8b. and holds no basis of its own: no pin read, no market read, no home_store read, no "
+      "second evidence scan",
+      not re.search(r"self_store_codes|_login_extra_codes|home_store|WORKED_AT_SOURCES", cs_code),
+      [l for l in cs_code.split("\n")
+       if re.search(r"self_store_codes|_login_extra_codes|home_store|WORKED_AT_SOURCES", l)])
+check("8c. the tier it passes is the DECLARED one, with the canonical scope stamped on it — never a "
+      "role name spelled in code (RULE TWO)",
+      re.search(r'perms\["scope"\]\s*=\s*scope', cs_code) is not None
+      and "role_perms=perms" in cs_code, cs_code[-400:])
+check("8d. visible_store_codes is defined ONLY in the ruling home",
+      [q for q in py_files() if re.search(r"^def visible_store_codes\(", read(q), re.M)]
+      == [RULING_HOME],
+      str([q for q in py_files() if re.search(r"^def visible_store_codes\(", read(q), re.M)]))
+# ── 8e-8g. ONE evidence registry, dereferenced by BOTH directions ────────────────────────────────
+wsc = re.search(r"^def worked_store_codes\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
+wsc = wsc.group(0) if wsc else ""
+rei = re.search(r"^def reporting_employee_ids\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
+rei = rei.group(0) if rei else ""
+check("8e. 'what records a person being somewhere' is ONE registry (WORKED_AT_SOURCES), declared "
+      "once in the ruling home",
+      [q for q in py_files() if re.search(r"^WORKED_AT_SOURCES\s*=", read(q), re.M)]
+      == [RULING_HOME],
+      str([q for q in py_files() if re.search(r"^WORKED_AT_SOURCES\s*=", read(q), re.M)]))
+check("8f. and BOTH directions dereference it — employee->stores and stores->employees — rather "
+      "than carrying a private copy of the table, column and soft-delete knowledge",
+      "WORKED_AT_SOURCES" in code_of(wsc) and "WORKED_AT_SOURCES" in code_of(rei),
+      f"worked={('WORKED_AT_SOURCES' in code_of(wsc))} "
+      f"reporting={('WORKED_AT_SOURCES' in code_of(rei))}")
+check("8g. neither spells a table name of its own — a third kind of evidence lands in both or in "
+      "neither",
+      not re.search(r'table\(\s*["\']', code_of(wsc))
+      and not re.search(r'table\(\s*["\']shifts|table\(\s*["\']timelog', code_of(rei)),
+      [l for l in code_of(wsc + rei).split("\n") if re.search(r'table\(\s*["\']', l)])
+check("8h. an empty evidence answer is a DENY-ALL, never the unrestricted None",
+      "return set()" in code_of(wsc) and "return None" not in code_of(wsc),
+      code_of(wsc)[-300:])
 
 # ── 9. ONE answer to "is this login an individual contributor" ────────────────────────────────────
 ric = re.search(r"^def role_is_self_scoped\(.*?(?=^def |\Z)", router, re.M | re.S)
@@ -210,6 +274,61 @@ code_only = "\n".join(l for l in flags.split("\n") if not l.lstrip().startswith(
 check("9c. and writes no predicate of its own (no hand-rolled rep-name comparison in the CODE)",
       "epay_salesperson" not in code_only,
       [l for l in code_only.split("\n") if "epay_salesperson" in l])
+
+
+# ── 10. a PER-REP store-keyed report carries BOTH dimensions, or neither is enough ──────────────
+# The owner's sentence has two halves — *"in the store they have been schduled and actually worked"*
+# AND *"only their numbers"* — and the first one WIDENS a rep's store list (84 pinned stores become
+# 354 worked, measured 2026-10-05). A report whose rows name a person and which gates on the store
+# alone is therefore not a smaller leak than before; it is a bigger one. These three surfaces emit a
+# `salesperson` per row, so each must ask the person question too.
+PER_REP_SALES = {
+    "sales_report": "the grid itself — one row per (store, salesperson, day)",
+    "sales_report_detail": "the drill-down — customer name, phone and serial per transaction",
+}
+for fn_name, what in sorted(PER_REP_SALES.items()):
+    body = re.search(rf"^def {fn_name}\(.*?(?=^@router|^def |\Z)", cc, re.M | re.S)
+    body = code_of(body.group(0) if body else "")
+    check(f"10a. `{fn_name}` ({what}) gates on the STORE", "scope_keyset" in body, body[:200])
+    check(f"10b. `{fn_name}` also gates on the PERSON, through the existing one-homes — the wider "
+          f"store list is only safe because of this",
+          "_caller_rep_keys" in body and ("mine_only" in body or "requested_rep_is_mine" in body),
+          body[:200])
+    check(f"10c. and writes no rep predicate of its own (no hand-rolled salesperson comparison)",
+          not re.search(r'["\']epay_salesperson["\']', body),
+          [l for l in body.split("\n") if "epay_salesperson" in l])
+# Both of the surfaces that had NO caller at all must keep one.
+for fn_name in ("sales_report_detail", "sales_report_narrative"):
+    sig = re.search(rf"^def {fn_name}\(([\s\S]*?)\):", cc, re.M)
+    check(f"10d. `{fn_name}` takes the caller's identity — it took none at all before 2026-10-05, "
+          f"so its gate could not have existed",
+          sig is not None and "authorization" in sig.group(1), str(sig and sig.group(1)[:160]))
+# The gate's error path must not hand over the tenant.
+sr = re.search(r"^def sales_report\(.*?(?=^@router|\Z)", cc, re.M | re.S)
+sr = code_of(sr.group(0) if sr else "")
+check("10e. the sales report's gate FAILS CLOSED — an exception resolving the span serves nothing, "
+      "never the whole tenant (it used to `pass` straight through to unrestricted)",
+      re.search(r"except Exception[\s\S]{0,200}out\s*=\s*\[\]", sr) is not None, sr[-500:])
+check("10f. and TOTALS are summed after the filters, not before — a rep's totals are a rep's own "
+      "rows, not the company's under their name",
+      sr.index("mine_only") < sr.index("totals = {"), "order")
+
+# ── 11. the ADMIN DIAGNOSTIC answers with the gate, not with a basis of its own ──────────────────
+# `GET /core/scope-preview` is the page an administrator uses to answer "what will this login
+# actually see" without logging in as them. It therefore may not compute the span itself: a second
+# basis here would have kept printing the PIN answer after the gate moved to evidence, and because
+# the page exists to be trusted, the admin would have trusted it.
+core_rt = read("app/modules/core/router.py")
+sp = re.search(r"^def scope_preview\(.*?(?=^@router|\Z)", core_rt, re.M | re.S)
+sp = code_of(sp.group(0) if sp else "")
+check("11a. `scope-preview` resolves its `reporting` answer by dereferencing "
+      "core.scope.visible_store_codes — the same home the reports read",
+      "visible_store_codes" in sp, sp[:200])
+check("11b. and holds no span basis of its own — no reporting_span_codes, no self_store_codes, no "
+      "home_store read for the reporting answer",
+      not re.search(r"reporting_span_codes|self_store_codes", sp),
+      [l for l in sp.split("\n")
+       if re.search(r"reporting_span_codes|self_store_codes", l)])
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

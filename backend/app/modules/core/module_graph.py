@@ -254,9 +254,14 @@ FACTS: dict[str, dict] = {
         },
     },
     'people_visibility': {
-        "question": 'Whose SHIFTS may this login read?',
+        # Two dimensions of ONE declared fact, so they are one node: `visible_people_keyset` answers
+        # whose rows are mine, `visible_store_codes` answers which stores reach me at all, and
+        # `WORKED_AT_SOURCES` is the evidence registry both directions dereference (§14x). Splitting
+        # them would invite exactly the drift the owner's "one fact, one home" rule forbids — a
+        # manager's people list on the pins while their report moved to evidence.
+        "question": 'Whose SHIFTS and whose STORES may this login read?',
         "homes": ('app/core/scope.py',),
-        "index": ('14w',),
+        "index": ('14w', '14x'),
         "locks": ('harness_people_visibility_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {

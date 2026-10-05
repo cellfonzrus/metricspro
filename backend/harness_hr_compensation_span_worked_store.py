@@ -118,7 +118,15 @@ def fresh_store():
         ("commcalc", "store_mapping"): [],
         ("storeops", "app_users"): [],
         ("storeops", "roles"): [
-            {"org_id": HOUSE, "name": "dm_store", "permissions": {"scope": "store"}},
+            # DECLARES people_visibility 'span' — which is what migration 1058 wrote on the live
+            # `store_manager` role, and what this fixture has always MEANT by "dm-store (span={S1})".
+            # Since the owner's 2026-10-05 directive (index §14x) a scope-'store' role that declares
+            # nothing falls narrow to 'self' and resolves only where that PERSON was scheduled or
+            # clocked in — correct fail-narrow behaviour, and not this harness's subject. The span
+            # tier is what makes the pin ('S1') part of the answer at all, and the home-store-UNION-
+            # worked-at roster resolution this harness actually tests is unaffected by the change.
+            {"org_id": HOUSE, "name": "dm_store",
+             "permissions": {"scope": "store", "people_visibility": "span"}},
         ],
         ("storeops", "tenants"): [],
         ("storeops", "employees"): [],

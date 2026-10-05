@@ -141,10 +141,10 @@ def app_user(name, role, *, market=None, store_code=None, store_codes=None, empl
             "market": market, "store_code": store_code, "store_codes": store_codes}
 
 
-def shift(eid, store, date, hours=8.0, sid=None):
+def shift(eid, store, date, hours=8.0, sid=None, deleted=False):
     return {"id": sid or nid("sh"), "org_id": HOUSE, "employee_id": eid, "employee_name": eid,
             "store_code": store, "shift_date": date, "start_time": "09:00", "end_time": "17:00",
-            "scheduled_hours": hours, "actual_hours": 0, "is_deleted": False}
+            "scheduled_hours": hours, "actual_hours": 0, "is_deleted": deleted}
 
 
 WK, WE = "2026-09-07", "2026-09-13"
@@ -155,6 +155,11 @@ st = {
         {"org_id": HOUSE, "store_code": "B-1", "address": "1 Main St", "market": "LI", "is_active": True},
         {"org_id": HOUSE, "store_code": "B-2", "address": "2 Oak Ave", "market": "NJ", "is_active": True},
         {"org_id": HOUSE, "store_code": "B-3", "address": "3 Penn Blvd", "market": "NYC", "is_active": True},
+        # B-7 / B-8 exist only for the BASIS test below: no other check asserts on either, so the
+        # two fixtures that disagree about where their person is cannot disturb anybody's people
+        # list while proving which field the span actually reads.
+        {"org_id": HOUSE, "store_code": "B-7", "address": "7 Roster Rd", "market": "LI", "is_active": True},
+        {"org_id": HOUSE, "store_code": "B-8", "address": "8 Evidence Way", "market": "LI", "is_active": True},
     ],
     ("commcalc", "store_mapping"): [],
     ("storeops", "roles"): [
@@ -181,8 +186,12 @@ st = {
         app_user("dm", "district_manager", market="NJ", store_code="B-2", employee_id="E20"),
         app_user("mystery", "mystery_role", market="NYC, NJ, LI", store_code="B-1", employee_id="E30"),
         app_user("nobody", "sales_rep", store_code="B-1", employee_id=None),
-        # Has a roster home_store (B-1) but NO pin on the login — the live case for 8 logins.
-        app_user("nopin", "store_manager", employee_id="E10"),
+        # Has a roster home_store (B-1) but NO pin on the login — the live case for 8 logins. Its
+        # only EVIDENCE is a shift at B-2, so the span it resolves proves which basis is in force.
+        app_user("nopin", "store_manager", employee_id="E31"),
+        # A rep pinned to B-1, home_store B-1, and NO shift and NO punch anywhere — the live case
+        # for 7 self-visibility logins. Under the evidence basis this resolves NOTHING.
+        app_user("ghost", "sales_rep", store_code="B-1", employee_id="E99"),
     ],
     ("storeops", "employees"): [
         {"org_id": HOUSE, "id": "1", "employee_id": "E1", "name": "Rep One", "home_store": "B-1", "is_active": True},
@@ -192,6 +201,11 @@ st = {
         {"org_id": HOUSE, "id": "20", "employee_id": "E20", "name": "Dm Twenty", "home_store": "B-2", "is_active": True},
         {"org_id": HOUSE, "id": "21", "employee_id": "E21", "name": "Nj Rep", "home_store": "B-2", "is_active": True},
         {"org_id": HOUSE, "id": "30", "employee_id": "E30", "name": "Mystery", "home_store": "B-1", "is_active": True},
+        # Both sit at B-7, a store no other check asserts on, so they test the BASIS without
+        # joining anybody's people list. E31's roster store is B-7 and its only shift is at B-2 —
+        # that disagreement is the whole point. E99 has a roster store and a pin and no evidence.
+        {"org_id": HOUSE, "id": "31", "employee_id": "E31", "name": "Pinless Mgr", "home_store": "B-7", "is_active": True},
+        {"org_id": HOUSE, "id": "99", "employee_id": "E99", "name": "Ghost Rep", "home_store": "B-7", "is_active": True},
     ],
     ("storeops", "shifts"): [
         shift("E1", "B-1", "2026-09-08"),
@@ -201,6 +215,9 @@ st = {
         shift("E10", "B-1", "2026-09-08"),
         shift("E20", "B-2", "2026-09-08"),
         shift("E21", "B-2", "2026-09-09"),
+        shift("E31", "B-8", "2026-09-11"),         # the pinless manager's ONLY evidence, and it is
+                                                   # NOT their roster home_store (B-7)
+        shift("E1", "B-9", "2026-09-12", deleted=True),   # a CANCELLED shift is not evidence
     ],
     ("storeops", "shift_templates"): [
         {"org_id": HOUSE, "employee_id": "E1", "store_code": "B-1", "weekday": 1},
@@ -244,8 +261,9 @@ old_ks = CS.widen_codes_to_keys(SO.get_supabase(), HOUSE, old_codes)
 check("A1. the PRE-FIX store gate put EVERY store in a rep's keyset (three market pins)",
       {"B-1", "B-2", "B-3"} <= old_ks, str(old_ks))
 leak = {str(s["employee_id"]) for s in st[("storeops", "shifts")] if SO.in_keyset(old_ks, s["store_code"])}
-check("A2. so the pre-fix gate left the rep reading SIX people's shifts — the whole company",
-      leak == {"E1", "E2", "E3", "E10", "E20", "E21"}, str(leak))
+check("A2. so the pre-fix gate left the rep reading EVERY scheduled person's shifts — the whole "
+      "company",
+      leak == {"E1", "E2", "E3", "E10", "E20", "E21", "E31"}, str(leak))
 
 # ══════════════════ B. A rep reads only their own ═══════════════════════════════════════════════
 rep_rows = shifts_for("Bearer rep")
@@ -278,13 +296,13 @@ check("D3. and not another market's", not ({"E1", "E2", "E3"} & who(dm_rows)), s
 # ══════════════════ E. Unrestricted stays unrestricted ══════════════════════════════════════════
 check("E1. an 'all'-scope admin is unrestricted", SO.schedule_emp_ids("Bearer admin", HOUSE) is None)
 check("E2. and reads every shift", who(shifts_for("Bearer admin")) ==
-      {"E1", "E2", "E3", "E10", "E20", "E21"}, str(who(shifts_for("Bearer admin"))))
+      {"E1", "E2", "E3", "E10", "E20", "E21", "E31"}, str(who(shifts_for("Bearer admin"))))
 check("E3. NO token -> unrestricted (an in-process / scheduled caller is never blanked)",
       SO.schedule_emp_ids("", HOUSE) is None)
 st[("storeops", "app_config")] = [{"id": 1, "rbac_enabled": False}]
 check("E4. rbac master switch OFF -> unrestricted", SO.schedule_emp_ids("Bearer rep", HOUSE) is None)
 check("E5. and the endpoint is then byte-identical to pre-change behaviour",
-      who(shifts_for("Bearer rep")) == {"E1", "E2", "E3", "E10", "E20", "E21"})
+      who(shifts_for("Bearer rep")) == {"E1", "E2", "E3", "E10", "E20", "E21", "E31"}, str(who(shifts_for("Bearer rep"))))
 st[("storeops", "app_config")] = [{"id": 1, "rbac_enabled": True}]
 
 # ══════════════════ F. Fail narrow ══════════════════════════════════════════════════════════════
@@ -337,23 +355,68 @@ check("H6. the staffing heat map (previously ungated entirely) refuses a store o
 # which for a rep whose login pins three markets is still wide. Narrowing that is the separate
 # "a rep's login should not pin three markets" setup problem, reported rather than coded around.
 
-# ══════════════════ J. THE MARKET PIN NO LONGER WIDENS A STORE-SCOPED SPAN ══════════════════════
-# The second half of the owner's ask: "they shoudl be gated out of all stores other and thier own"
-# — the SALES REPORT and every other store-keyed report read `scope_keyset`, so the fix is there.
+# ══════════════════ J. THE SPAN IS EVIDENCE, NOT A PIN ══════════════════════════════════════════
+# Two owner directives, same day, same mechanism. First: *"they shoudl be gated out of all stores
+# other and thier own"* — a MARKET pin must not widen a store-scoped span. Then, on seeing the
+# result: *"the store pin is not desired, the employee shoudl have teh visibility in the store they
+# have been schduled and actually worked and only their numbers, the concept of home store does not
+# apply for vistibility into the performance of the store"*.
+#
+# So the span is resolved from EVIDENCE — a shift (the roster said be there) or a punch (the clock
+# says they were). Note J1: the rep's span is WIDER than their pin, because they were borrowed to
+# B-3 and genuinely worked it. That is the directive, and it is only safe because the SAME
+# declaration gates the person dimension — see K8/K8b, where the rep reads those stores and sees
+# only their own rows at them. A harness that proved one half without the other would be proving a
+# leak.
 ks_rep_now = SO.scope_keyset("Bearer rep", HOUSE)
-check("J1. the rep's reporting span is now their OWN store, not their three pinned markets",
-      ks_rep_now == {"B-1", "1 MAIN ST"}, str(ks_rep_now))
-check("J2. a store-scoped MANAGER is narrowed the same way (a market is a manager-of-market fact)",
+check("J1. the rep's span is where they were SCHEDULED or WORKED — their own store AND the one they "
+      "were borrowed to — not their three pinned markets",
+      ks_rep_now == {"B-1", "1 MAIN ST", "B-3", "3 PENN BLVD"}, str(ks_rep_now))
+check("J1b. a MARKET pin is still never read for them (their three markets bind 'B-2' and it is "
+      "absent, even though the pin names the whole company)",
+      "B-2" not in ks_rep_now and "2 OAK AVE" not in ks_rep_now, str(ks_rep_now))
+check("J2. a store-scoped MANAGER gets assigned-OR-worked: the store they run plus anywhere they "
+      "actually were, and still no market",
       SO.scope_keyset("Bearer mgr", HOUSE) == {"B-1", "1 MAIN ST"},
       str(SO.scope_keyset("Bearer mgr", HOUSE)))
-check("J3. a scope-'market' DM's market grant STILL binds — only store/self scopes refuse it",
+check("J3. a scope-'market' DM's market grant STILL binds — only store/self tiers refuse it",
       {"B-2", "2 OAK AVE"} <= (SO.scope_keyset("Bearer dm", HOUSE) or set()),
       str(SO.scope_keyset("Bearer dm", HOUSE)))
 check("J4. an 'all'-scope admin is still unrestricted", SO.scope_keyset("Bearer admin", HOUSE) is None)
-check("J5. employees.home_store is deliberately NOT read into a reporting span — a login with no "
-      "store pin resolves nothing rather than being granted a store here",
-      SO.scope_keyset("Bearer nopin", HOUSE) == set(),
-      str(SO.scope_keyset("Bearer nopin", HOUSE)))
+# THE BASIS TEST. `nopin` has roster home_store B-7 and no login pin; its only shift is at B-8. A
+# home-store basis answers B-7, an evidence basis answers B-8. There is no other way to tell the two
+# apart, which is why this fixture exists.
+#
+# `employees.home_store` IS still read by `reporting_employee_ids`, deliberately, and that is not a
+# contradiction: there it answers "who is ASSIGNED to my store", which is a fair reading of "any
+# employee works under him". The owner's sentence rules it out as an answer to "whose PERFORMANCE
+# may I see", which is this dimension.
+ks_nopin = SO.scope_keyset("Bearer nopin", HOUSE)
+check("J5. the span reads EVIDENCE, not employees.home_store — a login whose roster store is B-7 "
+      "but whose only shift is at B-8 resolves B-8 and not B-7",
+      "B-8" in ks_nopin and "B-7" not in ks_nopin, str(ks_nopin))
+check("J6. and a login with a pin, a home_store and NO shift or punch anywhere resolves NOTHING "
+      "rather than being granted its pinned store (7 live logins) — empty stays a deny-all, never "
+      "the unrestricted None",
+      SO.scope_keyset("Bearer ghost", HOUSE) == set(),
+      str(SO.scope_keyset("Bearer ghost", HOUSE)))
+check("J7. the evidence scan is BOUNDED by the window being reported — asking about August, when "
+      "the rep's only shifts are in September, resolves nothing",
+      SO.scope_keyset("Bearer rep", HOUSE, since="2026-08-01", until="2026-08-31") == set(),
+      str(SO.scope_keyset("Bearer rep", HOUSE, since="2026-08-01", until="2026-08-31")))
+check("J8. a CANCELLED shift is not evidence — the rep has a deleted B-9 shift and B-9 is absent "
+      "from both the raw answer and the keyset",
+      "B-9" not in CS.worked_store_codes(SO.get_supabase(), HOUSE, "E1")
+      and "B-9" not in ks_rep_now,
+      str(CS.worked_store_codes(SO.get_supabase(), HOUSE, "E1")))
+check("J8b. a person with no employee_id resolves nothing rather than everything",
+      CS.worked_store_codes(SO.get_supabase(), HOUSE, None) == set()
+      and CS.worked_store_codes(SO.get_supabase(), HOUSE, "") == set())
+check("J9. both directions read ONE evidence registry — reporting_employee_ids dereferences the "
+      "same WORKED_AT_SOURCES tuple worked_store_codes does, so neither can drift",
+      isinstance(CS.WORKED_AT_SOURCES, tuple) and len(CS.WORKED_AT_SOURCES) >= 2
+      and {t[0] for t in CS.WORKED_AT_SOURCES} == {"shifts", "timelog"},
+      str(CS.WORKED_AT_SOURCES))
 
 # ══════════════════ I. Narrowing only, against the PRE-FIX gate ═════════════════════════════════
 narrowed, widened_for = True, []
@@ -433,16 +496,125 @@ check("K6. a flag with no rep name on it never becomes 'mine' by accident",
 check("K7. nor does a manager's row set change shape — mine_only hands a manager the SAME list",
       PA.mine_only(st[("commcalc", "flags")], None) is st[("commcalc", "flags")])
 
-# The SALES REPORT is store-keyed and applies `scope_keyset` verbatim, which J1/J2 pin. Proved here
-# on the endpoint's own predicate over its own rows, so a future change to how it filters is caught.
-sales_rows = [{"store": "B-1", "amount": 1}, {"store": "B-2", "amount": 2}, {"store": "B-3", "amount": 3}]
-for tok, want in (("Bearer rep", {"B-1"}), ("Bearer mgr", {"B-1"}), ("Bearer dm", {"B-2"})):
-    ks = SO.scope_keyset(tok, HOUSE)
-    got = {r["store"] for r in sales_rows if SO.in_keyset(ks, r.get("store"))}
-    check(f"K8. the sales report's own store filter leaves {tok.split()[1]} only {sorted(want)}",
-          got == want, str(got))
-check("K9. and the PRE-FIX filter left the rep all three stores",
-      {r["store"] for r in sales_rows if SO.in_keyset(old_rep_ks, r.get("store"))} == {"B-1", "B-2", "B-3"})
+# ══════════════════ K8+. THE SALES REPORT — BOTH DIMENSIONS, ON THE REAL ENDPOINT ═══════════════
+# *"the employee shoudl have teh visibility in the store they have been schduled and actually worked
+# and only their numbers"*. This report's rows are PER REP — one per (store, salesperson, day) with
+# that named person's revenue and GP — so the store gate alone was never the owner's sentence. These
+# run the real `sales_report` over real transactions, because the two halves are only correct
+# TOGETHER: the store half makes a rep's list wider (B-1 AND the borrowed B-3) and the person half
+# is what keeps that from being a leak.
+st[("commcalc", "raw_sales")] = [
+    # B-1: the rep's own store, shared with a colleague.
+    {"org_id": HOUSE, "period": "September 2026", "store": "B-1", "salesperson": "Rep One",
+     "trans_id": "T1", "trans_date": "2026-09-08", "department": "Phones", "category": "Device",
+     "product_desc": "Phone A", "contract_type": "New", "ext_price": 100, "gp": 30, "voided": False},
+    {"org_id": HOUSE, "period": "September 2026", "store": "B-1", "salesperson": "Rep Two",
+     "trans_id": "T2", "trans_date": "2026-09-08", "department": "Phones", "category": "Device",
+     "product_desc": "Phone B", "contract_type": "New", "ext_price": 200, "gp": 60, "voided": False},
+    # B-3: the store the rep was BORROWED to — their own row there, and a colleague's.
+    {"org_id": HOUSE, "period": "September 2026", "store": "B-3", "salesperson": "Rep One",
+     "trans_id": "T3", "trans_date": "2026-09-09", "department": "Phones", "category": "Device",
+     "product_desc": "Phone C", "contract_type": "New", "ext_price": 300, "gp": 90, "voided": False},
+    {"org_id": HOUSE, "period": "September 2026", "store": "B-3", "salesperson": "Far Away",
+     "trans_id": "T4", "trans_date": "2026-09-10", "department": "Phones", "category": "Device",
+     "product_desc": "Phone D", "contract_type": "New", "ext_price": 400, "gp": 120, "voided": False},
+    # B-2: a store the rep has never been near.
+    {"org_id": HOUSE, "period": "September 2026", "store": "B-2", "salesperson": "Nj Rep",
+     "trans_id": "T5", "trans_date": "2026-09-08", "department": "Phones", "category": "Device",
+     "product_desc": "Phone E", "contract_type": "New", "ext_price": 500, "gp": 150, "voided": False},
+]
+# A prior month, so the banner has something to compare against and actually renders (it returns
+# `available: False` when both windows are empty, which would make the gate check below vacuous).
+for _d, _st, _sp, _tid, _amt in (("2026-08-08", "B-1", "Rep One", "P1", 50),
+                                 ("2026-08-08", "B-2", "Nj Rep", "P2", 250)):
+    st[("commcalc", "raw_sales")].append(
+        {"org_id": HOUSE, "period": "August 2026", "store": _st, "salesperson": _sp,
+         "trans_id": _tid, "trans_date": _d, "department": "Phones", "category": "Device",
+         "product_desc": "Phone", "contract_type": "New", "ext_price": _amt,
+         "gp": _amt / 3.0, "voided": False})
+st[("commcalc", "daily_sales_feed")] = []
+
+
+def sales_cells(tok):
+    r = CC.sales_report(period="September 2026", authorization=tok, org_id=HOUSE)
+    return {(x["store"], x["salesperson"]) for x in (r.get("rows") or r.get("data") or [])}, r
+
+
+cells_rep, rep_resp = sales_cells("Bearer rep")
+check("K8. the rep's sales report reaches BOTH stores they actually worked — their own and the one "
+      "they were borrowed to — which the pin basis never would have",
+      {c[0] for c in cells_rep} == {"B-1", "B-3"}, str(cells_rep))
+check("K8b. and at BOTH of them they read only their OWN numbers, never the colleague's row that "
+      "shares the store — this is the half that makes the wider store list safe",
+      cells_rep == {("B-1", "Rep One"), ("B-3", "Rep One")}, str(cells_rep))
+check("K8c. the TOTALS are their own too — summed after the person filter, not before (the whole "
+      "fixture is $1,500; this rep sold $400 of it)",
+      abs(float((rep_resp.get("totals") or {}).get("revenue", 0)) - 400.0) < 0.01,
+      str(rep_resp.get("totals")))
+cells_mgr, _ = sales_cells("Bearer mgr")
+check("K8d. a store MANAGER still reads every rep at the store they run — a span tier is not an "
+      "individual contributor",
+      cells_mgr == {("B-1", "Rep One"), ("B-1", "Rep Two")}, str(cells_mgr))
+cells_admin, admin_resp = sales_cells("Bearer admin")
+check("K8e. an admin still reads the whole company, and their totals are the whole company's",
+      {c[0] for c in cells_admin} == {"B-1", "B-2", "B-3"}
+      and abs(float((admin_resp.get("totals") or {}).get("revenue", 0)) - 1500.0) < 0.01,
+      f"{cells_admin} {admin_resp.get('totals')}")
+check("K9. and the PRE-FIX gate left the rep every store's rows AND every colleague's name on them "
+      "— the leak the owner reported, reproduced on the old basis",
+      {r["store"] for r in st[("commcalc", "raw_sales")] if SO.in_keyset(old_rep_ks, r.get("store"))}
+      == {"B-1", "B-2", "B-3"})
+
+# ══════════════════ L. THE DRILL-DOWN AND THE BANNER HAD NO GATE AT ALL ═════════════════════════
+# Both took no `authorization` parameter, so neither ever looked at who was asking. The drill-down
+# returns customer name, phone (`mdn`) and serial; the banner totals the company. Same sibling class
+# as the ungated staffing heat map, and found the same way — by asking what ELSE answers this
+# question rather than fixing only the surface that was reported.
+import inspect  # noqa: E402
+from datetime import date as _date  # noqa: E402
+for fn, name in ((CC.sales_report_detail, "/sales-report/detail"),
+                 (CC.sales_report_narrative, "/sales-report/narrative")):
+    check(f"L1. {name} now takes the caller's identity at all",
+          "authorization" in inspect.signature(fn).parameters,
+          str(list(inspect.signature(fn).parameters)))
+det_own = CC.sales_report_detail(period="September 2026", store="B-3", salesperson="Rep One",
+                                 date="2026-09-09", authorization="Bearer rep", org_id=HOUSE)
+check("L2. a rep may open their OWN cell at a store they worked",
+      {t["trans_id"] for t in det_own["transactions"]} == {"T3"}, str(det_own["transactions"]))
+try:
+    CC.sales_report_detail(period="September 2026", store="B-3", salesperson="Far Away",
+                           date="2026-09-10", authorization="Bearer rep", org_id=HOUSE)
+    _refused = False
+except Exception as e:
+    _refused = getattr(e, "status_code", None) == 403
+check("L3. and is REFUSED a colleague's cell at that same store, by name", _refused)
+try:
+    CC.sales_report_detail(period="September 2026", store="B-2", salesperson="Nj Rep",
+                           date="2026-09-08", authorization="Bearer rep", org_id=HOUSE)
+    _refused_store = False
+except Exception as e:
+    _refused_store = getattr(e, "status_code", None) == 403
+check("L4. and refused a store they never worked", _refused_store)
+det_blank = CC.sales_report_detail(period="September 2026", store="B-1", salesperson="",
+                                   date="", authorization="Bearer rep", org_id=HOUSE)
+check("L5. omitting the rep name does NOT hand them the whole cell — the ROWS are filtered too, so "
+      "a colleague's customer name, phone and serial stay unreachable",
+      {t["trans_id"] for t in det_blank["transactions"]} == {"T1"},
+      str(det_blank["transactions"]))
+nar_rep = CC.sales_report_narrative(period="September 2026", today="2026-10-01",
+                                    authorization="Bearer rep", org_id=HOUSE)
+nar_admin = CC.sales_report_narrative(period="September 2026", today="2026-10-01",
+                                      authorization="Bearer admin", org_id=HOUSE)
+check("L6. the banner renders for both, and is GATED — a rep's sentences and an admin's are not the "
+      "same numbers (a sentence naming the company's revenue IS the company's revenue)",
+      nar_rep.get("available") and nar_admin.get("available") and nar_rep != nar_admin,
+      f"rep={str(nar_rep)[:160]}")
+check("L7. the banner's own aggregation honours a keyset directly, so no future caller can get the "
+      "unrestricted roll-up by forgetting to pass one",
+      CC._sales_narrative(SO.get_supabase(), HOUSE, "September 2026", today=_date.fromisoformat("2026-10-01"),
+                          keyset={"B-1", "1 MAIN ST"})
+      != CC._sales_narrative(SO.get_supabase(), HOUSE, "September 2026", today=_date.fromisoformat("2026-10-01"),
+                             keyset=None))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
