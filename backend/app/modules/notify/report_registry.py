@@ -827,6 +827,13 @@ def list_reports():
     return [{"key": k, "label": v["label"], "filters": v["filters"]} for k, v in REPORTS.items()]
 
 
+def report_labels() -> dict:
+    """{report_key: human label} — the ONE spelling of each report's name, read by
+    `notify/send_identity.py` so a send record and the history that displays it name a report the
+    same way the registry does (never a machine key, never a second spelling)."""
+    return {k: v.get("label") or k for k, v in REPORTS.items()}
+
+
 def validate_filters(report_key: str, filters: dict) -> None:
     """Raise ReportConfigError if this report's SAVED FILTERS can't produce a report — see
     report_filters.validate_filters. This wrapper supplies the live report-key list."""
