@@ -19,6 +19,7 @@
 import { useMemo } from 'react'
 import { fmt } from '@/lib/client'
 import { TrendChart, TREND_COLORS, type TrendSeries } from '@/components/TrendChart'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 export type DataChart = {
   kind: 'bar' | 'horizontal_bar' | 'line' | 'pie'
@@ -59,9 +60,16 @@ const cell = (v: Cell | undefined, money: boolean) => {
   return money ? fmt(v) : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
 }
 
+// A cell read for the shared sorter. Module scope so the memo inside useTableSort is stable.
+const pivotCell = (row: Record<string, Cell>, field: string) => row[field]
+
 function PivotTable({ table }: { table: DataTable }) {
   const money = MONEYISH.test(table.measure || '')
   const side = table.row_by?.length ? table.row_by : ['']
+  // Click-a-header sorting through the ONE comparison home (@/lib/table-sort), like every other report
+  // table. Null seeds it with the backend's own order, and the totals row lives in <tfoot>, so a sort
+  // can never drag it into the middle.
+  const { sorted, sort, toggle } = useTableSort<Record<string, Cell>>(table.rows || [], pivotCell)
   return (
     <div style={{ marginTop: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
       {(table.title || table.measure) && (
@@ -76,18 +84,22 @@ function PivotTable({ table }: { table: DataTable }) {
           <thead>
             <tr style={{ background: 'var(--surface2)' }}>
               {side.map(c => (
-                <th key={`h-${c}`} style={{ textAlign: 'left', padding: '6px 9px', whiteSpace: 'nowrap',
-                  borderBottom: '1px solid var(--border)' }}>{c || ''}</th>
+                <SortableTh key={`h-${c}`} field={c} sort={sort} onSort={toggle} disabled={!c}
+                  style={{ textAlign: 'left', padding: '6px 9px', whiteSpace: 'nowrap',
+                    borderBottom: '1px solid var(--border)' }}>{c || ''}</SortableTh>
               ))}
               {table.columns.map(c => (
-                <th key={`h2-${c}`} style={{ textAlign: 'right', padding: '6px 9px', whiteSpace: 'nowrap',
-                  borderBottom: '1px solid var(--border)' }}>{c || '—'}</th>
+                <SortableTh key={`h2-${c}`} field={c} sort={sort} onSort={toggle}
+                  style={{ textAlign: 'right', padding: '6px 9px', whiteSpace: 'nowrap',
+                    borderBottom: '1px solid var(--border)' }}>{c || '—'}</SortableTh>
               ))}
-              <th style={{ textAlign: 'right', padding: '6px 9px', borderBottom: '1px solid var(--border)' }}>Total</th>
+              <SortableTh field="_total" sort={sort} onSort={toggle}
+                style={{ textAlign: 'right', padding: '6px 9px',
+                  borderBottom: '1px solid var(--border)' }}>Total</SortableTh>
             </tr>
           </thead>
           <tbody>
-            {table.rows.map((r, i) => (
+            {sorted.map((r, i) => (
               <tr key={i}>
                 {side.map(c => (
                   <td key={`c-${c}`} style={{ padding: '5px 9px', whiteSpace: 'nowrap',
@@ -121,9 +133,9 @@ function PivotTable({ table }: { table: DataTable }) {
           </tfoot>
         </table>
       </div>
-      {typeof table.row_count === 'number' && table.row_count > table.rows.length && (
+      {typeof table.row_count === 'number' && table.row_count > sorted.length && (
         <div style={{ padding: '5px 10px', fontSize: 11, color: 'var(--text3)' }}>
-          Showing {table.rows.length} of {table.row_count} rows.
+          Showing {sorted.length} of {table.row_count} rows.
         </div>
       )}
     </div>
