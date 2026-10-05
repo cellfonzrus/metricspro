@@ -202,6 +202,54 @@ ok(not re.search(r"\bpath\s*=\s*(?:args|c\.input|json\.loads)", CODE[AGENT_HOME]
    "B8-ARMED a path assigned from caller input would fail this check")
 
 
+# §C's two detectors work on the AST, not on text. `code_only()` blanks string literals (so a
+# docstring cannot defeat a lock), which also blanks the very subscript key we are looking for —
+# and the RAW source would match the prose in a comment explaining the rule. The parse tree has
+# neither problem: comments are absent and a real subscript is still a node.
+def _reads_perm_scope_src(src):
+    """Does this source subscript a mapping with 'perms' or 'scope'? (`c["perms"]["scope"]`,
+    `caller.get("perms")["scope"]`, `x["scope"]` — any of them is a permission rule.)"""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:                                  # pragma: no cover
+        return False
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) \
+           and str(n.slice.value) in ("perms", "scope"):
+            return True
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" \
+           and n.args and isinstance(n.args[0], ast.Constant) \
+           and str(n.args[0].value) in ("perms", "scope"):
+            return True
+    return False
+
+
+def _compares_to_src(src, literal):
+    """Does this source compare anything to `literal` with == or != or `in`?"""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:                                  # pragma: no cover
+        return False
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Compare):
+            for c in [n.left] + list(n.comparators):
+                if isinstance(c, ast.Constant) and c.value == literal:
+                    return True
+                if isinstance(c, (ast.Tuple, ast.List, ast.Set)):
+                    for e in c.elts:
+                        if isinstance(e, ast.Constant) and e.value == literal:
+                            return True
+    return False
+
+
+def _reads_perm_scope(home):
+    return _reads_perm_scope_src(FILES[home])
+
+
+def _compares_to(home, literal):
+    return _compares_to_src(FILES[home], literal)
+
+
 # ── §C no permission rule of its own ───────────────────────────────────────────────────────────
 section("C. no second permission rule")
 # An RBAC role, not the `user`/`assistant` role of a chat message — a conversation turn has a
@@ -220,6 +268,41 @@ ok(bool(RBAC_ROLE.search("if role == 'district_manager': pass")),
    "C2-ARMED the RBAC-role detector really fires")
 ok(not RBAC_ROLE.search('if role in ("user", "assistant"): pass'),
    "C2-ARMED2 and it does NOT fire on a chat message's role")
+
+# ── the rep narrowing (owner directive 2026-10-05: *"only their own commission, only their action
+# plan"*). The thing to prevent is the obvious shortcut: filtering rows, stripping fields or
+# matching a rep's NAME inside this package, where it would be a second copy of a fact
+# `commcalc/payout_audience.py` already owns and would drift from it the first time either changed.
+for home in (AGENT_HOME, API_HOME, REGISTRY_HOME, COMPUTE_HOME):
+    src = CODE[home]
+    ok("epay_salesperson" not in src and "storeops_name" not in src,
+       f"C5 {home} matches no rep NAME field (payout_audience owns that)")
+    ok("rep_keys" not in src and "mine_only" not in src and "row_is_mine" not in src,
+       f"C6 {home} does not re-implement the own-rep predicate")
+    ok(not _reads_perm_scope(home),
+       f"C7 {home} reads no scope out of the caller's permissions")
+    ok(not _compares_to(home, "self"),
+       f"C8 {home} compares nothing to the literal scope 'self'")
+# The ONE place the self answer may come from, and it is asked of storeops, not computed.
+ok("role_is_self_scoped" in CODE[API_HOME],
+   "C9 the API asks storeops' one home whether the caller is self-scoped")
+ok("role_is_self_scoped" not in CODE[AGENT_HOME] and "role_is_self_scoped" not in CODE[REGISTRY_HOME],
+   "C10 …and asks it ONCE — the agent and the registry are handed a boolean, never the question")
+ok("caller_is_self" in CODE[AGENT_HOME] and "caller_is_self" in CODE[REGISTRY_HOME],
+   "C11 that boolean is what travels (so there is nothing to decide downstream)")
+# The ENFORCEMENT point must stay in code, not in the prompt: the narrowed set gates the tool call.
+ok(re.search(r"authorized_questions", CODE[AGENT_HOME]) is not None,
+   "C12 the agent still gates each tool call on the authorized question set")
+ok("answerable(enabled_modules, caller_is_self)" in CODE[AGENT_HOME],
+   "C13 and that set is built WITH the self flag — not the full registry")
+ok(_reads_perm_scope_src('x = caller["perms"]["scope"]'),
+   "C7-ARMED the permissions-scope detector really fires")
+ok(not _reads_perm_scope_src('x = caller["role"]'),
+   "C7-ARMED2 and it does not fire on an unrelated subscript")
+ok(_compares_to_src("if scope == 'self': pass", "self"),
+   "C8-ARMED the scope-literal detector really fires")
+ok(not _compares_to_src("if scope == 'market': pass", "self"),
+   "C8-ARMED2 and it does not fire on a different literal")
 
 
 # ── §D no arithmetic outside the proved module ──────────────────────────────────────────────────
@@ -263,9 +346,18 @@ ok(not d.get("allow") and d.get("code") == "unknown_authorizer",
    "E10-ARMED a purpose naming a predicate that does not exist authorizes NOBODY")
 d = cbx.ai_guard_decision(boss, purpose="data_qa", subject="which store is best", has_key=True)
 ok(d.get("allow"), "E11 and a real management caller with the module IS allowed")
+# A SELF-SCOPED REP MAY ASK (owner directive 2026-10-05: *"only their own commission, only their
+# action plan"*), and the breadth of what they may ask is NOT this guard's business — it is the
+# question registry's, proved in harness_data_qa_registry.py §G. Asserting it in both places is how
+# the two facts stay separable: the guard says who may spend, the registry says what is offered.
 rep = {"super_admin": False, "perms": {"modules": {"ai_assistant": True}, "scope": "self"}}
-d = cbx.ai_guard_decision(rep, purpose="data_qa", subject="which store is best", has_key=True)
-ok(not d.get("allow"), "E12 a self-scoped login is refused the ASSISTANT (its reports are unchanged)")
+d = cbx.ai_guard_decision(rep, purpose="data_qa", subject="what is my commission", has_key=True)
+ok(d.get("allow"), "E12 a self-scoped rep is allowed to SPEND on the assistant")
+ok(set(REG.answerable(None, True)) < set(REG.keys()),
+   "E12b …and is offered strictly fewer questions than a manager (the narrowing lives there)")
+unlisted = {"super_admin": False, "perms": {"modules": {"ai_assistant": True}, "scope": "store"}}
+d = cbx.ai_guard_decision(unlisted, purpose="data_qa", subject="x", has_key=True)
+ok(not d.get("allow"), "E12c a scope the purpose does not list is still refused")
 nomod = {"super_admin": False, "perms": {"modules": {}, "scope": "all"}}
 d = cbx.ai_guard_decision(nomod, purpose="data_qa", subject="x", has_key=True)
 ok(not d.get("allow"), "E13 a tenant without the module is refused")

@@ -197,6 +197,70 @@ for bad in HOSTILE:
 p, qy, e = reg.validate("action_plan", {"period": "2026-09", "store_code": "B-1115"})
 ok(not e and qy["store_code"] == "B-1115", "F4 a real store code still passes")
 
+# ── §G a rep is offered only what narrows to them ───────────────────────────────────────────────
+# OWNER DIRECTIVE 2026-10-05: a rep may ask the assistant about *"only their own commission, only
+# their action plan"*. This section proves the OFFER side. The enforcement side is each endpoint's
+# own narrowing (backend/harness_payout_audience.py §K) plus the agent's `authorized_questions`
+# check (backend/harness_data_qa_lock.py §C) — three different files on purpose, because a single
+# place that both decides and enforces is a place one edit can open.
+section("G. a self-scoped rep is offered only the self-safe questions")
+safe = set(reg.self_safe_keys())
+rep_offer = set(reg.answerable(None, True))
+ok(rep_offer == safe, "G1 a rep is offered exactly the self_safe questions")
+ok(safe == {"my_commission", "my_commission_range", "action_plan"},
+   f"G2 and those are their own commission and their own action plan, nothing else (got {sorted(safe)})")
+ok(rep_offer < set(reg.keys()), "G3 a rep is offered strictly LESS than a manager, never more")
+mgr_offer = set(reg.answerable(None, False))
+ok(rep_offer <= mgr_offer, "G4 and never a question a manager is not offered")
+for k in ("sales_by_store_rep_day", "profit_and_loss", "store_roster", "executive_mtd",
+          "daily_targets_summary"):
+    ok(k not in rep_offer, f"G5 a rep is NOT offered {k}")
+
+# FAIL-CLOSED. A new question that says nothing about self scope must be manager-only, so that
+# adding a report can never silently widen what a rep can ask. Armed: the same assertion run
+# against a question that DOES declare it must come out the other way.
+_bak = dict(reg.DATA_QUESTIONS)
+try:
+    reg.DATA_QUESTIONS["zz_new_report"] = {
+        "label": "A report somebody added", "answers": "anything", "path": "/api/v1/zz",
+        "params": {}, "rows_at": ("rows",), "grain": "x", "module": None, "index": ("0",)}
+    ok("zz_new_report" not in set(reg.answerable(None, True)),
+       "G6 a question that does not DECLARE self_safe is not offered to a rep (fail-closed)")
+    ok("zz_new_report" in set(reg.answerable(None, False)),
+       "G7 …while a manager is offered it as usual")
+    reg.DATA_QUESTIONS["zz_new_report"]["self_safe"] = True
+    ok("zz_new_report" in set(reg.answerable(None, True)),
+       "G8 NEGATIVE CONTROL: declaring it self_safe DOES offer it — so G6 is the rule working, "
+       "not the function refusing everything")
+    reg.DATA_QUESTIONS["zz_new_report"]["self_safe"] = "yes"
+    ok("zz_new_report" not in set(reg.answerable(None, True)),
+       "G9 only a real True counts — a truthy string does not open the door")
+finally:
+    reg.DATA_QUESTIONS.clear()
+    reg.DATA_QUESTIONS.update(_bak)
+ok(set(reg.keys()) == set(_bak), "G10 the registry is left exactly as it was found")
+
+# The two narrowings compose, and the module gate still applies on top of the self gate.
+ok(set(reg.answerable([], True)) == safe,
+   "G11 a tenant with no modules still offers a rep the ungated self-safe questions")
+
+# Every self_safe question must SAY WHY, naming the mechanism — a bare True is a claim nobody can
+# check, and this file is the one deciding who may read pay.
+for k in sorted(safe):
+    q = reg.question(k)
+    note = str(q.get("self_note") or "")
+    ok(len(note) > 40, f"G12 {k} declares HOW its endpoint narrows ({len(note)} chars)")
+    ok("payout_audience" in note or "SAME handler" in note or "same handler" in note.lower()
+       or "_caller_rep_keys" in note or "_caller_self_keyset" in note,
+       f"G13 {k}'s note names the mechanism, not just an assurance")
+
+# And the rep's catalog is still a catalog of QUESTIONS, carrying no route.
+rep_cat = reg.catalog(None, True)
+ok(rep_cat and len(rep_cat) == len(safe), "G14 the rep's catalog holds exactly those questions")
+ok("/api/v1/" not in repr(rep_cat), "G15 the rep's catalog contains no URL either")
+ok(all("self_note" not in c for c in rep_cat),
+   "G16 the internal note is NOT shown to the model (it is a reviewer's fact, not a prompt)")
+
 # ── report ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{'=' * 78}")
 if FAILS:

@@ -69,6 +69,23 @@ def _tenant_context(client, org_id):
     return name, mods
 
 
+def _caller_is_self(org_id, caller):
+    """Is this caller a self-scoped login (a rep)? Asked of the ONE home for that fact,
+    `storeops.router.role_is_self_scoped` — the same answer the payout surfaces and the nav ask, so
+    the assistant can never disagree with the menu about who is an employee (index §6j).
+
+    Why it is asked HERE and nowhere deeper: the answer travels as a plain boolean into the pure
+    registry, which means no file under `core/data_qa_*` holds a permission rule of its own — the
+    thing `harness_data_qa_lock.py` §C fails the build over. A read that cannot answer returns
+    False, which only ever OFFERS MORE, and offering more is harmless: every endpoint the assistant
+    reads narrows its own rows for a rep regardless of what was offered."""
+    try:
+        from app.modules.storeops.router import role_is_self_scoped
+        return bool(role_is_self_scoped(org_id, (caller or {}).get("role")))
+    except Exception:                                   # pragma: no cover - I/O guard
+        return False
+
+
 @router.get("/data-qa/status")
 def data_qa_status(org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Whether this login can use the data assistant, and what it can answer for this tenant.
@@ -81,6 +98,7 @@ def data_qa_status(org_id: str = ORG_ID, authorization: str = Header(default="")
     enabled = _module_enabled(org_id, MODULE_KEY)
     _name, mods = _tenant_context(client, org_id)
     caller = _gate.resolve_caller(client, authorization, org_id)
+    is_self = _caller_is_self(org_id, caller)
     decision, _cfg = _gate.decide(client, org_id=org_id, purpose=_agent.PURPOSE, caller=caller,
                                   subject="status")
     return {"module_enabled": bool(enabled),
@@ -88,7 +106,11 @@ def data_qa_status(org_id: str = ORG_ID, authorization: str = Header(default="")
             "allowed": bool(decision.get("allow")),
             "reason": None if decision.get("allow") else decision.get("reason"),
             "model": settings.DATA_QA_MODEL,
-            "questions": reg.catalog(mods)}
+            # A rep is shown only the questions whose report narrows to them, so the panel's
+            # suggestions are the ones that will actually answer rather than the ones that would
+            # come back empty.
+            "self_scoped": bool(is_self),
+            "questions": reg.catalog(mods, is_self)}
 
 
 class DataQaIn(LaxModel):
@@ -124,4 +146,5 @@ async def data_qa(body: DataQaIn, request: Request, org_id: str = ORG_ID,
     return await _agent.answer(
         request.app, org_id=org_id, question=question, history=(body.history or []),
         tenant_name=tenant_name, enabled_modules=mods, authorization=authorization,
-        caller=caller, client=client, today=today)
+        caller=caller, client=client, today=today,
+        caller_is_self=_caller_is_self(org_id, caller))

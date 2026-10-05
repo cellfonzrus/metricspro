@@ -131,11 +131,16 @@ async def _fetch(app, path, query, authorization):
 
 
 # ── the tool surface the model is given ─────────────────────────────────────────────────────────
-def tool_defs(enabled_modules=None):
+def tool_defs(enabled_modules=None, caller_is_self=False):
     """The tools, with the question catalog inlined into `run_question`'s description so the model
     chooses from the registry rather than being told to guess a name. `strict` keeps the arguments
-    schema-valid, which matters because every argument is then re-validated by the registry."""
-    cat = reg.catalog(enabled_modules)
+    schema-valid, which matters because every argument is then re-validated by the registry.
+
+    `caller_is_self` is passed STRAIGHT THROUGH to the registry: a rep is never even shown a
+    question they may not run, which is kinder than a refusal and, more to the point, means the
+    narrowing is not a sentence in a prompt that a model could be talked out of. The enforcement is
+    `_run_tool`'s `authorized_questions` check, which is built from the same call."""
+    cat = reg.catalog(enabled_modules, caller_is_self)
     listing = "\n".join(
         f"- {c['question']}: {c['label']}. Answers: {c['answers']} Grain: {c['grain']}. "
         f"Parameters: {json.dumps(c['parameters'], sort_keys=True)}"
@@ -352,7 +357,7 @@ def _bounded(payload, *, limit=4000):
 
 # ── the loop ────────────────────────────────────────────────────────────────────────────────────
 async def answer(app, *, org_id, question, history, tenant_name, enabled_modules, authorization,
-                 caller, client, today):
+                 caller, client, today, caller_is_self=False):
     """Answer one data question. Returns the reply payload the endpoint serves.
 
     Degrades, never raises: no key, AI switched off for the tenant, a refused guard decision, a
@@ -360,7 +365,7 @@ async def answer(app, *, org_id, question, history, tenant_name, enabled_modules
     operator asking "which store is best" must never be shown a stack trace.
     """
     from datetime import timezone as _tz
-    answerable = set(reg.answerable(enabled_modules))
+    answerable = set(reg.answerable(enabled_modules, caller_is_self))
 
     decision, _cfg = await _gate.decide_async(client, org_id=org_id, purpose=PURPOSE,
                                               caller=caller, subject=question)
@@ -391,7 +396,7 @@ async def answer(app, *, org_id, question, history, tenant_name, enabled_modules
     msgs.append({"role": "user", "content": question[:4000]})
 
     ws = _Workspace()
-    tools = tool_defs(enabled_modules)
+    tools = tool_defs(enabled_modules, caller_is_self)
     usage_in = usage_out = 0
     reply, err = "", None
 
