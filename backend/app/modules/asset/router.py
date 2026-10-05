@@ -8,7 +8,7 @@ from app.modules.asset.market_filter import (
     NO_MARKET_SENTINEL, _apply_market_filter, _market_matches, _store_list,
     resolve_market_for_rpc,
 )
-# §52 — ONE home for "what kind of finding is this, and how bad": every writer of
+# §53 — ONE home for "what kind of finding is this, and how bad": every writer of
 # `commcalc.flags` dereferences the registry instead of spelling its own severity.
 from app.modules.commcalc import flag_registry as _reg
 
@@ -1404,7 +1404,7 @@ async def sync_inventory_flags(org_id: str = ORG_ID):
                                f"({'+' if diff > 0 else ''}{diff}) as of {as_of}"
                                + (f" [{r['market']}]" if r.get("market") else ""),
             })
-    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # ONE home for what a finding's severity means (index §53): this module graded its findings
     # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
     # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
     # `stamp` keeps this module's own judgement and puts it on the one scale.
@@ -2420,7 +2420,7 @@ def _sync_hotsheet_flags(client, org_id, tolerance=1.0):
             "description": (f"{it.get('promo_type') or '?'} promo: hotsheet expected {expected:.2f}, "
                             f"Carrier reimbursed {actual:.2f} (short {shortfall:.2f})"),
         })
-    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # ONE home for what a finding's severity means (index §53): this module graded its findings
     # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
     # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
     # `stamp` keeps this module's own judgement and puts it on the one scale.
@@ -2689,7 +2689,7 @@ def _sync_appeal_flags(client, org_id):
         })
 
     # delete-first then plain insert (dedup pattern)
-    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # ONE home for what a finding's severity means (index §53): this module graded its findings
     # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
     # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
     # `stamp` keeps this module's own judgement and puts it on the one scale.
@@ -2830,7 +2830,7 @@ def _sync_rma_flags(client, org_id):
             "description": desc,
         })
 
-    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # ONE home for what a finding's severity means (index §53): this module graded its findings
     # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
     # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
     # `stamp` keeps this module's own judgement and puts it on the one scale.
@@ -3067,7 +3067,7 @@ def _sync_undercharge_flags(client, org_id):
                               f"reimbursement."),
         })
 
-    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # ONE home for what a finding's severity means (index §53): this module graded its findings
     # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
     # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
     # `stamp` keeps this module's own judgement and puts it on the one scale.

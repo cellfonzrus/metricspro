@@ -30,7 +30,7 @@ defect waiting to happen, not a convenience.
 
 The area, label, severity scale and grain all come from `flag_registry`. This file decides nothing.
 
-Mounted by app/main.py. Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §52.
+Mounted by app/main.py. Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §53.
 
 RULE TWO: no carrier, tenant, store or product name appears in this file.
 """

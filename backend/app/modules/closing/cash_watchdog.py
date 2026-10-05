@@ -51,7 +51,7 @@ declared once, in the registry.
 💰 MOVES NO MONEY. This module writes visibility records only. It books nothing to the P&L, GP,
 payroll or any payout, and no payout path reads what it writes.
 
-Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §52.
+Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §53.
 """
 from __future__ import annotations
 

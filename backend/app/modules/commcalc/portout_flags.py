@@ -12,7 +12,7 @@ because a flag with no store reaches nobody at all. See `_sf_to_code` below.
 from datetime import datetime
 from collections import defaultdict
 
-# ONE home for what a finding's severity means (index §52). The day-band grading below is this
+# ONE home for what a finding's severity means (index §53). The day-band grading below is this
 # module's own and is passed through unchanged; `stamp` only puts it on the shared scale.
 from app.modules.commcalc import flag_registry as _reg
 

@@ -54,7 +54,7 @@ RULE TWO: no carrier, tenant, store or product name appears here. Per-org enable
 config rows (`commcalc.watchdog_rule`, mig 1056) read through `rule_params()`; the house defaults
 below are the fallback when no row exists.
 
-Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §52.
+Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §53.
 """
 from __future__ import annotations
 

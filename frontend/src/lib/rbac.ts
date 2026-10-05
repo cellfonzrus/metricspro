@@ -162,7 +162,7 @@ const REPORT_TREES: [string, string][] = [
   ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
   ['/closing/recon', 'closing'],
   ['/closing/accountability', 'closing'],
-  // MANAGEMENT WATCHDOG (owner 2026-10-05, index §52). The whole /watchdog tree is one report
+  // MANAGEMENT WATCHDOG (owner 2026-10-05, index §53). The whole /watchdog tree is one report
   // area — the board, every area page under the dynamic route, and the void register — gated as
   // 'commissions', byte-identical to /commcalc/flags, because it is the same findings table read
   // another way. A separate area key would let a tenant grant the watchdog to somebody it denies
@@ -533,7 +533,7 @@ export const NAV: NavGroup[] = [
   // D1 tile layout (house layout seeded by mig 948). Same zero-RBAC-change duplicate rule as above.
   { group: 'Flags & Compliance', module: 'commissions', items: [
     { href: '/compliance', label: 'Flags & Compliance Dashboard', icon: '🛡️', module: 'commissions', scopes: ['all', 'market'] },
-    // MANAGEMENT WATCHDOG (owner ask 2026-10-05, index §52). Its home is this group because it is
+    // MANAGEMENT WATCHDOG (owner ask 2026-10-05, index §53). Its home is this group because it is
     // the SAME findings table, cut the other way: the dashboard above counts one row per QUEUE
     // across ten tables ("what is open?"), this gives one page per review AREA of commcalc.flags
     // ("which part of the business do I go and act on?"). The area pages are a single dynamic route

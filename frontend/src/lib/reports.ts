@@ -41,7 +41,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', module: 'commissions', scopes: ['all', 'market'] },
   ] },
   { category: 'Flags & Compliance', reports: [
-    // MANAGEMENT WATCHDOG (owner ask 2026-10-05, index §52): "keep these reports in management
+    // MANAGEMENT WATCHDOG (owner ask 2026-10-05, index §53): "keep these reports in management
     // dashboard under different reports so it is easy for the management to review each area and
     // take appropriate action". The board, then each AREA as its own report so one person can own
     // one area end to end. DM GATE mirrored 1:1 from the rbac.ts NAV rows — this catalog is the

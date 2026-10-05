@@ -2102,7 +2102,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 flags.append({**base, "flag_type": "SOLD_LINE_NOT_PAYING",
                               "source": "employee_miss", "severity": "MEDIUM",
                               "description": desc2, "coaching_note": coach2})
-                # ONE home for what a finding's severity means (index §52). Stamped where the rows
+                # ONE home for what a finding's severity means (index §53). Stamped where the rows
                 # are built, because this engine hands them to commcalc/router to write and a
                 # canonicalisation done only at the write site would miss the `persist=False` callers.
                 _reg.stamp(flags[-2:])

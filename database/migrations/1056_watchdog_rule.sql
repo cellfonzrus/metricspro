@@ -50,7 +50,7 @@
 --
 -- REVERT (1): drop table if exists commcalc.watchdog_rule;
 --
--- Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §52.
+-- Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §53.
 
 -- ── (1) The one table. One row per (org, watchdog). ─────────────────────────────────────────────
 create table if not exists commcalc.watchdog_rule (

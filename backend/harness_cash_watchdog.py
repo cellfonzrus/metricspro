@@ -1,4 +1,4 @@
-"""PROOF HARNESS — the cash watchdog (index §52). DB-free, stdlib only, no app import.
+"""PROOF HARNESS — the cash watchdog (index §53). DB-free, stdlib only, no app import.
 
 CLAUDE.md: *"Pure logic ships with a DB-free proof harness"*, and a design fix ships with the
 regression that reproduces the reported defect. Section R is that regression: the measured

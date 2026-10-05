@@ -53,7 +53,7 @@ line count are per-org config rows (`commcalc.watchdog_rule`, mig 1056) read thr
 
 💰 MOVES NO MONEY. Visibility records only — nothing it writes is read by any payout, P&L or GP path.
 
-Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §52.
+Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §53.
 """
 from __future__ import annotations
 

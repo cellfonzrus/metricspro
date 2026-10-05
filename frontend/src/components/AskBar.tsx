@@ -14,6 +14,10 @@ import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { REPORT_CATEGORIES } from '@/lib/reports'
 import { canSeeItem, type Permissions } from '@/lib/rbac'
+// The SAME panel the helpdesk page mounts — one Ask AI in the product, mounted in the one
+// overlay that is already available everywhere (⌘/), so the assistant needed no new widget
+// and no change to the platform layout.
+import AiAssistant from '@/components/AiAssistant'
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 const enc = encodeURIComponent
@@ -81,6 +85,9 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   const [q, setQ] = useState('')
   const [ans, setAns] = useState<{ intent: Intent; period: string; label: string; value?: string; href?: string; loading: boolean } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  // The assistant hand-off (index §52) — see the block below `onSubmit`.
+  const [askAI, setAskAI] = useState('')
+  const [canAskAI, setCanAskAI] = useState(false)
 
   // ⌘/ (Ctrl-/) opens — ⌘K is already taken by the nav menu-filter, so the ask bar uses a distinct key.
   // Esc is handled on the input.
@@ -128,8 +135,34 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
     return () => { live = false; clearTimeout(t) }
   }, [q, period])
 
-  const go = useCallback((href: string) => { setOpen(false); setQ(''); router.push(href) }, [router])
+  const go = useCallback((href: string) => { setOpen(false); setAskAI(''); setQ(''); router.push(href) }, [router])
   const onSubmit = () => { if (ans?.href) go(ans.href); else if (hits[0]) go(hits[0].href) }
+
+  // ── THE ASSISTANT HAND-OFF (index §52) ───────────────────────────────────────────────────────
+  // This bar is DETERMINISTIC and stays the first answer: it recognises a metric intent and reads the
+  // figure from the report's own endpoint, with no model involved, so it cannot invent a number. What
+  // it cannot do is answer a COMPOSITIONAL question — "which store was best", "who is pulling me
+  // down", "what do I need to pull sales up" — because those need a report grouped, ranked and
+  // compared rather than a single metric looked up.
+  //
+  // So the assistant is offered HERE rather than as a fourth place to ask a question (the
+  // duplicate-check gate: this bar and the Ask-AI panel already existed). The typed question is
+  // handed to the SAME <AiAssistant> panel the helpdesk page mounts, inside this one overlay, and the
+  // deterministic answer above it is left on screen — the user sees both, and can tell which is which.
+  // `askAI` is set only by a click, so no question reaches a model (or spends a token) unasked.
+  useEffect(() => {
+    let live = true
+    api(`/api/v1/core/data-qa/status${orgParam() ? `?${orgParam()}` : ''}`)
+      .then((d: { allowed?: boolean; configured?: boolean }) => {
+        if (live) setCanAskAI(!!d?.allowed && !!d?.configured)
+      })
+      .catch(() => { if (live) setCanAskAI(false) })
+    return () => { live = false }
+  }, [])
+  // Closing the overlay forgets the hand-off, so reopening never re-asks a question (or re-spends a
+  // token). Done in the close PATH rather than in an effect on `open` — an effect that calls setState
+  // in its body cascades a render, which this repo's lint rules reject.
+  const closeOverlay = useCallback(() => { setOpen(false); setAskAI('') }, [])
 
   return (
     <>
@@ -150,13 +183,13 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
       )}
 
       {open && (
-        <div onClick={() => setOpen(false)}
+        <div onClick={closeOverlay}
           style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 1000, display: 'flex',
             alignItems: 'flex-start', justifyContent: 'center', padding: '12vh 16px 16px' }}>
           <div onClick={e => e.stopPropagation()} className="card"
             style={{ width: 'min(620px, 96vw)', padding: 0, overflow: 'hidden', boxShadow: 'var(--shadow-lg)' }}>
             <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Escape') setOpen(false); if (e.key === 'Enter') onSubmit() }}
+              onKeyDown={e => { if (e.key === 'Escape') closeOverlay(); if (e.key === 'Enter') onSubmit() }}
               placeholder="Ask a question or search reports —  e.g. “net income last month”, “sales august”, “kpi”"
               style={{ width: '100%', border: 'none', borderBottom: '1px solid var(--border)', padding: '15px 18px',
                 fontSize: 15, outline: 'none', background: 'var(--surface)', color: 'var(--text)' }} />
@@ -195,6 +228,27 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
               ) : q ? (
                 <div style={{ padding: '18px 16px', fontSize: 13, color: 'var(--text3)' }}>No matching report. Try a metric (“net income”, “activations”) or a report name.</div>
               ) : null}
+              {/* Ask the assistant — offered for any typed question, and the one place in the app
+                  where a model is asked about the numbers. Nothing is sent until this is clicked. */}
+              {canAskAI && q.trim().length > 3 && !askAI && (
+                <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
+                  <button onClick={() => setAskAI(q.trim())}
+                    style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '8px 10px', borderRadius: 7, border: '1px dashed var(--border)',
+                      background: 'transparent', cursor: 'pointer', fontSize: 13 }}>
+                    <span>🤖</span>
+                    <span>Ask the assistant: <b>“{q.trim()}”</b></span>
+                  </button>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>
+                    It reads your own reports and can group, rank, pivot and chart them.
+                  </div>
+                </div>
+              )}
+              {askAI && (
+                <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                  <AiAssistant initialOpen compact initialQuestion={askAI} />
+                </div>
+              )}
             </div>
             <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text3)', display: 'flex', gap: 14 }}>
               <span><b>Enter</b> open</span><span><b>Esc</b> close</span><span>Answers are computed from live report data.</span>

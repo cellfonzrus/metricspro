@@ -125,6 +125,13 @@ AI_CALL_SITES = (
              "'lease_extraction' — whose predicate IS can_see_lease, so its authorization is "
              "unchanged; the guard added the rate limit, the budget and the audit. Metering still "
              "grants no permission: the two mechanisms stay separate."},
+    {"key": "data_qa", "purpose": "data_qa", "metered": True,
+     "module": "core", "label": "In-app data assistant",
+     "file": "app/modules/core/data_qa_agent.py (answer)",
+     "note": "One question can take several model turns (the tool loop), and the meter records the "
+             "turns TOGETHER as one call — the figure billed is the whole question's token spend, "
+             "which is what the tenant actually consumed. Authorized by the shared guard on purpose "
+             "'data_qa' (mig 1055). Index §52."},
 )
 
 # Sites the platform has but this build does NOT meter. Kept as a first-class list (not an omission)

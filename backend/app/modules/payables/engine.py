@@ -584,7 +584,7 @@ def sync_payable_flags(client, org_id=ORG_ID):
             "description": "Device sold but the equipment rebate was not received — owed to vendor "
                            f"is not offset (due {r.get('due_date') or 'n/a'}).",
         })
-    # ONE home for what a finding's severity means (index §52) — this module's own
+    # ONE home for what a finding's severity means (index §53) — this module's own
     # critical/warning judgement, put on the one scale the Management Watchdog orders by.
     _reg.stamp(flags)
     for i in range(0, len(flags), 500):

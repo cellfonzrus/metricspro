@@ -1,4 +1,4 @@
-"""PROOF HARNESS — voids and returns made visible (index §52). DB-free, stdlib only.
+"""PROOF HARNESS — voids and returns made visible (index §53). DB-free, stdlib only.
 
 CLAUDE.md: pure logic ships with a DB-free proof harness, and a design fix ships with a check that
 FAILS THE BUILD if a caller stops dereferencing the shared fact.

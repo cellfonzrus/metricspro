@@ -1,0 +1,123 @@
+name: data-qa-guard
+
+# The in-app DATA assistant's three proofs, run as a gate (index §52, owner directive 2026-10-05).
+#
+# WHY A GATE AND NOT A FILE. `backend/harness_ci_pipefail_lock.py` puts it plainly: "a harness
+# nothing executes is not a gate, it is a file, and it will rot unnoticed". That applies with
+# particular force here, because this subsystem is the one place in the platform where a language
+# model's output is turned into a statement about a tenant's money. The three things that keep that
+# honest are exactly the three things this job runs:
+#
+#   harness_data_qa_registry.py — the SEMANTIC LAYER. The assistant may only name a question the
+#       registry declares, every parameter is pattern-matched, and nothing a user or a model types
+#       becomes a route or a query (§F replays SQL, traversal, scheme, newline, control-character
+#       and over-long inputs). It also proves the catalog shown to the model contains no API path at
+#       all, so no model output is ever interpreted as a URL.
+#
+#   harness_data_qa_compute.py — the ARITHMETIC. The owner asked for calculations, pivot tables and
+#       graphs; a model doing that arithmetic in prose would be wrong about a store's revenue and
+#       sound exactly as confident. Every figure the assistant can state is produced here, and this
+#       harness pins the rules that matter in retail reporting: a parenthesised cell is NEGATIVE, a
+#       blank is NOT REPORTED rather than zero (so an average is not quietly halved and an empty
+#       store is never "the worst"), and a pivot's rows, columns and grand total agree.
+#
+#   harness_data_qa_lock.py — the DESIGN LOCK. One registry, one reader, GET only, carrying the
+#       CALLER'S own token (so the assistant inherits every endpoint's RBAC instead of re-
+#       implementing it); no permission rule and no arithmetic of its own; the purpose registered in
+#       BOTH shared registries (the AI guard's and billing's); the SEV-1 2026-07-30 async-client
+#       rule; and bounds on turns, reports and rows. Every control is ARMED — each check is shown to
+#       fail on a deliberately broken input, so a lock that has quietly stopped looking at anything
+#       cannot pass.
+#
+# DEPENDENCY-FREE, like the lineage, org-scope and vision guards. `data_qa_registry` and
+# `data_qa_compute` are stdlib-only by design (proven in the lock's §G), and the lock reads the
+# agent and the API as TEXT and AST rather than importing their dependencies — so no pip install,
+# seconds to run, and the pipefail lock's "every harness CI runs can actually import" rule holds.
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/modules/core/data_qa_registry.py"
+      - "backend/app/modules/core/data_qa_compute.py"
+      - "backend/app/modules/core/data_qa_agent.py"
+      - "backend/app/modules/core/data_qa_api.py"
+      # The lock asserts the purpose is registered in both shared registries and that the guard
+      # refuses an unregistered one, so a change to either registry must run it (the §13e lesson: a
+      # job behind an allowlist that does not name its own subject skips silently).
+      - "backend/app/modules/core/control_box.py"
+      - "backend/app/modules/billing/ai_usage.py"
+      - "backend/app/modules/core/module_graph.py"
+      - "backend/harness_data_qa_registry.py"
+      - "backend/harness_data_qa_compute.py"
+      - "backend/harness_data_qa_lock.py"
+      - "backend/harness_data_qa_routes.py"
+      - "database/migrations/1055_data_qa_assistant.sql"
+      - "docs/SYSTEM_DATA_FLOW_INDEX.md"
+      - ".github/workflows/data-qa-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/modules/core/data_qa_*.py"
+      - "backend/harness_data_qa_*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-qa-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every step runs under `bash -eo pipefail` (GitHub's explicit-bash shell). Without this, the default
+# `bash -e` has NO pipefail, so `python3 harness_x.py | tee …` passed even when the harness failed —
+# every lock in this repo was silently unenforced until 2026-09-24. Locked by
+# backend/harness_ci_pipefail_lock.py.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  data-qa-guard:
+    name: Data assistant — semantic layer, arithmetic, design lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the data-qa semantic-layer proof (one declaration; a value is never a query; no path reaches the model — index §52.1)
+        working-directory: backend
+        run: python3 harness_data_qa_registry.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the data-qa arithmetic proof (blank is not zero; a parenthesised cell is negative; the pivot adds up both ways — index §52.2)
+        working-directory: backend
+        run: python3 harness_data_qa_compute.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the module-graph guard (the new facts are registered and their siblings named — index §50)
+        working-directory: backend
+        run: python3 harness_module_graph_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The WIRING proof and the DESIGN LOCK need the real app / the app's settings module, so they get
+  # their own job with the backend's dependencies —
+  # the repo's existing pattern for an app-dependent proof (cf. the royalty / customer-master jobs).
+  # It is the check that catches a path that reads perfectly and is wrong: the first version of the
+  # registry declared `/api/v1/sales-report` for all nine questions when commcalc's router carries a
+  # `/commcalc` prefix, and every DB-free harness passed throughout.
+  data-qa-routes:
+    name: Data assistant — routes resolve, and the design lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -q -r requirements.txt
+      - name: Run the data-qa route proof (every registered question is a GET-able route; the assistant's own two endpoints are mounted once — index §52.1)
+        working-directory: backend
+        run: python3 harness_data_qa_routes.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # The design lock lives in THIS job, not the dependency-free one, because it imports
+      # `control_box` and `data_qa_agent` — which reach `app/core/config.py` and so need
+      # pydantic_settings. `backend/harness_ci_pipefail_lock.py` caught exactly that and named the
+      # chain: a harness in a job that installs nothing dies with ModuleNotFoundError before its
+      # first check, and the step still reads green.
+      - name: Run the data-qa design lock (one registry, one GET-only reader on the caller's token, no second permission rule, no arithmetic of its own — index §52.3)
+        working-directory: backend
+        run: python3 harness_data_qa_lock.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"

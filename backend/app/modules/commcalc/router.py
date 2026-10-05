@@ -16191,7 +16191,7 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             #
             # Scoped to the SOURCES this pass owns, so it can no longer wipe the asset / payables /
             # closing / account flags that share this table — the old wholesale per-period DELETE did.
-            # ONE home for what a finding's severity means (index §52). `calc_flags` and
+            # ONE home for what a finding's severity means (index §53). `calc_flags` and
             # `calc_portout_flags` already stamp their own rows; this is the write-site guarantee, so
             # a future detector plugged into `flag_list` cannot reach the table off the scale.
             flag_registry.stamp(flag_list or [])
@@ -16228,7 +16228,7 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
         try:
             si_flags = (sale_installment_engine.compute_sale_installments(client, org_id, period, persist=False)
                         .get('flags') or [])
-            flag_registry.stamp(si_flags or [])   # index §52 — the one severity scale
+            flag_registry.stamp(si_flags or [])   # index §53 — the one severity scale
             _INSTALLMENT_FLAG_SOURCES = ['commission_rebate_tracking', 'employee_miss']
             # Same DM routing as the main flag pass (mig 285). No MI fallback here: an installment flag
             # is raised from a SALE, so it always carries that sale's store string.

@@ -5248,3 +5248,13 @@ from app.modules.core import operator_api as _operator_api   # noqa: E402  (bott
 
 router.include_router(_operator_api.router)
 router.include_router(_operator_api.public_router)
+
+
+# ── In-app DATA assistant (index §52) ───────────────────────────────────────────────────────────
+# Mounted at the bottom like the other core sub-APIs. The assistant answers questions about THIS
+# tenant's own data by running the platform's own reports as the signed-in user — the semantic layer
+# it may see is `core/data_qa_registry`, the arithmetic is `core/data_qa_compute`, and the spend is
+# authorized by the shared AI guard on purpose `data_qa` (mig 1055).
+from app.modules.core import data_qa_api as _data_qa_api   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_data_qa_api.router)

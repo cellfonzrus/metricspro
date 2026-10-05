@@ -528,7 +528,7 @@ def _sync_invoice_due_flags(client, org_id):
                             f"due {inv.get('due_date')} — total due "
                             f"${float(inv.get('grand_total') or 0):,.2f}."),
         })
-    # ONE home for what a finding's severity means (index §52) — this module's own
+    # ONE home for what a finding's severity means (index §53) — this module's own
     # critical/warning judgement, put on the one scale the Management Watchdog orders by.
     _reg.stamp(flags)
     for i in range(0, len(flags), 500):

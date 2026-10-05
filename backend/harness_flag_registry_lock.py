@@ -2,7 +2,7 @@
 
 CLAUDE.md, "A fix is a DESIGN fix": *"A design fix ships with a check that FAILS THE BUILD if a
 caller stops dereferencing the shared fact, or if a second copy appears. Without that, the next
-change quietly restores the patchwork."* This is that check for the flag registry (index §52).
+change quietly restores the patchwork."* This is that check for the flag registry (index §53).
 
 WHAT IT DEFENDS, AND WHY EACH RULE EXISTS
 ─────────────────────────────────────────

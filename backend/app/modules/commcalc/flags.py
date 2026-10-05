@@ -12,13 +12,13 @@ long enough that the registry work had to re-derive it from the code.
 Those unemitted names are NOT being implemented here to make the docstring true: they are
 recorded in `flag_registry.DOCUMENTED_NOT_EMITTED` and left unregistered on purpose, because
 registering a type nobody writes would put a permanently-empty row on the Management Watchdog
-board — the fake-zero this house forbids (index §52.2). If a tenant wants one of them, it is a
+board — the fake-zero this house forbids (index §53.2). If a tenant wants one of them, it is a
 new detector with its own proof, not a docstring to satisfy.
 """
 from typing import Any
 from collections import defaultdict
 
-# ONE home for what a finding's severity means (index §52). This module keeps its own HIGH/MEDIUM/
+# ONE home for what a finding's severity means (index §53). This module keeps its own HIGH/MEDIUM/
 # LOW judgements; `flag_registry.stamp` only puts them on the shared scale, so the Management
 # Watchdog can order by severity across every writer of the table.
 from app.modules.commcalc import flag_registry as _reg

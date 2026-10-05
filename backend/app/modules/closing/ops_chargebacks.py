@@ -553,7 +553,7 @@ def _write_missed_closing_flag(client, org_id, store_code, incident_date, employ
         "description": (f"No daily closing submitted for {label} on {incident_date}"
                         + (f" — effective closer {employee_name}" if employee_name else "")),
     }
-    # ONE home for what a finding's severity means (index §52).
+    # ONE home for what a finding's severity means (index §53).
     _reg.stamp([row])
     client.schema("commcalc").table("flags").insert(row).execute()
 

@@ -253,7 +253,7 @@ def sync_flags(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEF
                             f"({'short' if r['status'] == 'under' else 'over'} by {abs(r['diff']):.2f})."),
         })
 
-    # ONE home for what a finding's severity means (index §52) — this module's own
+    # ONE home for what a finding's severity means (index §53) — this module's own
     # critical/warning judgement, put on the one scale the Management Watchdog orders by.
     _reg.stamp(flags)
     client.schema("commcalc").table("flags").delete() \

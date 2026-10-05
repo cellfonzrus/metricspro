@@ -294,7 +294,7 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
                                 f"${(r.get('daily_total') or 0):,.2f} (Δ ${(r.get('delta') or 0):,.2f})."),
             })
 
-    # ONE home for what a finding's severity means (index §52). This module graded its two findings
+    # ONE home for what a finding's severity means (index §53). This module graded its two findings
     # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW, so
     # the two could not be ordered together; `stamp` keeps the judgement and puts it on one scale.
     _reg.stamp(flags)
