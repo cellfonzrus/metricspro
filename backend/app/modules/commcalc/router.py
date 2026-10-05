@@ -24737,13 +24737,38 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
             "gp": round(a["gp"], 2), "market": _market_for(st),
         })
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
+    # ── WHOSE ROWS (owner directive 2026-10-05, index §14x) ──────────────────────────────────────
+    # *"the employee shoudl have teh visibility in the store they have been schduled and actually
+    # worked and only their numbers"*. THIS REPORT'S ROWS ARE PER REP — one per (store, salesperson,
+    # day), carrying that named person's revenue, GP and accessory revenue. So a store gate alone was
+    # never the answer to the owner's sentence: the moment a login resolved a shared store it read
+    # every colleague's money by name. The store half moved to evidence (`caller_scope`), which makes
+    # a rep's store list WIDER, not narrower — 84 pinned stores become 354 worked. The person half is
+    # what makes that safe, and the two are inseparable.
+    #
+    # No new predicate: `_caller_rep_keys` is the platform's one answer to "which rep rows are mine"
+    # and `payout_audience.mine_only` its one "is this row mine" — `salesperson` is already in
+    # `REP_NAME_FIELDS`, so this report needed no field of its own. Same two one-homes `get_flags`
+    # uses; the lock harness fails the build if either grows a hand-rolled copy.
+    #
+    # THE GATE FAILS CLOSED. It used to swallow every exception and fall through to unrestricted —
+    # an access gate whose error case hands over the whole tenant. A resolution error now yields an
+    # empty report, which is visible and fixable, instead of a silent company-wide read.
     try:
         from app.modules.storeops.router import scope_keyset, in_keyset
+        from app.modules.commcalc import payout_audience as _pa
         ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
         if ks is not None:
             out = [r for r in out if in_keyset(ks, r.get("store"))]
-    except Exception:
-        pass   # a span-scope resolution error must not blank the report (fail open to unrestricted)
+        rep_keys = _caller_rep_keys(authorization, org_id)   # None = not an individual contributor
+        if rep_keys is not None:
+            cmap = _rep_canon_map(client, org_id)
+            out = _pa.mine_only(out, rep_keys, canon=lambda v: _canon(v, cmap))
+    except Exception as e:
+        print(f"WARN commcalc.sales_report scope gate failed, serving nothing: {e}")
+        out = []
+    # TOTALS ARE COMPUTED AFTER BOTH FILTERS, never before: a rep's totals are the sum of a rep's
+    # own rows. Summing the unfiltered pass here would print the company's revenue under their name.
     totals = {
         "txns": sum(r["txns"] for r in out), "lines": sum(r["lines"] for r in out),
         "activations": sum(r["activations"] for r in out), "byod": sum(r["byod"] for r in out),
@@ -24788,13 +24813,17 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
             "shown_rows": src_meta.get("shown_rows"), "filled_days": src_meta.get("filled_days")}
 
 
-def _sales_narrative(client, org_id, period, today=None):
+def _sales_narrative(client, org_id, period, today=None, keyset=None):
     """Sales-Report narrative banner: this period's sales vs the SAME complete-days window of last month —
     revenue headline, activations, the store that moved revenue most, and the gross-profit / accessory
     trend. Built from the exact `_sales_rows_union` + `_sales_cell_agg` + `_apply_activation_basis` pass the
     Sales Report renders, windowed to the same day-of-month cut, so the banner can never disagree with the
     grid. DISPLAY-ONLY; never raises → `available: False` hides it. Shares the deterministic sentence
-    helpers with the Exec-MTD narrative (see `_mtd_narrative`)."""
+    helpers with the Exec-MTD narrative (see `_mtd_narrative`).
+
+    `keyset` is the caller's store keyset (None = unrestricted) and is applied to the SAME cells the
+    grid filters, so the banner's sentences and the grid's rows describe one population. Before
+    2026-10-05 this took no keyset and no caller at all — see the endpoint's docstring."""
     try:
         _today = today or _date.today()
         open_m = _is_open_month(period)
@@ -24818,9 +24847,14 @@ def _sales_narrative(client, org_id, period, today=None):
             hi = f"{y}-{m:02d}-{max(1, min(through, dim)):02d}"
             tot = {'revenue': 0.0, 'gp': 0.0, 'activations': 0, 'byod': 0, 'upgrades': 0, 'accessory_rev': 0.0}
             per_store = {}
+            from app.modules.storeops.router import in_keyset as _ik
             for a in agg.values():
                 dt = str(a.get('trans_date') or '')[:10]
                 if not dt or dt < lo or dt > hi:
+                    continue
+                # The caller's store gate, on the same cells the grid gates — a banner that totals a
+                # store the reader may not open is that store's numbers, in a sentence.
+                if keyset is not None and not _ik(keyset, a.get('store')):
                     continue
                 acts = (a.get('act_new', 0) or 0) + (a.get('act_port', 0) or 0)
                 st = a.get('store') or '—'
@@ -24890,10 +24924,21 @@ def _sales_narrative(client, org_id, period, today=None):
 
 
 @router.get("/sales-report/narrative")
-def sales_report_narrative(period: str = "", today: str = "", org_id: str = ORG_ID):
+def sales_report_narrative(period: str = "", today: str = "",
+                                 authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Plain-English summary banner for the Sales Report — this period vs the same complete-days window of
     last month (revenue, activations, the top-moving store, gross profit / accessory). Every number is
-    computed from the SAME aggregation the report renders. DISPLAY-ONLY."""
+    computed from the SAME aggregation the report renders. DISPLAY-ONLY.
+
+    LIKE THE DRILL-DOWN, THIS HAD NO ACCESS GATE until 2026-10-05 (index §14x): no `authorization`
+    parameter, so a rep's banner read the whole company's revenue, activations and gross profit — in
+    sentences, above a report whose own rows were gated. "Display-only" is not a reason to skip the
+    gate; a sentence naming the company's revenue is the company's revenue.
+
+    The banner is a STORE-LEVEL roll-up with no person in it, so its gate is the store keyset alone
+    (the same dimension `sales_comparison` uses). An individual contributor whose span resolves to
+    their own worked stores gets a banner about those stores; what it must never do is total the
+    tenant for somebody entitled to one store."""
     require_org(org_id)
     if not period:
         n = datetime.now(timezone.utc)
@@ -24904,7 +24949,9 @@ def sales_report_narrative(period: str = "", today: str = "", org_id: str = ORG_
             _t = _date.fromisoformat(str(today)[:10])
         except Exception:
             _t = None
-    return _sales_narrative(sb(), org_id, period, today=_t)
+    from app.modules.storeops.router import scope_keyset
+    return _sales_narrative(sb(), org_id, period, today=_t,
+                            keyset=scope_keyset(authorization, org_id))
 
 
 @router.get("/sales-report/classification-unmatched")
@@ -24964,11 +25011,35 @@ def sales_report_classification_unmatched(period: str = "", authorization: str =
 
 @router.get("/sales-report/detail")
 def sales_report_detail(period: str = "", store: str = "", salesperson: str = "",
-                              date: str = "", org_id: str = ORG_ID):
+                              date: str = "", authorization: str = Header(default=""),
+                              org_id: str = ORG_ID):
     """Transaction drill-down for one Sales Report cell (store + rep + day): every transaction that
     rolled into that line, each with its line items (product, contract type, price, GP). Same
-    raw_sales → daily_sales_feed fallback as the report, so it works off whichever source it used."""
+    raw_sales → daily_sales_feed fallback as the report, so it works off whichever source it used.
+
+    THIS ENDPOINT HAD NO ACCESS GATE OF ANY KIND until 2026-10-05 (index §14x) — no `authorization`
+    parameter at all, so it never even looked at who was asking. It takes a store and a rep NAME
+    straight off the query string and returns that person's transactions including the customer's
+    name, their phone number (`mdn`) and the device serial. Any signed-in caller could read any
+    store's any rep's drill-down, which made the report's own gate decorative: the cell was hidden
+    and the data behind it was one URL away. Same class as the ungated staffing heat map closed in
+    the first half of this directive — and found the same way, by asking what ELSE answers this
+    question rather than fixing the surface that was reported."""
     client = sb()
+    # THE SAME TWO DIMENSIONS THE REPORT USES, dereferenced — not re-derived. Store first, then the
+    # person: an individual contributor may drill into their own cell at a store they worked, and
+    # nobody else's. `requested_rep_is_mine` is the platform's one answer to "is this `rep=` the
+    # caller themselves"; a self caller asking for a colleague is refused rather than quietly served.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    from app.modules.commcalc import payout_audience as _pa
+    _ks = scope_keyset(authorization, org_id)        # None = unrestricted (admin / rbac off)
+    if _ks is not None and store and not in_keyset(_ks, store):
+        raise HTTPException(403, "That store is outside your access.")
+    _rk = _caller_rep_keys(authorization, org_id)    # None = not an individual contributor
+    if _rk is not None:
+        _cm = _rep_canon_map(client, org_id)
+        if not _pa.requested_rep_is_mine(salesperson, _rk, canon=lambda v: _canon(v, _cm)):
+            raise HTTPException(403, "You can only open your own transactions.")
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
@@ -25019,6 +25090,13 @@ def sales_report_detail(period: str = "", store: str = "", salesperson: str = ""
             if (not date or str(r.get("trans_date") or "")[:10] == date)
             and (not store or _ckey(r.get("store")) == store_ck)
             and (not salesperson or _n(r.get("salesperson")) == nr)]
+    # AND THE ROWS THEMSELVES, not only the requested `salesperson=`. The parameter check above
+    # refuses a caller who NAMES a colleague, but a blank `salesperson=` asks for nothing and would
+    # otherwise return the whole cell, every rep in it. The same `mine_only` the report applies runs
+    # here on the raw transactions, so an individual contributor cannot reach a colleague's customer
+    # name, phone or serial by simply omitting the parameter.
+    if _rk is not None:
+        rows = _pa.mine_only(rows, _rk, canon=lambda v: _canon(v, _cm))
 
     # Which POS Departments count as a device "box" — CONFIG-DRIVEN (mig 218, the SAME list the box count
     # on the Sales Report / Productivity uses), default = the Boost XP labels. Used ONLY to LABEL which line

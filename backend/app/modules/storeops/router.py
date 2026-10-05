@@ -8272,10 +8272,16 @@ def _rbac_enabled(org_id: str = ORG_ID) -> bool:
         return False
 
 
-def caller_scope(authorization: str, org_id: str = ORG_ID):
+def caller_scope(authorization: str, org_id: str = ORG_ID, *, since=None, until=None):
     """How to scope a read for the signed-in caller.
     Returns None  -> UNRESTRICTED (enforcement off, no/invalid token, unprovisioned, or 'all' scope).
-    Returns a SET of store_codes the caller may see otherwise (a manager's span; possibly empty)."""
+    Returns a SET of store_codes the caller may see otherwise (a manager's span; possibly empty).
+
+    `since`/`until` bound the EVIDENCE scan that now resolves the span (see below). They are optional
+    because ~90 call sites predate them and a span is honest without a window — the scan is keyed on
+    the caller's own employee_id, so unbounded it is one person's shift history, not a table sweep.
+    A surface that knows the period it is reporting should pass it: "which stores can I see for
+    September" then reads as "where I was in September" rather than "where I have ever been"."""
     if not _rbac_enabled(org_id):
         return None
     from app.modules.core.router import _uid_from_token
@@ -8309,25 +8315,44 @@ def caller_scope(authorization: str, org_id: str = ORG_ID):
     # since ruling #7, and `roster_keyset` already applied that refusal to the name picker; Q1 now
     # draws the same line, so the class is closed instead of one surface at a time.
     #
-    # STRICTLY NARROWING: the pins read here (`store_code` + `store_codes`) are the same ones
-    # `_login_extra_codes` already returned, minus the markets. `employees.home_store` is
-    # deliberately NOT read — it would GRANT a store to a login that resolves nothing today
-    # (8 such logins), and a reporting span is not the place to discover that; those logins are
-    # reported as a setup gap instead (pin the store on the login).
-    if scope in ("store",):
-        span |= _cscope.self_store_codes(get_supabase(), org_id, u, employee_home_store=None)
-    elif scope != "self":
-        span |= _login_extra_codes(u, org_id)
+    # THE BASIS IS EVIDENCE, NOT A PIN (owner directive 2026-10-05, index §14x): *"the store pin is
+    # not desired, the employee shoudl have teh visibility in the store they have been schduled and
+    # actually worked and only their numbers, the concept of home store does not apply for
+    # vistibility into the performance of the store"*.
+    #
+    # This function no longer decides. It dereferences `core.scope.visible_store_codes`, the ONE home
+    # for "whose stores reach this login", which reads the SAME declared `people_visibility` fact the
+    # person dimension reads — so an individual contributor resolves where they were scheduled or
+    # clocked in (no pin, no home_store, no market), and a manager resolves assigned-or-worked. The
+    # tier decision is config, never a role name spelled here (RULE TWO).
+    #
+    # NOT STRICTLY NARROWING, and that is the point: measured 2026-10-05, the 71 self-visibility
+    # logins hold 84 pinned stores and have evidence at 354. A rep sees MORE stores and, at every one
+    # of them, only their own rows — the person half of the same declaration. The two ship together;
+    # `harness_people_visibility_lock.py` fails the build if a per-rep store-keyed report carries one
+    # without the other.
+    if scope != "all":
+        perms = dict(_role_permissions(org_id, (u.get("role") or "").strip()) or {})
+        perms["scope"] = scope
+        codes, _why = _cscope.visible_store_codes(
+            get_supabase(), org_id, role_perms=perms, app_user=u,
+            org_unit_codes=span, since=since, until=until)
+        if codes is None:                       # an 'all'-tier role under a non-'all' scope
+            return None
+        span = set(codes)
     return span
 
 
-def scope_keyset(authorization: str, org_id: str = ORG_ID):
+def scope_keyset(authorization: str, org_id: str = ORG_ID, *, since=None, until=None):
     """None = unrestricted; else a set of UPPER store keys (store_codes + their addresses) the caller
     may see — so rows whose store field is EITHER a code or an address still match. caller_scope()
     is UNCHANGED; only the widening (code -> code+address) now runs off app.core.scope's cached,
     unioned market index instead of a fresh storeops.stores scan per request — same contract, and it
-    additionally picks up the address for a store_code that exists only in commcalc.store_mapping."""
-    codes = caller_scope(authorization, org_id)
+    additionally picks up the address for a store_code that exists only in commcalc.store_mapping.
+
+    `since`/`until` are passed straight through to `caller_scope`'s evidence scan; see it for why
+    they are optional."""
+    codes = caller_scope(authorization, org_id, since=since, until=until)
     if codes is None:
         return None
     return _cscope.widen_codes_to_keys(get_supabase(), org_id, codes)
