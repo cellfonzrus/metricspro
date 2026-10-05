@@ -3,13 +3,13 @@ dereferences (owner directive 2026-10-05, index §14w; the design-fix clause "lo
 un-wire").
 
 Stdlib only, no DB, no imports of the application. The behavioural PROOF is
-`harness_schedule_visibility.py` (31 checks over the real endpoints); this file guards the SHAPE.
+`harness_people_visibility.py` (31 checks over the real endpoints); this file guards the SHAPE.
 
 It fails the build when:
-  1. The ruling moves or is copied — `schedule_visibility` / `schedule_people_keyset` must be
+  1. The ruling moves or is copied — `people_visibility` / `visible_people_keyset` must be
      defined in `app/core/scope.py` and nowhere else.
   2. The wiring is copied — `schedule_emp_ids` must be defined in `storeops/router.py` and nowhere
-     else, and must dereference `core.scope.schedule_people_keyset` rather than re-deriving a span.
+     else, and must dereference `core.scope.visible_people_keyset` rather than re-deriving a span.
   3. A wired read stops calling it — every endpoint in WIRED below must still reference
      `schedule_emp_ids` inside its own handler body.
   4. A NEW person-keyed schedule/attendance read lands unwired — any GET handler in
@@ -20,7 +20,7 @@ It fails the build when:
      `_caller_org_unit_codes` (the org tree ALONE), never `_caller_span_codes`, which unions the
      login's market pin and is precisely what put the whole company on a rep's schedule.
 
-Run: `cd backend && python3 harness_schedule_visibility_lock.py`
+Run: `cd backend && python3 harness_people_visibility_lock.py`
 """
 import os
 import re
@@ -56,6 +56,10 @@ EXCUSED = {
 
 PERSON_TABLES = ("shifts", "shift_templates", "time_off_requests", "shift_swap_requests", "timelog")
 
+# A wired read asks through the ONE gate helper, or through the ruling's wiring point directly (the
+# punch list does, because it owns an id-form reconciliation the helper must not duplicate).
+GATE = re.compile(r"gate_person_rows|schedule_emp_ids")
+
 
 def read(rel):
     with open(os.path.join(HERE, rel), encoding="utf-8") as fh:
@@ -71,7 +75,7 @@ def py_files():
 
 
 # ── 1. the ruling has ONE home ───────────────────────────────────────────────────────────────────
-for fn in ("schedule_visibility", "schedule_people_keyset"):
+for fn in ("people_visibility", "visible_people_keyset"):
     homes = [p for p in py_files() if re.search(rf"^def {fn}\(", read(p), re.M)]
     check(f"1. `{fn}` is defined ONLY in {RULING_HOME}", homes == [RULING_HOME], str(homes))
 
@@ -83,11 +87,11 @@ check(f"2a. `schedule_emp_ids` is defined ONLY in {WIRING_HOME}",
 router = read(WIRING_HOME)
 m = re.search(r"^def schedule_emp_ids\(.*?(?=^def |\Z)", router, re.M | re.S)
 body = m.group(0) if m else ""
-check("2b. it dereferences core.scope.schedule_people_keyset (no second derivation)",
-      "schedule_people_keyset" in body)
-callers = sum(len(re.findall(r"schedule_people_keyset\(", read(p)))
+check("2b. it dereferences core.scope.visible_people_keyset (no second derivation)",
+      "visible_people_keyset" in body)
+callers = sum(len(re.findall(r"visible_people_keyset\(", read(p)))
               for p in py_files() if p != RULING_HOME)
-check("2c. nothing else re-derives the ruling — schedule_people_keyset has exactly one call site",
+check("2c. nothing else re-derives the ruling — visible_people_keyset has exactly one call site",
       callers == 1, str(callers))
 
 # ── 5. the market-grant refusal stands ───────────────────────────────────────────────────────────
@@ -95,7 +99,7 @@ check("5a. it feeds the ORG TREE alone (_caller_org_unit_codes)", "_caller_org_u
 check("5b. and NOT _caller_span_codes, which unions the login's market pin",
       "_caller_span_codes" not in body, body)
 scope_src = read(RULING_HOME)
-ruling = re.search(r"^def schedule_people_keyset\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
+ruling = re.search(r"^def visible_people_keyset\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
 ruling = ruling.group(0) if ruling else ""
 check("5c. the ruling reads a market grant only inside its market/region branch",
       ruling.count("login_grant_codes") == 1
@@ -131,7 +135,7 @@ for idx, (i, meth, path) in enumerate(routes):
         continue
     if not any(f'table("{t}")' in handler for t in PERSON_TABLES):
         continue
-    if "schedule_emp_ids" in handler:
+    if GATE.search(handler):
         continue
     if path in EXCUSED:
         continue
@@ -144,8 +148,8 @@ for path in WIRED:
     for idx, (i, meth, p) in enumerate(routes):
         if p != path or meth != "get":
             continue
-        hit = hit or "schedule_emp_ids" in handler_src(i)
-    check(f"3. GET {path} still dereferences schedule_emp_ids", hit)
+        hit = hit or bool(GATE.search(handler_src(i)))
+    check(f"3. GET {path} still dereferences the gate", hit)
 
 # ── 6. the frontend mirror agrees with the ruling ────────────────────────────────────────────────
 # `frontend/src/lib/rbac.ts` carries a MIRROR so the Roles & Access box shows what the server will
@@ -154,10 +158,10 @@ for path in WIRED:
 FE = os.path.normpath(os.path.join(HERE, "..", "frontend", "src", "lib", "rbac.ts"))
 with open(FE, encoding="utf-8") as fh:
     fe = fh.read()
-fe_fn = re.search(r"export function scheduleVisibility\([\s\S]*?\n\}", fe)
+fe_fn = re.search(r"export function peopleVisibility\([\s\S]*?\n\}", fe)
 fe_fn = fe_fn.group(0) if fe_fn else ""
-check("6a. frontend rbac.ts carries the scheduleVisibility mirror", bool(fe_fn))
-py_fn = re.search(r"^def schedule_visibility\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
+check("6a. frontend rbac.ts carries the peopleVisibility mirror", bool(fe_fn))
+py_fn = re.search(r"^def people_visibility\(.*?(?=^def |\Z)", scope_src, re.M | re.S)
 py_fn = py_fn.group(0) if py_fn else ""
 for tier, members in (("all", ("all", "company")),
                       ("span", ("market", "region", "regional"))):
@@ -165,8 +169,43 @@ for tier, members in (("all", ("all", "company")),
           all(f"\"{m}\"" in py_fn for m in members) and all(f"'{m}'" in fe_fn for m in members),
           f"py={py_fn.count(tier)} fe={fe_fn.count(tier)}")
 check("6c. both sides fail NARROW — the last word of each derivation is 'self'",
-      py_fn.rstrip().endswith("return SCHEDULE_SELF") and "return 'self'\n}" in fe_fn + "\n",
+      py_fn.rstrip().endswith("return PEOPLE_SELF") and "return 'self'\n}" in fe_fn + "\n",
       fe_fn[-60:])
+
+# ── 7. the gate helper has ONE home, and the person set REPLACES the store gate ──────────────────
+check("7a. `gate_person_rows` is defined ONLY in the wiring home",
+      [p for p in py_files() if re.search(r"^def gate_person_rows\(", read(p), re.M)] == [WIRING_HOME])
+gate = re.search(r"^def gate_person_rows\(.*?(?=^def |\Z)", router, re.M | re.S)
+gate = gate.group(0) if gate else ""
+check("7b. when people-visibility restricts, it returns on the PERSON set BEFORE consulting the "
+      "store keyset — a stacked store gate would hide a rep's own shift at a store they covered",
+      gate.index("keep_visible_people") < gate.index("scope_keyset"), "order")
+
+# ── 8. a market pin does not widen a store-scoped REPORTING span (the sales report) ──────────────
+cs = re.search(r"^def caller_scope\(.*?(?=^def |\Z)", router, re.M | re.S)
+cs = cs.group(0) if cs else ""
+check("8a. caller_scope resolves a scope-'store' span through self_store_codes",
+      "self_store_codes" in cs)
+check("8b. and reaches _login_extra_codes (which unions MARKET pins) only for a wider scope",
+      cs.index("self_store_codes") < cs.index("_login_extra_codes"), "order")
+check("8c. it does NOT read employees.home_store into a reporting span (that would GRANT a store "
+      "to a login which resolves none today)", "employee_home_store=None" in cs, cs[-400:])
+
+# ── 9. ONE answer to "is this login an individual contributor" ────────────────────────────────────
+ric = re.search(r"^def role_is_self_scoped\(.*?(?=^def |\Z)", router, re.M | re.S)
+ric = ric.group(0) if ric else ""
+check("9a. role_is_self_scoped dereferences the declaration (not a second copy of the derivation)",
+      "people_visibility" in ric and "PEOPLE_SELF" in ric)
+cc = read("app/modules/commcalc/router.py")
+flags = re.search(r"^def get_flags\(.*?(?=^def |\Z)", cc, re.M | re.S)
+flags = flags.group(0) if flags else ""
+check("9b. GET /flags gates on the person through the existing one-homes — _caller_rep_keys for "
+      "'which rep rows are mine' and payout_audience.mine_only for 'is this row mine'",
+      "_caller_rep_keys" in flags and "mine_only" in flags)
+code_only = "\n".join(l for l in flags.split("\n") if not l.lstrip().startswith("#"))
+check("9c. and writes no predicate of its own (no hand-rolled rep-name comparison in the CODE)",
+      "epay_salesperson" not in code_only,
+      [l for l in code_only.split("\n") if "epay_salesperson" in l])
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

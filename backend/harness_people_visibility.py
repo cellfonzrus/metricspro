@@ -11,7 +11,7 @@ the regression is demonstrated, not asserted.
 
 Runs the REAL endpoints (`get_shifts`, `schedule_hours_trend`, `get_shift_templates`,
 `get_time_off`, `get_shift_swaps`, `timeclock_list`, `staffing_heatmap`) and the REAL rulings
-(`core.scope.schedule_visibility` / `schedule_people_keyset`, `storeops.schedule_emp_ids`) against a
+(`core.scope.people_visibility` / `visible_people_keyset`, `storeops.schedule_emp_ids`) against a
 stateful fake Supabase-chain client — same convention as harness_storeops_scope_wiring.py.
 Monkeypatches only `get_supabase` and `_uid_from_token`.
 
@@ -19,7 +19,7 @@ Proves:
   A. THE LEAK (pre-fix behaviour, still measurable): a rep whose login pins three markets resolves a
      store keyset covering EVERY store, i.e. the whole company's schedule.
   B. A rep now reads ONLY their own shifts — at their own store and anywhere else they worked.
-  C. A store manager declared `schedule_visibility='span'` reads their own store's people (home
+  C. A store manager declared `people_visibility='span'` reads their own store's people (home
      store UNION actually-worked-there) and NOT another store's, even though their login pins the
      whole market. Market grants do not bind a store-scoped role.
   D. A DM (`scope='market'`, nothing declared) derives 'span' and its market grant DOES bind.
@@ -34,7 +34,7 @@ Proves:
      store outside the caller's span.
   I. NARROWING ONLY — no caller sees anyone they could not see before this change.
 
-Run: `cd backend && python3 harness_schedule_visibility.py`
+Run: `cd backend && python3 harness_people_visibility.py`
 """
 import sys
 from types import SimpleNamespace
@@ -162,9 +162,9 @@ st = {
         # The live shape of the defect: a rep and their manager BOTH carry scope 'store', so scope
         # alone cannot tell them apart — the rep is DECLARED 'self', the manager DECLARED 'span'.
         {"org_id": HOUSE, "name": "sales_rep",
-         "permissions": {"scope": "store", "schedule_visibility": "self"}},
+         "permissions": {"scope": "store", "people_visibility": "self"}},
         {"org_id": HOUSE, "name": "store_manager",
-         "permissions": {"scope": "store", "schedule_visibility": "span"}},
+         "permissions": {"scope": "store", "people_visibility": "span"}},
         {"org_id": HOUSE, "name": "district_manager", "permissions": {"scope": "market"}},
         # Declares nothing at all, and its name means nothing to the code.
         {"org_id": HOUSE, "name": "mystery_role", "permissions": {"scope": "store"}},
@@ -177,6 +177,8 @@ st = {
         app_user("dm", "district_manager", market="NJ", store_code="B-2", employee_id="E20"),
         app_user("mystery", "mystery_role", market="NYC, NJ, LI", store_code="B-1", employee_id="E30"),
         app_user("nobody", "sales_rep", store_code="B-1", employee_id=None),
+        # Has a roster home_store (B-1) but NO pin on the login — the live case for 8 logins.
+        app_user("nopin", "store_manager", employee_id="E10"),
     ],
     ("storeops", "employees"): [
         {"org_id": HOUSE, "id": "1", "employee_id": "E1", "name": "Rep One", "home_store": "B-1", "is_active": True},
@@ -228,12 +230,17 @@ def shifts_for(tok):
     return SO.get_shifts(store_code=None, week_start=WK, week_end=WE, authorization=tok, org_id=HOUSE)
 
 
-# ══════════════════ A. THE LEAK, measured with the OLD gate only ════════════════════════════════
-ks_rep = SO.scope_keyset("Bearer rep", HOUSE)
-check("A1. the OLD store gate alone puts EVERY store in a rep's keyset (three market pins)",
-      ks_rep is not None and {"B-1", "B-2", "B-3"} <= ks_rep, str(ks_rep))
-leak = {str(s["employee_id"]) for s in st[("storeops", "shifts")] if SO.in_keyset(ks_rep, s["store_code"])}
-check("A2. so the store gate alone leaves the rep reading SEVEN people's shifts — the whole company",
+# ══════════════════ A. THE LEAK, reproduced on the PRE-FIX gate ═════════════════════════════════
+# `_login_extra_codes` is the pre-fix input to `caller_scope` for a scope-'store' role — the market
+# pin unioned in. It is called DIRECTLY here so the regression is reproduced on the old behaviour
+# rather than on whatever the current `scope_keyset` happens to return.
+rep_au = [a for a in st[("storeops", "app_users")] if a["auth_id"] == "uid-rep"][0]
+old_codes = SO._login_extra_codes(rep_au, HOUSE)
+old_ks = CS.widen_codes_to_keys(SO.get_supabase(), HOUSE, old_codes)
+check("A1. the PRE-FIX store gate put EVERY store in a rep's keyset (three market pins)",
+      {"B-1", "B-2", "B-3"} <= old_ks, str(old_ks))
+leak = {str(s["employee_id"]) for s in st[("storeops", "shifts")] if SO.in_keyset(old_ks, s["store_code"])}
+check("A2. so the pre-fix gate left the rep reading SIX people's shifts — the whole company",
       leak == {"E1", "E2", "E3", "E10", "E20", "E21"}, str(leak))
 
 # ══════════════════ B. A rep reads only their own ═══════════════════════════════════════════════
@@ -258,8 +265,8 @@ check("C4. the org tree is EMPTY in this scenario — the span came from store a
       SO._caller_org_unit_codes("Bearer mgr", HOUSE) == [])
 
 # ══════════════════ D. A DM: scope 'market', nothing declared -> 'span', market binds ═══════════
-check("D1. schedule_visibility derives 'span' for an undeclared scope-'market' role",
-      CS.schedule_visibility({"scope": "market"}) == CS.SCHEDULE_SPAN)
+check("D1. people_visibility derives 'span' for an undeclared scope-'market' role",
+      CS.people_visibility({"scope": "market"}) == CS.PEOPLE_SPAN)
 dm_rows = shifts_for("Bearer dm")
 check("D2. the DM reads their market's people", who(dm_rows) == {"E20", "E21"}, str(who(dm_rows)))
 check("D3. and not another market's", not ({"E1", "E2", "E3"} & who(dm_rows)), str(who(dm_rows)))
@@ -278,15 +285,15 @@ st[("storeops", "app_config")] = [{"id": 1, "rbac_enabled": True}]
 
 # ══════════════════ F. Fail narrow ══════════════════════════════════════════════════════════════
 check("F1. an undeclared scope-'store' role falls to 'self', not to its store",
-      CS.schedule_visibility({"scope": "store"}) == CS.SCHEDULE_SELF)
+      CS.people_visibility({"scope": "store"}) == CS.PEOPLE_SELF)
 check("F2. a blank / unknown / garbage permission set falls to 'self'",
-      CS.schedule_visibility(None) == CS.SCHEDULE_SELF
-      and CS.schedule_visibility({}) == CS.SCHEDULE_SELF
-      and CS.schedule_visibility({"schedule_visibility": "banana"}) == CS.SCHEDULE_SELF
-      and CS.schedule_visibility("nonsense") == CS.SCHEDULE_SELF)
+      CS.people_visibility(None) == CS.PEOPLE_SELF
+      and CS.people_visibility({}) == CS.PEOPLE_SELF
+      and CS.people_visibility({"people_visibility": "banana"}) == CS.PEOPLE_SELF
+      and CS.people_visibility("nonsense") == CS.PEOPLE_SELF)
 check("F3. an explicit declaration always wins over the derivation",
-      CS.schedule_visibility({"scope": "all", "schedule_visibility": "self"}) == CS.SCHEDULE_SELF
-      and CS.schedule_visibility({"scope": "self", "schedule_visibility": "all"}) == CS.SCHEDULE_ALL)
+      CS.people_visibility({"scope": "all", "people_visibility": "self"}) == CS.PEOPLE_SELF
+      and CS.people_visibility({"scope": "self", "people_visibility": "all"}) == CS.PEOPLE_ALL)
 check("F4. so the undeclared mystery role reads only itself",
       who(shifts_for("Bearer mystery")) == {"E30"} or shifts_for("Bearer mystery") == [],
       str(who(shifts_for("Bearer mystery"))))
@@ -326,16 +333,98 @@ check("H6. the staffing heat map (previously ungated entirely) refuses a store o
 # which for a rep whose login pins three markets is still wide. Narrowing that is the separate
 # "a rep's login should not pin three markets" setup problem, reported rather than coded around.
 
-# ══════════════════ I. Narrowing only ═══════════════════════════════════════════════════════════
-narrowed = True
-for tok in ("Bearer rep", "Bearer mgr", "Bearer dm", "Bearer mystery", "Bearer nobody"):
-    ks = SO.scope_keyset(tok, HOUSE)
-    before = {s["id"] for s in st[("storeops", "shifts")] if ks is None or SO.in_keyset(ks, s["store_code"])}
+# ══════════════════ J. THE MARKET PIN NO LONGER WIDENS A STORE-SCOPED SPAN ══════════════════════
+# The second half of the owner's ask: "they shoudl be gated out of all stores other and thier own"
+# — the SALES REPORT and every other store-keyed report read `scope_keyset`, so the fix is there.
+ks_rep_now = SO.scope_keyset("Bearer rep", HOUSE)
+check("J1. the rep's reporting span is now their OWN store, not their three pinned markets",
+      ks_rep_now == {"B-1", "1 MAIN ST"}, str(ks_rep_now))
+check("J2. a store-scoped MANAGER is narrowed the same way (a market is a manager-of-market fact)",
+      SO.scope_keyset("Bearer mgr", HOUSE) == {"B-1", "1 MAIN ST"},
+      str(SO.scope_keyset("Bearer mgr", HOUSE)))
+check("J3. a scope-'market' DM's market grant STILL binds — only store/self scopes refuse it",
+      {"B-2", "2 OAK AVE"} <= (SO.scope_keyset("Bearer dm", HOUSE) or set()),
+      str(SO.scope_keyset("Bearer dm", HOUSE)))
+check("J4. an 'all'-scope admin is still unrestricted", SO.scope_keyset("Bearer admin", HOUSE) is None)
+check("J5. employees.home_store is deliberately NOT read into a reporting span — a login with no "
+      "store pin resolves nothing rather than being granted a store here",
+      SO.scope_keyset("Bearer nopin", HOUSE) == set(),
+      str(SO.scope_keyset("Bearer nopin", HOUSE)))
+
+# ══════════════════ I. Narrowing only, against the PRE-FIX gate ═════════════════════════════════
+narrowed, widened_for = True, []
+for tok, who_au in (("Bearer rep", "uid-rep"), ("Bearer mgr", "uid-mgr"), ("Bearer dm", "uid-dm"),
+                    ("Bearer mystery", "uid-mystery"), ("Bearer nobody", "uid-nobody")):
+    au = [a for a in st[("storeops", "app_users")] if a["auth_id"] == who_au][0]
+    scope = SO._role_scope(HOUSE, au["role"])
+    if scope == "all":
+        continue                                            # unrestricted before and after
+    old = CS.widen_codes_to_keys(SO.get_supabase(), HOUSE, SO._login_extra_codes(au, HOUSE))
+    before = {s["id"] for s in st[("storeops", "shifts")] if SO.in_keyset(old, s["store_code"])}
     after = {r["id"] for r in shifts_for(tok)}
     if not after <= before:
         narrowed = False
-check("I1. every caller's result is a SUBSET of what the old store gate gave them — never a widening",
-      narrowed)
+        widened_for.append((tok, sorted(after - before)))
+check("I1. every caller reads a SUBSET of what the PRE-FIX gate gave them — nobody gained a row",
+      narrowed, str(widened_for))
+
+# ══════════════════ K. THE SALES REPORT AND THE FLAGS QUEUE (owner's extension, same hour) ══════
+# *"same for sales report, they shoudl be gated out of all stores other and thier own, also the
+# flags should only be seen by them for thier own not all stores"*. Two DIFFERENT grains, and the
+# owner named both correctly: the sales report is per STORE (J above fixes it at the span), a flag is
+# per REP, so it gates on the person.
+import app.modules.commcalc.router as CC                   # noqa: E402
+
+CC.get_supabase = lambda: FakeClient(st)
+CC.sb = lambda: FakeClient(st)
+st[("commcalc", "flags")] = [
+    {"id": 1, "org_id": HOUSE, "period": "2026-09", "epay_salesperson": "REP ONE",
+     "store_code": "B-1", "store_address": "1 Main St", "status": "open", "severity": 1},
+    {"id": 2, "org_id": HOUSE, "period": "2026-09", "epay_salesperson": "REP TWO",
+     "store_code": "B-1", "store_address": "1 Main St", "status": "open", "severity": 1},
+    {"id": 3, "org_id": HOUSE, "period": "2026-09", "epay_salesperson": "FAR AWAY",
+     "store_code": "B-3", "store_address": "3 Penn Blvd", "status": "open", "severity": 1},
+]
+st[("commcalc", "name_map")] = []
+st[("commcalc", "rep_aliases")] = []
+
+old_rep_ks = CS.widen_codes_to_keys(SO.get_supabase(), HOUSE, SO._login_extra_codes(rep_au, HOUSE))
+before_flags = {f["id"] for f in st[("commcalc", "flags")]
+                if SO.in_keyset(old_rep_ks, f["store_code"], f["store_address"])}
+check("K1. the PRE-FIX gate showed the rep every store's flags",
+      before_flags == {1, 2, 3}, str(before_flags))
+flags_rep = CC.get_flags("2026-09", authorization="Bearer rep", org_id=HOUSE)
+check("K2. the rep now reads ONLY the flags raised against them, not their store's or the company's",
+      {f["id"] for f in flags_rep} == {1}, str([f["id"] for f in flags_rep]))
+flags_dm = CC.get_flags("2026-09", authorization="Bearer dm", org_id=HOUSE)
+check("K3. a manager's flags queue is untouched — still their span, by store",
+      {f["id"] for f in flags_dm} == set(), str([f["id"] for f in flags_dm]))
+flags_admin = CC.get_flags("2026-09", authorization="Bearer admin", org_id=HOUSE)
+check("K4. an admin still reads every flag", {f["id"] for f in flags_admin} == {1, 2, 3},
+      str([f["id"] for f in flags_admin]))
+check("K5. the individual-contributor answer is ONE function, and a declared people_visibility "
+      "'self' now satisfies it (it is why the flags ask did nothing before)",
+      SO.role_is_self_scoped(HOUSE, "sales_rep") is True
+      and SO.role_is_self_scoped(HOUSE, "store_manager") is False
+      and SO.role_is_self_scoped(HOUSE, "admin") is False,
+      f"rep={SO.role_is_self_scoped(HOUSE, 'sales_rep')} "
+      f"mgr={SO.role_is_self_scoped(HOUSE, 'store_manager')}")
+from app.modules.commcalc import payout_audience as PA        # noqa: E402
+check("K6. a flag with no rep name on it never becomes 'mine' by accident",
+      PA.row_is_mine({"store_code": "B-1"}, {"REP ONE"}) is False)
+check("K7. nor does a manager's row set change shape — mine_only hands a manager the SAME list",
+      PA.mine_only(st[("commcalc", "flags")], None) is st[("commcalc", "flags")])
+
+# The SALES REPORT is store-keyed and applies `scope_keyset` verbatim, which J1/J2 pin. Proved here
+# on the endpoint's own predicate over its own rows, so a future change to how it filters is caught.
+sales_rows = [{"store": "B-1", "amount": 1}, {"store": "B-2", "amount": 2}, {"store": "B-3", "amount": 3}]
+for tok, want in (("Bearer rep", {"B-1"}), ("Bearer mgr", {"B-1"}), ("Bearer dm", {"B-2"})):
+    ks = SO.scope_keyset(tok, HOUSE)
+    got = {r["store"] for r in sales_rows if SO.in_keyset(ks, r.get("store"))}
+    check(f"K8. the sales report's own store filter leaves {tok.split()[1]} only {sorted(want)}",
+          got == want, str(got))
+check("K9. and the PRE-FIX filter left the rep all three stores",
+      {r["store"] for r in sales_rows if SO.in_keyset(old_rep_ks, r.get("store"))} == {"B-1", "B-2", "B-3"})
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

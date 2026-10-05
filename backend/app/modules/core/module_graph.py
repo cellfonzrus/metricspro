@@ -253,11 +253,11 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/sale_installment_engine.py': ('month_leg_of',),
         },
     },
-    'schedule_visibility': {
+    'people_visibility': {
         "question": 'Whose SHIFTS may this login read?',
         "homes": ('app/core/scope.py',),
         "index": ('14w',),
-        "locks": ('harness_schedule_visibility_lock.py',),
+        "locks": ('harness_people_visibility_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/account/device_payable.py': ('store_market_resolver',),

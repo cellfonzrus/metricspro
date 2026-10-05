@@ -5576,11 +5576,17 @@ read-only previews, `pay_rate = 17.00` for the ten, the 63 template rows (idempo
 note, the double-count STEP 7, optional hire dates, and a REVERT block per step.
 
 
-### 14w. WHOSE SCHEDULE MAY A LOGIN READ — the third scope question (owner directive 2026-10-05)
+### 14w. WHOSE ROWS MAY A LOGIN READ — the third scope question (owner directive 2026-10-05)
 
 Owner, verbatim: *"currently employees can see the schdule of the whoel company, i saw when i used
 rana to clok in as him, it should only show the reps wown schdule and the managers his own schdule
-and if any employee works under him"*.
+and if any employee works under him"* — and, the same hour: *"same for sales report, they shoudl be
+gated out of all stores other and thier own, also the flags should only be seen by them for thier
+own not all stores"*.
+
+**TWO GRAINS, and the owner named both correctly.** The sales report is per STORE, so it is fixed at
+the SPAN (Q1, below). A flag and a shift are per PERSON, so they are fixed at the PERSON (Q3). Both
+halves are the same class — *a rep's reach was never their own* — which is why they ship together.
 
 **THE CLASS, not the instance.** Every schedule read answered *"which STORES may I see"* and never
 *"which PEOPLE"*. `storeops.scope_keyset` is a store keyset and `scope_emp_ids` only re-expresses
@@ -5601,29 +5607,53 @@ that same file rather than as a fourth private copy of "how wide is this person"
 |---|---|---|---|
 | Q1 REPORTING | whose NUMBERS may I see? | `reporting_span_codes` / `storeops.scope_keyset` | store keyset |
 | Q2 ROSTER | whom may I PUT on a shift? | `roster_reach` / `roster_keyset` | deliberately WIDE |
-| Q3 SCHEDULE | whose SHIFTS may I READ? | `schedule_visibility` / `schedule_people_keyset` | deliberately NARROW |
+| Q3 PEOPLE | whose PERSON-KEYED rows may I READ? | `people_visibility` / `visible_people_keyset` | deliberately NARROW |
 
 Q2 and Q3 point opposite ways on purpose: a manager must be able to schedule a borrowed rep they
 cannot otherwise see, and a rep must be able to read their own week without reading the register
 they are picked from. One set can never answer both — that is the §13 defect in a new place.
 
+**Q3 GOVERNS EVERY ROW THAT NAMES A PERSON**, not just shifts: the schedule and its templates, time
+off, swaps, the punch list, and the per-rep rows of a report. ONE declaration, so the owner's second
+message needed no second switch.
+
+**THE Q1 HALF — A MARKET PIN NO LONGER WIDENS A STORE-SCOPED SPAN.** `caller_scope` unioned
+`_login_extra_codes` (market + store pins) into every non-`self` scope, so a rep pinned to one store
+and three markets reported on all of them — which is what made the SALES REPORT, the flags queue and
+every other store-keyed report company-wide. A market is *what area this person covers*, a manager's
+fact; `scope = 'store'` says this login covers a STORE. So for `scope = 'store'` the span now
+resolves through `_cscope.self_store_codes` (the login's `store_code` + `store_codes`) unioned with
+any org unit the login actually manages. `scope = 'market'/'region'` is untouched — its market still
+binds. `scope = 'self'` is untouched — it stays the empty, deny-all keyset the ~54 `in_keyset` call
+sites already rely on.
+- **STRICTLY NARROWING, measured read-only 2026-10-05** by running the real `self_store_codes` /
+  `login_grant_codes` over production: of **90** logins holding a store/self-scoped role, **32
+  narrow** — worst cases `alondra.navarro@luxelinkwireless.com` (store_manager) and two Luxelink reps
+  at **27 → 1** store, `ramosbonilla19@gmail.com` **22 → 1**, nine more Cellfonz reps **16 → 1-2**.
+  The other 58 are unchanged. Nobody gains a store: `employees.home_store` is deliberately NOT read
+  here (it would GRANT a store to the **8** logins that resolve none today — those are reported as a
+  setup gap, "pin the store on the login", not papered over in a reporting span).
+- **One judgement call worth the owner's eye:** `alondra.navarro` is a `store_manager` pinned to one
+  store with a market grant. She narrows to that store. If she genuinely covers the Chicago market
+  she wants `market_manager`, or more `store_codes` on her login — a setting, either way.
+
 - **THE ONE HOME (the ruling):** `app/core/scope.py` —
-  `schedule_visibility(role_perms) -> 'self' | 'span' | 'all'` and
-  `schedule_people_keyset(...) -> (employee_ids | None, why)`. Module graph fact
-  `schedule_visibility`.
+  `people_visibility(role_perms) -> 'self' | 'span' | 'all'` and
+  `visible_people_keyset(...) -> (employee_ids | None, why)`. Module graph fact
+  `people_visibility`.
 - **THE ONE WIRING POINT:** `storeops/router.py::schedule_emp_ids(authorization, org_id, since, until)`
   — `None` unrestricted (rbac off / no token / unprovisioned, same posture as `caller_scope`),
   `set()` deny-all. `keep_visible_people(rows, eids, *fields)` is the only comparison helper, and
   `_widen_emp_id_forms` resolves BOTH id forms (a Schedule-page shift stores the numeric
   `employees.id`, the roster and punches store `E45` — the `payroll_identity` mismatch), so a rep is
   never filtered out of their own schedule.
-- **DECLARED, NOT INFERRED (RULE TWO):** `roles.permissions.schedule_visibility`, editable on
+- **DECLARED, NOT INFERRED (RULE TWO):** `roles.permissions.people_visibility`, editable on
   Admin → Roles & Access ("Schedule visibility — whose shifts they can see"); frontend mirror
-  `rbac.ts::scheduleVisibility`, drift-locked. With nothing declared the fallback derives from
+  `rbac.ts::peopleVisibility`, drift-locked. With nothing declared the fallback derives from
   `scope` and **FAILS NARROW**: `'all'/'company' → all`, `'market'/'region(al)' → span`, everything
   else including `'store'` **→ self**, because in the house org a rep AND their store manager are
   BOTH `scope = 'store'` and the schema cannot tell them apart. Migration
-  `1058_schedule_visibility_declaration.sql` declares every live role so nothing rides the fallback
+  `1058_people_visibility_declaration.sql` declares every live role so nothing rides the fallback
   — **required before managers are correct**; reps are correct either way.
 - **"WORKS UNDER ME" RESOLVES FROM STORE ASSIGNMENT, not the org tree.** `reporting_employee_ids`
   (home store UNION actually-worked-a-shift/punch-there, bounded by the caller's own date window) is
@@ -5635,24 +5665,49 @@ they are picked from. One set can never answer both — that is the §13 defect 
 - **MARKET GRANTS BIND ONLY FOR A SCOPE THAT CAN USE A MARKET** — the same line `self_store_codes`
   and `roster_keyset` draw. A DM (`scope='market'`) gets their market; a store-scoped manager gets
   their own store(s) plus any org unit they actually manage, and their market pin is ignored.
-- **The reads wired (NARROWING ONLY — each keeps the store gate it already had):**
-  `GET /storeops/shifts`, `/schedule/hours-trend` (payload gains `scope.people_restricted`),
-  `/shift-templates`, `/time-off`, `/shift-swaps`, `/timeclock/list`. **The sibling sweep also closed
+- **THE ONE GATE for a person-keyed read:** `storeops/router.py::gate_person_rows`. **When
+  people-visibility restricts, the PERSON set IS the gate — the store keyset is not additionally
+  applied.** That is deliberate: a rep's own shift at a store they were borrowed to is still their
+  own shift, and once the Q1 half stops a market pin widening their span, a stacked store gate would
+  hide it from them. The person set was derived from that same span plus the caller, so it can never
+  reach anyone the span did not already allow. Unrestricted callers keep exactly the gate they had
+  (store keyset for a table with a store column, `scope_emp_ids` for one without).
+- **ONE answer to "is this login an individual contributor":** `storeops.role_is_self_scoped`. It
+  was `scope == 'self'` alone — False for every rep in this tenant — **which is the whole reason the
+  flags ask had done nothing**: every per-rep narrowing in the platform hangs off this one answer. It
+  now also returns True for a role declaring `people_visibility = 'self'`, so the schedule, the punch
+  list and the per-rep report rows all follow one declaration.
+- **`GET /commcalc/flags/{period}`** gates on the person through the EXISTING one-homes —
+  `_caller_rep_keys` ("which rep rows are mine") and `payout_audience.mine_only` ("is this row
+  mine"), which the commission, coaching and action-plan surfaces already share. A flag names
+  `epay_salesperson`, already in `payout_audience.REP_NAME_FIELDS`, so no new predicate was written;
+  the lock fails the build if one appears. A manager's queue is unchanged (still their span, by
+  store), and `/flags-unrouted` still catches a flag no span can match.
+- **The reads wired (NARROWING ONLY):** `GET /storeops/shifts`, `/schedule/hours-trend` (payload
+  gains `scope.people_restricted`), `/shift-templates`, `/time-off`, `/shift-swaps`,
+  `/timeclock/list`, `GET /commcalc/flags/{period}`. **The sibling sweep also closed
   `GET /storeops/staffing-heatmap`, which had NO scope gate of any kind** — any signed-in caller
   could heat-map any store; it is a store-level aggregate with no names, so its gate is the store
   keyset, not the per-person one. `GET /timeclock/status` was already token-identity self-only.
-- **Proof:** `backend/harness_schedule_visibility.py` (31 checks over the REAL endpoints; §A
-  reproduces the leak with the old gate still in place, §I proves no caller gained anybody).
-  **Lock:** `backend/harness_schedule_visibility_lock.py` (19 checks) fails the build when the
-  ruling is copied, the wiring is re-derived, a wired read stops asking, a NEW person-keyed
-  schedule/attendance GET lands unwired without an EXCUSED reason, the market-grant refusal is
-  undone, or the frontend mirror drifts. CI job *Schedule visibility* in `org-scope-guard.yml`.
-- **KNOWN GAP, reported not coded around:** 28 of 37 house rep logins pin a market they have no
-  business covering. Q3 now ignores it, but Q1 (reporting) still reads it, so those reps' store-level
-  REPORTS remain market-wide. That is a setup correction on Admin → Roles & Access, not a code fix.
+- **Proof:** `backend/harness_people_visibility.py` — **47 checks over the REAL endpoints**
+  (`get_shifts`, `schedule_hours_trend`, `get_shift_templates`, `get_time_off`, `get_shift_swaps`,
+  `timeclock_list`, `staffing_heatmap`, `commcalc.get_flags`). §A and §K1/§K9 reproduce BOTH reported
+  leaks on the **pre-fix** gate (computed from `_login_extra_codes` directly, never from the current
+  `scope_keyset`, so the regression cannot quietly stop being reproduced); §I proves every caller
+  reads a subset of what the pre-fix gate gave them. **Lock:**
+  `backend/harness_people_visibility_lock.py` — **27 checks**; fails the build when the ruling is
+  copied, the wiring re-derived, a wired read stops asking, a NEW person-keyed GET lands unwired
+  without an EXCUSED reason, `gate_person_rows` stops letting the person set win over the store
+  keyset, `caller_scope` goes back to reading a market pin for a store scope (or starts reading
+  `home_store` into a reporting span), `role_is_self_scoped` stops dereferencing the declaration, the
+  flags queue grows its own rep predicate, or the frontend mirror drifts. CI job *People visibility*
+  in `org-scope-guard.yml`.
 - **Owner-facing SQL (surfaced, NOT applied):**
-  `/mnt/project-files/schedule-visibility/RUN_schedule_visibility_1058_2026-10-05.sql` — numbered
-  steps with a BEFORE query, the declarations, a VERIFY and an UNDO block.
+  `/mnt/project-files/schedule-visibility/RUN_people_visibility_1058_2026-10-05.sql` — numbered
+  steps with a BEFORE query, the declarations, a VERIFY and an UNDO block. Numbered **1058**: it was
+  drafted as 1057 and collided with #388's `1057_notify_send_log_report_label`, which merged and was
+  applied while this sat awaiting approval — the normal cost of surfacing a migration rather than
+  applying it (see §19.18's sibling note on 1015).
 
 
 ### 15.1 THE SEND RECORD — "has this finding reached this recipient, on this channel?"

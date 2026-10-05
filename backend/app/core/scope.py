@@ -1356,7 +1356,7 @@ def reporting_employee_ids(client, org_id: str, keyset, *, since=None, until=Non
     return ids
 
 
-# ── SCHEDULE VISIBILITY — "whose SHIFTS may this login READ?" (owner directive 2026-10-05) ───────
+# ── PEOPLE VISIBILITY — "whose PERSON-KEYED ROWS may this login READ?" (owner 2026-10-05) ────────
 #
 # THE INSTANCE. *"currently employees can see the schdule of the whoel company, i saw when i used
 # rana to clok in as him, it should only show the reps wown schdule and the managers his own schdule
@@ -1375,53 +1375,60 @@ def reporting_employee_ids(client, org_id: str, keyset, *, since=None, until=Non
 #
 # This is therefore Q3 of the same split this module opened with, and it lives here beside Q1/Q2
 # rather than as a fourth private copy of "how wide is this person":
-#   Q1 REPORTING   "whose NUMBERS may I see?"   -> reporting_span_codes / storeops.scope_keyset
-#   Q2 ROSTER      "whom may I PUT on a shift?" -> roster_reach / roster_keyset  (deliberately WIDE)
-#   Q3 SCHEDULE    "whose SHIFTS may I READ?"   -> schedule_visibility / schedule_people_keyset
+#   Q1 REPORTING   "whose STORES' numbers may I see?"    -> reporting_span_codes / scope_keyset
+#   Q2 ROSTER      "whom may I PUT on a shift?"          -> roster_reach / roster_keyset  (WIDE)
+#   Q3 PEOPLE      "whose PERSON-KEYED rows may I READ?" -> people_visibility / visible_people_keyset
+#
+# Q3 GOVERNS EVERY ROW THAT NAMES A PERSON, not only shifts: the schedule and its recurring
+# templates, time off, shift swaps, the punch list, and the per-rep rows of a report (flags; the
+# commission / coaching surfaces already asked this question through `payout_audience` and now read
+# this declaration instead of `scope == 'self'` alone). ONE declaration, every person-keyed surface
+# — the owner extended the ask to the sales report and flags within the hour of filing the schedule
+# one, which is why this is not called `schedule_visibility`.
 # Q2 and Q3 point OPPOSITE ways on purpose: a store manager must be able to pick a borrowed rep they
 # cannot otherwise see, and a rep must be able to see their own shifts without seeing the register
 # they are picked from. One set can never answer both.
 #
-# DECLARED, NOT INFERRED (RULE TWO). `roles.permissions.schedule_visibility` ∈ {'self','span','all'}.
+# DECLARED, NOT INFERRED (RULE TWO). `roles.permissions.people_visibility` ∈ {'self','span','all'}.
 # `scope` alone cannot answer this: in the house org `sales_rep` AND `store_manager` are BOTH
 # `scope = 'store'`, so the schema genuinely cannot tell a rep from their manager. The derivation
 # below is only the fallback for a role that has not declared itself, and it FAILS NARROW for the one
 # scope that is ambiguous — matching `storeops._rbac_scope_failclosed`, whose unresolved-role default
 # is likewise 'self'. Migration 1058 declares all live roles explicitly so nothing rides the default.
-SCHEDULE_SELF = "self"      # own shifts only
-SCHEDULE_SPAN = "span"      # own shifts + everyone who works under this login
-SCHEDULE_ALL = "all"        # the whole tenant's schedule
-SCHEDULE_VISIBILITIES = (SCHEDULE_SELF, SCHEDULE_SPAN, SCHEDULE_ALL)
+PEOPLE_SELF = "self"      # own shifts only
+PEOPLE_SPAN = "span"      # own shifts + everyone who works under this login
+PEOPLE_ALL = "all"        # the whole tenant's schedule
+PEOPLE_VISIBILITIES = (PEOPLE_SELF, PEOPLE_SPAN, PEOPLE_ALL)
 
 
-def schedule_visibility(role_perms) -> str:
+def people_visibility(role_perms) -> str:
     """Which of the three schedule visibilities a role gets. Pure; never raises.
 
-    An explicit `schedule_visibility` always wins. With none declared, derive from `scope`:
+    An explicit `people_visibility` always wins. With none declared, derive from `scope`:
 
-        'all' / 'company'          -> SCHEDULE_ALL   an admin/executive sees the whole schedule
-        'market' / 'region(al)'    -> SCHEDULE_SPAN  a DM sees their market's people
-        'store' / 'self' / unknown -> SCHEDULE_SELF  fail NARROW: the ambiguous case is a rep
+        'all' / 'company'          -> PEOPLE_ALL   an admin/executive sees the whole schedule
+        'market' / 'region(al)'    -> PEOPLE_SPAN  a DM sees their market's people
+        'store' / 'self' / unknown -> PEOPLE_SELF  fail NARROW: the ambiguous case is a rep
 
     A store manager therefore needs the declaration (migration 1058 carries it). That asymmetry is
     deliberate: being shown too little of a schedule is a support ticket, being shown everybody's is
     the defect this exists to close."""
     try:
         perms = role_perms if isinstance(role_perms, dict) else {}
-        v = str(perms.get("schedule_visibility") or "").strip().lower()
-        if v in SCHEDULE_VISIBILITIES:
+        v = str(perms.get("people_visibility") or "").strip().lower()
+        if v in PEOPLE_VISIBILITIES:
             return v
         scope = str(perms.get("scope") or "").strip().lower()
     except Exception:                                               # pragma: no cover - purity guard
-        return SCHEDULE_SELF
+        return PEOPLE_SELF
     if scope in ("all", "company"):
-        return SCHEDULE_ALL
+        return PEOPLE_ALL
     if scope in ("market", "region", "regional"):
-        return SCHEDULE_SPAN
-    return SCHEDULE_SELF
+        return PEOPLE_SPAN
+    return PEOPLE_SELF
 
 
-def schedule_people_keyset(client, org_id: str, *, role_perms, app_user, employee_home_store=None,
+def visible_people_keyset(client, org_id: str, *, role_perms, app_user, employee_home_store=None,
                            org_unit_codes=None, since=None, until=None):
     """-> (employee_ids, why). `employee_ids is None` means UNRESTRICTED (the whole tenant).
 
@@ -1440,11 +1447,11 @@ def schedule_people_keyset(client, org_id: str, *, role_perms, app_user, employe
     `roster_keyset` already draw. A DM (`scope = 'market'`) gets their market; a store-scoped manager
     gets their own store(s) plus any org unit they actually manage, and their market pin is ignored.
     """
-    vis = schedule_visibility(role_perms)
+    vis = people_visibility(role_perms)
     me = self_employee_ids(app_user)
-    if vis == SCHEDULE_ALL:
-        return None, "role schedule_visibility 'all' — the whole tenant's schedule"
-    if vis == SCHEDULE_SELF:
+    if vis == PEOPLE_ALL:
+        return None, "role people_visibility 'all' — the whole tenant's schedule"
+    if vis == PEOPLE_SELF:
         return set(me), ("own shifts only" if me else
                          "own shifts only — and this login carries NO employee_id, so nothing "
                          "resolves: link it to an employee record")
