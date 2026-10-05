@@ -18000,3 +18000,153 @@ Code is complete and proved (`harness_order_transport.py`, **143 checks**: §G t
 **Nothing is switched on**: `po_mode` stays `off` for every tenant, no vendor declares a route, and no
 credential is stored. Migration 1053 is **written and surfaced, not applied**. Still outstanding: the
 owner's Shopify **client id and client secret**, which go into Supabase by hand, never through chat.
+
+---
+
+## 52. THE MANAGEMENT WATCHDOG — one registry for every finding, and the two checks nobody was running (owner 2026-10-05, mig `1055`)
+
+**Owner ask 2026-10-05, verbatim:** *"Start the registry + cash watchdog , keep these reports in
+management dashboard under different reports so it is easy for the management to review each area and
+take appropriate action , name it Management Watch dog / Make the voids visible and track able /
+Which five modules write findings and why do they write 3 different ways -"*
+
+### 52.1 The answer to the question, because it IS the defect
+
+`commcalc.flags` was created in migration 002 as `flag_type TEXT` with no registry, no enum and no
+check constraint. Six modules were then given a queue on it, months apart, and each author picked the
+spelling that looked right:
+
+| module | spelling | example |
+|---|---|---|
+| `commcalc/flags.py` + `portout_flags.py` | SCREAMING_SNAKE | `DUPLICATE_IMEI` |
+| `commcalc/sales_recon.py` | lower_snake | `sales_leak` |
+| `asset/router.py` + `asset/invoice_due.py` | a human sentence | `"Hotsheet Underpayment"` |
+| `account/recon.py` | a human sentence | `"Distributor credit-memo recon (store)"` |
+| `payables/engine.py` | a human sentence | `"Equipment Rebate Not Received"` |
+| `closing/ops_chargebacks.py` | a human sentence | `"Missed Daily Closing"` |
+
+A seventh was found by the lock on its first run: `commcalc/sale_installment_engine.py`
+(`INSTALLMENT_WITHHELD_UNPAID`, `SOLD_LINE_NOT_PAYING`). Nobody was wrong — there was no shared home
+to be right about. That is the duplicate defect the index rules forbid in its quietest form: not two
+code paths, but seven private vocabularies for one column.
+
+**The part that was not cosmetic.** `severity` had THREE vocabularies: `HIGH`/`MEDIUM`/`LOW`
+(commcalc), `CRITICAL` (port-outs), and `critical`/`warning` (asset, account, payables). The Flags
+page's `SEVERITY_COLORS` map is keyed on the upper-case four, so **asset / account / payables rows
+rendered grey on screen** and "show me everything critical first" was impossible across the table.
+Canonicalising UP therefore fixes those rows' colour with no frontend change; canonicalising DOWN
+would have greyed out every row the page colours today.
+
+### 52.2 The one home
+
+`backend/app/modules/commcalc/flag_registry.py` — pure, stdlib only, no app import, so a lock reads
+it on bare Python and every writer imports it without dragging a router in.
+
+| fact | home | callers |
+|---|---|---|
+| what kind of finding is this, and what does a manager read for it | `flag_registry.TYPES` / `canon_type` / `label_of` (39 types; `prefix: True` covers `asset`'s dynamic `Inventory mismatch — <kind>`) | the board, every area page, the lock |
+| how bad is it, on ONE scale | `flag_registry.SEVERITIES` / `canon_sev` / `sev_rank` / `severity_for` | `stamp` (write side), the area page (read side) |
+| which area is it reviewed on | `flag_registry.AREAS` / `area_of` / `types_in_area` / `area_summary` (8 areas) | `GET /commcalc/watchdog/board`, `/watchdog/area/{area}`, the frontend page list |
+| can a manager click through to a transaction | `flag_registry.grain_of` (`transaction` / `store_day` / `rep_period` / `store_period`) | the area page's "what this is about" column |
+| what thresholds are in force for this org | `flag_registry.DEFAULT_PARAMS` + `rule_params` / `is_enabled` over `commcalc.watchdog_rule` (mig 1055) | both detectors, `GET /commcalc/watchdog/rules` |
+
+**THE WRITE-SIDE DEREFERENCE is `stamp(rows)`**, one line in each writer. A writer keeps its own
+judgement — asset's critical-vs-warning, the port-out day bands — and it comes out on the one scale.
+`harness_flag_registry_lock.py` (**23 checks**, armed) fails the build if a writer stops calling it,
+if a flag type is written that is not registered, if a second severity vocabulary appears, or if a
+registered type is emitted by nothing (a permanently-empty row on a management board is the fake-zero
+this house forbids). Removing one `stamp` call turns rule A red, verified.
+
+**Deliberately NOT done, and why.** No `area` column on `flags` (the area is a property of the TYPE,
+so a column would be a second copy). No severity backfill: existing rows keep the spelling they were
+written with and are canonicalised ON READ, because a finding is an accusation with a manager's
+ruling attached and re-spelling history is the erasure `flag_persist.py` exists to prevent. Four types
+`commcalc/flags.py`'s docstring names but never emits (`MRC_IMEI_MISMATCH`, `ACCESSORY_LOSS`,
+`RSK_NON_PAYMENT`, `HIGH_CHURN_RATE`) are recorded in `DOCUMENTED_NOT_EMITTED` and left unregistered.
+
+### 52.3 The cash watchdog — nothing new was ingested
+
+`backend/app/modules/closing/cash_watchdog.py` (pure; `harness_cash_watchdog.py`, **30 checks**).
+Every signal has been stored since migration 103 with nothing watching it: `closing_attempt` carries
+`entered_cash`/`entered_credit`, the point-of-sale `b2b_cash`/`b2b_credit`, the variance directions
+and `auto_accepted` — accepted on the final try WHILE STILL MISMATCHED.
+
+It computes **no variance of its own**: `unfinished_day.variance` returns the gate's recorded
+comparison (§29.12), and `unfinished_day.store_key` joins the two tables through the §13 store
+resolver — the measured 2026-10-04 trap where the attempt trail said `1800GreatNeckRd` and the closing
+said `B-1800`, so a raw-string join reported seven banked days as unfinished.
+
+**The class, not the instance.** The instance is B-117 / 2026-10-01: $194.17 cash over, $123.41 credit
+over, entered, refused twice, never corrected, still waiting on 2026-10-05. The class is **a variance
+the gate RECORDED is not a variance anybody OWNS** — true of every store, tenant and all four ways a
+day can carry one, so all four are detected: `CASH_OVER` / `CASH_SHORT` / `CREDIT_VARIANCE` (accepted
+and out of tolerance), `CASH_AUTO_ACCEPTED` (size-independent — being waved through IS the finding),
+`CASH_AWAITING_CORRECTION` (the Burnside case), `CASH_REPEAT_VARIANCE` (the pattern). A short is
+graded CRITICAL and an over HIGH: an over is usually a miscount, a short is money that is not there.
+A store-day the feed never carried produces NO finding — a zero there would be a fabricated agreement.
+
+### 52.4 Voids and returns, visible for the first time
+
+`backend/app/modules/commcalc/void_watchdog.py` (pure; `harness_void_watchdog.py`, **29 checks**).
+
+**Measured in the code first:** `gp_report.is_voided` is dereferenced about a dozen times and *every
+one of them only EXCLUDES the line so it does not pay*. Correct for pay, correct for GP — and the
+whole of the platform's relationship with a void. There was no void count, no void rate and no void
+list, by rep or store or at all. A rep whose voids tripled looked identical to a rep who sold less.
+
+The fix is a **second reading of the same rule**: `classify` dereferences
+`gp_report.countable_sale_skip_reason` and KEEPS what it returns (`voided` / `return` /
+`unattributed`) instead of discarding it. The pay path asks "does this count?", the watchdog asks
+"what did we throw away?", so the two can never disagree about what a void is. `harness_void_watchdog.py`
+§W fails the build if a private void test appears — removing the dereference turns six checks red and
+names the three tokens that would be missed.
+
+Detects `VOID_RATE_HIGH`, `RETURN_RATE_HIGH`, `VOID_AFTER_SALE`, `VOID_UNATTRIBUTED`. **Stated so
+nobody reads it in:** `raw_sales.trans_date` is a DATE with no clock, so "voided four minutes after
+the sale" is NOT detectable; `VOID_AFTER_SALE` means "sold and voided in the same period" and its
+description says the order of the two is unknown.
+
+### 52.5 The board — how it differs from `/compliance`, so nobody builds it twice
+
+| surface | grain | question it answers |
+|---|---|---|
+| `/compliance` (§ owner 2026-09-03) | one row per QUEUE, ten different tables | "What is open?" |
+| `/watchdog` (this section) | one page per AREA of `commcalc.flags` | "Which part of the business do I go and act on?" |
+
+The frontend page list is **derived** from `GET /commcalc/watchdog/board`, which builds it from the
+registry — so a new detector appears on the board by registering, and the page cannot drift from the
+rules. Every area is returned even at zero (a manager must be able to tell "nothing open in cash" from
+"cash is not watched"), and a finding of an unregistered kind is counted under **Unclassified** and
+NAMED in `unregistered_types` rather than dropped.
+
+`watchdog_router.py` **does not query `commcalc.flags`**. It calls `commcalc/router.get_flags`, the one
+home for "which findings may this caller see" — the active-queue filter, the period-spelling variants
+and the district-manager span filter (`scope_keyset` / `in_keyset`). A private query there would be a
+second answer to a permission question. The void register applies the same span filter to the sales
+lines.
+
+| Endpoint | What it does | Read by |
+|---|---|---|
+| `GET /commcalc/watchdog/board` | one row per area with open counts, worst severity and the unclassified bucket | `/watchdog` |
+| `GET /commcalc/watchdog/area/{area}` | that area's findings, worst first, each with its label and grain | `/watchdog/[area]` |
+| `GET /commcalc/watchdog/voids` | every voided / returned / unnamed line for a period, with rates by rep and store | `/watchdog/void-register` |
+| `GET /commcalc/watchdog/rules` | every threshold in force, saying whether it is an org row or a house default | the rules surface |
+| `POST /commcalc/watchdog/run-now` | both detectors for one org, now | the operator button |
+| `POST /commcalc/watchdog/run-due` | both detectors for every tenant (NOTIFY_RUN_SECRET) | `pg_cron` |
+
+**ONE `run-due` for both detectors on purpose**: a second endpoint would be a second `cron.schedule`
+line to register, and §43 already records sweeps shipped correct, green and silent because their line
+was never pasted.
+
+| Table | Written by | Read by |
+|-------|-----------|---------|
+| `commcalc.watchdog_rule` (mig `1055`, **NOT applied**) — per-(org, flag type) `enabled` + `params` thresholds. `enabled` NULL means the house default (ON), never off, so a cleared cell cannot silently stop a cash check; a `params` key the registry does not declare is ignored rather than trusted | the rules surface; mig 1055 seeds the house org's defaults, mirroring `flag_registry.DEFAULT_PARAMS` | `flag_registry.rule_params` / `is_enabled`, dereferenced by both detectors — §52.2 |
+
+### 52.6 Status
+
+Code complete and proved: **82 checks** across three stdlib, DB-free harnesses
+(`harness_flag_registry_lock.py` 23, `harness_cash_watchdog.py` 30, `harness_void_watchdog.py` 29),
+run by `.github/workflows/watchdog-guard.yml`. Migration `1055` is **written and surfaced, not
+applied** — and until one `cron.schedule` line is run (it is in the migration's header), nothing
+sweeps on its own; `POST /watchdog/run-now` works with no cron at all. The watchdogs run on the house
+defaults in code before the migration, so shipping the code is not gated on running the SQL.

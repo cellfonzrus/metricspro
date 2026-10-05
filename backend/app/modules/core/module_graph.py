@@ -43,6 +43,47 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    'finding_kind_and_severity': {
+        "question": 'What kind of finding is this, how bad is it, and who reviews it?',
+        "homes": ('app/modules/commcalc/flag_registry.py',),
+        "index": ('52.1', '52.2'),
+        "locks": ('harness_flag_registry_lock.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/account/recon.py': ('_reg',),
+            'app/modules/asset/invoice_due.py': ('_reg',),
+            'app/modules/closing/cash_watchdog.py': ('_reg',),
+            'app/modules/closing/ops_chargebacks.py': ('_reg',),
+            'app/modules/commcalc/flags.py': ('_reg',),
+            'app/modules/commcalc/portout_flags.py': ('_reg',),
+            'app/modules/commcalc/router.py': ('flag_registry',),
+            'app/modules/commcalc/sale_installment_engine.py': ('_reg',),
+            'app/modules/commcalc/sales_recon.py': ('_reg',),
+            'app/modules/commcalc/void_watchdog.py': ('_reg',),
+            'app/modules/commcalc/watchdog_router.py': ('_reg',),
+            'app/modules/payables/engine.py': ('_reg',),
+        },
+    },
+    'cash_drawer_variance_owner': {
+        "question": 'Which store-day carries a drawer variance nobody has ruled on?',
+        "homes": ('app/modules/closing/cash_watchdog.py',),
+        "index": ('52.3',),
+        "locks": ('harness_cash_watchdog.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/watchdog_router.py': ('_cash',),
+        },
+    },
+    'void_and_return_visibility': {
+        "question": 'What did we void or return, and who rang it?',
+        "homes": ('app/modules/commcalc/void_watchdog.py',),
+        "index": ('52.4',),
+        "locks": ('harness_void_watchdog.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/watchdog_router.py': ('_void',),
+        },
+    },
     'vendor_order_route': {
         "question": 'How does an order actually reach this vendor, and may a sweep send it?',
         "homes": ('app/modules/supply/order_transport.py',),

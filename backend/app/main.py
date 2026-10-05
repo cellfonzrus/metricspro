@@ -40,6 +40,7 @@ from app.modules.supply.router import router as supply_router
 from app.modules.referral.router import router as referral_router
 from app.modules.vision.router import router as vision_router
 from app.modules.commcalc.processor_ledger_api import router as processor_ledger_router
+from app.modules.commcalc.watchdog_router import router as watchdog_router
 from app.modules.core.control_box_api import router as control_box_router
 from app.modules.billing.usage_api import router as billing_usage_router
 
@@ -278,6 +279,7 @@ app.include_router(approvals_router, prefix="/api/v1")    # Unified Approvals En
 app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Phase 1 (mig 868)
 app.include_router(vision_router, prefix="/api/v1")       # Vision — Nest live view + heat map + behavior (mig 900)
 app.include_router(processor_ledger_router, prefix="/api/v1")  # Processor daily debit/credit ledger (owner 2026-09-04)
+app.include_router(watchdog_router, prefix="/api/v1")  # Management Watchdog — the flags table cut by review area, plus the cash + void detectors (owner 2026-10-05, mig 1055, index §52)
 app.include_router(control_box_router, prefix="/api/v1")  # Super-admin control box (owner 2026-09-05; carries its own /core prefix)
 app.include_router(billing_usage_router, prefix="/api/v1")  # Billing: AI + per-module usage, pricing grid, itemized statement (owner 2026-09-05)
 

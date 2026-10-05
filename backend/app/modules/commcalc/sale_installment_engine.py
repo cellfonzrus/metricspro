@@ -53,6 +53,7 @@ from app.modules.commcalc import expected_commission as xcomm
 # → 5 already lives in the Commission Ledger. REUSED, never re-implemented, so the ledger's month
 # attribution and the installment gate can never drift apart on wording.
 from app.modules.commcalc.commission_ledger import month_leg_of
+from app.modules.commcalc import flag_registry as _reg
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -2101,6 +2102,10 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 flags.append({**base, "flag_type": "SOLD_LINE_NOT_PAYING",
                               "source": "employee_miss", "severity": "MEDIUM",
                               "description": desc2, "coaching_note": coach2})
+                # ONE home for what a finding's severity means (index §52). Stamped where the rows
+                # are built, because this engine hands them to commcalc/router to write and a
+                # canonicalisation done only at the write site would miss the `persist=False` callers.
+                _reg.stamp(flags[-2:])
 
             ledger_row = {
                 "device_category": _cat, "device_product": device_product,

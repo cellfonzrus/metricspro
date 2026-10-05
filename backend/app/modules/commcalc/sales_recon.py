@@ -18,6 +18,7 @@ net sales. Read-only — no flags/writes (a deliberate v1; flagging is a later i
 from datetime import date
 from app.core.database import get_supabase
 from app.modules.commcalc import report_labels as _report_labels
+from app.modules.commcalc import flag_registry as _reg
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 TOLERANCE = 0.01          # $ difference per trans_id treated as a match
@@ -292,6 +293,11 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
                                 f"${(r.get('monthly_total') or 0):,.2f} vs daily "
                                 f"${(r.get('daily_total') or 0):,.2f} (Δ ${(r.get('delta') or 0):,.2f})."),
             })
+
+    # ONE home for what a finding's severity means (index §52). This module graded its two findings
+    # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW, so
+    # the two could not be ordered together; `stamp` keeps the judgement and puts it on one scale.
+    _reg.stamp(flags)
 
     # Resolve each flag's store into `store_code` (mig 285) so it can reach the district manager whose
     # span covers it — a recon leak written with a POS spelling the span keyset doesn't know matches no

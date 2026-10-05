@@ -1401,6 +1401,11 @@ async def sync_inventory_flags(org_id: str = ORG_ID):
                                f"({'+' if diff > 0 else ''}{diff}) as of {as_of}"
                                + (f" [{r['market']}]" if r.get("market") else ""),
             })
+    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
+    # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
+    # `stamp` keeps this module's own judgement and puts it on the one scale.
+    _reg.stamp(out)
     if out:
         for i in range(0, len(out), 500):
             client.schema("commcalc").table("flags").insert(out[i:i + 500]).execute()
@@ -2412,6 +2417,11 @@ def _sync_hotsheet_flags(client, org_id, tolerance=1.0):
             "description": (f"{it.get('promo_type') or '?'} promo: hotsheet expected {expected:.2f}, "
                             f"Carrier reimbursed {actual:.2f} (short {shortfall:.2f})"),
         })
+    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
+    # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
+    # `stamp` keeps this module's own judgement and puts it on the one scale.
+    _reg.stamp(flags)
     client.schema("commcalc").table("flags").delete() \
         .eq("org_id", org_id).eq("source", "asset_hotsheet").execute()
     for i in range(0, len(flags), 500):
@@ -2676,6 +2686,11 @@ def _sync_appeal_flags(client, org_id):
         })
 
     # delete-first then plain insert (dedup pattern)
+    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
+    # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
+    # `stamp` keeps this module's own judgement and puts it on the one scale.
+    _reg.stamp(flags)
     client.schema("commcalc").table("flags").delete() \
         .eq("org_id", org_id).eq("source", "asset_appeal").execute()
     for i in range(0, len(flags), 500):
@@ -2812,6 +2827,11 @@ def _sync_rma_flags(client, org_id):
             "description": desc,
         })
 
+    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
+    # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
+    # `stamp` keeps this module's own judgement and puts it on the one scale.
+    _reg.stamp(flags)
     client.schema("commcalc").table("flags").delete() \
         .eq("org_id", org_id).eq("source", "asset_rma").execute()
     for i in range(0, len(flags), 500):
@@ -3044,6 +3064,11 @@ def _sync_undercharge_flags(client, org_id):
                               f"reimbursement."),
         })
 
+    # ONE home for what a finding's severity means (index §52): this module graded its findings
+    # `critical` / `warning` while the biggest writer of the same table graded HIGH / MEDIUM / LOW,
+    # so the Flags page's colour map (keyed on the upper-case four) rendered every row here grey.
+    # `stamp` keeps this module's own judgement and puts it on the one scale.
+    _reg.stamp(flags)
     client.schema("commcalc").table("flags").delete() \
         .eq("org_id", org_id).eq("source", "asset_undercharge").execute()
     for i in range(0, len(flags), 500):

@@ -61,6 +61,7 @@ from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
 from app.modules.asset.market_filter import NO_MARKET_SENTINEL, _market_matches
+from app.modules.commcalc import flag_registry as _reg
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -527,6 +528,9 @@ def _sync_invoice_due_flags(client, org_id):
                             f"due {inv.get('due_date')} — total due "
                             f"${float(inv.get('grand_total') or 0):,.2f}."),
         })
+    # ONE home for what a finding's severity means (index §52) — this module's own
+    # critical/warning judgement, put on the one scale the Management Watchdog orders by.
+    _reg.stamp(flags)
     for i in range(0, len(flags), 500):
         client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
     return {"flags_written": len(flags)}

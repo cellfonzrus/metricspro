@@ -19,6 +19,7 @@ from app.modules.commcalc.calculator import safe_float
 from app.modules.account import coa
 from app.modules.account import _period
 from app.modules.account.ai_limits import ACCOUNT_AI_TIMEOUT_S, ACCOUNT_AI_MAX_RETRIES
+from app.modules.commcalc import flag_registry as _reg
 
 DEFAULT_TOLERANCE = 1.0
 DEFAULT_DATE_COL = "mi_activation_date"
@@ -252,6 +253,9 @@ def sync_flags(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEF
                             f"({'short' if r['status'] == 'under' else 'over'} by {abs(r['diff']):.2f})."),
         })
 
+    # ONE home for what a finding's severity means (index §52) — this module's own
+    # critical/warning judgement, put on the one scale the Management Watchdog orders by.
+    _reg.stamp(flags)
     client.schema("commcalc").table("flags").delete() \
         .eq("org_id", org_id).eq("source", "account_recon").eq("period", period).execute()
     for i in range(0, len(flags), 500):

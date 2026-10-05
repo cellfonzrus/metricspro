@@ -1,13 +1,27 @@
 """
-Flags Calculator — all 13 flag types
-CHARGEBACK, MRC_IMEI_MISMATCH, ACCESSORY_LOSS,
-IMEI_FRAUD, IMEI_MULTI_MDN, SETUP_FEE_MISSING,
-RSK_ACTIVATIONS, RSK_NON_PAYMENT,
-MISSING_STORE_PAYMENT, MISSING_STORE_SALES,
-HIGH_PORT_OUT_RATE, HIGH_CHURN_RATE, UNMAPPED_PAYMENT_TYPE
+Flags Calculator — the EIGHT flag types this module actually emits:
+CHARGEBACK, UNMAPPED_PAYMENT_TYPE, DUPLICATE_IMEI, SETUP_FEE_MISSING,
+RSK_ACTIVATIONS, HIGH_PORT_OUT_RATE, MISSING_STORE_PAYMENT, MISSING_STORE_SALES
+
+CORRECTED 2026-10-05. This header used to claim "all 13 flag types" and list
+MRC_IMEI_MISMATCH, ACCESSORY_LOSS, IMEI_FRAUD, IMEI_MULTI_MDN, RSK_NON_PAYMENT and
+HIGH_CHURN_RATE — none of which appears anywhere in the code below, while DUPLICATE_IMEI,
+which it does emit, was missing. The list was wrong in both directions and had been for
+long enough that the registry work had to re-derive it from the code.
+
+Those unemitted names are NOT being implemented here to make the docstring true: they are
+recorded in `flag_registry.DOCUMENTED_NOT_EMITTED` and left unregistered on purpose, because
+registering a type nobody writes would put a permanently-empty row on the Management Watchdog
+board — the fake-zero this house forbids (index §52.2). If a tenant wants one of them, it is a
+new detector with its own proof, not a docstring to satisfy.
 """
 from typing import Any
 from collections import defaultdict
+
+# ONE home for what a finding's severity means (index §52). This module keeps its own HIGH/MEDIUM/
+# LOW judgements; `flag_registry.stamp` only puts them on the shared scale, so the Management
+# Watchdog can order by severity across every writer of the table.
+from app.modules.commcalc import flag_registry as _reg
 
 def safe_float(v) -> float:
     try: return float(v or 0)
@@ -252,4 +266,4 @@ def calc_flags(
                 'coaching_note': 'Sales file may be incomplete. Verify all stores are in the uploaded sales file.',
             })
 
-    return flags
+    return _reg.stamp(flags)
