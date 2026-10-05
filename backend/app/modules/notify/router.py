@@ -22,7 +22,7 @@ from app.core.schemas import LaxModel
 from app.core.run_secret import verify_notify_secret
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from app.modules.core import auth_security as _sec
-from . import report_registry, render, download_token, whatsapp_window
+from . import report_registry, render, download_token, whatsapp_window, send_identity
 from .channels import email_resend, whatsapp_meta
 
 router = APIRouter(prefix="/notify", tags=["Notify"])
@@ -135,7 +135,8 @@ def _download_expiry_days(org_id) -> int:
         return 7
 
 
-def _store_artifact(org_id, filename, mime, data: bytes, report_key=None, created_by=None):
+def _store_artifact(org_id, filename, mime, data: bytes, report_key=None, created_by=None,
+                   report_label=None):
     """Persist a sent file as a notify.send_artifact and return its no-login signed DOWNLOAD URL (an
     absolute backend url the recipient taps → the file streams with NO login). Returns None if storage
     is unavailable (un-run mig 713 → the caller falls back to the live-report link; never crashes a send).
@@ -151,9 +152,18 @@ def _store_artifact(org_id, filename, mime, data: bytes, report_key=None, create
                "mime": mime or "application/octet-stream",
                "content_b64": base64.b64encode(data).decode(), "size_bytes": len(data),
                "report_key": report_key, "created_by": created_by, "expires_at": expires}
+        # The artifact names its report for the same reason the send_log row does: the download row
+        # written when the recipient taps the link is history too (see send_identity). Stripped and
+        # retried below when mig 1057 is un-run, so this never costs a send its download link.
+        row[send_identity.LABEL_COLUMN] = send_identity.report_label(
+            report_key, report_label or filename, report_registry.report_labels())
         # NOTE (B1): if the backend ever ran on the anon key, this insert is DENIED by RLS and raises a
         # PostgREST APIError (a plain Exception subclass) → caught below → returns None → link fallback.
-        res = sb().table("send_artifact").insert(row).execute()
+        try:
+            res = sb().table("send_artifact").insert(row).execute()
+        except Exception:
+            res = sb().table("send_artifact").insert(
+                {k: v for k, v in row.items() if k != send_identity.LABEL_COLUMN}).execute()
         aid = (res.data or [{}])[0].get("id")
         if not aid:
             return None
@@ -465,25 +475,34 @@ def _email_html(payload, link, message) -> str:
     )
 
 
+# Columns a send_log row carries ONLY once its migration has been run: `delivery_route` (mig 723) and
+# `report_label` (mig 1057). PostgREST rejects the WHOLE batch when any one of them is missing, so
+# `_insert_log` drops them one at a time and retries. Un-run migration = a history row that is slightly
+# poorer, never a history row that is silently lost (and `send_identity.display_label` resolves the name
+# for a row that has no stored label, so the Notify history reads correctly either way).
+_OPTIONAL_LOG_COLUMNS = ("delivery_route", send_identity.LABEL_COLUMN)
+
+
 def _insert_log(log_rows) -> None:
     """Write send_log rows. Never lets a logging failure abort a real send, and DEGRADES GRACEFULLY when
-    migration 723 has not been run: PostgREST rejects the whole batch if `delivery_route` doesn't exist,
-    so we strip that one key and retry once. Without the retry an un-run migration would silently lose the
-    ENTIRE send history — exactly the class of failure this package exists to remove."""
+    a column's migration has not been run: strip one optional column, retry, repeat. Without the retry an
+    un-run migration would silently lose the ENTIRE send history — exactly the class of failure this
+    package exists to remove."""
     if not log_rows:
         return
-    try:
-        sb().table("send_log").insert(log_rows).execute()
-        return
-    except Exception:
-        pass
-    if not any("delivery_route" in r for r in log_rows):
-        return
-    try:
-        sb().table("send_log").insert(
-            [{k: v for k, v in r.items() if k != "delivery_route"} for r in log_rows]).execute()
-    except Exception:
-        pass
+    rows = [dict(r) for r in log_rows]
+    drop = []
+    for attempt in range(len(_OPTIONAL_LOG_COLUMNS) + 1):
+        payload = [{k: v for k, v in r.items() if k not in drop} for r in rows]
+        try:
+            sb().table("send_log").insert(payload).execute()
+            return
+        except Exception:
+            pass
+        nxt = [c for c in _OPTIONAL_LOG_COLUMNS if c not in drop and any(c in r for r in rows)]
+        if not nxt:
+            return
+        drop.append(nxt[0])
 
 
 async def _dispatch(org_id, report_key, filters, channels, formats, emails, phones, message,
@@ -506,6 +525,8 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
 
     title = payload.get("title") or report_key
     subject = title if not payload.get("subtitle") else f"{title} — {payload['subtitle']}"
+    # WHICH REPORT this history row names — one home for every send path (send_identity).
+    ident = send_identity.log_identity(report_key, title, report_registry.report_labels())
     log_rows = []
     sent = failed = 0
 
@@ -514,7 +535,7 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
         sent += status == "sent"
         failed += status == "failed"
         row = {
-            "org_id": org_id, "subscription_id": subscription_id, "report_key": report_key,
+            "org_id": org_id, "subscription_id": subscription_id, **ident,
             "channel": channel, "target": target, "status": status,
             "provider_message_id": mid or None, "error": (err or None),
             "filters": filters or {}, "triggered_by": triggered_by,
@@ -583,6 +604,10 @@ async def send_file(body: dict, org_id: str = ORG_ID):
     title = (body.get("title") or "Report").strip()
     message = body.get("message") or ""
     link = settings.APP_PUBLIC_URL.rstrip("/") + "/"
+    # The reported defect (owner 2026-10-05): this path wrote the literal "(client-export)" for EVERY
+    # report and threw the browser's `title` away, so an employee's Notify history could not say which
+    # report they had sent themselves. The identity is resolved by the one home, exactly as /send does.
+    ident = send_identity.log_identity(body.get("report_key"), title, report_registry.report_labels())
     sent = failed = 0
     log_rows = []
 
@@ -590,7 +615,7 @@ async def send_file(body: dict, org_id: str = ORG_ID):
         nonlocal sent, failed
         sent += status == "sent"
         failed += status == "failed"
-        row = {"org_id": org_id, "report_key": "(client-export)", "channel": channel,
+        row = {"org_id": org_id, **ident, "channel": channel,
                "target": target, "status": status, "provider_message_id": mid or None,
                "error": (err or None), "triggered_by": "manual"}
         if route:
@@ -608,7 +633,9 @@ async def send_file(body: dict, org_id: str = ORG_ID):
                 _log("email", addr, "failed", err=str(e))
     if "whatsapp" in channels and phones:
         # Same no-login artifact path as _dispatch: the tapped link downloads the exact file, no login.
-        dls = [_store_artifact(org_id, fn, mime, data, "(client-export)") for (data, fn, mime) in files]
+        dls = [_store_artifact(org_id, fn, mime, data, ident["report_key"],
+                               report_label=ident[send_identity.LABEL_COLUMN])
+               for (data, fn, mime) in files]
         for ph in phones:
             for (data, fn, mime), dl in zip(files, dls):
                 try:
@@ -676,10 +703,14 @@ def download_artifact(token: str):
     except Exception:
         pass
     try:
-        sb().table("send_log").insert({
-            "org_id": art.get("org_id"), "report_key": art.get("report_key") or "(download)",
+        _insert_log([{
+            "org_id": art.get("org_id"),
+            **send_identity.log_identity(
+                art.get("report_key") or send_identity.DOWNLOAD_KEY,
+                art.get(send_identity.LABEL_COLUMN) or art.get("filename"),
+                report_registry.report_labels()),
             "channel": "download", "target": (art.get("filename") or aid)[:120],
-            "status": "sent", "triggered_by": "download"}).execute()
+            "status": "sent", "triggered_by": "download"}])
     except Exception:
         pass
     return Response(content=data, media_type=(art.get("mime") or "application/octet-stream"),
@@ -861,8 +892,12 @@ def delete_subscription(sid: str, org_id: str = ORG_ID):
 
 @router.get("/send-log")
 def send_log(org_id: str = ORG_ID, limit: int = 200):
-    return sb().table("send_log").select("*").eq("org_id", org_id) \
+    """The Notify history. Every row is stamped with the REPORT IT CARRIED (`report_label`) by the one
+    home — including rows written before mig 1057, which have no stored label to show (§13b.1 pattern:
+    a display name is resolved by the read, never assumed to be in the row)."""
+    rows = sb().table("send_log").select("*").eq("org_id", org_id) \
         .order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
+    return send_identity.stamp_display(rows, report_registry.report_labels())
 
 
 def _log_schedule_config_error(org_id, sub, err) -> None:

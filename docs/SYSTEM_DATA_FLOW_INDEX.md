@@ -5635,6 +5635,45 @@ and the dry run · §E a record with no channel cannot be written · §F a recor
 nothing · §G migration `1051` tied to the code · §H eight locks, each with an armed control.
 
 
+### 15.3 THE SEND RECORD'S REPORT — "which report did this send carry?" (owner 2026-10-05)
+
+**Owner 2026-10-05:** *"in the notify app, the employees are sending themselves reports or
+notification, in the notify history it should show which report was exported"*.
+
+**The class, not the instance.** The instance was the export-bar send. The class is that nothing owned
+the question, so each of the three send_log writers answered it differently: `/notify/send` +
+`/notify/send-to-designated` stored the MACHINE key and the history rendered it raw although the
+registry has held a human label for every report all along; **`/notify/send-file`** — the universal
+path every page's "📤 Send" button uses, i.e. the one employees actually use to send themselves a
+report — stored the literal `"(client-export)"` for EVERY report and DISCARDED the `title` the browser
+had already sent; the no-login download row stored `"(download)"` on the same terms.
+
+**ONE HOME:** `backend/app/modules/notify/send_identity.py` (PURE — no IO, no app import).
+`report_label` resolves the name (a REGISTERED key is named by `report_registry.report_labels()`, so a
+browser cannot introduce a second spelling of one report; otherwise the caller's title; never a
+machine key dressed up as a name). `log_identity` returns the `report_key` + `report_label` columns of
+one row, spread by **every** writer. `display_label` / `stamp_display` are the read side.
+
+- Writers: `_dispatch` (`/notify/send`, `/send-to-designated`, every scheduled run), `send_file`
+  (`/notify/send-file`), `_store_artifact`, and the download row in `GET /notify/dl/{token}`.
+- Reader: `GET /notify/send-log` stamps every returned row, so a row written **before** mig `1057`
+  still displays a name — the §13b.1 pattern (a display name is resolved by the read, never assumed to
+  be stored). The Notify history page renders `report_label || report_key`.
+- Migration `1057` (additive, idempotent) adds `report_label TEXT` to `notify.send_log` and
+  `notify.send_artifact`. Degrades both ways: un-run → `_insert_log` strips the column and retries
+  (`_OPTIONAL_LOG_COLUMNS`, one column at a time, so a history row is never lost) and the read still
+  resolves the name; run → the name is stored **as sent**, so a report later renamed or unregistered
+  reads back as the name it actually went out under.
+
+Proof: `backend/harness_notify_send_identity.py` — **32 checks, stdlib only, DB-free**, CI job *Notify
+history names the report sent* in `carrier-vocab-guard.yml`. §A the resolution · §B the reported
+regression · §C the read side with no column · §D the writers · §E the degrade + the migration ·
+**§F THE UN-WIRING LOCKS** — an AST scan of every send_log row literal in `notify/router.py` fails the
+build if a send path goes back to naming the report itself (armed control: the pre-fix row is
+flagged), `send_identity` is the only module that may define `report_label`, and the page must keep
+rendering the resolved name.
+
+
 ## 16. Cross-reference: by TABLE
 
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).

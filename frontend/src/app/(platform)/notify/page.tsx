@@ -18,7 +18,9 @@ type Sub = {
   timezone: string; is_active: boolean; next_run_at: string | null; last_run_at: string | null
 }
 type LogRow = {
-  id: string; report_key: string; channel: string; target: string; status: string
+  // `report_label` is WHICH REPORT this send carried, resolved server-side for every row by
+  // notify/send_identity (a row predating mig 1057 still gets one). `report_key` stays the machine key.
+  id: string; report_key: string; report_label?: string | null; channel: string; target: string; status: string
   error: string | null; triggered_by: string | null; created_at: string
   delivery_status?: string | null; delivery_error?: string | null; delivery_updated_at?: string | null
   delivery_route?: string | null
@@ -458,13 +460,15 @@ function SendLog({ log }: { log: LogRow[] }) {
         (delivered/read = confirmed; <b>failed</b> shows Meta's own reason; a WhatsApp row stuck on
         <b> sent</b> with no delivery was accepted and never confirmed — that is the silent-drop case).
         “Sent as” says whether the recipient got the real file or a download link.
+        “Report” is the report that was exported and sent — the same name the page's own export carries.
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>Delivery</th><th style={th}>Sent as</th><th style={th}>By</th><th style={th}>Error</th></tr></thead>
         <tbody>
           {log.map(l => (
             <tr key={l.id}>
-              <td style={td}>{d10(l.created_at)}</td><td style={td}>{l.report_key}</td><td style={td}>{l.channel}</td>
+              <td style={td}>{d10(l.created_at)}</td>
+              <td style={td}>{l.report_label || l.report_key}</td><td style={td}>{l.channel}</td>
               <td style={td}>{l.target}</td>
               <td style={{ ...td, color: l.status === 'sent' ? 'green' : '#c00' }}>{l.status}</td>
               <td style={{ ...td, color: deliveryColor(l.delivery_status) }}>{l.delivery_status || '—'}</td>
