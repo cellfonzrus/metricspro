@@ -18003,7 +18003,7 @@ owner's Shopify **client id and client secret**, which go into Supabase by hand,
 
 ---
 
-## 52. THE MANAGEMENT WATCHDOG — one registry for every finding, and the two checks nobody was running (owner 2026-10-05, mig `1055`)
+## 52. THE MANAGEMENT WATCHDOG — one registry for every finding, and the two checks nobody was running (owner 2026-10-05, mig `1056`)
 
 **Owner ask 2026-10-05, verbatim:** *"Start the registry + cash watchdog , keep these reports in
 management dashboard under different reports so it is easy for the management to review each area and
@@ -18048,7 +18048,7 @@ it on bare Python and every writer imports it without dragging a router in.
 | how bad is it, on ONE scale | `flag_registry.SEVERITIES` / `canon_sev` / `sev_rank` / `severity_for` | `stamp` (write side), the area page (read side) |
 | which area is it reviewed on | `flag_registry.AREAS` / `area_of` / `types_in_area` / `area_summary` (8 areas) | `GET /commcalc/watchdog/board`, `/watchdog/area/{area}`, the frontend page list |
 | can a manager click through to a transaction | `flag_registry.grain_of` (`transaction` / `store_day` / `rep_period` / `store_period`) | the area page's "what this is about" column |
-| what thresholds are in force for this org | `flag_registry.DEFAULT_PARAMS` + `rule_params` / `is_enabled` over `commcalc.watchdog_rule` (mig 1055) | both detectors, `GET /commcalc/watchdog/rules` |
+| what thresholds are in force for this org | `flag_registry.DEFAULT_PARAMS` + `rule_params` / `is_enabled` over `commcalc.watchdog_rule` (mig 1056) | both detectors, `GET /commcalc/watchdog/rules` |
 
 **THE WRITE-SIDE DEREFERENCE is `stamp(rows)`**, one line in each writer. A writer keeps its own
 judgement — asset's critical-vs-warning, the port-out day bands — and it comes out on the one scale.
@@ -18140,13 +18140,13 @@ was never pasted.
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
-| `commcalc.watchdog_rule` (mig `1055`, **NOT applied**) — per-(org, flag type) `enabled` + `params` thresholds. `enabled` NULL means the house default (ON), never off, so a cleared cell cannot silently stop a cash check; a `params` key the registry does not declare is ignored rather than trusted | the rules surface; mig 1055 seeds the house org's defaults, mirroring `flag_registry.DEFAULT_PARAMS` | `flag_registry.rule_params` / `is_enabled`, dereferenced by both detectors — §52.2 |
+| `commcalc.watchdog_rule` (mig `1056`, **NOT applied**) — per-(org, flag type) `enabled` + `params` thresholds. `enabled` NULL means the house default (ON), never off, so a cleared cell cannot silently stop a cash check; a `params` key the registry does not declare is ignored rather than trusted | the rules surface; mig 1056 seeds the house org's defaults, mirroring `flag_registry.DEFAULT_PARAMS` | `flag_registry.rule_params` / `is_enabled`, dereferenced by both detectors — §52.2 |
 
 ### 52.6 Status
 
 Code complete and proved: **82 checks** across three stdlib, DB-free harnesses
 (`harness_flag_registry_lock.py` 23, `harness_cash_watchdog.py` 30, `harness_void_watchdog.py` 29),
-run by `.github/workflows/watchdog-guard.yml`. Migration `1055` is **written and surfaced, not
+run by `.github/workflows/watchdog-guard.yml`. Migration `1056` is **written and surfaced, not
 applied** — and until one `cron.schedule` line is run (it is in the migration's header), nothing
 sweeps on its own; `POST /watchdog/run-now` works with no cron at all. The watchdogs run on the house
 defaults in code before the migration, so shipping the code is not gated on running the SQL.

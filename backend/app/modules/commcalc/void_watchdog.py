@@ -48,7 +48,7 @@ sharper rule is not pretended.
 PURE: no I/O, no framework import. `harness_void_watchdog.py` proves it DB-free.
 
 RULE TWO: no carrier, tenant, store or product name appears here. The allowed share and the minimum
-line count are per-org config rows (`commcalc.watchdog_rule`, mig 1055) read through
+line count are per-org config rows (`commcalc.watchdog_rule`, mig 1056) read through
 `flag_registry.rule_params`; the house defaults are declared once, in the registry.
 
 💰 MOVES NO MONEY. Visibility records only — nothing it writes is read by any payout, P&L or GP path.

@@ -40,7 +40,7 @@ on:
       - "backend/harness_flag_registry_lock.py"
       - "backend/harness_cash_watchdog.py"
       - "backend/harness_void_watchdog.py"
-      - "database/migrations/1055_watchdog_rule.sql"
+      - "database/migrations/1056_watchdog_rule.sql"
       - ".github/workflows/watchdog-guard.yml"
   push:
     branches: [main]

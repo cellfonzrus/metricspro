@@ -51,7 +51,7 @@ WHAT IT DELIBERATELY DOES NOT DO
     watchdogs commissioned in the same PR.
 
 RULE TWO: no carrier, tenant, store or product name appears here. Per-org enable and thresholds are
-config rows (`commcalc.watchdog_rule`, mig 1055) read through `rule_params()`; the house defaults
+config rows (`commcalc.watchdog_rule`, mig 1056) read through `rule_params()`; the house defaults
 below are the fallback when no row exists.
 
 Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §52.
@@ -483,7 +483,7 @@ def unregistered_types(rows) -> list[str]:
 
 # ── Per-org rules (RULE TWO). ────────────────────────────────────────────────────────────────────
 # A watchdog's thresholds are CONFIG, never code. The house defaults live here; a tenant overrides
-# them with a `commcalc.watchdog_rule` row (mig 1055), which `rule_params` merges over the default.
+# them with a `commcalc.watchdog_rule` row (mig 1056), which `rule_params` merges over the default.
 # No tenant, carrier or store name appears in either.
 #
 # Every default was chosen to be deliberately quiet on arrival: a watchdog that flags a third of

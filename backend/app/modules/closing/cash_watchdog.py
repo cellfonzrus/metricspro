@@ -45,7 +45,7 @@ PURE: no I/O, no framework import, no clock of its own. The caller reads the row
 takes the flag dicts to `flag_persist.sync`. `harness_cash_watchdog.py` proves it DB-free.
 
 RULE TWO: no carrier, tenant or store name appears here. Tolerances are per-org config rows
-(`commcalc.watchdog_rule`, mig 1055) read through `flag_registry.rule_params`; the house defaults are
+(`commcalc.watchdog_rule`, mig 1056) read through `flag_registry.rule_params`; the house defaults are
 declared once, in the registry.
 
 💰 MOVES NO MONEY. This module writes visibility records only. It books nothing to the P&L, GP,

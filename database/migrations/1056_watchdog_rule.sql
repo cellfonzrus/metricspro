@@ -1,4 +1,4 @@
--- 1055_watchdog_rule.sql — THE MANAGEMENT WATCHDOG'S THRESHOLDS, AS ROWS.
+-- 1056_watchdog_rule.sql — THE MANAGEMENT WATCHDOG'S THRESHOLDS, AS ROWS.
 --
 -- OWNER ASK 2026-10-05, verbatim (OWNER-QUOTE-BEGIN — the owner's own words, kept for provenance):
 --   "Start the registry + cash watchdog , keep these reports in management dashboard under different

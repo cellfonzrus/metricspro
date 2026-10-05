@@ -235,7 +235,7 @@ def watchdog_rules(org_id: str = ORG_ID):
 
 
 def _read_rules(client, org_id):
-    """This org's `commcalc.watchdog_rule` rows, or [] before migration 1055 has been applied.
+    """This org's `commcalc.watchdog_rule` rows, or [] before migration 1056 has been applied.
 
     Degrades to the house defaults rather than erroring (contract §5): a watchdog must run on the
     day its code ships, not on the day somebody remembers to paste the migration.
@@ -244,7 +244,7 @@ def _read_rules(client, org_id):
         return (client.schema("commcalc").table("watchdog_rule")
                 .select("flag_type,enabled,params").eq("org_id", org_id).execute().data) or []
     except Exception as e:
-        print(f"INFO watchdog_rule unavailable, using house defaults (run migration 1055?): {e}")
+        print(f"INFO watchdog_rule unavailable, using house defaults (run migration 1056?): {e}")
         return []
 
 
@@ -338,7 +338,7 @@ def watchdog_run_due(x_notify_secret: str = Header(default=""), period: str = Qu
 
     NOTHING RUNS UNTIL ONE `cron.schedule` LINE IS PASTED. That is stated here because the 2026-10-04
     notes record two alert sweeps shipped, correct and silent for exactly this reason. The line is in
-    migration 1055's comment header.
+    migration 1056's comment header.
     """
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
