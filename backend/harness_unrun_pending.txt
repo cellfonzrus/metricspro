@@ -217,7 +217,6 @@ harness_pay_simulator.py
 harness_pay_visibility.py
 harness_payables_market_filter.py
 harness_payout_accrual.py
-harness_payout_structure.py
 harness_payroll_data_flow.py
 harness_payroll_expenses.py
 harness_payroll_expenses_router_integration.py

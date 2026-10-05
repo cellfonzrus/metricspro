@@ -460,6 +460,10 @@ on:
       - "backend/app/modules/commcalc/paramount_kpi.py"
       - "backend/harness_kpi_registry_lock.py"
       - "backend/app/modules/commcalc/kpi_failing.py"
+      - "backend/harness_boost_terms.py"
+      - "backend/harness_boost_terms_lock.py"
+      - "backend/app/modules/commcalc/boost_terms.py"
+      - "backend/app/modules/commcalc/payout_structure.py"
       - "backend/harness_kpi_vintage.py"
       - "backend/app/modules/commcalc/calculator.py"
       - "backend/app/modules/commcalc/dlar_sweep.py"
@@ -714,6 +718,9 @@ jobs:
       - name: Run the KPI registry lock (one built-in KPI set; one rep-grain AND store-grain feed map; the PAID score, the SHOWN score and the hand-entry grid read them; no fabricated zero, no fabricated denominator, each DLAR grain carries its own as-of date — index §19.27 / §19.28)
         working-directory: backend
         run: python3 harness_kpi_registry_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Boost payout terms lock (one home for what the Boost config pays; the pay engine AND the employee PDF dereference it; no second copy under backend/app; the handout carries no rate history — index §6p)
+        working-directory: backend
+        run: python3 harness_boost_terms_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the Ready App denominator proof (ONE new-activation count = Exec MTD Total Activation less Upgrade less swap; the carrier reconciliation 8/13; the derived rate resolved at score time; house pay byte-identical until the basis column is set — owner 2026-09-27, index §19.31)
         working-directory: backend
         run: python3 harness_ready_app_denominator.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -948,6 +955,28 @@ jobs:
   # spellings stop collapsing to ONE canonical key — the B-1800 / B-1115 split the owner reported on 2026-10-02, whose
   # cause is a store_mapping row with no real address (or none at all). Imports the app, so it takes the backend's
   # dependencies. DB-free (_harness_dbfree tripwire).
+  # §19.25b — THE PROOF LIVES WHERE IT CAN RUN. `harness_boost_terms.py` is stdlib-only for its first
+  # six sections, but §G renders a real PDF through reportlab, and the `carrier-vocab-guard` job
+  # installs nothing — there it would SKIP §G and the render would never be proven in CI. So the lock
+  # runs there (stdlib, no render) and the proof runs HERE, with the backend's dependencies.
+  boost-payout-terms:
+    name: Boost payout terms — one home for the rates, and the employee PDF prints them (DB-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the Boost payout terms proof (the retired inline expressions replayed byte-for-byte over the live configs and every fallback branch; then end-to-end through the real engine; then the employee document asserted against what that engine pays, and rendered — index §6p)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_boost_terms.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the plan-engine payout-structure proof (this change touched the shared renderer — the PLAN document must still build and render exactly as before)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_payout_structure.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
   store-identity-proof:
     name: Store identity — one store, one canonical key (DB-free, the real resolver)
     runs-on: ubuntu-latest

@@ -393,6 +393,229 @@ def _how_it_works(out_plans):
     return bullets
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE SECOND ENGINE — the Boost KPI-tier model (owner directive 2026-10-05)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Everything above describes the configurable Commission Plans engine. MetricsPro pays through TWO
+# engines, and a tenant on the OTHER one — the Boost KPI-tier model in `calculator.calc_rep_commissions`
+# — has no `commission_plan` rows at all (measured live 2026-10-05: org `…0001`, 0 plans), so the
+# document above described nothing their employees are paid by and the endpoint 400'd. That is the
+# class defect: *the employee payout-structure document knew only one of the two pay engines*.
+#
+# `build_boost_doc` emits the SAME document model as `build_doc`, so `render_pdf`, `filename_for` and
+# the `fmt=json` on-screen preview are reused unchanged — one renderer, one download name, one
+# contract. Every rate and every tier threshold is dereferenced from `boost_terms`, the ONE home the
+# pay engine itself now reads, so this document cannot print a rate the engine does not pay.
+#
+# WHAT THIS DOCUMENT DELIBERATELY OMITS: how the rates have MOVED from month to month. The owner's
+# directive is explicit — *"keep how the commission has moved as a second module on that page so the
+# pdf is not the same, this pdf could also be used to share with employees"*. Rate history is a
+# management view; it is served by `GET /commcalc/payout-terms/history` and rendered on the Boost
+# Rates page, never inside the handout. A document that is safe to give an employee stays that way by
+# containing only the terms in force.
+
+# The three activation buckets the Boost engine pays on, in the order they appear on a payout row.
+# `premium` is `line_class.BUCKET_OF`'s activation + port, so its wording is DERIVED from
+# `line_class.CLASS_LABELS` rather than written out again here.
+def _bucket_labels():
+    """Employee-facing wording for the three paying buckets. Dereferences `line_class.CLASS_LABELS`
+    (`premium` = activation + port, per `line_class.BUCKET_OF`) so the words an employee reads cannot
+    drift from the classes the engine actually counts. PURE."""
+    from app.modules.commcalc import line_class as _lc
+    cl = _lc.CLASS_LABELS
+    return {
+        "premium": (f'{cl["activation"]} — a new line on a device '
+                    f'({cl["port"].split("(")[0].strip().lower()} counts as one)'),
+        "byod": f'{cl["byod"]} — the customer brings their own phone',
+        "upgrade": f'{cl["upgrade"]} — an existing line moving to a new device',
+    }
+
+
+# Where a KPI is actually MEASURED decides whether an employee can move it alone. Derived from
+# `kpi_failing`'s two feed maps (`grain_of`), never a list written out here — a tenant that defines an
+# eighth metric gets the right answer without this module changing.
+_GRAIN_WORDS = {"rep": "your own numbers", "store": "your store", None: "entered by your manager"}
+
+
+def build_boost_doc(cfg, kpi_defs, tenant_name="", period="", generated_at=None, engine_label=""):
+    """The Boost KPI-tier engine's configuration as the payout-structure DOCUMENT MODEL. PURE — no I/O.
+
+    `cfg`       : one `commcalc.payout_config` row for the period (dict; `{}` = the house defaults,
+                  which ARE what an unconfigured tenant is paid by, so the document is still correct).
+    `kpi_defs`  : `kpi_failing.resolve_defs(...)` output — the tenant's OWN registry when it has one,
+                  the built-in seven otherwise. The same tuple the pay engine scores against.
+    `period`    : the period the config row is for ("October 2026"), printed so nobody reads a stale
+                  handout as current.
+
+    Every number here is read through `boost_terms`, which the pay engine reads too. Nothing is
+    recomputed and nothing is rounded for display beyond `money()` / `pct()`.
+    """
+    from app.modules.commcalc import boost_terms as _bt
+    from app.modules.commcalc import kpi_failing as _kpi
+
+    G = _bt.resolve_terms(cfg or {})
+    targets = _bt.resolve_kpi_targets(cfg or {}, kpi_defs or ())
+    labels = _bucket_labels()
+
+    _now = datetime.now(timezone.utc)
+    when = generated_at or f"{_now.strftime('%B')} {_now.day}, {_now.year}"
+
+    # ── ① what pays ───────────────────────────────────────────────────────────────────────────────
+    # A term whose resolved rate is ZERO is NOT dropped — it moves to `no_pay_items` and is labelled,
+    # exactly as `build_doc` treats a zeroed rule. An employee who sells upgrades all month must be
+    # able to see that upgrades pay nothing this period, rather than find the line missing.
+    pay_items, no_pay_items, warnings, footnotes = [], [], [], []
+
+    # `tiered=False` on every term is deliberate and is NOT "these do not scale". In this engine the
+    # tier multiplies the WHOLE subtotal, so per-row "tier-scaled" badges — which exist to tell a plan
+    # employee WHICH of their items scale — would imply the others do not. The ladder below says it
+    # once, for everything.
+    def _term(what, condition, rate_value, rate_text, frequency, scope="", tiered=False):
+        item = {"what": what, "condition": condition, "rate": rate_text,
+                "frequency": frequency, "scope": scope, "tiered": bool(tiered)}
+        if _f(rate_value) == 0.0:
+            no_pay_items.append({"what": what, "condition": condition,
+                                 "why": "Currently set to zero — earns no incentive."})
+        else:
+            pay_items.append(item)
+
+    _byod_rate = _f(G["byod_flat"]) + _f(G["byod_extra"])
+    _byod_cond = labels["byod"]
+    if _f(G["byod_extra"]) != 0.0:
+        _byod_cond += (f' — base {money(G["byod_flat"])} plus a '
+                       f'{money(G["byod_extra"])} BYOD spiff')
+    _term("Premium activation", labels["premium"], G["premium_flat"], money(G["premium_flat"]),
+          "Once per transaction")
+    _term("BYOD activation", _byod_cond, _byod_rate, money(_byod_rate), "Once per transaction")
+    _term("Upgrade", labels["upgrade"], G["upgrade_flat"], money(G["upgrade_flat"]),
+          "Once per transaction")
+    _term("Accessories",
+          "Any sale line classified as an accessory — paid on the selling price, not the profit",
+          G["acc_rate"], f'{pct(G["acc_rate"])} of the sale', "Each qualifying item")
+    _term("Device set-up fee", "A set-up fee charged on the sale", G["setup_rate"],
+          f'{pct(G["setup_rate"])} of the fee', "Each fee collected")
+    _term("Trade-in", "A trade-in recorded on the carrier pay detail", G["trade_in_spiff"],
+          money(G["trade_in_spiff"]), "Once per trade-in")
+    _term("Acima lease", "A transaction tendered to Acima", G["acima_spiff"],
+          money(G["acima_spiff"]), "Once per transaction")
+    for cs in (G["custom_spiffs"] or []):
+        name = display_label((cs or {}).get("name"))
+        if not name:
+            continue
+        _term(f"Spiff: {name}", f"A sale line in the {_quote(name)} category or department",
+              (cs or {}).get("rate"), money((cs or {}).get("rate")), "Each qualifying item")
+
+    # ── ② the KPI table — the bar, and who can move it ────────────────────────────────────────────
+    kpi_rows = []
+    for (k, label, _col, _dflt) in (kpi_defs or ()):
+        if k not in targets:
+            # No stored target AND no default: the pay engine does not score it, so the document does
+            # not print a bar. Saying "target 0" would tell an employee they had already met it.
+            continue
+        grain = _GRAIN_WORDS.get(_kpi.grain_of(k), _GRAIN_WORDS[None])
+        kpi_rows.append({"label": display_label(label), "target": f"{_f(targets[k]):g} or better",
+                         "grain": grain})
+    if any(r["grain"] == _GRAIN_WORDS["store"] for r in kpi_rows):
+        footnotes.append(
+            "Some of the measures above are recorded for your whole store rather than for you "
+            "individually, so everyone working that store shares them.")
+    footnotes.append(
+        "A measure that has not been reported for the period is not counted against you: it is left "
+        "out of both the score and the total, so you may see a score out of fewer than "
+        f"{len(kpi_rows)}.")
+
+    # ── ③ the tier ladder ─────────────────────────────────────────────────────────────────────────
+    # Rendered through the SAME `tiers` slot the plan engine uses — `min_count` reads as "N or more",
+    # which is exactly how the engine compares `kpis_met`. `heading` renames the section for this
+    # engine; `build_doc` omits it and keeps its own wording.
+    total_scored = len(kpi_rows)
+    tiers = None
+    if G["straight"]:
+        warnings.append("This period is paid straight-line: the measures above are tracked, but the "
+                        "amounts shown are paid in full without a tier multiplier.")
+    else:
+        tiers = {
+            "heading": f"Your tier — how many of the {total_scored} measures you hit",
+            "metric": f"measures met (out of {total_scored})",
+            "rows": [
+                {"label": "Full rate", "min_count": int(G["t100"]), "multiplier": "100%",
+                 "effect": "You are paid the full amount earned above."},
+                {"label": "Reduced", "min_count": int(G["t75"]), "multiplier": pct(G["t75pct"]),
+                 "effect": f'You are paid {pct(G["t75pct"])} of the amount earned above.'},
+            ],
+            "below": pct(G["t50pct"]),
+            # Said once, here, because it is true of every line above — see `_term`'s note on why no
+            # row carries a per-item "tier-scaled" badge in this engine.
+            "applies_to_all": True,
+        }
+        if int(G["t100"]) > total_scored > 0:
+            warnings.append(
+                f'The full rate requires {int(G["t100"])} measures to be met, but only {total_scored} '
+                f'are currently measured, so the full rate cannot be reached this period.')
+
+    if G["acc_target_on"]:
+        footnotes.append(
+            "An accessory target applies. If your accessory profit for the period is below your share "
+            "of your store's target, your tier is capped at "
+            f'{pct(G["t75pct"])} even when you meet enough measures for the full rate.')
+
+    applies_line = f"Everyone paid on the {engine_label or 'Boost'} rates" + (
+        f" for {period}" if period else "")
+    plan = {
+        "id": "boost",
+        "name": (f"{engine_label or 'Boost'} commission" + (f" — {period}" if period else "")),
+        "active": True,
+        "applies": {"lines": [applies_line]},
+        "pay_items": pay_items,
+        "no_pay_items": no_pay_items,
+        "tiers": tiers,
+        "kpis": ({"heading": "What you are measured on",
+                  "note": "Each measure is compared with its target for the period. "
+                          "How many you meet sets your tier below.",
+                  "rows": kpi_rows} if kpi_rows else None),
+        "notes": None,
+        "warnings": warnings,
+    }
+    if not pay_items:
+        plan["warnings"].insert(0, "No paying items are configured for this period. Anyone paid on "
+                                   "these rates earns $0.00.")
+
+    return {
+        "title": "Incentive Payout Structure",
+        "tenant": _s(tenant_name),
+        "generated_at": when,
+        "period": _s(period) or None,
+        "plans": [plan],
+        "never_pays": [
+            {"label": "Voided sales", "condition": "A sale marked void in the point-of-sale system",
+             "reason": "The sale did not complete."},
+            {"label": "Returns", "condition": "A transaction recorded as a return",
+             "reason": "The sale was reversed."},
+        ],
+        "footnotes": footnotes,
+        "how_it_works": _boost_how_it_works(G, total_scored),
+    }
+
+
+def _boost_how_it_works(G, total_scored):
+    """The opening explainer, built FROM the resolved terms so it never claims something this tenant's
+    own configuration does not do. PURE."""
+    bullets = [
+        "Your incentive is worked out in two steps. First you earn an amount for each thing you sell "
+        "— that total is your subtotal. Then your subtotal is multiplied by your tier.",
+        "Every activation, accessory, set-up fee, trade-in and lease you write is checked against the "
+        "rates below. A single sale can earn from more than one rate — for example a phone and its "
+        "accessories.",
+    ]
+    if not G["straight"]:
+        bullets.append(
+            f"Your tier comes from how many of the {total_scored} measures you meet for the period. "
+            "It is applied to everything you earned, not to one item.")
+    bullets.append("Returned, voided and refunded sales do not earn incentive. Chargebacks are "
+                   "deducted from the payout for the period in which they are applied.")
+    return bullets
+
+
 # ── PDF rendering ─────────────────────────────────────────────────────────────────────────────────
 # Colors are defined once here so the document reads as one system across sections.
 _INK = (0.13, 0.16, 0.22)        # body text
@@ -477,7 +700,10 @@ def render_pdf(doc):
     if tenant:
         story.append(Paragraph(esc(tenant), st_tenant))
     story.append(Paragraph(esc(title), st_title))
-    story.append(Paragraph(f"Effective as configured on {esc(doc.get('generated_at'))}", st_meta))
+    _per = _s(doc.get("period"))
+    story.append(Paragraph(
+        (f"Pay period {esc(_per)} &nbsp;·&nbsp; " if _per else "")
+        + f"Effective as configured on {esc(doc.get('generated_at'))}", st_meta))
     story.append(Spacer(1, 6))
     story.append(HRFlowable(width="100%", thickness=1.6, color=C(_NAVY), spaceAfter=10))
 
@@ -539,8 +765,26 @@ def render_pdf(doc):
             if applies_txt:
                 story.append(Paragraph(applies_txt, st_cap))
 
+        # The KPI table (the Boost engine's "what you are measured on"). Plan documents carry no
+        # `kpis` key, so this renders for them exactly as before: not at all.
+        kp = plan.get("kpis")
+        if kp:
+            story.append(Paragraph(esc(kp.get("heading") or "What you are measured on"), st_h3))
+            if kp.get("note"):
+                story.append(Paragraph(esc(kp["note"]), st_cap))
+            rows = [[Paragraph("Measure", st_head), Paragraph("Target", st_head),
+                     Paragraph("Measured on", st_head)]]
+            for r in kp["rows"]:
+                rows.append([Paragraph(esc(r["label"]), st_cell_b), Paragraph(esc(r["target"]), st_cell),
+                             Paragraph(esc(r["grain"]), st_cell)])
+            story.append(table(rows, [avail * 0.38, avail * 0.27, avail * 0.35]))
+
         if plan["tiers"]:
-            story.append(Paragraph(f"Volume tiers — based on {esc(plan['tiers']['metric'])}", st_h3))
+            # `heading` lets an engine name its own ladder ("Your tier — how many of the 7 measures
+            # you hit"); the plan engine omits it and keeps the volume-tier wording it always had.
+            story.append(Paragraph(
+                esc(plan["tiers"].get("heading")
+                    or f"Volume tiers — based on {plan['tiers']['metric']}"), st_h3))
             rows = [[Paragraph("Tier", st_head), Paragraph("Reach", st_head),
                      Paragraph("Multiplier", st_head_r), Paragraph("Effect", st_head)]]
             for t in plan["tiers"]["rows"]:
@@ -551,7 +795,9 @@ def render_pdf(doc):
             story.append(table(rows, [avail * 0.28, avail * 0.22, avail * 0.18, avail * 0.32],
                                [("ALIGN", (2, 0), (2, -1), "RIGHT")]))
             if plan["tiers"]["below"]:
-                story.append(Paragraph(f"Below the first tier, tier-scaled items pay "
+                _what = ("everything you earned above pays"
+                         if plan["tiers"].get("applies_to_all") else "tier-scaled items pay")
+                story.append(Paragraph(f"Below the first tier, {_what} "
                                        f"{esc(plan['tiers']['below'])} of the base rate.", st_cap))
 
         if plan["no_pay_items"]:

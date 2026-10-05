@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
-import { api, ORG_ID } from '@/lib/client'
+import { api, apiDownload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { usePosTerm } from '@/lib/report-labels'
 import EntityPicker from '@/components/EntityPicker'
@@ -31,6 +31,32 @@ function toApiPeriod(label: string): string {
   return `${yr}-${String(m).padStart(2, '0')}`
 }
 
+// ── Rate-history display helpers (the 📄 Employee Handout tab's second module) ────────────────────
+// Display only. Every VALUE they format is resolved on the server by `boost_terms.resolve_terms`, so
+// nothing here decides what a period pays — these only decide how it reads.
+function money(v: any): string {
+  const n = Number(v || 0)
+  return n % 1 ? `$${n.toFixed(2)}` : `$${n}`
+}
+
+function ratePct(v: any): string {
+  const n = Number(v || 0) * 100
+  return `${String(Number(n.toFixed(2)))}%`
+}
+
+// The server names what moved using the engine's own term keys; these are the words a manager reads.
+// An unknown key falls back to itself rather than being dropped — a change nobody can see is worse
+// than one named awkwardly (the same rule payout_structure.display_label follows).
+const TERM_LABELS: Record<string, string> = {
+  premium_flat: 'premium rate', byod_flat: 'BYOD rate', byod_extra: 'BYOD spiff',
+  upgrade_flat: 'upgrade rate', trade_in_spiff: 'trade-in spiff', acima_spiff: 'Acima spiff',
+  acc_rate: 'accessory rate', setup_rate: 'set-up fee rate', custom_spiffs: 'custom spiffs',
+  acc_target_on: 'accessory target', acc_target_pct: 'accessory target %',
+  straight: 'straight-line mode', t100: 'full-tier threshold', t75: '75% threshold',
+  t75pct: '75% multiplier', t50pct: '50% multiplier',
+}
+function termLabel(k: string): string { return TERM_LABELS[k] || k }
+
 function parsePromoPrice(sampleDesc: string): string {
   const m = sampleDesc.match(/\$(\d+(?:\.\d+)?)$/)
   return m ? `$${m[1]}` : '—'
@@ -45,7 +71,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [activeTab, setActiveTab] = useState<'rates'|'kpi'|'tier'|'stores'|'comprates'|'topphones'>('comprates')
+  const [activeTab, setActiveTab] = useState<'rates'|'kpi'|'tier'|'stores'|'comprates'|'topphones'|'handout'>('comprates')
   const [storeList, setStoreList] = useState<any[]>([])
   const [storeSaving, setStoreSaving] = useState<string | null>(null)
   const [markets, setMarkets] = useState<string[]>([])
@@ -68,6 +94,17 @@ export default function SettingsPage() {
   const [topSellers, setTopSellers] = useState<any[]>([])
   const [topLoading, setTopLoading] = useState(false)
 
+  // ── EMPLOYEE HANDOUT tab (owner directive 2026-10-05) ───────────────────────────────────────────
+  // TWO MODULES, deliberately separate. The PDF is the document you give an EMPLOYEE: the terms in
+  // force, nothing else. The rate history is a MANAGEMENT view of how those terms have moved — the
+  // owner's words: "keep how the commission has moved as a second module on that page so the pdf is
+  // not the same, this pdf could also be used to share with employees". Keeping history out of the
+  // handout is what makes the handout safe to share, so these never merge into one export.
+  const [structureBusy, setStructureBusy] = useState(false)
+  const [structureMsg, setStructureMsg] = useState('')
+  const [history, setHistory] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+
   useEffect(() => {
     api(`/api/v1/commcalc/stores?org_id=${ORG_ID}`)
       .then(setStoreList).catch(console.error)
@@ -81,7 +118,30 @@ export default function SettingsPage() {
     if (activeTab === 'comprates') loadCompRates()
     if (activeTab === 'topphones') loadTopSellers()
     if (activeTab === 'stores') { loadAliases(); loadMarkets() }
+    if (activeTab === 'handout') loadHistory()
   }, [activeTab, period])
+
+  // How the Boost terms have moved, period by period. The SERVER resolves each period's terms through
+  // `boost_terms.resolve_terms` — the same one home the pay engine reads — and names what changed, so
+  // the browser never re-derives a comparison the engine would answer differently.
+  async function loadHistory() {
+    setHistoryLoading(true)
+    try {
+      const d = await api(`/api/v1/commcalc/payout-terms/history?org_id=${ORG_ID}`)
+      setHistory(d?.periods || [])
+    } catch (e) { console.error(e) } finally { setHistoryLoading(false) }
+  }
+
+  // The employee-facing PDF. Server-rendered (payout_structure.render_pdf) from THIS tenant's real
+  // configuration for the selected period — the endpoint picks the engine that actually pays this
+  // tenant, so a Boost tenant gets the KPI-tier document and a plan tenant gets its plans.
+  function downloadStructure() {
+    setStructureBusy(true); setStructureMsg('')
+    apiDownload(`/api/v1/commcalc/commission-plans/payout-structure?fmt=pdf&org_id=${ORG_ID}&period=${encodeURIComponent(period)}`)
+      .then(() => setStructureMsg('✅ Downloaded'))
+      .catch(e => setStructureMsg('❌ ' + (e?.message || e)))
+      .finally(() => setStructureBusy(false))
+  }
 
   // Existing markets = the pick-don't-type option list for the Store Markets editor (RULE THREE).
   // A failure here is non-fatal: marketOptions still falls back to the markets already on the rows.
@@ -257,6 +317,7 @@ export default function SettingsPage() {
     { key: 'kpi', label: '🎯 KPI Targets' },
     { key: 'tier', label: '📊 Tier Structure' },
     { key: 'stores', label: '🏪 Stores & Markets' },
+    { key: 'handout', label: '📄 Employee Handout' },
   ] as const
 
   return (
@@ -567,6 +628,94 @@ export default function SettingsPage() {
                 onChange={e => setCfg((c: any) => ({ ...c, straight_line: e.target.checked }))} />
               <span style={{ fontSize: 14 }}>Straight-line mode (no tier multiplier — everyone pays 100%)</span>
             </label>
+          </div>
+        </div>
+      )}
+
+      {/* ── EMPLOYEE HANDOUT TAB — two modules, kept apart on purpose (see the state block above) ── */}
+      {activeTab === 'handout' && (
+        <div style={{ display: 'grid', gap: 16 }}>
+
+          {/* MODULE 1 — the document you hand an employee. */}
+          <div className="card">
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>📄 Employee Commission Structure</div>
+            <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.55 }}>
+              A one-document explanation of how an employee is paid for <b>{period}</b>: what each
+              activation, accessory, set-up fee, trade-in and lease earns, the measures they are scored
+              on with their targets, and the tier that multiplies the total. Built on the server from
+              this period&rsquo;s saved settings &mdash; the same numbers the pay run uses &mdash; so it
+              cannot show a rate nobody is paid.
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8, lineHeight: 1.5 }}>
+              Safe to share with staff: it states the terms in force and nothing about how they have
+              changed. It is not a statement of earnings. Change a rate below and download again to
+              reissue it.
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14 }}>
+              <button className="btn btn-primary" onClick={downloadStructure} disabled={structureBusy}>
+                {structureBusy ? 'Preparing…' : '📄 Create PDF'}
+              </button>
+              {structureMsg && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{structureMsg}</span>}
+            </div>
+          </div>
+
+          {/* MODULE 2 — management view. Never folded into the PDF above. */}
+          <div className="card" style={{ padding: 0 }}>
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontWeight: 600 }}>📈 How the commission has moved</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 3, lineHeight: 1.5 }}>
+                Every period that has saved settings, newest first, with the rate in force and what
+                changed from the period before it. Internal &mdash; this is not part of the employee PDF.
+              </div>
+            </div>
+            {historyLoading && <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)' }}>Loading…</div>}
+            {!historyLoading && history.length === 0 && (
+              <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)' }}>
+                No saved settings yet. The first period you save will appear here.
+              </div>
+            )}
+            {!historyLoading && history.length > 0 && (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', fontSize: 13 }}>
+                  <thead>
+                    <tr>
+                      {['Period', 'Premium', 'BYOD', 'Upgrade', 'Trade-in', 'Acima', 'Accessories',
+                        'Set-up fee', 'Full tier needs', 'Changed'].map(h => (
+                        <th key={h} style={{ textAlign: 'left', padding: '8px 14px', fontSize: 12,
+                                             color: 'var(--text3)', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map(row => {
+                      const t = row.terms || {}
+                      const moved = (k: string) => (row.changed || []).includes(k)
+                      const cell = (k: string, text: string) => (
+                        <td style={{ padding: '8px 14px', whiteSpace: 'nowrap',
+                                     fontWeight: moved(k) ? 700 : 400,
+                                     color: moved(k) ? 'var(--accent)' : undefined }}>{text}</td>
+                      )
+                      return (
+                        <tr key={row.period}>
+                          <td style={{ padding: '8px 14px', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.period}</td>
+                          {cell('premium_flat', money(t.premium_flat))}
+                          {cell('byod_flat', money(Number(t.byod_flat || 0) + Number(t.byod_extra || 0)))}
+                          {cell('upgrade_flat', money(t.upgrade_flat))}
+                          {cell('trade_in_spiff', money(t.trade_in_spiff))}
+                          {cell('acima_spiff', money(t.acima_spiff))}
+                          {cell('acc_rate', ratePct(t.acc_rate))}
+                          {cell('setup_rate', ratePct(t.setup_rate))}
+                          {cell('t100', `${t.t100} measures`)}
+                          <td style={{ padding: '8px 14px', fontSize: 12, color: 'var(--text3)' }}>
+                            {(row.changed || []).length === 0 ? 'no change' : (row.changed || []).map(termLabel).join(', ')}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
