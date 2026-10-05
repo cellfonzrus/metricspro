@@ -18000,3 +18000,158 @@ Code is complete and proved (`harness_order_transport.py`, **143 checks**: §G t
 **Nothing is switched on**: `po_mode` stays `off` for every tenant, no vendor declares a route, and no
 credential is stored. Migration 1053 is **written and surfaced, not applied**. Still outstanding: the
 owner's Shopify **client id and client secret**, which go into Supabase by hand, never through chat.
+
+---
+
+## 52. THE IN-APP DATA ASSISTANT — it runs the platform's OWN reports, as the signed-in user (owner directive 2026-10-05, mig `1055`)
+
+> Owner (sanjot@, 2026-10-05): *"We have a Claude api which gives our system the ability to use Claude
+> as per user request. We need to create a self generated Ai inside our platform that is smart enough
+> to answer any questions related to the data ingested into the system, perform calculations, create a
+> pivot table or create graphs or answer a question like which was my best store and how much revenue
+> did it make or who is best sales person or who is pulling me down, or what is need to pull sales up
+> etc. This intelligence needs to be built and improved as more and more data will be ingested — this
+> will make our system complete."*
+
+**DUPLICATE CHECK — what was searched, and what is reused rather than rebuilt.** Two existing
+mechanisms answer parts of this and are EXTENDED, not forked:
+
+1. **There is already an in-app assistant**: `POST /helpdesk/ai-assist` (§17; `ai_assistant` module;
+   `components/AiAssistant.tsx`). It is the PRODUCT/how-to assistant and says so in its own system
+   prompt — *"You do NOT have live database access"*. So the gap was never "an assistant"; it was
+   "an assistant that may read the tenant's numbers". The same entitlement gates both, and the same
+   `AiAssistant.tsx` panel routes a DATA question to the new door and a how-to question to the
+   existing one. **There is still exactly one "Ask AI" in the product.**
+2. **Every number the owner asked for already has one home**, and those homes own rules a second
+   derivation would not reproduce — the DISTINCT-`trans_id` counting rule, the void/return skip set,
+   `line_class` classification, the Activation-Details basis override, the P&L's line bookings, the
+   org tree's store span, and the RBAC read scope. So **the assistant writes no SQL and reads no raw
+   table**: it calls the SAME endpoints the screens call. §3 `_sales_cell_agg` (the one row-level
+   pass behind the Sales Report, Executive MTD and Daily Targets), §4/§4c the P&L, §5 the targets
+   engine and the action plan, §13 store resolution — none is re-derived, so an answer here cannot
+   disagree with the screen the user is looking at. There is no second derivation to drift.
+3. **The AI spend guard already exists** (migs `972`/`982`/`983`): `core.ai_budget_config` +
+   `core.ai_call_audit`, read by `core/ai_gate.py`, written by `billing/ai_meter.record()`. Mig
+   `1055` adds **one config row** — no table, no column, no second meter, and no cost column
+   (mig `718`'s `core.token_rates` stays the only $/MTok source).
+
+### 52.1 The semantic layer — ONE declaration of what may be read
+
+`backend/app/modules/core/data_qa_registry.py` is the one home for **"which of this platform's own
+reports answers this business question?"**. `DATA_QUESTIONS` declares, per question: the owner-worded
+`answers` text the model matches a user's question against, the existing endpoint path, which query
+parameters a caller may set (each with a KIND whose regex is the only thing a value may be), the
+entitlement module, the response envelope key, and the index section that documents it.
+
+What it deliberately does **not** declare: a report's COLUMNS or what any of them means in dollars.
+Those are facts about the endpoint, and the endpoint is their one home — a copy here would rot the
+first time a report gained a column, which is the "one fact, two homes" defect the house rules
+forbid. `data_qa_agent` therefore **discovers** the columns from the live response
+(`registry.columns_of` / `compute.describe`) and tells the model what it actually got.
+
+| Question key | Answers | Runs | Index |
+|---|---|---|---|
+| `sales_by_store_rep_day` | best / worst store, best salesperson, revenue, units, GP, who is pulling me down | `GET /sales-report` | §3 |
+| `sales_movement_summary` | are we up or down, what changed vs last month | `GET /sales-report/narrative` | §3 |
+| `executive_mtd` | month-to-date activations / upgrades / accessories per store and rep | `GET /exec-mtd/{period}` | §3, §19.31 |
+| `executive_mtd_movement` | MTD against the same days of last month | `GET /exec-mtd/{period}/narrative` | §3 |
+| `daily_targets_summary` | on target or behind, and by how much | `GET /targets/{period}/summary` | §5 |
+| `action_plan` | **what is needed to pull sales up** — catch-up per store, commission at risk per rep | `GET /targets/{period}/action-plan` | §5 |
+| `profit_and_loss` | profit for a month, per store / company, where the money went | `GET /account/pl/{period}` | §4 |
+| `profit_and_loss_range` | the P&L month by month, which month was best | `GET /account/pl-range` | §4c |
+| `store_roster` | which stores do I have, which market is a store in | `GET /commcalc/stores` | §13 |
+
+**THE MODEL IS NEVER SHOWN A PATH.** `registry.catalog()` returns the question key, label, `answers`
+and parameters — and the lock proves the rendered catalog contains no `/api/v1/` string at all. The
+model picks a QUESTION; `registry.validate()` turns that into a path. So no model output is ever
+interpreted as a route, there is no SQL seam to inject into, and the registry holds no write route
+(`harness_data_qa_lock.py` §A4).
+
+### 52.2 The arithmetic — the model chooses, the code computes
+
+`backend/app/modules/core/data_qa_compute.py` is the one home for group / rank / pivot / compare /
+chart. The owner asked for calculations, pivot tables and graphs; **a model doing that arithmetic in
+prose would be wrong about a store's revenue and sound exactly as confident.** So the model chooses a
+grouping, a measure and a chart kind, and this module does the adding up, deterministically, over the
+rows the report itself returned. Proved DB-free by `backend/harness_data_qa_compute.py` (82 checks).
+
+Three rules it pins, each of which is how a report starts lying quietly:
+
+- **A blank is NOT REPORTED, never zero.** A store with no reported revenue totals to `None`, so it
+  is never "the best store", never "the worst", never a zero-height bar that reads as "sold nothing",
+  and never a zero that halves an average (`avg` divides by reported cells, not by rows).
+- **An accounting cell in parentheses is NEGATIVE.** `(50.00)` reduces a total. One coercion
+  (`to_number`) for every surface, so a sum and a rank can never disagree — and a BOOLEAN is not a
+  number, so `True` never totals as 1.
+- **A pivot adds up both ways.** Row totals, the column footer and the grand total agree
+  (§D8), so the table a user reads is arithmetically closed rather than three independent claims.
+
+"Who is pulling me down" is `compare()` — the row furthest BELOW what the rest of the estate is
+doing, not simply the smallest number — and a zero baseline yields **no** percentage, because a share
+of nothing is unanswerable rather than 0% or infinity. A chart is returned as DATA
+(`{kind, labels, series}`) and rendered by the frontend: the backend draws nothing and the model
+draws nothing, so a chart cannot show a figure the table does not.
+
+### 52.3 The agent, and why it cannot see more than the user
+
+`backend/app/modules/core/data_qa_agent.py` runs the tool loop. Tools: `run_question`, `group_rank`,
+`pivot_table`, `compare_rows`, `make_chart`. Two properties carry the design:
+
+- **Each report read is made IN-PROCESS, with the caller's own bearer token** (`httpx.ASGITransport`
+  against the app itself). The request therefore runs through the same middleware stack and the same
+  handler as the browser's call: `TenantScopeMiddleware` resolves the org, and each endpoint's own
+  RBAC (`storeops.caller_scope` → `scope_keyset` → `in_keyset`, §13) decides which stores come back.
+  **The assistant is exactly as blind as the person using it**, and it holds no scope rule of its own
+  — the lock fails the build if one appears, or if the agent reaches for a service key.
+- **The model is handed a RESULT ID, never the rows.** The arithmetic always runs over what the
+  report returned, so a model cannot retype a number on the way to a total; it also keeps a long
+  report answerable without the model holding it in context, which is where a model starts
+  approximating.
+
+READ-ONLY by construction: the registry holds no write path and the reader issues only GET (§B1).
+SEV-1 2026-07-30 is honoured — `AsyncAnthropic`, awaited, explicit timeout × (1 + retries), and the
+in-process reads are awaited too, so neither a slow model nor a slow report holds the event loop.
+Bounded per question: `DATA_QA_MAX_ROUNDS` (8), `MAX_REPORTS` (6), `MAX_ROWS_TO_MODEL` (60), all
+env-tunable.
+
+Every failure degrades to a sentence an operator can act on — a refused guard decision, no API key, a
+model timeout, a report 403 — because somebody asking "which store is best" must never be shown a
+stack trace. Model: `settings.DATA_QA_MODEL` (`claude-opus-5-5`, env-settable).
+
+### 52.4 Who may ask, and what it costs
+
+Purpose `data_qa` in `control_box.AI_PURPOSES` (mig `1055`), authorizer `module_scope`: the
+`ai_assistant` module plus a reporting scope of `all`, `market` or `company`. A self-scoped login (a
+rep) is refused **the assistant** — not its data: every report it would have read stays on its own
+page, scoped as always. The question is `bounded_text` like remediation triage (§20): stripped,
+capped by the org's `max_input_chars`, audited as a DIGEST rather than as a copy of everything anyone
+ever typed. Spend is metered as one call per QUESTION (the whole tool loop), declared in
+`billing/ai_usage.AI_CALL_SITES` so §21's coverage figure stays honest.
+
+### 52.5 "Improved as more data is ingested" — the mechanism, stated
+
+Not model training. Two concrete paths, both already in the platform:
+
+1. **`registry.answerable()` offers only the questions whose module is switched on for the tenant.**
+   The day a tenant's feed lands and its module comes on, the matching questions appear with no code
+   change — and until then the assistant never promises a number there is no feed for.
+2. **Every NEW report registers in the registry in the PR that builds it** (the index rule at the top
+   of `CLAUDE.md`). The assistant's reach grows with the platform's reach, reviewable in a diff
+   instead of being an opaque property of a model.
+
+### 52.6 Proofs, and the lock that stops it un-wiring
+
+| Harness | Proves |
+|---|---|
+| `backend/harness_data_qa_registry.py` (165 checks) | the registry's shape; `validate()` refuses an unregistered question, an unlisted parameter, a caller-supplied `org_id`, a missing required parameter and an unfilled path param; entitlement narrowing; §F replays SQL, traversal, scheme, newline, control-character and over-long inputs as parameter values, with a positive control so the refusals are the pattern working rather than the validator refusing everything |
+| `backend/harness_data_qa_compute.py` (82 checks) | the arithmetic, including blank-is-not-zero, parenthesised negatives, the no-percentage-on-a-zero-baseline rule, and the invariants (a total is conserved by grouping, pivoting and comparing; no function mutates the rows a report returned) |
+| `backend/harness_data_qa_routes.py` (32 checks, needs the backend's dependencies) | that every declared path RESOLVES to a GET-able route on the real app, read from `app.openapi()`. **This caught a live defect in its own PR:** the registry first declared `/api/v1/sales-report` for all nine questions, which reads perfectly and is wrong — commcalc's router carries a `/commcalc` prefix — and every DB-free harness passed throughout, because a string that matches a pattern is not a string that matches a route. It also catches the doubled-prefix mistake (`/core/core/data-qa`), which also happened here |
+| `backend/harness_data_qa_lock.py` (86 checks, every control ARMED) | one registry (detected STRUCTURALLY, by the dict-of-`path` shape, not by a word search); one GET-only reader carrying the caller's token; no permission rule and no arithmetic of its own; the purpose registered in BOTH shared registries and the guard shown to refuse an unregistered one; the async-client rule; the bounds; and that the tool schemas accept a result id rather than rows |
+
+Run by `.github/workflows/data-qa-guard.yml`, which also runs the module-graph guard — the two new
+facts (`data_qa_semantic_layer`, `data_qa_arithmetic`) are registered in §50's graph, so a future
+change to either file has its siblings named in the pull request.
+
+**Status: NOTHING IS SWITCHED ON.** Migration `1055` is written and surfaced, **not applied**, and
+until it is, `control_box.DEFAULT_AI_CONFIG`'s tighter house ceiling applies. The `ai_assistant`
+module remains whatever each tenant already had it set to; this PR enables it for nobody.

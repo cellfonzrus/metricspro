@@ -125,6 +125,14 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     ACCOUNT_ENGINE_MODEL: str = "claude-opus-4-8"
 
+    # ── In-app DATA assistant (index §52) ────────────────────────────────────────
+    # The tool-using assistant over `core/data_qa_registry`'s semantic layer. It runs a multi-turn
+    # tool loop over this tenant's own reports, so it is pointed at the current Opus rather than
+    # inheriting the account engine's pin — a model that picks the wrong report or mis-reads a
+    # returned table costs an operator a wrong business decision, not a clumsy sentence. Env-settable
+    # (`DATA_QA_MODEL`) so the pin moves without a code deploy. Same key as every other call site.
+    DATA_QA_MODEL: str = "claude-opus-5-5"
+
     # ── Sensitive-field encryption (employee PII: SSN/bank/A-Number) ──────────────
     # Fernet key(s) for app-level encryption of sensitive onboarding fields (app/core/crypto.py).
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

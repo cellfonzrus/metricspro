@@ -268,6 +268,27 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_landing',),
         },
     },
+    'data_qa_semantic_layer': {
+        "question": 'Which of this platform\'s own reports answers this business question?',
+        "homes": ('app/modules/core/data_qa_registry.py',),
+        "index": ('52.1',),
+        "locks": ('harness_data_qa_lock.py', 'harness_data_qa_registry.py'),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/core/data_qa_agent.py': ('reg',),
+            'app/modules/core/data_qa_api.py': ('reg',),
+        },
+    },
+    'data_qa_arithmetic': {
+        "question": 'What is the total, the rank, the pivot or the chart over these report rows?',
+        "homes": ('app/modules/core/data_qa_compute.py',),
+        "index": ('52.2',),
+        "locks": ('harness_data_qa_lock.py', 'harness_data_qa_compute.py'),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/core/data_qa_agent.py': ('calc',),
+        },
+    },
 }
 
 

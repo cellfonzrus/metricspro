@@ -606,6 +606,13 @@ _DENY_DEFAULT_CODE = "not_super_admin"   # the strictest predicate's refusal, us
 _REMEDIATION_MODULE = "helpdesk"
 _REMEDIATION_SCOPES = ("all", "market")
 
+# The in-app DATA assistant (index §52). Gated on the SAME module the existing in-app assistant is
+# entitled by, and on a reporting scope broad enough for the questions it exists to answer ("which
+# store is best", "who is pulling me down"). A narrower login is not refused data it may see — it is
+# refused the ASSISTANT; its own reports stay on their own pages, scoped as always.
+_DATA_QA_MODULE = "ai_assistant"
+_DATA_QA_SCOPES = ("all", "market", "company")
+
 
 def _auth_super_admin(caller, spec=None):
     """Platform super-admin — the login-level flag, resolved server-side from the verified token."""
@@ -686,6 +693,25 @@ AI_PURPOSES = {
         "require_actionable": False,
         "call_site": "storeops/doc_intel_ai.py (extract_document)",
     },
+    "data_qa": {
+        "label": "In-app data assistant (questions about this tenant's own reports)",
+        "authorizer": "module_scope",
+        "module": _DATA_QA_MODULE,
+        "scopes": _DATA_QA_SCOPES,
+        "deny_code": "not_data_qa_operator",
+        # The caller ASKS A QUESTION in words, so — like remediation triage — this purpose cannot be
+        # registry-key shaped without deleting the feature. It opts in to bounded_text: stripped,
+        # control-characters removed, capped by the org's config, and audited as a DIGEST rather than
+        # as a copy of everything anyone ever typed.
+        #
+        # WHAT THE QUESTION CANNOT DO, which is why bounded text is safe here: it never becomes a
+        # query. The model may only name a question from `core/data_qa_registry.DATA_QUESTIONS`, and
+        # every parameter is re-validated against that registry's patterns, so the blast radius of
+        # the text is "which of this platform's own reports gets run, as this very user".
+        "subject_rule": SUBJECT_BOUNDED_TEXT,
+        "require_actionable": False,
+        "call_site": "core/data_qa_agent.py (answer)",
+    },
 }
 
 DEFAULT_AI_CONFIG = {
@@ -701,6 +727,8 @@ _DENY = {
     "not_remediation_operator": "AI triage is restricted to helpdesk operators with market-wide or "
                                 "company-wide scope.",
     "not_lease_access": "Lease and insurance documents are restricted to management roles.",
+    "not_data_qa_operator": "The data assistant is available to management logins with a market-wide "
+                            "or company-wide view. Your reports are still on their own pages.",
     "unknown_authorizer": "This AI purpose declares no authorization rule, so it is refused.",
     "wrong_purpose": "This key is restricted to registered purposes and refuses any other.",
     "unknown_check": "That check is not in the registry, so there is nothing to triage.",
