@@ -18680,6 +18680,9 @@ moves.
 
 ### 54.5 What this does NOT do
 
+(Written before §54.7; the first bullet is now narrower — the ⌘K index is still NAV-only, while ⌘/
+reads the derived page list, so ⌘/ finds strictly more than ⌘K does.)
+
 - **⌘K stays the nav destination search** and ⌘/ stays the question-and-entity console. The two were
   left distinct rather than merged: `layout.tsx`'s ⌘K index is already built from the post-RBAC,
   post-capability, post-layout nav (276 tenant-visible entries), and collapsing them would have meant
@@ -18691,10 +18694,98 @@ moves.
   enough (tens of stores, hundreds of people) that enumerating once and ranking client-side is both
   cheaper and the only way the ranking stays in one home.
 
-### 54.6 Status
+### 54.7 The page index is DERIVED, so a page cannot be left out (owner 2026-10-05, second report)
 
-Code complete and proved: **162 checks** across three Node, dependency-free proofs
-(`prove_search_rank.mjs` 78, `prove_search_catalog.mjs` 57, `prove_search_console_lock.mjs` 27), run
-by the `search-console` job in `.github/workflows/data-qa-guard.yml`. No migration. The entity half
-of the catalogue appears as soon as the two endpoints answer; the assistant half is live wherever
-`GET /core/data-qa/status` returns `allowed && configured` (§52.6).
+Owner, on being told the fix for a missing password-reset page would be an alias: *"this is a design
+issue not a random left out issue, all the search needs to be run through the index we built and the
+assistant should be able to give the most appropriate solution"*.
+
+He was right, and §54.1–§54.3 were only half the fix. The catalogue above is assembled from CURATED
+registries — the nav, the report catalogue, the screen-alias registry — so **a page that exists on
+disk and appears in none of them is invisible to every search in the product.** Measured when this
+was written:
+
+| | Count |
+|---|---|
+| static pages under `frontend/src/app` | **319** |
+| of those, present in `rbac.ts` NAV | 285 |
+| **in no registry at all — unfindable by ⌘K, by ⌘/, by the reports index** | **34** |
+
+The 34 are not obscure: the whole HR letters queue (`/hr/letters/queue`, `/send`, `/sent`), five
+purchase-order screens, five closing screens, `/commcalc/ma-upload`, `/storeops/salary-advances` —
+and `/account/password`, the one somebody actually searched for. Curating an alias for that one would
+have left the other 33, which is the instance-not-class defect CLAUDE.md forbids by name.
+
+**`frontend/src/lib/route-index.ts` is therefore GENERATED**, the way `module_graph.py` derives its
+callers from the import graph rather than trusting a hand list (§50):
+
+- `node frontend/prove_route_index.mjs --bless` walks `src/app`, strips route groups (`(platform)`),
+  excludes dynamic segments (`[id]` — there is no single URL to offer), and writes one entry per page.
+- The same file run WITHOUT `--bless` is the proof, and it **fails the build** when disk and the
+  registry disagree. The `search-console` CI job runs it on any change to `frontend/src/app/**/page.tsx`,
+  so the next page added is findable or the build is red. That ratchet is the design fix; the registry
+  is just its output.
+- **Three fields are human and are PRESERVED across a re-bless**: `label` (a derived label reads like
+  a path — "Account → Password" — and a person may replace it; a page with a nav entry takes the NAV
+  label instead, because that is the wording on the viewer's own screen), `aliases` (the words
+  somebody would type), and `preauth` (**the REASON** a page is deliberately not searchable, never a
+  bare flag, so an exclusion cannot be silent — `/login`, `/signup`, `/privacy`, `/terms`, `/`).
+- **Aliases for a page the nav lists do NOT live here.** `ScreenLink.tsx` SCREENS is the existing one
+  home for that, and `harness_screen_link_guard.py` §A requires every SCREENS href to BE a nav href —
+  which is mechanically why `/account/password` could only declare them in the derived registry. The
+  boundary is a constraint, not a preference.
+
+**The blesser verifies its own write**, because the module-graph blesser did not: on 2026-10-04 a
+one-line entry made its span run into the next one and it **silently deleted 11 of 12 facts while
+still printing OK**. Here an entry may not span lines at all, an unparseable line makes the parser
+REFUSE rather than guess, the write is rejected if it holds fewer entries than disk has, and the file
+is re-read and re-parsed and every field compared before the bless is called done. §E of the proof
+runs the real parse → build → render → parse cycle and asserts every label, alias list and exclusion
+reason survives, with armed controls (E5–E7) that the preservation is measured rather than tautological.
+
+The catalogue folds the route source **LAST**, which is the whole completeness guarantee: a page the
+nav already named keeps that label and only gains declared aliases, and a page in no other registry
+becomes its own entry instead of being unfindable. `AskBar` gates each one with `rbac.canAccessPath`,
+the one home for "may this viewer open this path" — so the derived list can never offer a page the
+viewer could not open. §H of `prove_search_catalog.mjs` pins the ordering and the gate, with the armed
+control that **without the route source "password reset" finds nothing**, which is what was reported.
+
+### 54.8 The console picks the assistant's door
+
+The same report's second half: *"the assistant should be able to give the most appropriate solution"*.
+The panel has had two doors since §52 — `POST /core/data-qa` for this tenant's numbers and
+`POST /helpdesk/ai-assist` for how the product works — and the person had to pick. A password reset
+handed to the data door gets nothing, because that door has no answer for it.
+
+`search-rank.askDoor(q)` now decides, in the same module as the rest of the meaning-reading:
+
+1. **"how much" / "how many" → `data`.** Checked first, because they open with the same word as
+   "how do I" and are asking for a figure.
+2. **An explicit how-to opener ("how do I…", "where is…", "can I…") → `howto`.** Checked BEFORE the
+   quantity words, and a real case drove that order: *"how do i upload the commission ledger"*
+   contains "commission" and is still a how-to question. The opener is what the person is asking FOR;
+   a noun further along is only the subject. The first version of this function got it wrong, and §I
+   of the proof is where it was caught.
+3. **No opener, a verb of change ("reset", "add", "turn on"), no quantity word → `howto`.**
+4. **Otherwise `data`** — the safe default, because the data door reads the real reports, so a
+   misrouted question there comes back with a number rather than with nothing.
+
+`AiAssistant` gained an `initialMode` prop and **falls back to the door the tenant is actually
+entitled to**, so a routing opinion can never produce a refusal where an answer was available. The
+offer line in the console says which door it will use, so the person can see the choice before
+spending anything.
+
+### 54.9 Status
+
+Code complete and proved: **240 checks** across four Node, dependency-free proofs
+(`prove_search_rank.mjs` 100, `prove_search_catalog.mjs` 69, `prove_route_index.mjs` 30,
+`prove_search_console_lock.mjs` 41), run by the `search-console` job in
+`.github/workflows/data-qa-guard.yml`. No migration. The entity half of the catalogue appears as soon
+as the two endpoints answer; the assistant half is live wherever `GET /core/data-qa/status` returns
+`allowed && configured` (§52.6).
+
+**The lock covers three facts, not two**: the ranker, the catalogue, and the derived page index. A
+console surface that stops reading the derived index, stops gating it with `canAccessPath`, or stops
+deciding the assistant's door fails the build (B10a–B10f), and so does a route index that stops
+declaring itself generated, drops an export, grows a permission rule or turns `preauth` into a bare
+flag (B18–B22).

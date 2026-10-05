@@ -227,6 +227,51 @@ export function fullyCovered(hits: Hit[], q: string): boolean {
   return n > 0 && hits.some(h => h.matched.length === n)
 }
 
+/** WHICH assistant door an unexplained question belongs to (owner 2026-10-05: *"the assistant
+ *  should be able to give the most appropriate solution"*). The panel has had two doors since §52 —
+ *  `/core/data-qa` for this tenant's numbers and `/helpdesk/ai-assist` for how the product works —
+ *  and until now the person had to pick. Picking for them is the difference between "someone wanted a
+ *  password reset" getting an answer and getting a refusal from the door that has no database.
+ *
+ *  'howto' when the question is about DOING something — a verb of change ("reset", "set up", "turn
+ *  on"), or a "how/where/can I" opener that is not asking for a quantity. 'data' otherwise, which is
+ *  the safe default: the data door reads the real reports, so a misrouted question there comes back
+ *  with a number rather than with nothing.
+ *
+ *  Note the deliberate exception: "how much" and "how many" are quantities, so they stay 'data' even
+ *  though they open with "how". */
+export type AskDoor = 'data' | 'howto'
+
+// Verbs of CHANGE. A question containing one is about doing something to the product, not about what
+// the numbers say — "reset a password", "add a store", "turn on the digest".
+const DOING = new Set([
+  'reset', 'change', 'update', 'edit', 'enable', 'disable', 'add', 'remove', 'delete', 'create',
+  'configure', 'setup', 'install', 'invite', 'assign', 'grant', 'revoke', 'upload', 'import',
+  'export', 'fix', 'rename', 'move', 'switch', 'turn', 'set', 'approve', 'submit', 'print',
+])
+// Words that mean the person wants a FIGURE, whatever else the sentence contains.
+const QUANTITY = new Set([
+  'much', 'many', 'total', 'revenue', 'profit', 'sales', 'commission', 'payout', 'best', 'worst',
+  'top', 'average', 'count', 'margin', 'activations', 'gross', 'net',
+])
+
+export function askDoor(q: string): AskDoor {
+  const t = tokens(q)
+  if (!t.length) return 'data'
+  // "how much" / "how many" ask for a FIGURE, not for instructions — checked before the opener rule
+  // below, because they open with the same word as "how do I".
+  if (t[0] === 'how' && (t[1] === 'much' || t[1] === 'many')) return 'data'
+  // An explicit how-to opener decides it: "how do I …", "where is …", "can I …". This is checked
+  // BEFORE the quantity words, and the reason is a case that caught the first version of this
+  // function: "how do i upload the commission ledger" contains "commission" and is still a how-to
+  // question. The opener is what the person is asking FOR; a noun further along is only the subject.
+  if (t[0] === 'how' || t[0] === 'where' || (t[0] === 'can' && t[1] === 'i')) return 'howto'
+  // No opener: a verb of change means doing, unless a quantity word says the person wants a figure
+  // ("set the revenue target" is doing; "what did we add in revenue" is not).
+  if (t.some(w => DOING.has(w)) && !t.some(w => QUANTITY.has(w))) return 'howto'
+  return 'data'
+}
+
 export type Intent = 'navigate' | 'ask' | 'empty'
 
 /**

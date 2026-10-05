@@ -24,10 +24,11 @@ import { api, fmt, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { REPORT_CATEGORIES } from '@/lib/reports'
-import { canSeeItem, TENANT_NAV, type Permissions, type Scope } from '@/lib/rbac'
+import { canAccessPath, canSeeItem, TENANT_NAV, type Permissions, type Scope } from '@/lib/rbac'
 import { SCREENS } from '@/components/ScreenLink'
 import { buildCatalog, entityOnly, type StoreSource, type PersonSource } from '@/lib/search-catalog'
-import { rank, intent as searchIntent, type Hit, type SearchKind } from '@/lib/search-rank'
+import { rank, intent as searchIntent, askDoor, type Hit, type SearchKind } from '@/lib/search-rank'
+import { searchableRoutes } from '@/lib/route-index'
 // The SAME panel the helpdesk page mounts — one Ask AI in the product, mounted in the one
 // overlay that is already available everywhere (⌘/), so the assistant needed no new widget
 // and no change to the platform layout.
@@ -102,7 +103,12 @@ function useSearchCatalog(permissions: Permissions, stores: StoreSource, people:
     const screens = Object.values(SCREENS)
       .filter(sc => openable.has(sc.href.split('#')[0].split('?')[0]))
       .map(sc => ({ href: sc.href, label: sc.label, blurb: sc.blurb, aliases: sc.aliases }))
-    return buildCatalog({ nav, reports, screens, stores, people })
+    // EVERY page that exists, gated by the one home for "may this viewer open this path". Before
+    // this source the catalogue was curated and 34 pages were in no registry at all — the owner
+    // asked for a password reset and search found nothing, because `/account/password` is a real
+    // page that nothing listed. Passed last so the nav keeps the labels it has (§54.7).
+    const routes = searchableRoutes().filter(r => canAccessPath(permissions, r.path))
+    return buildCatalog({ nav, reports, screens, routes, stores, people })
   }, [permissions, stores, people])
 }
 
@@ -154,6 +160,10 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   const inputRef = useRef<HTMLInputElement>(null)
   // The assistant hand-off (index §52) — see the block below `onSubmit`.
   const [askAI, setAskAI] = useState('')
+  // WHICH door the assistant should open for this question, decided in the shared module rather than
+  // left to the person: "someone wanted a password reset" belongs to the how-to door, which knows the
+  // product, not to the data door, which has no answer for it.
+  const door = useMemo(() => askDoor(q), [q])
   const [canAskAI, setCanAskAI] = useState(false)
 
   // ⌘/ (Ctrl-/) opens — ⌘K is already taken by the nav menu-filter, so the ask bar uses a distinct key.
@@ -341,18 +351,23 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
                       background: 'transparent', cursor: 'pointer', fontSize: 13 }}>
                     <span>🤖</span>
                     <span>Ask the assistant: <b>“{q.trim()}”</b></span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      {door === 'howto' ? 'how to' : 'your data'}
+                    </span>
                     {mode === 'ask' && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>Enter ↵</span>}
                   </button>
                   <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>
                     {mode === 'ask'
-                      ? 'That reads as a question, and nothing on the platform is named that — so it goes to the assistant rather than to the closest-looking page.'
+                      ? (door === 'howto'
+                          ? 'That reads as a question about how the product works, so it goes to the how-to assistant rather than to the closest-looking page.'
+                          : 'That reads as a question about your numbers, and nothing on the platform is named that — so it goes to the data assistant rather than to the closest-looking page.')
                       : 'It reads your own reports and can group, rank, pivot and chart them.'}
                   </div>
                 </div>
               )}
               {askAI && (
                 <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                  <AiAssistant initialOpen compact initialQuestion={askAI} />
+                  <AiAssistant initialOpen compact initialQuestion={askAI} initialMode={door} />
                 </div>
               )}
             </div>

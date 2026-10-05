@@ -44,6 +44,11 @@ name: data-qa-guard
 #       folded store options, the visible roster) and folded to one entry per thing, so a page named
 #       by three registries cannot occupy three of eight rows and push the real answer off the list.
 #
+#   prove_route_index.mjs        — the PAGE INDEX, derived. Run as a proof it FAILS THE BUILD when
+#       the pages on disk and `src/lib/route-index.ts` disagree, which is what stops the next page
+#       from being invisible: 34 of 319 static pages were in no registry at all when this was
+#       written, including the `/account/password` somebody actually searched for.
+#
 #   prove_search_console_lock.mjs — the DESIGN LOCK. One ranker, one catalogue, dereferenced by the
 #       one console surface; the build fails if a surface starts scoring, sorting or tokenizing for
 #       itself, or if a second stopword list or a second page list appears. Every control is ARMED.
@@ -78,6 +83,12 @@ on:
       # The search console — the surface that hands a question to the assistant (index §54).
       - "frontend/src/lib/search-rank.ts"
       - "frontend/src/lib/search-catalog.ts"
+      - "frontend/src/lib/route-index.ts"
+      - "frontend/prove_route_index.mjs"
+      # Adding or removing a page changes what the derived index must contain, so the proof runs on
+      # any page change — that is the ratchet, not a convenience.
+      - "frontend/src/app/**/page.tsx"
+      - "frontend/src/components/AiAssistant.tsx"
       - "frontend/src/components/AskBar.tsx"
       - "frontend/prove_search_rank.mjs"
       - "frontend/prove_search_catalog.mjs"
@@ -168,6 +179,9 @@ jobs:
       - name: Run the ranking proof (a stopword ranks nothing; a digit run always counts; an unexplained question goes to the assistant — index §54.1)
         working-directory: frontend
         run: node prove_search_rank.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the derived page-index proof (every page that exists is in the index — index §54.7)
+        working-directory: frontend
+        run: node prove_route_index.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the catalogue proof (assembled from the registries that already exist; one entry per thing — index §54.2)
         working-directory: frontend
         run: node prove_search_catalog.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

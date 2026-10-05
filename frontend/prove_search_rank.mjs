@@ -214,6 +214,46 @@ ck('H4 the limit is honoured', S.rank(CATALOGUE, 'store', 2).length <= 2)
 ck('H5 a zero limit returns nothing', S.rank(CATALOGUE, 'store', 0).length === 0)
 ck('H6 a null-ish catalogue does not throw', S.rank([], 'x').length === 0)
 
+// ── §I — askDoor(): which assistant answers an unexplained question ──────────────────────────────
+// The reported case, by name. "someone wanted a password reset" belongs to the how-to door; routing
+// it to the data door is how it got no answer at all.
+section('§I  askDoor(): the how-to door for doing, the data door for figures')
+{
+  const howto = [
+    'someone wanted a password reset',
+    'how do i reset a password',
+    'reset password for abid',
+    'how do i add a store',
+    'where is the closing deadline set',
+    'can i turn on the digest',
+    'how do i invite a new user',
+    'change my password',
+    'how do i upload the commission ledger',
+  ]
+  for (const q of howto) ck(`I1  howto: "${q}"`, S.askDoor(q) === 'howto', S.askDoor(q))
+  const data = [
+    'which store was best last month',
+    'how much revenue did we make',
+    'how many activations in august',
+    'who is my best sales person',
+    'what is my commission',
+    'total payout for september',
+    'who is pulling me down',
+  ]
+  for (const q of data) ck(`I2  data: "${q}"`, S.askDoor(q) === 'data', S.askDoor(q))
+  // The deliberate exception: "how much" / "how many" open with "how" and are still quantities.
+  ck('I3  "how much" is a quantity, not a how-to', S.askDoor('how much did store b-1115 make') === 'data')
+  ck('I4  "how many" likewise', S.askDoor('how many phones did we sell') === 'data')
+  // ARMED: a quantity word beats a doing word, because a misroute to the data door still returns a
+  // number while a misroute to the how-to door returns nothing.
+  ck('I5  ARMED — a quantity word wins over a doing verb',
+     S.askDoor('how much did we add in revenue') === 'data', S.askDoor('how much did we add in revenue'))
+  ck('I6  the safe default for a question with neither signal is the data door',
+     S.askDoor('nostrand august') === 'data')
+  ck('I7  empty is the safe default too', S.askDoor('') === 'data')
+  ck('I8  it is pure — same answer twice', S.askDoor('reset a password') === S.askDoor('reset a password'))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
 console.log('OK — search ranks on meaning; an unexplained question goes to the assistant.')

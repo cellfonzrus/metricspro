@@ -10,6 +10,10 @@
 // ASSEMBLED from the registries that already exist, never re-declared. The platform already holds
 // five of them —
 //
+//   • `route-index.ts`       — every page that EXISTS, derived from a walk of `src/app` (§54.7). This
+//                              source is what makes the catalogue complete rather than curated: 34 of
+//                              319 static pages were in no registry at all, including the
+//                              `/account/password` somebody actually searched for.
 //   • `rbac.ts` NAV          — every destination, already RBAC/capability/layout-filtered upstream
 //   • `lib/reports.ts`       — the curated report catalogue, which is where the descriptions live
 //   • `ScreenLink.ts` SCREENS— the spellings prose uses for a screen ("cash setup", "closing gate")
@@ -45,6 +49,10 @@ import type { Searchable, SearchKind } from '@/lib/search-rank'
 export type NavSource = { group: string; items: { href: string; label: string }[] }[]
 export type ReportSource = { category: string; reports: { href: string; label: string; desc?: string }[] }[]
 export type ScreenSource = { href: string; label: string; blurb?: string; aliases?: string[] }[]
+/** Every page that exists, as `route-index.searchableRoutes()` emits it. Passed LAST so a page that
+ *  also has a nav entry keeps the nav's own wording; a page nav does not list gets its derived label
+ *  and whatever aliases were declared for it. */
+export type RouteSource = { path: string; label: string; aliases?: string[] }[]
 /** A folded store option, exactly as `core.scope.build_store_options` emits it. */
 export type StoreSource = { store: string; market?: string | null; also_known_as?: string[] }[]
 /** A visible employee, as `GET /storeops/employees/visible` emits it. */
@@ -54,6 +62,7 @@ export type CatalogSources = {
   nav?: NavSource
   reports?: ReportSource
   screens?: ScreenSource
+  routes?: RouteSource
   stores?: StoreSource
   people?: PersonSource
 }
@@ -115,6 +124,14 @@ export function buildCatalog(src: CatalogSources): Searchable[] {
     // SCREENS is the spellings registry: its aliases are what prose calls the screen, which is
     // exactly what somebody types. Its label and blurb only fill gaps the nav left.
     upsert(s.href, { label: s.label, kind: kindOf(s.href, ''), desc: s.blurb, aliases: s.aliases })
+  }
+
+  // LAST, deliberately. `upsert` merges rather than replaces, so a page the nav already named keeps
+  // that label and only gains the declared aliases — and a page in no other registry becomes its own
+  // entry here instead of being unfindable. This ordering is the whole completeness guarantee, and
+  // the proof asserts it rather than trusting it.
+  for (const r of src.routes || []) {
+    upsert(r.path, { label: r.label, kind: kindOf(r.path, ''), aliases: r.aliases })
   }
 
   const out: Searchable[] = Array.from(byHref.values())

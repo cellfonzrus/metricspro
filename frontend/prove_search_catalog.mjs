@@ -246,6 +246,54 @@ console.log('§G  determinism and purity')
      R.rank(ALL(), 'who is working in 509 nostrand', 8).map(h => h.item.key))
 }
 
+// ── §H — the route source is what makes the catalogue COMPLETE rather than curated ───────────────
+// The second reported defect, by name: somebody searched for a password reset and found nothing,
+// because `/account/password` is a real page that no curated registry listed. 34 of 319 static pages
+// were in that position. The route index (§54.7) is derived from disk, so the catalogue is complete
+// by construction — and this section asserts the ORDERING that lets it be complete without
+// overwriting the labels the nav already supplies.
+console.log('§H  every page that exists is findable, and the nav keeps its labels')
+{
+  const ROUTES = [
+    // a page the nav also names — the label must NOT be replaced by the derived one
+    { path: '/storeops/schedule', label: 'Storeops → Schedule' },
+    // a page in NO other registry: the reported case
+    { path: '/account/password', label: 'Account → Password',
+      aliases: ['password reset', 'reset password', 'change password'] },
+    // another one, to prove the first is not a special case
+    { path: '/hr/letters/queue', label: 'Hr → Letters → Queue' },
+  ]
+  const items = C.buildCatalog({ nav: NAV, reports: REPORTS, screens: SCREENS, routes: ROUTES,
+                                 stores: STORES, people: PEOPLE })
+  const at = p => items.find(i => i.href.split('?')[0] === p)
+  ok('H1  the page nobody listed is now in the catalogue', !!at('/account/password'))
+  eq('H2  and so is the other one', at('/hr/letters/queue')?.label, 'Hr → Letters → Queue')
+  // THE ORDERING RULE: routes are folded in LAST, so a nav label wins over a derived one.
+  eq('H3  a nav page keeps the NAV label, not the derived one', at('/storeops/schedule')?.label, 'Schedule')
+  ok('H4  and keeps its report description', /scheduled to work/i.test(at('/storeops/schedule')?.desc || ''))
+  eq('H5  the route source adds no duplicate entry',
+     items.filter(i => i.href.split('?')[0] === '/storeops/schedule').length, 1)
+  // And the question that started it finally resolves.
+  const hits = R.rank(items, 'password reset', 8)
+  eq('H6  "password reset" finds the password page', hits[0]?.item.href, '/account/password')
+  const hits2 = R.rank(items, 'someone wanted a password reset', 8)
+  ok('H7  the sentence form finds it too',
+     hits2.some(h => h.item.href === '/account/password'), hits2.map(h => h.item.label))
+  eq('H8  and that sentence goes to the how-to door', R.askDoor('someone wanted a password reset'), 'howto')
+  // ARMED: without the route source the page is unfindable again — which is what was reported.
+  const before = C.buildCatalog({ nav: NAV, reports: REPORTS, screens: SCREENS })
+  eq('H9  ARMED — with no route source "password reset" finds nothing',
+     R.rank(before, 'password reset', 8).length, 0)
+  // A declared alias is kept; a page with none still carries its label.
+  ok('H10 the declared aliases survive',
+     (at('/account/password')?.aliases || []).includes('change password'),
+     at('/account/password')?.aliases)
+  eq('H11 a route with no aliases carries none', at('/hr/letters/queue')?.aliases, undefined)
+  // A route-only page is still gated UPSTREAM, never here: the catalogue ranks what it is handed.
+  eq('H12 the catalogue applies no gate of its own',
+     C.buildCatalog({ routes: [{ path: '/anything', label: 'Anything' }] }).length, 1)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (!fail) console.log('OK — the catalogue is assembled from the registries that already exist, folded to one entry per thing.')
 process.exit(fail ? 1 : 0)

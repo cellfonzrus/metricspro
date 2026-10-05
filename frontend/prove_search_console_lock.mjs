@@ -9,6 +9,14 @@
 //
 //   FACT 1  "what did the person mean by what they typed"  →  src/lib/search-rank.ts
 //   FACT 2  "what can the platform search find"            →  src/lib/search-catalog.ts
+//   FACT 3  "every page this app has"                      →  src/lib/route-index.ts (DERIVED)
+//
+// FACT 3 arrived from the owner's second report — *"this is a design issue not a random left out
+// issue, all the search needs to be run through the index we built"* — and it is locked differently
+// from the other two, because the failure mode is different: a curated list goes stale silently, so
+// the lock here is that the registry must be DERIVED (its own proof, `prove_route_index.mjs`, fails
+// the build when disk and the registry disagree) and that the console must actually read it. A
+// surface that assembles a catalogue without the route source is complete only by luck.
 //
 // Every check is ARMED: the lock is run against a deliberately broken copy of the source in memory
 // and must go red. An unarmed lock that matches nothing passes forever and protects nothing, which
@@ -54,6 +62,7 @@ const SURFACES = ['src/components/AskBar.tsx']
 
 const RANKER = 'src/lib/search-rank.ts'
 const CATALOG = 'src/lib/search-catalog.ts'
+const ROUTES = 'src/lib/route-index.ts'
 
 // ── the checks, as functions over (relative path, raw source) so the arming can re-run them ──────
 // Each returns an array of complaints; empty means the file is wired correctly.
@@ -68,13 +77,26 @@ function checkSurface(rel, raw) {
     bad.push(`${rel} does not import intent() from @/lib/search-rank`)
   if (!/import\s*\{[^}]*\bbuildCatalog\b[^}]*\}\s*from\s*['"]@\/lib\/search-catalog['"]/.test(raw))
     bad.push(`${rel} does not import buildCatalog() from @/lib/search-catalog`)
+  // FACT 3: the catalogue must be built from the DERIVED page list, not from the curated registries
+  // alone — that is the whole difference between complete and complete-by-luck.
+  if (!/import\s*\{[^}]*\bsearchableRoutes\b[^}]*\}\s*from\s*['"]@\/lib\/route-index['"]/.test(raw))
+    bad.push(`${rel} does not import searchableRoutes() from @/lib/route-index`)
+  // And the door the assistant opens must be DECIDED, not left to the person.
+  if (!/import\s*\{[^}]*\baskDoor\b[^}]*\}\s*from\s*['"]@\/lib\/search-rank['"]/.test(raw))
+    bad.push(`${rel} does not import askDoor() from @/lib/search-rank`)
   // And they must be CALLED, not merely imported — a dead import is how a rewiring un-wires.
-  for (const fn of ['rank(', 'buildCatalog(']) {
+  for (const fn of ['rank(', 'buildCatalog(', 'searchableRoutes(', 'askDoor(']) {
     if (!code.includes(fn)) bad.push(`${rel} imports but never calls ${fn})`)
   }
   // `intent` is imported under an alias here (the file already has a local `Intent` type for the
   // metric intents), so the call is matched by either spelling.
   if (!/\b(searchIntent|intent)\s*\(/.test(code)) bad.push(`${rel} never calls intent()`)
+  // The route source must reach buildCatalog, and each page must be gated by the ONE home for "may
+  // this viewer open this path". A surface that passed the derived list through ungated would be
+  // offering pages the viewer cannot open — the leak the upstream-filter rule exists to prevent.
+  if (!/routes\b/.test(code)) bad.push(`${rel} never passes a routes source to buildCatalog()`)
+  if (!/canAccessPath\s*\(/.test(code))
+    bad.push(`${rel} does not gate the derived page list with canAccessPath()`)
   // NO PRIVATE RANKER. These are the exact shapes the old code used, and each one re-appearing means
   // somebody started scoring in the surface again instead of in the one home.
   if (/\bhay\b/.test(code)) bad.push(`${rel} builds a "hay" haystack string — scoring belongs in ${RANKER}`)
@@ -103,6 +125,29 @@ function checkRanker(raw) {
   return bad
 }
 
+function checkRouteIndex(raw) {
+  const code = codeOnly(raw)
+  const bad = []
+  // DERIVED, and it must say so: the header is what stops somebody hand-editing the array back into
+  // a curated list, and the generator is what keeps it true.
+  if (!/GENERATED/.test(raw.slice(0, 400)))
+    bad.push(`${ROUTES} does not declare itself generated in its first lines`)
+  if (!code.includes('export function searchableRoutes'))
+    bad.push(`${ROUTES} no longer exports searchableRoutes()`)
+  if (!code.includes('export const ROUTES')) bad.push(`${ROUTES} no longer exports ROUTES`)
+  const imports = raw.match(/^\s*import\s+(?!type\b)/gm) || []
+  if (imports.length) bad.push(`${ROUTES} imports at runtime (${imports.length}) — it must stay pure`)
+  // It says WHAT EXISTS and nothing else: no gate, no module, no API path.
+  const noComments = raw.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ')
+  if (/canSeeItem|canAccessPath|module:/.test(noComments))
+    bad.push(`${ROUTES} carries a permission rule — gating lives in rbac.ts`)
+  if (/\/api\/v1/.test(noComments)) bad.push(`${ROUTES} carries an API path`)
+  // An exclusion must carry its reason rather than be a bare flag, so it cannot be silent.
+  if (/preauth: (?:true|false)/.test(code))
+    bad.push(`${ROUTES} uses preauth as a flag — it must hold the REASON`)
+  return bad
+}
+
 function checkCatalog(raw) {
   const code = codeOnly(raw)
   const bad = []
@@ -125,7 +170,7 @@ function checkCatalog(raw) {
 
 // ── §A — the tree as it stands is GREEN ──────────────────────────────────────────────────────────
 console.log('§A  the tree as it stands')
-const RAW = { ranker: read(RANKER), catalog: read(CATALOG) }
+const RAW = { ranker: read(RANKER), catalog: read(CATALOG), routes: read(ROUTES) }
 const SURFACE_RAW = Object.fromEntries(SURFACES.map(s => [s, read(s)]))
 {
   for (const s of SURFACES) {
@@ -136,6 +181,8 @@ const SURFACE_RAW = Object.fromEntries(SURFACES.map(s => [s, read(s)]))
   ok('A2  the ranker is pure and still exports its surface', r.length === 0, r)
   const c = checkCatalog(RAW.catalog)
   ok('A3  the catalogue is pure and declares no registry', c.length === 0, c)
+  const ri = checkRouteIndex(RAW.routes)
+  ok('A3b the derived page index is generated, pure, and says only what exists', ri.length === 0, ri)
   ok('A4  there is exactly one console surface under the lock', SURFACES.length === 1, SURFACES)
 }
 
@@ -161,6 +208,17 @@ console.log('§B  ARMED — every rule fails on a broken copy')
   arm('B9  a second stopword list goes red', s => `${s}\nconst STOPWORDS = new Set()\n`)
   arm('B10 never calling intent() goes red',
       s => s.replace(/searchIntent\(q, hits\)/, "'navigate'"))
+  arm('B10a dropping the searchableRoutes() import goes red',
+      s => s.replace(/import \{ searchableRoutes \}[^\n]*\n/, ''))
+  arm('B10b never calling searchableRoutes() goes red',
+      s => s.replace(/searchableRoutes\(\)/g, '[]'))
+  arm('B10c not passing the routes source to buildCatalog goes red',
+      s => s.replace(/const routes = /, 'const unused = ').replace(/routes,/g, ''))
+  arm('B10d not gating the page list with canAccessPath goes red',
+      s => s.replace(/canAccessPath\(/g, 'alwaysTrue('))
+  arm('B10e dropping the askDoor() import goes red',
+      s => s.replace(/, askDoor,/, ','))
+  arm('B10f never calling askDoor() goes red', s => s.replace(/askDoor\(q\)/, "'data'"))
 
   ok('B11 ARMED — an import added to the ranker goes red',
      checkRanker(`import x from 'y'\n${RAW.ranker}`).length > 0)
@@ -176,6 +234,16 @@ console.log('§B  ARMED — every rule fails on a broken copy')
      checkCatalog(RAW.catalog.replace('export function entityOnly', 'function entityOnly')).length > 0)
   ok('B17 ARMED — scoring in the catalogue goes red',
      checkCatalog(`${RAW.catalog}\nconst score = 1\n`).length > 0)
+  ok('B18 ARMED — a route index that stops declaring itself generated goes red',
+     checkRouteIndex(RAW.routes.replace('GENERATED', 'hand-written')).length > 0)
+  ok('B19 ARMED — dropping searchableRoutes() from the index goes red',
+     checkRouteIndex(RAW.routes.replace('export function searchableRoutes', 'function searchableRoutes')).length > 0)
+  ok('B20 ARMED — a permission rule in the index goes red',
+     checkRouteIndex(`${RAW.routes}\nconst z = canSeeItem(p, i)\n`).length > 0)
+  ok('B21 ARMED — preauth used as a bare flag goes red',
+     checkRouteIndex(RAW.routes.replace(/preauth: '[^']*'/, 'preauth: true')).length > 0)
+  ok('B22 ARMED — an import added to the index goes red',
+     checkRouteIndex(`import x from 'y'\n${RAW.routes}`).length > 0)
 }
 
 // ── §C — the scan is not vacuous ─────────────────────────────────────────────────────────────────
@@ -194,8 +262,12 @@ console.log('§C  the scan still sees code')
   ok('C4  and the blanked code does not', !/\bscore\s*[:=]/.test(code))
   ok('C5  the ranker still has code after blanking', codeOnly(RAW.ranker).length > 2000)
   ok('C6  the catalogue still has code after blanking', codeOnly(RAW.catalog).length > 1000)
+  ok('C7  the route index still has code after blanking', codeOnly(RAW.routes).length > 2000)
+  // Counter-arming the index checks the same way: the scan must still see real entries.
+  ok('C8  and the blanked index still holds its exports',
+     codeOnly(RAW.routes).includes('export const ROUTES'))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
-if (!fail) console.log('OK — one ranker, one catalogue, dereferenced by the one console surface; every rule armed.')
+if (!fail) console.log('OK — one ranker, one catalogue, one DERIVED page index, dereferenced by the one console surface; every rule armed.')
 process.exit(fail ? 1 : 0)
