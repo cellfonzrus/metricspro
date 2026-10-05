@@ -8,6 +8,9 @@ from app.modules.asset.market_filter import (
     NO_MARKET_SENTINEL, _apply_market_filter, _market_matches, _store_list,
     resolve_market_for_rpc,
 )
+# §52 — ONE home for "what kind of finding is this, and how bad": every writer of
+# `commcalc.flags` dereferences the registry instead of spelling its own severity.
+from app.modules.commcalc import flag_registry as _reg
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"

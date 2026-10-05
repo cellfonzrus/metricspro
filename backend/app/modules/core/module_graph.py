@@ -52,6 +52,7 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/account/recon.py': ('_reg',),
             'app/modules/asset/invoice_due.py': ('_reg',),
+            'app/modules/asset/router.py': ('_reg',),
             'app/modules/closing/cash_watchdog.py': ('_reg',),
             'app/modules/closing/ops_chargebacks.py': ('_reg',),
             'app/modules/commcalc/flags.py': ('_reg',),

@@ -295,7 +295,8 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
             reason="the drawer variance was corrected or the day was ruled on")
         out["cash"].pop("run_id", None)
     except flag_persist.FlagPersistUnavailable as e:
-        out["cash"] = {"skipped": "migration 287 not applied", "detail": str(e)[:200]}
+        out["cash"] = {"skipped": "findings cannot be recorded yet",
+                      "detail": f"run migration 287 first: {str(e)[:200]}"}
     except Exception as e:
         out["cash"] = {"error": str(e)[:300]}
 
@@ -315,7 +316,8 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
         out["voids"].pop("run_id", None)
         out["voids"]["sales_lines_read"] = len(rows)
     except flag_persist.FlagPersistUnavailable as e:
-        out["voids"] = {"skipped": "migration 287 not applied", "detail": str(e)[:200]}
+        out["voids"] = {"skipped": "findings cannot be recorded yet",
+                      "detail": f"run migration 287 first: {str(e)[:200]}"}
     except Exception as e:
         out["voids"] = {"error": str(e)[:300]}
 
