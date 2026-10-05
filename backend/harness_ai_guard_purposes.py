@@ -49,6 +49,13 @@ REP = {"super_admin": False, "org_id": "org-1", "id": "u-5",
 NO_MODULE = {"super_admin": False, "org_id": "org-1", "id": "u-6",
              "perms": {"modules": {"commissions": True}, "scope": "all"}}
 LEASE_HOLDER = {"super_admin": False, "org_id": "org-1", "id": "u-7", "can_see_lease": True}
+# The in-app DATA assistant (index §52, mig 1055): the `ai_assistant` module plus a reporting scope
+# broad enough for the questions it exists to answer. A self-scoped login (REP, below) is refused the
+# ASSISTANT — not its data, which stays on each report's own page, scoped as always.
+DATA_QA_USER = {"super_admin": False, "org_id": "org-1", "id": "u-8",
+                "perms": {"modules": {"ai_assistant": True}, "scope": "company"}}
+DATA_QA_REP = {"super_admin": False, "org_id": "org-1", "id": "u-9",
+               "perms": {"modules": {"ai_assistant": True}, "scope": "self"}}
 EVERYONE = {"anonymous": None, "super-admin": SUPER, "helpdesk operator": OPERATOR,
             "market manager": MARKET_MGR, "store manager": STORE_MGR, "sales rep": REP,
             "lease holder": LEASE_HOLDER}
@@ -82,9 +89,19 @@ for name, spec in sorted(cb.AI_PURPOSES.items()):
           cb.is_auth_denial(spec.get("deny_code")))
 check("`control_box_triage` still means SUPER-ADMIN and nothing else",
       cb.AI_PURPOSES["control_box_triage"]["authorizer"] == "super_admin")
+# A PINNED list, deliberately — adding a purpose that accepts caller free text must be a conscious,
+# reviewed act rather than something a new registry row can do quietly. Two purposes have earned it,
+# and each only because the feature IS "describe it in words":
+#   remediation_diagnose — the caller describes a problem (mig 982)
+#   data_qa              — the caller asks a question about their own data (mig 1055, index §52).
+#                          What makes its text safe is not the text: the model may only NAME a
+#                          question from core/data_qa_registry, and every parameter is re-validated
+#                          against that registry's patterns, so the text can never become a query or
+#                          a route (backend/harness_data_qa_registry.py §F).
 check("bounded_text (caller free text) is OPT-IN, never the default",
-      [n for n, s in cb.AI_PURPOSES.items() if s.get("subject_rule") == cb.SUBJECT_BOUNDED_TEXT]
-      == ["remediation_diagnose"])
+      sorted(n for n, s in cb.AI_PURPOSES.items()
+             if s.get("subject_rule") == cb.SUBJECT_BOUNDED_TEXT)
+      == ["data_qa", "remediation_diagnose"])
 
 print("\nB. per-purpose predicate resolution — the right door for the right purpose")
 check("a super-admin is allowed on control_box_triage",
@@ -160,11 +177,14 @@ check("an EMPTY authorizer map authorizes nobody",
 
 print("\nE. every OTHER gate applies to EVERY purpose, whatever its predicate")
 HOLDERS = {"control_box_triage": SUPER, "remediation_diagnose": OPERATOR,
-           "lease_extraction": LEASE_HOLDER}
+           "lease_extraction": LEASE_HOLDER, "data_qa": DATA_QA_USER}
 # For each purpose, somebody who is NOT authorized for it — used to prove the authorization gate is
 # decided BEFORE any other state is revealed. `lease_extraction`'s entry is a platform SUPER-ADMIN
 # without the lease capability: a purpose is satisfied on its OWN predicate or not at all.
-DENIED = {"control_box_triage": REP, "remediation_diagnose": STORE_MGR, "lease_extraction": SUPER}
+# `data_qa`'s entry is a login that HOLDS the module but is scoped to itself: the refusal is about the
+# breadth of the view the assistant needs, not about the module being missing.
+DENIED = {"control_box_triage": REP, "remediation_diagnose": STORE_MGR, "lease_extraction": SUPER,
+          "data_qa": DATA_QA_REP}
 for name in sorted(cb.AI_PURPOSES):
     who = HOLDERS[name]
     check("[%s] the per-hour RATE LIMIT bites" % name,
@@ -241,6 +261,32 @@ check("the digest is stable and non-reversible",
       and len(cb.subject_digest(inj)) == 23)
 check("a registry_key purpose NEVER returns caller text to send",
       "text" not in decide(SUPER, "control_box_triage"))
+
+# The DATA assistant is "ask a question in words", so it is bounded_text for the same reason
+# remediation is. The same four guarantees are asserted for it rather than assumed from the loop
+# above, which skips every bounded_text purpose. What makes the text safe is not the text: the model
+# may only NAME a question from core/data_qa_registry and every parameter is re-validated against it
+# (backend/harness_data_qa_registry.py §F).
+d_q = decide(DATA_QA_USER, "data_qa", subject="which store was best last month\x00?")
+check("[data_qa] bounded_text strips control characters before anything is sent",
+      "\x00" not in d_q["text"], repr(d_q.get("text")))
+check("[data_qa] bounded_text is truncated to the org's max_input_chars CONFIG (RULE TWO)",
+      len(decide(DATA_QA_USER, "data_qa", subject="x" * 9000,
+                 config={"max_input_chars": 300})["text"]) == 300)
+for blank in ("", "   ", "\n\t", None, "\x00\x00"):
+    check("[data_qa] a blank question %r is refused (no empty spend)" % (blank,),
+          decide(DATA_QA_USER, "data_qa", subject=blank)["code"] == "no_subject")
+d_qi = decide(DATA_QA_USER, "data_qa", subject=inj)
+check("[data_qa] the question is audited as a DIGEST, never stored raw",
+      d_qi["subject_key"].startswith("sha256:") and inj not in d_qi["subject_key"])
+check("[data_qa] a self-scoped login is refused the assistant, before any other state is revealed",
+      decide(DATA_QA_REP, "data_qa", has_key=False, config={"enabled": False},
+             usage={"calls_today": 9999})["code"] == "not_data_qa_operator")
+check("[data_qa] a login without the module is refused",
+      decide(NO_MODULE, "data_qa")["code"] == "not_data_qa_operator")
+check("[data_qa] a market-wide and a company-wide login are both allowed",
+      decide({**DATA_QA_USER, "perms": {"modules": {"ai_assistant": True}, "scope": "market"}},
+             "data_qa")["allow"] and decide(DATA_QA_USER, "data_qa")["allow"])
 
 print("\n%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)
