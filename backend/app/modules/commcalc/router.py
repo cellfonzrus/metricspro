@@ -21,6 +21,7 @@ from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, 
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
+from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
 from app.modules.commcalc import labour_coverage as _labour  # shared shift reader + the silent-zero shape
 from app.modules.commcalc import invoice_tenders as _invt   # 2026-09-21 — the invoice tender split (pure; classes injected from closing)
@@ -16263,7 +16264,13 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             existing = client.schema('commcalc').table('chargeback_items').select('source,source_ref,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
             decided = {(e['source'], e['source_ref']): e['deduct'] for e in existing}
             cb_items = []
-            prem_rate = float(cfg.get('premium_flat') or 5)
+            # THE SIBLING (found by harness_boost_terms_lock, 2026-10-05): `float(cfg.get(
+            # 'premium_flat') or 5)` was a second copy of the engine's own rate, and it did not even
+            # agree with it — `or 5` turns a STORED ZERO into $5, while the engine pays $0. A tenant
+            # who zeroed the premium rate had their chargeback exposure estimated at a rate nobody is
+            # paid. The home answers what the engine pays. (No live tenant stores 0 today, so this
+            # moves no current figure.)
+            prem_rate = float(_bt.resolve_terms(cfg)['premium_flat'])
 
             # THE SIBLING (found by the lock, owner ruling 2026-09-27): "this line is an INELIGIBLE
             # activation" was a bare `'ineligible' in ct` here — a THIRD copy of the exclusion
@@ -20362,18 +20369,148 @@ def list_commission_plans(org_id: str = ORG_ID):
 # commission_rule, and the frequency column is resolved through plan_pay_gate, the same resolver the
 # payout uses, so the document cannot drift from the arithmetic. See payout_structure.py's header for
 # the three traps (amount-vs-pct, contains-vs-in, per-line-vs-per-device) it exists to avoid.
+def _carrier_rows(client, org_id):
+    """This tenant's carrier rows, for `_resolve_carrier_mode`. Degrades to `[]` (which that resolver
+    reads as 'boost', the platform default) rather than 500ing a document request."""
+    try:
+        return (client.schema("commcalc").table("carrier").select("*")
+                .eq("org_id", org_id).limit(1000).execute().data) or []
+    except Exception:
+        return []
+
+
+def _boost_period_label(period=""):
+    """The period a Boost payout-structure document describes. An explicit `period` wins; otherwise the
+    CURRENT month, because that is the configuration in force and a handout naming last month would be
+    read as current. Spelled the way `payout_config.period` stores it ('October 2026')."""
+    p = str(period or "").strip()
+    if p:
+        return p
+    now = _datetime.now(_timezone.utc)
+    return f"{_calendar.month_name[now.month]} {now.year}"
+
+
+def _boost_payout_structure_doc(client, org_id, carriers, tenant, period=""):
+    """The payout-structure document model for a tenant paid by the Boost KPI-tier engine.
+
+    Reads the SAME two things the pay engine reads for that period and nothing else: the
+    `payout_config` row (`GET /config/{period}`'s query, spelling-agnostic via `_pvariants`) and the
+    tenant's KPI definitions (`_kpi_defs`, the registry the engine scores against — so the document
+    prints THIS tenant's metric labels, not the built-in seven's). `payout_structure.build_boost_doc`
+    resolves both through `boost_terms`, the one home `calc_rep_commissions` itself now reads.
+
+    A tenant with no row for the period still gets a correct document: `{}` resolves to the house
+    defaults, which ARE what that tenant would be paid.
+    """
+    from app.modules.commcalc import payout_structure as _ps
+
+    label = _boost_period_label(period)
+    cfg = {}
+    try:
+        r = (client.schema("commcalc").table("payout_config").select("*")
+             .eq("org_id", org_id).in_("period", _pvariants(label)).limit(1).execute().data) or []
+        cfg = r[0] if r else {}
+    except Exception:
+        cfg = {}
+    default_carrier = next((c for c in (carriers or []) if c.get("is_default")), None)
+    try:
+        defs = _kpi_defs(org_id, (default_carrier or {}).get("id"))
+    except Exception:
+        defs = ACTION_KPI_DEFS
+    engine_label = ((default_carrier or {}).get("name")
+                    or (default_carrier or {}).get("code") or "Boost")
+    return _ps.build_boost_doc(cfg, defs, tenant_name=tenant, period=label,
+                               engine_label=engine_label)
+
+
+# ── HOW THE RATES HAVE MOVED (owner directive 2026-10-05) ─────────────────────────────────────────
+# *"keep how the commission has moved as a second module on that page so the pdf is not the same, this
+# pdf could also be used to share with employees"* — rate HISTORY is a management view and is served
+# here, separately, so it can be shown on the Boost Rates page WITHOUT entering the employee handout.
+# Read-only: it restates stored `payout_config` rows through the same `boost_terms.resolve_terms` the
+# engine reads, so a period whose row is missing a column is shown as what the engine would pay for
+# it, not as a blank.
+@router.get("/payout-terms/history")
+def payout_terms_history(org_id: str = ORG_ID, limit: int = 24):
+    """Every stored period's resolved Boost terms, newest period first, plus what CHANGED each period.
+
+    `changed` names the keys whose resolved value differs from the period BEFORE it (chronologically),
+    so the page can show movement without re-deriving the comparison in the browser — the comparison
+    is over RESOLVED terms, so a period that only stopped storing a column is correctly shown as
+    unchanged when its default matches.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import boost_terms as _bt
+
+    try:
+        rows = (sb().schema("commcalc").table("payout_config").select("*")
+                .eq("org_id", org_id).limit(500).execute().data) or []
+    except Exception:
+        return {"periods": [], "defaults": _bt.DEFAULTS, "ready": False}
+
+    def _key(r):
+        # `period` is stored as either 'October 2026' or '2026-10'; sort on the parsed month so the
+        # two spellings interleave correctly rather than sorting as text.
+        p = str(r.get("period") or "")
+        for cand in _pvariants(p):
+            if len(cand) == 7 and cand[4] == "-":
+                return (int(cand[:4]), int(cand[5:7]))
+        return (0, 0)
+
+    rows.sort(key=_key)
+    out, prev = [], None
+    for r in rows:
+        terms = _bt.resolve_terms(r)
+        # `custom_spiffs` is a list of dicts — compared by value, not identity, so an unchanged list
+        # that arrived as a new object does not read as a change.
+        changed = [] if prev is None else sorted(k for k in terms if terms[k] != prev[k])
+        out.append({"period": r.get("period"), "updated_at": r.get("updated_at"),
+                    "terms": terms, "changed": changed})
+        prev = terms
+    out.reverse()
+    return {"periods": out[:max(1, int(limit or 24))], "defaults": _bt.DEFAULTS, "ready": True}
+
+
 @router.get("/commission-plans/payout-structure")
-def payout_structure_document(fmt: str = "pdf", plan_id: str = "", org_id: str = ORG_ID):
-    """The employee-facing Payout Structure document.
+def payout_structure_document(fmt: str = "pdf", plan_id: str = "", period: str = "",
+                              org_id: str = ORG_ID):
+    """The employee-facing Payout Structure document — for WHICHEVER ENGINE PAYS THIS TENANT.
 
     fmt=pdf (default) downloads it; fmt=json returns the SAME document model so an on-screen preview and
-    the PDF can never disagree. `plan_id` renders a single plan as a per-team handout.
+    the PDF can never disagree. `plan_id` renders a single plan as a per-team handout (plan engine only).
+    `period` picks the `payout_config` row to describe (Boost engine only; defaults to the current month).
+
+    WHY THE ENGINE IS RESOLVED HERE (owner directive 2026-10-05). This endpoint used to assume the
+    Commission Plans engine and raise 400 for anyone else. A Boost tenant has NO plan rows at all
+    (measured live: org `…0001`, 0 plans), so the one document the platform offers employees described
+    nothing they are paid by. `_resolve_carrier_mode` is the SAME resolver the pay run uses to choose
+    its engine (`_calc_inputs` -> `calc_rep_commissions(carrier_mode=…)`), so the document can never
+    describe an engine that is not the one paying.
     """
     from fastapi import Response
     from app.modules.commcalc import payout_structure as _ps
     from app.modules.commcalc import plan_pay_gate as _ppg
 
     client = sb()
+    # The tenant's real name heads the document. A tenant with no storeops row still gets a valid
+    # (untitled) document rather than a failure.
+    tenant = ""
+    try:
+        _t = (client.schema("storeops").table("tenants").select("name")
+              .eq("org_id", org_id).limit(1).execute().data) or []
+        tenant = (_t[0].get("name") or "") if _t else ""
+    except Exception:
+        tenant = ""
+
+    carriers = _carrier_rows(client, org_id)
+    if _resolve_carrier_mode(carriers) == "boost":
+        doc = _boost_payout_structure_doc(client, org_id, carriers, tenant, period)
+        if (fmt or "pdf").strip().lower() == "json":
+            return doc
+        return Response(content=_ps.render_pdf(doc), media_type="application/pdf",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="{_ps.filename_for(doc)}"'})
+
     plans, ready = commission_engine._load_plans(client, org_id)
     if not ready:
         raise HTTPException(400, "Commission plans are not enabled for this tenant "
@@ -20388,16 +20525,6 @@ def payout_structure_document(fmt: str = "pdf", plan_id: str = "", org_id: str =
         exclusions, _ = _ppg.load_exclusions(client, org_id)
     except Exception:
         exclusions = []
-    # The tenant's real name heads the document. A tenant with no storeops row still gets a valid
-    # (untitled) document rather than a failure.
-    tenant = ""
-    try:
-        _t = (client.schema("storeops").table("tenants").select("name")
-              .eq("org_id", org_id).limit(1).execute().data) or []
-        tenant = (_t[0].get("name") or "") if _t else ""
-    except Exception:
-        tenant = ""
-
     doc = _ps.build_doc(plans, tenant_name=tenant, gate_cfg=gate_cfg, exclusions=exclusions,
                         plan_id=(plan_id or None))
     if (fmt or "pdf").strip().lower() == "json":
@@ -30065,8 +30192,13 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
     # tenant with a CUSTOM metric key plus one transient failure mid-loop hit `kpi_targets[k]` with a
     # key that no longer existed -> KeyError out of the handler. One list, read once, can't disagree.
     kpi_defs = _kpi_defs(org_id)
-    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in kpi_defs}
-    t100 = int(cfg.get('tier_100_min_kpis') or 7)
+    # THE SIBLING (found by harness_boost_terms_lock, 2026-10-05). This comprehension was a second
+    # copy of the pay engine's target resolution, and it disagreed with it twice: `float(dv)` raises
+    # TypeError on a registry row whose `target_default` is NULL, and a metric with no bar anywhere
+    # was kept rather than dropped — so the SHOWN score could count a metric the PAID score does not.
+    # `boost_terms.resolve_kpi_targets` is the home the engine itself reads.
+    kpi_targets = _bt.resolve_kpi_targets(cfg, kpi_defs)
+    t100 = _bt.resolve_terms(cfg)['t100']
     comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
     cb = (client.schema('commcalc').table('chargeback_items')
           .select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
@@ -33668,9 +33800,10 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     cfg_rows = (client.schema('commcalc').table('payout_config')
                 .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
-    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in _kpi_defs(org_id)}
-    t100 = int(cfg.get('tier_100_min_kpis') or 7)
-    t75 = int(cfg.get('tier_75_min_kpis') or 5)
+    # The same sibling as above — one home for the bar and for the two tier thresholds.
+    kpi_targets = _bt.resolve_kpi_targets(cfg, _kpi_defs(org_id))
+    _terms = _bt.resolve_terms(cfg)
+    t100, t75 = _terms['t100'], _terms['t75']
     comm_rows = (client.schema('commcalc').table('rep_commissions')
                  .select('storeops_name,epay_salesperson,tier,kpis_met,total_kpis,'
                          'kpi_values,subtotal,total_payout')

@@ -227,11 +227,25 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/commission_engine.py': ('_lc',),
             'app/modules/commcalc/ma_recon.py': ('_lc',),
             'app/modules/commcalc/payout_audience.py': ('_lc',),
+            'app/modules/commcalc/payout_structure.py': ('_lc',),
             'app/modules/commcalc/plan_options.py': ('_lc',),
             'app/modules/commcalc/router.py': ('_lc',),
             'app/modules/commcalc/sales_comparison.py': ('_lc',),
             'app/modules/commcalc/zero_sales.py': ('_lc',),
             'app/modules/core/plan_sources.py': ('_lc',),
+        },
+    },
+    'boost_payout_terms': {
+        "question": "What does this tenant's Boost KPI-tier configuration actually pay, and what bar "
+                    "is each measure scored against?",
+        "homes": ('app/modules/commcalc/boost_terms.py',),
+        "index": ('6p',),
+        "locks": ('harness_boost_terms_lock.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/calculator.py': ('_boost_terms',),
+            'app/modules/commcalc/payout_structure.py': ('_bt',),
+            'app/modules/commcalc/router.py': ('_bt',),
         },
     },
     'commission_ledger_identity': {

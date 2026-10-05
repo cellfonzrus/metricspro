@@ -2782,6 +2782,64 @@ schedule's full horizon; mig `078:31` documents the old behaviour, not the code.
 
 ---
 
+### 6p. THE EMPLOYEE PAYOUT-STRUCTURE DOCUMENT DESCRIBES THE ENGINE THAT ACTUALLY PAYS — one home for the Boost terms (owner 2026-10-05)
+
+Owner: *"need to add a create a pdf for commission structure from the boost tier for employee payout"*, then
+*"give the option to create this pdf on the incentive payout module, and keep how the commission has moved as a
+second module on that page so the pdf is not the same, this pdf could also be used to share with employees"*.
+
+**THE CLASS DEFECT, not the instance.** MetricsPro pays through TWO engines. `payout_structure.py` (§6a, owner
+2026-08-11) already produced the employee-facing "Incentive Payout Structure" PDF — but only for the configurable
+Commission Plans engine. A tenant on the OTHER engine, the Boost KPI-tier model in
+`calculator.calc_rep_commissions`, has **ZERO `commission_plan` rows** (measured live 2026-10-05: org
+`00000000-…-0001` = Cellfonz R Us = Boost, 0 plans), so `GET /commission-plans/payout-structure` raised 400 for
+them and the one document the platform offers employees described nothing they are paid by. The fix is not "give
+Boost a PDF": it is that *the document knew only one of the two engines*, and now resolves which engine pays
+through `_resolve_carrier_mode` — THE same resolver the pay run uses (`_calc_inputs` →
+`calc_rep_commissions(carrier_mode=…)`), so the document can never describe an engine that is not paying.
+
+**ONE FACT, ONE HOME, DEREFERENCED.** A document that prints a rate needs the same rate the engine pays, and a
+second copy would diverge the day either literal moved. `calc_rep_commissions` built its `G` dict (every rate,
+spiff and tier threshold, with its exact `or` / `is not None` fallback) and its `KPI` target loop inline; both
+moved verbatim into **`commcalc/boost_terms.py`** — `resolve_terms` + `resolve_kpi_targets` + `DEFAULTS` — and the
+engine now dereferences them. BYTE-IDENTICAL by construction, including the two known quirks preserved
+deliberately (`acc_rate` / `setup_fee_rate` stored as 0 fall back to 10%; the flats honour a stored 0) and the
+rule that **a FALSY target is NO target** — a metric with no bar is left out of the map, never given a bar of 0
+that every value would meet.
+
+**FOUR SIBLINGS, FOUND BY THE LOCK AND FIXED IN THE SAME PR** (`router.py`): `prem_rate = float(cfg.get(
+'premium_flat') or 5)` on the chargeback-detection path, and three copies of the KPI-target comprehension
+`{k: (safe_float(cfg.get(col)) or float(dv)) …}` with their own `tier_100_min_kpis') or 7`. These did not merely
+duplicate the engine — they *disagreed* with it: `or 5` turns a stored zero into $5 while the engine pays $0, and
+`float(dv)` raises `TypeError` on a registry row whose `target_default` is NULL while keeping a metric the paid
+score drops. All four now read the home. (No live tenant stores a 0 rate today, so no current figure moves.)
+
+**THE HANDOUT CARRIES NO RATE HISTORY — by rule, and locked.** The owner's second message is the design
+constraint: a document that is safe to hand an employee stays safe by containing only the terms in force.
+`GET /commcalc/payout-terms/history` serves the movement (every stored period's RESOLVED terms + `changed`, the
+keys differing from the period before — resolved, so a period that merely stopped storing a column reads as
+unchanged when its default matches). The two render as **two separate modules** on the 📄 Employee Handout tab of
+`commcalc/settings/page.tsx` (the "Boost Rates (KPI-tier)" page), and `harness_boost_terms_lock.py` §e fails the
+build if either one grows into the other.
+
+**ONE RENDERER.** `build_boost_doc` emits the SAME document model as `build_doc`, so `render_pdf`, `filename_for`
+and the `fmt=json` preview are reused unchanged. Two optional model slots were added and the plan document sets
+neither, so it renders exactly as before: `plans[].kpis` (the measure table) and `plans[].tiers.heading` (an
+engine naming its own ladder). A zeroed term is moved to `no_pay_items` and LABELLED, never dropped — an employee
+who sells upgrades all month must be able to see that upgrades pay $0 this period.
+
+| What | Where |
+| --- | --- |
+| The terms + the bars (THE home) | `backend/app/modules/commcalc/boost_terms.py` — `resolve_terms`, `resolve_kpi_targets`, `DEFAULTS`. Pure: stdlib only, no DB, no reportlab |
+| The pay engine (caller) | `calculator.calc_rep_commissions` — `G = _boost_terms.resolve_terms(cfg)`, `KPI = _boost_terms.resolve_kpi_targets(cfg, _KPI_DEFS)` |
+| The document (caller) | `payout_structure.build_boost_doc` + `_boost_how_it_works` + `_bucket_labels` (wording DERIVED from `line_class.CLASS_LABELS`) |
+| The endpoints | `GET /commcalc/commission-plans/payout-structure` (engine-resolved; `?period=`), `GET /commcalc/payout-terms/history` — §17 |
+| The page | `commcalc/settings/page.tsx` → 📄 Employee Handout tab: module 1 = Create PDF, module 2 = How the commission has moved |
+| Module graph | fact `boost_payout_terms` (§50) |
+| Proof | `backend/harness_boost_terms.py` (119 checks: byte-identical replay of the retired expressions, end-to-end through the real engine, the document vs what the engine pays, the armed negative control) |
+| Lock | `backend/harness_boost_terms_lock.py` (19 checks; CI job *Boost payout terms*) — fails the build if the engine or the document stops dereferencing the home, a second copy appears under `backend/app`, the home stops being pure, or the handout grows rate history |
+
+
 ### 7a. REPORT — Residual per Subscriber (per store, month over month, vs commission)
 
 **Where.** `backend/app/modules/account/residual_subs.py` → `compute(client, org_id, months)`;
@@ -6134,6 +6192,8 @@ rendering the resolved name.
 | `GET /api/v1/core/auth-config` — the PUBLIC read of `rbac_enabled` the Guard gates the whole app on. A FAILED read is its own state (`enforceUnreadable`), never the value `false`: the app shows "Can't reach the server", it does NOT open | `frontend/src/app/(platform)/layout.tsx` `Guard`; backend `core/router._rbac_enabled_flag`; lock `harness_one_domain_lock.py` rule 9 | §40.13 |
 | **Any path on the platform hostname in production** → 308 to `NEXT_PUBLIC_SITE_URL`, same path + query (only when that is set; previews / localhost untouched) | `frontend/site-routing.ts` `canonicalHostRedirects` via `next.config.ts` `redirects()` | §40.4 |
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
+| **`GET /commcalc/commission-plans/payout-structure`** (`?fmt=pdf\|json&plan_id=&period=`) — THE employee-facing payout-structure document, **for WHICHEVER ENGINE PAYS THIS TENANT**. Read-only; computes no pay and writes nothing. `fmt=json` returns the SAME model the PDF renders, so a preview can never disagree with the download. `plan_id` = a per-team handout (plan engine); `period` = which `payout_config` row to describe (Boost engine; defaults to the current month) | `router.payout_structure_document` → `_resolve_carrier_mode` (THE same resolver the pay run uses) → **boost**: `_boost_payout_structure_doc` → `payout_structure.build_boost_doc` (terms + bars from `boost_terms`, metric labels from `_kpi_defs`) · **plan**: `commission_engine._load_plans` + `plan_pay_gate` → `payout_structure.build_doc`; both render through the one `payout_structure.render_pdf` / `filename_for` | §6p. Before 2026-10-05 this assumed the PLAN engine and 400'd for everyone else — a Boost tenant has ZERO `commission_plan` rows, so the one document the platform offered employees described nothing they are paid by. Proof `harness_boost_terms.py` (119) + `harness_payout_structure.py` (87); lock `harness_boost_terms_lock.py` (19) |
+| **`GET /commcalc/payout-terms/history`** (`?limit=`) — HOW THE BOOST RATES HAVE MOVED: every stored period's RESOLVED terms, newest first, plus `changed` (the term keys differing from the period before it). Read-only | `router.payout_terms_history` → `boost_terms.resolve_terms` per period (so a period that merely stopped storing a column reads as unchanged when its default matches) | §6p — deliberately SEPARATE from the document above: rate history is a management view and never enters the employee handout (owner 2026-10-05) |
 | `GET /commcalc/carrier-vs-pay/{period}` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `POST /discrepancy/run` · `GET /discrepancy-appeals` · `/commission-device` · `/commission-explain?view=carrier` — the CARRIER surfaces: 403 for every viewer without `carrier_commission_view` (reps and store managers alike), each by its REGISTERED key | `router._require_carrier_view(authorization, org_id, key)` → `_can_view_carrier_commission` → `payout_audience.carrier_view_allowed`; keys in `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j / §6m |
 | `GET /commcalc/commission-explain` (no `view`) · `/commission-drill` · `/commissions/{period}` · `/commissions-range` · `/commission-statement(s)` — the Rep Incentive payloads: NO carrier field for ANY audience | `payout_audience.rep_incentive_explain` / `rep_incentive_drill` / `rep_incentive_row`; `_statement_doc(buckets=None)` | §6m |
 | `GET /commcalc/commission-statement?rep=&period_from=&period_to=&fmt=pdf\|csv\|json` — ONE employee over a month range (≤ 12): each month = that month's single statement, month totals + grand total. READ-ONLY; own-rep 403 for a rep | `router.commission_statement_document` → `_statement_doc` (per month) → `commission_statement.build_range` / `render_range_pdf` / `range_csv` | §6j |

@@ -22,6 +22,7 @@ DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 # classifier over every contract-type spelling in the seeds and asserts equality.
 from app.modules.commcalc import line_class as _lc
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set (one home; pure, stdlib)
+from app.modules.commcalc import boost_terms as _boost_terms  # THE Boost engine's resolved terms (one home; pure)
 
 
 def classify_line(row, rules=None):
@@ -137,30 +138,12 @@ def calc_rep_commissions(
     period_year = pm['year']
     
     # ── Config ──────────────────────────────────────────────
-    G = {
-        'upgrade_flat':     cfg.get('upgrade_flat') if cfg.get('upgrade_flat') is not None else 20,
-        'premium_flat':     cfg.get('premium_flat') if cfg.get('premium_flat') is not None else 5,
-        'byod_flat':        cfg.get('byod_flat') if cfg.get('byod_flat') is not None else 3,
-        'byod_extra':       cfg.get('byod_extra_spiff') or 0,
-        'trade_in_spiff':   cfg.get('trade_in_spiff') if cfg.get('trade_in_spiff') is not None else 20,
-        'acima_spiff':      cfg.get('acima_spiff') if cfg.get('acima_spiff') is not None else 25,
-        'acc_rate':         cfg.get('acc_rate') or 0.10,
-        # The employee's share of the set-up fee COLLECTED. `payout_config.setup_fee_rate` remains the
-        # source of truth for this (Boost) engine and still wins, so Boost pay is unchanged; the
-        # per-carrier `setup_fee_pay` config (mig 263) is what the PLAN engine reads for every other
-        # carrier. `or 0.10` is preserved verbatim, including its known quirk that a stored 0 falls back
-        # to 10% — changing that here would silently move money for any tenant who stored a 0, so it is
-        # REPORTED in the park record instead of fixed in the same breath as everything else.
-        'setup_rate':       cfg.get('setup_fee_rate') or 0.10,
-        'acc_target_on':    bool(cfg.get('acc_target_enabled', False)),
-        'acc_target_pct':   cfg.get('acc_target_pct') or 0.10,
-        'custom_spiffs':    cfg.get('custom_spiffs') or [],
-        'straight':         bool(cfg.get('straight_line', False)),
-        't100':             int(cfg.get('tier_100_min_kpis') or 7),
-        't75':              int(cfg.get('tier_75_min_kpis') or 5),
-        't75pct':           float(cfg.get('tier_75_pct') or 0.75),
-        't50pct':           float(cfg.get('tier_50_pct') or 0.50),
-    }
+    # ONE HOME (2026-10-05). The literal dict that stood here — every rate, spiff and tier threshold
+    # with its exact `or` / `is not None` fallback — is now `boost_terms.resolve_terms`, because the
+    # employee-facing Payout Structure PDF has to print these SAME numbers and a second copy would
+    # print a rate this engine does not pay. Same keys, same order, same fallbacks (including the two
+    # known `or 0.10` quirks, documented there): this is a dereference, not a rate change.
+    G = _boost_terms.resolve_terms(cfg)
     # Configurable accessory classification (mig 092/093): POS departments/categories/product-keywords
     # that are accessories. Empty → the historical default department 'Ondigo', so pay is unchanged
     # until it's configured. Product keywords cover POS feeds that carry no dept/category.
@@ -216,24 +199,12 @@ def calc_rep_commissions(
     # default. A metric with NEITHER a stored target nor a default is left OUT of this map on purpose —
     # `kpi_failing.evaluate` then skips it, because a metric with no target cannot fail anyone. It is
     # NOT given a target of 0, which every value would "meet".
-    KPI = {}
-    for (_k, _label, _col, _dflt) in _KPI_DEFS:
-        _t = cfg.get(_col)
-        if not _t:
-            _t = _dflt
-        try:
-            _t = float(_t) if _t is not None else None
-        except (TypeError, ValueError):
-            _t = None
-        # A FALSY TARGET IS NO TARGET, not a target of zero that every value "meets". This is the
-        # platform's existing convention — the `or dflt` chain above has always treated a stored 0 as
-        # absent, and `GET /kpi-failing/{period}` filters its target map with `if v` for the same
-        # reason. It matters now that the def list is the TENANT'S registry: a registry row saved with
-        # no `target_default` resolves to 0.0 through `_kpi_defs`'s `safe_float`, and scoring against
-        # 0 would hand every rep a free MET on a metric nobody set a bar for. All seven built-in
-        # defaults are non-zero, so Boost is unchanged.
-        if _t:
-            KPI[_k] = _t
+    # ONE HOME (2026-10-05) — the same move as `G` above. The document prints the bar an employee is
+    # measured against, so the bar is resolved in ONE place. `boost_terms.resolve_kpi_targets` carries
+    # this loop verbatim, both rules intact: the per-period column wins over the definition default
+    # (`or dflt`, stored-0-falls-back quirk preserved), and a FALSY target is NO target — the metric is
+    # left out of the map rather than given a bar of 0 that every value would "meet".
+    KPI = _boost_terms.resolve_kpi_targets(cfg, _KPI_DEFS)
     # Measured values for metrics no carrier feed fills — `commcalc.kpi_actual`, already scoped to this
     # org + period by the caller: {store_key: {metric_key: value}}. EMPTY platform-wide as at 2026-09-26,
     # so this is inert until a tenant types or emails one in.
