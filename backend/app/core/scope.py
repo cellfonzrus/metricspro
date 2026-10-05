@@ -1354,3 +1354,117 @@ def reporting_employee_ids(client, org_id: str, keyset, *, since=None, until=Non
         except Exception as e:                                      # pragma: no cover - I/O guard
             print(f"WARN core.scope reporting_employee_ids {table} read failed: {e}")
     return ids
+
+
+# ── SCHEDULE VISIBILITY — "whose SHIFTS may this login READ?" (owner directive 2026-10-05) ───────
+#
+# THE INSTANCE. *"currently employees can see the schdule of the whoel company, i saw when i used
+# rana to clok in as him, it should only show the reps wown schdule and the managers his own schdule
+# and if any employee works under him"*
+#
+# THE CLASS. Every schedule read in this platform answered "which STORES may I see" and NEVER "which
+# PEOPLE may I see". `storeops.router.scope_keyset` is a store keyset, and `scope_emp_ids` only
+# re-expresses that same store keyset in employee_ids — so a login that resolves a store resolves
+# EVERY person who worked at it. Two independent widenings then made that the whole company:
+#   1. The house `sales_rep` role carries `scope = 'store'`, not `'self'` — so a rep was never
+#      self-narrowed at all; and
+#   2. `caller_scope` unions MARKET grants into a scope-'store' span, and 28 of 37 house rep logins
+#      carry a market (5 of them carry THREE: "NYC, NJ, LI" — which is the entire company).
+# `self_store_codes` already refuses to read market grants for exactly this reason, and
+# `roster_keyset` already applies that refusal to the NAME PICKER. The schedule READ never got it.
+#
+# This is therefore Q3 of the same split this module opened with, and it lives here beside Q1/Q2
+# rather than as a fourth private copy of "how wide is this person":
+#   Q1 REPORTING   "whose NUMBERS may I see?"   -> reporting_span_codes / storeops.scope_keyset
+#   Q2 ROSTER      "whom may I PUT on a shift?" -> roster_reach / roster_keyset  (deliberately WIDE)
+#   Q3 SCHEDULE    "whose SHIFTS may I READ?"   -> schedule_visibility / schedule_people_keyset
+# Q2 and Q3 point OPPOSITE ways on purpose: a store manager must be able to pick a borrowed rep they
+# cannot otherwise see, and a rep must be able to see their own shifts without seeing the register
+# they are picked from. One set can never answer both.
+#
+# DECLARED, NOT INFERRED (RULE TWO). `roles.permissions.schedule_visibility` ∈ {'self','span','all'}.
+# `scope` alone cannot answer this: in the house org `sales_rep` AND `store_manager` are BOTH
+# `scope = 'store'`, so the schema genuinely cannot tell a rep from their manager. The derivation
+# below is only the fallback for a role that has not declared itself, and it FAILS NARROW for the one
+# scope that is ambiguous — matching `storeops._rbac_scope_failclosed`, whose unresolved-role default
+# is likewise 'self'. Migration 1057 declares all live roles explicitly so nothing rides the default.
+SCHEDULE_SELF = "self"      # own shifts only
+SCHEDULE_SPAN = "span"      # own shifts + everyone who works under this login
+SCHEDULE_ALL = "all"        # the whole tenant's schedule
+SCHEDULE_VISIBILITIES = (SCHEDULE_SELF, SCHEDULE_SPAN, SCHEDULE_ALL)
+
+
+def schedule_visibility(role_perms) -> str:
+    """Which of the three schedule visibilities a role gets. Pure; never raises.
+
+    An explicit `schedule_visibility` always wins. With none declared, derive from `scope`:
+
+        'all' / 'company'          -> SCHEDULE_ALL   an admin/executive sees the whole schedule
+        'market' / 'region(al)'    -> SCHEDULE_SPAN  a DM sees their market's people
+        'store' / 'self' / unknown -> SCHEDULE_SELF  fail NARROW: the ambiguous case is a rep
+
+    A store manager therefore needs the declaration (migration 1057 carries it). That asymmetry is
+    deliberate: being shown too little of a schedule is a support ticket, being shown everybody's is
+    the defect this exists to close."""
+    try:
+        perms = role_perms if isinstance(role_perms, dict) else {}
+        v = str(perms.get("schedule_visibility") or "").strip().lower()
+        if v in SCHEDULE_VISIBILITIES:
+            return v
+        scope = str(perms.get("scope") or "").strip().lower()
+    except Exception:                                               # pragma: no cover - purity guard
+        return SCHEDULE_SELF
+    if scope in ("all", "company"):
+        return SCHEDULE_ALL
+    if scope in ("market", "region", "regional"):
+        return SCHEDULE_SPAN
+    return SCHEDULE_SELF
+
+
+def schedule_people_keyset(client, org_id: str, *, role_perms, app_user, employee_home_store=None,
+                           org_unit_codes=None, since=None, until=None):
+    """-> (employee_ids, why). `employee_ids is None` means UNRESTRICTED (the whole tenant).
+
+    NEVER DEGRADES TO UNRESTRICTED. The opposite of `roster_keyset`: an unresolvable span here means
+    the caller sees THEMSELVES, because the cost of guessing wide is a rep reading the company's
+    schedule (and, through `/timeclock/list`, its attendance). The empty set is a real answer too —
+    a login with no employee_id on it is nobody and is shown nothing.
+
+    'WORKS UNDER ME' RESOLVES FROM STORE ASSIGNMENT, NOT THE ORG TREE. `reporting_employee_ids` reads
+    `employees.home_store` UNION "actually worked a shift/punch there", bounded by the caller's own
+    date window. The org tree is unioned in where it exists but cannot be the primary source: it
+    resolves a manager for only 6 of 29 house stores and 0 of 20 Luxelink stores (measured
+    2026-10-04), so a tree-first rule would show most managers nobody at all.
+
+    MARKET GRANTS BIND ONLY FOR A SCOPE THAT CAN USE A MARKET — the same line `self_store_codes` and
+    `roster_keyset` already draw. A DM (`scope = 'market'`) gets their market; a store-scoped manager
+    gets their own store(s) plus any org unit they actually manage, and their market pin is ignored.
+    """
+    vis = schedule_visibility(role_perms)
+    me = self_employee_ids(app_user)
+    if vis == SCHEDULE_ALL:
+        return None, "role schedule_visibility 'all' — the whole tenant's schedule"
+    if vis == SCHEDULE_SELF:
+        return set(me), ("own shifts only" if me else
+                         "own shifts only — and this login carries NO employee_id, so nothing "
+                         "resolves: link it to an employee record")
+    try:
+        scope = str((role_perms or {}).get("scope") or "").strip().lower()
+    except Exception:                                               # pragma: no cover - purity guard
+        scope = ""
+    if scope in ("market", "region", "regional"):
+        codes = set(org_unit_codes or []) | login_grant_codes(client, org_id, app_user)
+        why = "the market(s) / org-unit(s) this login manages"
+    else:
+        codes = set(org_unit_codes or []) | self_store_codes(
+            client, org_id, app_user, employee_home_store=employee_home_store)
+        why = ("own store(s) + any org unit this login manages — a market pin is NOT read for a "
+               "store-scoped role")
+    codes = {c for c in codes if c}
+    if not codes:
+        return set(me), ("NO RESOLVABLE STORE for this login — showing own shifts only; pin this "
+                         "person's store on their login or their employee record")
+    ids = reporting_employee_ids(client, org_id,
+                                 widen_codes_to_keys(client, org_id, codes),
+                                 since=since, until=until) or set()
+    return {str(i) for i in ids} | set(me), why

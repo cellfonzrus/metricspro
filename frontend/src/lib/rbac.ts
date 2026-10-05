@@ -10,6 +10,7 @@ export type Scope = 'all' | 'market' | 'store' | 'self'
 // scheduling surface already does today via /storeops/employees?all_company=true; 'span' = the old
 // coupling, for tenants that want the roster locked to the reporting span.
 export type SchedulingReach = 'org' | 'span'
+export type ScheduleVisibility = 'self' | 'span' | 'all'
 export type Permissions = {
   modules?: Record<string, boolean>
   reports?: Record<string, boolean>   // per-AREA report access (separate from the operational module)
@@ -18,6 +19,7 @@ export type Permissions = {
   settings?: Record<string, boolean>  // per-AREA settings-editing grants (core SETTING_AREAS, e.g. 'menu_layout')
   scope?: Scope                       // REPORTING span (whose numbers) — NOT scheduling reach
   scheduling_reach?: SchedulingReach  // SCHEDULING reach (whom you may schedule); default 'org'
+  schedule_visibility?: ScheduleVisibility  // whose SHIFTS this role may READ; default derived, fails narrow
   home?: string
   impersonate?: boolean               // "Sign in as an employee" — DEFAULT-DENY, no bypass (see below)
   // WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j, §6m) — stamped by the SERVER on /me
@@ -69,6 +71,20 @@ export function schedulingReach(perms: Permissions | undefined): SchedulingReach
 // True when a scheduling roster / employee-picker read may ignore the reporting span.
 export function rosterSpanExempt(perms: Permissions | undefined): boolean {
   return schedulingReach(perms) === 'org'
+}
+// MIRROR of backend app/core/scope.schedule_visibility() — KEEP IN SYNC
+// (harness_schedule_visibility_lock.py fails the build if the two derivations drift).
+// "Whose SHIFTS may this role READ" — a third question, separate from both the reporting scope and
+// the scheduling reach: a manager must be able to PUT a borrowed rep on a shift (reach 'org') while
+// a rep may READ only their own week. An explicit declaration wins; with none, derive from scope and
+// FAIL NARROW, because scope 'store' covers a rep and their manager alike.
+export function scheduleVisibility(perms: Permissions | undefined): ScheduleVisibility {
+  const v = String(perms?.schedule_visibility || '').trim().toLowerCase()
+  if (v === 'self' || v === 'span' || v === 'all') return v
+  const scope = String(perms?.scope || '').trim().toLowerCase()
+  if (scope === 'all' || scope === 'company') return 'all'
+  if (scope === 'market' || scope === 'region' || scope === 'regional') return 'span'
+  return 'self'
 }
 
 // ── THE GRANT MODEL (owner rulings #5 / #6 / #7, 2026-08-08) ─────────────────────────────────────

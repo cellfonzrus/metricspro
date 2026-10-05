@@ -190,3 +190,26 @@ jobs:
       - name: Run the employee-write proof (the real handlers, both defects reproduced then fixed)
         working-directory: backend
         run: python3 harness_employee_write_proof.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  schedule-visibility:
+    # §14w — "whose SHIFTS may this login READ?" is ONE declared fact (app/core/scope.py:
+    # schedule_visibility / schedule_people_keyset) that every schedule and attendance read
+    # dereferences through ONE wiring point (storeops.schedule_emp_ids). The lock fails the build if
+    # the ruling is copied, the wiring is re-derived, a wired read stops asking, a NEW person-keyed
+    # schedule GET lands unwired, the market-grant refusal is undone, or the frontend mirror drifts.
+    # The PROOF runs the real endpoints and reproduces the reported leak (a rep reading the whole
+    # company's schedule) with the old store gate still in place before showing it closed.
+    name: Schedule visibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the schedule-visibility lock (stdlib only, no deps)
+        working-directory: backend
+        run: python3 harness_schedule_visibility_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install backend deps (the proof execs the real endpoints)
+        run: pip install -r backend/requirements.txt
+      - name: Run the schedule-visibility proof
+        working-directory: backend
+        run: python3 harness_schedule_visibility.py | tee -a "$GITHUB_STEP_SUMMARY"

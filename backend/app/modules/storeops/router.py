@@ -237,12 +237,18 @@ def get_employees(include_inactive: bool = False, all_company: bool = False, aut
     return rows
 
 @router.get("/staffing-heatmap")
-def staffing_heatmap(store_code: str, period: str, capacity: float = 12.0, org_id: str = ORG_ID):
+def staffing_heatmap(store_code: str, period: str, capacity: float = 12.0,
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Store-local weekday × hour heat map: transaction DEMAND → 'staff required' (demand ÷ capacity),
     laid over SCHEDULED heads (shifts) and ACTUAL heads present (timelog). `capacity` = transactions one
     employee handles per labor-hour (tunable). Scheduled/actual are available today; transaction demand
     accrues from mig-854 `trans_ts` going forward (historical rows are date-only)."""
     from app.modules.storeops.staffing_heatmap import build_grid, hhmm_to_hours
+    # This read had NO scope gate at all — any signed-in caller could heat-map any store in the
+    # tenant (§14w sibling sweep). It is a store-level AGGREGATE with no names in it, so the gate is
+    # the store keyset every other storeops read uses, not the per-person one.
+    if not in_keyset(scope_keyset(authorization, org_id), store_code):
+        raise HTTPException(403, "That store is outside your access.")
     tz = _biz_tz_for_store(org_id, store_code)
     p = str(period).strip()
     try:
@@ -345,6 +351,12 @@ def get_shifts(store_code: str = None, week_start: str = None, week_end: str = N
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
+    # WHOSE shifts (owner directive 2026-10-05, §14w). The store keyset above answers "which stores"
+    # and a rep's market pin made that the whole company; this answers "which people" and only ever
+    # narrows. A rep sees their own week, a manager theirs plus the people who work under them.
+    rows = keep_visible_people(
+        rows, schedule_emp_ids(authorization, org_id, since=week_start or None, until=week_end or None),
+        "employee_id")
     return rows
 
 
@@ -407,6 +419,11 @@ def schedule_hours_trend(
     if ks is not None:
         rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
 
+    # WHOSE shifts (§14w) — same one answer GET /shifts dereferences, so the trend can never show
+    # hours for a person whose schedule the caller may not read.
+    _vis = schedule_emp_ids(authorization, org_id, since=lo, until=anchor)
+    rows = keep_visible_people(rows, _vis, "employee_id")
+
     # Optional market filter — resolve each selected market to its store keys and keep only shifts in
     # those stores (intersected with the RBAC keyset above, so this can only ever NARROW).
     mkts = [m.strip() for m in (markets or "").split(",") if m.strip()]
@@ -424,7 +441,8 @@ def schedule_hours_trend(
     out = _sh.hours_trend(rows, anchor=anchor, weeks=weeks, months=months, week_start_dow=week_start_dow)
     out["scope"] = {"markets": mkts, "store_code": store_code or None,
                     "employees": sorted(emps) if emps else None,
-                    "rbac_restricted": ks is not None}
+                    "rbac_restricted": ks is not None,
+                    "people_restricted": _vis is not None}
     return out
 
 # ── Scheduling-over-approved-time-off policy (owner directive 2026-07-26, ALL tenants) ─────────
@@ -640,6 +658,9 @@ def get_time_off(employee_id: str = None, authorization: str = Header(default=""
     eids = scope_emp_ids(authorization, org_id, since=since, until=until)   # None = unrestricted
     if eids is not None:
         rows = [r for r in rows if str(r.get("employee_id")) in eids]
+    # Time off is the schedule's other half (§14w) — a rep may not read who else is off.
+    rows = keep_visible_people(
+        rows, schedule_emp_ids(authorization, org_id, since=since, until=until), "employee_id")
     return rows
 
 @router.post("/time-off")
@@ -4050,6 +4071,10 @@ def get_shift_templates(authorization: str = Header(default=""), org_id: str = O
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [t for t in rows if in_keyset(ks, t.get("store_code"))]
+    # The RECURRING schedule is the same fact as the week (§14w) — a template nobody may read the
+    # shifts of must not be readable either. No date window: a template has no date of its own, so
+    # the span resolves on today's window (schedule_emp_ids' default).
+    rows = keep_visible_people(rows, schedule_emp_ids(authorization, org_id), "employee_id")
     return rows
 
 
@@ -4169,6 +4194,10 @@ def get_shift_swaps(status: str = None, authorization: str = Header(default=""),
     if eids is not None:
         reqs = [r for r in reqs if str(r.get("requester_id")) in eids
                 or (r.get("target_id") and str(r.get("target_id")) in eids)]
+    # A swap names two people's shifts (§14w): the caller must be allowed to read one of them.
+    reqs = keep_visible_people(
+        reqs, schedule_emp_ids(authorization, org_id, since=since, until=until),
+        "requester_id", "target_id")
     names = _emp_name_map(org_id)
     ids = [r["shift_id"] for r in reqs if r.get("shift_id")] + \
           [r["target_shift_id"] for r in reqs if r.get("target_shift_id")]
@@ -5484,6 +5513,11 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
         _canon_eids = {_alias.get(str(x), str(x)) for x in eids}
         rows = [e for e in rows
                 if _alias.get(str(e.get("employee_id")), str(e.get("employee_id"))) in _canon_eids]
+    # WHOSE punches (§14w). Attendance is the schedule's mirror image — the same one answer, so a rep
+    # cannot read the company's clock-ins either. Narrowing only; both id forms already resolved.
+    rows = keep_visible_people(
+        rows, schedule_emp_ids(authorization, org_id, since=start or None, until=end or None),
+        "employee_id")
     for e in rows:
         e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
     if start and end:
@@ -8311,6 +8345,101 @@ def scope_emp_ids(authorization: str, org_id: str = ORG_ID, *, since: str = None
     if ks is None:
         return None
     return _cscope.reporting_employee_ids(get_supabase(), org_id, ks, since=since, until=until)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# SCHEDULE VISIBILITY — "whose SHIFTS may this caller READ?" (owner directive 2026-10-05, §14w)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# THE ONE WIRING POINT. Every schedule / attendance read below dereferences `schedule_emp_ids` and
+# nothing re-derives it; `harness_schedule_visibility_lock.py` fails the build if a second
+# derivation appears or a wired read stops calling it. The ruling itself lives in
+# `app.core.scope.schedule_people_keyset` (Q3 of this platform's scope split) — this function is
+# only the I/O that feeds it the caller's identity.
+#
+# NARROWING ONLY. Each call site keeps the store keyset / `scope_emp_ids` filter it already had and
+# applies this ON TOP, so this change can never WIDEN what anyone sees.
+def schedule_emp_ids(authorization: str, org_id: str = ORG_ID, *, since: str = None, until: str = None):
+    """employee_ids whose SHIFTS/PUNCHES the signed-in caller may read.
+
+    None  -> UNRESTRICTED — enforcement off, or no/invalid token, or an unprovisioned login. Same
+             posture as `caller_scope`: an in-process/scheduled caller with no header is not a
+             browser and must not be silently blanked.
+    set() -> deny-all (a provisioned login we cannot tie to an employee sees nothing).
+
+    `since`/`until` bound the "actually worked here" half of a manager's span, exactly as
+    `scope_emp_ids` does, so this never becomes a full-history scan."""
+    if not _rbac_enabled(org_id):
+        return None
+    au = _caller_app_user(authorization, org_id)
+    if not au:
+        return None
+    role = (au.get("role") or "").strip()
+    perms = dict(_role_permissions(org_id, role) or {})
+    perms["scope"] = _role_scope(org_id, role)      # canonical, fail-closed resolution of the scope
+    eid = (au.get("employee_id") or "").strip()
+    ids, _why = _cscope.schedule_people_keyset(
+        get_supabase(), org_id, role_perms=perms, app_user=au,
+        employee_home_store=_cscope.employee_home_store(get_supabase(), org_id, eid),
+        org_unit_codes=_caller_org_unit_codes(authorization, org_id),
+        since=since, until=until)
+    return _widen_emp_id_forms(org_id, ids)
+
+
+def _caller_org_unit_codes(authorization: str, org_id: str = ORG_ID) -> list:
+    """store_codes of the org-unit subtree(s) this login MANAGES — the org tree ALONE.
+
+    Deliberately NOT `_caller_span_codes`, which also unions the market/store pinned on the login.
+    A market pin is "what area this person covers", and for a store-scoped role that is not the same
+    question as "who works under me" — reading it is exactly the 3-markets widening that put the
+    whole company on a rep's schedule (§14w). `schedule_people_keyset` adds the login's market grant
+    itself, and only for a scope that can use one."""
+    au = _caller_app_user(authorization, org_id)
+    eid = (au.get("employee_id") or "").strip() if au else ""
+    if not eid:
+        return []
+    try:
+        spans = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
+    except Exception as e:                                  # pragma: no cover - I/O guard
+        print(f"WARN _caller_org_unit_codes org_span_for_manager failed: {e}")
+        return []
+    return _span_codes(spans)
+
+
+def _widen_emp_id_forms(org_id: str, ids):
+    """BOTH id forms for every allowed person (None passes through). A Schedule-page shift stores
+    `employees.id` (numeric "45") while the roster, templates and punches store the BUSINESS id
+    ("E45") — the identical mismatch `payroll_identity.business_id_alias_map` exists for. Without
+    this, a rep whose own shifts carry the numeric form would be filtered out of their OWN schedule.
+    Widens FORMS of an already-allowed person only; it can never admit a different person."""
+    if ids is None:
+        return None
+    out = {str(i) for i in ids}
+    if not out:
+        return out
+    try:
+        emps = sb().table("employees").select("id,employee_id").eq("org_id", org_id).limit(20000).execute().data or []
+    except Exception as e:                                  # pragma: no cover - I/O guard
+        print(f"WARN schedule_emp_ids id-form widening failed: {e}")
+        return out
+    for e in emps:
+        num, biz = str(e.get("id") or "").strip(), str(e.get("employee_id") or "").strip()
+        if not num or not biz:
+            continue
+        if biz in out:
+            out.add(num)
+        if num in out:
+            out.add(biz)
+    return out
+
+
+def keep_visible_people(rows, eids, *fields):
+    """Filter `rows` to the people in `eids` (None = unrestricted), matching on any of `fields`.
+    One helper so no call site hand-rolls the comparison and silently forgets to stringify."""
+    if eids is None:
+        return rows
+    allowed = {str(e) for e in eids}
+    return [r for r in rows
+            if any(str(r.get(f) or "") in allowed for f in (fields or ("employee_id",)))]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
