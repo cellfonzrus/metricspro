@@ -6,7 +6,7 @@ import { planRowSave, runRowSave, commitSaved, rowSaveMessage, dirtySlices, pend
 import { ROLES_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
 import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
 import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, reportAreaForPath, canSeeItem, navBlockReason,
-         schedulingReach, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
+         schedulingReach, peopleVisibility, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
          grantableModules, missingReportAreasForModule, reportGrantedByConfig, isDeepLinkItem,
          type Permissions } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
@@ -46,7 +46,7 @@ const MASTER_ADMIN_TEMPLATE: { name: string; display: string; permissions: any }
   permissions: {
     modules: Object.fromEntries(TENANT_ONLY_MODULES.map(m => [m.key, true])),
     data: Object.fromEntries(DATA_GRANTS.map(d => [d.key, true])),
-    scope: 'all', scheduling_reach: 'org', impersonate: true, home: '/commcalc',
+    scope: 'all', scheduling_reach: 'org', people_visibility: 'all', impersonate: true, home: '/commcalc',
   },
 }
 
@@ -60,6 +60,12 @@ const SCOPES = [
 const SCHEDULING_REACHES = [
   { v: 'org', l: 'Any employee in the company' },
   { v: 'span', l: 'Only employees in their stores' },
+]
+// Whose SHIFTS this role may READ — the third, separate question (owner directive 2026-10-05, §14w).
+const PEOPLE_VISIBILITIES = [
+  { v: 'self', l: 'Only their own shifts' },
+  { v: 'span', l: 'Their own + whoever works under them' },
+  { v: 'all', l: "The whole company's schedule" },
 ]
 // Employee Dashboard widgets this role can see on their own dashboard (default on).
 const EMP_WIDGETS = [
@@ -843,6 +849,22 @@ export default function RolesAdminPage() {
                       {schedulingReach(p as Permissions) === 'org'
                         ? 'Can put ANY employee in the company on a shift, while reports stay limited to the stores above. Use this instead of granting all stores.'
                         : 'Can only schedule employees inside their reporting stores.'}
+                    </div>
+                    {/* The third question. Reach (above) is "whom may they PUT on a shift" and is
+                        deliberately WIDE; this is "whose shifts may they READ" and is deliberately
+                        narrow. A rep should be 'self'. */}
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', margin: '12px 0 6px' }}>Schedule visibility
+                      <span style={{ fontWeight: 400, color: 'var(--text3)' }}> — whose shifts they can see</span></div>
+                    <select style={sel} value={peopleVisibility(p as Permissions)}
+                      onChange={ev => setPerm(r.id, pp => ({ ...pp, people_visibility: ev.target.value }))}>
+                      {PEOPLE_VISIBILITIES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                    </select>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, maxWidth: 220 }}>
+                      {peopleVisibility(p as Permissions) === 'self'
+                        ? 'Sees only their own shifts, time off and punches — nobody else\u2019s.'
+                        : peopleVisibility(p as Permissions) === 'span'
+                          ? 'Sees their own plus everyone at the store(s) or market(s) they manage. Enforced on the server, not just hidden.'
+                          : 'Sees every employee\u2019s schedule in the company.'}
                     </div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', margin: '12px 0 6px' }}>Landing page</div>
                     <input style={{ ...sel, width: 200 }} value={p.home || ''} placeholder="/commcalc"

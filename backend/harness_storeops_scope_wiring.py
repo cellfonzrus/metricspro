@@ -161,7 +161,13 @@ st[("commcalc", "store_mapping")] = [
 st[("storeops", "roles")] = [
     {"org_id": HOUSE, "name": "admin", "permissions": {"scope": "all"}},
     {"org_id": HOUSE, "name": "dm_market", "permissions": {"scope": "market"}},          # scheduling_reach unset -> 'org'
-    {"org_id": HOUSE, "name": "dm_store", "permissions": {"scope": "store"}},
+    # `people_visibility: 'span'` declares this role a store MANAGER (owner directive 2026-10-05,
+    # index §14w). It is what migration 1057 writes on the live `store_manager` role, and D2 below
+    # needs it: GET /time-off is now ALSO gated per PERSON, and a scope-'store' role that declares
+    # nothing falls to 'self' by design — which would hide the borrowed rep this section proves is
+    # visible. The worked-at union under test is unaffected either way.
+    {"org_id": HOUSE, "name": "dm_store",
+     "permissions": {"scope": "store", "people_visibility": "span"}},
     {"org_id": HOUSE, "name": "dm_span_reach",
      "permissions": {"scope": "market", "scheduling_reach": "span"}},
 ]

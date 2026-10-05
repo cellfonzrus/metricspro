@@ -17714,6 +17714,19 @@ def get_flags(period: str, authorization: str = Header(default=""),
     else:
         rows = q.order('severity').execute().data or []
     from app.modules.storeops.router import scope_keyset, in_keyset
+    # OWN ROWS ONLY FOR AN INDIVIDUAL CONTRIBUTOR (owner directive 2026-10-05, index §14w: "also the
+    # flags should only be seen by them for thier own not all stores"). A flag is a per-REP finding —
+    # it names `epay_salesperson` — so for a rep the gate is the PERSON, not the store. No new
+    # predicate: `_caller_rep_keys` is the platform's one answer to "which rep rows are mine" and
+    # `payout_audience.mine_only` is its one "is this row mine", both already used by the commission,
+    # coaching and action-plan surfaces. The only reason this did nothing before is that
+    # `role_is_self_scoped` was False for every rep in this tenant (the house `sales_rep` role is
+    # `scope = 'store'`); it now also honours a declared `people_visibility = 'self'`.
+    from app.modules.commcalc import payout_audience as _pa
+    rep_keys = _caller_rep_keys(authorization, org_id)
+    if rep_keys is not None:
+        cmap = _rep_canon_map(client, org_id)
+        return _pa.mine_only(rows, rep_keys, canon=lambda v: _canon(v, cmap))
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     # `store_code` (mig 285) is the RESOLVED store — the key a manager's span is actually built from.
     # `store_address` stays as a second key so this is a strict SUPERSET of the old filter: a row that

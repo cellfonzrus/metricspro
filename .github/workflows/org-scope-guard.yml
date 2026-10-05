@@ -190,3 +190,28 @@ jobs:
       - name: Run the employee-write proof (the real handlers, both defects reproduced then fixed)
         working-directory: backend
         run: python3 harness_employee_write_proof.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  people-visibility:
+    # §14w — "whose PERSON-KEYED rows may this login READ?" is ONE declared fact (app/core/scope.py:
+    # people_visibility / visible_people_keyset) that every schedule, attendance and per-rep report
+    # read dereferences through ONE gate (storeops.gate_person_rows / schedule_emp_ids), plus the
+    # store-span half: a MARKET pin no longer widens a scope-'store' reporting span, which is what
+    # made the sales report company-wide for a rep. The lock fails the build if the ruling is copied,
+    # the wiring re-derived, a wired read stops asking, a NEW person-keyed GET lands unwired, the
+    # market-grant refusal is undone, the flags queue grows its own rep predicate, or the frontend
+    # mirror drifts. The PROOF runs the real endpoints and reproduces both reported leaks on the
+    # PRE-FIX gate before showing them closed.
+    name: People visibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the people-visibility lock (stdlib only, no deps)
+        working-directory: backend
+        run: python3 harness_people_visibility_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install backend deps (the proof execs the real endpoints)
+        run: pip install -r backend/requirements.txt
+      - name: Run the people-visibility proof (real endpoints, both leaks reproduced)
+        working-directory: backend
+        run: python3 harness_people_visibility.py | tee -a "$GITHUB_STEP_SUMMARY"
