@@ -29,6 +29,29 @@ name: data-qa-guard
 #       fail on a deliberately broken input, so a lock that has quietly stopped looking at anything
 #       cannot pass.
 #
+# THE SEARCH CONSOLE's three proofs run here too (index §54, owner directive 2026-10-05), as a third
+# job rather than a workflow of their own: it is the surface that hands a question to this assistant,
+# so the two stand or fall together and the duplicate-check gate asks for one home per purpose.
+#
+#   prove_search_rank.mjs        — the RANKING. The reported defect replayed as its first test: asked
+#       *"who is working in 509 nostrand"* the old bar answered "Carrier Earned vs Employee Paid",
+#       because every typed word scored the same and "who", "is" and "in" carried the ordering. This
+#       asserts a stopword earns nothing on its own, a digit run is always a content token, and a
+#       question nothing explains routes to the assistant instead of to the closest-looking page.
+#
+#   prove_search_catalog.mjs     — the CATALOGUE. What there is to find is ASSEMBLED from the
+#       registries that already exist (the nav, the report catalogue, the screen-alias registry, the
+#       folded store options, the visible roster) and folded to one entry per thing, so a page named
+#       by three registries cannot occupy three of eight rows and push the real answer off the list.
+#
+#   prove_search_console_lock.mjs — the DESIGN LOCK. One ranker, one catalogue, dereferenced by the
+#       one console surface; the build fails if a surface starts scoring, sorting or tokenizing for
+#       itself, or if a second stopword list or a second page list appears. Every control is ARMED.
+#
+# Node, not Python: the three modules under proof are the frontend's own, and Node strips their
+# erasable TypeScript, so the proofs drive the REAL functions with no React, no network and no npm
+# install (the same pattern as prove_one_domain / prove_nav_deep_link in carrier-vocab-guard).
+#
 # DEPENDENCY-FREE, like the lineage, org-scope and vision guards. `data_qa_registry` and
 # `data_qa_compute` are stdlib-only by design (proven in the lock's §G), and the lock reads the
 # agent and the API as TEXT and AST rather than importing their dependencies — so no pip install,
@@ -52,6 +75,13 @@ on:
       - "backend/harness_data_qa_lock.py"
       - "backend/harness_data_qa_routes.py"
       - "database/migrations/1055_data_qa_assistant.sql"
+      # The search console — the surface that hands a question to the assistant (index §54).
+      - "frontend/src/lib/search-rank.ts"
+      - "frontend/src/lib/search-catalog.ts"
+      - "frontend/src/components/AskBar.tsx"
+      - "frontend/prove_search_rank.mjs"
+      - "frontend/prove_search_catalog.mjs"
+      - "frontend/prove_search_console_lock.mjs"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - ".github/workflows/data-qa-guard.yml"
   push:
@@ -59,6 +89,8 @@ on:
     paths:
       - "backend/app/modules/core/data_qa_*.py"
       - "backend/harness_data_qa_*.py"
+      - "frontend/src/lib/search-*.ts"
+      - "frontend/prove_search_*.mjs"
   workflow_dispatch:
 
 permissions:
@@ -121,3 +153,24 @@ jobs:
       - name: Run the data-qa design lock (one registry, one GET-only reader on the caller's token, no second permission rule, no arithmetic of its own — index §52.3)
         working-directory: backend
         run: python3 harness_data_qa_lock.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The SEARCH CONSOLE (index §54). Node 22 strips the erasable TypeScript of the real modules, so
+  # these three proofs drive the shipped functions rather than a copy — no React, no network, and
+  # deliberately no `npm ci`, which keeps this job in the same seconds-not-minutes class as the rest
+  # of the guard.
+  search-console:
+    name: Search console — ranking, catalogue, design lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the ranking proof (a stopword ranks nothing; a digit run always counts; an unexplained question goes to the assistant — index §54.1)
+        working-directory: frontend
+        run: node prove_search_rank.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the catalogue proof (assembled from the registries that already exist; one entry per thing — index §54.2)
+        working-directory: frontend
+        run: node prove_search_catalog.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the search-console design lock (one ranker, one catalogue, no private scoring in a surface — index §54.3)
+        working-directory: frontend
+        run: node prove_search_console_lock.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

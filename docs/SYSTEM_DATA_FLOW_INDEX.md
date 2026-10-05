@@ -18537,3 +18537,164 @@ run by `.github/workflows/watchdog-guard.yml`. Migration `1056` is **written and
 applied** — and until one `cron.schedule` line is run (it is in the migration's header), nothing
 sweeps on its own; `POST /watchdog/run-now` works with no cron at all. The watchdogs run on the house
 defaults in code before the migration, so shipping the code is not gated on running the SQL.
+
+---
+
+## 54. THE PLATFORM SEARCH CONSOLE — it ranks on MEANING, and an unexplained question goes to the assistant (owner directive 2026-10-05)
+
+**The report.** Owner: *"i asked who is working in 509 nostrand and it took me to Carrier Earned vs
+Employee Paid"* → *"need this to be a true search and ai console built for the platform"* → and the
+division of labour that shapes this whole section: *"search module will only search what modules are
+build but ask assistant will act as a ai"*.
+
+**The two faults, reproduced before anything was changed.** Simulated against the real catalogue:
+
+```
+terms: who, is, working, in, 509, nostrand   | catalogue size: 25
+3.0  Management Watchdog     matched: who,is,in
+3.0  Reports Index           matched: who,is,in
+2.0  Activations             matched: is,in
+```
+
+1. **Every word scored the same.** `AskBar.tsx` built a `hay` string per report (`label + category +
+   desc`) and awarded one point per typed word found anywhere in it. "who", "is" and "in" appear
+   across half the catalogue, so they carried the entire ordering; ties broke alphabetically; and
+   `.slice(0, 8)` then presented the alphabet as relevance. Nothing matched "nostrand" or "working".
+2. **The catalogue held reports and nothing else** — the 58 curated entries in `lib/reports.ts`, 27 of
+   which carry a `desc`. A store address, a store code or a person's name could not match anything,
+   ever, so the question was unanswerable rather than badly answered.
+
+**The class, not the instance** (the house rule). The class is *"a search that always returns its
+best guess cannot tell a bad match from no match"*. Both halves of the fix are therefore about
+knowing when the console does NOT know: a hit must account for at least one CONTENT token or it is
+not a hit, and a question nothing explains is routed to the assistant instead of navigated.
+
+### 54.1 `frontend/src/lib/search-rank.ts` — the ONE home for "what did the person mean"
+
+PURE and import-free. Exports `SearchKind`, `Searchable`, `Hit`, `STOPWORDS`, `tokens`,
+`contentTokens`, `looksLikeQuestion`, `rank`, `fullyCovered`, `intent`.
+
+| Rule | Why it is a rule and not a weight |
+|------|-----------------------------------|
+| A **stopword earns nothing on its own**, and a query of nothing but stopwords ranks nothing at all | a word in half the catalogue carries no information about WHICH thing is meant, so it may not decide an ordering |
+| A **digit run is always a content token** (the old tokenizer dropped length-1 tokens but kept stopwords — exactly backwards) | "509" is the most specific thing in the reported sentence, and it is what lets a store code or a street number find its store |
+| A hit must **account for at least one content token** | an empty result is then an honest "I did not find that", which is what the assistant hand-off needs |
+| **Coverage beats loudness** (`W_COVERAGE` 200 > any single field) | a hit explaining the whole query outranks one explaining a word of it loudly |
+| The loose fallback is a **word-PREFIX test, never a substring one** | a substring test reads well and is wrong: "509" would match the store at 1509, and a short token would match the middle of an unrelated word. "pay" finds Payroll, "nostr" finds Nostrand, "509" stays away from 1509 |
+| `subtitle` (a thing's OWN second line) outranks `context` (a line BORROWED from something else) by 40 to 18 | load-bearing, not cosmetic: asked about "509 Nostrand" the STORE at that address must outrank the person who works there, and before the two fields were distinguished they tied and lost to the alphabet |
+| A **shared-stem match needs four characters** ("working" → "work"), and never applies to a digit run | the floor is what lets "working" reach "scheduled to work" while keeping "pay" out of "payroll" by stem and "50" out of "509" |
+| `intent()` is the ONE decision about what to do | `'empty'` / `'ask'` / `'navigate'`, so the mouse, Enter and the panel cannot disagree. Deliberate asymmetry: a question that IS fully covered still navigates — only an **unexplained** question goes to the assistant |
+
+**Proof**: `frontend/prove_search_rank.mjs` — **78 checks**, §A replaying the reported sentence as the
+regression, with the armed negative control that the carrier report IS the top hit when asked for by
+name (so §A is the rule working, not the ranker refusing everything).
+
+### 54.2 `frontend/src/lib/search-catalog.ts` — the ONE home for "what can be found"
+
+PURE and import-free (types only). Exports `buildCatalog`, `entityOnly`, `catalogCounts`.
+
+It **declares no catalogue**. Five registries that already exist are passed IN and this file only
+folds and labels them — a sixth copy of "which pages exist" would be the duplicate defect:
+
+| Source | What it contributes | Gate applied BEFORE it arrives |
+|--------|--------------------|--------------------------------|
+| `rbac.ts` `TENANT_NAV` | every destination, and the label the viewer actually sees | `canSeeItem` per item |
+| `lib/reports.ts` `REPORT_CATEGORIES` | the report descriptions, and the fact a destination IS a report | `canSeeItem` per report |
+| `components/ScreenLink.tsx` `SCREENS` | the spellings prose uses for a screen ("closing gate") | dropped unless its nav href is one the viewer may open |
+| `GET /core/filter-options` → `stores` | one option per PHYSICAL store, folded through `core.scope.build_store_options` (§13e: 58 raw spellings for 31 real stores), with every unchosen spelling in `also_known_as` | org-scoped; the same list this viewer's own filter bars already offer |
+| `GET /storeops/employees/visible` → `employees` | the roster this login may see, with home store and role | the server's own `visible_people_keyset` (§14w) |
+
+**No new endpoint and no new query** — that is the duplicate check for this PR, stated: both entity
+reads are endpoints the platform already serves, fetched once when the overlay first opens rather
+than per keystroke, and either failing leaves the search working over pages and reports alone.
+
+**The fold is the point.** A page reachable from the nav AND listed as a report AND named in prose is
+ONE thing; before the fold it would be three entries that tie with each other and push the real
+answer off an eight-row list. `byHref` keys on the path with the query and anchor removed — the same
+key `rbac.navPath` gates on — so the two doors into `/hr` are one searchable entry, and each source
+MERGES rather than replaces: the nav supplies the label, the report catalogue the description,
+`SCREENS` the aliases.
+
+**An entity carries NO href, deliberately.** A store and a person are real answers to "509 nostrand"
+and "who is working", but the platform has no store page and no person page, and inventing an href
+would be worse than the gap — the same honesty convention `ScreenLink` states for the metric source
+of truth. A resolved entity is handed to the assistant as the SUBJECT of the question instead, and
+`entityOnly()` is the one predicate for that, so the renderer, the keyboard and the proof agree.
+
+**Proof**: `frontend/prove_search_catalog.mjs` — **57 checks**. §A replays the reported question
+against the assembled catalogue (the store wins, the person who works there ranks below it, the store
+at 1509 is not offered, and the carrier report is absent), with the armed control that removing the
+store source makes the sentence unanswerable again.
+
+### 54.3 The design lock
+
+`frontend/prove_search_console_lock.mjs` — **27 checks**, every one ARMED (run against a deliberately
+broken copy of the source in memory and required to go red). It fails the build if:
+
+- a console surface stops importing or stops CALLING `rank`, `intent` or `buildCatalog`;
+- a surface starts scoring, sorting, tokenizing or stopword-listing for itself (the exact shapes the
+  old code used — `hay`, `score =`, `localeCompare`, `.toLowerCase().split(`);
+- the ranker gains a runtime import, does I/O, names a registry, or drops an export;
+- the catalogue gains a runtime import, does I/O, scores, or **spells an in-app href**.
+
+§C is the counter-arming: it asserts the scanner still SEES code after comments and string literals
+are blanked. That blanking is necessary — the surface's own documentation quotes the patterns being
+forbidden — and it is also the exact trap `harness_data_qa_lock.py` hit (§52.3), where a textual check
+for a string literal was vacuous because the scanner had blanked it. The href rule therefore runs on
+a comments-stripped-but-strings-KEPT read, and B14 is the check that proves it is not vacuous.
+
+**No `module_graph.py` fact**: that registry's callers are DERIVED from the backend's Python AST
+import graph (§50), so a frontend fact would have no callers to derive and would be a hand-maintained
+literal — the thing §50 exists to remove. The lock above is the frontend equivalent.
+
+### 54.4 Three workforce questions the assistant did not have
+
+The reported question had no registered answer either, which is why there was nothing better for the
+console to fall through to. Added to `core/data_qa_registry.py` (§52.1), now **13** questions:
+
+| Question | Endpoint | Rows at | Grain |
+|----------|----------|---------|-------|
+| `store_schedule` | `GET /api/v1/storeops/shifts` | bare array | one row per shift — employee × store × date |
+| `visible_people` | `GET /api/v1/storeops/employees/visible` | `employees` | one row per employee this login may see |
+| `store_roster` (**re-pointed**) | `GET /api/v1/core/filter-options` | `stores` | one row per PHYSICAL store, other spellings in `also_known_as` |
+
+`store_roster` previously read `/commcalc/stores`, which is one of the two RAW store vocabularies
+(§13e) and carries no scope gate at all; the folded `/core/filter-options` means the assistant cannot
+report one store twice or treat two spellings as two stores.
+
+**Two measured facts a reader must not design around:**
+
+- **`storeops.shifts` is SCHEDULED, not clocked.** `scheduled_hours` is the reliable column: this
+  tenant has **no punched hours at all** — 0 of 640 July and 0 of 613 August shifts carry
+  `actual_hours > 0` (§14v). An answer built on `actual_hours` would read as zero rather than as "not
+  reported".
+- **8 active house-org employees have no `home_store`** and are deliberately kept visible rather than
+  dropped (§29.6), so "who works at store X" will not account for everybody.
+
+**None of the three is `self_safe`**, and the comment in the registry says why: the endpoints DO
+narrow a rep server-side (`storeops.gate_person_rows` → `core.scope.visible_people_keyset`, §14w),
+but the owner's directive names exactly two things a rep may ask the assistant — *"only their own
+commission, only their action plan"* (§52.7) — and marking a third would be the registry granting
+reach rather than recording it. `harness_data_qa_registry.py` §G2/§G5 fail the build if that set
+moves.
+
+### 54.5 What this does NOT do
+
+- **⌘K stays the nav destination search** and ⌘/ stays the question-and-entity console. The two were
+  left distinct rather than merged: `layout.tsx`'s ⌘K index is already built from the post-RBAC,
+  post-capability, post-layout nav (276 tenant-visible entries), and collapsing them would have meant
+  a third ranker or moving that gating out of the layout.
+- **There is still no customer in the catalogue.** `GET /pos/customers?search=` already matches name,
+  phone, alias and customer number properly (`pos/customer_master.search_ids`), so the `customer`
+  kind exists in the type and nothing feeds it yet; adding it is a source, not a mechanism.
+- **There is still no store or person SEARCH endpoint**, and none was written: the catalogue is small
+  enough (tens of stores, hundreds of people) that enumerating once and ranking client-side is both
+  cheaper and the only way the ranking stays in one home.
+
+### 54.6 Status
+
+Code complete and proved: **162 checks** across three Node, dependency-free proofs
+(`prove_search_rank.mjs` 78, `prove_search_catalog.mjs` 57, `prove_search_console_lock.mjs` 27), run
+by the `search-console` job in `.github/workflows/data-qa-guard.yml`. No migration. The entity half
+of the catalogue appears as soon as the two endpoints answer; the assistant half is live wherever
+`GET /core/data-qa/status` returns `allowed && configured` (§52.6).
