@@ -125,8 +125,9 @@ LANDERS = (
      "the carrier KPI portal sweep → raw_dlar_rep / raw_dlar_store (its inline recalculation is retired)"),
     ("app/modules/commcalc/epay_sweep.py", "_process_report",
      "the ePay portal sweep, month grain → raw_mi / raw_payment_detail"),
-    ("app/modules/commcalc/epay_sweep.py", "_store_day_grain",
-     "the ePay portal sweep, day grain (comp report)"),
+    ("app/modules/commcalc/epay_sweep.py", "_store_rows_by_day",
+     "the ePay portal sweep, DAY grain — the one per-day replace both callers reach "
+     "(`_store_day_grain`'s pulls and any registry-declared day-keyed feed; index §19.46)"),
     ("app/modules/commcalc/report_pull.py", "ingest_report_rows",
      "every portal pull (VidaPay / T-CETRA / Total Access) → raw_ma_* (vidapay_sweep._pull_one_report)"),
     ("app/modules/pos/commcalc_feed.py", "sync_period",

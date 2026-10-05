@@ -484,6 +484,9 @@ on:
       - "backend/harness_browser_sweep_kinds.py"
       - "backend/harness_feed_watchdog.py"
       - "backend/harness_empty_pull_verdict.py"
+      - "backend/harness_feed_day_grain.py"
+      - "backend/app/modules/commcalc/feed_period.py"
+      - "backend/app/modules/commcalc/data_lineage_registry.py"
       - "backend/app/modules/commcalc/empty_pull_verdict.py"
       - "backend/app/modules/commcalc/epay_sweep.py"
       - "backend/app/modules/commcalc/dlar_sweep.py"
@@ -742,6 +745,9 @@ jobs:
       - name: Run the silent-zero lock (a sweep's reported status is not a record of what it did — one home for "is this zero the source's own answer?", every empty_ok leg routed through it, the window never narrower than the arrears, success is what landed — index §19.41)
         working-directory: backend
         run: python3 harness_empty_pull_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the feed day-grain lock (a feed row's month is its OWN day's month, never the period someone picked; one home for the data-date map, dereferenced by the upload and the sweep; all-or-nothing stamping; every declared feed is day-keyed or declared period-grain with a reason — owner 2026-10-05, index §19.44)
+        working-directory: backend
+        run: python3 harness_feed_day_grain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
         working-directory: backend
         run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

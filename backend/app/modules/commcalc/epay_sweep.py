@@ -33,6 +33,7 @@ WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run 
 "Request Rejected", the sweep can be pointed at a residential/allow-listed egress.
 """
 from datetime import datetime, timedelta, timezone
+from app.modules.commcalc import feed_period as _feed_period  # THE feed-row month + per-day stamp (one home, pure)
 
 try:
     from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
@@ -340,7 +341,13 @@ REPORTS = {
     "payment_detail": {"report_id": PAYMENT_DETAIL_REPORT_ID, "table": "raw_payment_detail",
                        "file_type": "payment_detail", "registry_key": "payment_detail",
                        "grain": "none", "filter": None,
-                       "period": "current", "label": "Commission Payment Detail",
+                       # PERIOD "data", NOT "current" (owner 2026-10-05). This sibling of comp_report
+                       # is pulled from the same portal over the same ROLLING IN-ARREARS WINDOW, and it
+                       # used to stamp every row with the month the sweep happened to run in. The
+                       # 2026-10-04 pull covered 2026-09-05 … 2026-10-02 and filed 18,231 rows /
+                       # $415,862.56 of September's commission under October, which then read 28x its
+                       # own $15,460.69. The row carries `payment_date`; the row's month is its own.
+                       "period": "data", "label": "Commission Payment Detail",
                        "map": lambda recs, base: _map_filtered(recs, base, map_payment_detail_row)},
     "comp_report": {"report_id": COMP_REPORT_ID, "table": "raw_comp_report",
                     "file_type": "comp_report", "registry_key": "comp_report",
@@ -917,54 +924,77 @@ def _read_report_records(xlsx_path, label):
     return records, [str(c) for c in df.columns]
 
 
+
+def _lin_day_keyed():
+    """The registry's {table: data-date column} for DAY-KEYED feeds, dereferenced (owner 2026-10-05).
+
+    One accessor so this module names the registry once; see feed_period.py for the private copy of
+    this map that filed a month of commission twice."""
+    from app.modules.commcalc import data_lineage_registry as _lin
+    return _lin.day_keyed_date_columns()
+
 def _store_day_grain(client, org_id, spec, key, records, target):
-    """Comp: store a pull DAY BY DAY, each day replacing only its own begin_date.
+    """Store a pull DAY BY DAY, each day replacing only its own data date.
 
-    Why not by month: the pull is now a date range (often a single day), so replacing the month
-    would delete every other day in it. Each day is independent and idempotent, the month label
-    comes from the day itself, and a day the portal did not return is LEFT ALONE rather than
-    treated as deleted — we cannot tell "nothing posted" from "not included" and the safe reading
-    of an absent day is that we simply do not have news about it."""
+    Why not by month: the pull is a date RANGE (often a single day, sometimes a rolling in-arrears
+    window), so replacing the month would delete every other day in it. Each day is independent and
+    idempotent, the month label comes from the day itself, and a day the portal did not return is
+    LEFT ALONE rather than treated as deleted — we cannot tell "nothing posted" from "not included"
+    and the safe reading of an absent day is that we simply do not have news about it.
+
+    The day comes from the MAPPED row, in the column `data_lineage_registry` declares for this table
+    — so there is no second spelling of "which column is the date" anywhere on this path."""
     day_key = spec["day_key"]
-    by_day = {}
-    for r in records:
-        iso = _iso_day(_comp_get(r, "Begin Date", "BeginDate"))
-        if iso:
-            by_day.setdefault(iso, []).append(r)
-    if not by_day:
+    _prov = _period_now()
+    rows = spec["map"](records, {"org_id": org_id, "period": _prov[0],
+                                 "period_month": _prov[1], "period_year": _prov[2]})
+    stamp = _feed_period.day_stamp(rows, day_key)
+    if not stamp.stamped:
         raise EpayPortalError(
-            f"{spec['label']}: {len(records)} row(s) came back but not one carried a usable "
-            f"Begin Date, so they cannot be filed against a day. Columns seen: "
-            f"{', '.join(sorted(records[0].keys()))[:300]}")
+            f"{spec['label']}: {len(records)} row(s) came back but they cannot be filed against a "
+            f"day — {stamp.get('reason')}. Columns seen: "
+            f"{', '.join(sorted(records[0].keys()))[:300] if records else '(none)'}")
+    return _store_rows_by_day(client, org_id, spec, key, rows, day_key)
 
+
+def _store_rows_by_day(client, org_id, spec, key, rows, day_key):
+    """THE per-day replace for already-mapped, already-day-stamped rows. ONE home for both callers:
+    the `grain: "day"` pulls and any feed the registry declares DAY KEYED (owner 2026-10-05).
+
+    Each row must already carry its own `period`/`period_month`/`period_year` — `feed_period.day_stamp`
+    is what puts them there, and it refuses rather than guess, so a row filed here always belongs to
+    the day the delete covers."""
     from app.modules.commcalc.safe_replace import safe_replace as _safe_replace
+    by_day = {}
+    for r in rows:
+        by_day.setdefault(str(r.get(day_key)), []).append(r)
     days, saved_total, skipped = [], 0, []
     for iso in sorted(by_day):
-        period, pm, py = _period_of_day(iso)
-        base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
-        rows = spec["map"](by_day[iso], base)
-        if not rows:
-            continue
+        day_rows = by_day[iso]
         # Same partial-collapse guard as the month path, applied per DAY.
         existing = _day_row_count(client, spec["table"], org_id, day_key, iso)
-        if existing >= REPLACE_MIN_ROWS and len(rows) < existing * REPLACE_MIN_RETAIN:
-            skipped.append({"day": iso, "existing": existing, "pulled": len(rows)})
+        if existing >= REPLACE_MIN_ROWS and len(day_rows) < existing * REPLACE_MIN_RETAIN:
+            skipped.append({"day": iso, "existing": existing, "pulled": len(day_rows)})
             continue
-        res = _safe_replace(client, spec["table"], rows,
+        res = _safe_replace(client, spec["table"], day_rows,
                             lambda q, _k=day_key, _v=iso: q.eq("org_id", org_id).eq(_k, _v),
                             label=f"{key} {iso}")
         saved_total += res["saved"]
         days.append({"day": iso, "rows": res["saved"], "prior": res["prior"],
                      "warning": res.get("warning")})
+    _periods = sorted({r.get("period") for r in rows if r.get("period")})
     out = {"report": key, "label": spec["label"], "grain": "day",
-           "period": ", ".join(sorted({_period_of_day(d)[0] for d in by_day})),
+           "period": ", ".join(_periods), "periods": _periods,
            "days": days, "rows": saved_total, "mode": "replace_by_day"}
     # DATA LANDED (index §6l) — the ONE post-landing hook, for every month a written day belongs to. A table the
     # calculation does not read answers not_a_calc_input; nothing is recalculated inline here.
     from app.modules.commcalc import auto_calc as _auto_calc
-    out["auto_calc"] = _auto_calc.landed(client, org_id, table=spec["table"],
-                                         periods=[_period_of_day(d["day"])[0] for d in days if d.get("rows")],
-                                         source="epay_sweep", filename=spec["label"], rows=saved_total)
+    _written = {d["day"] for d in days if d.get("rows")}
+    out["auto_calc"] = _auto_calc.landed(
+        client, org_id, table=spec["table"],
+        periods=sorted({r.get("period") for r in rows
+                        if str(r.get(day_key)) in _written and r.get("period")}),
+        source="epay_sweep", filename=spec["label"], rows=saved_total)
     if skipped:
         out["skipped_guard"] = skipped
     return out
@@ -1059,6 +1089,9 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
     if spec.get("grain") == "day":
         return _store_day_grain(client, org_id, spec, key, records, target)
     mode = spec["period"]
+    # The registry's answer to "which column means the day this row is about", DEREFERENCED — never a
+    # header spelling repeated here. See feed_period.py for the duplicate this closes.
+    _day_col = _lin_day_keyed().get(spec["table"].split(".")[-1])
     if mode == "report_month":
         report_month = ""
         for r in records:
@@ -1067,10 +1100,12 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
                 break
         period, pm, py = _period_from_report_month(report_month)
     elif mode == "data":
-        # Store under the period the rows themselves belong to (their Begin Date). This is what makes
-        # a mis-set / non-moving Month filter harmless: the data is never mislabeled. Fall back to the
-        # requested target, then the current month, only if no Begin Date is parseable.
-        derived = comp_period_from_records(records)
+        # Store under the period the rows themselves belong to. This is what makes a mis-set /
+        # non-moving Month filter harmless: the data is never mislabeled. A provisional label here;
+        # when the registry declares this table's data-date column the ROWS decide below, per row,
+        # and the pull is replaced per DAY. Fall back to the requested target, then the current
+        # month, only when no row can prove its day.
+        derived = comp_period_from_records(records) if not _day_col else None
         if derived:
             period, pm, py = derived
         elif target and target.get("period"):
@@ -1081,6 +1116,16 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
         period, pm, py = _period_now()
     base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
     rows = spec["map"](records, base)
+
+    # ── EACH ROW UNDER ITS OWN DAY'S MONTH, REPLACED PER DAY (owner 2026-10-05) ──────────────────
+    # All or nothing: when a row cannot prove its day we keep the (org, period) replace below, which
+    # is a real delete covering every row inserted. Never a per-day delete that could not reach the
+    # row it could not read — that asymmetry is exactly how a re-pull duplicates a month.
+    if mode == "data" and _day_col and rows:
+        _stamp = _feed_period.day_stamp(rows, _day_col)
+        if _stamp.stamped:
+            return _store_rows_by_day(client, org_id, spec, key, rows, _day_col)
+        print(f"WARN epay sweep {key}: {_stamp.get('reason')} — stored under {period}")
 
     # PARTIAL-COLLAPSE guard: never replace a populated period with a drastically smaller pull. A
     # canceled account legitimately dropping out shrinks a period slightly; a pull collapsing it to a

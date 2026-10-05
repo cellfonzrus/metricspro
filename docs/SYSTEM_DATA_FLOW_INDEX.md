@@ -5970,6 +5970,7 @@ rendering the resolved name.
 | `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
 | `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `FEED_CADENCE_BY_TABLE` / `FEED_LABEL_BY_TABLE` / `NOT_WATCHED_REASONS` (code registry) — **which feeds are watched, how often each is due, which column names the day its DATA is about (distinct from the ARRIVAL column in `FRESHNESS_COLUMN_BY_TABLE`), and the human name each is reported under.** `watched_feeds()` is DERIVED from `INGEST_TABLES_BY_MODULE` minus the declared exclusions, so a registered feed is watched the same day — 22 watched, 24 excused with a reason, 0 unaccounted | code | `router._data_freshness_report` (the set, each cadence, each label), `router._duty_last_loaded` (`data_date_column()` → `freshness_column()` fallback; `_DUTY_DATE_COL` deleted); lock `harness_feed_watchdog.py` (50) — §19.43 |
+| `data_lineage_registry.PERIOD_GRAIN_REASONS` + `day_keyed_date_columns()` / `is_day_keyed()` (code registry) — **which feeds are replaced by DAY and carry their own month, and which are replaced per PERIOD with a stated reason.** DERIVED from `DATA_DATE_COLUMN_BY_TABLE`, so a feed that declares a data-date column is day-keyed the same day; a declared table that is neither fails the build | code | `router._upload_file_impl` (`DATE_KEYED` is the derivation, no literal map), `epay_sweep._pull_and_store` / `_store_day_grain` / `_store_rows_by_day`; one parser `commcalc/feed_period.py`; lock `harness_feed_day_grain.py` (85) — §19.46 |
 | `commcalc.asset_ledger` / `pos_tender_summary` / `inventory_value` — their **arrival** column, newly declared: these three have NO `created_at`, so the default left `last_ingest_at` None and the §19.18 arrival-vs-content diagnosis was dead on them | migrations (unchanged); `FRESHNESS_COLUMN_BY_TABLE` declares `uploaded_at` / `updated_at` / `updated_at` | `_table_feed_freshness` via `data_lineage_registry.freshness_column` — §19.43 |
 | `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
 | *(none — §40 One domain creates no table and touches no database; its facts are deploy config, see §18)* | — | — |
@@ -6458,6 +6459,7 @@ rendering the resolved name.
 | **What bearer token do I use for this vendor right now?** | `api_credential.access_token(client, org_id, login_row, host)` | ONE home `supply/api_credential.py`; client id + secret on the vendor's `commcalc.data_source` row exchanged for a ~24h token, cached in `session_state`, re-minted inside the refresh margin. `describe()` never returns the token. Lock `harness_order_transport.py` §G — §51.6 |
 | **How does an order reach this vendor, and may a sweep send it?** — two separate facts: whether the route can reach them at all, and whether using it PLACES an order | `order_transport.transport_for(vendor)` + `push_enabled(route, switch)` | ONE home `supply/order_transport.py`; the only dialect is `supply/shopify_draft_order.py`, selected by a config VALUE (RULE TWO); lock `harness_order_transport.py` (143) — §51. Nothing is switched on: `po_mode` is `off` for every tenant and no vendor declares a route |
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
+| **Which month does this feed row belong to, and what does this upload replace?** — the row's OWN data date, and the DAYS the file covers; never the period an operator picked or the month a sweep ran in. All or nothing: a row that cannot prove its day keeps the period replace | `data_lineage_registry.day_keyed_date_columns()` (+ `PERIOD_GRAIN_REASONS` for the archives) | ONE parser `commcalc/feed_period.py` (`period_of_day` / `month_spread` / `day_stamp`); dereferenced by the manual upload and the nightly sweep; lock `harness_feed_day_grain.py` (85) — §19.46. Live 2026-10-05: 80,614 payment-detail rows / $579,926.24 were filed under the wrong month, October reading 28x its own $15,460.69 |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
@@ -6634,6 +6636,72 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.46 **A FEED ROW'S MONTH IS ITS OWN DAY'S MONTH, NEVER THE PERIOD SOMEONE PICKED — the commission
+that was counted twice (owner 2026-10-05: *"check the commission reports for boost as it seems very
+high like we were check the other day"*; fixed).**
+
+**Evidence (live, read-only, house org).** `commcalc.raw_payment_detail` was stamped with the period an
+operator picks at upload — and, on the nightly sweep, with the month the sweep happened to RUN in
+(`REPORTS['payment_detail']['period'] = 'current'`) — then replaced per `(org, period)`. The portal
+serves that report over a rolling IN-ARREARS WINDOW, not a month:
+
+| period stored | the report reads | rows whose `payment_date` is in that month | mis-filed |
+|---|---|---|---|
+| August 2026 | $539,797.49 | **$392,361.90** | +$147,435.59 — 61,681 rows, all July's |
+| September 2026 | $480,624.23 | **$463,996.14** | +$16,628.09 — 702 rows dated 2026-08-31 |
+| October 2026 | $431,323.25 | **$15,460.69** | +$415,862.56 — 18,231 rows, all September's |
+
+80,614 rows / **$579,926.24** mis-filed in all. October read **28x** its own figure, and the carrier's
+own `raw_comp_report` agrees to the penny with the smaller number ($15,460.69). The duplicate is
+visible on every surface that reads payment detail BY PERIOD — the GP report's Commission column
+(`router` ~23125 / ~23987 / ~24423) and `_run_calculation`'s `pay_detail` fetch, which is why a little
+October rep pay (trade-in spiff counts) moved too.
+
+**THE CLASS, not the instance.** The general fact that was wrong is *"a row's month came from the
+upload instead of from the row"*. That question already had ONE home —
+`data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` — and `router.DATE_KEYED` kept its own four-entry
+copy (`daily_sales`/`ma_commission`/`ma_daily_tx`/`ma_fulfillment`), so the per-day replace that makes
+a rolling re-pull idempotent reached the feeds somebody remembered to list. §19.18's shape for the
+fourth time. It is also why `raw_comp_report` was given a multi-month upload guard in 2026-08 while its
+SIBLING — same portal, same window — never was.
+
+**THE DESIGN FIX.**
+- **One home, dereferenced.** `data_lineage_registry.day_keyed_date_columns()` DERIVES {table → data-date
+  column} from `DATA_DATE_COLUMN_BY_TABLE` minus the declared `PERIOD_GRAIN_REASONS`. `router.DATE_KEYED`
+  is now that derivation through `TABLE_MAP`; no literal map survives on either writer.
+- **One parser.** `commcalc/feed_period.py` (pure, stdlib, no clock) answers `period_of_day` /
+  `month_spread` / `day_stamp`. `epay_sweep.comp_month_spread` is no longer the only thing that can see a
+  multi-month file, and the sweep's day path reads the registry's COLUMN instead of the `"Begin Date"`
+  header spelling.
+- **ALL OR NOTHING.** `day_stamp` stamps every row or none: a row whose day cannot be read is a row a
+  per-day delete could not cover, so the caller keeps its `(org, period)` replace — a real delete either
+  way, never the asymmetry that duplicates a month. Live posture: payment detail and comp carry a date
+  on every row; `raw_dlar_rep` / `raw_dlar_store` are ~85% blank on `as_of_date` and stay
+  byte-identical until that feed starts carrying it.
+- **One per-day store.** `epay_sweep._store_rows_by_day` is the single replace loop, reached by the
+  `grain: "day"` pulls and by any registry-declared day-keyed feed. `REPORTS['payment_detail']['period']`
+  is now `"data"`, like its sibling.
+- **Said out loud.** The upload reply carries `day_grain` = {date_column, stamped, rows, unproven,
+  months}: a rolling window covering two months now lands correctly AND says that it did.
+
+**THE SIBLINGS WERE MEASURED BEFORE IT SHIPPED** (rows whose data date falls outside their stored
+period): `raw_payment_detail` 80,614 / $579,926.24 · `raw_comp_report` **0** · `raw_ma_commission` **0** ·
+`raw_ma_daily_tx` **0** · `daily_sales_feed` **0**. Generalising the fix therefore moves nothing else
+today and cannot drift tomorrow.
+
+**⚠ THE STORED ROWS ARE STILL DUPLICATED — reported, not hidden.** The code stops the next pull from
+doing it; it does not rewrite history. The repair (delete from each period the rows whose `payment_date`
+is in a different month) is money-touching and waits on the owner:
+`/mnt/project-files/commission-month/RUN_payment_detail_month_repair_2026-10-05.sql`.
+
+**⚠ A SEPARATE GAP, ALSO REPORTED.** The 2026-08-24 pull stopped at 2026-08-20 and the 2026-09-30 pull
+starts at 2026-08-31, so **2026-08-21 … 08-30 has no payment detail at all**. That is a missing pull,
+not a defect to code around; it needs a re-pull of those ten days.
+
+**Proof:** `backend/harness_feed_day_grain.py` (85 checks, DB-free — §A reproduces the duplicate, §D pins
+all-or-nothing, §E is the un-wiring lock, §F makes omission not compile, §G pins the siblings). CI:
+`carrier-vocab-guard`.
 
 §19.45 **THE EMPLOYEE NUMBER WAS MISSING FROM THE PAYROLL CHANGE LOG — a log row says WHO from the stored record
 (owner 2026-10-03, Vzone; fixed).** **Evidence (live, read-only):** `storeops.payroll_change_log` rows at
