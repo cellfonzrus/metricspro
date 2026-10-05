@@ -4,16 +4,31 @@
 //   1. Quick answer — recognises a metric intent + a period and fetches the number from the SAME endpoints
 //      the reports use (no LLM, no API key, so it can't hallucinate a figure), with a link to the full
 //      report.
-//   2. Jump to a report — ranks the permission-filtered report catalogue by the words you typed and lets
-//      you open any of them (Enter opens the top hit).
+//   2. Search the platform — ranks everything the viewer may already open (pages, settings, reports)
+//      PLUS the stores and people they may already see, by what the words MEAN, and lets you open any
+//      destination (Enter opens the top hit).
 // Opened with ⌘/ (Ctrl-/) or the nav button; Esc closes. Everything here is display/navigation only.
+//
+// WHAT CHANGED 2026-10-05, and why (owner: *"i asked who is working in 509 nostrand and it took me to
+// Carrier Earned vs Employee Paid"* → *"need this to be a true search and ai console built for the
+// platform"*). The search half had two faults and both are fixed in shared, proved modules rather than
+// tuned here: it scored one point per typed word found anywhere in a REPORT's text, so "who", "is" and
+// "in" carried the whole ranking (now `@/lib/search-rank`), and the only catalogue it searched was the
+// 58 curated report entries, so a store address could never match (now `@/lib/search-catalog`, which
+// folds the registries that already exist). The owner's division of labour: *"search module will only
+// search what modules are build but ask assistant will act as a ai"* — so a question nothing in the
+// catalogue explains is handed to the assistant instead of guessed at.
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { REPORT_CATEGORIES } from '@/lib/reports'
-import { canSeeItem, type Permissions } from '@/lib/rbac'
+import { canAccessPath, canSeeItem, TENANT_NAV, type Permissions, type Scope } from '@/lib/rbac'
+import { SCREENS } from '@/components/ScreenLink'
+import { buildCatalog, entityOnly, type StoreSource, type PersonSource } from '@/lib/search-catalog'
+import { rank, intent as searchIntent, askDoor, type Hit, type SearchKind } from '@/lib/search-rank'
+import { searchableRoutes } from '@/lib/route-index'
 // The SAME panel the helpdesk page mounts — one Ask AI in the product, mounted in the one
 // overlay that is already available everywhere (⌘/), so the assistant needed no new widget
 // and no change to the platform layout.
@@ -62,31 +77,93 @@ const INTENTS: Intent[] = [
     resolve: async (p, o) => { const rows = await api(join(`/api/v1/commcalc/commissions/${enc(p)}`, o)); const t = (rows || []).reduce((s: number, r: any) => s + (r.total_payout || 0), 0); return { value: fmt(t), href: '/commcalc' } } },
 ]
 
-// The permission-filtered, flattened report catalogue for the jump list.
-function useReportIndex(permissions: Permissions) {
+// What the search half can find. Assembled by `@/lib/search-catalog` from the registries that
+// ALREADY exist — there is no catalogue declared here, which is the point: a second list of "which
+// pages exist" would drift from the nav the moment either changed.
+//
+// PERMISSIONS ARE APPLIED HERE, BEFORE RANKING, by each source's own existing gate: `canSeeItem` for
+// the nav and the report catalogue (so search can never surface a page the viewer could not already
+// click), and the server's own scope gate for the stores and people, which arrive already narrowed.
+function useSearchCatalog(permissions: Permissions, stores: StoreSource, people: PersonSource) {
   return useMemo(() => {
-    const out: { href: string; label: string; category: string; desc?: string; hay: string }[] = []
-    for (const cat of REPORT_CATEGORIES) {
-      for (const r of cat.reports) {
-        if (!canSeeItem(permissions, { href: r.href, label: r.label, icon: '', module: r.module, scopes: r.scopes } as any)) continue
-        out.push({ href: r.href, label: r.label, category: cat.category, desc: r.desc, hay: `${r.label} ${cat.category} ${r.desc || ''}`.toLowerCase() })
-      }
-    }
-    return out
-  }, [permissions])
+    // One shaped NavItem per candidate, so the nav and the report catalogue are gated by the SAME
+    // predicate (`canSeeItem`) rather than two readings of it. A ReportDef carries no icon.
+    const seeable = (href: string, label: string, module: string, scopes?: Scope[]) =>
+      canSeeItem(permissions, { href, label, icon: '', module, scopes })
+    const nav = TENANT_NAV
+      .map(g => ({ group: g.group, items: g.items.filter(it => seeable(it.href, it.label, it.module, it.scopes)) }))
+      .filter(g => g.items.length > 0)
+    const reports = REPORT_CATEGORIES
+      .map(c => ({ category: c.category, reports: c.reports.filter(r => seeable(r.href, r.label, r.module, r.scopes)) }))
+      .filter(c => c.reports.length > 0)
+    // SCREENS is the spellings registry (`ScreenLink`), and every one of its hrefs IS a nav href —
+    // which is what makes this safe: an alias only ever lands on a destination the fold already
+    // holds, or on nothing. A screen whose page the viewer may not open is dropped with it.
+    const openable = new Set(nav.flatMap(g => g.items.map(it => it.href.split('#')[0].split('?')[0])))
+    const screens = Object.values(SCREENS)
+      .filter(sc => openable.has(sc.href.split('#')[0].split('?')[0]))
+      .map(sc => ({ href: sc.href, label: sc.label, blurb: sc.blurb, aliases: sc.aliases }))
+    // EVERY page that exists, gated by the one home for "may this viewer open this path". Before
+    // this source the catalogue was curated and 34 pages were in no registry at all — the owner
+    // asked for a password reset and search found nothing, because `/account/password` is a real
+    // page that nothing listed. Passed last so the nav keeps the labels it has (§54.7).
+    const routes = searchableRoutes().filter(r => canAccessPath(permissions, r.path))
+    return buildCatalog({ nav, reports, screens, routes, stores, people })
+  }, [permissions, stores, people])
+}
+
+// The stores and the people, from the endpoints that ALREADY serve them — no new data path, which is
+// what the duplicate-check gate asks for. `/core/filter-options` is the one home that folds the two
+// raw store vocabularies to one option per physical store (§13e: 58 raw spellings for 31 real
+// stores), and it is the same list this viewer's own filter bars already offer them.
+// `/storeops/employees/visible` is the roster narrowed by the server's `visible_people_keyset`
+// (§14w), so a rep searching finds themselves and a manager finds their team.
+//
+// Fetched ONCE, the first time the overlay is opened — not per keystroke. Either failing leaves the
+// search working over pages and reports alone, because a search box that errors is worse than one
+// that finds less.
+function useEntities(open: boolean) {
+  const [stores, setStores] = useState<StoreSource>([])
+  const [people, setPeople] = useState<PersonSource>([])
+  const asked = useRef(false)
+  useEffect(() => {
+    if (!open || asked.current) return
+    asked.current = true
+    let live = true
+    api(join('/api/v1/core/filter-options', orgParam()))
+      .then((d: { stores?: StoreSource }) => { if (live && Array.isArray(d?.stores)) setStores(d.stores) })
+      .catch(() => {})
+    api(join('/api/v1/storeops/employees/visible', orgParam()))
+      .then((d: { employees?: PersonSource }) => { if (live && Array.isArray(d?.employees)) setPeople(d.employees) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [open])
+  return { stores, people }
+}
+
+// How each kind of hit reads in the list. A destination says where it lives; an entity says what it
+// is, because there is no page to open for it (see `entityOnly` in search-catalog.ts).
+const KIND_LABEL: Record<SearchKind, string> = {
+  page: 'Page', report: 'Report', setting: 'Setting',
+  store: 'Store', person: 'Person', customer: 'Customer',
 }
 
 export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   const router = useRouter()
   const { period } = usePeriod()
   const { permissions } = useAuth()
-  const reports = useReportIndex(permissions || {})
   const [open, setOpen] = useState(false)
+  const { stores, people } = useEntities(open)
+  const catalog = useSearchCatalog(permissions || {}, stores, people)
   const [q, setQ] = useState('')
   const [ans, setAns] = useState<{ intent: Intent; period: string; label: string; value?: string; href?: string; loading: boolean } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   // The assistant hand-off (index §52) — see the block below `onSubmit`.
   const [askAI, setAskAI] = useState('')
+  // WHICH door the assistant should open for this question, decided in the shared module rather than
+  // left to the person: "someone wanted a password reset" belongs to the how-to door, which knows the
+  // product, not to the data door, which has no answer for it.
+  const door = useMemo(() => askDoor(q), [q])
   const [canAskAI, setCanAskAI] = useState(false)
 
   // ⌘/ (Ctrl-/) opens — ⌘K is already taken by the nav menu-filter, so the ask bar uses a distinct key.
@@ -107,17 +184,16 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   }, [])
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 30) }, [open])
 
-  // Rank reports by how many typed words they match (label/category/desc), then alphabetically.
-  const hits = useMemo(() => {
-    const terms = q.toLowerCase().split(/\s+/).filter(t => t.length > 1)
-    if (!terms.length) return reports.slice(0, 8)
-    return reports
-      .map(r => ({ r, score: terms.reduce((s, t) => s + (r.hay.includes(t) ? 1 : 0), 0) + (r.label.toLowerCase().startsWith(terms[0]) ? 0.5 : 0) }))
-      .filter(x => x.score > 0)
-      .sort((a, b) => b.score - a.score || a.r.label.localeCompare(b.r.label))
-      .slice(0, 8)
-      .map(x => x.r)
-  }, [q, reports])
+  // ONE ranking decision, taken in the shared proved module. `hits` is empty for an empty query:
+  // the suggestion list below is a separate, deliberate thing rather than a rank of nothing.
+  const hits: Hit[] = useMemo(() => rank(catalog, q, 8), [q, catalog])
+  // And ONE decision about what to DO with it, so the mouse, Enter and the panel cannot disagree.
+  const mode = useMemo(() => searchIntent(q, hits), [q, hits])
+  // The first thing the viewer can actually OPEN — Enter follows this, never an entity.
+  const firstDest = useMemo(() => hits.find(h => !entityOnly(h.item)) || null, [hits])
+  // Suggestions for an untouched box: the reports, as before.
+  const suggestions = useMemo(
+    () => catalog.filter(i => i.kind === 'report').slice(0, 8), [catalog])
 
   // Detect the best metric intent and fetch its value for the resolved period (debounced, cancellable).
   useEffect(() => {
@@ -136,7 +212,14 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   }, [q, period])
 
   const go = useCallback((href: string) => { setOpen(false); setAskAI(''); setQ(''); router.push(href) }, [router])
-  const onSubmit = () => { if (ans?.href) go(ans.href); else if (hits[0]) go(hits[0].href) }
+  // Enter: the deterministic figure first, then the first thing that can be OPENED. When the console
+  // judged the query a question nothing explains, Enter asks the assistant rather than navigating —
+  // which is the owner's reported defect stated as a keystroke.
+  const onSubmit = () => {
+    if (ans?.href) { go(ans.href); return }
+    if (mode === 'ask' && canAskAI && q.trim().length > 3) { setAskAI(q.trim()); return }
+    if (firstDest) go(firstDest.item.href)
+  }
 
   // ── THE ASSISTANT HAND-OFF (index §52) ───────────────────────────────────────────────────────
   // This bar is DETERMINISTIC and stays the first answer: it recognises a metric intent and reads the
@@ -190,7 +273,7 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
             style={{ width: 'min(620px, 96vw)', padding: 0, overflow: 'hidden', boxShadow: 'var(--shadow-lg)' }}>
             <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
               onKeyDown={e => { if (e.key === 'Escape') closeOverlay(); if (e.key === 'Enter') onSubmit() }}
-              placeholder="Ask a question or search reports —  e.g. “net income last month”, “sales august”, “kpi”"
+              placeholder="Ask a question, or search pages, reports, stores and people"
               style={{ width: '100%', border: 'none', borderBottom: '1px solid var(--border)', padding: '15px 18px',
                 fontSize: 15, outline: 'none', background: 'var(--surface)', color: 'var(--text)' }} />
             <div style={{ maxHeight: '52vh', overflow: 'auto' }}>
@@ -212,41 +295,79 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
                   )}
                 </div>
               )}
-              {/* Report jump list */}
-              {hits.length > 0 ? (
+              {/* Search results. A destination opens; an entity (a store, a person) has no page to
+                  open, so selecting it asks the assistant ABOUT it — see `entityOnly`. */}
+              {!q && suggestions.length > 0 && (
                 <div style={{ padding: 6 }}>
-                  {!q && <div style={{ fontSize: 11, color: 'var(--text3)', padding: '4px 10px' }}>Jump to a report</div>}
-                  {hits.map((r, i) => (
-                    <button key={r.href} onClick={() => go(r.href)}
+                  <div style={{ fontSize: 11, color: 'var(--text3)', padding: '4px 10px' }}>Jump to a report</div>
+                  {suggestions.map(it => (
+                    <button key={it.key} onClick={() => go(it.href)}
                       style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 10px',
-                        borderRadius: 7, border: 'none', background: i === 0 && q ? 'var(--surface2)' : 'transparent', cursor: 'pointer' }}>
-                      <span style={{ fontSize: 13.5, fontWeight: 550, color: 'var(--text)' }}>{r.label}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>{r.category}</span>
+                        borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer' }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 550, color: 'var(--text)' }}>{it.label}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>{it.category}</span>
                     </button>
                   ))}
                 </div>
-              ) : q ? (
-                <div style={{ padding: '18px 16px', fontSize: 13, color: 'var(--text3)' }}>No matching report. Try a metric (“net income”, “activations”) or a report name.</div>
-              ) : null}
+              )}
+              {q && hits.length > 0 && (
+                <div style={{ padding: 6 }}>
+                  {hits.map((h, i) => {
+                    const it = h.item
+                    const isEntity = entityOnly(it)
+                    const lead = mode === 'navigate' && h === firstDest
+                    return (
+                      <button key={it.key}
+                        onClick={() => (isEntity ? setAskAI(`${q.trim()}`) : go(it.href))}
+                        disabled={isEntity && !canAskAI}
+                        title={isEntity ? `${it.label} — ask the assistant about it` : it.desc || it.label}
+                        style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 10px',
+                          borderRadius: 7, border: 'none', background: lead ? 'var(--surface2)' : 'transparent',
+                          cursor: isEntity && !canAskAI ? 'default' : 'pointer' }}>
+                        <span style={{ fontSize: 13.5, fontWeight: 550, color: 'var(--text)' }}>{it.label}</span>
+                        {it.context && <span style={{ fontSize: 11, color: 'var(--text3)' }}>{it.context}</span>}
+                        <span style={{ flex: 1 }} />
+                        <span style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          {KIND_LABEL[it.kind]}
+                        </span>
+                        {!isEntity && it.category && <span style={{ fontSize: 11, color: 'var(--text3)' }}>{it.category}</span>}
+                        {i === 0 && isEntity && <span style={{ fontSize: 11, color: 'var(--text3)' }}>↓ ask about it</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {q && hits.length === 0 && mode !== 'ask' && (
+                <div style={{ padding: '18px 16px', fontSize: 13, color: 'var(--text3)' }}>Nothing on the platform matches that. Try a metric (“net income”, “activations”), a report name, a store or a person.</div>
+              )}
               {/* Ask the assistant — offered for any typed question, and the one place in the app
                   where a model is asked about the numbers. Nothing is sent until this is clicked. */}
               {canAskAI && q.trim().length > 3 && !askAI && (
                 <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
                   <button onClick={() => setAskAI(q.trim())}
                     style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '8px 10px', borderRadius: 7, border: '1px dashed var(--border)',
+                      padding: '8px 10px', borderRadius: 7,
+                      border: mode === 'ask' ? '1px solid var(--accent2)' : '1px dashed var(--border)',
                       background: 'transparent', cursor: 'pointer', fontSize: 13 }}>
                     <span>🤖</span>
                     <span>Ask the assistant: <b>“{q.trim()}”</b></span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      {door === 'howto' ? 'how to' : 'your data'}
+                    </span>
+                    {mode === 'ask' && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>Enter ↵</span>}
                   </button>
                   <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>
-                    It reads your own reports and can group, rank, pivot and chart them.
+                    {mode === 'ask'
+                      ? (door === 'howto'
+                          ? 'That reads as a question about how the product works, so it goes to the how-to assistant rather than to the closest-looking page.'
+                          : 'That reads as a question about your numbers, and nothing on the platform is named that — so it goes to the data assistant rather than to the closest-looking page.')
+                      : 'It reads your own reports and can group, rank, pivot and chart them.'}
                   </div>
                 </div>
               )}
               {askAI && (
                 <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                  <AiAssistant initialOpen compact initialQuestion={askAI} />
+                  <AiAssistant initialOpen compact initialQuestion={askAI} initialMode={door} />
                 </div>
               )}
             </div>

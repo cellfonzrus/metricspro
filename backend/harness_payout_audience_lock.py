@@ -68,6 +68,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
 FE = os.path.join(os.path.dirname(ROOT), "frontend", "src", "app", "(platform)", "commcalc")
 RBAC = os.path.join(os.path.dirname(ROOT), "frontend", "src", "lib", "rbac.ts")
+# The derived page registry (index 54.7): generated from a walk of src/app, so it names every page
+# that exists, gated pages included. It renders nothing, and its readers gate — see i2 below.
+PAGE_REGISTRY = "lib/route-index.ts"
+REGISTRY_IMPORT = re.compile(r"from\s+['\"]@/lib/route-index['\"]")
 DRILL = "modules/commcalc/commission_drilldown.py"
 ISR = "modules/commcalc/inventory_sold_recon.py"
 CORE = "modules/core/router.py"
@@ -502,13 +506,30 @@ def carrier_violations(be, fe, rbac, fe_all=None):
     vp = py_code(fn_body(home_src, "viewer_payload"))
     if "if allowed else list(MANAGER_ONLY_PAGES)" not in vp or 'aud != "employee"' not in vp:
         v.append(("i2", HOME, "viewer_payload no longer refuses every carrier page to a viewer without the permission"))
+    # A registry that lists EVERY page the app has cannot assert the viewer's permission — it has no
+    # viewer. Its CALLERS must, and the gate they call is the nav's own `canAccessPath`, which (f)
+    # above already proves asks `payoutRefused` before any bypass. So the derived page registry is
+    # excused from naming the gate itself and held to a stricter rule in exchange: it may render no
+    # link at all, something must read it, and EVERY file that reads it must dereference
+    # canAccessPath. One hop, proved at both ends — not an exception.
+    reg_src = ts_code(fe_all.get(PAGE_REGISTRY, ""))
+    if reg_src:
+        if re.search(r"href\s*[=:]|<a\s|useRouter|router\.push", reg_src):
+            v.append(("i2", PAGE_REGISTRY, "the page registry renders a link, so it must ask payoutRefused itself"))
+        importers = [r for r, src in sorted(fe_all.items())
+                     if r != PAGE_REGISTRY and REGISTRY_IMPORT.search(ts_code(src))]
+        if not importers:
+            v.append(("i2", PAGE_REGISTRY, "nothing reads the page registry, so the gate on it cannot be proved"))
+        for r in importers:
+            if "canAccessPath(" not in ts_code(fe_all[r]):
+                v.append(("i2", r, "reads the page registry without gating it through canAccessPath"))
     for k, pages, menu in registry(home_src, with_menu=True):
         if menu:
             continue
         for pg in pages:
             own = pg.split("/commcalc/", 1)[-1] + "/"
             for rel, src in sorted(fe_all.items()):
-                if ("app/(platform)/commcalc/" + own) in rel:
+                if ("app/(platform)/commcalc/" + own) in rel or rel == PAGE_REGISTRY:
                     continue
                 code = ts_code(src)
                 # any string literal naming the page (an href, or a constant an href reads) — the file must ask the
@@ -724,6 +745,15 @@ check("(e) i2 /me's payload hiding carrier pages from reps only (store managers 
 _DASH = "app/(platform)/commcalc/page.tsx"
 v = planted(fe_all_mut={_DASH: FE_ALL[_DASH].replace("payoutRefused", "canSeeReport")})
 check("(e) i2 a link to the menu-less carrier diagnostic that does not ask payoutRefused → RED", red(v, "i2", _DASH))
+# The derived page registry names every page, gated ones included, and is excused from naming the
+# gate only because its readers dereference canAccessPath. Both halves of that bargain are armed.
+_READER = "components/AskBar.tsx"
+v = planted(fe_all_mut={_READER: FE_ALL[_READER].replace("canAccessPath(", "alwaysTrue(")})
+check("(e) i2 a reader of the derived page registry dropping canAccessPath → RED", red(v, "i2", _READER))
+v = planted(fe_all_mut={PAGE_REGISTRY: FE_ALL[PAGE_REGISTRY] + "\nexport const Link = () => <a href='/commcalc/commission-explain'/>\n"})
+check("(e) i2 the derived page registry growing a rendered link → RED", red(v, "i2", PAGE_REGISTRY))
+v = planted(fe_all_mut={_READER: FE_ALL[_READER].replace("from '@/lib/route-index'", "from '@/lib/nothing'")})
+check("(e) i2 nothing reading the derived page registry at all → RED", red(v, "i2", PAGE_REGISTRY))
 v = planted(be_mut={ROUTER: be[ROUTER].replace('    if carrier:\n        _require_carrier_view(authorization, org_id, "commission_explain_carrier")\n',
                                                '    if carrier:\n        pass\n')})
 check("(e) i2 commission-explain's carrier view served without the refusal → RED",

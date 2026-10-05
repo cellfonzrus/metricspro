@@ -50,8 +50,13 @@ type DataStatus = { module_enabled: boolean; configured: boolean; allowed: boole
                     questions?: { question: string; label: string; answers: string }[] }
 type HowtoStatus = { module_enabled: boolean; configured: boolean }
 
-export default function AiAssistant({ initialOpen = false, initialQuestion = '', compact = false }: {
+export default function AiAssistant({ initialOpen = false, initialQuestion = '', compact = false,
+                                      initialMode }: {
   initialOpen?: boolean; initialQuestion?: string; compact?: boolean
+  /** Which door a handed-off question belongs to, decided by `search-rank.askDoor` (§54.8). The
+   *  caller names it; this component still falls back to the door the tenant is actually entitled
+   *  to, so a routing opinion can never produce a refusal where an answer was available. */
+  initialMode?: Mode
 }) {
   const [open, setOpen] = useState(!!initialOpen)
   const [mode, setMode] = useState<Mode>('data')
@@ -117,10 +122,16 @@ export default function AiAssistant({ initialOpen = false, initialQuestion = '',
   useEffect(() => {
     if (sentInitial.current || !initialQuestion || !data) return
     sentInitial.current = true
-    const use: Mode = data.allowed ? 'data' : 'howto'
+    // The caller's routing is honoured when the tenant may use that door; otherwise the entitled
+    // door answers. A question routed to 'howto' is asked there even when the data door is open —
+    // that IS the fix: "how do I reset a password" has no answer in the reports.
+    const want: Mode = initialMode || 'data'
+    const use: Mode = want === 'howto'
+      ? (howto?.module_enabled && howto?.configured ? 'howto' : (data.allowed ? 'data' : 'howto'))
+      : (data.allowed ? 'data' : 'howto')
     setMode(use)
     void send(initialQuestion, use)
-  }, [initialQuestion, data, send])
+  }, [initialQuestion, data, howto, initialMode, send])
 
   const dataOK = !!data?.allowed
   // Unchanged contract: a tenant entitled to neither assistant sees nothing at all.

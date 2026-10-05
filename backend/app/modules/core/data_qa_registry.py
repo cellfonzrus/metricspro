@@ -229,12 +229,64 @@ DATA_QUESTIONS: dict[str, dict] = {
     "store_roster": {
         "label": "The stores this login may see",
         "answers": "Which stores do I have? What are they called? Which market is a store in?",
-        "path": "/api/v1/commcalc/stores",
+        # §13e: `/commcalc/stores` and `/storeops/stores` are the two RAW store vocabularies, and
+        # unioning them offered 58 options for 31 real stores. `/core/filter-options` is the ONE home
+        # that folds them through `core.scope.build_store_options` — one option per physical store,
+        # every unchosen spelling kept in `also_known_as`. The assistant reads the folded list so it
+        # cannot report one store twice or treat two spellings as two stores.
+        "path": "/api/v1/core/filter-options",
         "params": {},
         "rows_at": ("stores", "rows"),
-        "grain": "one row per store",
+        "grain": "one row per physical store, with its other spellings in also_known_as",
         "module": None,
-        "index": ("13",),
+        # NOT self_safe. The route would narrow nothing for a rep, and the owner's directive is that
+        # a rep may ask about *"only their own commission, only their action plan"* — so widening it
+        # here, however harmless the rows look, would be this file deciding a policy it was told.
+        "index": ("13", "13e"),
+    },
+    # ── WORKFORCE (owner 2026-10-05: *"i asked who is working in 509 nostrand"*) ─────────────────
+    # The question that exposed the gap. Before these two rows the assistant had no scheduling read
+    # at all, so "who is working at a store" had no registered answer and the ask bar fell through to
+    # guessing at a report name. Both endpoints were narrowed per-person by `gate_person_rows` in
+    # §14w, which is what makes them safe to offer a rep rather than managers only.
+    "store_schedule": {
+        "label": "Who is scheduled to work, by store and date",
+        "answers": ("Who is working at a store today, or this week? Who is scheduled at a store on a "
+                    "date? What shifts does somebody have? Who opens or closes?"),
+        "path": "/api/v1/storeops/shifts",
+        "params": {"store_code": _p("store_code", note="one store's code"),
+                   "week_start": _p("date", note="first shift_date to include, inclusive"),
+                   "week_end": _p("date", note="last shift_date to include, inclusive; for a "
+                                              "single day set it equal to week_start")},
+        "rows_at": (),
+        "grain": ("one row per shift — employee x store x date; a person with two shifts in a day "
+                  "has two rows"),
+        "module": None,
+        # The ENDPOINT does narrow a rep to their own shifts — `get_shifts` passes every row through
+        # `storeops.gate_person_rows`, which reads `core.scope.visible_people_keyset` (§14w). It is
+        # still NOT marked self_safe, because the owner's directive names exactly two things a rep
+        # may ask the assistant, and a schedule is not one of them. Offering it would be this file
+        # granting reach rather than recording it.
+        # SCHEDULED, not clocked. `scheduled_hours` is the reliable column: this tenant has no
+        # punched hours at all (0 of 640 July and 0 of 613 August shifts carry actual_hours > 0), so
+        # an answer built on `actual_hours` would read as zero rather than as "not reported".
+        "index": ("14", "14v", "14w"),
+    },
+    "visible_people": {
+        "label": "The people this login may see",
+        "answers": ("Who works at a store? Who is on my team? What is somebody's role? Who reports "
+                    "to me?"),
+        "path": "/api/v1/storeops/employees/visible",
+        "params": {},
+        "rows_at": ("employees", "rows"),
+        "grain": "one row per employee this login may see, with their home store and role",
+        "module": None,
+        # Likewise NOT self_safe: the handler's reach ladder does narrow a self-scoped caller to
+        # themselves via `core.scope.roster_keyset`, but a roster is not one of the two things the
+        # owner said a rep may ask.
+        # 8 active employees in the house org have NO home_store and are deliberately kept visible
+        # rather than dropped (§29.6), so "who works at store X" will not account for everybody.
+        "index": ("14", "29"),
     },
 }
 
