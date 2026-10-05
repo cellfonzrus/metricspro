@@ -22,6 +22,7 @@ import { usePeriod } from '@/lib/period-context'
 import PageIntro from '@/components/PageIntro'
 import StatTile from '@/components/StatTile'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 const KIND_LABEL: Record<string, string> = {
   voided: 'Voided',
@@ -54,6 +55,39 @@ type Register = {
   by_rep?: Record<string, RepAgg>
   by_store?: Record<string, RepAgg>
   lines?: VoidLine[]
+}
+
+const th: React.CSSProperties = { padding: '6px 8px' }
+const thRight: React.CSSProperties = { padding: '6px 8px', textAlign: 'right' }
+
+// THE accessors for the two tables below, at module scope so `useTableSort`'s memo is not rebuilt on
+// every render. Both return raw numbers and raw nulls rather than the formatted cell: a share of null
+// means "no denominator", and the shared comparator sinks it instead of reading it as 0%.
+type AggRow = RepAgg & { name: string }
+const lineCell = (l: VoidLine, field: string): any => {
+  switch (field) {
+    case 'kind': return KIND_LABEL[l.kind] || l.kind
+    case 'date': return l.trans_date || ''
+    case 'store': return l.store || ''
+    case 'person': return l.salesperson || ''
+    case 'trans': return l.trans_id || ''
+    case 'item': return l.product_desc || ''
+    case 'device': return l.imei || l.mdn || ''
+    case 'amount': return l.amount ?? null
+    default: return ''
+  }
+}
+const aggCell = (r: AggRow, field: string): any => {
+  switch (field) {
+    case 'name': return r.name || ''
+    case 'countable': return r.countable ?? null
+    case 'voided': return r.voided ?? null
+    case 'void_share': return r.void_share ?? null
+    case 'amount_voided': return r.amount_voided ?? null
+    case 'returned': return r.return ?? null
+    case 'return_share': return r.return_share ?? null
+    default: return ''
+  }
 }
 
 // A share is null when there is no denominator, and that is NOT 0%. "—" is the honest rendering.
@@ -97,6 +131,12 @@ export default function VoidRegisterPage() {
     .filter(r => r.voided || r.return || r.unattributed)
     .sort((a, b) => (b.void_share ?? -1) - (a.void_share ?? -1)), [data])
 
+  // Click-a-header sorting on both tables through the ONE comparison home (lib/table-sort via
+  // useTableSort) — owner directive 2026-08-10. The aggregate table keeps its own default order
+  // (worst void rate first) until a header is clicked: `sort === null` returns the rows untouched.
+  const lineSort = useTableSort(rows, lineCell)
+  const aggSort = useTableSort<AggRow>(view === 'rep' ? repRows : storeRows, aggCell)
+
   const buildPayload = (): ExportPayload => ({
     title: 'Void & Return Register',
     subtitle: data?.period || period || '',
@@ -116,7 +156,7 @@ export default function VoidRegisterPage() {
           { header: 'Amount', get: (l: VoidLine) => l.amount, money: true, align: 'right' },
           { header: 'Tender', get: (l: VoidLine) => l.tender_type || '' },
         ],
-        rows,
+        rows: lineSort.sorted,   // export the lines in the order the manager sorted them
       },
       {
         name: 'By person',
@@ -229,18 +269,18 @@ export default function VoidRegisterPage() {
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--text2)', fontSize: 11.5,
                                  textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                      <th style={{ padding: '6px 8px' }}>Kind</th>
-                      <th style={{ padding: '6px 8px' }}>Date</th>
-                      <th style={{ padding: '6px 8px' }}>Store</th>
-                      <th style={{ padding: '6px 8px' }}>Person</th>
-                      <th style={{ padding: '6px 8px' }}>Transaction</th>
-                      <th style={{ padding: '6px 8px' }}>Item</th>
-                      <th style={{ padding: '6px 8px' }}>Device</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'right' }}>Amount</th>
+                      <SortableTh field="kind" sort={lineSort.sort} onSort={lineSort.toggle} style={th}>Kind</SortableTh>
+                      <SortableTh field="date" sort={lineSort.sort} onSort={lineSort.toggle} style={th}>Date</SortableTh>
+                      <SortableTh field="store" sort={lineSort.sort} onSort={lineSort.toggle} style={th}>Store</SortableTh>
+                      <SortableTh field="person" sort={lineSort.sort} onSort={lineSort.toggle} style={th}>Person</SortableTh>
+                      <SortableTh field="trans" sort={lineSort.sort} onSort={lineSort.toggle} style={th}>Transaction</SortableTh>
+                      <SortableTh field="item" sort={lineSort.sort} onSort={lineSort.toggle} style={th}>Item</SortableTh>
+                      <SortableTh field="device" sort={lineSort.sort} onSort={lineSort.toggle} style={th}>Device</SortableTh>
+                      <SortableTh field="amount" sort={lineSort.sort} onSort={lineSort.toggle} style={thRight}>Amount</SortableTh>
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((l, i) => (
+                    {lineSort.sorted.map((l, i) => (
                       <tr key={`${l.trans_id}-${i}`} style={{ borderTop: '1px solid var(--border)' }}>
                         <td style={{ padding: '8px' }}>
                           <span style={{ fontSize: 10, fontWeight: 700,
@@ -273,17 +313,19 @@ export default function VoidRegisterPage() {
                 <thead>
                   <tr style={{ textAlign: 'left', color: 'var(--text2)', fontSize: 11.5,
                                textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                    <th style={{ padding: '6px 8px' }}>{view === 'rep' ? 'Person' : 'Store'}</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Counted</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Voided</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Void rate</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Voided value</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Returned</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Return rate</th>
+                    <SortableTh field="name" sort={aggSort.sort} onSort={aggSort.toggle} style={th}>
+                      {view === 'rep' ? 'Person' : 'Store'}
+                    </SortableTh>
+                    <SortableTh field="countable" sort={aggSort.sort} onSort={aggSort.toggle} style={thRight}>Counted</SortableTh>
+                    <SortableTh field="voided" sort={aggSort.sort} onSort={aggSort.toggle} style={thRight}>Voided</SortableTh>
+                    <SortableTh field="void_share" sort={aggSort.sort} onSort={aggSort.toggle} style={thRight}>Void rate</SortableTh>
+                    <SortableTh field="amount_voided" sort={aggSort.sort} onSort={aggSort.toggle} style={thRight}>Voided value</SortableTh>
+                    <SortableTh field="returned" sort={aggSort.sort} onSort={aggSort.toggle} style={thRight}>Returned</SortableTh>
+                    <SortableTh field="return_share" sort={aggSort.sort} onSort={aggSort.toggle} style={thRight}>Return rate</SortableTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {(view === 'rep' ? repRows : storeRows).map(r => (
+                  {aggSort.sorted.map(r => (
                     <tr key={r.name} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '8px' }}>{r.name}</td>
                       <td style={{ padding: '8px', textAlign: 'right' }}>{r.countable}</td>

@@ -19,12 +19,35 @@ import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import PageIntro from '@/components/PageIntro'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: '#dc2626', HIGH: '#d97706', MEDIUM: '#2563eb', LOW: '#64748b',
 }
 // Worst first, the backend's own SEVERITY_RANK order.
 const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+
+// THE one accessor for this table, at module scope so `useTableSort`'s memo is not rebuilt every
+// render. Severity sorts by the registry's own SEVERITY_RANK, never alphabetically: ascending must put
+// CRITICAL at the top, and 'CRITICAL' < 'HIGH' < 'LOW' < 'MEDIUM' as text is the wrong order for a
+// manager triaging a queue. `amount` is returned as a raw number-or-null so the shared comparator sinks
+// the no-money findings instead of reading them as zero.
+const th: React.CSSProperties = { padding: '6px 8px' }
+const thRight: React.CSSProperties = { padding: '6px 8px', textAlign: 'right' }
+const SEVERITY_RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
+const cellOf = (f: Finding, field: string): any => {
+  switch (field) {
+    case 'severity': return SEVERITY_RANK[f.severity || ''] ?? 9
+    case 'finding': return f.type_label || f.flag_type || ''
+    case 'store': return f.store_code || f.store_address || ''
+    case 'person': return f.epay_salesperson || ''
+    case 'date': return f.transaction_date || ''
+    case 'amount': return f.amount ?? null
+    case 'what': return f.description || ''
+    case 'ruled': return f.reviewed_by || ''
+    default: return ''
+  }
+}
 
 const GRAIN_LABEL: Record<string, string> = {
   transaction: 'One transaction',
@@ -82,6 +105,11 @@ export default function WatchdogAreaPage() {
     && (!fRep || (f.epay_salesperson || '').toLowerCase().includes(fRep.toLowerCase()))
   ), [findings, fType, fSev, fStore, fRep])
 
+  // Click-a-header sorting through the ONE comparison home (lib/table-sort via useTableSort), not a
+  // private asc/desc state — owner directive 2026-08-10, "sort function by clicking on the header for
+  // all reports". Sorting runs AFTER the filters, so it reorders what the manager is actually looking at.
+  const { sorted, sort, toggle } = useTableSort(rows, cellOf)
+
   // The kinds PRESENT, not the kinds registered: a filter offering a value that matches nothing is
   // the same small lie as a fake zero.
   const typesPresent = useMemo(
@@ -115,7 +143,7 @@ export default function WatchdogAreaPage() {
         { header: 'Ruled by', get: (f: Finding) => f.reviewed_by || '' },
         { header: 'Decision', get: (f: Finding) => f.action_taken || '' },
       ],
-      rows,
+      rows: sorted,          // export what the manager is looking at, in the order they sorted it
     }],
   })
 
@@ -176,18 +204,20 @@ export default function WatchdogAreaPage() {
                 <thead>
                   <tr style={{ textAlign: 'left', color: 'var(--text2)', fontSize: 11.5,
                                textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                    <th style={{ padding: '6px 8px' }}>Severity</th>
-                    <th style={{ padding: '6px 8px' }}>Finding</th>
-                    <th style={{ padding: '6px 8px' }}>Store</th>
-                    <th style={{ padding: '6px 8px' }}>Person</th>
-                    <th style={{ padding: '6px 8px' }}>Date</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Amount</th>
-                    <th style={{ padding: '6px 8px' }}>What happened, and what to do</th>
-                    <th style={{ padding: '6px 8px' }}>Ruled</th>
+                    <SortableTh field="severity" sort={sort} onSort={toggle} style={th}>Severity</SortableTh>
+                    <SortableTh field="finding" sort={sort} onSort={toggle} style={th}>Finding</SortableTh>
+                    <SortableTh field="store" sort={sort} onSort={toggle} style={th}>Store</SortableTh>
+                    <SortableTh field="person" sort={sort} onSort={toggle} style={th}>Person</SortableTh>
+                    <SortableTh field="date" sort={sort} onSort={toggle} style={th}>Date</SortableTh>
+                    <SortableTh field="amount" sort={sort} onSort={toggle} style={thRight}>Amount</SortableTh>
+                    <SortableTh field="what" sort={sort} onSort={toggle} style={th}>
+                      What happened, and what to do
+                    </SortableTh>
+                    <SortableTh field="ruled" sort={sort} onSort={toggle} style={th}>Ruled</SortableTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((f, i) => {
+                  {sorted.map((f, i) => {
                     const colour = SEVERITY_COLORS[f.severity || ''] || '#64748b'
                     return (
                       <tr key={f.id || i} style={{ borderTop: '1px solid var(--border)' }}>
