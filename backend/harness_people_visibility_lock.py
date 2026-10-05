@@ -196,6 +196,10 @@ ric = re.search(r"^def role_is_self_scoped\(.*?(?=^def |\Z)", router, re.M | re.
 ric = ric.group(0) if ric else ""
 check("9a. role_is_self_scoped dereferences the declaration (not a second copy of the derivation)",
       "people_visibility" in ric and "PEOPLE_SELF" in ric)
+check("9a2. and stamps the CANONICAL _role_scope on the perms before reading it — off the raw "
+      "roles.permissions blob, a DM or owner whose row omits `scope` derives 'self' and reads as "
+      "an individual contributor (harness_payout_audience.py G5 caught exactly that)",
+      re.search(r'perms\["scope"\]\s*=\s*scope', ric) is not None, ric[-400:])
 cc = read("app/modules/commcalc/router.py")
 flags = re.search(r"^def get_flags\(.*?(?=^def |\Z)", cc, re.M | re.S)
 flags = flags.group(0) if flags else ""

@@ -7759,9 +7759,18 @@ def role_is_self_scoped(org_id: str, role, rbac_on=None) -> bool:
     if not on:
         return False
     role = (role or "").strip()
-    if _role_scope(org_id, role) == "self":
+    scope = _role_scope(org_id, role)
+    if scope == "self":
         return True
-    return _cscope.people_visibility(_role_permissions(org_id, role)) == _cscope.PEOPLE_SELF
+    # The declaration is read with the CANONICAL scope stamped on it, never off the raw permissions
+    # blob: `_role_scope` is the authoritative resolution (it honours the elevated-role and
+    # fail-closed defaults for a role whose row carries no `scope` key), and `people_visibility`
+    # derives from `scope` when nothing is declared. Reading the blob directly made a DM or an owner
+    # whose row omits `scope` derive 'self' and read as an individual contributor — caught by
+    # harness_payout_audience.py G5 before it shipped.
+    perms = dict(_role_permissions(org_id, role) or {})
+    perms["scope"] = scope
+    return _cscope.people_visibility(perms) == _cscope.PEOPLE_SELF
 
 
 def _role_permissions(org_id: str, role: str) -> dict:

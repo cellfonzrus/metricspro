@@ -166,6 +166,10 @@ st = {
         {"org_id": HOUSE, "name": "store_manager",
          "permissions": {"scope": "store", "people_visibility": "span"}},
         {"org_id": HOUSE, "name": "district_manager", "permissions": {"scope": "market"}},
+        # An ELEVATED role (`_ELEVATED_ROLES`) whose row carries NO `scope` key at all —
+        # `_role_scope` resolves it to 'all' from the elevated-role default, and the declaration
+        # must honour that resolution rather than the empty blob.
+        {"org_id": HOUSE, "name": "owner", "permissions": {"pages": {}}},
         # Declares nothing at all, and its name means nothing to the code.
         {"org_id": HOUSE, "name": "mystery_role", "permissions": {"scope": "store"}},
     ],
@@ -410,6 +414,20 @@ check("K5. the individual-contributor answer is ONE function, and a declared peo
       f"rep={SO.role_is_self_scoped(HOUSE, 'sales_rep')} "
       f"mgr={SO.role_is_self_scoped(HOUSE, 'store_manager')}")
 from app.modules.commcalc import payout_audience as PA        # noqa: E402
+# THE REGRESSION (caught by harness_payout_audience.py G5 on the first push of this branch): the
+# declaration must be read with the CANONICAL scope stamped on it. Reading `roles.permissions`
+# directly made a DM or an owner whose row omits a `scope` key derive 'self' and read as an
+# individual contributor — i.e. the widest roles would have been treated as the narrowest.
+st[("storeops", "roles")].append(
+    {"org_id": HOUSE, "name": "no_scope_key", "permissions": {"pages": {}}})
+check("K5b. an ELEVATED role whose row has NO scope key resolves through _role_scope ('all'), so it "
+      "is NOT read as an individual contributor",
+      SO._role_scope(HOUSE, "owner") == "all"
+      and SO.role_is_self_scoped(HOUSE, "owner") is False,
+      f"scope={SO._role_scope(HOUSE, 'owner')} "
+      f"self_scoped={SO.role_is_self_scoped(HOUSE, 'owner')}")
+check("K5c. and the fail-closed default for a genuinely unknown role still lands on 'self'",
+      SO.role_is_self_scoped(HOUSE, "no_scope_key") is True)
 check("K6. a flag with no rep name on it never becomes 'mine' by accident",
       PA.row_is_mine({"store_code": "B-1"}, {"REP ONE"}) is False)
 check("K7. nor does a manager's row set change shape — mine_only hands a manager the SAME list",
