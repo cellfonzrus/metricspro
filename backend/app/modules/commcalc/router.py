@@ -16827,18 +16827,15 @@ async def _get_commissions_rows(period, authorization, org_id):
     # SELF scope (B2): an employee sees ONLY their OWN rep row(s) — their own KPIs/commission, never a
     # coworker's pay. scope_keyset returns an empty set for a self rep (would hide everything); instead we
     # match the caller's own rep identity by name (canon-aware). A self rep we can't map sees nothing.
+    from app.modules.commcalc import payout_audience as _pa
     rep_keys = _caller_rep_keys(authorization, org_id)
     if rep_keys is not None:
+        # The "is this row mine" predicate is NOT written here any more. It lives in
+        # `payout_audience.row_is_mine` / `.mine_only`, because the action plan and the coaching
+        # report need the identical answer and used to each guess at it (one of them with no identity
+        # check at all). Locked by harness_payout_audience_lock.py.
         cmap = _rep_canon_map(client, org_id)
-        def _mine(c):
-            cand = set()
-            for f in ('storeops_name', 'epay_salesperson', 'salesperson'):
-                v = str(c.get(f) or '').strip()
-                if v:
-                    cand.add(v.upper())
-                    cand.add(str(_canon(v, cmap)).strip().upper())
-            return bool(cand & rep_keys)
-        return [c for c in comms if _mine(c)]
+        return _pa.mine_only(comms, rep_keys, canon=lambda v: _canon(v, cmap))
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
 
@@ -30086,9 +30083,19 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
         })
     reps.sort(key=lambda r: -r['money_on_table'])
     from app.modules.storeops.router import scope_keyset, in_keyset
+    from app.modules.commcalc import payout_audience as _pa
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         reps = [r for r in reps if in_keyset(ks, r.get('store'))]
+    # THE SIBLING OF THE ACTION PLAN, fixed in the same change rather than left for later (CLAUDE.md:
+    # "find the siblings before you ship"). This payload carries `total_payout`, `final_payout`,
+    # `at_risk` and the chargeback deductions PER REP, and `rep=` above is a plain string filter with
+    # no identity check — so a self-scoped caller is narrowed to their own row HERE, through the one
+    # home, and the team roll-up below is then a roll-up of one person: their own.
+    rep_keys = _caller_rep_keys(authorization, org_id)
+    if rep_keys is not None:
+        _cmap = _rep_canon_map(sb(), org_id)
+        reps = _pa.mine_only(reps, rep_keys, canon=lambda v: _canon(v, _cmap))
     summary = {'reps': len(reps),
                'total_at_risk': round(sum(r['at_risk'] for r in reps), 2),
                'total_chargebacks': round(sum(r['chargeback_deducted'] for r in reps), 2),
@@ -33627,7 +33634,29 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                           f'${comm["at_risk"]:,.0f} of commission at risk this period{tail}'}
 
     from app.modules.storeops.router import scope_keyset, in_keyset
+    from app.modules.commcalc import payout_audience as _pa
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
+    # A SELF-SCOPED REP SEES THEIR OWN PLAN (owner directive 2026-10-05: *"only their own commission,
+    # only their action plan"*). Two separate narrowings, both server-side:
+    #   · WHICH STORE — `scope_keyset` hands a self rep an EMPTY set (they manage nobody), so every
+    #     store was filtered out and a rep's action plan came back blank. Substitute their OWN store
+    #     exactly as `get_targets_summary` does — the same call, not a copy of its logic.
+    #   · WHICH REP — see `_mine_reps` below. `rep=` was a plain string filter here with NO identity
+    #     check; the deny-all above was the only thing standing between a rep and a colleague's
+    #     tier, payout and at-risk figures, and it held by accident rather than by rule.
+    # 🔴 A self caller is NEVER unrestricted: `None` is this line's UNRESTRICTED sentinel, so the
+    # `or set()` re-states that invariant HERE and not only inside the helper (same guard as §29.5x).
+    is_self, self_ks = _caller_self_keyset(authorization, org_id)
+    if is_self:
+        ks = self_ks if self_ks is not None else set()
+    no_self_store = bool(is_self) and not ks
+    rep_keys = _caller_rep_keys(authorization, org_id)
+    _cmap = _rep_canon_map(client, org_id) if rep_keys is not None else None
+    _canon_fn = (lambda v: _canon(v, _cmap)) if rep_keys is not None else None
+    # A self caller asking about somebody else does not get them: the parameter is dropped, not
+    # honoured and not 403'd, because their own plan is still a perfectly good answer.
+    if not _pa.requested_rep_is_mine(rep, rep_keys, canon=_canon_fn):
+        rep = ""
 
     out = []
     tot_crit = tot_warn = 0
@@ -33691,6 +33720,10 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             rep_plans.append({'rep': rep_name, 'conversion': rep_conv, 'below_store': below,
                               'items': rep_items, 'commission': comm})
 
+        # THE OWN-REP RULE, dereferenced from the one home (`payout_audience.mine_only`) rather than
+        # re-implemented — the same predicate `/commissions/{period}` and `/coaching/{period}` use.
+        # A manager is handed the same list object back, so their response does not shift.
+        rep_plans = _pa.mine_only(rep_plans, rep_keys, canon=_canon_fn)
         if rep:
             rep_plans = [rp for rp in rep_plans
                          if rp['rep'].strip().upper() == rep.strip().upper()]
@@ -33702,6 +33735,11 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                 store_items = []
         store_at_risk = round(sum((rp['commission'] or {}).get('at_risk', 0)
                                   for rp in rep_plans if rp.get('commission')), 2)
+        # A STORE-WIDE FIGURE IS A CROSS-REP FIGURE. "$X across N reps" tells a rep what the rest of
+        # the shop is leaving on the table, which is the manager's business and not theirs — so a
+        # self caller gets their own at-risk item (added per rep above) and no store roll-up.
+        if rep_keys is not None:
+            store_at_risk = 0.0
         if store_at_risk > 0 and not (rep and not store_code):
             n = sum(1 for rp in rep_plans if (rp.get('commission') or {}).get('at_risk', 0) > 0)
             store_items.append({'severity': 'warning', 'metric': 'commission',
@@ -33728,9 +33766,15 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     # Stores needing the most attention first.
     out.sort(key=lambda r: (-r['counts']['critical'], -r['counts']['warning'],
                             str(r.get('address') or r.get('store_code') or '')))
+    # NEVER A SILENT BLANK PAGE. A self rep nobody has placed in a store has an empty plan for a
+    # reason a human can act on, and saying so beats rendering nothing (the same hint
+    # `get_targets_summary` raises for the same cause).
+    setup_hint = ("No store is assigned to your login yet, so there is nothing to plan — ask your "
+                  "manager to set your store." if no_self_store else "")
     return {'period': period, 'today': today.isoformat(),
             'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out),
                         'commission_at_risk': round(tot_at_risk, 2)},
+            'setup_hint': setup_hint,
             'stores': out}
 
 

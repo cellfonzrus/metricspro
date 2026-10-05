@@ -84,7 +84,10 @@ export default function MyTargetsPage() {
         api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/action-plan?store_code=${encodeURIComponent(storeCode)}&rep=${encodeURIComponent(rep)}&org_id=${ORG_ID}&today=${localToday()}`).catch(() => null),
       ])
       setDetail(d)
-      const plans = (ap?.stores || []).flatMap((s: any) => s.rep_plans || [])
+      // The endpoint emits each store's rep plans under `reps` (router: get_action_plan). This read
+      // asked for `rep_plans`, which the response has never carried, so this page's action-item list
+      // was ALWAYS empty — for a manager as well as a rep. Fixed 2026-10-05.
+      const plans = (ap?.stores || []).flatMap((s: any) => s.reps || [])
       const mine = plans.find((p: any) => (p.rep || '').toUpperCase() === rep.toUpperCase())
       setActionItems(mine?.items || [])
     } catch (e) { console.error(e) }

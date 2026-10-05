@@ -719,6 +719,86 @@ for label, tok, keys in VIEWERS:
           not any(f'"{k}": {v}' in _txt for k in ("ext_price", "gp") for v in ("150.0", "100.0", "45.0", "170.0")))
 _SELF["keys"] = None
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# K. "IS THIS ROW MINE" — ONE PREDICATE, AND IT FAILS CLOSED
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER DIRECTIVE 2026-10-05: a rep may ask the in-app assistant about *"only their own commission,
+# only their action plan"*. Three surfaces had to answer "which of these rep rows is the caller's":
+# `/commissions/{period}` did it correctly in a private closure, while `/targets/{period}/action-plan`
+# and `/coaching/{period}` took `rep=` as a plain string filter with NO identity check and were saved
+# only by a self rep's store keyset coming out empty — an accident, not a rule. The predicate now
+# lives in `payout_audience` and all three dereference it; this section proves the predicate, and
+# `harness_payout_audience_lock.py` fails the build if a handler stops calling it.
+print("\n" + "=" * 100)
+print("K. ONE own-rep predicate, fail-closed")
+print("=" * 100)
+
+_MINE = {"storeops_name": "ABID", "epay_salesperson": "ABID K", "total_payout": 120.0}
+_THEIRS = {"storeops_name": "RAJ", "epay_salesperson": "RAJ P", "total_payout": 900.0}
+_ALIASED = {"epay_salesperson": "A. KHAN", "total_payout": 50.0}      # an epay spelling, canon → ABID
+_canon = lambda v: {"A. KHAN": "ABID", "ABID K": "ABID"}.get(str(v).upper(), v)
+ROWS = [_MINE, _THEIRS, _ALIASED]
+
+check("K1 a manager (rep_keys None) sees every row, and gets the SAME list object back",
+      PA.mine_only(ROWS, None) is ROWS)
+check("K2 a self rep sees only their own row",
+      [r["total_payout"] for r in PA.mine_only(ROWS, {"ABID"})] == [120.0])
+check("K2b …and the aliased row joins it ONLY once the canon map is supplied",
+      [r["total_payout"] for r in PA.mine_only(ROWS, {"ABID"}, canon=_canon)] == [120.0, 50.0])
+check("K3 …and never a colleague's",
+      all(r is not _THEIRS for r in PA.mine_only(ROWS, {"ABID"})))
+check("K4 an epay alias is the same person once canon-mapped",
+      PA.row_is_mine(_ALIASED, {"ABID"}, canon=_canon))
+check("K5 …and is NOT matched without the canon pass (so the canon map is load-bearing, not decor)",
+      not PA.row_is_mine(_ALIASED, {"ABID"}))
+check("K6 FAIL-CLOSED: a self rep we could not map to any rep sees NOTHING",
+      PA.mine_only(ROWS, set()) == [])
+check("K7 …which is the opposite of the manager case, so empty is never read as unrestricted",
+      PA.mine_only(ROWS, set()) != ROWS)
+check("K8 the comparison is case- and whitespace-insensitive",
+      PA.row_is_mine({"rep": "  abid  "}, {"ABID"}))
+check("K9 a row with no name field at all is not anybody's",
+      not PA.row_is_mine({"total_payout": 5.0}, {"ABID"}))
+check("K10 an empty name is not a wildcard",
+      not PA.row_is_mine({"rep": "", "storeops_name": "   "}, {"ABID"}))
+check("K11 the predicate MUTATES NOTHING",
+      ROWS == [_MINE, _THEIRS, _ALIASED] and _MINE["total_payout"] == 120.0)
+check("K12 a canon callable that raises denies rather than crashing a report",
+      not PA.row_is_mine(_ALIASED, {"ABID"}, canon=lambda v: (_ for _ in ()).throw(ValueError("x"))))
+
+# `rep=` asked for by a caller: the parameter is the question, the keys are the answer.
+check("K13 a self rep asking for THEMSELVES is honoured",
+      PA.requested_rep_is_mine("ABID", {"ABID"}))
+check("K14 a self rep asking for A COLLEAGUE is refused",
+      not PA.requested_rep_is_mine("RAJ", {"ABID"}))
+check("K15 …by alias too",
+      PA.requested_rep_is_mine("ABID K", {"ABID"}, canon=_canon)
+      and not PA.requested_rep_is_mine("RAJ P", {"ABID"}, canon=_canon))
+check("K16 a manager asking for anyone is honoured (nothing changes for them)",
+      PA.requested_rep_is_mine("RAJ", None))
+check("K17 asking for nobody in particular is not a refusal",
+      PA.requested_rep_is_mine("", {"ABID"}) and PA.requested_rep_is_mine(None, {"ABID"}))
+check("K18 a rep we could not map cannot name their way in",
+      not PA.requested_rep_is_mine("ABID", set()))
+
+# The name fields are declared in ONE tuple, so a new row shape cannot quietly escape the predicate.
+check("K19 the name fields are a declared tuple, covering both vocabularies and the plan/coaching key",
+      set(PA.REP_NAME_FIELDS) >= {"storeops_name", "epay_salesperson", "rep"})
+check("K20 every field in it is actually consulted",
+      all(PA.row_is_mine({f: "ABID"}, {"ABID"}) for f in PA.REP_NAME_FIELDS))
+
+# The live handler, through the rig: a self rep's /commissions is their own row only.
+_SELF["keys"] = {REP.upper()}
+_own = asyncio.run(R.get_commissions(PERIOD, authorization="", org_id=ORG))
+check("K21 the real /commissions handler returns the self rep's own row via the shared predicate",
+      len(_own) == 1 and _own[0].get("total_payout") == 20.0, _own)
+_SELF["keys"] = set()
+_none = asyncio.run(R.get_commissions(PERIOD, authorization="", org_id=ORG))
+check("K22 …and an unmappable self rep gets nothing from it, not everything", _none == [], _none)
+_SELF["keys"] = None
+_all = asyncio.run(R.get_commissions(PERIOD, authorization="", org_id=ORG))
+check("K23 a manager's /commissions response is unchanged by any of this", len(_all) == 1, _all)
+
 print("\n" + "=" * 100)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)

@@ -79,6 +79,18 @@ def _p(kind, *, required=False, multi=False, note=""):
 # `module` is the entitlement key the endpoint itself already gates on (or None when it does not
 # gate). It is recorded here so the assistant can say "that is not switched on for you" instead of
 # making the user watch a 403 come back. It NEVER grants anything — the endpoint remains the gate.
+#
+# `self_safe` is the one new fact (owner directive 2026-10-05: a rep may ask the assistant about
+# *"only their own commission, only their action plan"*). It DECLARES a property of the endpoint —
+# that its handler narrows a self-scoped caller to their own rows SERVER-SIDE, naming the mechanism
+# in `self_note` — and it is read only to decide which questions a rep is OFFERED. It is never a
+# permission: no row is filtered, no field stripped and no name matched anywhere in this package;
+# that work stays in `commcalc/payout_audience.py`, which is its one home, and
+# `harness_data_qa_lock.py` fails the build if a second copy appears here.
+#
+# FAIL-CLOSED: a question that does not say `self_safe` is NOT offered to a rep. A new report is
+# therefore manager-only until somebody has read its handler and said otherwise, which is the right
+# default for a file that decides who may read pay.
 DATA_QUESTIONS: dict[str, dict] = {
     "sales_by_store_rep_day": {
         "label": "Sales done, per store, per rep, per day",
@@ -141,6 +153,37 @@ DATA_QUESTIONS: dict[str, dict] = {
         "module": None,
         "index": ("5",),
     },
+    "my_commission": {
+        "label": "My own commission for a month",
+        "answers": ("What is my commission this month? What have I earned? What did I get paid "
+                    "for? Which KPIs did I hit? How much is at risk? What is my tier?"),
+        "path": "/api/v1/commcalc/commissions/{period}",
+        "path_params": ("period",),
+        "params": {},
+        "rows_at": (),
+        "grain": "one row per rep per month (a self-scoped caller gets only their own)",
+        "module": None,
+        "index": ("6i", "6j", "6m"),
+        "self_safe": True,
+        "self_note": ("the handler takes NO rep parameter; `_get_commissions_rows` narrows to the "
+                      "caller's own rows via `_caller_rep_keys` + `payout_audience.mine_only`, and "
+                      "a self rep it cannot map to a rep sees nothing"),
+    },
+    "my_commission_range": {
+        "label": "My own commission across several months",
+        "answers": ("What have I earned over the last few months? Is my commission going up or "
+                    "down? Which month paid me most? How does this month compare to last?"),
+        "path": "/api/v1/commcalc/commissions-range",
+        "params": {"period_from": _p("period", required=True),
+                   "period_to": _p("period", note="blank = through the current month")},
+        "rows_at": ("rows",),
+        "grain": "one row per rep per month over the range (a self-scoped caller gets only their own)",
+        "module": None,
+        "index": ("6g", "6j"),
+        "self_safe": True,
+        "self_note": ("each month is the SAME handler as my_commission, called with the caller's own "
+                      "token, so the narrowing is inherited rather than repeated"),
+    },
     "action_plan": {
         "label": "What to do to pull sales up",
         "answers": ("What do I need to do to pull sales up? Where is the catch-up? Which rep has "
@@ -153,6 +196,11 @@ DATA_QUESTIONS: dict[str, dict] = {
         "grain": "prioritised focus areas per store and per rep",
         "module": None,
         "index": ("5",),
+        "self_safe": True,
+        "self_note": ("`get_action_plan` substitutes the rep's OWN store keyset via "
+                      "`_caller_self_keyset`, keeps only their own rep plans via "
+                      "`payout_audience.mine_only`, drops a `rep=` that is not them, and suppresses "
+                      "the cross-rep store roll-up"),
     },
     "profit_and_loss": {
         "label": "Profit & loss for a month",
@@ -202,27 +250,48 @@ def question(key):
     return DATA_QUESTIONS[str(key)]
 
 
-def answerable(enabled_modules):
-    """The question keys answerable for a tenant whose enabled module keys are `enabled_modules`.
+def self_safe_keys():
+    """The question keys whose endpoint narrows a self-scoped caller to their own rows server-side.
+
+    Read off `self_safe`, so adding a question cannot accidentally widen this set: an entry that
+    says nothing is absent. PURE."""
+    return tuple(k for k in keys() if DATA_QUESTIONS[k].get("self_safe") is True)
+
+
+def answerable(enabled_modules, caller_is_self=False):
+    """The question keys answerable for a tenant whose enabled module keys are `enabled_modules`,
+    for a caller who is (or is not) self-scoped.
 
     PURE, and the honest form of "the assistant improves as more data is ingested": a question whose
     module is not switched on is not offered, so the assistant never promises a number the tenant
     has no feed for. `None` means "the entitlement is unknown here" and keeps every question — the
     endpoint is still the gate, so this can only ever narrow what is OFFERED, never widen what is
-    ALLOWED."""
+    ALLOWED.
+
+    `caller_is_self=True` narrows further, to the `self_safe` questions only (owner directive
+    2026-10-05: a rep gets *"only their own commission, only their action plan"*). Two things this
+    is NOT: it is not the security boundary — each endpoint narrows its own rows and would refuse a
+    rep anyway — and it is not a judgement about the caller, only about which endpoints have been
+    read and shown to narrow. Belt and braces, in that order: this keeps a rep from being OFFERED a
+    question whose answer would be an empty report or a refusal."""
     if enabled_modules is None:
-        return keys()
-    have = {str(m).strip() for m in enabled_modules if str(m or "").strip()}
-    return tuple(k for k in keys()
-                 if not DATA_QUESTIONS[k].get("module") or DATA_QUESTIONS[k]["module"] in have)
+        offered = keys()
+    else:
+        have = {str(m).strip() for m in enabled_modules if str(m or "").strip()}
+        offered = tuple(k for k in keys()
+                        if not DATA_QUESTIONS[k].get("module") or DATA_QUESTIONS[k]["module"] in have)
+    if caller_is_self:
+        safe = set(self_safe_keys())
+        offered = tuple(k for k in offered if k in safe)
+    return offered
 
 
-def catalog(enabled_modules=None):
+def catalog(enabled_modules=None, caller_is_self=False):
     """What the model is shown: key, label, the owner-worded `answers`, the grain, and the
     parameters it may set. The endpoint path is deliberately ABSENT — the model picks a question,
     never a URL, so no model output is ever interpreted as a route."""
     out = []
-    for k in answerable(enabled_modules):
+    for k in answerable(enabled_modules, caller_is_self):
         q = DATA_QUESTIONS[k]
         params = {}
         for name, spec in sorted((q.get("params") or {}).items()):

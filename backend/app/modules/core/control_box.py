@@ -607,11 +607,18 @@ _REMEDIATION_MODULE = "helpdesk"
 _REMEDIATION_SCOPES = ("all", "market")
 
 # The in-app DATA assistant (index §52). Gated on the SAME module the existing in-app assistant is
-# entitled by, and on a reporting scope broad enough for the questions it exists to answer ("which
-# store is best", "who is pulling me down"). A narrower login is not refused data it may see — it is
-# refused the ASSISTANT; its own reports stay on their own pages, scoped as always.
+# entitled by, and on a reporting scope.
+#
+# `self` IS IN THIS LIST (owner directive 2026-10-05: a rep may ask the assistant about *"only their
+# own commission, only their action plan"*). Two facts are kept apart on purpose, and conflating
+# them is how a rep would end up reading a colleague's pay:
+#   · WHO MAY SPEND on this purpose — here, as registry config (RULE TWO: data, not a branch).
+#   · WHAT A SELF CALLER MAY ASK — `data_qa_registry.self_safe_keys()`, which offers a rep only the
+#     questions whose endpoint has been read and shown to narrow to its caller server-side.
+# Neither is the security boundary. That is each endpoint's own RBAC, which the assistant inherits by
+# reading through the caller's own token — see `payout_audience` for the pay-visibility home.
 _DATA_QA_MODULE = "ai_assistant"
-_DATA_QA_SCOPES = ("all", "market", "company")
+_DATA_QA_SCOPES = ("all", "market", "company", "self")
 
 
 def _auth_super_admin(caller, spec=None):
@@ -727,8 +734,8 @@ _DENY = {
     "not_remediation_operator": "AI triage is restricted to helpdesk operators with market-wide or "
                                 "company-wide scope.",
     "not_lease_access": "Lease and insurance documents are restricted to management roles.",
-    "not_data_qa_operator": "The data assistant is available to management logins with a market-wide "
-                            "or company-wide view. Your reports are still on their own pages.",
+    "not_data_qa_operator": "The data assistant needs the AI assistant module and a reporting scope. "
+                            "Your reports are still on their own pages.",
     "unknown_authorizer": "This AI purpose declares no authorization rule, so it is refused.",
     "wrong_purpose": "This key is restricted to registered purposes and refuses any other.",
     "unknown_check": "That check is not in the registry, so there is nothing to triage.",
