@@ -69,6 +69,7 @@ from app.modules.commcalc import sales_recon
 from app.modules.commcalc import sales_derive
 from app.modules.commcalc import ingest_store_guard as _isg
 from app.modules.commcalc import ingest_slice as _ingest_slice   # pure slice-scoped replace rules (2026-09-02)
+from app.modules.commcalc import feed_period as _feed_period  # 2026-10-05 — THE feed-row month + per-day stamp (one home, pure)
 from app.modules.commcalc import landing_identity as _landing    # 2026-09-20 — which KIND wrote a row; who reads it (ONE home)
 from app.modules.commcalc import auto_calc as _auto_calc        # 2026-09-28 — "data landed for org X, period P" (ONE home, index §6l)
 from app.modules.commcalc import comp_trend
@@ -1911,8 +1912,30 @@ async def _upload_file_impl(
     # GUARD: only NOW (rows successfully mapped) do we clear the existing data, and only if the
     # upload actually produced rows — so a file that parsed to nothing can never wipe a populated
     # period. catalog/master_cats replace the whole table.
-    DATE_KEYED = {'daily_sales': 'trans_date', 'ma_commission': 'tx_date',
-                  'ma_daily_tx': 'tx_date', 'ma_fulfillment': 'date_ordered'}
+    # ── WHICH FEEDS ARE REPLACED BY DAY — DERIVED, never listed here (owner 2026-10-05) ──────────
+    # This was a hand-written four-entry map and `payment_detail` was simply not on it, so the feed
+    # the ePay portal serves over a ROLLING WINDOW was replaced per (org, period) and stamped with
+    # the period an operator picked: 18,231 rows / $415,862.56 of September's commission landed a
+    # second time under October, which read 28x its own $15,460.69. See feed_period.py's header.
+    # "Which column means the day this row is about" has ONE home in data_lineage_registry; this
+    # DEREFERENCES it, so a feed that declares a data-date column is day-keyed the same day and the
+    # map cannot fall behind the registry — it IS the registry.
+    # `harness_feed_day_grain.py` fails the build on a second copy of this map.
+    _DAY_KEYED = _lineage.day_keyed_date_columns()
+    DATE_KEYED = {_ft: _DAY_KEYED[_tb] for _ft, _tb in TABLE_MAP.items() if _tb in _DAY_KEYED}
+
+    # ── A ROW'S MONTH IS ITS OWN DAY'S MONTH, never the period someone picked ────────────────────
+    # All or nothing, and the refusal is the safe side: when ANY row cannot prove its day, the rows
+    # are left stamped with the selected period and the per-day replace is dropped for this upload,
+    # so the (org, period) delete below still covers every row inserted. A real delete either way —
+    # never a per-day delete that could not reach the row it could not read. Live posture 2026-10-05:
+    # payment_detail and comp_report carry a date on every row; raw_dlar_* are ~85% blank on
+    # `as_of_date` and therefore byte-identical until that feed starts carrying it.
+    day_stamp = None
+    if mapped and has_period and file_type in DATE_KEYED:
+        day_stamp = _feed_period.day_stamp(mapped, DATE_KEYED[file_type])
+        if not day_stamp.stamped:
+            DATE_KEYED = {k: v for k, v in DATE_KEYED.items() if k != file_type}
     # Row-count guardrail (user 2026-07-05): BEFORE the delete-and-replace, compare the incoming count
     # against what's already stored for the same day/period. A day-to-date feed only grows through the
     # day and a monthly file only shrinks on a bad/partial export (June arrived ~1/6th complete). A big
@@ -2203,6 +2226,15 @@ async def _upload_file_impl(
             _tr_dates[str(_d)] = _tr_dates.get(str(_d), 0) + 1
     out["_trace"] = {"rows_in": len(rows), "target_table": table,
                      "periods": _tr_periods, "date_counts": _tr_dates}
+    # WHICH MONTHS THIS FILE ACTUALLY LANDED IN, said out loud (owner 2026-10-05). A rolling-window
+    # pull covering two months is normal and now lands correctly; what was never visible is THAT it
+    # did. `stamped` False names the rows that could not prove their day and says the selected period
+    # was used instead, so a feed that starts arriving without its date is a sentence, not a silent
+    # re-run of the September-into-October duplicate.
+    if day_stamp is not None:
+        out["day_grain"] = {"date_column": _DAY_KEYED.get(table), "stamped": day_stamp.stamped,
+                            "rows": day_stamp.get("rows"), "unproven": day_stamp.get("unproven"),
+                            "months": day_stamp.get("months"), "reason": day_stamp.get("reason")}
     # DATA LANDED (index §6l) — the ONE post-landing hook: queues one standard Run Calculation per month this
     # file touched (a daily file spanning a month-end queues both), per the org's config, never blocking this
     # request. The upload pages, the Email Auto-Import and the FTP drop all arrive here.

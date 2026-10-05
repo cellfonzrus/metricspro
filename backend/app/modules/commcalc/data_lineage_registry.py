@@ -488,6 +488,65 @@ DATA_DATE_COLUMN_BY_TABLE = {
     "ma_overview_upload": None,
 }
 
+# ── DAY GRAIN vs PERIOD GRAIN — WHICH MONTH A ROW BELONGS TO, AND WHAT AN UPLOAD REPLACES ─────────
+# THE DEFECT THIS CLOSES (house org, measured 2026-10-05). `commcalc.raw_payment_detail` is stamped
+# with the period an operator PICKS at upload, and replaced per (org, period). The ePay portal serves
+# that report over a rolling in-arrears window, so the 2026-10-04 pull covered 2026-09-05 … 2026-10-02
+# and every one of its rows was filed under "October 2026": 18,231 rows / $415,862.56 of SEPTEMBER's
+# commission landed a second time under October, which then read $431,323.25 against a true
+# $15,460.69 — 28x. The 2026-08-24 pull did the same with July ($147,435.59 under August).
+#
+# THE CLASS, not the instance. The question "which day is this row about" already has ONE home —
+# DATA_DATE_COLUMN_BY_TABLE above. `router.DATE_KEYED` kept its OWN copy of that map, listing four
+# feeds by hand, and `raw_payment_detail` was simply not on it; so the per-day replace that makes a
+# rolling re-pull idempotent, and the row-date period stamp that keeps a month honest, applied to the
+# feeds somebody remembered. That is §19.18's shape for the fourth time, and it is why `raw_comp_report`
+# got a multi-month upload guard in 2026-08 while its sibling feed never did.
+#
+# THE DESIGN FIX. A feed with a declared data-date column is DAY GRAIN unless it is declared
+# period-grain here, with its reason. `day_keyed_date_columns()` DERIVES the map every caller needs, so
+# a feed that declares a data-date column gets the day-grain treatment the same day. Omission does not
+# compile: `harness_feed_day_grain.py` fails the build on a table that is in neither place, and on a
+# caller that keeps a second copy of the map.
+PERIOD_GRAIN_REASONS = {
+    # The monthly ARCHIVE of the sales pair. It is uploaded as one whole month and replaced as one
+    # whole month on purpose — the live feed (LIVE_SALES_FEED) is the day-grain side of the pair, and
+    # it is already day-keyed. Making the archive day-keyed would let a partial monthly export replace
+    # only the days it happened to carry and leave the rest of a stale month standing beside it.
+    MONTHLY_SALES: "monthly archive of the sales pair — uploaded and replaced as one whole month",
+    "pos_builtin_sales": "monthly archive of the pos_builtin pair — replaced as one whole month",
+    # The distributor/vendor invoice feeds arrive as one statement per period, and their own day
+    # columns describe lines INSIDE that statement rather than the pull window.
+    "royalty_report": "one franchisor statement per period — the period IS the document",
+}
+
+# Tables whose data-date column is declared but which this upload path never reaches (no file_type
+# maps to them), stated so the lock can tell "not an upload" apart from "forgotten".
+NOT_UPLOADED_TABLES = (
+    "raw_sales_invoice", "raw_sales_invoice_tender", "pos_tender_summary", "inventory_value",
+    "asset_ledger",
+)
+
+
+def day_keyed_date_columns() -> dict:
+    """PURE: {table: data-date column} for every feed that is DAY GRAIN — i.e. declares a data-date
+    column in DATA_DATE_COLUMN_BY_TABLE and is not declared period-grain in PERIOD_GRAIN_REASONS.
+
+    THE one home for "a re-pull of these days replaces those days, and a row belongs to its own day's
+    month". Callers DEREFERENCE this; a second literal copy fails the build."""
+    return {t: c for t, c in DATA_DATE_COLUMN_BY_TABLE.items()
+            if c and t not in PERIOD_GRAIN_REASONS}
+
+
+def is_day_keyed(table: str) -> bool:
+    """PURE: True when `table` is replaced by DAY and its rows carry their own month."""
+    return table in day_keyed_date_columns()
+
+
+def period_grain_reason(table: str):
+    """PURE: why `table` is replaced per PERIOD rather than per day, or None when it is day grain."""
+    return PERIOD_GRAIN_REASONS.get(table)
+
 # ── HOW OFTEN EACH WATCHED FEED IS DUE ────────────────────────────────────────────────────────────
 # The default is daily, deliberately: a feed nobody thought about is better watched too keenly than not
 # at all. A slower feed says so here.
