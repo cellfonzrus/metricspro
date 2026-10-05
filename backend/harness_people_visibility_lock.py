@@ -313,6 +313,23 @@ check("10f. and TOTALS are summed after the filters, not before — a rep's tota
       "rows, not the company's under their name",
       sr.index("mine_only") < sr.index("totals = {"), "order")
 
+# ── 11. the ADMIN DIAGNOSTIC answers with the gate, not with a basis of its own ──────────────────
+# `GET /core/scope-preview` is the page an administrator uses to answer "what will this login
+# actually see" without logging in as them. It therefore may not compute the span itself: a second
+# basis here would have kept printing the PIN answer after the gate moved to evidence, and because
+# the page exists to be trusted, the admin would have trusted it.
+core_rt = read("app/modules/core/router.py")
+sp = re.search(r"^def scope_preview\(.*?(?=^@router|\Z)", core_rt, re.M | re.S)
+sp = code_of(sp.group(0) if sp else "")
+check("11a. `scope-preview` resolves its `reporting` answer by dereferencing "
+      "core.scope.visible_store_codes — the same home the reports read",
+      "visible_store_codes" in sp, sp[:200])
+check("11b. and holds no span basis of its own — no reporting_span_codes, no self_store_codes, no "
+      "home_store read for the reporting answer",
+      not re.search(r"reporting_span_codes|self_store_codes", sp),
+      [l for l in sp.split("\n")
+       if re.search(r"reporting_span_codes|self_store_codes", l)])
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED:\n  " + "\n  ".join(FAIL))
