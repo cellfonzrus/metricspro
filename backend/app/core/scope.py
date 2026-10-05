@@ -1387,7 +1387,7 @@ def reporting_employee_ids(client, org_id: str, keyset, *, since=None, until=Non
 # `scope = 'store'`, so the schema genuinely cannot tell a rep from their manager. The derivation
 # below is only the fallback for a role that has not declared itself, and it FAILS NARROW for the one
 # scope that is ambiguous — matching `storeops._rbac_scope_failclosed`, whose unresolved-role default
-# is likewise 'self'. Migration 1057 declares all live roles explicitly so nothing rides the default.
+# is likewise 'self'. Migration 1058 declares all live roles explicitly so nothing rides the default.
 SCHEDULE_SELF = "self"      # own shifts only
 SCHEDULE_SPAN = "span"      # own shifts + everyone who works under this login
 SCHEDULE_ALL = "all"        # the whole tenant's schedule
@@ -1403,7 +1403,7 @@ def schedule_visibility(role_perms) -> str:
         'market' / 'region(al)'    -> SCHEDULE_SPAN  a DM sees their market's people
         'store' / 'self' / unknown -> SCHEDULE_SELF  fail NARROW: the ambiguous case is a rep
 
-    A store manager therefore needs the declaration (migration 1057 carries it). That asymmetry is
+    A store manager therefore needs the declaration (migration 1058 carries it). That asymmetry is
     deliberate: being shown too little of a schedule is a support ticket, being shown everybody's is
     the defect this exists to close."""
     try:

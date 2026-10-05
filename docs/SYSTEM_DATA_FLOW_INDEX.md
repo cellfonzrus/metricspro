@@ -5623,7 +5623,7 @@ they are picked from. One set can never answer both — that is the §13 defect 
   `scope` and **FAILS NARROW**: `'all'/'company' → all`, `'market'/'region(al)' → span`, everything
   else including `'store'` **→ self**, because in the house org a rep AND their store manager are
   BOTH `scope = 'store'` and the schema cannot tell them apart. Migration
-  `1057_schedule_visibility_declaration.sql` declares every live role so nothing rides the fallback
+  `1058_schedule_visibility_declaration.sql` declares every live role so nothing rides the fallback
   — **required before managers are correct**; reps are correct either way.
 - **"WORKS UNDER ME" RESOLVES FROM STORE ASSIGNMENT, not the org tree.** `reporting_employee_ids`
   (home store UNION actually-worked-a-shift/punch-there, bounded by the caller's own date window) is
@@ -5651,7 +5651,7 @@ they are picked from. One set can never answer both — that is the §13 defect 
   business covering. Q3 now ignores it, but Q1 (reporting) still reads it, so those reps' store-level
   REPORTS remain market-wide. That is a setup correction on Admin → Roles & Access, not a code fix.
 - **Owner-facing SQL (surfaced, NOT applied):**
-  `/mnt/project-files/schedule-visibility/RUN_schedule_visibility_1057_2026-10-05.sql` — numbered
+  `/mnt/project-files/schedule-visibility/RUN_schedule_visibility_1058_2026-10-05.sql` — numbered
   steps with a BEFORE query, the declarations, a VERIFY and an UNDO block.
 
 

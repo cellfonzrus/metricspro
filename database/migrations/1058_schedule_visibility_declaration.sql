@@ -1,4 +1,4 @@
--- 1057_schedule_visibility_declaration.sql
+-- 1058_schedule_visibility_declaration.sql
 -- WHOSE SCHEDULE MAY A LOGIN READ — declared per role (owner directive 2026-10-05, index §14w)
 --
 -- Owner, verbatim: "currently employees can see the schdule of the whoel company, i saw when i used
@@ -24,7 +24,7 @@
 --
 -- REVERT: UPDATE storeops.roles SET permissions = permissions - 'schedule_visibility';
 --         (removing the key returns every role to the server's derived fallback, which is NARROWER
---          than the pre-1057 behaviour, not wider — the leak cannot come back by reverting.)
+--          than the pre-1058 behaviour, not wider — the leak cannot come back by reverting.)
 
 BEGIN;
 
