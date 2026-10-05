@@ -18752,6 +18752,16 @@ is re-read and re-parsed and every field compared before the bless is called don
 runs the real parse → build → render → parse cycle and asserts every label, alias list and exclusion
 reason survives, with armed controls (E5–E7) that the preservation is measured rather than tautological.
 
+**A page list that names every page names the gated ones too**, and that tripped
+`harness_payout_audience_lock.py` §i2 on the second push: a menu-less carrier diagnostic
+(`/commcalc/commission-explain`) may be named by a frontend file only if that file asks
+`rbac.payoutRefused`. The registry cannot ask it — it has no viewer. So the rule was amended rather
+than excepted, and the registry is held to a stricter bargain in exchange: it may render no link, something
+must read it, and **every file that reads it must dereference `canAccessPath`**, which §i2(f) already
+proves asks `payoutRefused` before any bypass. One hop, proved at both ends, and armed three ways —
+a reader that drops `canAccessPath`, a registry that grows a rendered link, and nothing reading it at
+all each turn the lock red.
+
 The catalogue folds the route source **LAST**, which is the whole completeness guarantee: a page the
 nav already named keeps that label and only gains declared aliases, and a page in no other registry
 becomes its own entry instead of being unfindable. `AskBar` gates each one with `rbac.canAccessPath`,
