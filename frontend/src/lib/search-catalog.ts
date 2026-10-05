@@ -52,7 +52,7 @@ export type ScreenSource = { href: string; label: string; blurb?: string; aliase
 /** Every page that exists, as `route-index.searchableRoutes()` emits it. Passed LAST so a page that
  *  also has a nav entry keeps the nav's own wording; a page nav does not list gets its derived label
  *  and whatever aliases were declared for it. */
-export type RouteSource = { path: string; label: string; aliases?: string[] }[]
+export type RouteSource = { path: string; label?: string; aliases?: string[] }[]
 /** A folded store option, exactly as `core.scope.build_store_options` emits it. */
 export type StoreSource = { store: string; market?: string | null; also_known_as?: string[] }[]
 /** A visible employee, as `GET /storeops/employees/visible` emits it. */
@@ -90,12 +90,16 @@ export function buildCatalog(src: CatalogSources): Searchable[] {
   const kindOf = (href: string, group: string): SearchKind =>
     SETTING_GROUP.test(group) || /\/(settings?|admin|config)\b/.test(pathOf(href)) ? 'setting' : 'page'
 
-  const upsert = (href: string, patch: Partial<Searchable> & { label: string; kind: SearchKind }) => {
+  const upsert = (href: string, patch: Partial<Searchable> & { kind: SearchKind }) => {
     const path = pathOf(href)
-    if (!path || !clean(patch.label)) return
+    if (!path) return
     const cur = byHref.get(path)
     if (!cur) {
-      byHref.set(path, { key: `page:${path}`, kind: patch.kind, label: clean(patch.label), href,
+      // A label is needed only to CREATE an entry — nothing can be found by a name it does not have.
+      // A patch with no label still merges into an entry that already exists, which is how a page the
+      // nav names (and which therefore declares no second label) still gains its typed-in aliases.
+      if (!clean(patch.label)) return
+      byHref.set(path, { key: `page:${path}`, kind: patch.kind, label: clean(patch.label!), href,
                          category: patch.category, desc: patch.desc, aliases: patch.aliases })
       return
     }

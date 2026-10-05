@@ -292,6 +292,19 @@ console.log('§H  every page that exists is findable, and the nav keeps its labe
   // A route-only page is still gated UPSTREAM, never here: the catalogue ranks what it is handed.
   eq('H12 the catalogue applies no gate of its own',
      C.buildCatalog({ routes: [{ path: '/anything', label: 'Anything' }] }).length, 1)
+  // A page the nav names declares NO label in the route index (§54.7: the nav owns that wording, and
+  // a second copy derived from the URL leaks the other carrier side's words into display copy). So a
+  // route entry with aliases and no label must still merge those aliases onto the nav's entry.
+  const noLabel = C.buildCatalog({ nav: NAV, reports: REPORTS, screens: SCREENS,
+    routes: [{ path: '/storeops/schedule', aliases: ['who is working'] }] })
+  const sched = noLabel.find(i => i.href.split('?')[0] === '/storeops/schedule')
+  eq('H13 a labelless route keeps the nav label', sched?.label, 'Schedule')
+  ok('H14 and still contributes its aliases', (sched?.aliases || []).includes('who is working'), sched?.aliases)
+  eq('H15 and adds no second entry',
+     noLabel.filter(i => i.href.split('?')[0] === '/storeops/schedule').length, 1)
+  // ARMED: a label is still required to CREATE an entry — nothing is findable by a name it lacks.
+  eq('H16 ARMED — a labelless route for a page no other source knows creates nothing',
+     C.buildCatalog({ routes: [{ path: '/nobody/knows', aliases: ['x'] }] }).length, 0)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

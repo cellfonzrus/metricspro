@@ -18726,10 +18726,19 @@ callers from the import graph rather than trusting a hand list (§50):
   so the next page added is findable or the build is red. That ratchet is the design fix; the registry
   is just its output.
 - **Three fields are human and are PRESERVED across a re-bless**: `label` (a derived label reads like
-  a path — "Account → Password" — and a person may replace it; a page with a nav entry takes the NAV
-  label instead, because that is the wording on the viewer's own screen), `aliases` (the words
-  somebody would type), and `preauth` (**the REASON** a page is deliberately not searchable, never a
-  bare flag, so an exclusion cannot be silent — `/login`, `/signup`, `/privacy`, `/terms`, `/`).
+  a path — "Account → Password" — and a person may replace it), `aliases` (the words somebody would
+  type), and `preauth` (**the REASON** a page is deliberately not searchable, never a bare flag, so an
+  exclusion cannot be silent — `/login`, `/signup`, `/privacy`, `/terms`, `/`).
+- **A page the nav lists carries NO label here at all, and the blesser drops one if it appears.** The
+  nav holds the wording the viewer reads, per-tenant nicknames included, so a second label was dead
+  data that could only disagree with it. It was worse than dead: derived from a URL it spelled the
+  OTHER carrier side's vocabulary into frontend display copy, and `harness_carrier_vocab_guard.py`
+  caught exactly that on the first push — 8 paths under `/closing/epay-*` and `/commcalc/{epay,ma,vip}-*`.
+  The fix is the rule, not an exception list: `build()` reads the nav hrefs out of `rbac.ts` and sets
+  `label: undefined` for every path the nav names. §G of the proof pins it, names all 8 paths as the
+  regression, and is armed both ways (a label added to a nav page is dropped by the next bless; a
+  non-nav page keeps its own). The catalogue's `upsert` needs a label only to CREATE an entry, so a
+  labelless route still merges its aliases onto the nav's entry (§H13–H16).
 - **Aliases for a page the nav lists do NOT live here.** `ScreenLink.tsx` SCREENS is the existing one
   home for that, and `harness_screen_link_guard.py` §A requires every SCREENS href to BE a nav href —
   which is mechanically why `/account/password` could only declare them in the derived registry. The
@@ -18777,8 +18786,8 @@ spending anything.
 
 ### 54.9 Status
 
-Code complete and proved: **240 checks** across four Node, dependency-free proofs
-(`prove_search_rank.mjs` 100, `prove_search_catalog.mjs` 69, `prove_route_index.mjs` 30,
+Code complete and proved: **258 checks** across four Node, dependency-free proofs
+(`prove_search_rank.mjs` 100, `prove_search_catalog.mjs` 73, `prove_route_index.mjs` 44,
 `prove_search_console_lock.mjs` 41), run by the `search-console` job in
 `.github/workflows/data-qa-guard.yml`. No migration. The entity half of the catalogue appears as soon
 as the two endpoints answer; the assistant half is live wherever `GET /core/data-qa/status` returns

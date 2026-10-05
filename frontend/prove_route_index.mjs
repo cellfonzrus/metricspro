@@ -16,6 +16,16 @@
 // without `--bless` it FAILS THE BUILD when disk and the registry disagree — so the next page added
 // is findable or the build is red. There is no third option and no quiet drift.
 //
+// ONLY A PAGE NAV DOES NOT LIST CARRIES A LABEL HERE, and that is not tidiness — the first version
+// of this registry derived a label for all 319 pages and the carrier-vocabulary guard failed the
+// build on 8 of them: a path like `/commcalc/ma-commission` or `/closing/epay-recon` derives to
+// "Commcalc → Ma Commission" and "Closing → Epay Recon", which are the OTHER carrier side's words in
+// frontend display copy. The guard was right, and the fix is the one-fact-one-home rule applied
+// properly: the nav already holds the wording for every page it lists, and that wording is what the
+// viewer sees on their own screen, per-tenant nicknames and all. A second label for the same page was
+// dead data that could only ever disagree with it. So an entry for a nav page has NO label, §G fails
+// the build if one reappears, and a page nav does not list must have one.
+//
 // WHAT STAYS HUMAN. A derived label reads like a path ("Account → Password"); a person may improve
 // it, and a person may declare `aliases` (the words somebody would type) or `preauth` (the reason a
 // page is deliberately not searchable — a sign-in screen, the marketing terms page). `--bless`
@@ -65,6 +75,14 @@ function routesOnDisk(dir = APP, rel = '') {
 
 const DISK = [...new Set(routesOnDisk())].filter(p => !p.includes('[')).sort()
 
+// Which paths the nav already names. Read as TEXT rather than imported, so the generator stays a
+// plain script with no bundler — the same reason the proofs drive stripped TypeScript directly.
+function navPaths() {
+  const src = readFileSync(RBAC, 'utf8')
+  return new Set((src.match(/\{ href: '([^']+)'/g) || [])
+    .map(m => m.replace(/^\{ href: '/, '').replace(/'$/, '').split('#')[0].split('?')[0]))
+}
+
 // A derived label: the path's segments, title-cased, joined by an arrow — the same shape the nav uses
 // for a sub-page. Only ever a FALLBACK; a nav entry's own label wins when the catalogue is built, and
 // a person may replace this one in the registry.
@@ -103,7 +121,8 @@ const esc = s => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 
 function render(entries) {
   const lines = entries.map(e => {
-    const bits = [`path: '${esc(e.path)}'`, `label: '${esc(e.label)}'`]
+    const bits = [`path: '${esc(e.path)}'`]
+    if (e.label) bits.push(`label: '${esc(e.label)}'`)
     if (e.aliases?.length) bits.push(`aliases: [${e.aliases.map(a => `'${esc(a)}'`).join(', ')}]`)
     if (e.preauth) bits.push(`preauth: '${esc(e.preauth)}'`)
     return `  { ${bits.join(', ')} },`
@@ -132,9 +151,9 @@ const HEADER = `// GENERATED — do not edit the ROUTES array by hand.
 // pattern, §50).
 //
 // THREE FIELDS ARE HUMAN and are PRESERVED across a re-bless:
-//   label    — a derived label reads like a path ("Account → Password"); replace it with what people
-//              call the page. A page that also has a nav entry takes the NAV label instead, because
-//              that is the wording on the viewer's own screen.
+//   label    — ONLY for a page the nav does not list, since the nav's own label is what the viewer
+//              sees for every page it does. A derived label reads like a path ("Account → Password");
+//              replace it with what people call the page.
 //   aliases  — the words somebody would TYPE. For a page nav lists, aliases belong in
 //              \`ScreenLink.tsx\` SCREENS instead: its guard requires every href to be a nav href,
 //              which is mechanically why a page like \`/account/password\` can only declare them here.
@@ -145,7 +164,11 @@ const HEADER = `// GENERATED — do not edit the ROUTES array by hand.
 // already lives (\`rbac.canAccessPath\`, \`canSeeItem\`). This file says only WHAT EXISTS.
 export type RouteEntry = {
   path: string
-  label: string
+  /** What people call the page — present ONLY for a page the nav does not list, because for every
+   *  other page the nav's own label is the wording on the viewer's screen and a second copy here
+   *  could only ever disagree with it (and, derived from the path, leak the other carrier side's
+   *  vocabulary into display copy — which is how this rule was found). */
+  label?: string
   aliases?: string[]
   /** Why this page is deliberately not offered by search. Absent = searchable. */
   preauth?: string
@@ -168,12 +191,15 @@ const SEED_ALIASES = {
                         'forgot password', 'new password'],
 }
 
-function build(existing) {
+function build(existing, nav = navPaths()) {
   return DISK.map(path => {
     const prev = existing?.get(path)
+    // A nav page's wording belongs to the nav. Dropping any label a previous bless derived for one is
+    // deliberate: that is what removes the 8 carrier-vocabulary strings this rule exists for.
+    const label = nav.has(path) ? undefined : (prev?.label || derivedLabel(path))
     return {
       path,
-      label: prev?.label || derivedLabel(path),
+      label,
       aliases: prev?.aliases || SEED_ALIASES[path],
       preauth: prev?.preauth || SEED_PREAUTH[path],
     }
@@ -201,7 +227,8 @@ if (BLESS) {
   }
   for (const e of entries) {
     const r = back.get(e.path)
-    if (!r || r.label !== e.label || (r.preauth || undefined) !== (e.preauth || undefined)
+    if (!r || (r.label || undefined) !== (e.label || undefined)
+        || (r.preauth || undefined) !== (e.preauth || undefined)
         || JSON.stringify(r.aliases || null) !== JSON.stringify(e.aliases || null)) {
       console.error(`REFUSED: ${e.path} did not round-trip`)
       process.exit(1)
@@ -221,6 +248,7 @@ const ok = (name, cond, detail) => {
 
 const SRC = readFileSync(OUT, 'utf8')
 const REG = parseRegistry(SRC)
+const NAV = navPaths()
 
 console.log(`§A  the registry matches the pages on disk (${DISK.length} static pages)`)
 {
@@ -230,12 +258,15 @@ console.log(`§A  the registry matches the pages on disk (${DISK.length} static 
   const extra = [...have].filter(p => !DISK.includes(p))
   ok('A2  every page on disk is in the registry — run --bless if this is red', missing.length === 0, missing)
   ok('A3  the registry names no page that does not exist', extra.length === 0, extra)
-  ok('A4  every entry carries a label', REG && [...REG.values()].every(e => e.label && e.label.trim()))
+  ok('A4  every entry the nav does not name carries a label',
+     REG && [...REG.values()].filter(e => !NAV.has(e.path)).every(e => e.label && e.label.trim()),
+     REG && [...REG.values()].filter(e => !NAV.has(e.path) && !e.label).map(e => e.path))
   ok('A5  no page is listed twice', REG && REG.size === DISK.length, { reg: REG?.size, disk: DISK.length })
   // The page the owner actually asked for — the regression, by name.
   ok('A6  /account/password is in the registry', have.has('/account/password'))
   const pw = REG?.get('/account/password')
   ok('A7  and it is searchable, not pre-auth', pw && !pw.preauth, pw)
+  ok('A7b and it carries the name a person would read', pw?.label === 'My Password', pw?.label)
   ok('A8  and the words somebody types reach it',
      (pw?.aliases || []).includes('password reset'), pw?.aliases)
 }
@@ -288,7 +319,7 @@ console.log('§E  --bless PRESERVES the human half (a real round trip, in memory
   let keptLabels = 0, keptAliases = 0, keptPreauth = 0
   for (const [path, e] of REG || []) {
     const r = round?.get(path)
-    if (r?.label === e.label) keptLabels++
+    if ((r?.label || undefined) === (e.label || undefined)) keptLabels++
     if (JSON.stringify(r?.aliases || null) === JSON.stringify(e.aliases || null)) keptAliases++
     if ((r?.preauth || undefined) === (e.preauth || undefined)) keptPreauth++
   }
@@ -298,7 +329,7 @@ console.log('§E  --bless PRESERVES the human half (a real round trip, in memory
   // ARMED: the preservation is real, not a tautology — drop a label and the round trip must differ.
   const hacked = new Map(REG)
   hacked.set('/account/password', { path: '/account/password', label: 'CHANGED' })
-  const hackedRound = parseRegistry(render(build(hacked)))
+  const hackedRound = parseRegistry(render(build(hacked, NAV)))
   ok('E5  ARMED — a changed label comes back changed, so E2 is measuring something',
      hackedRound?.get('/account/password')?.label === 'CHANGED')
   // ARMED: a page deleted from the registry is rebuilt from disk, never left out.
@@ -306,8 +337,41 @@ console.log('§E  --bless PRESERVES the human half (a real round trip, in memory
   ok('E6  ARMED — a page missing from the registry is re-derived from disk',
      build(shrunk).some(e => e.path === '/account/password'))
   // ARMED: an unparseable line makes the parser REFUSE rather than silently drop entries.
+  ok('E6b ARMED — a non-nav page missing its label is re-derived rather than left blank',
+     build(new Map([['/account/password', { path: '/account/password' }]]), NAV)
+       .find(e => e.path === '/account/password')?.label === 'Account → Password')
   ok('E7  ARMED — an entry with no path makes the parse refuse',
      parseRegistry(SRC.replace(/\{ path: '\/account\/password'[^\n]*\n/, '  { oops: 1 },\n')) === null)
+}
+
+// ── §G — a nav page carries NO label here (the carrier-vocabulary rule) ──────────────────────────
+console.log('§G  a page the nav names carries no label of its own')
+{
+  const withLabel = REG ? [...REG.values()].filter(e => NAV.has(e.path) && e.label) : []
+  ok('G1  no nav page carries a second label', withLabel.length === 0, withLabel.map(e => e.path))
+  // THE REGRESSION, by name. These are the 8 paths whose DERIVED label was the other carrier side's
+  // vocabulary in display copy, which failed `harness_carrier_vocab_guard.py` on 2026-10-05.
+  const LEAKED = ['/closing/epay-recon', '/commcalc/epay-fee-recon', '/commcalc/epay/sweep',
+                  '/commcalc/ma-commission', '/commcalc/ma-handsets', '/commcalc/vip',
+                  '/commcalc/vip/paygo', '/commcalc/vip/sweep']
+  for (const path of LEAKED) {
+    const e = REG?.get(path)
+    ok(`G2  ${path} is present but unlabelled`, e && !e.label, e)
+  }
+  // And the file itself must not spell any of it.
+  ok('G3  the registry spells no cross-side carrier term',
+     !/\b(Epay|Ma Commission|Ma Handset|Vip|Paygo)\b/.test(SRC.replace(/^\s*\/\/.*$/gm, '')),
+     (SRC.match(/\b(Epay|Ma Commission|Ma Handset|Vip|Paygo)\b/g) || []).slice(0, 5))
+  // ARMED: the rule is measured, not assumed.
+  const hacked = new Map(REG)
+  hacked.set('/commcalc/vip', { path: '/commcalc/vip', label: 'Commcalc → Vip' })
+  const after = parseRegistry(render(build(hacked, NAV)))
+  ok('G4  ARMED — a label added to a nav page is dropped by the next bless',
+     !after?.get('/commcalc/vip')?.label, after?.get('/commcalc/vip'))
+  // And the page nav does NOT list keeps its label through the same cycle.
+  ok('G5  ARMED — a non-nav page keeps its label through the same bless',
+     after?.get('/account/password')?.label === 'My Password',
+     after?.get('/account/password'))
 }
 
 console.log('§F  the nav is still the label authority where it has one')
