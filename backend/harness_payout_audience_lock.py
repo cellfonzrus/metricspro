@@ -93,6 +93,18 @@ SURFACES = {
     (ROUTER, "get_commissions"): ["return [_pa.rep_incentive_row(r) for r in rows]"],
     (ROUTER, "get_commissions_range"): ["await get_commissions(m, authorization=authorization, org_id=org_id, audience=audience)"],
     (ROUTER, "commission_drill"): ["_payout_audience(authorization, org_id, audience, rep=rep", "_pa.rep_incentive_drill(out, _aud)"],
+    # The own-rep predicate's three callers (owner directive 2026-10-05). `/commissions` used to
+    # carry its own private closure; the action plan and coaching carried NO identity check at all
+    # and leant on a self rep's empty store keyset. Each must keep DEREFERENCING the one home — if a
+    # future edit drops the call, this lock fails the build rather than quietly reopening the hole.
+    (ROUTER, "_get_commissions_rows"): ["_caller_rep_keys(authorization, org_id)",
+                                        "_pa.mine_only(comms, rep_keys"],
+    (ROUTER, "get_action_plan"): ["_caller_self_keyset(authorization, org_id)",
+                                  "_caller_rep_keys(authorization, org_id)",
+                                  "_pa.requested_rep_is_mine(rep, rep_keys",
+                                  "_pa.mine_only(rep_plans, rep_keys"],
+    (ROUTER, "rep_coaching"): ["_caller_rep_keys(authorization, org_id)",
+                               "_pa.mine_only(reps, rep_keys"],
     ("modules/core/router.py", "employee_dashboard"): ["_pa.employee_rep_row(myc)"],
     ("modules/notify/report_registry.py", "_commissions"): ['audience="employee"', "C.get_commissions("],
 }

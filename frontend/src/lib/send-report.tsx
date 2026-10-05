@@ -95,7 +95,9 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, s
         if (!files.length) { setResult('Nothing to send.'); setBusy(false); return }
         res = await api(`/api/v1/notify/send-file?org_id=${ORG_ID}`, {
           method: 'POST',
-          body: JSON.stringify({ title: title || 'Report', message, channels, emails, phones, files }),
+          // report_key rides along so the Notify history names the report by its REGISTRY label when
+          // the page has one (notify/send_identity is the one home for that resolution).
+          body: JSON.stringify({ title: title || 'Report', report_key: reportKey, message, channels, emails, phones, files }),
         })
       } else if (exportPayload) {
         // Universal path: render the file(s) in the browser and deliver via /notify/send-file (no
@@ -107,7 +109,7 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, s
         ])).filter(Boolean)
         res = await api(`/api/v1/notify/send-file?org_id=${ORG_ID}`, {
           method: 'POST',
-          body: JSON.stringify({ title: title || p.title, message, channels, emails, phones, files }),
+          body: JSON.stringify({ title: title || p.title, report_key: reportKey, message, channels, emails, phones, files }),
         })
       } else {
         res = await api(`/api/v1/notify/send?org_id=${ORG_ID}`, {

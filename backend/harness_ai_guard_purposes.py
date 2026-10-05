@@ -49,13 +49,18 @@ REP = {"super_admin": False, "org_id": "org-1", "id": "u-5",
 NO_MODULE = {"super_admin": False, "org_id": "org-1", "id": "u-6",
              "perms": {"modules": {"commissions": True}, "scope": "all"}}
 LEASE_HOLDER = {"super_admin": False, "org_id": "org-1", "id": "u-7", "can_see_lease": True}
-# The in-app DATA assistant (index §52, mig 1055): the `ai_assistant` module plus a reporting scope
-# broad enough for the questions it exists to answer. A self-scoped login (REP, below) is refused the
-# ASSISTANT — not its data, which stays on each report's own page, scoped as always.
+# The in-app DATA assistant (index §52, mig 1055): the `ai_assistant` module plus a reporting scope.
+# A SELF-SCOPED REP IS NOW ALLOWED TO SPEND (owner directive 2026-10-05: *"only their own commission,
+# only their action plan"*) — what a rep may ASK is narrowed by `data_qa_registry.self_safe_keys()`,
+# not by this guard, and the two facts are deliberately kept in different files. DATA_QA_STORE below
+# is the login this purpose still refuses: it holds the module but its scope is not a registered one,
+# which is what makes the fail-closed assertion in section E meaningful.
 DATA_QA_USER = {"super_admin": False, "org_id": "org-1", "id": "u-8",
                 "perms": {"modules": {"ai_assistant": True}, "scope": "company"}}
 DATA_QA_REP = {"super_admin": False, "org_id": "org-1", "id": "u-9",
                "perms": {"modules": {"ai_assistant": True}, "scope": "self"}}
+DATA_QA_STORE = {"super_admin": False, "org_id": "org-1", "id": "u-10",
+                 "perms": {"modules": {"ai_assistant": True}, "scope": "store"}}
 EVERYONE = {"anonymous": None, "super-admin": SUPER, "helpdesk operator": OPERATOR,
             "market manager": MARKET_MGR, "store manager": STORE_MGR, "sales rep": REP,
             "lease holder": LEASE_HOLDER}
@@ -181,10 +186,11 @@ HOLDERS = {"control_box_triage": SUPER, "remediation_diagnose": OPERATOR,
 # For each purpose, somebody who is NOT authorized for it — used to prove the authorization gate is
 # decided BEFORE any other state is revealed. `lease_extraction`'s entry is a platform SUPER-ADMIN
 # without the lease capability: a purpose is satisfied on its OWN predicate or not at all.
-# `data_qa`'s entry is a login that HOLDS the module but is scoped to itself: the refusal is about the
-# breadth of the view the assistant needs, not about the module being missing.
+# `data_qa`'s entry is a login that HOLDS the module but whose scope is not a registered one: the
+# refusal is about the scope, not about the module being missing. (A SELF scope IS registered since
+# 2026-10-05 and is allowed here — see section G.)
 DENIED = {"control_box_triage": REP, "remediation_diagnose": STORE_MGR, "lease_extraction": SUPER,
-          "data_qa": DATA_QA_REP}
+          "data_qa": DATA_QA_STORE}
 for name in sorted(cb.AI_PURPOSES):
     who = HOLDERS[name]
     check("[%s] the per-hour RATE LIMIT bites" % name,
@@ -279,11 +285,22 @@ for blank in ("", "   ", "\n\t", None, "\x00\x00"):
 d_qi = decide(DATA_QA_USER, "data_qa", subject=inj)
 check("[data_qa] the question is audited as a DIGEST, never stored raw",
       d_qi["subject_key"].startswith("sha256:") and inj not in d_qi["subject_key"])
-check("[data_qa] a self-scoped login is refused the assistant, before any other state is revealed",
-      decide(DATA_QA_REP, "data_qa", has_key=False, config={"enabled": False},
+# A REP MAY ASK (owner directive 2026-10-05). Two separate assertions, because conflating them is
+# exactly how a rep would end up reading a colleague's pay: the SPEND gate lets them in, and the
+# QUESTION registry decides what they are offered (proved in harness_data_qa_registry.py §D).
+check("[data_qa] a self-scoped rep is ALLOWED to spend on the assistant",
+      decide(DATA_QA_REP, "data_qa")["allow"])
+check("[data_qa] what a rep may ASK is NOT decided here — the scope list holds no question key",
+      not (set(cb.AI_PURPOSES["data_qa"].get("scopes") or ())
+           & {"my_commission", "action_plan", "my_commission_range"}))
+check("[data_qa] a login whose scope is not registered is refused, before any other state",
+      decide(DATA_QA_STORE, "data_qa", has_key=False, config={"enabled": False},
              usage={"calls_today": 9999})["code"] == "not_data_qa_operator")
 check("[data_qa] a login without the module is refused",
       decide(NO_MODULE, "data_qa")["code"] == "not_data_qa_operator")
+check("[data_qa] a scope the registry does not list is refused however broad it sounds",
+      decide({**DATA_QA_USER, "perms": {"modules": {"ai_assistant": True}, "scope": "region"}},
+             "data_qa")["code"] == "not_data_qa_operator")
 check("[data_qa] a market-wide and a company-wide login are both allowed",
       decide({**DATA_QA_USER, "perms": {"modules": {"ai_assistant": True}, "scope": "market"}},
              "data_qa")["allow"] and decide(DATA_QA_USER, "data_qa")["allow"])

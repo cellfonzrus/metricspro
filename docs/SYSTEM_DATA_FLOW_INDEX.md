@@ -5714,6 +5714,45 @@ and the dry run · §E a record with no channel cannot be written · §F a recor
 nothing · §G migration `1051` tied to the code · §H eight locks, each with an armed control.
 
 
+### 15.3 THE SEND RECORD'S REPORT — "which report did this send carry?" (owner 2026-10-05)
+
+**Owner 2026-10-05:** *"in the notify app, the employees are sending themselves reports or
+notification, in the notify history it should show which report was exported"*.
+
+**The class, not the instance.** The instance was the export-bar send. The class is that nothing owned
+the question, so each of the three send_log writers answered it differently: `/notify/send` +
+`/notify/send-to-designated` stored the MACHINE key and the history rendered it raw although the
+registry has held a human label for every report all along; **`/notify/send-file`** — the universal
+path every page's "📤 Send" button uses, i.e. the one employees actually use to send themselves a
+report — stored the literal `"(client-export)"` for EVERY report and DISCARDED the `title` the browser
+had already sent; the no-login download row stored `"(download)"` on the same terms.
+
+**ONE HOME:** `backend/app/modules/notify/send_identity.py` (PURE — no IO, no app import).
+`report_label` resolves the name (a REGISTERED key is named by `report_registry.report_labels()`, so a
+browser cannot introduce a second spelling of one report; otherwise the caller's title; never a
+machine key dressed up as a name). `log_identity` returns the `report_key` + `report_label` columns of
+one row, spread by **every** writer. `display_label` / `stamp_display` are the read side.
+
+- Writers: `_dispatch` (`/notify/send`, `/send-to-designated`, every scheduled run), `send_file`
+  (`/notify/send-file`), `_store_artifact`, and the download row in `GET /notify/dl/{token}`.
+- Reader: `GET /notify/send-log` stamps every returned row, so a row written **before** mig `1057`
+  still displays a name — the §13b.1 pattern (a display name is resolved by the read, never assumed to
+  be stored). The Notify history page renders `report_label || report_key`.
+- Migration `1057` (additive, idempotent) adds `report_label TEXT` to `notify.send_log` and
+  `notify.send_artifact`. Degrades both ways: un-run → `_insert_log` strips the column and retries
+  (`_OPTIONAL_LOG_COLUMNS`, one column at a time, so a history row is never lost) and the read still
+  resolves the name; run → the name is stored **as sent**, so a report later renamed or unregistered
+  reads back as the name it actually went out under.
+
+Proof: `backend/harness_notify_send_identity.py` — **32 checks, stdlib only, DB-free**, CI job *Notify
+history names the report sent* in `carrier-vocab-guard.yml`. §A the resolution · §B the reported
+regression · §C the read side with no column · §D the writers · §E the degrade + the migration ·
+**§F THE UN-WIRING LOCKS** — an AST scan of every send_log row literal in `notify/router.py` fails the
+build if a send path goes back to naming the report itself (armed control: the pre-fix row is
+flagged), `send_identity` is the only module that may define `report_label`, and the page must keep
+rendering the resolved name.
+
+
 ## 16. Cross-reference: by TABLE
 
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
@@ -18136,6 +18175,8 @@ forbid. `data_qa_agent` therefore **discovers** the columns from the live respon
 | `executive_mtd_movement` | MTD against the same days of last month | `GET /exec-mtd/{period}/narrative` | §3 |
 | `daily_targets_summary` | on target or behind, and by how much | `GET /targets/{period}/summary` | §5 |
 | `action_plan` | **what is needed to pull sales up** — catch-up per store, commission at risk per rep | `GET /targets/{period}/action-plan` | §5 |
+| `my_commission` | **what is my commission this month**, what was I paid for, which KPIs did I hit, how much is at risk | `GET /commcalc/commissions/{period}` | §6i, §6j, §6m |
+| `my_commission_range` | what have I earned over several months, is my commission going up or down | `GET /commcalc/commissions-range` | §6g, §6j |
 | `profit_and_loss` | profit for a month, per store / company, where the money went | `GET /account/pl/{period}` | §4 |
 | `profit_and_loss_range` | the P&L month by month, which month was best | `GET /account/pl-range` | §4c |
 | `store_roster` | which stores do I have, which market is a store in | `GET /commcalc/stores` | §13 |
@@ -18200,9 +18241,8 @@ stack trace. Model: `settings.DATA_QA_MODEL` (`claude-opus-5-5`, env-settable).
 ### 52.4 Who may ask, and what it costs
 
 Purpose `data_qa` in `control_box.AI_PURPOSES` (mig `1055`), authorizer `module_scope`: the
-`ai_assistant` module plus a reporting scope of `all`, `market` or `company`. A self-scoped login (a
-rep) is refused **the assistant** — not its data: every report it would have read stays on its own
-page, scoped as always. The question is `bounded_text` like remediation triage (§20): stripped,
+`ai_assistant` module plus a reporting scope of `all`, `market`, `company` — or **`self`**, since the
+owner directive of 2026-10-05 (see §52.7). The question is `bounded_text` like remediation triage (§20): stripped,
 capped by the org's `max_input_chars`, audited as a DIGEST rather than as a copy of everything anyone
 ever typed. Spend is metered as one call per QUESTION (the whole tool loop), declared in
 `billing/ai_usage.AI_CALL_SITES` so §21's coverage figure stays honest.
@@ -18234,6 +18274,66 @@ change to either file has its siblings named in the pull request.
 **Status: NOTHING IS SWITCHED ON.** Migration `1055` is written and surfaced, **not applied**, and
 until it is, `control_box.DEFAULT_AI_CONFIG`'s tighter house ceiling applies. The `ai_assistant`
 module remains whatever each tenant already had it set to; this PR enables it for nobody.
+
+### 52.7 A REP MAY ASK ABOUT THEMSELVES — two gates, deliberately in different files (owner directive 2026-10-05)
+
+**Owner ask, verbatim:** *"can an employee check thier commisison and if they ask what they shoudl do
+to improve thier commission can the asssitant answer that"* → *"yes only their won commission , only
+thier action plan"*.
+
+A self-scoped login (a rep) may now use the assistant. What they may ASK is narrowed, and the
+narrowing is **three independent things in three files**, because a single place that both decides
+and enforces is a place one edit can open:
+
+| Gate | Where | What it decides |
+|---|---|---|
+| May this login SPEND on the assistant? | `control_box._DATA_QA_SCOPES` (now includes `self`) | who gets in at all |
+| Which questions is it OFFERED? | `data_qa_registry.self_safe_keys()` — read off each question's declared `self_safe` + `self_note` | `my_commission`, `my_commission_range`, `action_plan`, and nothing else |
+| Which ROWS come back? | each endpoint's own handler, via `payout_audience` | the security boundary — unchanged by any of the above |
+
+**FAIL-CLOSED by construction:** a question that does not DECLARE `self_safe` is not offered to a
+rep, so registering a new report cannot silently widen what an employee can ask. `self_note` must
+name the mechanism, because a bare `True` is a claim nobody can check
+(`harness_data_qa_registry.py` §G, with the control armed both ways).
+
+**No file under `core/data_qa_*` holds a permission rule.** The only thing that travels is a boolean,
+read ONCE in `data_qa_api._caller_is_self` from the one home for that fact
+(`storeops.router.role_is_self_scoped` — the same answer the payout surfaces and the nav ask, §6j).
+`harness_data_qa_lock.py` §C fails the build if a file in that package matches a rep name, reads a
+scope out of the caller's permissions, or compares anything to the literal `'self'`.
+
+#### 52.7a THE OWN-REP PREDICATE — one home, three callers (the design fix)
+
+The class, named rather than the instance: **"which of these rep rows belongs to the signed-in
+rep?"** was being answered three different ways.
+
+| Caller | Before | Now |
+|---|---|---|
+| `GET /commissions/{period}` (`_get_commissions_rows`) | correct, in a closure private to that handler | dereferences `payout_audience.mine_only` |
+| `GET /targets/{period}/action-plan` (`get_action_plan`) | **`rep=` was a plain string filter with NO identity check**; a self rep was saved only by `scope_keyset` handing them an empty store set, so the plan came back BLANK — an accident, not a rule | substitutes their OWN store via `_caller_self_keyset` (the same call `get_targets_summary` makes), keeps only their own rep plans, drops a `rep=` that is not them, suppresses the cross-rep store roll-up, and returns a `setup_hint` when nobody has assigned them a store |
+| `GET /coaching/{period}` (`rep_coaching`) | the identical omission, over a payload carrying `total_payout`, `final_payout`, `at_risk` and the chargeback deductions per rep | narrowed through the same predicate |
+
+`payout_audience.REP_NAME_FIELDS` / `rep_row_keys` / `row_is_mine` / `mine_only` /
+`requested_rep_is_mine` are the one home. PURE: resolving WHO the caller is stays in the router
+adapters that can do I/O (`_caller_rep_keys`, `_rep_canon_map`, `_caller_self_keyset`).
+`rep_keys=set()` — a self rep we could not map — means **nothing**, never everything.
+
+**Locked:** `harness_payout_audience_lock.py` `SURFACES` now requires the dereference in all three
+handlers and FAILS THE BUILD if one stops (demonstrated by deliberately breaking
+`get_action_plan`'s call: 2 red). Proved: `harness_payout_audience.py` §K, 123 checks — aliases via
+the canon map, fail-closed on an unmappable rep, a colleague's `rep=` refused, nothing mutated, and
+a manager's response byte-identical.
+
+**Precondition worth stating:** all of this hangs off `app_config.rbac_enabled` plus a role whose
+scope is `self`. With RBAC off, `_caller_rep_keys` returns `None` and there is no self caller to
+narrow — the same precondition every other payout surface already has (§6j).
+
+#### 52.7b A live defect found on the way, reported not papered over
+
+`frontend/.../commcalc/targets/my/page.tsx` read each store's rep plans as `s.rep_plans`; the
+handler has always emitted them as `reps`. So **My Targets' action-item list was always empty**, for
+a manager as well as a rep, independent of scope. Fixed in the same PR (one word) and recorded here
+because the page looked like it worked.
 
 ## 53. THE MANAGEMENT WATCHDOG — one registry for every finding, and the two checks nobody was running (owner 2026-10-05, mig `1056`)
 

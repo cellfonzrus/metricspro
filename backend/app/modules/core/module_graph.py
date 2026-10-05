@@ -142,6 +142,16 @@ FACTS: dict[str, dict] = {
             'app/modules/storeops/router.py': ('_alert_log',),
         },
     },
+    'send_report_identity': {
+        "question": 'Which report does this send record name?',
+        "homes": ('app/modules/notify/send_identity.py',),
+        "index": ('15.3',),
+        "locks": ('harness_notify_send_identity.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/notify/router.py': ('send_identity',),
+        },
+    },
     'alert_channel_ladder': {
         "question": 'Which channels does this recipient still owe, and what did each one do?',
         "homes": ('app/modules/notify/digest_delivery.py',),

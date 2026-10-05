@@ -418,3 +418,80 @@ def rule_line_total(explain):
     """Σ line $ over the plan component's rule lines (flat-once lines carry no per-line amount)."""
     pc = (explain or {}).get("plan_component") or {}
     return round(sum(_f(ln.get("amount")) for rb in pc.get("rules") or [] for ln in rb.get("lines") or []), 2)
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
+# "IS THIS ROW MINE?" — THE ONE HOME (owner directive 2026-10-05: a rep may use the in-app assistant
+# for *"only their own commission, only their action plan"*).
+#
+# THE CLASS, named rather than the instance. Three surfaces answer "which of these rep rows belongs
+# to the signed-in rep", and before this they answered it three different ways:
+#   · `/commissions/{period}` matched the caller's name keys against three row fields, canon-aware,
+#     in a closure private to that handler — correct, and unreachable by anyone else.
+#   · `/targets/{period}/action-plan` took `rep` as a plain string filter with NO identity check, and
+#     was saved only by a self rep's store keyset coming out empty. An accident, not a rule.
+#   · `/coaching/{period}` did the same, over a payload carrying `total_payout`, `final_payout`,
+#     `at_risk` and the chargeback figures.
+# So the fix is not "add a check to the action plan". It is: the predicate lives HERE, every caller
+# dereferences it, and `harness_payout_audience_lock.py` fails the build if one stops.
+#
+# WHAT A CALLER STILL OWNS. Resolving WHO the caller is stays in the router adapters that can do I/O
+# (`_caller_rep_keys` for the name keys, `_rep_canon_map` for the alias map, `_caller_self_keyset`
+# for their store). This module stays PURE: it is handed the keys and a canon callable and answers
+# the question. That split is why this file needs no tenant, carrier or product name (RULE TWO).
+#
+# FAIL-CLOSED, deliberately. `rep_keys=set()` is a self rep we could not map to any rep row, and the
+# honest answer is NOTHING — never "then show them everything". Only `rep_keys=None`, meaning "this
+# caller is not self-scoped at all", leaves rows untouched.
+
+# Row fields that can carry a rep's name. The epay/POS spelling and the storeops roster spelling are
+# both names for one person, which is why a canon pass is part of the match rather than a nicety.
+REP_NAME_FIELDS = ("storeops_name", "epay_salesperson", "salesperson", "rep")
+
+
+def rep_row_keys(row, canon=None, fields=REP_NAME_FIELDS):
+    """Every UPPER name key a row could be known by: each name field as written, plus its canonical
+    form when a `canon` callable is supplied. PURE."""
+    out = set()
+    for f in fields or ():
+        v = str((row or {}).get(f) or "").strip()
+        if not v:
+            continue
+        out.add(v.upper())
+        if canon is not None:
+            try:
+                c = str(canon(v) or "").strip()
+            except Exception:                              # pragma: no cover - a caller's map misbehaving
+                c = ""
+            if c:
+                out.add(c.upper())
+    return out
+
+
+def row_is_mine(row, rep_keys, canon=None, fields=REP_NAME_FIELDS):
+    """Whether `row` belongs to the self-scoped caller whose own name keys are `rep_keys`.
+    `rep_keys is None` (not a self caller) → True, so a manager's rows are untouched.
+    `rep_keys == set()` (a self caller we could not place) → False for every row. PURE."""
+    if rep_keys is None:
+        return True
+    return bool(rep_row_keys(row, canon=canon, fields=fields) & set(rep_keys))
+
+
+def mine_only(rows, rep_keys, canon=None, fields=REP_NAME_FIELDS):
+    """`rows` as the self-scoped caller may read them — their own, in the original order. A manager
+    (`rep_keys is None`) gets the SAME LIST OBJECT back, so no existing response can shift. PURE."""
+    if rep_keys is None:
+        return rows
+    return [r for r in (rows or []) if row_is_mine(r, rep_keys, canon=canon, fields=fields)]
+
+
+def requested_rep_is_mine(requested, rep_keys, canon=None):
+    """Whether a `rep=` a caller asked for is the caller themselves. A self caller asking for anyone
+    else is False — the handler then ignores the parameter rather than serving a colleague's pay.
+    A blank request is True (no narrowing was asked for); a non-self caller is always True."""
+    if rep_keys is None:
+        return True
+    name = str(requested or "").strip()
+    if not name:
+        return True
+    return row_is_mine({"rep": name}, rep_keys, canon=canon, fields=("rep",))

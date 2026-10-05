@@ -1191,3 +1191,21 @@ jobs:
       - name: Run the schedule-from-history proof (the inference is stated and outward-rounded; relief is not a weekly commitment; one derivation, one destination table — index §14v)
         working-directory: backend
         run: python3 harness_schedule_from_history.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE NOTIFY SEND-IDENTITY PROOF (index §15.3) pins the ONE home for "which report does this send
+  # record name" — notify/send_identity.py — over the real module: the registry label wins over any
+  # browser-supplied spelling, a client export carries the report's NAME instead of the old
+  # "(client-export)" literal (the owner's 2026-10-05 report), a row written before mig 1057 still
+  # displays a name because the READ resolves it, and the UN-WIRING LOCKS — an AST scan of every
+  # send_log row literal in notify/router.py fails the build if a send path goes back to naming the
+  # report itself, with the pre-fix row as an armed control. stdlib only, DB-free.
+  notify-send-identity-proof:
+    name: Notify history names the report sent (DB-free, the real module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the notify send-identity proof (one home for the report's name; the history never shows a machine key — index §15.3)
+        working-directory: backend
+        run: python3 harness_notify_send_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
