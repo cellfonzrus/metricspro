@@ -162,6 +162,12 @@ const REPORT_TREES: [string, string][] = [
   ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
   ['/closing/recon', 'closing'],
   ['/closing/accountability', 'closing'],
+  // MANAGEMENT WATCHDOG (owner 2026-10-05, index §53). The whole /watchdog tree is one report
+  // area — the board, every area page under the dynamic route, and the void register — gated as
+  // 'commissions', byte-identical to /commcalc/flags, because it is the same findings table read
+  // another way. A separate area key would let a tenant grant the watchdog to somebody it denies
+  // the Flags page, which is the same rows.
+  ['/watchdog', 'commissions'],
 ]
 // The report area for a path, or null if it's an operational (non-report) page.
 export function reportAreaForPath(path: string): string | null {
@@ -527,6 +533,15 @@ export const NAV: NavGroup[] = [
   // D1 tile layout (house layout seeded by mig 948). Same zero-RBAC-change duplicate rule as above.
   { group: 'Flags & Compliance', module: 'commissions', items: [
     { href: '/compliance', label: 'Flags & Compliance Dashboard', icon: '🛡️', module: 'commissions', scopes: ['all', 'market'] },
+    // MANAGEMENT WATCHDOG (owner ask 2026-10-05, index §53). Its home is this group because it is
+    // the SAME findings table, cut the other way: the dashboard above counts one row per QUEUE
+    // across ten tables ("what is open?"), this gives one page per review AREA of commcalc.flags
+    // ("which part of the business do I go and act on?"). The area pages are a single dynamic route
+    // whose list comes from the backend flag registry, so a new detector cannot land without a page.
+    // Scopes are byte-identical to the dashboard's, so this changes what is REACHABLE and nothing
+    // about who may see it; the server span-scopes every row through the same get_flags filter.
+    { href: '/watchdog', label: 'Management Watchdog', icon: '👀', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/watchdog/void-register', label: 'Void & Return Register', icon: '↩️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // FOLLOW UP WITH MANAGERS (owner 2026-10-03, index §47.14). Its home is this group because what
     // it follows up ON is this group's queues: the board rolls the SAME registry
     // (compliance_summary.CATEGORIES) up per manager and queue with an age, which is the one thing

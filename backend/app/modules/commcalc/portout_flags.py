@@ -12,6 +12,10 @@ because a flag with no store reaches nobody at all. See `_sf_to_code` below.
 from datetime import datetime
 from collections import defaultdict
 
+# ONE home for what a finding's severity means (index §53). The day-band grading below is this
+# module's own and is passed through unchanged; `stamp` only puts it on the shared scale.
+from app.modules.commcalc import flag_registry as _reg
+
 def safe_float(v):
     try: return float(v or 0)
     except: return 0.0
@@ -139,4 +143,4 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
                 'coaching_note': 'Non-payment affects 3MR. Reporting only — rep may follow up with customer.',
             })
 
-    return flags
+    return _reg.stamp(flags)

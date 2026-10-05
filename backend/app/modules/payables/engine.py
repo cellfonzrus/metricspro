@@ -18,6 +18,7 @@ from app.core.database import get_supabase
 from app.modules.asset.router import (
     _norm_imei, _vip_invoice_map, _epay_payments_map, _classify_rma,
 )
+from app.modules.commcalc import flag_registry as _reg
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 PAGE = 1000
@@ -583,6 +584,9 @@ def sync_payable_flags(client, org_id=ORG_ID):
             "description": "Device sold but the equipment rebate was not received — owed to vendor "
                            f"is not offset (due {r.get('due_date') or 'n/a'}).",
         })
+    # ONE home for what a finding's severity means (index §53) — this module's own
+    # critical/warning judgement, put on the one scale the Management Watchdog orders by.
+    _reg.stamp(flags)
     for i in range(0, len(flags), 500):
         client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
     return len(flags)

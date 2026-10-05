@@ -1,0 +1,87 @@
+name: watchdog-guard
+
+# THE MANAGEMENT WATCHDOG (owner ask 2026-10-05): *"Start the registry + cash watchdog … Make the
+# voids visible and track able … Which five modules write findings and why do they write 3 different
+# ways"*.
+#
+# Three stdlib-only, DB-free checks, and the first of them is the one that keeps the other two
+# honest:
+#
+#   · harness_flag_registry_lock.py — THE LOCK. `commcalc.flags` was created with `flag_type TEXT`
+#     and no registry, so six modules grew six private vocabularies for one column, and three
+#     incompatible severity scales with them (`HIGH`/`MEDIUM`/`LOW`, `CRITICAL`, `critical`/`warning`)
+#     — which is why a third of the rows rendered grey on the Flags page. The registry
+#     (backend/app/modules/commcalc/flag_registry.py) is the one home; this lock FAILS THE BUILD if a
+#     writer stops dereferencing it, if a flag type is written that is not registered, if a second
+#     severity vocabulary appears, or if a registered type is emitted by nothing (a permanently-empty
+#     row on a management board is the fake-zero this house forbids). It already caught two live
+#     unregistered types on its first run.
+#
+#   · harness_cash_watchdog.py — the cash detector, including the regression that reproduces the
+#     reported defect: the measured B-117 / 2026-10-01 store-day, $194.17 cash over and $123.41
+#     credit over, entered, refused twice and never corrected.
+#
+#   · harness_void_watchdog.py — the void register, including the lock that the module reads the pay
+#     path's OWN rule (`gp_report.countable_sale_skip_reason`) rather than growing a private void
+#     test. Removing that dereference turns six checks red, naming the tokens that would be missed.
+#
+# Dependency-free by design: all three modules under test are pure (no I/O, no framework import), so
+# this runs on bare Python in seconds with no pip install. That is the property the house purity rule
+# exists to give, used here rather than described.
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/modules/commcalc/flag_registry.py"
+      - "backend/app/modules/commcalc/void_watchdog.py"
+      - "backend/app/modules/commcalc/watchdog_router.py"
+      - "backend/app/modules/closing/cash_watchdog.py"
+      - "backend/app/modules/**"
+      - "backend/harness_flag_registry_lock.py"
+      - "backend/harness_cash_watchdog.py"
+      - "backend/harness_void_watchdog.py"
+      - "database/migrations/1056_watchdog_rule.sql"
+      - ".github/workflows/watchdog-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/modules/**"
+      - "backend/harness_flag_registry_lock.py"
+      - "backend/harness_cash_watchdog.py"
+      - "backend/harness_void_watchdog.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watchdog-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every step runs under `bash -eo pipefail` (GitHub's explicit-bash shell). Without this the default
+# `bash -e` has NO pipefail, so `python3 harness_x.py | tee …` passes even when the harness fails —
+# locked by backend/harness_ci_pipefail_lock.py.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  watchdog-guard:
+    name: One registry, one severity scale, and both detectors proved
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+
+      - name: Every writer of the findings table dereferences the registry
+        working-directory: backend
+        run: python3 harness_flag_registry_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: The cash watchdog, including the B-117 regression
+        working-directory: backend
+        run: python3 harness_cash_watchdog.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Voids and returns are visible, and read the pay path's own rule
+        working-directory: backend
+        run: python3 harness_void_watchdog.py | tee -a "$GITHUB_STEP_SUMMARY"
