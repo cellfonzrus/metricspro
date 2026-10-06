@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, apiUpload } from '@/lib/client'
+import { buttonState, isRunning, nextPollDelay, POLL_GIVE_UP_MS } from '@/lib/job-run'
 
 // Auto-import config for the daily-closing Google "Envelopes Data (Responses)" sheet, read via a
 // Google service account. The SA JSON key lives in the Railway env GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -14,11 +15,38 @@ export default function ClosingImportsPage() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [upMsg, setUpMsg] = useState('')
+  // The epoch ms of OUR press, so the poll below knows how long the run has been in flight and the
+  // shared schedule can decide when to stop following it.
+  const [sweepStartedAt, setSweepStartedAt] = useState<number | null>(null)
+  // Whether the sweep we started has outlived job-run's poll schedule. A boolean, not a live
+  // elapsed-ms figure: reading the clock during render makes the render impure.
+  const [sweepOverdue, setSweepOverdue] = useState(false)
 
   const load = useCallback(() => { api('/api/v1/closing/sweep/config').then(setCfg).catch(() => setCfg({})) }, [])
   useEffect(() => { load() }, [load])
 
+  // FOLLOW THE SWEEP TO ITS END, on job-run's shared schedule — no page invents its own cadence.
+  useEffect(() => {
+    if (sweepStartedAt === null) return
+    if (!isRunning(cfg?.last_status)) return
+    // The clock is read HERE, in the effect, never during render.
+    const delay = nextPollDelay(Date.now() - sweepStartedAt)
+    if (delay === null) return
+    const t = setTimeout(() => {
+      if (nextPollDelay(Date.now() - sweepStartedAt) === null) setSweepOverdue(true)
+      load()
+    }, delay)
+    return () => clearTimeout(t)
+  }, [cfg?.last_status, sweepStartedAt, load])
+
   const set = (patch: any) => setCfg((c: any) => ({ ...c, ...patch }))
+
+  // The Run-now control's whole appearance, from the ONE home.
+  const sweepBtn = buttonState({
+    status: cfg?.last_status,
+    idleLabel: '▶ Run now',
+    elapsedMs: sweepOverdue ? POLL_GIVE_UP_MS + 1 : null,
+  })
 
   async function save() {
     setBusy(true); setMsg('')
@@ -33,11 +61,19 @@ export default function ClosingImportsPage() {
     finally { setBusy(false) }
   }
 
+  // RUN NOW — the sweep is running until the SERVER says it is not (owner report 2026-10-06,
+  // index §6q). This used to clear `busy` in a `finally` the instant the POST returned and then read
+  // the status ONCE, four seconds later: a `finally` on the submit is not the end of the JOB, which
+  // is the class of defect job-run.ts exists to stop. `_do_closing_sweep` now declares 'running'
+  // before it starts, so `cfg.last_status` is a real answer and the poll below can follow it.
   async function runNow() {
-    setBusy(true); setMsg('')
-    try { await api('/api/v1/closing/sweep/run-now', { method: 'POST' }); setMsg('⏳ Sweep started — refresh in a moment for status.'); setTimeout(load, 4000) }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
-    finally { setBusy(false) }
+    setSweepStartedAt(Date.now()); setSweepOverdue(false); setMsg('')
+    try {
+      await api('/api/v1/closing/sweep/run-now', { method: 'POST' })
+      setMsg('⏳ Sweep started.')
+    }
+    catch (e: any) { setSweepStartedAt(null); setMsg('❌ ' + (e?.message || e)) }
+    load()
   }
 
   async function upload(file: File) {
@@ -109,7 +145,11 @@ export default function ClosingImportsPage() {
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
           <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy} onClick={save}>💾 Save</button>
-          <button className="btn btn-secondary" style={{ fontSize: 14 }} disabled={busy || !cfg.sheet_id} onClick={runNow}>▶ Run now</button>
+          {/* ONE source for the label AND the disabled state (job-run.buttonState), so the control
+              cannot offer a press while a sweep is in flight — the reported defect. */}
+          <button className="btn btn-secondary" style={{ fontSize: 14 }}
+            title={sweepBtn.disabled ? sweepBtn.badge : undefined}
+            disabled={busy || !cfg.sheet_id || sweepBtn.disabled} onClick={runNow}>{sweepBtn.label}</button>
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
         </div>
 

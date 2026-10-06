@@ -1,9 +1,10 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { carrierMode, payoutRefused } from '@/lib/rbac'
+import { buttonState, isError, isRunning, settleStatus, nextPollDelay, POLL_GIVE_UP_MS } from '@/lib/job-run'
 import StatTile from '@/components/StatTile'
 import { GoogleRatingChips, useGoogleRatings } from './_lib/googleRatings'
 
@@ -20,6 +21,15 @@ interface RepRow {
   acima_comm: number
 }
 
+// Badge colour per job-run phase. The PHASES are owned by job-run.ts; only their colour is local.
+const BADGE_COLOR: Record<string, string> = {
+  idle: 'var(--text3)',
+  running: 'var(--amber)',
+  overdue: 'var(--amber)',
+  done: 'var(--green)',
+  error: 'var(--red)',
+}
+
 export default function CommCalcDashboard() {
   const { period } = usePeriod()
   const { carriers, permissions } = useAuth()
@@ -33,10 +43,42 @@ export default function CommCalcDashboard() {
   // matching does not hand its lines to anything else. Read-only; never blocks anything.
   const [calcWarn, setCalcWarn] = useState<any>(null)
   const [calcNotices, setCalcNotices] = useState<any[]>([])   // mig 247 — what the calc did NOT pay
+  // WHEN THIS PAGE STARTED A RUN (owner report 2026-10-06, index §6q). `job-run.ts` is the ONE home
+  // for what the control shows; this ref is only the local fact it needs — the epoch ms of OUR press,
+  // so a status read that PREDATES the press cannot downgrade it back to "not calculated yet". That
+  // downgrade is what made the button look pressable mid-run and earned the server's 409.
+  const pressedAt = useRef<number | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  // Whether the run we started has outlived job-run's poll schedule. A BOOLEAN rather than a live
+  // elapsed-ms figure on purpose: reading the clock during render makes the render impure, and the
+  // only thing the control needs to know is whether we have stopped following the run.
+  const [overdue, setOverdue] = useState(false)
 
   useEffect(() => {
+    // A new month is a different job: forget our press so the new period's real status is shown.
+    // `pressedAt` is a ref, so this costs no render; `overdue` is cleared by the press itself.
+    pressedAt.current = null
     loadData()
   }, [period])
+
+  // FOLLOW THE RUN TO ITS END (owner report 2026-10-06). The page used to ask the server once, two
+  // seconds after the press, and never again — against a job that takes about a minute. The schedule
+  // lives in job-run.POLL_SCHEDULE (quick at first, then backing off, then stopping) so no surface
+  // invents its own cadence and none polls forever.
+  useEffect(() => {
+    if (pressedAt.current === null || !isRunning(calcStatus)) return
+    let alive = true
+    // The clock is read HERE, in the effect, never during render.
+    const delay = nextPollDelay(Date.now() - pressedAt.current)
+    if (delay === null) return
+    const t = setTimeout(() => {
+      if (!alive) return
+      if (pressedAt.current !== null && nextPollDelay(Date.now() - pressedAt.current) === null) setOverdue(true)
+      loadData()
+    }, delay)
+    return () => { alive = false; clearTimeout(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calcStatus, overdue])
 
   async function loadData() {
     setLoading(true)
@@ -47,11 +89,13 @@ export default function CommCalcDashboard() {
         api(`/api/v1/commcalc/calc-status/${enc}?org_id=${ORG_ID}`),
       ])
       setReps(comms || [])
-      setCalcStatus(status?.calc_status || 'not_run')
+      // ONE rule for reconciling our press with the server's word (job-run.settleStatus): a read
+      // that is not strictly later than the press may not contradict it.
+      setCalcStatus(settleStatus(status?.calc_status, { pressedAt: pressedAt.current, readAt: Date.now() }))
       // Surface a REFUSED / error calc (e.g. the R1 unconfigured-tenant guard) instead of a silent
       // "0 reps" — save_errors carries the actionable message.
       const errs = status?.save_errors
-      setCalcError(status?.calc_status === 'error'
+      setCalcError(isError(status?.calc_status)
         ? (Array.isArray(errs) ? errs.join(' ') : (errs || 'Calculation failed.')) : '')
       // pre-mig-243 the column doesn't exist, so fall back to computing them live
       const w = status?.calc_warnings
@@ -79,6 +123,16 @@ export default function CommCalcDashboard() {
   const { ratingsFor: googleFor } = useGoogleRatings(
     topReps.map(r => (r as any).storeops_name || r.epay_salesperson))
 
+  // The control's whole appearance, from the ONE home. `idleLabel` is this page's own wording for
+  // the action; everything else (label while running, disabled, badge) is derived there so no second
+  // surface can spell "running" differently.
+  const btn = buttonState({
+    status: calcStatus,
+    idleLabel: '⚡ Run Calculation',
+    elapsedMs: overdue ? POLL_GIVE_UP_MS + 1 : null,
+    submitting,
+  })
+
   const totalPayout = reps.reduce((s, r) => s + (r.total_payout || 0), 0)
   const totalActs   = reps.reduce((s, r) => s + (r.premium_acts || 0) + (r.byod_acts || 0), 0)
   const totalUpgrades = reps.reduce((s, r) => s + (r.upgrade_acts || 0), 0)
@@ -103,29 +157,43 @@ export default function CommCalcDashboard() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>CommCalc Dashboard</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · {reps.length} reps
-            {calcStatus === 'done' && <span style={{ color: 'var(--green)', marginLeft: 8 }}>✓ Calculated</span>}
-            {calcStatus === 'running' && <span style={{ color: 'var(--amber)', marginLeft: 8 }}>⏳ Running...</span>}
-            {calcStatus === 'error' && <span style={{ color: 'var(--red)', marginLeft: 8 }}>⚠ Calculation refused</span>}
-            {calcStatus === 'not_run' && <span style={{ color: 'var(--text3)', marginLeft: 8 }}>Not calculated yet</span>}
+            {/* ONE source for the badge AND the button (job-run.buttonState), so the two can never
+                disagree — the reported defect was exactly that disagreement. */}
+            <span style={{ marginLeft: 8, color: BADGE_COLOR[btn.phase] }}>
+              {btn.phase === 'error' ? '⚠ Calculation refused' : btn.badge}
+            </span>
           </p>
         </div>
         <button
+          disabled={btn.disabled}
+          title={btn.disabled ? btn.badge : undefined}
           onClick={async () => {
+            // A PRESS IS A REQUEST, and the job is running until the SERVER says it is not. We mark
+            // the press FIRST so settleStatus can protect it from a status read that predates it.
+            if (btn.disabled) return
+            pressedAt.current = Date.now()
+            setOverdue(false)
+            setSubmitting(true)
             setCalcStatus('running')
             try {
               await api(`/api/v1/commcalc/calculate/${encodeURIComponent(period)}?org_id=${ORG_ID}`, { method: 'POST' })
-              setTimeout(loadData, 2000)
             } catch (e: any) {
-              // A 409 here means a calculation for this month is ALREADY running (single-flight guard) —
-              // show the server's plain-English reason, then re-read the real status so the badge above
-              // stops claiming this press started something.
-              alert(e.message)
-              loadData()
+              // A 409 here means a calculation for this month is ALREADY running (single-flight guard).
+              // The button being disabled while we know a run is in flight means this is now reachable
+              // only when ANOTHER tab or the landing hook started one — so keep 'running' and let the
+              // poll follow that run, rather than alerting and forgetting it.
+              const busy = /already running/i.test(String(e?.message || ''))
+              if (!busy) { pressedAt.current = null; alert(e.message) }
+            } finally {
+              // Only the SUBMIT is over here. Clearing a busy flag in `finally` as if the JOB were
+              // over is the class of defect this page was fixed for — see job-run.ts.
+              setSubmitting(false)
             }
+            loadData()
           }}
           className="btn btn-primary"
         >
-          ⚡ Run Calculation
+          {btn.label}
         </button>
       </div>
 

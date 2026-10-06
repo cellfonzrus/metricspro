@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { isRunning, nextPollDelay } from '@/lib/job-run'
 import { WorkflowNext } from '@/components/WorkflowNext'
 import { useConnectors } from '@/lib/connectors'
 import { SetupNotice } from '@/lib/setupNotice'
@@ -29,12 +30,28 @@ export default function ConnectorsPage() {
   const [nc, setNc] = useState<any>({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '' })
   const [nr, setNr] = useState<Record<string, any>>({})
   const [sched, setSched] = useState<Record<string, any>>({})
+  // Epoch ms of OUR press, per connector, so the poll below can measure how long each run has been
+  // in flight and the shared schedule can decide when to stop following it.
+  const [runStartedAt, setRunStartedAt] = useState<Record<string, number>>({})
 
   const load = useCallback(() => {
     setLoading(true)
     api('/api/v1/commcalc/connectors').then(setConns).catch(console.error).finally(() => setLoading(false))
   }, [])
   useEffect(() => { load() }, [load])
+
+  // FOLLOW EVERY RUN THIS PAGE STARTED, on job-run's shared schedule. One timer for the soonest
+  // due connector: re-reading the list answers for all of them at once.
+  useEffect(() => {
+    const live = conns.filter(c => runStartedAt[c.id] && isRunning(c?.status?.last_status))
+    if (live.length === 0) return
+    const delays = live
+      .map(c => nextPollDelay(Date.now() - runStartedAt[c.id]))
+      .filter((d): d is number => d !== null)
+    if (delays.length === 0) return
+    const t = setTimeout(load, Math.min(...delays))
+    return () => clearTimeout(t)
+  }, [conns, runStartedAt, load])
 
   async function setConn(c: any, patch: any) {
     try { await api(`/api/v1/commcalc/connectors/${c.id}`, { method: 'PATCH', body: JSON.stringify(patch) }); load() }
@@ -44,11 +61,26 @@ export default function ConnectorsPage() {
     try { await api(`/api/v1/commcalc/report-definitions/${r.id}`, { method: 'PATCH', body: JSON.stringify(patch) }); load() }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
+  // RUN NOW — see job-run.ts (owner report 2026-10-06, index §6q). The `finally { setBusy('') }`
+  // this replaces cleared the busy state when the POST returned, which is when the sweep STARTS, and
+  // the single `setTimeout(load, 4000)` then stopped following it. We now record the press and let
+  // the poll below follow the connector's own status to a terminal word.
+  //
+  // PARTIAL BY DESIGN, and named rather than quietly left: `/connectors/{id}/run-now` dispatches
+  // through `_sweep_registry()` to each vendor's own sweep, and only the daily-closing sweep declares
+  // 'running' before it works. Until every registered sweep does, this page follows a run it started
+  // on the shared schedule but cannot yet SEE one started elsewhere. The remaining half is one
+  // `'running'` write per sweep, listed in index §6q.
   async function runNow(c: any) {
     setBusy(c.id); setMsg('')
-    try { const r = await api(`/api/v1/commcalc/connectors/${c.id}/run-now`, { method: 'POST' }); setMsg(`⏳ ${c.vendor_name} sweep started.`); setTimeout(load, 4000) }
+    try {
+      await api(`/api/v1/commcalc/connectors/${c.id}/run-now`, { method: 'POST' })
+      setRunStartedAt(p => ({ ...p, [c.id]: Date.now() }))
+      setMsg(`⏳ ${c.vendor_name} sweep started.`)
+    }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy('') }
+    load()
   }
   async function saveSchedule(c: any, sc: any) {
     setBusy(c.id + 'sched'); setMsg('')
