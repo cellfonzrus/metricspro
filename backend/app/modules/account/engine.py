@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from app.core.config import settings
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account import coa, _period
+from app.modules.account import analysis as _analysis   # 2026-10-06 — THE earned crosscheck verdict (index §19.49)
 from app.modules.account.ai_limits import ACCOUNT_AI_TIMEOUT_S, ACCOUNT_AI_MAX_RETRIES
 
 ORG_ID = coa.ORG_ID
@@ -274,8 +275,12 @@ def compute_and_store(client, org_id, period):
             narrative, model = "", "deterministic"
 
         for stmt, st_type in ((pl, "pl"), (bs, "balance_sheet")):
+            # The flag is EARNED, never defaulted (index §19.49). `stmt.get("balanced", True)` made
+            # an unchecked P&L — which carries no `balanced` key at all — indistinguishable from a
+            # passing one, so all 289 stored P&L snapshots claimed a crosscheck that never ran.
             _persist(client, org_id, period, st_type, scope_key, scope_label, stmt,
-                     narrative if st_type == "pl" else "", model, stmt.get("balanced", True))
+                     narrative if st_type == "pl" else "", model,
+                     _analysis.statement_crosscheck(st_type, stmt)["ok"])
             written += 1
 
     return {"period": period, "snapshots": written, "scopes": len(scopes),
