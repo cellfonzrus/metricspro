@@ -340,6 +340,14 @@ def commission_expense_by_key(exp_rows, commission_names, key_of=None):
     return out
 
 
+# ── A GATED DETECTOR'S VERDICT, tri-state (owner report 2026-10-06, index §19.50) ───────────────
+# "I did not measure this" and "I measured this and found nothing" are different facts, and a single
+# float cannot carry both. Same class as the statement crosscheck (§19.49): an ABSENCE reported as a
+# RESULT. These two strings are the ONE vocabulary for that verdict.
+VERDICT_MEASURED = "measured"
+VERDICT_NOT_CONFIGURED = "not_configured"
+
+
 def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance=0.005):
     """PURE: labour dollars that reach the report by TWO routes at once.
 
@@ -349,12 +357,26 @@ def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance
     cost a second time.
 
     Returns {'names': [...], 'stores': [{'store_code','expense','rep_pay','double_booked'}…],
-             'total_double_booked': float, 'note': str|None}. Reports only — nothing is netted here,
-    because which route is authoritative is a money decision and money decisions are the owner's.
+             'total_double_booked': float|None, 'measured': bool, 'verdict': str,
+             'note': str|None}. Reports only — nothing is netted here, because which route is
+    authoritative is a money decision and money decisions are the owner's.
+
+    A DETECTOR GATED ON CONFIG MUST SAY SO (owner report 2026-10-06, index §19.50). This check can
+    only run on the org's OWN `account_config.labour_commission_expense_names` (RULE TWO — no expense
+    name is spelled in code). An org that has not set it was returning `total_double_booked: 0.0`
+    with no note, which reads exactly like "measured, and nothing is double-booked". It is not the
+    same fact: `verdict` is `measured` or `not_configured`, and `total_double_booked` is **None**
+    when nothing was measured, so an absence can never be summed, charted or believed as a zero.
+    `suppression_plan` below already drew this line with its `active` flag; this is the same line.
     """
     want = _names(commission_names)
     if not want:
-        return {"names": [], "stores": [], "total_double_booked": 0.0, "note": None}
+        return {"names": [], "stores": [], "total_double_booked": None,
+                "measured": False, "verdict": VERDICT_NOT_CONFIGURED,
+                "note": "Double-booked labour was NOT CHECKED for this org. The check reads the "
+                        "org's own commission expense-name list, and it is empty — so this is not "
+                        "a finding of zero. Set the commission expense names in Finance settings "
+                        "to measure it."}
     by_code = commission_expense_by_key(exp_rows, commission_names)
     stores, total = [], 0.0
     for code in sorted(by_code):
@@ -372,8 +394,8 @@ def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance
         note = (f"${total:,.2f} of commission is booked TWICE across {len(stores)} store(s): once as "
                 f"an expense row and again from the calculated rep commissions, which the GP report and "
                 f"the P&L already deduct on their own line. Remove one of the two routes.")
-    return {"names": sorted(want), "stores": stores,
-            "total_double_booked": total, "note": note}
+    return {"names": sorted(want), "stores": stores, "total_double_booked": total,
+            "measured": True, "verdict": VERDICT_MEASURED, "note": note}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

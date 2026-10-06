@@ -8081,6 +8081,12 @@ def _closing_sweep_status(client, org_id, status, detail, mark_run=False):
 
 def _do_closing_sweep(org_id: str):
     client = sb()
+    # DECLARE THE RUN BEFORE DOING IT (owner report 2026-10-06, index §6q). Until now this sweep only
+    # ever wrote a TERMINAL status, so "a run is in flight" was a fact no reader could obtain: the
+    # Imports page cleared its own busy flag the moment the POST returned and then read a status row
+    # describing the PREVIOUS run. `last_run_at` is deliberately NOT stamped here — it means "when a
+    # run last finished", and moving it on start would make a running sweep look complete.
+    _closing_sweep_status(client, org_id, "running", "Sweep started.")
     try:
         cfg = _closing_cfg(client, org_id)
         sheet_id = (cfg.get("sheet_id") or "").strip()

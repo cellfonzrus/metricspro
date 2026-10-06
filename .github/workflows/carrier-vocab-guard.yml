@@ -499,6 +499,10 @@ on:
       - "database/migrations/1059_subscriber_installment_pay_period_key.sql"
       - "backend/harness_statement_crosscheck_earned.py"
       - "backend/app/modules/account/analysis.py"
+      - "backend/harness_expense_one_path.py"
+      - "backend/app/modules/commcalc/expenses_effective.py"
+      - "backend/app/modules/commcalc/labour_coverage.py"
+      - "backend/app/modules/account/statement_filter.py"
       - "backend/app/modules/account/_period.py"
       - "backend/app/modules/account/coa.py"
       - "backend/app/modules/account/engine.py"
@@ -779,6 +783,7 @@ jobs:
       - name: Run the earned-crosscheck lock (a statement's crosscheck verdict is COMPUTED, never defaulted; `not_measured` is never a pass; both statement writers dereference the one resolver — owner 2026-10-06, index §19.49)
         working-directory: backend
         run: python3 harness_statement_crosscheck_earned.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+<<<<<<< HEAD
       - name: Run the instalment-month anchor lock (which month of a multi-month curve a row is in comes from the ROW'S OWN activation date, never the lookback window's edge; both multi-month engines share one home for the arithmetic; an unanchored month, an unresolved schedule, a raised engine and an incomplete ledger write are all REPORTED rather than read as $0.00 — index §19.51)
         working-directory: backend
         # `set -o pipefail` ON PURPOSE. Every other step in this job pipes the harness into `tee`,
@@ -792,6 +797,11 @@ jobs:
         run: |
           set -o pipefail
           python3 harness_installment_month_anchor.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+=======
+      - name: Run the one-path expense lock (one question one path — a gated detector reports that it did not measure, a period filter matches every spelling and dedupes, and the expenses trend reads the SAME carry-forward rule as the P&L — owner 2026-10-06, index §19.50)
+        working-directory: backend
+        run: python3 harness_expense_one_path.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+>>>>>>> origin/main
       - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
         working-directory: backend
         run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

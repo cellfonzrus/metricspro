@@ -15,6 +15,7 @@
 // so the numbers below refresh on their own.
 import { useEffect, useRef, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { isRunning } from '@/lib/job-run'
 import { paths } from './runCommission'
 
 export type AutoCalc = {
@@ -31,7 +32,11 @@ const TONE: Record<string, { border: string; label: string }> = {
   info: { border: 'var(--accent)', label: 'Auto-calculation' },
 }
 
-const PENDING = new Set(['queued', 'running', 'busy'])
+// WHICH WORDS MEAN "a run is in flight" is NOT this file's fact — it is job-run.RUNNING_STATES
+// (owner report 2026-10-06, index §6q). This file held a third private copy of that set; a fourth
+// would be the next divergence. The POLL CADENCE below stays local on purpose: it follows the
+// landing hook's own queue rather than a press on this page, so it is a different question.
+const PENDING = { has: (s: string) => isRunning(s) }
 
 export default function AutoCalcNotice({ period, onSettled }: { period: string; onSettled?: () => void }) {
   const [ac, setAc] = useState<AutoCalc | null>(null)

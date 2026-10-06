@@ -96,6 +96,14 @@ on:
       - "frontend/prove_search_rank.mjs"
       - "frontend/prove_search_catalog.mjs"
       - "frontend/prove_search_console_lock.mjs"
+      # A background job's control — one home for "is it running, and may it be pressed" (index §6q).
+      # Every surface the proof names is listed, because a job behind an allowlist that does not name
+      # its own subject skips silently (the §13e lesson again).
+      - "frontend/src/lib/job-run.ts"
+      - "frontend/prove_job_run.mjs"
+      - "frontend/src/app/(platform)/commcalc/_lib/AutoCalcNotice.tsx"
+      - "backend/app/modules/commcalc/router.py"
+      - "backend/app/modules/closing/router.py"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - ".github/workflows/data-qa-guard.yml"
   push:
@@ -105,6 +113,8 @@ on:
       - "backend/harness_data_qa_*.py"
       - "frontend/src/lib/search-*.ts"
       - "frontend/prove_search_*.mjs"
+      - "frontend/src/lib/job-run.ts"
+      - "frontend/prove_job_run.mjs"
   workflow_dispatch:
 
 permissions:
@@ -198,3 +208,19 @@ jobs:
       - name: Run the search-console design lock (one ranker, one catalogue, no private scoring in a surface — index §54.3)
         working-directory: frontend
         run: node prove_search_console_lock.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # A BACKGROUND JOB'S CONTROL (index §6q). Node 22 strips the erasable TypeScript of the real
+  # src/lib/job-run.ts, so this proof drives the shipped functions rather than a copy — no React, no
+  # network, and deliberately no `npm ci`. §G is the un-wiring lock: it reads the four surfaces and
+  # the backend, and fails the build if one stops dereferencing the shared fact or if a retired
+  # "accepted means finished" shape comes back.
+  job-run:
+    name: Background job control — one home for running, pressable and the poll schedule
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the job-run proof (a job runs until the SERVER says otherwise; the button cannot offer a press it knows will be refused — index §6q)
+        working-directory: frontend
+        run: node prove_job_run.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

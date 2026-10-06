@@ -220,9 +220,14 @@ def bs_totals(payload):
             "equity": _r2((payload or {}).get("equity_total"))}
 
 
-def _dedupe_latest(rows):
-    """{(month_key, statement_type, scope_key): row} keeping the newest computed_at — the same
-    month stored under both period spellings (or recomputed) must count once, freshest wins."""
+def dedupe_latest(rows):
+    """THE "freshest wins" rule for stored statements (index §19.47, §19.50).
+
+    {(month_key, statement_type, scope_key): row} keeping the newest computed_at — the same month
+    stored under both period spellings (or recomputed) must count once, freshest wins. Public
+    because EVERY reader that widens its period filter to both spellings needs it: widening without
+    deduping turns one month into two and SUMS them. `statement_filter.filtered_statement`
+    dereferences it for exactly that reason."""
     out = {}
     for r in rows or []:
         mk = _month_key(r.get("period"))
@@ -255,7 +260,7 @@ def assemble(rows, months=12, own_company_ids=None, companies=None):
     if own_company_ids is not None:
         from app.modules.account.coa import filter_org_scopes
         rows = filter_org_scopes(rows, own_company_ids)
-    idx = _dedupe_latest(rows)
+    idx = dedupe_latest(rows)
 
     # the month axis = months with a computed CONSOLIDATED P&L, chronological, trailing window
     month_keys = sorted({mk for (mk, st, sc) in idx if st == "pl" and sc == "consolidated"})[-months:]

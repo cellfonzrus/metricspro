@@ -283,7 +283,28 @@ ok("F6 nothing is netted automatically — the report carries both raw figures",
    (col["stores"][0]["expense"], col["stores"][0]["rep_pay"]), (500.00, 821.65))
 ok("F7 no configured commission names -> no claim at all (byte-identical default)",
    lc.commission_collisions(aug_exp, rep_pay, [])["stores"], [])
-ok("F8 …and no note", lc.commission_collisions(aug_exp, rep_pay, None)["note"], None)
+# ── F8–F8e  A GATED DETECTOR SAYS SO (owner report 2026-10-06, index §19.50) ─────────────────
+# REGRESSION: this used to return `total_double_booked: 0.0` with `note: None` for an org that had
+# never configured the expense-name list — indistinguishable from "measured, and nothing is double
+# booked". The house org IS that org, so its GP payload carried a clean $0.00 against a real
+# overlap. An absence is never a finding: the verdict is tri-state and the total is None.
+_unconf = lc.commission_collisions(aug_exp, rep_pay, None)
+ok("F8 unconfigured -> the verdict says NOT configured",
+   _unconf["verdict"], lc.VERDICT_NOT_CONFIGURED)
+ok("F8a …and `measured` is False", _unconf["measured"], False)
+ok("F8b …and the total is None, never 0.0 — an absence cannot be summed or charted",
+   _unconf["total_double_booked"], None)
+ok("F8c …and None is not 0.0 (the defect's own shape)",
+   _unconf["total_double_booked"] == 0.0, False)
+ok("F8d …and the note tells the reader it was not checked",
+   ("NOT CHECKED" in (_unconf["note"] or "")), True)
+ok("F8e a CONFIGURED org is measured, with a real total",
+   (lc.commission_collisions(aug_exp, rep_pay, COMMISSION_NAMES)["verdict"],
+    lc.commission_collisions(aug_exp, rep_pay, COMMISSION_NAMES)["measured"]),
+   (lc.VERDICT_MEASURED, True))
+ok("F8f the two verdict strings are distinct and the ONE vocabulary",
+   (lc.VERDICT_MEASURED != lc.VERDICT_NOT_CONFIGURED,
+    sorted({lc.VERDICT_MEASURED, lc.VERDICT_NOT_CONFIGURED})), (True, ["measured", "not_configured"]))
 ok("F9 a store with an expense row but NO rep pay is not a collision",
    lc.commission_collisions([expense("Solo", "Employee Commission", 500.0)], {},
                             COMMISSION_NAMES)["stores"], [])
@@ -559,7 +580,9 @@ ok("G4 the report carries states and evidence only — no key that books a dolla
    sorted(g_rep.keys()), ["allocated_names", "carried_from", "counts", "detail", "gaps",
                           "note", "period", "scanned", "states"])
 ok("G4a the collision report likewise reports, never nets",
-   sorted(g_col.keys()), ["names", "note", "stores", "total_double_booked"])
+   sorted(g_col.keys()), ["measured", "names", "note", "stores", "total_double_booked", "verdict"])
+ok("G4b …and neither verdict key names a dollar the report could book",
+   [k for k in sorted(g_col.keys()) if k in ("suppressed", "booked_instead", "netted")], [])
 ok("G5 load_shift_hours degrades to [] on an unreadable feed (never a fabricated zero)",
    lc.load_shift_hours(None, "org", "2026-08"), [])
 ok("G6 …and on an unparseable period", lc.load_shift_hours(None, "org", "nonsense"), [])
