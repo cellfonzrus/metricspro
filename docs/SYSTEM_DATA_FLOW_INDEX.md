@@ -19001,11 +19001,47 @@ entitled to**, so a routing opinion can never produce a refusal where an answer 
 offer line in the console says which door it will use, so the person can see the choice before
 spending anything.
 
+### 54.10 A guess is never delivered as an answer (owner 2026-10-06, third report)
+
+Owner, the morning after §54 shipped: *"i asked which sales rep worked in 509 today it took me to
+sales report, then i asked who worked in 509 today it took me to"* Pay period & work-week.
+
+Reproduced against the shipped ranker, which was **right both times**: `intent()` returned `'ask'`
+for each sentence (nothing explains `worked` + `509` + `today`), and the store at that address was the
+top hit. The defect was one line further on, in the surface — `AskBar`'s `onSubmit` asked for the
+assistant only `if (mode === 'ask' && canAskAI …)` and then **fell through to
+`if (firstDest) go(...)`**. The data assistant is not switched on for this tenant (§52: migration
+`1055_data_qa_assistant.sql` unapplied, `ai_assistant` module off), so `canAskAI` is false and every
+unexplained question walked straight into the closest-looking page. That is exactly the class §54
+exists to end, wearing a different hat: *a search that always returns its best guess cannot tell a bad
+match from no match* — and a fall-through is a best guess with the question's own verdict overruled.
+
+`search-rank.submitAction(mode, { hasFigure, canAsk, hasDest })` is now the one home for **what a
+keystroke does**, which is a different question from what was typed: `intent()` reads the words,
+`submitAction` reads the words together with what the console can actually reach.
+
+| mode | reachable | action |
+|---|---|---|
+| any | a deterministic figure | `figure` — the report's own endpoint, no model, always wins |
+| `ask` | assistant reachable | `ask` |
+| `ask` | **assistant not reachable** | **`unanswered`** — say so; never navigate |
+| `navigate` | something openable | `navigate` |
+| `navigate` / `empty` | nothing openable | `unanswered` |
+
+`unanswered` renders the reason in the server's own words (`module_enabled` / `configured` /
+`allowed` + `reason` from `GET /core/data-qa/status`, which the surface previously collapsed into one
+boolean and threw the explanation away) and leaves every ranked row clickable, so the destination is
+one deliberate click away instead of arriving unasked. §J of `prove_search_rank.mjs` replays both
+reported sentences as the regression and is armed — the same inputs still navigate when the question
+IS explained, so J3 cannot be passing because nothing ever navigates. The lock adds the surface rules:
+`submitAction` must be imported and called, and the literal fall-through shape `if (firstDest) go(`
+re-appearing fails the build (B10g–B10i).
+
 ### 54.9 Status
 
-Code complete and proved: **258 checks** across four Node, dependency-free proofs
-(`prove_search_rank.mjs` 100, `prove_search_catalog.mjs` 73, `prove_route_index.mjs` 44,
-`prove_search_console_lock.mjs` 41), run by the `search-console` job in
+Code complete and proved: **275 checks** across four Node, dependency-free proofs
+(`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 73, `prove_route_index.mjs` 44,
+`prove_search_console_lock.mjs` 44), run by the `search-console` job in
 `.github/workflows/data-qa-guard.yml`. No migration. The entity half of the catalogue appears as soon
 as the two endpoints answer; the assistant half is live wherever `GET /core/data-qa/status` returns
 `allowed && configured` (§52.6).
