@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account import coa, balance_sheet, _period
 from app.modules.account import device_cogs
+from app.modules.account import analysis as _analysis   # 2026-10-06 — THE earned crosscheck verdict (index §19.49)
 # NOTE: `engine` (the assembler/narrator/persistor this module reuses) is imported LAZILY inside
 # the functions that need it — engine.py pulls app.core.config at import time, and keeping it off
 # this module's import path is what lets the stdlib proof harness exercise the pure parts
@@ -712,9 +713,15 @@ def compute_and_store(client, org_id, period):
         else:
             narrative, model = "", "deterministic"
         for stmt, st_type in ((pl, "pl"), (bs, "balance_sheet"), (cf, "cash_flow")):
+            # The flag is EARNED, never defaulted (index §19.49). This read
+            # `stmt.get("balanced", stmt.get("tied", True))`: `balanced` is set only on a balance
+            # sheet and `tied` only on a cash flow, so a P&L fell through to the literal True and
+            # every stored P&L claimed a crosscheck that had never run. `statement_crosscheck` now
+            # computes the P&L's own identities and returns None — not True — for anything it
+            # cannot judge, so "never checked" can no longer read as "checked and fine".
             engine._persist(client, org_id, period, st_type, scope_key, scope_label, stmt,
                             narrative if st_type == "pl" else "", model,
-                            stmt.get("balanced", stmt.get("tied", True)))
+                            _analysis.statement_crosscheck(st_type, stmt)["ok"])
             written += 1
 
     return {"period": period, "snapshots": written, "scopes": len(scopes),
