@@ -407,6 +407,7 @@ FACTS: dict[str, dict] = {
             'app/modules/account/royalty.py': ('canonical_period', 'month_range', 'parse_period'),
             'app/modules/account/royalty_router.py': ('_period',),
             'app/modules/account/statement_engine.py': ('_period',),
+            'app/modules/account/statement_filter.py': ('_per',),
             'app/modules/commcalc/auto_calc.py': ('_pd',),
             'app/modules/commcalc/commission_ledger.py': ('_pd',),
             'app/modules/commcalc/discrepancy_appeals.py': ('_pd',),
@@ -426,6 +427,7 @@ FACTS: dict[str, dict] = {
             'app/modules/account/projection_engine.py': ('analysis',),
             'app/modules/account/router.py': ('analysis',),
             'app/modules/account/statement_engine.py': ('_analysis',),
+            'app/modules/account/statement_filter.py': ('_analysis',),
             'app/modules/account/valuation.py': ('analysis',),
         },
     },
@@ -452,6 +454,30 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/commission_engine.py': ('_pdq_cfg',),
             'app/modules/commcalc/plan_pay_gate.py': ('_pdq',),
             'app/modules/commcalc/router.py': ('_pdq',),
+        },
+    },
+    'expense_month_one_path': {
+        "question": 'What did this store spend in this month — including a month it never saved?',
+        "homes": ('app/modules/commcalc/expenses_effective.py',),
+        "index": ('19.50',),
+        "locks": ('harness_expense_one_path.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/account/coa.py': ('effective_expense_rows',),
+            'app/modules/commcalc/labour_coverage.py': ('period_sort_key',),
+            'app/modules/commcalc/router.py': ('_expfx',),
+        },
+    },
+    'gated_detector_verdict': {
+        "question": 'Did this check actually run, or is its clean result just an empty config?',
+        "homes": ('app/modules/commcalc/labour_coverage.py',),
+        "index": ('19.50',),
+        "locks": ('harness_expense_one_path.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/account/coa.py': ('_lcov',),
+            'app/modules/commcalc/gp_report.py': ('_lcov',),
+            'app/modules/commcalc/router.py': ('_labour', '_lcov'),
         },
     },
 }

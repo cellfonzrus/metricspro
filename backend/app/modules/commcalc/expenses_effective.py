@@ -77,6 +77,47 @@ def manual_rows(rows):
     return [r for r in (rows or []) if not (r.get("source_key") or None)]
 
 
+def effective_series(rows, periods):
+    """PURE: THE carry-forward rule applied to a SERIES of months at once (index §19.50).
+
+    `rows` = every `store_expenses` row the org has (each needs `period`, plus `source_key` for the
+    carry test and whatever money columns the caller reads). `periods` = the month labels the caller
+    wants, in any spelling. Returns {period_label: {'rows': [...], 'carried_from': str|None}}.
+
+    WHY THIS EXISTS. `effective_expense_rows` above answers the question for ONE period over I/O;
+    the trend endpoint asked the SAME question for twelve months and answered it by reading the raw
+    table — no carry-forward, no store resolution. Two paths, one question, different answers: the
+    duplicate defect the house rules forbid (owner report 2026-10-06). Live evidence: the P&L booked
+    $379,108.81 of carried October store opex while the expenses trend had no October row at all,
+    and both of LuxeLink's September and October months were likewise absent from the trend while
+    the P&L booked $275,610.15 for each.
+
+    Both spellings of a month collapse into one slot (via `period_sort_key`, the ONE parser here),
+    and the carry decision dereferences `pick_carry_period` and `manual_rows` — the same two pure
+    facts the I/O path uses — so the series and the single-period read cannot drift. That agreement
+    is PROVED, not asserted: `harness_expense_one_path.py` §C runs both over one fixture and
+    requires them to return the same rows and the same `carried_from` for every month.
+    """
+    all_periods = [r.get("period") for r in (rows or [])]
+    by_month = {}
+    for r in (rows or []):
+        k = period_sort_key(r.get("period"))
+        if k == (0, 0):
+            continue
+        by_month.setdefault(k, []).append(r)
+    out = {}
+    for p in (periods or []):
+        k = period_sort_key(p)
+        own = list(by_month.get(k) or [])
+        if own:
+            out[p] = {"rows": own, "carried_from": None}
+            continue
+        carried_from = pick_carry_period(all_periods, p) if k != (0, 0) else None
+        prior = by_month.get(period_sort_key(carried_from)) or [] if carried_from else []
+        out[p] = {"rows": manual_rows(prior), "carried_from": carried_from}
+    return out
+
+
 def effective_expense_rows(client, org_id, period, pvariants, select_cols):
     """I/O: the period's effective store_expenses rows under the carry-forward rule above.
 

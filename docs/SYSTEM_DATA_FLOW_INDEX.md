@@ -6050,6 +6050,9 @@ rendering the resolved name.
 | `core/feed_read.read_all` / `PAGE` / `MAX_PAGES` / `IncompleteRead` (code) — **"give me ALL of this feed": one paged read with NO limit parameter and no default cap, so a row count is a property of the DATA and never of a literal.** A failed read RAISES rather than returning a short list | code | `commcalc.router` input loader (`fetch`), `_compute_gp` (payment detail + comp report), the three period-rollup reads, the ePay-split read, the two unnarrowed `raw_sales` reads, the three comp-report reads; lock `harness_pay_feed_balance.py` §G (107) — §19.48 |
 | `commcalc/pay_data_quality.reconcile_pay_feed` + `PLACEABLE_CATEGORIES` + `UNPLACED_REASONS` + `day_coverage_gap` (code) — **the pay feed's BALANCE: every dollar PLACED in a pay bucket or REPORTED unplaced under a named reason, with `balances` as the arithmetic proof.** Never decides what a category means — the caller hands in the org's own map (RULE TWO) | code | `commcalc.router.pay_feed_balance` (`GET /commcalc/pay-feed-balance`); the ONE statement of which buckets `calculator.pay_by_login` actually reads; lock `harness_pay_feed_balance.py` (107) — §19.48 |
 | `account/analysis.statement_crosscheck` / `pl_crosscheck` / `CROSSCHECK_TOLERANCE` (code) — **"was this statement checked, and did it pass?": the verdict is EARNED, tri-state (`passed`/`failed`/`not_measured`), and `ok` is None for anything that cannot be judged.** A boolean cannot tell "checked and fine" from "never checked" | code | `account/engine._persist`'s caller and `account/statement_engine` (both writers dereference it, so the stored flag and the served flag can never disagree); the P&L identity reads `pl_totals` -> `EXPENSE_SECTIONS`, never re-summing sections; lock `harness_statement_crosscheck_earned.py` (63) — §19.49 |
+| `commcalc/expenses_effective.effective_series` (code) — **what a store spent in a month, for a whole AXIS of months at once, including a month it never saved.** Dereferences `pick_carry_period` + `manual_rows`, the same two pure facts the single-period reader uses, so a series and a single month cannot drift; proved equivalent by the lock, not asserted | code | `commcalc.router.expenses_trend` (`GET /commcalc/expenses-trend`, which read the raw table and so had no October while the P&L booked $379,108.81 carried); `effective_expense_rows` for the P&L and GP report; lock `harness_expense_one_path.py` §B/§C/§E (129) — §19.50 |
+| `commcalc/labour_coverage.VERDICT_MEASURED` / `VERDICT_NOT_CONFIGURED` (code) — **did this check actually RUN, or is its clean result just an empty config?** `total_double_booked` is None when nothing was measured, so an absence cannot be summed or charted | code | `labour_coverage.commission_collisions` → the GP payload's `labour_double_booked`; the sibling `suppression_plan` already said so via `active`; lock `harness_expense_one_path.py` §A/§E (129) — §19.50. Live 2026-10-06: the house org reported $0.00 double-booked against a real $19,860.23 overlap (Jul–Sep) because its name list is empty |
+| `account/analysis.dedupe_latest` (code) — **one month stored under two spellings is ONE row, freshest wins.** Public because every reader that WIDENS its period filter needs it: widening without deduping turns one month into two and SUMS them | code | `analysis.assemble` and `account/statement_filter.filtered_statement` (which matched one spelling and returned an EMPTY filtered statement at `net_income 0.00` for a month stored under the other); lock `harness_expense_one_path.py` §D (129) — §19.50 |
 | `account/_period.canonical_period` / `period_keys` / `is_canonical_period` (code) — **the ONE spelling a month-period is STORED under, and every spelling a filter must match.** A second private copy, or a period-keyed write that passes the caller's raw string, fails the build | code | `commcalc.router._canon_period` (dereferences, no longer re-derives), `_write_gp_snapshot` / `_gp_snapshot_period` / `_tperiods` / `gp_trend` / `save_config`, `account/engine._persist` + its purge, `statement_engine` purge, the journal writer, `account/router.overview` + `_consolidated_pl`; `coa.journal_rows` is the one home for a month's manual journal entries; lock `harness_period_one_spelling.py` (60) — §19.47 |
 | `commcalc.asset_ledger` / `pos_tender_summary` / `inventory_value` — their **arrival** column, newly declared: these three have NO `created_at`, so the default left `last_ingest_at` None and the §19.18 arrival-vs-content diagnosis was dead on them | migrations (unchanged); `FRESHNESS_COLUMN_BY_TABLE` declares `uploaded_at` / `updated_at` / `updated_at` | `_table_feed_freshness` via `data_lineage_registry.freshness_column` — §19.43 |
 | `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
@@ -6546,6 +6549,8 @@ rendering the resolved name.
 | **Have I read ALL of this feed, or just the first N rows?** — a read of a growing feed carries NO literal row ceiling; a failed read raises instead of returning a short list | `core/feed_read.read_all` (no `limit=` parameter exists to pass) | every pay-path and GP-path feed read dereferences it; lock `harness_pay_feed_balance.py` §G — §19.48. Live 2026-10-06: `.limit(50000)` against July's 82,999 payment-detail rows read $60,994.46 of carrier commission where the feed holds $123,700.62, losing 12 of 122 rep logins |
 | **Do these two feeds for the SAME carrier money cover the same days?** — a month whose coverage is incomplete is not a finished month | `raw_payment_detail.payment_date` vs `raw_comp_report.begin_date` | `pay_data_quality.day_coverage_gap` → `GET /commcalc/pay-feed-balance`; §19.48. Live 2026-10-06: the statement is missing the final day of all seven closed months ($111,949.22); October has two days in both and ties to the penny |
 | **Was this statement actually crosschecked, and did it pass?** — `passed` / `failed` / `not_measured`; an absence is never a pass | the statement payload's own sections (P&L: `gross_profit == revenue − cogs` and `net_income == gross_profit − expenses`), `balanced` for a balance sheet, `tied` for a cash flow | `analysis.statement_crosscheck` → the stored `account_statements.crosscheck_ok` and the flag `account/router` serves; lock `harness_statement_crosscheck_earned.py` (63) — §19.49. Live 2026-10-06: all **329** stored P&L snapshots pass at a **$0.00** total gap (the arithmetic is SOUND, proven not assumed), while the flag had been an unconditional `True` that checked nothing; `balance_sheet` fails 327/329 and `cash_flow` 159/166, both already surfaced by the Journal note |
+| **What did this store spend in this month — including a month it never saved?** — the carry-forward rule, for one month or a whole axis of them; a carried month is labelled, never silent | `commcalc.store_expenses` (own rows win; else the latest strictly-prior month's MANUAL rows) | ONE home `commcalc/expenses_effective` (`effective_expense_rows` for a month, `effective_series` for an axis — proved equivalent); dereferenced by the P&L `coa.build_inputs`, the GP report `router._compute_gp` and `GET /commcalc/expenses-trend`; lock `harness_expense_one_path.py` (129) — §19.50. Live 2026-10-06: the trend had no October while the P&L booked $379,108.81 of carried October opex |
+| **Did this check actually RUN, or is its clean result just an empty config?** — `measured` / `not_configured`; a gated detector that did not measure says so, and reports None rather than 0.00 | the org's OWN `account_config.labour_commission_expense_names` (RULE TWO) | `labour_coverage.VERDICT_MEASURED` / `VERDICT_NOT_CONFIGURED` → `commission_collisions` → the GP payload; lock `harness_expense_one_path.py` (129) — §19.50. Live 2026-10-06: $0.00 reported against a real $19,860.23 of double-booked labour |
 | **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
@@ -6723,6 +6728,102 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.50 **ONE QUESTION, ONE PATH — the three reads that disagreed about a month** (owner report
+2026-10-06).
+
+Owner: *"make sure all expenses and every commission and residual is assigned properly and p&l
+calculated properly then the data for all reports should be aligned"*.
+
+**THE CLASS.** All three defects below are **unfixed SIBLINGS of design fixes this house has already
+shipped** — which is precisely the failure the "find the siblings before you ship" rule exists to
+catch. Each shipped fix named its class correctly and left one caller behind.
+
+**1. A GATED DETECTOR REPORTED A CLEAN ZERO** (sibling of §19.49 / §19.48 — an ABSENCE reported as a
+RESULT). `commcalc/labour_coverage.commission_collisions` can only run on the org's OWN
+`account_config.labour_commission_expense_names` (RULE TWO — no expense name is spelled in code).
+With that list empty it returned `total_double_booked: 0.0` and `note: None`, which reads exactly
+like "measured, and nothing is double-booked". **The house org IS that org.** Measured live with the
+detector's own formula (`min(|expense|, |rep_pay|)`): the overlap is **$2,707.88 July / $7,176.71
+August / $9,975.64 September — $19,860.23 of labour in the P&L twice** while the platform reported
+$0.00. LuxeLink is configured and correct ($552.54 suppressed in August). `suppression_plan`, ten
+lines below in the same module, had always drawn this line with its `active` flag.
+**FIXED:** the verdict is tri-state — `VERDICT_MEASURED` / `VERDICT_NOT_CONFIGURED`, one vocabulary,
+`measured: bool`, and `total_double_booked` is **None** when nothing was measured, so an absence can
+never be summed, charted or believed as a zero.
+
+**2. A PERIOD FILTER MATCHED ONE SPELLING** (sibling of §19.47, the one-stored-spelling class).
+`account/statement_filter.filtered_statement` read `.eq("period", period)` for both its per-store
+fetch and its line-skeleton fetch, while `account/router._read` already dereferenced
+`_period.period_keys`. So `GET /account/pl/<month>?stores=<any>` returned `computed: true` with an
+**EMPTY statement and `net_income 0.00`** for a month stored under the other spelling — a filter
+that reads as "this subset earned nothing" rather than "not computed". **Latent, not on screen:** the
+browser always sends the month-name form (`frontend/src/lib/period-context.tsx`) and
+`_period.month_range` emits canonical, so the page, the range export and Print-each-store were safe;
+any API, notify or scheduled caller holding the ISO form was not.
+**FIXED, and the obvious fix would have been worse than the defect:** widening alone would make a
+month stored under BOTH spellings contribute every store twice and the filtered figures **DOUBLE**,
+so the widened read goes through the ONE "freshest wins" rule — `account/analysis.dedupe_latest`,
+promoted to public for exactly this, never a second copy. A period whose month cannot be parsed keeps
+its rows verbatim, so widening can never return LESS than the one-spelling read it replaced.
+
+**3. A THIRD PATH FOR "WHAT DID THIS STORE SPEND THAT MONTH?"** (sibling of §6623's ONE home).
+`GET /commcalc/expenses-trend` read `store_expenses` raw — no carry-forward, no store resolution —
+while the P&L (`account/coa.build_inputs`) and the GP report (`router._compute_gp`) both go through
+`commcalc/expenses_effective`. Live: the house P&L booked **$379,108.81 of CARRIED October store
+opex and the trend had no October row at all**; LuxeLink booked $275,610.15 for September AND October
+and neither month appeared in the trend.
+**FIXED:** `expenses_effective.effective_series` is THE rule over a whole axis of months, and it
+dereferences the same two pure facts the single-period reader uses (`pick_carry_period`,
+`manual_rows`) rather than re-deciding. The agreement is **PROVED, not asserted** — §C of the lock
+runs the series and `effective_expense_rows` over six fixtures × five months and requires the same
+rows and the same `carried_from` from both. The month axis is now the union of the months expenses
+were ENTERED for and the months the org has a computed statement for: deriving it from entered rows
+alone is what hid a carried month, because a carry can only fill a slot that exists. The response
+carries `carried_from` per month, so a carried figure is never silent. The read also drops its
+`.limit(200000)` onto `core/feed_read.read_all` (§19.48).
+
+**THE ONE HOMES.** `commcalc/expenses_effective.effective_series` (what a month's effective expenses
+are, over a series) · `commcalc/labour_coverage.VERDICT_MEASURED` / `VERDICT_NOT_CONFIGURED` (did a
+gated check actually run) · `account/analysis.dedupe_latest` (freshest wins, now public).
+Module-graph facts `expense_month_one_path` and `gated_detector_verdict`.
+
+**PROOF AND LOCK.** `harness_expense_one_path.py` — **129 checks, DB-free**, verified **RED against
+the pre-fix code** (14 counted failures in §A, and §B/§C cannot even run because the one home does
+not exist). §A reproduces the clean zero and proves `None != 0.0`; §B is the carry rule on every
+shape including system rows, both spellings, junk periods and no rows at all; §C is the equivalence
+proof; §D proves the widened read dedupes and that no single-spelling period filter remains in the
+module; §E fails the build if the trend re-reads `store_expenses` into its own loop, carries a
+literal ceiling, or if either verdict is defaulted again; §F holds RULE TWO and `analysis`' purity.
+
+**NO MIGRATION, NO DATA WRITTEN.** The money is unchanged by this PR except where a report was
+reading the wrong rows: the trend now shows the months the P&L already booked.
+
+**REPORTED, NOT FIXED IN CODE** (owner/data decisions, from the same audit —
+`/mnt/project-files/boost-commission-audit/EXPENSES_AND_PL_2026-10-06.md`): six July house store
+codes (`T-531`, `T-7812`, `T-902`, `T-957`, `T21880`, `T3560`) holding **$51,350.00** of expense and
+$23,511.67 of revenue that no store picker option and no market filter can bind; **$51,217.31** of
+carrier commission (Jul–Oct, still arriving) booked to `2778 Mt Ephraim Ave Camden, NJ 08104` →
+"Default Company", an abbreviated spelling `store_aliases` does not route; **$123,460.08** of entered
+July house expense absent from the July P&L, of which $74,041.00 is honest post-compute inserts and
+**$49,419.08 is unexplained** — INFERRED cause: `autocompute._PERIOD_SOURCES` probes only
+`created_at` for `store_expenses` (which has no `updated_at`), and an in-place `UPDATE` of
+`amount` is live practice here, so a changed figure does not look stale; May and June 2026 each
+stored under two spellings, worth **$204,023.94** and **$120,973.65** of consolidated net income
+depending on which copy is read (July onward is clean); and every one of the 1,256 house expense
+rows routing to `store_opex` because hand entry never sets `source_key` —
+`account_config.payroll_expense_names` / `payroll_expense_routes` are `[]` / `{}`.
+
+**NOT WRONG — do not re-investigate.** The P&L identities hold in every scope in both orgs (and
+independently of §19.49's 329-snapshot result). **$0.00 is booked `company_wide` in either org in any
+of the four months**, and Σ(stores) == Σ(companies) == consolidated to within 8–16 cents of float
+rounding on the `wages` line. Zero of 1,848 expense rows lack a `store_code`. The store-identity
+roster audit is clean and the 2026-10-02 merge runbook IS applied. Market vocabulary is complete —
+all 29 house and 20 LuxeLink real stores bind. `expenses_effective`'s carry-forward is correct.
+GP `net_profit` and P&L net income **should not be expected to tie**: `gp_report.net_profit` has no
+`wages` and no `chargebacks` term, and house September's two alone are $84,293.40, larger than the
+$38,351.88 gap. What is missing is any surface that BRIDGES them, and `gp_snapshot.store_rows` keeps
+only five columns so the GP figure cannot be decomposed from its own cache.
 
 §19.49 **A CROSSCHECK IS EARNED, NEVER DEFAULTED — the P&L flag that passed 329 times without ever
 being checked** (owner report 2026-10-06).
