@@ -206,7 +206,7 @@ def main():
 
     bad_grain = sorted(k for k, m in TYPES.items()
                        if m.get("grain") not in ("transaction", "store_day", "rep_period",
-                                                 "store_period"))
+                                                 "store_period", "period"))
     if not bad_grain:
         ok("D4 every type declares a known grain")
     else:

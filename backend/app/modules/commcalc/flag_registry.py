@@ -227,6 +227,15 @@ TYPES: dict[str, dict] = {
         "area": "commission", "sev": HIGH, "writer": "commcalc/sales_recon.py",
         "grain": "transaction",
     },
+    # ONE condition for a closed month whose month-end archive never arrived — NOT one finding per
+    # transaction. The per-transaction `sales_leak` is a claim about a sale; this is a claim about a
+    # FILE, so its grain is the period and exactly one row exists per period (owner 2026-10-06:
+    # September raised 11,233 criticals for a single missing archive). See sales_recon.comparability.
+    "sales_basis_not_loaded": {
+        "label": "Closed month has no month-end sales archive",
+        "area": "commission", "sev": HIGH, "writer": "commcalc/sales_recon.py",
+        "grain": "period",
+    },
     "CHARGEBACK": {
         "label": "Commission clawed back",
         "area": "commission", "sev": HIGH, "writer": "commcalc/flags.py", "grain": "transaction",

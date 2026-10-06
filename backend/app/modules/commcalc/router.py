@@ -27715,20 +27715,15 @@ def _fetch_shifts(client, start, end, org_id=ORG_ID):
 
 
 def _is_open_month(period):
-    """True if `period` is the current in-progress calendar month. Handles BOTH 'June 2026' and the
-    '2026-07' shape (parse_period only understands the month-name form → it silently mapped '2026-07'
-    to January, so July read as a CLOSED month — the source-selection bug)."""
-    try:
-        p = str(period).strip()
-        if len(p) >= 7 and p[:4].isdigit() and p[4] == '-' and p[5:7].isdigit():
-            yr, mo = int(p[:4]), int(p[5:7])
-        else:
-            pm = parse_period(period)
-            yr, mo = pm['year'], pm['month']
-        t = _date.today()
-        return mo == t.month and yr == t.year
-    except Exception:
-        return False
+    """True if `period` is the current in-progress calendar month.
+
+    DEREFERENCES `feed_period.month_state` (the one home) rather than re-deriving the rule. It WAS a
+    second copy: a third copy lived in `sales_derive_gap` below as a string compare against
+    `_ftp_current_period()`, and `commcalc/sales_recon.py` never asked at all — which is how October
+    2026, the month in progress, came to carry 3,001 critical "revenue leak" flags against a month-end
+    archive that cannot exist yet (owner 2026-10-06). The one home also accepts the abbreviated
+    spellings this body could not, and treats a FUTURE month as open instead of closed."""
+    return _feed_period.month_state(period) == _feed_period.OPEN
 
 
 _BOX_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
@@ -35887,7 +35882,9 @@ def get_sales_derive_status(org_id: str = ORG_ID, period: str = ""):
     p = (period or "").strip() or sales_derive.prior_period_label(now)
     gap = sales_recon.derive_gap(p, org_id=org_id, client=client)
     cfg = sales_derive.load(client, org_id)
-    closed = _canon_period(p) != _canon_period(_ftp_current_period())
+    # `is_closed_month` was a THIRD copy of "is this month open" (a string compare against
+    # _ftp_current_period). It now reads the gap's own verdict, which reads feed_period — one home.
+    closed = bool(gap.get("archive_due"))
     return {**gap, "is_closed_month": closed,
             "grace_window_open": sales_derive.window_open(now, cfg),
             "grace_config": cfg,

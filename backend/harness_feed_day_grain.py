@@ -280,8 +280,26 @@ _fp = _src(FEED_PERIOD)
 _fp_code = _code_only(_fp)
 for banned in ("supabase", "client", "requests", "psycopg", "fastapi", "HTTPException"):
     ok(f"H1 feed_period imports no {banned}", banned not in _fp_code)
-ok("H2 feed_period has no clock (a month is read from the row, never from today)",
-   "datetime" not in _fp_code and "now()" not in _fp_code)
+# H2 TIGHTENED 2026-10-06. The module gained `month_state` / `archive_due` — "has this month closed,
+# so is its month-end archive due" — which is the one home `router._is_open_month` and
+# `sales_recon.comparability` now dereference instead of each deriving it (see
+# harness_sales_recon_basis.py). That question needs a calendar reference, so the old blanket "no
+# datetime anywhere" would have forced a FOURTH private copy of the rule — the opposite of the point.
+# So the rule is now SCOPED rather than dropped: the row-stamping half stays clock-free (a feed row's
+# month comes from the row, never from today — the defect this module exists for), the clock is
+# confined to `month_state`, and it is INJECTED there so nothing reads a hidden one.
+_fp_stamping = _fp_code.split("def month_state(")[0].split("def period_month_year(")[0]
+ok("H2 the row-stamping half has no clock (a FEED ROW's month is read from the row, never from today)",
+   "datetime" not in _fp_stamping and "now()" not in _fp_stamping and "today" not in _fp_stamping)
+ok("H2a the only clock in the module is month_state's, and it is confined to it",
+   _fp_code.count("datetime") == 1 and "def month_state(" in _fp_code
+   and "datetime" in _fp_code.split("def month_state(")[1].split("def archive_due(")[0])
+ok("H2b ... and `today` is INJECTED, so the fact is testable and reads no hidden clock",
+   "def month_state(period, today=None):" in _fp_code
+   and "def archive_due(period, today=None):" in _fp_code)
+ok("H2c month_state never calls now() — a date, not a timestamp (a time-of-day cannot change which "
+   "month it is, and reading one would make the answer depend on the server's hour)",
+   "now()" not in _fp_code)
 # RULE TWO — no carrier, tenant or product branch names anywhere in the module, comments included.
 for word in ("boost", "luxelink", "cellfonz", "verizon", "vidapay", "novawave", "total wireless",
              "epay portal", "t-mobile"):

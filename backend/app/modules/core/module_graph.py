@@ -179,6 +179,20 @@ FACTS: dict[str, dict] = {
             'app/modules/storevisit/router.py': ('_delivery',),
         },
     },
+    'month_archive_due': {
+        "question": "Has this month closed, so is its month-end archive due — and may a live feed be "
+                    "compared against that archive at all?",
+        "homes": ('app/modules/commcalc/feed_period.py', 'app/modules/commcalc/sales_recon.py'),
+        "index": ('19.52',),
+        "locks": ('harness_sales_recon_basis.py', 'harness_feed_day_grain.py'),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/epay_sweep.py': ('_feed_period',),
+            'app/modules/commcalc/import_audit.py': ('_recon',),
+            'app/modules/commcalc/router.py': ('_feed_period', 'sales_recon'),
+            'app/modules/notify/report_registry.py': ('SR',),
+        },
+    },
     'feed_lineage': {
         "question": "Which table is the LIVE feed for this item, and which column means 'arrived'?",
         "homes": ('app/modules/commcalc/data_lineage_registry.py',),

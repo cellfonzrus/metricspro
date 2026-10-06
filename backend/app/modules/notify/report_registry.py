@@ -401,7 +401,21 @@ async def _sales_recon(org_id, f):
     period = _resolve_period(f)
     data = SR.run_sales_recon(period)
     s = data["summary"]
-    leaks = [r for r in data["rows"] if r["bucket"] in ("missing_in_monthly", "amount_mismatch")]
+    # SIBLING of the Flags page, same precondition, same one home (owner 2026-10-06). This emailed
+    # report read `summary` raw, so a month whose archive is not due or never arrived was delivered as
+    # "11,233 leak(s)" — the number the verdict exists to explain. It now shows only the buckets the
+    # verdict allows, and says in the subtitle why the rest are absent.
+    _v = data.get("verdict") or {}
+    try:                                     # the tenant's POS name in copy — never a vendor spelled here
+        from app.core.database import get_supabase as _gs
+        from app.modules.commcalc import report_labels as _rl
+        _pos = _rl.pos_term(_gs(), org_id)
+    except Exception:
+        _pos = "POS"
+
+    _allowed = set(_v.get("reportable_buckets") or ("missing_in_monthly", "amount_mismatch"))
+    leaks = [r for r in data["rows"]
+             if r["bucket"] in ("missing_in_monthly", "amount_mismatch") and r["bucket"] in _allowed]
     sheets = [
         {"name": "Leaks & Mismatches", "rows": leaks, "columns": [
             {"header": "Bucket", "key": "bucket"},
@@ -421,9 +435,19 @@ async def _sales_recon(org_id, f):
             {"header": "Net Delta", "key": "delta_total", "money": True},
         ]},
     ]
-    return {"title": "Sales Feed Recon",
-            "subtitle": f"{period} — {s['missing_in_monthly']} leak(s) (${s['missing_in_monthly_total']:,.2f}) · "
-                        f"{s['amount_mismatch']} mismatch(es)",
+    _shown_leaks = sum(1 for r in leaks if r["bucket"] == "missing_in_monthly")
+    _shown_mism = sum(1 for r in leaks if r["bucket"] == "amount_mismatch")
+    _leak_total = round(sum((r.get("delta") or 0)
+                            for r in leaks if r["bucket"] == "missing_in_monthly"), 2)
+    if _v and not _v.get("reportable"):
+        # The condition IS the report for this month — stating it is what makes the zero honest.
+        _sub = f"{period} — {SR.verdict_reason(_v, _pos)}"
+        if _shown_mism:
+            _sub += f" {_shown_mism} amount mismatch(es) are still reported."
+    else:
+        _sub = (f"{period} — {_shown_leaks} leak(s) (${_leak_total:,.2f}) · "
+                f"{_shown_mism} mismatch(es)")
+    return {"title": "Sales Feed Recon", "subtitle": _sub,
             "filename": f"sales-recon-{period.replace(' ', '-')}", "sheets": sheets}
 
 
