@@ -5972,6 +5972,7 @@ rendering the resolved name.
 | `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `FEED_CADENCE_BY_TABLE` / `FEED_LABEL_BY_TABLE` / `NOT_WATCHED_REASONS` (code registry) — **which feeds are watched, how often each is due, which column names the day its DATA is about (distinct from the ARRIVAL column in `FRESHNESS_COLUMN_BY_TABLE`), and the human name each is reported under.** `watched_feeds()` is DERIVED from `INGEST_TABLES_BY_MODULE` minus the declared exclusions, so a registered feed is watched the same day — 22 watched, 24 excused with a reason, 0 unaccounted | code | `router._data_freshness_report` (the set, each cadence, each label), `router._duty_last_loaded` (`data_date_column()` → `freshness_column()` fallback; `_DUTY_DATE_COL` deleted); lock `harness_feed_watchdog.py` (50) — §19.43 |
 | `data_lineage_registry.PERIOD_GRAIN_REASONS` + `day_keyed_date_columns()` / `is_day_keyed()` (code registry) — **which feeds are replaced by DAY and carry their own month, and which are replaced per PERIOD with a stated reason.** DERIVED from `DATA_DATE_COLUMN_BY_TABLE`, so a feed that declares a data-date column is day-keyed the same day; a declared table that is neither fails the build | code | `router._upload_file_impl` (`DATE_KEYED` is the derivation, no literal map), `epay_sweep._pull_and_store` / `_store_day_grain` / `_store_rows_by_day`; one parser `commcalc/feed_period.py`; lock `harness_feed_day_grain.py` (85) — §19.46 |
 | `core/feed_read.read_all` / `PAGE` / `MAX_PAGES` / `IncompleteRead` (code) — **"give me ALL of this feed": one paged read with NO limit parameter and no default cap, so a row count is a property of the DATA and never of a literal.** A failed read RAISES rather than returning a short list | code | `commcalc.router` input loader (`fetch`), `_compute_gp` (payment detail + comp report), the three period-rollup reads, the ePay-split read, the two unnarrowed `raw_sales` reads, the three comp-report reads; lock `harness_pay_feed_balance.py` §G (107) — §19.48 |
+| `commcalc/installment_month` — `resolve_month` / `month_span` / `in_schedule` / `horizon` / `period_index` / `index_of_date` / `BasisTally` / `BASIS_ACTIVATION`·`BASIS_ORIGIN_PERIOD`·`BASIS_WINDOW_EDGE` (code) — **"which instalment month is this row in, and is that month PROVEN by the row or assumed from the window the reader pulled": the answer never travels without its BASIS.** Pure stdlib: no DB, no clock, no carrier / tenant / product name, and it never decides WHICH column holds a date | code | `installment_engine.compute_installments` (`_im`, anchored on the row's own `mi_activation_date`) and `sale_installment_engine.compute_sale_installments` (`_im`, anchored on the row's own origin month — byte-identical to its retired inline expressions); lock `harness_installment_month_anchor.py` (151) — §19.51 |
 | `commcalc/pay_data_quality.reconcile_pay_feed` + `PLACEABLE_CATEGORIES` + `UNPLACED_REASONS` + `day_coverage_gap` (code) — **the pay feed's BALANCE: every dollar PLACED in a pay bucket or REPORTED unplaced under a named reason, with `balances` as the arithmetic proof.** Never decides what a category means — the caller hands in the org's own map (RULE TWO) | code | `commcalc.router.pay_feed_balance` (`GET /commcalc/pay-feed-balance`); the ONE statement of which buckets `calculator.pay_by_login` actually reads; lock `harness_pay_feed_balance.py` (107) — §19.48 |
 | `account/analysis.statement_crosscheck` / `pl_crosscheck` / `CROSSCHECK_TOLERANCE` (code) — **"was this statement checked, and did it pass?": the verdict is EARNED, tri-state (`passed`/`failed`/`not_measured`), and `ok` is None for anything that cannot be judged.** A boolean cannot tell "checked and fine" from "never checked" | code | `account/engine._persist`'s caller and `account/statement_engine` (both writers dereference it, so the stored flag and the served flag can never disagree); the P&L identity reads `pl_totals` -> `EXPENSE_SECTIONS`, never re-summing sections; lock `harness_statement_crosscheck_earned.py` (63) — §19.49 |
 | `account/_period.canonical_period` / `period_keys` / `is_canonical_period` (code) — **the ONE spelling a month-period is STORED under, and every spelling a filter must match.** A second private copy, or a period-keyed write that passes the caller's raw string, fails the build | code | `commcalc.router._canon_period` (dereferences, no longer re-derives), `_write_gp_snapshot` / `_gp_snapshot_period` / `_tperiods` / `gp_trend` / `save_config`, `account/engine._persist` + its purge, `statement_engine` purge, the journal writer, `account/router.overview` + `_consolidated_pl`; `coa.journal_rows` is the one home for a month's manual journal entries; lock `harness_period_one_spelling.py` (60) — §19.47 |
@@ -6036,6 +6037,7 @@ rendering the resolved name.
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
 | `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses`; **salary coverage** `labour_coverage.authoritative_codes`/`allocated_names`/`commission_collisions` (2026-09-08, §4); **commission double-book SUPPRESSION** `labour_coverage.suppression_plan`/`suppresses_row` — a row named in `account_config.labour_commission_expense_names` stops booking on BOTH readers because `rep_commissions` is authoritative (owner 2026-09-08, mig `994`, §4) |
+| `commcalc.subscriber_installments` | `installment_engine._persist` via `compute_installments(persist=True)` `9200` — **ADAPTIVE key** (`LEDGER_CONFLICT_KEYS`: mig `1059`'s `(org, subscriber, activation_type, month_index, pay_period)` first, mig `057`'s narrow key as the fallback) and adaptive `month_basis` column via `column_tolerant.present_columns`; RETURNS `{conflict_key, written, error}` instead of `except: pass` | the residual multi-month audit trail; `residual_installment_comm`. ⚠ On a pre-`1059` database the narrow key means one pay period OVERWRITES another's record of the same instalment — §19.51 |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
 | `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), **residual-per-subscriber report §7a** (`residual_subs._aggregate_ma` — ONE sweep: residual = −`retail_cost` on the mig-309 `ma_residual_row_matcher` union, airtime margin = `merchant_discount`; stores via the mig-314 account index), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4), **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `retail_cost` sign = debit/credit to the dealer, §15) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`), **residual-per-subscriber SUBSCRIBER count §7a** (`residual_subs._aggregate_ma` — one row = one activated line, keyed by `merchant_account_id` through the SAME mig-314 index the residual rows use) |
@@ -6173,6 +6175,7 @@ rendering the resolved name.
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/payout-schedule/preview` (`?period=`) — the RESIDUAL multi-month installment preview, READ-ONLY (`persist=False`). Since §19.51 its payload also carries `month_basis` (rows AND dollars per `activation_date` / `origin_period` / `window_edge`, plus `unanchored_rows` / `unanchored_amount`), `unresolved_schedule` (`subscribers`, `subscribers_with_no_carrier_id`, `by_carrier_id`), `totals.amount_no_rep` and `persisted` — and `note` is a real sentence instead of an unconditional `None` | `router.preview_payout_installments` `19762` → `installment_engine.compute_installments` | §7, §19.51 |
 | `POST /storeops/employees` · `POST /storeops/employees/bulk` · `POST /hr/employees` — pay fields pass the ONE pay-write gate: dropped and named in `pay_fields_ignored` for a caller who may not see pay (people still added), 403 for a non-manager sending pay; the StoreOps create echo is pay-stripped | `storeops/router.py::create_employee` / `bulk_create_employees` (now take `authorization`), `hr/router.py::hr_create_employee` → `gate_pay_write` | §19.44 |
 | `POST /storeops/employees/bulk-payscale` — was manager-only; now also refused (403 `PAY_WRITE_REFUSED`) for a manager below the org's pay line · `PATCH /storeops/employees/{id}` — same policy, now from the shared gate | `storeops/router.py::bulk_payscale` / `update_employee` → `gate_pay_write` | §19.44 |
 | `DELETE /storeops/manual-hours/{mid}` — a repeat delete of an entry already gone logs nothing (reply unchanged) · every payroll change-log write (no route added) builds its identity from the stored employee | `storeops/router.py::delete_manual_hours`, `_log_payroll_change` → `payroll_log_identity.resolve_log_identity` | §19.45 |
@@ -6467,6 +6470,8 @@ rendering the resolved name.
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $70,157.10 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Have I read ALL of this feed, or just the first N rows?** — a read of a growing feed carries NO literal row ceiling; a failed read raises instead of returning a short list | `core/feed_read.read_all` (no `limit=` parameter exists to pass) | every pay-path and GP-path feed read dereferences it; lock `harness_pay_feed_balance.py` §G — §19.48. Live 2026-10-06: `.limit(50000)` against July's 82,999 payment-detail rows read $60,994.46 of carrier commission where the feed holds $123,700.62, losing 12 of 122 rep logins |
 | **Do these two feeds for the SAME carrier money cover the same days?** — a month whose coverage is incomplete is not a finished month | `raw_payment_detail.payment_date` vs `raw_comp_report.begin_date` | `pay_data_quality.day_coverage_gap` → `GET /commcalc/pay-feed-balance`; §19.48. Live 2026-10-06: the statement is missing the final day of all seven closed months ($111,949.22); October has two days in both and ties to the penny |
+| **Which month of a multi-month curve is this subscriber / sale in — and is that month PROVEN?** — the ROW'S OWN anchor (`mi_activation_date`, or the row's own origin month), never the oldest month the reader happened to pull; the basis is reported with every row (`activation_date` / `origin_period` / `window_edge`) and an unanchored row is counted AND priced, never absorbed | `commcalc.raw_mi.mi_activation_date` per subscriber; the sale path's own `sale_period` | ONE home `commcalc/installment_month.resolve_month` (+ `in_schedule` / `horizon`), dereferenced by BOTH multi-month engines; `month_basis` on the ledger row and `month_basis.unanchored_amount` on the result; lock `harness_installment_month_anchor.py` (151) — §19.51. Live 2026-10-06: the window-edge derivation put **16,757 rows / $119,887.50 of $177,462.50** at month 6 of a 6-month curve, payable again every month, and disagreed with the rows' own activation date on **11,780 of 15,337 (76.8%)** anchored subscribers |
+| **Did the multi-month residual engine actually pay nothing, or could it not place anything?** — an unresolved schedule, an unanchored month, payout naming no rep and an incomplete ledger write are each REPORTED with their counts and dollars; a raised engine is a CRITICAL notice, never a $0.00 | the org's own `payout_schedule` rows (RULE TWO) × what the feed stamps on its rows | `installment_engine`'s `unresolved_schedule` / `month_basis` / `totals.amount_no_rep` / `persisted` → `router._apply_new_engines` notices (the SAME channel the sale engine has used since mig 245/247); lock `harness_installment_month_anchor.py` §I/§J — §19.51. Live 2026-10-06: `residual_installment_comm` is **$0.00 across all 571 rep_commissions rows** and `subscriber_installments` is **empty**, because `raw_mi.carrier_id` is NULL on **326,051/326,051** rows while all 14 active schedules name a carrier that is not in this org's `carrier` table |
 | **Was this statement actually crosschecked, and did it pass?** — `passed` / `failed` / `not_measured`; an absence is never a pass | the statement payload's own sections (P&L: `gross_profit == revenue − cogs` and `net_income == gross_profit − expenses`), `balanced` for a balance sheet, `tied` for a cash flow | `analysis.statement_crosscheck` → the stored `account_statements.crosscheck_ok` and the flag `account/router` serves; lock `harness_statement_crosscheck_earned.py` (63) — §19.49. Live 2026-10-06: all **329** stored P&L snapshots pass at a **$0.00** total gap (the arithmetic is SOUND, proven not assumed), while the flag had been an unconditional `True` that checked nothing; `balance_sheet` fails 327/329 and `cash_flow` 159/166, both already surfaced by the Journal note |
 | **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
@@ -6645,6 +6650,155 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.51 **AN INSTALMENT'S MONTH OF LIFE IS A PROPERTY OF THE ROW, NEVER OF THE WINDOW THE READER
+PULLED — the residual installment engine that would have paid the final instalment forever** (owner
+2026-10-06: *"make sure all expenses and every commission and residual is assigned properly and p&l
+calculated properly then the data for all reports should be aligned"*; fixed).
+
+**THE CLASS.** The same general fact §19.46 fixed for a feed row's MONTH, one layer up: *a row's
+position in a schedule is a property of THE ROW, never of the window somebody chose to read.*
+`installment_engine.compute_installments` derived a subscriber's activation month as the **lowest
+period index it found inside its own lookback window** (`max_n = min(12, max(num_months))` months
+back). For anybody present throughout that window that yields `month_index == max_n` — and it yields
+it **again next month, and the month after**, because the window slides with the pay period. A
+six-month curve therefore paid its SIXTH instalment every month, indefinitely, to the entire
+long-standing subscriber base; and conversely a subscriber whose first window month fell mid-curve
+skipped the instalments before it. The row carried `mi_activation_date` the whole time and the engine
+never read it.
+
+**MEASURED LIVE (read-only, house org `00000000-…-0001`, 2026-10-06, the REAL engine replayed).** The
+engine pays $0.00 today for a separate reason (D1 below), so these are its figures with that one
+blocking comparison satisfied — the exposure, not a booking:
+
+| pay period | would pay | `month_index = 6` alone | credited to NO rep |
+|---|---|---|---|
+| August 2026 | $110,925.00 | — | **$34,240.00** |
+| **September 2026** | **$177,462.50** | **16,757 rows / $119,887.50 (67.6%)** | **$63,297.50 (35.7%)** |
+| October 2026 | $9,617.50 | — | $3,037.50 |
+
+Against the rows' OWN `mi_activation_date`, September's derived activation month **disagreed on
+11,780 of the 15,337 anchored subscribers (76.8%), carrying $57,992.50**, the engine running LATE by
+1 to 13+ months (`{1: 2151, 4: 711, 2: 669, 6: 563, 5: 544, 3: 525, 7: 520, 8: 515, 9: 470, 13: 434,
+…}`). Every one of those cohorts falls OUT of a 6-month curve once anchored on its own date — which
+is the fix, and the harness §E pins each figure.
+
+**THE ONE HOME.** `commcalc/installment_month.py` (PURE — stdlib `datetime` only, no DB, no clock, no
+vocabulary) answers *"which instalment month is this row in, and is that month PROVEN"*:
+
+| fact | function |
+|---|---|
+| the monotonic month scale | `period_index(year, month)` — `installment_engine._period_index` dereferences it |
+| a date → its month, or **absent** | `index_of_date` (ISO string, `date`, `datetime`; anything unreadable is None, never a plausible month) |
+| which month of the curve | `month_span(anchor_index, pay_index)` = `(pay − anchor) + 1` |
+| is that month payable | `in_schedule(month_index, num_months)` — 1..N, so month 14 of a 6-month curve falls out |
+| how deep to read | `horizon(num_months_values, max_months)` |
+| **the answer + its BASIS** | `resolve_month(...)` → `{month_index, anchor_index, basis, anchored}` |
+| what could not be placed | `BasisTally` — rows AND dollars per basis, plus `note()` |
+
+**A MONTH INDEX NEVER TRAVELS WITHOUT ITS BASIS** (the §19.49 / §19.50 shape). Three values, and only
+the first two mean "I know": `BASIS_ACTIVATION` (the row's own date), `BASIS_ORIGIN_PERIOD` (the row's
+own origin month — the sale path's anchor), `BASIS_WINDOW_EDGE` (**no anchor on the row**, so the
+lookback floor was used — a GUESS). The fallback exists because a feed row can genuinely lack its
+date and refusing to place it would silently drop money the carrier is paying; it is honest only
+because it is LABELLED, counted and PRICED (§19.48's rule), on the ledger row (`month_basis`,
+`month_anchored`), in the result (`month_basis.unanchored_rows` / `unanchored_amount`) and as an
+operator notice.
+
+**THE SIBLING WAS RIGHT, SO IT WAS FACTORED — NOT REWRITTEN.**
+`sale_installment_engine.compute_sale_installments` (§8) answers the SAME question and was measured
+CORRECT: it iterates the periods a sale could have come from and reads each period's own rows, so its
+anchor is already the row's own origin month. Verified live on LuxeLink's
+`commcalc.sale_installment_ledger` — every cohort carries forward **exactly once** (284 → 284 → 284;
+89 → 89 → 89; 312 → 312), no double pay and no drop, ledger tying to
+`rep_commissions.installment_comm_sale` to the cent for all four months. It was right by
+construction, so its arithmetic IS the arithmetic: `(pay_idx - s_idx) + 1`, `min(MAX, num_months)` and
+`month_index > num_months` moved into `month_span` / `horizon` / `in_schedule` and both engines now
+dereference them. **Byte-identical** — proven exhaustively over every (pay, origin) pair and every
+schedule depth in harness §B, not asserted.
+
+**D1 — AN UNRESOLVED SCHEDULE IS REPORTED, NOT PAID AND NOT HIDDEN.** `_resolve_schedule` returns
+None for every house subscriber: `commcalc.raw_mi.carrier_id` is NULL on **326,051 / 326,051 rows
+(100.00%)** while all 14 active `payout_schedule` rows name carrier `ca4d8084-…` — which is not even
+in this org's `commcalc.carrier` (one row, `5000c36f-…`). So every subscriber hit `if not sched:
+continue`, the engine returned `note: None`, and `router._apply_new_engines` wrapped the whole call in
+`except Exception: inst_by_rep = {}` **with no notice of any kind** — so "the engine raised", "no
+schedule resolved for 27,000 subscribers" and "there is genuinely nothing to pay" were ONE observable:
+`residual_installment_comm = 0`. Its sibling ten lines below had appended operator notices since mig
+245/247. That same channel is now dereferenced (no second mechanism): four notices —
+`residual_installment_no_schedule`, `_month_unanchored`, `_no_rep`, `_ledger_write`, plus a CRITICAL
+`_engine_failed` carrying the exception. **The dangling carrier id is DATA and is reported as data:
+the engine never guesses a carrier to make a payout happen** (pinned, harness I10).
+
+**D3 — THE LEDGER KEEPS ONE ROW PER PAY PERIOD.** `commcalc.subscriber_installments` was created
+(mig `057:70`) as `UNIQUE (org_id, subscriber_id, activation_type, month_index)` — `pay_period` is a
+stored column but not part of the key — and `_persist` upserted on exactly that, inside
+`except Exception: pass` per batch. One subscriber could hold only ONE row per month_index, so the
+September run **overwrote** August's record of the same instalment, in a table mig 057's own header
+calls "the 'reflected in the statement' audit trail". Its sibling
+`commcalc.sale_installment_ledger` has had `pay_period` in its key since mig `201`. Migration
+**`1059_subscriber_installment_pay_period_key.sql`** widens the key to the sibling's shape and adds
+`month_basis`; it creates the new index BEFORE dropping the old constraint, finds that constraint by
+its COLUMN SET rather than a name spelling, deletes and rewrites nothing, and its `-- REVERT:` block
+**refuses** to restore the narrow key while two pay periods exist for one instalment (that is a money
+decision). `_persist` is **ADAPTIVE** — `LEDGER_CONFLICT_KEYS` widest-first, optional columns probed
+through `core/column_tolerant.present_columns` — and now RETURNS a report (`conflict_key`, `written`,
+`error`) that the engine surfaces as `persisted`, so a ledger that stopped being written can no longer
+look like a period with nothing to record.
+
+**NOTHING MOVES UNTIL THE OWNER SAYS SO.** `residual_installment_comm` is **$0.00 across all 571
+`rep_commissions` rows, both orgs, every period**, and `subscriber_installments` is **empty** —
+because no schedule resolves (D1), which this PR deliberately does NOT repair. So re-graining the
+month index moves **no** live figure; it changes what the engine WOULD pay if the data were corrected,
+and that $177,462.50 has not been approved. Mig 1059 is surfaced, not applied, and the code is
+byte-identical against a pre-1059 database.
+
+**ALSO DEREFERENCED: §19.48's no-ceiling read.** `_read_mi` had its own private page loop. §19.48's
+own docstring names `raw_mi` as the next feed over (46,047 rows in September, growing ~4,000 a month),
+so it now reads through `core/feed_read.read_all` — no row ceiling, and a failed read RAISES instead
+of returning a short list.
+
+**SIBLINGS — fixed vs excused.**
+- **FIXED** — `installment_engine.compute_installments` (the defect); `sale_installment_engine`
+  (factored onto the shared arithmetic, byte-identical); `installment_engine._period_index` (stopped
+  re-deriving the scale); `_persist` (adaptive key + a report instead of `pass`);
+  `router._apply_new_engines` (notices instead of a bare swallow).
+- **NOT IN THIS PR, and why** — two further siblings were MEASURED on 2026-10-06 and belong to a
+  different question ("which STORE owns this residual dollar", §7b's home), so folding them in here
+  would have widened a month-of-life PR into a store-attribution one: **`account/recon.py`** attributes
+  MI/ATU to a store by REP NAME (`_rep_to_store`, docstring still claiming "raw_mi has no native store
+  column"), placing only **2.5–3.4%** of the month where §7b's door home places 100.0%, disagreeing
+  about 70%+ of the dollars it does place, and inventing **$142,432.69** of per-store "over" in
+  September against the home's $11,891.64 — it is in NEITHER §7b's FIXED nor its EXCUSED list; and
+  **`commcalc/gp_report`** reaches the door through its own last-wins `store_by_num` street-token map
+  (`street_num = addr.split(' ')[0]`, no ambiguity refusal, live keys `'1'`, `'1598'`, `'1800'` and the
+  word `'Cellular'`), losing 2 of 28 doors and **$20,806.74** of residual over Aug+Sep, while §7b lists
+  it as "ALREADY CORRECT". Both are reported in full at
+  `/mnt/project-files/boost-commission-audit/RESIDUAL_ASSIGNMENT_2026-10-06.md`.
+- **ALREADY CORRECT, checked** — `commission_engine._read_mi_mrc`, `discrepancy_engine`,
+  `recovery/engine`, `device_history`, `whatif`: none derives a month of life; they key by
+  mdn / imei / subscriber_id.
+
+**DUPLICATE CHECK (build gate).** Searched §7 (the residual installment engine), §8 (the sale
+installment engine and its ledger), §6h (multi-month offered only when configured), §19.46 (a row's
+month is its own), §19.48 (the no-ceiling read + the placed-or-reported rule), §19.49/§19.50 (the
+earned-verdict shape), §16 (`raw_mi`, `subscriber_installments`, `sale_installment_ledger`), §17
+(`/plan-installments`, `/expected-commission/*`), §18 ("multi-month", "installment", "residual").
+**REUSED, not re-derived:** `sale_installment_engine`'s month arithmetic and clamps (extracted into the
+shared home, not copied); the §8 engine's `notices.append` operator channel; `core/feed_read.read_all`;
+`core/column_tolerant.present_columns`; the mig-`314`/`1033` adaptive-config posture; mig `201`'s
+ledger key SHAPE. **CREATED:** one pure module, one migration, one harness.
+
+**LOCK:** `backend/harness_installment_month_anchor.py` (**151 checks**, DB-free, stdlib). §F is the
+REGRESSION — the retired window-edge derivation runs as an ARMED NEGATIVE CONTROL beside the fix, so
+the defect is a running test rather than a memory. §E pins every live oracle figure above. VERIFIED
+RED with each defect patched back in: D2 fails G3/G6/G7/G8 and D1 fails I1/I2/I3 (7 checks), D3 fails
+J9/J12. §G is the anti-unwiring half — it fails the build if either engine stops dereferencing the
+home, if `(pay_idx - x) + 1` or `month_index > num_months` is re-spelled anywhere, or if the private
+page loop returns. Wired into CI in `carrier-vocab-guard.yml` (paths filter + its own step).
+Module-graph fact `installment_month_of_life` (§50), written BY HAND in multi-line form.
+
+---
 
 §19.49 **A CROSSCHECK IS EARNED, NEVER DEFAULTED — the P&L flag that passed 329 times without ever
 being checked** (owner report 2026-10-06).

@@ -15813,13 +15813,66 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
     try:
         from app.modules.commcalc import installment_engine, commission_engine
         inst_by_rep = {}
+        # OPERATOR-VISIBLE NOTICES for the RESIDUAL installment engine too (index §19.51). This read
+        # used to be `except Exception: inst_by_rep = {}` with no notice of any kind, so "the engine
+        # raised", "no schedule resolved for 27,000 subscribers" and "there is genuinely nothing to
+        # pay" were the SAME observable: residual_installment_comm = 0. Its sibling ten lines below
+        # has appended notices since mig 245/247; this dereferences that same mechanism rather than
+        # inventing a second one, so both multi-month engines report through one channel.
         try:
             ir = installment_engine.compute_installments(client, org_id, period, persist=persist_installments)
             for rep, amt in (ir.get("by_rep") or {}).items():
                 if rep:
                     inst_by_rep[str(rep).strip().upper()] = safe_float(amt)
-        except Exception:
+            if notices is not None:
+                _unres = ir.get("unresolved_schedule") or {}
+                if _unres.get("subscribers"):
+                    notices.append({
+                        "type": "residual_installment_no_schedule", "severity": "warning",
+                        "subscribers": _unres.get("subscribers"),
+                        "no_carrier_id": _unres.get("subscribers_with_no_carrier_id"),
+                        "by_carrier_id": _unres.get("by_carrier_id"),
+                        "message": (f"{_unres.get('subscribers'):,} subscriber(s) matched no multi-month "
+                                    f"residual payout schedule and paid $0.00. No schedule was assumed — "
+                                    f"check each schedule's carrier against what the residual feed stamps "
+                                    f"on its rows.")})
+                _mb = ir.get("month_basis") or {}
+                if _mb.get("unanchored_rows"):
+                    notices.append({
+                        "type": "residual_installment_month_unanchored", "severity": "warning",
+                        "rows": _mb.get("unanchored_rows"), "amount": _mb.get("unanchored_amount"),
+                        "message": (f"{_mb.get('unanchored_rows'):,} residual installment row(s) "
+                                    f"(${safe_float(_mb.get('unanchored_amount')):,.2f}) carry no activation "
+                                    f"date, so their month of life was taken from the oldest month read "
+                                    f"rather than proven by the data.")})
+                _pz = ir.get("persisted") or {}
+                if _pz.get("error") or (_pz.get("rows") and _pz.get("written") != _pz.get("rows")):
+                    notices.append({
+                        "type": "residual_installment_ledger_write", "severity": "critical",
+                        "rows": _pz.get("rows"), "written": _pz.get("written"),
+                        "error": _pz.get("error"),
+                        "message": (f"The residual installment ledger recorded {_pz.get('written')} of "
+                                    f"{_pz.get('rows')} row(s) for this period"
+                                    + (f": {_pz.get('error')}" if _pz.get("error") else "")
+                                    + ". The payout figures above are unaffected; the audit trail is "
+                                      "incomplete.")})
+                _nr = safe_float((ir.get("totals") or {}).get("amount_no_rep"))
+                if _nr:
+                    notices.append({
+                        "type": "residual_installment_no_rep", "severity": "warning", "amount": _nr,
+                        "message": (f"${_nr:,.2f} of residual installment payout names no rep and is "
+                                    f"credited to nobody, though it is counted in the run total.")})
+        except Exception as e:
             inst_by_rep = {}
+            # A RAISE IS NOT A ZERO. Reported with its reason instead of being indistinguishable
+            # from "nothing to pay" — the §19.48 class, in the shape it took on this path.
+            if notices is not None:
+                notices.append({
+                    "type": "residual_installment_engine_failed", "severity": "critical",
+                    "error": f"{type(e).__name__}: {e}",
+                    "message": ("The multi-month residual installment engine did not complete, so no "
+                                "residual installment was paid this run. This is a failure, not a $0.00 "
+                                f"result: {type(e).__name__}: {e}")})
         # SALE-TRIGGERED multi-month installments (mig 201, doctrine commission-0): rep pay from the SALE
         # LINE, paid-gated on the line being active + receiving residual. Separate component column
         # (installment_comm_sale) from the raw_mi path above. Boost/house has no schedule → returns {} →

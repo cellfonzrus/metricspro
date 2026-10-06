@@ -46,6 +46,7 @@ from app.modules.commcalc.commission_engine import (
     _load_plans, _resolve_plan_for, _read_sales, _read_store_market, _rule_matches, _norm_mdn,
     _read_employee_roles, _canon_person,
 )
+from app.modules.commcalc import installment_month as _im
 from app.modules.commcalc import installment_category as icat
 from app.modules.commcalc import installment_category_payout as icpay
 from app.modules.commcalc import expected_commission as xcomm
@@ -1468,7 +1469,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 "note": f"Unparseable pay_period '{pay_period}'."}
 
     # horizon: pull sales for pay_period back through the deepest schedule's num_months.
-    max_n = min(MAX_SCHEDULE_MONTHS, max((int(s.get("num_months") or 1) for s in scheds), default=1))
+    # THE SHARED HORIZON (index §19.51) — same home as the residual path, so neither engine
+    # re-expresses how deep to look. Byte-identical to the retired expression for every schedule set.
+    max_n = _im.horizon((s.get("num_months") for s in scheds), MAX_SCHEDULE_MONTHS)
     sale_periods = [_shift_period(pay_period, -k) for k in range(0, max_n)]
     sale_periods = [p for p in sale_periods if p]
 
@@ -1515,8 +1518,13 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
         s_idx = _period_index(sale_period)
         if s_idx is None:
             continue
-        month_index = (pay_idx - s_idx) + 1
-        if month_index < 1:
+        # THE SHARED ARITHMETIC (index §19.51). This path's anchor was already the ROW'S OWN origin
+        # month — `sale_period` is the period its rows are read from — which is why it was measured
+        # correct where the residual path was not. It now dereferences the shared fact instead of
+        # spelling `(pay_idx - s_idx) + 1` a second time, so "what month 3 means" has one home.
+        _resolved = _im.resolve_month(pay_idx, origin_index=s_idx)
+        month_index = _resolved["month_index"]
+        if month_index is None or month_index < 1:
             continue
         sales = (list((_sales_override or {}).get(sale_period) or [])
                  if _sales_override is not None else _read_sales(client, org_id, sale_period))
@@ -1635,7 +1643,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 if sched.get("plan_id") != plan.get("id"):
                     continue
                 num_months = min(MAX_SCHEDULE_MONTHS, int(sched.get("num_months") or 1))
-                if month_index > num_months:
+                # THE SHARED GATE (index §19.51): 1 <= month_index <= num_months, one home for both
+                # engines. `month_index >= 1` is already guaranteed above, so this is equivalent.
+                if not _im.in_schedule(month_index, num_months):
                     continue
                 if not _rule_matches(line, {"match_field": sched.get("trigger_match_field"),
                                             "match_op": sched.get("trigger_match_op"),
