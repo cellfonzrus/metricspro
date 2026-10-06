@@ -5971,6 +5971,7 @@ rendering the resolved name.
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
 | `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `FEED_CADENCE_BY_TABLE` / `FEED_LABEL_BY_TABLE` / `NOT_WATCHED_REASONS` (code registry) — **which feeds are watched, how often each is due, which column names the day its DATA is about (distinct from the ARRIVAL column in `FRESHNESS_COLUMN_BY_TABLE`), and the human name each is reported under.** `watched_feeds()` is DERIVED from `INGEST_TABLES_BY_MODULE` minus the declared exclusions, so a registered feed is watched the same day — 22 watched, 24 excused with a reason, 0 unaccounted | code | `router._data_freshness_report` (the set, each cadence, each label), `router._duty_last_loaded` (`data_date_column()` → `freshness_column()` fallback; `_DUTY_DATE_COL` deleted); lock `harness_feed_watchdog.py` (50) — §19.43 |
 | `data_lineage_registry.PERIOD_GRAIN_REASONS` + `day_keyed_date_columns()` / `is_day_keyed()` (code registry) — **which feeds are replaced by DAY and carry their own month, and which are replaced per PERIOD with a stated reason.** DERIVED from `DATA_DATE_COLUMN_BY_TABLE`, so a feed that declares a data-date column is day-keyed the same day; a declared table that is neither fails the build | code | `router._upload_file_impl` (`DATE_KEYED` is the derivation, no literal map), `epay_sweep._pull_and_store` / `_store_day_grain` / `_store_rows_by_day`; one parser `commcalc/feed_period.py`; lock `harness_feed_day_grain.py` (85) — §19.46 |
+| `account/_period.canonical_period` / `period_keys` / `is_canonical_period` (code) — **the ONE spelling a month-period is STORED under, and every spelling a filter must match.** A second private copy, or a period-keyed write that passes the caller's raw string, fails the build | code | `commcalc.router._canon_period` (dereferences, no longer re-derives), `_write_gp_snapshot` / `_gp_snapshot_period` / `_tperiods` / `gp_trend` / `save_config`, `account/engine._persist` + its purge, `statement_engine` purge, the journal writer, `account/router.overview` + `_consolidated_pl`; `coa.journal_rows` is the one home for a month's manual journal entries; lock `harness_period_one_spelling.py` (60) — §19.47 |
 | `commcalc.asset_ledger` / `pos_tender_summary` / `inventory_value` — their **arrival** column, newly declared: these three have NO `created_at`, so the default left `last_ingest_at` None and the §19.18 arrival-vs-content diagnosis was dead on them | migrations (unchanged); `FRESHNESS_COLUMN_BY_TABLE` declares `uploaded_at` / `updated_at` / `updated_at` | `_table_feed_freshness` via `data_lineage_registry.freshness_column` — §19.43 |
 | `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
 | *(none — §40 One domain creates no table and touches no database; its facts are deploy config, see §18)* | — | — |
@@ -6460,6 +6461,7 @@ rendering the resolved name.
 | **How does an order reach this vendor, and may a sweep send it?** — two separate facts: whether the route can reach them at all, and whether using it PLACES an order | `order_transport.transport_for(vendor)` + `push_enabled(route, switch)` | ONE home `supply/order_transport.py`; the only dialect is `supply/shopify_draft_order.py`, selected by a config VALUE (RULE TWO); lock `harness_order_transport.py` (143) — §51. Nothing is switched on: `po_mode` is `off` for every tenant and no vendor declares a route |
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Which month does this feed row belong to, and what does this upload replace?** — the row's OWN data date, and the DAYS the file covers; never the period an operator picked or the month a sweep ran in. All or nothing: a row that cannot prove its day keeps the period replace | `data_lineage_registry.day_keyed_date_columns()` (+ `PERIOD_GRAIN_REASONS` for the archives) | ONE parser `commcalc/feed_period.py` (`period_of_day` / `month_spread` / `day_stamp`); dereferenced by the manual upload and the nightly sweep; lock `harness_feed_day_grain.py` (85) — §19.46. Live 2026-10-05: 80,614 payment-detail rows / $579,926.24 were filed under the wrong month, October reading 28x its own $15,460.69 |
+| **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
@@ -6636,6 +6638,94 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.47 **ONE MONTH, ONE STORED SPELLING — the two surfaces that disagreed, and a doubling nobody
+could see** (owner report 2026-10-06).
+
+Owner, comparing two screens: *"first check the gross profit report vs the account dashboard the data
+on those dont match so clearly there are differnt sources of data and likely they are bing doubled
+also"*. Both halves were right.
+
+**WHY THEY DISAGREED (not a defect, and now stated once so nobody re-derives it).** `GET /gp/{period}`
+runs `_compute_gp` on every request — it is LIVE. The Account dashboard runs nothing: `GET
+/account/overview/{period}` reads the STORED `commcalc.account_statements` snapshot and its
+`computed_at`. So the two agree only while the snapshot is fresh, and their revenue headlines are not
+the same measurement either (the GP report's `total_rev` blends margin-style terms — `acc_gp`,
+`plan_gp`, `setup_gp` — with revenue-style ones, while the P&L separates revenue from COGS). The
+comparable figures are the BOTTOM lines: August 2026 GP net profit $266,148.46 vs P&L net income
+$278,731.53.
+
+**THE DEFECT, measured live on the house org.** Every period-keyed table keys on `(org_id, period)`
+where `period` was whatever STRING the caller held, and the platform stores a month under two
+spellings. One month therefore reached a table twice, and the copies disagreed:
+
+```
+commcalc.gp_snapshot    'September 2026'  net profit $201,289.22   computed 2026-10-06
+                        '2026-09'         net profit $194,724.22   computed 2026-10-04
+                        'October 2026'    net profit  $45,589.14
+                        '2026-10'         net profit  $44,799.87
+commcalc.account_statements   'May 2026' + '2026-05'   ·   'June 2026' + '2026-06'
+```
+
+`_tperiods` de-duped the raw STRING, so September and October each took TWO slots of the GP Trends
+hub's six-month window — one month, twice, two different answers, two real months pushed off the end.
+The statements purge was `.eq("period", period)`, so computing '2026-09' left the 'September 2026'
+snapshot of the same month standing.
+
+**THE DOUBLING, latent not live.** `journal_entries` is replace-per-period: the writer purged ONE
+spelling and inserted the caller's, while `statement_engine._journal_rows` correctly read BOTH. So a
+journal saved as '2026-09' over a 'September 2026' save left both sets standing and every
+hand-entered amount — cash, fixtures, owner capital — booked TWICE on the statements. Measured
+2026-10-06: 8 journal rows across all orgs, all under 'August 2026', **0 months stored under two
+spellings**, so no money is doubled today. The mechanism was real and is closed.
+
+**THE CLASS, not the instance.** The general fact that was wrong is not "the trend shows September
+twice"; it is **"a month was stored under whatever spelling the caller held"**. That question already
+had ONE home — `account/_period.canonical_period`, whose own `is_canonical_period` documents exactly
+this class (*"a stored spelling that is NOT canonical is an ORPHAN no period_keys() reader finds"*) —
+and the writers did not read it. `commcalc.router._canon_period` was a SECOND COPY of the rule, and a
+divergent one: it mapped `'Sept 2026'` to **'January 2026'**, because it fell through to
+`calculator.parse_period`, which leniently returns month 1 for anything it cannot read.
+
+**WHAT CHANGED — every writer stores the canonical spelling, every reader covers every spelling.**
+
+| writer / reader | before | now |
+|---|---|---|
+| `commcalc.router._canon_period` | its own month-name derivation | DEREFERENCES `account/_period.canonical_period` (abbreviations fixed) |
+| `_write_gp_snapshot` | `period` as given | `_gp_snapshot_period(period)` = the one home |
+| `_tperiods` | de-duped the raw string | de-dupes on the canonical spelling — one slot per month |
+| `gp_trend` cache read | `{r['period']: …}` | folded onto the canonical month, NEWEST `computed_at` wins |
+| `router.save_config` (`payout_config`) | `period` as given | `_canon_period(period)` — one rate row per month |
+| `engine.compute_and_store` purge | `.eq("period", period)` | `.in_("period", period_keys(period))` |
+| `engine._persist` | `period` as given | `_period.canonical_period(period)` |
+| `statement_engine` purge | `.eq("period", period)` | `.in_("period", period_keys(period))` |
+| journal writer (`account/router`) | purge one spelling, insert as given | purge EVERY spelling, insert canonical |
+| journal readers | `engine` read ONE spelling, `statement_engine` read both | both dereference **`coa.journal_rows`** |
+| `account/router.overview` | `.eq("period", period)`, row order decided | every spelling, NEWEST per (scope, statement) |
+| `_consolidated_pl` | `rows[0]` | `.order("computed_at", desc=True)` — the banner and the dashboard quote one snapshot |
+
+`auto_calc` needed no change and is excused by measurement, not by assumption: `month_periods`
+already canonicalises through `_pd.canonical_period` before any upsert. `calc_status` already keyed
+on `_canon_period`, which is why it never grew a twin.
+
+**ONE HOME:** `app/modules/account/_period.py` (`canonical_period` / `period_keys` /
+`is_canonical_period`) for the spelling; `app/modules/account/coa.py::journal_rows` for a month's
+manual journal entries.
+
+**LOCK:** `backend/harness_period_one_spelling.py` — **60 checks, DB-free, stdlib**, the real
+`_tperiods` / `_gp_snapshot_period` extracted from the router by AST. §A reproduces the live
+duplicate and the fold; §B proves the collapse re-derives nothing and fixes the abbreviations; §C
+fails the build if any writer keys on a raw period again; §D negative controls; §E purity + RULE
+TWO; §F the journal one home and the arithmetic of the doubling; §G the dashboard read. Verified RED
+on the pre-change tree: **36 FAIL**.
+
+**NOT CHANGED, and reported rather than coded around:** the duplicate rows already stored. They are
+cache (`gp_snapshot`) and recomputable snapshots (`account_statements`), so the readers above make
+them harmless and the next compute replaces them; nothing in this change rewrites a stored row.
+October's P&L showing **−$273,625.14** is also not this defect — it is a full month of carried
+expenses ($408,698.02) against five days of revenue, and whether a part-month should carry
+whole-month expenses is a presentation decision for the owner.
+
 
 §19.46 **A FEED ROW'S MONTH IS ITS OWN DAY'S MONTH, NEVER THE PERIOD SOMEONE PICKED — the commission
 that was counted twice (owner 2026-10-05: *"check the commission reports for boost as it seems very

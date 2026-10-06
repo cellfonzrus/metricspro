@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.modules.account import coa, engine, autocompute, report_gates, statement_engine, analysis
+from app.modules.account import _period   # the ONE spelling a month is stored under (index §19.47)
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
 # guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
@@ -153,8 +154,12 @@ def assign_stores(body: AssignStoresIn, org_id: str = ORG_ID):
 @router.get("/journal/{period}")
 def get_journal(period: str, org_id: str = ORG_ID):
     require_org(org_id)
+    # EVERY stored spelling (index §19.47) — the page must show the entries the statements use,
+    # and the statements read both. A one-spelling read here made the journal page look empty for a
+    # month whose entries were saved under the other form.
     rows = (sb().schema("commcalc").table("journal_entries").select("*")
-            .eq("org_id", org_id).eq("period", period).order("statement").execute().data) or []
+            .eq("org_id", org_id).in_("period", list(_period.period_keys(period)))
+            .order("statement").execute().data) or []
     return {"period": period, "entries": rows,
             "account_types": {"pl": sorted(PL_TYPES), "balance_sheet": sorted(BS_TYPES)}}
 
@@ -194,14 +199,20 @@ def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
             rejected.append({"account_line": line,
                              "reason": f"Balance-sheet type must be one of {sorted(BS_TYPES)}"})
             continue
-        ins.append({"org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+        ins.append({"org_id": org_id, "period": _period.canonical_period(period),
+                    "period_month": pm, "period_year": py,
                     "company_id": r.get("company_id") or None,
                     "store_address": (r.get("store_address") or "").strip() or None,
                     "entry_date": (r.get("entry_date") or None),
                     "statement": statement, "account_type": atype, "account_line": line,
                     "amount": amt, "memo": (r.get("memo") or "").strip() or None})
+    # REPLACE means replace: purge EVERY spelling of this month before inserting, and insert under
+    # the canonical one. The purge used to be `.eq("period", period)`, so saving the journal as
+    # '2026-09' left the 'September 2026' rows of the same month in place — and because
+    # `coa.journal_rows` correctly reads BOTH spellings, every one of those hand-entered amounts was
+    # then counted TWICE on the statements (owner report 2026-10-06; index §19.47).
     client.schema("commcalc").table("journal_entries").delete() \
-        .eq("org_id", org_id).eq("period", period).execute()
+        .eq("org_id", org_id).in_("period", list(_period.period_keys(period))).execute()
     for i in range(0, len(ins), 500):
         client.schema("commcalc").table("journal_entries").insert(ins[i:i + 500]).execute()
     # Advisory: which entries resolved to a company (saved company_id, or the typed designation in
@@ -658,9 +669,13 @@ def _scope_display(scope_key, stored_label, org_id):
 
 
 def _read(period, st_type, scope, org_id):
+    """One stored statement — EVERY spelling of the month, NEWEST first (index §19.47). A
+    one-spelling read returned None for a month computed under the other form, and `rows[0]` was
+    row order once both existed."""
     rows = (sb().schema("commcalc").table("account_statements").select("*")
-            .eq("org_id", org_id).eq("period", period).eq("statement_type", st_type)
-            .eq("scope_key", scope).execute().data) or []
+            .eq("org_id", org_id).in_("period", list(_period.period_keys(period)))
+            .eq("statement_type", st_type).eq("scope_key", scope)
+            .order("computed_at", desc=True).execute().data) or []
     return rows[0] if rows else None
 
 
@@ -1082,9 +1097,23 @@ def overview(period: str, org_id: str = ORG_ID):
     company — is DROPPED from the dropdown (`coa.filter_org_scopes`), never rendered. This is the
     single scope-picker source for the Account dashboard, P&L, Balance Sheet and Cash Flow pages."""
     require_org(org_id)
-    rows = (sb().schema("commcalc").table("account_statements")
+    # EVERY stored spelling of the month, newest snapshot per (scope, statement) (index §19.47).
+    # This read matched ONLY the caller's spelling, so a month computed under the other form was
+    # invisible here while the narrative banner — which reads both — quoted it; and once both forms
+    # existed (live: 'May 2026' + '2026-05', 'June 2026' + '2026-06') which vintage the dashboard
+    # showed came down to row order. The writer purges every spelling now, so this is belt and
+    # braces for the rows written before it.
+    _raw = (sb().schema("commcalc").table("account_statements")
             .select("statement_type,scope_key,scope_label,payload,crosscheck_ok,computed_at,model")
-            .eq("org_id", org_id).eq("period", period).execute().data) or []
+            .eq("org_id", org_id).in_("period", list(_period.period_keys(period)))
+            .execute().data) or []
+    _newest = {}
+    for _r in _raw:
+        _k = (_r.get("scope_key"), _r.get("statement_type"))
+        if _k in _newest and str(_r.get("computed_at") or "") <= str(_newest[_k].get("computed_at") or ""):
+            continue
+        _newest[_k] = _r
+    rows = list(_newest.values())
     companies = coa.org_companies(sb(), org_id)   # canonical entity enumeration (fail closed)
     own_ids = {str(c["id"]) for c in companies}
     rows = coa.filter_org_scopes(rows, own_ids)   # foreign/stale company scopes never render
@@ -1156,10 +1185,13 @@ def _consolidated_pl(client, org_id, period):
     has no computed consolidated P&L. Matches BOTH period spellings via `period_keys` (the finance-wide
     month-name/numeric duality)."""
     from app.modules.account._period import period_keys
+    # Ordered by `computed_at` so that when a month exists under both spellings the banner quotes
+    # the NEWEST snapshot — the same one `overview` now shows. `rows[0]` was row order (index §19.47).
     rows = (client.schema("commcalc").table("account_statements")
-            .select("payload")
+            .select("payload,computed_at")
             .eq("org_id", org_id).in_("period", list(period_keys(period)))
-            .eq("scope_key", "consolidated").eq("statement_type", "pl").execute().data) or []
+            .eq("scope_key", "consolidated").eq("statement_type", "pl")
+            .order("computed_at", desc=True).execute().data) or []
     if not rows:
         return None
     # Same ONE HOME as `overview` above — the narrative can never quote a revenue the dashboard
@@ -1254,8 +1286,11 @@ def sync_recon_flags(period: str, tolerance: float = 1.0, date_col: str = "mi_ac
 @router.get("/credit-memos/{period}")
 def get_credit_memos(period: str, org_id: str = ORG_ID):
     require_org(org_id)
+    # EVERY stored spelling (index §19.47) — the recon that reads these matches both forms, so a
+    # one-spelling read here showed fewer memos on the page than the reconciliation used.
     rows = (sb().schema("commcalc").table("vip_credit_memos").select("*")
-            .eq("org_id", org_id).eq("period", period).order("created_on").execute().data) or []
+            .eq("org_id", org_id).in_("period", list(_period.period_keys(period)))
+            .order("created_on").execute().data) or []
     return {"period": period, "credit_memos": rows, "count": len(rows)}
 
 

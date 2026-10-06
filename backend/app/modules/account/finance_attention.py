@@ -527,10 +527,13 @@ def _p_finance_integrity(client, org_id, ctx):
         periods = []
     for period in periods:
         try:
+            # EVERY stored spelling, newest first (index §19.47): a one-spelling read made the
+            # attention surface report "no balance sheet" for a month that had one.
+            from app.modules.account._period import period_keys as _pkeys
             srows = (client.schema("commcalc").table("account_statements").select("payload")
-                     .eq("org_id", org_id).eq("period", period)
+                     .eq("org_id", org_id).in_("period", list(_pkeys(period)))
                      .eq("statement_type", "balance_sheet").eq("scope_key", "consolidated")
-                     .limit(1).execute().data) or []
+                     .order("computed_at", desc=True).limit(1).execute().data) or []
         except Exception:
             continue
         if not srows:

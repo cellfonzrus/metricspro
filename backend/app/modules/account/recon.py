@@ -234,7 +234,8 @@ def sync_flags(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEF
     if cw["status"] != "ok":
         sev = "critical" if cw["status"] == "under" else "warning"
         flags.append({
-            "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+            "org_id": org_id, "period": _period.canonical_period(period),
+            "period_month": pm, "period_year": py,
             "flag_type": "Distributor credit-memo recon (company-wide)", "source": "account_recon",
             "severity": sev, "amount": abs(cw["diff"]),
             "description": (f"Company-wide: Distributor credit memos {cw['memo_total']:.2f} vs MI+ATU earned "
@@ -246,7 +247,8 @@ def sync_flags(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEF
             continue
         sev = "critical" if r["status"] == "under" else "warning"
         flags.append({
-            "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+            "org_id": org_id, "period": _period.canonical_period(period),
+            "period_month": pm, "period_year": py,
             "flag_type": "Distributor credit-memo recon (store)", "source": "account_recon",
             "severity": sev, "store_address": r["store"], "amount": abs(r["diff"]),
             "description": (f"{r['store']}: memos {r['memo_total']:.2f} vs MI+ATU {r['mi_atu_total']:.2f} "
@@ -256,8 +258,12 @@ def sync_flags(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEF
     # ONE home for what a finding's severity means (index §53) — this module's own
     # critical/warning judgement, put on the one scale the Management Watchdog orders by.
     _reg.stamp(flags)
+    # REPLACE means replace: purge EVERY spelling of this month (index §19.47). A one-spelling
+    # purge beside an insert under the caller's spelling is how a replace-per-period engine leaves
+    # BOTH months' findings standing — the same shape as the journal doubling.
     client.schema("commcalc").table("flags").delete() \
-        .eq("org_id", org_id).eq("source", "account_recon").eq("period", period).execute()
+        .eq("org_id", org_id).eq("source", "account_recon") \
+        .in_("period", list(_period.period_keys(period))).execute()
     for i in range(0, len(flags), 500):
         client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
     return {"period": period, "flags_written": len(flags),

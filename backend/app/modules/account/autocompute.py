@@ -159,8 +159,10 @@ def statements_computed_at(client, org_id, period):
     """The newest computed_at across a period's stored statement snapshots (any scope), or None if
     the period was never computed. All scopes are written together, so the max is the build time."""
     try:
+        # EVERY stored spelling (index §19.47) — a one-spelling read reported a month computed
+        # under the other form as NEVER COMPUTED, and this answer drives `staleness`.
         rows = (client.schema("commcalc").table("account_statements").select("computed_at")
-                .eq("org_id", org_id).eq("period", period)
+                .eq("org_id", org_id).in_("period", list(period_keys(period)))
                 .order("computed_at", desc=True).limit(1).execute().data) or []
         return rows[0].get("computed_at") if rows else None
     except Exception:

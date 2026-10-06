@@ -388,8 +388,34 @@ FACTS: dict[str, dict] = {
             'app/modules/core/data_qa_agent.py': ('calc',),
         },
     },
+    'period_stored_spelling': {
+        "question": 'Which spelling is this month STORED under, and which spellings must a filter match?',
+        "homes": ('app/modules/account/_period.py',),
+        "index": ('19.47',),
+        "locks": ('harness_period_one_spelling.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/account/analysis.py': ('_period',),
+            'app/modules/account/autocompute.py': ('_MONTHS', 'period_keys'),
+            'app/modules/account/coa.py': ('_period', 'parse_period'),
+            'app/modules/account/engine.py': ('_period',),
+            'app/modules/account/finance_attention.py': ('_pkeys', 'fin_period'),
+            'app/modules/account/projection_engine.py': ('_period',),
+            'app/modules/account/recon.py': ('_period',),
+            'app/modules/account/residual_subs.py': ('parse_period', 'recent_period_keys'),
+            'app/modules/account/router.py': ('_pd', '_period', 'parse_period', 'period_keys'),
+            'app/modules/account/royalty.py': ('canonical_period', 'month_range', 'parse_period'),
+            'app/modules/account/royalty_router.py': ('_period',),
+            'app/modules/account/statement_engine.py': ('_period',),
+            'app/modules/commcalc/auto_calc.py': ('_pd',),
+            'app/modules/commcalc/commission_ledger.py': ('_pd',),
+            'app/modules/commcalc/discrepancy_appeals.py': ('_pd',),
+            'app/modules/commcalc/ledger_batch.py': ('_pd',),
+            'app/modules/commcalc/ma_recon.py': ('_pd',),
+            'app/modules/commcalc/router.py': ('_pd',),
+        },
+    },
 }
-
 
 def keys() -> tuple:
     """Every fact in the graph, in a stable order."""
