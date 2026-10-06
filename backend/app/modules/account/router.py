@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.modules.account import coa, engine, autocompute, report_gates, statement_engine, analysis
+from app.modules.account import _period   # the ONE spelling a month is stored under (index §19.47)
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
 # guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
