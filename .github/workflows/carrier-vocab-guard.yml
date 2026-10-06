@@ -489,6 +489,8 @@ on:
       - "backend/harness_pay_feed_balance.py"
       - "backend/app/modules/core/feed_read.py"
       - "backend/app/modules/commcalc/pay_data_quality.py"
+      - "backend/harness_statement_crosscheck_earned.py"
+      - "backend/app/modules/account/analysis.py"
       - "backend/app/modules/account/_period.py"
       - "backend/app/modules/account/coa.py"
       - "backend/app/modules/account/engine.py"
@@ -766,6 +768,9 @@ jobs:
       - name: Run the pay-feed balance lock (every dollar the carrier paid is PLACED in a pay bucket or REPORTED unplaced with a reason; a feed read carries NO literal row ceiling and raises rather than returning a short list; two feeds for the same money must cover the same days — owner 2026-10-06, index §19.48)
         working-directory: backend
         run: python3 harness_pay_feed_balance.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the earned-crosscheck lock (a statement's crosscheck verdict is COMPUTED, never defaulted; `not_measured` is never a pass; both statement writers dereference the one resolver — owner 2026-10-06, index §19.49)
+        working-directory: backend
+        run: python3 harness_statement_crosscheck_earned.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
         working-directory: backend
         run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
