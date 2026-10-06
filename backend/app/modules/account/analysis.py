@@ -115,6 +115,101 @@ def pl_totals(payload):
             "net_income": _r2((payload or {}).get("net_income"))}
 
 
+# ── THE P&L's OWN CROSSCHECK (owner report 2026-10-06) ──────────────────────────────────────────
+# OWNER: *"make sure all expenses and every commission and residual is assigned properly and p&l
+# calculated properly then the data for all reports should be aligned"*.
+#
+# THE DEFECT, measured live. `commcalc.account_statements.crosscheck_ok` is persisted as
+# `stmt.get("balanced", stmt.get("tied", True))` (`statement_engine.py`). `balanced` is set ONLY on
+# a balance sheet (`engine._assemble`) and `tied` ONLY on a cash flow, so a P&L payload carries
+# NEITHER key and the expression falls through to the literal `True` — every time, for every scope,
+# for every month. House org: all **289** stored P&L snapshots say `crosscheck_ok = true`, and not
+# one of them was ever checked. `account/router.py` serves that flag to the browser.
+#
+# THE CLASS, not the instance: **the platform reported an ABSENCE as a RESULT.** "I never checked
+# this" was stored, and served, as "checked and fine" — the same shape as the pay path reporting
+# money it could not place as money that did not exist (index §19.48). The house vocabulary already
+# says ABSENCE IS NEVER A FINDING; this is that rule inverted, an absence reported as a PASS.
+#
+# The identity was never in doubt and never computed: EXPENSE_SECTIONS above already states it in
+# prose — *"gross_profit − expenses == net_income, for every scope, always"* — and asserts it as a
+# property of the design. This turns that sentence into the check, so the claim is tested rather
+# than trusted.
+#
+# TRI-STATE, deliberately. `verdict` is "passed" / "failed" / "not_measured" and `ok` is None when
+# nothing could be evaluated, because a boolean cannot tell "checked and fine" from "never checked"
+# — which is the whole defect. A payload with no sections at all yields "not_measured", never a
+# pass.
+#
+# PURE. No DB, no network, no clock. Callers: `statement_engine._persist` (the stored flag) and
+# `account/router` (the served one), so the two can never disagree.
+
+# A dollar of tolerance, matching the balance sheet's own `abs(imbalance) < 1.0` — the sections are
+# each rounded to cents before they are summed, so sub-dollar drift is rounding, not a defect.
+CROSSCHECK_TOLERANCE = 1.0
+
+
+def pl_crosscheck(payload):
+    """Did this P&L actually tie? Returns the identities, their verdict, and the dollar gap.
+
+    Two identities, both of them already properties of the design rather than new rulings:
+      · `gross_profit` == revenue − COGS
+      · `net_income`   == gross_profit − expenses   (expenses = Σ EXPENSE_SECTIONS)
+
+    A payload that carries no sections cannot be judged, so the verdict is `not_measured` and `ok`
+    is None. That distinction is the point: the column it feeds used to default to True.
+    """
+    sections = (payload or {}).get("sections") or []
+    t = pl_totals(payload)
+    if not sections:
+        return {"verdict": "not_measured", "ok": None,
+                "reason": "the payload carries no sections, so neither identity can be evaluated",
+                "identities": [], "worst_gap": None}
+
+    checks = [
+        {"name": "gross_profit == revenue - cogs",
+         "expected": _r2(t["revenue"] - t["cogs"]), "reported": t["gross_profit"]},
+        {"name": "net_income == gross_profit - expenses",
+         "expected": _r2(t["gross_profit"] - t["expenses"]), "reported": t["net_income"]},
+    ]
+    for c in checks:
+        c["gap"] = _r2(c["reported"] - c["expected"])
+        c["holds"] = abs(c["gap"]) < CROSSCHECK_TOLERANCE
+    worst = max(checks, key=lambda c: abs(c["gap"]))
+    failed = [c for c in checks if not c["holds"]]
+    return {
+        "verdict": "passed" if not failed else "failed",
+        "ok": not failed,
+        "reason": "" if not failed else "; ".join(
+            f'{c["name"]} is out by {c["gap"]}' for c in failed),
+        "identities": checks,
+        "worst_gap": worst["gap"],
+    }
+
+
+def statement_crosscheck(st_type, payload):
+    """The ONE answer to "was this statement checked, and did it pass?", for any statement type.
+
+    Replaces `stmt.get("balanced", stmt.get("tied", True))`, whose fall-through default made an
+    unchecked P&L indistinguishable from a passing one. Each type names the key that carries its
+    own verdict; a type with no key is `not_measured` rather than a silent pass.
+    """
+    payload = payload or {}
+    if st_type == "pl":
+        return pl_crosscheck(payload)
+    key = {"balance_sheet": "balanced", "cash_flow": "tied"}.get(st_type)
+    if key is None or key not in payload:
+        return {"verdict": "not_measured", "ok": None,
+                "reason": f"statement type {st_type!r} declares no crosscheck identity",
+                "identities": [], "worst_gap": None}
+    held = bool(payload.get(key))
+    gap = payload.get("imbalance") if st_type == "balance_sheet" else None
+    return {"verdict": "passed" if held else "failed", "ok": held,
+            "reason": "" if held else f"{key} is false",
+            "identities": [{"name": key, "holds": held, "gap": _r2(gap) if gap is not None else None}],
+            "worst_gap": _r2(gap) if gap is not None else None}
+
+
 def bs_totals(payload):
     """Headline BS numbers from a stored snapshot: cash & equivalents = the CASH_KEYS asset lines
     summed (a pre-938 payload simply has no store_cash_on_hand line → sums as 0, byte-identical)."""

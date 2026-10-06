@@ -5971,6 +5971,7 @@ rendering the resolved name.
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
 | `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `FEED_CADENCE_BY_TABLE` / `FEED_LABEL_BY_TABLE` / `NOT_WATCHED_REASONS` (code registry) — **which feeds are watched, how often each is due, which column names the day its DATA is about (distinct from the ARRIVAL column in `FRESHNESS_COLUMN_BY_TABLE`), and the human name each is reported under.** `watched_feeds()` is DERIVED from `INGEST_TABLES_BY_MODULE` minus the declared exclusions, so a registered feed is watched the same day — 22 watched, 24 excused with a reason, 0 unaccounted | code | `router._data_freshness_report` (the set, each cadence, each label), `router._duty_last_loaded` (`data_date_column()` → `freshness_column()` fallback; `_DUTY_DATE_COL` deleted); lock `harness_feed_watchdog.py` (50) — §19.43 |
 | `data_lineage_registry.PERIOD_GRAIN_REASONS` + `day_keyed_date_columns()` / `is_day_keyed()` (code registry) — **which feeds are replaced by DAY and carry their own month, and which are replaced per PERIOD with a stated reason.** DERIVED from `DATA_DATE_COLUMN_BY_TABLE`, so a feed that declares a data-date column is day-keyed the same day; a declared table that is neither fails the build | code | `router._upload_file_impl` (`DATE_KEYED` is the derivation, no literal map), `epay_sweep._pull_and_store` / `_store_day_grain` / `_store_rows_by_day`; one parser `commcalc/feed_period.py`; lock `harness_feed_day_grain.py` (85) — §19.46 |
+| `account/analysis.statement_crosscheck` / `pl_crosscheck` / `CROSSCHECK_TOLERANCE` (code) — **"was this statement checked, and did it pass?": the verdict is EARNED, tri-state (`passed`/`failed`/`not_measured`), and `ok` is None for anything that cannot be judged.** A boolean cannot tell "checked and fine" from "never checked" | code | `account/engine._persist`'s caller and `account/statement_engine` (both writers dereference it, so the stored flag and the served flag can never disagree); the P&L identity reads `pl_totals` -> `EXPENSE_SECTIONS`, never re-summing sections; lock `harness_statement_crosscheck_earned.py` (63) — §19.49 |
 | `account/_period.canonical_period` / `period_keys` / `is_canonical_period` (code) — **the ONE spelling a month-period is STORED under, and every spelling a filter must match.** A second private copy, or a period-keyed write that passes the caller's raw string, fails the build | code | `commcalc.router._canon_period` (dereferences, no longer re-derives), `_write_gp_snapshot` / `_gp_snapshot_period` / `_tperiods` / `gp_trend` / `save_config`, `account/engine._persist` + its purge, `statement_engine` purge, the journal writer, `account/router.overview` + `_consolidated_pl`; `coa.journal_rows` is the one home for a month's manual journal entries; lock `harness_period_one_spelling.py` (60) — §19.47 |
 | `commcalc.asset_ledger` / `pos_tender_summary` / `inventory_value` — their **arrival** column, newly declared: these three have NO `created_at`, so the default left `last_ingest_at` None and the §19.18 arrival-vs-content diagnosis was dead on them | migrations (unchanged); `FRESHNESS_COLUMN_BY_TABLE` declares `uploaded_at` / `updated_at` / `updated_at` | `_table_feed_freshness` via `data_lineage_registry.freshness_column` — §19.43 |
 | `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
@@ -6461,6 +6462,7 @@ rendering the resolved name.
 | **How does an order reach this vendor, and may a sweep send it?** — two separate facts: whether the route can reach them at all, and whether using it PLACES an order | `order_transport.transport_for(vendor)` + `push_enabled(route, switch)` | ONE home `supply/order_transport.py`; the only dialect is `supply/shopify_draft_order.py`, selected by a config VALUE (RULE TWO); lock `harness_order_transport.py` (143) — §51. Nothing is switched on: `po_mode` is `off` for every tenant and no vendor declares a route |
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Which month does this feed row belong to, and what does this upload replace?** — the row's OWN data date, and the DAYS the file covers; never the period an operator picked or the month a sweep ran in. All or nothing: a row that cannot prove its day keeps the period replace | `data_lineage_registry.day_keyed_date_columns()` (+ `PERIOD_GRAIN_REASONS` for the archives) | ONE parser `commcalc/feed_period.py` (`period_of_day` / `month_spread` / `day_stamp`); dereferenced by the manual upload and the nightly sweep; lock `harness_feed_day_grain.py` (85) — §19.46. Live 2026-10-05: 80,614 payment-detail rows / $579,926.24 were filed under the wrong month, October reading 28x its own $15,460.69 |
+| **Was this statement actually crosschecked, and did it pass?** — `passed` / `failed` / `not_measured`; an absence is never a pass | the statement payload's own sections (P&L: `gross_profit == revenue − cogs` and `net_income == gross_profit − expenses`), `balanced` for a balance sheet, `tied` for a cash flow | `analysis.statement_crosscheck` → the stored `account_statements.crosscheck_ok` and the flag `account/router` serves; lock `harness_statement_crosscheck_earned.py` (63) — §19.49. Live 2026-10-06: all **329** stored P&L snapshots pass at a **$0.00** total gap (the arithmetic is SOUND, proven not assumed), while the flag had been an unconditional `True` that checked nothing; `balance_sheet` fails 327/329 and `cash_flow` 159/166, both already surfaced by the Journal note |
 | **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
@@ -6638,6 +6640,65 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.49 **A CROSSCHECK IS EARNED, NEVER DEFAULTED — the P&L flag that passed 329 times without ever
+being checked** (owner report 2026-10-06).
+
+Owner: *"make sure all expenses and every commission and residual is assigned properly and p&l
+calculated properly then the data for all reports should be aligned"*.
+
+**THE DEFECT, measured live on the house org.** `commcalc.account_statements.crosscheck_ok` was
+persisted as `stmt.get("balanced", stmt.get("tied", True))`. `balanced` is set ONLY on a balance
+sheet (`engine._assemble`) and `tied` ONLY on a cash flow (`statement_engine`), so **a P&L payload
+carries NEITHER key** and the expression fell through to the literal `True` — every time, every
+scope, every month. All **329** stored P&L snapshots said `crosscheck_ok = true` and **not one had
+ever been checked**. `account/router.py` serves that flag to the browser.
+
+**THE CLASS, not the instance: the platform reported an ABSENCE as a RESULT.** "I never checked
+this" was stored, and served, as "checked and fine". It is the same shape as §19.48's pay path
+reporting money it could not place as money that did not exist, and it is the house's own ABSENCE IS
+NEVER A FINDING rule inverted — an absence reported as a PASS. A boolean column cannot distinguish
+"checked and fine" from "never checked", which is why the flag is now tri-state.
+
+**THE IDENTITY WAS NEVER IN DOUBT AND NEVER COMPUTED.** `analysis.EXPENSE_SECTIONS` already stated
+it in prose and asserted it as a property of the design — *"gross_profit − expenses == net_income,
+for every scope, always"*. §19.49 turns that sentence into the check, so the claim is tested rather
+than trusted.
+
+**THE ANSWER, and it is good news — recorded here so nobody re-investigates it.** Run over all
+**329** stored P&L snapshots, every scope and every month: **all 329 PASS, to the cent. Total
+absolute gap $0.00.** Both identities (`gross_profit == revenue − cogs`, `net_income ==
+gross_profit − expenses`) hold universally. **The P&L arithmetic is SOUND — now proven rather than
+assumed.** The flag's VALUE for a P&L is therefore unchanged by this fix; only now it is earned.
+
+The same check on the other two types: `balance_sheet` fails **327 of 329**, `cash_flow` fails
+**159 of 166**. Both were ALREADY honestly surfaced — `engine._notes` attaches *"Balance sheet is
+not yet balanced — enter cash / opening balances via the Journal"* — so they are a **data-entry
+backlog** (cash, fixtures and owner capital are manual journal entries), **not a hidden defect** and
+not this section's subject.
+
+**THE ONE HOME: `account/analysis.pl_crosscheck` / `statement_crosscheck` / `CROSSCHECK_TOLERANCE`.**
+`statement_crosscheck(st_type, payload)` is the ONE answer to "was this statement checked, and did it
+pass?" for any type, dereferenced by BOTH writers (`engine._persist`'s caller and
+`statement_engine`'s) so the stored flag and the served flag can never disagree. `verdict` is
+`passed` / `failed` / **`not_measured`**, and `ok` is **None** — not True — for anything it cannot
+judge, so a brand-new statement type cannot arrive as a silent pass. Tolerance is $1.00, matching the
+balance sheet's own `abs(imbalance) < 1.0`, because sections are rounded to cents before summing.
+The P&L identity dereferences `pl_totals` (and through it `EXPENSE_SECTIONS`), never re-summing
+sections, so a future reclassification moves the check with the statement.
+
+**PURITY PRESERVED.** `analysis` imports only `_period` — no `app.core.config`, no DB — which is what
+lets `statement_engine` keep `engine` off its import path and `harness_statement_engine.py` keep
+running with no app environment. §G of the lock fails the build if that is undone.
+
+**THE LOCK.** `harness_statement_crosscheck_earned.py` (63 checks; verified **RED with 4 failures**
+against the pre-fix writers). §A reproduces the defect by running the retired expression; §C proves
+`not_measured` / `ok is None` is never a pass; §E pins the live verdicts as the oracle; §F fails the
+build if either writer defaults a verdict again or a second resolver appears.
+
+**NO MIGRATION.** `crosscheck_ok` is already nullable (`account/router.py` already returns `None` for
+an absent snapshot), so tri-state needs no schema change, and no existing row's meaning changes —
+nothing was stored as `not_measured`.
 
 §19.47 **ONE MONTH, ONE STORED SPELLING — the two surfaces that disagreed, and a doubling nobody
 could see** (owner report 2026-10-06).

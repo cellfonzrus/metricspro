@@ -415,6 +415,20 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_pd',),
         },
     },
+    'statement_crosscheck_verdict': {
+        "question": 'Was this statement actually crosschecked, and did it pass?',
+        "homes": ('app/modules/account/analysis.py',),
+        "index": ('19.49',),
+        "locks": ('harness_statement_crosscheck_earned.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/account/engine.py': ('_analysis',),
+            'app/modules/account/projection_engine.py': ('analysis',),
+            'app/modules/account/router.py': ('analysis',),
+            'app/modules/account/statement_engine.py': ('_analysis',),
+            'app/modules/account/valuation.py': ('analysis',),
+        },
+    },
 }
 
 def keys() -> tuple:
