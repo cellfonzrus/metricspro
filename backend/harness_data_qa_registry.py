@@ -54,10 +54,18 @@ for k in reg.keys():
     ok(isinstance(q.get("grain"), str) and q["grain"], f"A6 {k} states its grain")
     for name, spec in (q.get("params") or {}).items():
         ok(spec["kind"] in reg.PARAM_KINDS, f"A7 {k}.{name} uses a known parameter kind")
-    # Every path placeholder must be declared as a path param, or validate() can never fill it.
+    # Every path placeholder must be fillable, or validate() can never build a URL: either the
+    # caller is ASKED for it (`path_params`) or the registry FIXES it (`path_bound` — a Watchdog
+    # area is part of which report this is, not a question for the model). The rule is "fillable",
+    # not "asked": a derived question that binds its own subject satisfies the reason this exists.
     for seg in str(q["path"]).split("{")[1:]:
-        ok(seg.split("}")[0] in (q.get("path_params") or ()),
-           f"A8 {k} declares its path parameter {seg.split('}')[0]!r}")
+        name = seg.split("}")[0]
+        ok(name in (q.get("path_params") or ()) or name in (q.get("path_bound") or {}),
+           f"A8 {k} declares or binds its path parameter {name!r}")
+    # A bound value is never also asked for, or the caller could overwrite which report this is.
+    for name in (q.get("path_bound") or {}):
+        ok(name not in (q.get("path_params") or ()) and name not in (q.get("params") or {}),
+           f"A8b {k} does not also ask for its bound parameter {name!r}")
 # THE no-write property, proven rather than asserted: the registry is the only source of paths, and
 # nothing in it may be a mutation route.
 for k in reg.keys():

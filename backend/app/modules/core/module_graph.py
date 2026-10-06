@@ -429,6 +429,31 @@ FACTS: dict[str, dict] = {
             'app/modules/account/valuation.py': ('analysis',),
         },
     },
+    'complete_feed_read': {
+        "question": 'Have I read ALL of this feed, or only the first N rows somebody typed?',
+        "homes": ('app/modules/core/feed_read.py',),
+        "index": ('19.48',),
+        "locks": ('harness_pay_feed_balance.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_feed_read',),
+        },
+    },
+    'pay_feed_balance': {
+        "question": 'Did this pay figure account for every dollar the carrier paid, or did it '
+                    'silently drop what it could not place?',
+        "homes": ('app/modules/commcalc/pay_data_quality.py',),
+        "index": ('19.48',),
+        "locks": ('harness_pay_feed_balance.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/accessory_cost_audit.py': ('_f', 'pdq'),
+            'app/modules/commcalc/commission_drilldown.py': ('_pdq',),
+            'app/modules/commcalc/commission_engine.py': ('_pdq_cfg',),
+            'app/modules/commcalc/plan_pay_gate.py': ('_pdq',),
+            'app/modules/commcalc/router.py': ('_pdq',),
+        },
+    },
 }
 
 def keys() -> tuple:
