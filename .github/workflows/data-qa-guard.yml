@@ -66,6 +66,9 @@ on:
   pull_request:
     paths:
       - "backend/app/modules/core/data_qa_registry.py"
+      - "backend/harness_data_qa_catalog.py"
+      - "backend/app/modules/core/data_qa_derived.py"
+      - "frontend/src/lib/reports.ts"
       - "backend/app/modules/core/data_qa_compute.py"
       - "backend/app/modules/core/data_qa_agent.py"
       - "backend/app/modules/core/data_qa_api.py"
@@ -164,6 +167,13 @@ jobs:
       - name: Run the data-qa design lock (one registry, one GET-only reader on the caller's token, no second permission rule, no arithmetic of its own — index §52.3)
         working-directory: backend
         run: python3 harness_data_qa_lock.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+      # The RATCHET on coverage. It reads the frontend's report registry and the live OpenAPI spec,
+      # so it belongs in the job that installs the backend. A report shipped without entering the
+      # catalogue fails here rather than becoming a question the assistant cannot answer — which is
+      # the defect this file was added for (index §54.11).
+      - name: Run the report-catalogue ratchet (every report the platform has is a question, or carries the reason it is not — index §54.11)
+        working-directory: backend
+        run: python3 harness_data_qa_catalog.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The SEARCH CONSOLE (index §54). Node 22 strips the erasable TypeScript of the real modules, so
   # these three proofs drive the shipped functions rather than a copy — no React, no network, and
