@@ -19127,6 +19127,76 @@ IS explained, so J3 cannot be passing because nothing ever navigates. The lock a
 `submitAction` must be imported and called, and the literal fall-through shape `if (firstDest) go(`
 re-appearing fails the build (B10g–B10i).
 
+### 54.11 The question catalogue is DERIVED from the reports (owner 2026-10-06, fourth report)
+
+Owner, after using the assistant: *"not a good experience it is not giving the correct answers as
+expected"* — and before any of this was built, plainly: *"we dont want to have any registered
+questions, the assistant should be able to answer all questions"*.
+
+Measured rather than guessed at:
+
+| | Count |
+|---|---|
+| reports in `frontend/src/lib/reports.ts` | **58** |
+| GET routes in the app | **815** |
+| hand-written questions in `data_qa_registry.DATA_QUESTIONS` | 13 |
+| endpoints those reach | 11 |
+| **reports the assistant could answer about** | **6 of 58** |
+
+The other fifty-two included Gross Profit, KPI Metrics, Failing KPIs, Activations, Zero Sales, Rep
+Coaching, Retention, Sales Comparison, Chargebacks & Fraud, Pay Discrepancy, Hours/Payroll, the
+Closing dashboard and reconciliation, the Balance Sheet, Cash Flow, Trends, Residual per Subscriber
+and all eight Watchdog areas. Asked about any of them the assistant answered from the nearest thing
+it did know, which reads as a wrong answer rather than as a gap — the §54 class again, one layer down.
+
+**THE CLASS: a catalogue of what can be answered must be derived from what exists, or it drifts.**
+The index rule says a new report registers itself in the same PR; a rule that depends on remembering
+decays, and 52 of 58 is what that decay measures. So the hand list stops being the catalogue:
+
+`backend/harness_data_qa_catalog.py --bless` generates
+`backend/app/modules/core/data_qa_derived.py`, and the same file without `--bless` is the proof that
+FAILS THE BUILD on drift (the `module_graph.py` / route-index pattern, §50 and §54.7).
+
+| Field | Derived from |
+|---|---|
+| label, answers, module | the report's own entry in `reports.ts` — so the assistant and the Reports index describe a report with the same sentence |
+| page | that entry's href |
+| path | the GET endpoints the report's own `page.tsx` fetches, scored by rule, then resolved against the live OpenAPI spec |
+| params | that route's own parameters, intersected with the registry's `PARAM_KINDS` — a parameter the registry cannot pattern-match is not offered at all |
+| path_params / bound | the route's own placeholders: asked of the model, or FIXED by the report (the eight Watchdog areas are one endpoint with `area` bound from the page's own URL) |
+
+**The picking rule, because a page fetches several endpoints and only one is its report:** an action
+(`run-now`, `scan`, `import`, `compute`) is never it; nor is chrome (`filter-options`, `config`,
+`calc-status`, a store list); a singular endpoint beside its own plural is the detail route and is
+dropped; a route keyed by a row id is dropped; an exact tail match wins, then a shared stem, then
+word overlap. The endpoints NOT picked are kept in `also`, so an ambiguity is reported rather than
+resolved in silence.
+
+**Human fields, preserved across a re-bless, each in its OWN field:** `override` (the rule picked the
+wrong endpoint), `skip` (**the REASON** a report answers no question — a sentence, never a flag), and
+`answers_override` (a rewording). That separation is the lesson of this file: a field holding both the
+generator's answer and a person's override cannot tell them apart, so the generator's stale answer
+survives as if it were a ruling. It happened twice here in one sitting — eight Watchdog reports kept
+the previous bless's auto "nothing to answer from" after their endpoint resolved, and every
+improvement to the picking rule was a silent no-op because the previous pick came back as an
+"override". §E of the proof is armed against both.
+
+**What a derived question deliberately does NOT get: `self_safe`.** The fail-closed rule in the
+registry stands — a question that does not say it narrows a self-scoped caller is manager-only — so
+56 new questions widen nobody's reach. A report whose handler nobody has read must not become a rep's
+window onto other people's pay. The three self-safe questions are still only `my_commission`,
+`my_commission_range` and `action_plan` (§52.7).
+
+**The envelope is DISCOVERED for a derived question, declared for a hand one.** `rows_from` keeps
+refusing to guess at an undeclared envelope for a hand question — guessing would make the declaration
+pointless and a typo read as "no data" — and for a derived question, which has no declaration to
+disagree with, `_discover_rows` takes a named key (`rows`, `items`, `data`, …) or else the longest
+list of objects in the payload. A list of scalars is never rows: that is a filter.
+
+Coverage after this change: **58 of 58 reports answerable, 69 questions** (13 hand + 56 derived; two
+derived entries fold into hand questions that already answer the same endpoint). The catalogue shown
+to the model is ~7.5k tokens, which is the one cost worth watching as reports are added.
+
 ### 54.9 Status
 
 Code complete and proved: **275 checks** across four Node, dependency-free proofs
