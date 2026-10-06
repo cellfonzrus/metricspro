@@ -17,6 +17,8 @@ from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
+from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
+from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
@@ -10465,8 +10467,11 @@ def accessory_definition_facets(org_id: str = ORG_ID):
     require_org(org_id)
     periods, stores, reps = set(), set(), set()
     try:
-        rows = (sb().schema("commcalc").table("raw_sales").select("period,store,salesperson")
-                .eq("org_id", org_id).limit(100000).execute().data) or []
+        # PAGED (index §19.48): this was `.limit(100000)` against 155,677 house `raw_sales` rows, so
+        # the filter bar's own option lists silently omitted every period / store / rep that lived
+        # only in the rows past the ceiling — a pick-don't-type surface offering an incomplete list.
+        rows = _feed_read.read_all(lambda: sb().schema("commcalc").table("raw_sales")
+                                   .select("period,store,salesperson").eq("org_id", org_id))
         for r in rows:
             if str(r.get("period") or "").strip():
                 periods.add(str(r["period"]).strip())
@@ -11252,10 +11257,12 @@ def unmapped_categories(period: str = "", carrier_id: str = "", org_id: str = OR
     require_org(org_id)
     client = sb()
     rules = carrier_map.load_rules(client, org_id, carrier_id or None)
-    q = client.schema("commcalc").table("raw_comp_report").select("compensation_type,payment_amount,period").eq("org_id", org_id)
-    if period:
-        q = q.in_("period", _period_variants(period))
-    rows = q.limit(200000).execute().data or []
+    # PAGED through the one home (index §19.48) — no literal row ceiling on a feed that grows.
+    def _comp_q():
+        q = (client.schema("commcalc").table("raw_comp_report")
+             .select("compensation_type,payment_amount,period").eq("org_id", org_id))
+        return q.in_("period", _period_variants(period)) if period else q
+    rows = _feed_read.read_all(_comp_q)
     agg = {}
     for r in rows:
         cat = (r.get("compensation_type") or "").strip()
@@ -11279,16 +11286,83 @@ def unmapped_categories(period: str = "", carrier_id: str = "", org_id: str = OR
             "unmapped_total": round(sum(x["amount"] for x in unmapped), 2)}
 
 
+@router.get("/pay-feed-balance")
+def pay_feed_balance(period: str = "", org_id: str = ORG_ID):
+    """EVERY DOLLAR THE CARRIER PAID, PLACED OR REPORTED — the total that has to balance.
+
+    OWNER 2026-10-06: *"the numbers are off"*. They were, and nothing said so, because the pay path
+    treated "I could not place this money" as "there is no money" (index §19.48). This endpoint is
+    the honest total: for one period it accounts for every `raw_payment_detail` row as PLACED in a
+    pay bucket or UNPLACED under a named reason, and returns `balances` as the arithmetic proof.
+
+    Measured live the day it shipped (house org, August 2026): feed $408,989.99, placed $68,479.60.
+    $288,813.11 in six quarter-named promo types nobody had mapped, $16,952.28 on 73 rep logins
+    that rang no sale that month.
+
+    READ-ONLY, BOOKS NOTHING, PAYS NOBODY. It does not decide what an unmapped promo should pay —
+    that is a money decision and the owner's call (§6d precedent). It makes the decision visible
+    instead of letting it be made silently, as $0.
+
+    Also reports DAY COVERAGE against the carrier's own statement, because the two feeds are the
+    same money: October 2026 has two days in both and ties to the penny, while the statement is
+    missing the final day of every closed month ($10,875.67-$23,050.60 each).
+    """
+    require_org(org_id)
+    client = sb()
+    pv = _pvariants(period) if period else None
+
+    def _read(table, select):
+        def _make():
+            q = client.schema("commcalc").table(table).select(select).eq("org_id", org_id)
+            return q.in_("period", pv) if pv else q
+        return _feed_read.read_all(_make)
+
+    detail = _read("raw_payment_detail", "payment_type,amount,rep_username,payment_date")
+    # The org's OWN category map — never a second copy of it in this module (RULE TWO).
+    cat_rows = (client.schema("commcalc").table("payment_categories")
+                .select("description,category").eq("org_id", org_id).execute().data) or []
+    cat_map = {str(r["description"]).strip(): r.get("category")
+               for r in cat_rows if r.get("description")}
+
+    # The logins the pay run can actually reach: a rep who rang a sale in this period. Same
+    # resolution the engine's `pay_by_login` lookup depends on (`rep['login']` off the sale row),
+    # so this report and the payout cannot disagree about who is reachable.
+    placed_logins = set()
+    for tbl in ("daily_sales_feed", "raw_sales"):
+        try:
+            for r in _read(tbl, "user_login,salesperson"):
+                if str(r.get("salesperson") or "").strip().lower() in ("", "admin"):
+                    continue
+                lg = str(r.get("user_login") or "").lower().strip()
+                if lg:
+                    placed_logins.add(lg)
+        except Exception as e:
+            print(f"WARN pay_feed_balance sales read {tbl} failed: {e}")
+
+    bal = _pdq.reconcile_pay_feed(detail, lambda t: cat_map.get(t), placed_logins)
+
+    statement = _read("raw_comp_report", "begin_date,payment_amount")
+    coverage = _pdq.day_coverage_gap(
+        {str(r.get("payment_date") or "")[:10] for r in detail if r.get("payment_date")},
+        {str(r.get("begin_date") or "")[:10] for r in statement if r.get("begin_date")})
+    coverage["statement_total"] = round(sum(safe_float(r.get("payment_amount")) for r in statement), 2)
+
+    return {"period": period, "balance": bal, "day_coverage": coverage,
+            "detail_rows": len(detail), "statement_rows": len(statement)}
+
+
 @router.get("/comp-by-component")
 def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_ID):
     """Apply the category map to raw_comp_report → $ per canonical component (the payoff)."""
     require_org(org_id)
     client = sb()
     rules = carrier_map.load_rules(client, org_id, carrier_id or None)
-    q = client.schema("commcalc").table("raw_comp_report").select("compensation_type,payment_amount,period").eq("org_id", org_id)
-    if period:
-        q = q.in_("period", _period_variants(period))
-    rows = q.limit(200000).execute().data or []
+    # PAGED through the one home (index §19.48) — no literal row ceiling on a feed that grows.
+    def _comp_q():
+        q = (client.schema("commcalc").table("raw_comp_report")
+             .select("compensation_type,payment_amount,period").eq("org_id", org_id))
+        return q.in_("period", _period_variants(period)) if period else q
+    rows = _feed_read.read_all(_comp_q)
     out = {c: 0.0 for c in carrier_map.COMPONENTS}
     unmapped = 0.0
     for r in rows:
@@ -11317,11 +11391,13 @@ def carrier_category_options(period: str = "", org_id: str = ORG_ID):
     """
     require_org(org_id)
     client = sb()
-    q = (client.schema("commcalc").table("raw_comp_report")
-         .select("compensation_type").eq("org_id", org_id))
-    if period:
-        q = q.in_("period", _period_variants(period))
-    rows = q.limit(200000).execute().data or []
+    # PAGED through the one home (index §19.48) — an option list built off a capped read offers
+    # an INCOMPLETE set of real labels, which is the pick-don't-type surface lying by omission.
+    def _comp_q():
+        q = (client.schema("commcalc").table("raw_comp_report")
+             .select("compensation_type").eq("org_id", org_id))
+        return q.in_("period", _period_variants(period)) if period else q
+    rows = _feed_read.read_all(_comp_q)
     cats = sorted(
         {(r.get("compensation_type") or "").strip() for r in rows
          if (r.get("compensation_type") or "").strip()},
@@ -13152,8 +13228,10 @@ def chargeback_review_list(status: str = None, source: str = None, store: str = 
     by_serial, by_phone = {}, {}
     if any(not r.get('assigned_rep') and not r.get('suggested_rep') for r in rows):
         try:
-            sales = (client.schema('commcalc').table('raw_sales')
-                     .select('serial_1,mdn,salesperson').eq('org_id', org_id).limit(100000).execute().data) or []
+            # PAGED (index §19.48): `.limit(100000)` against 155,677 house rows left ~36% of sales
+            # out of the serial/phone -> rep index, so the suggestion was silently absent for them.
+            sales = _feed_read.read_all(lambda: client.schema('commcalc').table('raw_sales')
+                                        .select('serial_1,mdn,salesperson').eq('org_id', org_id))
             for s in sales:
                 sp = (s.get('salesperson') or '').strip()
                 if not sp:
@@ -15911,16 +15989,22 @@ def _calc_inputs(client, org_id, period):
         # Org-scope EVERY read so a calc runs over ONLY the caller's tenant. Without this the engine
         # folded every tenant's raw sales/MI/payments/employees into the caller's snapshot (multi-tenant
         # leak). All tables fetched here carry org_id.
-        q = client.schema('commcalc').table(table).select('*').eq('org_id', org_id)
-        for k, v in filters.items():
-            # A LIST filter value → .in_ so the read is period-spelling tolerant: the sweeps store
-            # 'July 2026' while a manual /calculate passes '2026-07', and an exact .eq('period', …)
-            # then loads ZERO rows and silently underpays. Callers pass _pvariants(period) for period.
-            q = q.in_(k, v) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
-        try:
-            r = q.limit(50000).execute()
-            return r.data or []
-        except: return []
+        # PAGED THROUGH THE ONE HOME (`core/feed_read.read_all`), never a literal row ceiling. This
+        # read used to end in `q.limit(50000)` with `except: return []`, and July 2026 holds 82,999
+        # `raw_payment_detail` rows — so the pay run saw 60% of the month and read $60,994.46 of
+        # carrier commission where the feed holds $123,700.62, losing 12 of 122 rep logins outright.
+        # Crossing the ceiling was indistinguishable from an empty month. `raw_mi` was next over it
+        # (46,047 rows in September, +~4,000/month). A failed read now RAISES rather than returning
+        # [] — a partial feed must never be mistaken for a smaller feed.
+        def _make():
+            q = client.schema('commcalc').table(table).select('*').eq('org_id', org_id)
+            for k, v in filters.items():
+                # A LIST filter value → .in_ so the read is period-spelling tolerant: the sweeps store
+                # 'July 2026' while a manual /calculate passes '2026-07', and an exact .eq('period', …)
+                # then loads ZERO rows and silently underpays. Callers pass _pvariants(period) for period.
+                q = q.in_(k, v) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
+            return q
+        return _feed_read.read_all(_make)
     
     # Sales come from the ONE unified source (same as the Sales Report / targets): the OPEN month
     # reads the daily feed (the hourly-emailed Sales Transaction Details lands there; raw_sales lags/
@@ -23290,7 +23374,11 @@ def _compute_gp(client, org_id, period, market=""):
     except Exception as _sce:
         print(f'WARN gp sales select fell back (no voided/trans_type columns?): {_sce}')
         sales  = sc.table('raw_sales').select('store,department,category,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
-    pay_detail = sc.table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    # PAGED (index §19.48): this was `.limit(50000)` and July 2026 holds 82,999 payment-detail
+    # rows, so the GP report's commission column silently dropped ~33,000 of them.
+    pay_detail = _feed_read.read_all(lambda: sc.table('raw_payment_detail')
+                                     .select('business_address,amount,payment_type')
+                                     .eq('org_id', org_id).in_('period', pv))
     # ── VidaPay/MA carrier income — DEREFERENCED, not derived (owner bug report 2026-09-21) ──────
     # Owner: "why does the gross profit report and the p&l entries dont match, the m1 commision is
     # different in both and also the gross profit shows company level commission it shoudl show
@@ -23389,7 +23477,9 @@ def _compute_gp(client, org_id, period, market=""):
     except Exception as e:
         print(f"WARN _compute_gp market enrichment failed: {e}")
     pay_cats   = sc.table('payment_categories').select('description,category').eq('org_id', org_id).execute().data or []
-    comp_rows  = sc.table('raw_comp_report').select('business_address,compensation_type,payment_amount').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    comp_rows  = _feed_read.read_all(lambda: sc.table('raw_comp_report')   # PAGED, no row ceiling (§19.48)
+                                     .select('business_address,compensation_type,payment_amount')
+                                     .eq('org_id', org_id).in_('period', pv))
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
@@ -24191,8 +24281,9 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
             cat_map = {}
         for lab in labels[-cap:]:
             try:
-                pd = (sc.table('raw_payment_detail').select('business_address,payment_type,amount')
-                      .eq('org_id', org_id).in_('period', _pvariants(lab)).limit(60000).execute().data) or []
+                pd = _feed_read.read_all(lambda: sc.table('raw_payment_detail')   # PAGED (§19.48)
+                                         .select('business_address,payment_type,amount')
+                                         .eq('org_id', org_id).in_('period', _pvariants(lab)))
             except Exception:
                 pd = []
             for r in pd:
@@ -24359,9 +24450,9 @@ def commission_leg_labels(period: str = "", months: int = 6, org_id: str = ORG_I
         rows = []
         for lab in labels[-1:]:
             try:
-                for r in (sc.table('raw_payment_detail').select('payment_type,amount')
-                          .eq('org_id', org_id).in_('period', _pvariants(lab))
-                          .limit(60000).execute().data) or []:
+                for r in _feed_read.read_all(lambda: sc.table('raw_payment_detail')   # PAGED (§19.48)
+                                             .select('payment_type,amount')
+                                             .eq('org_id', org_id).in_('period', _pvariants(lab))):
                     rows.append({'source': 'payment_detail', 'label': str(r.get('payment_type') or '').strip(),
                                  'category': '', 'amount': safe_float(r.get('amount')), 'n': 1})
             except Exception:
@@ -24627,9 +24718,9 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
             cat_map = {}
         for lab in labels[-cap:]:
             try:
-                pd = (sc.table('raw_payment_detail').select('business_address,payment_type,amount')
-                      .eq('org_id', org_id).in_('period', _pvariants(lab))
-                      .limit(60000).execute().data) or []
+                pd = _feed_read.read_all(lambda: sc.table('raw_payment_detail')   # PAGED (§19.48)
+                                         .select('business_address,payment_type,amount')
+                                         .eq('org_id', org_id).in_('period', _pvariants(lab)))
             except Exception:
                 pd = []
             for r in pd:
@@ -41460,10 +41551,10 @@ def _recon_ours_paid(client, org_id, period, store_of, into, notes):
     ours side at zero (a note, never a 500) on a missing table / empty period."""
     bucket = _recon_payment_bucketer(client, org_id, notes)
     try:
-        rows = (client.schema("commcalc").table("raw_payment_detail")
-                .select("business_address,payment_type,amount")
-                .eq("org_id", org_id).in_("period", _pvariants(period))
-                .limit(120000).execute().data) or []
+        rows = _feed_read.read_all(lambda: client.schema("commcalc")   # PAGED (index §19.48)
+                                   .table("raw_payment_detail")
+                                   .select("business_address,payment_type,amount")
+                                   .eq("org_id", org_id).in_("period", _pvariants(period)))
     except Exception as e:
         notes.append(f"raw_payment_detail read failed for ePay split: {e}")
         return
