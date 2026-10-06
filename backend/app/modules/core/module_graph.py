@@ -43,6 +43,20 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    'installment_month_of_life': {
+        "question": 'Which instalment month is this subscriber or sale in, and is that month PROVEN '
+                    'by the row or assumed from the window the reader pulled?',
+        "homes": ('app/modules/commcalc/installment_month.py',),
+        "index": ('19.51',),
+        "locks": ('harness_installment_month_anchor.py',),
+        # SNAPSHOT — written BY HAND, multi-line, not blessed. `--bless` has silently deleted facts
+        # before, so this entry is maintained here and the lock verifies it against the real import
+        # graph rather than regenerating it.
+        "callers": {
+            'app/modules/commcalc/installment_engine.py': ('_im',),
+            'app/modules/commcalc/sale_installment_engine.py': ('_im',),
+        },
+    },
     'finding_kind_and_severity': {
         "question": 'What kind of finding is this, how bad is it, and who reviews it?',
         "homes": ('app/modules/commcalc/flag_registry.py',),
@@ -337,6 +351,9 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/commission_engine.py': ('_ct',),
             'app/modules/commcalc/dlar_sweep.py': ('_ct',),
             'app/modules/commcalc/expenses_effective.py': ('_ct',),
+            # §19.51 — the residual installment ledger's mig-1059 columns are PROBED, never assumed,
+            # so merging that code before the migration is applied writes what it wrote before.
+            'app/modules/commcalc/installment_engine.py': ('_col',),
             'app/modules/commcalc/router.py': ('_ct',),
             'app/modules/commcalc/setup_documents.py': ('read_row',),
             'app/modules/commcalc/whatif.py': ('_ct',),
@@ -435,9 +452,12 @@ FACTS: dict[str, dict] = {
         "question": 'Have I read ALL of this feed, or only the first N rows somebody typed?',
         "homes": ('app/modules/core/feed_read.py',),
         "index": ('19.48',),
-        "locks": ('harness_pay_feed_balance.py',),
+        "locks": ('harness_pay_feed_balance.py', 'harness_installment_month_anchor.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
+            # §19.51 — raw_mi is the feed §19.48's own docstring named as the next ceiling risk
+            # (46,047 rows in September, growing ~4,000 a month); its private page loop is retired.
+            'app/modules/commcalc/installment_engine.py': ('_feed_read',),
             'app/modules/commcalc/router.py': ('_feed_read',),
         },
     },
