@@ -84,8 +84,16 @@ function checkSurface(rel, raw) {
   // And the door the assistant opens must be DECIDED, not left to the person.
   if (!/import\s*\{[^}]*\baskDoor\b[^}]*\}\s*from\s*['"]@\/lib\/search-rank['"]/.test(raw))
     bad.push(`${rel} does not import askDoor() from @/lib/search-rank`)
+  // And what a KEYSTROKE does must be decided in the one home too. The reported defect was here and
+  // nowhere else: the surface asked intent(), got 'ask', found the assistant switched off, and then
+  // navigated to the closest-looking page anyway. A guess arriving as an answer is what this console
+  // exists not to do, so the surface may not keep its own fall-through.
+  if (!/import\s*\{[^}]*\bsubmitAction\b[^}]*\}\s*from\s*['"]@\/lib\/search-rank['"]/.test(raw))
+    bad.push(`${rel} does not import submitAction() from @/lib/search-rank`)
+  if (/if\s*\(firstDest\)\s*go\(/.test(code))
+    bad.push(`${rel} navigates to its best guess without asking submitAction() — the reported defect`)
   // And they must be CALLED, not merely imported — a dead import is how a rewiring un-wires.
-  for (const fn of ['rank(', 'buildCatalog(', 'searchableRoutes(', 'askDoor(']) {
+  for (const fn of ['rank(', 'buildCatalog(', 'searchableRoutes(', 'askDoor(', 'submitAction(']) {
     if (!code.includes(fn)) bad.push(`${rel} imports but never calls ${fn})`)
   }
   // `intent` is imported under an alias here (the file already has a local `Intent` type for the
@@ -219,6 +227,14 @@ console.log('§B  ARMED — every rule fails on a broken copy')
   arm('B10e dropping the askDoor() import goes red',
       s => s.replace(/, askDoor,/, ','))
   arm('B10f never calling askDoor() goes red', s => s.replace(/askDoor\(q\)/, "'data'"))
+  arm('B10g dropping the submitAction() import goes red',
+      s => s.replace(/, submitAction,/, ','))
+  arm('B10h never calling submitAction() goes red',
+      s => s.replace(/submitAction\(mode,/, "noop(mode,"))
+  // THE REGRESSION, by name: the fall-through that sent "which sales rep worked in 509 today" to
+  // the Sales Report because the assistant was off.
+  arm('B10i the best-guess fall-through coming back goes red',
+      s => `${s}\n  const onSubmit2 = () => { if (firstDest) go(firstDest.item.href) }\n`)
 
   ok('B11 ARMED — an import added to the ranker goes red',
      checkRanker(`import x from 'y'\n${RAW.ranker}`).length > 0)

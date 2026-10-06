@@ -254,6 +254,44 @@ section('§I  askDoor(): the how-to door for doing, the data door for figures')
   ck('I8  it is pure — same answer twice', S.askDoor('reset a password') === S.askDoor('reset a password'))
 }
 
+// ── §J — submitAction(): a guess is never delivered as an answer ─────────────────────────────────
+// THE SECOND REPORT, by name. Asked "which sales rep worked in 509 today" the console judged the
+// question unexplained (intent -> 'ask'), found the assistant not switched on for the tenant, and
+// then navigated to the Sales Report anyway; "who worked in 509 today" landed on Pay period &
+// work-week the same way. intent() was right both times — the fall-through in the surface was the
+// defect. An unexplained question with no reachable assistant is a "no", not a navigation.
+section('§J  submitAction(): an unexplained question never navigates to the closest-looking page')
+{
+  const REPORTED = ['which sales rep worked in 509 today', 'who worked in 509 today']
+  for (const q of REPORTED) {
+    const hits = S.rank(CATALOGUE, q, 8)
+    const mode = S.intent(q, hits)
+    ck(`J1  "${q}" still reads as an unexplained question`, mode === 'ask', mode)
+    // There IS a destination (that is how it went wrong), and it is still not taken.
+    const hasDest = hits.some(h => h.item.href)
+    ck(`J2  "${q}" does have a closest-looking destination`, hasDest)
+    ck(`J3  "${q}" with the assistant OFF does not navigate`,
+       S.submitAction(mode, { canAsk: false, hasDest }) === 'unanswered',
+       S.submitAction(mode, { canAsk: false, hasDest }))
+    ck(`J4  "${q}" with the assistant ON goes to the assistant`,
+       S.submitAction(mode, { canAsk: true, hasDest }) === 'ask')
+  }
+  // The other outcomes are unchanged, so the fix narrows nothing it should not.
+  ck('J5  a covered query still navigates',
+     S.submitAction('navigate', { hasDest: true }) === 'navigate')
+  ck('J6  a deterministic figure wins over everything, assistant or no assistant',
+     S.submitAction('ask', { hasFigure: true, canAsk: false, hasDest: true }) === 'figure')
+  ck('J7  an empty box does nothing', S.submitAction('empty', { hasDest: true }) === 'unanswered')
+  ck('J8  navigate with nothing openable is honest, not a silent no-op',
+     S.submitAction('navigate', { hasDest: false }) === 'unanswered')
+  // ARMED: the rule is what makes J3 true, not the fixture. With the assistant reachable the same
+  // inputs produce a different answer, so J3 cannot be passing because nothing ever navigates.
+  ck('J9  ARMED — the same inputs navigate when the question IS explained',
+     S.submitAction('navigate', { canAsk: false, hasDest: true }) === 'navigate')
+  ck('J10 it is pure — same answer twice',
+     S.submitAction('ask', { canAsk: false, hasDest: true }) === S.submitAction('ask', { canAsk: false, hasDest: true }))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
 console.log('OK — search ranks on meaning; an unexplained question goes to the assistant.')

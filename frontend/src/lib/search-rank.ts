@@ -292,3 +292,31 @@ export function intent(q: string, hits: Hit[]): Intent {
   if (!hits.length) return 'ask'
   return 'navigate'
 }
+
+/** What a KEYSTROKE does, which is not the same question as what was typed. `intent` reads the
+ *  words; this reads the words together with what the console can actually reach right now. */
+export type SubmitAction = 'figure' | 'ask' | 'navigate' | 'unanswered'
+
+/**
+ * The one home for "Enter was pressed — now what", and the reason it exists is a reported defect.
+ *
+ * Asked *"which sales rep worked in 509 today"* the console correctly judged the question
+ * unexplained (`intent` → 'ask') and then, because the assistant was not switched on for the tenant,
+ * fell through and navigated to the Sales Report anyway. *"who worked in 509 today"* landed on Pay
+ * period & work-week the same way. Both are the class the console was built to end: **a best guess
+ * presented as an answer.** An unexplained question whose assistant is unreachable is not a
+ * navigation, it is a "no" — and saying so is the only honest move left.
+ *
+ * So the fall-through is gone. `unanswered` renders the reason and leaves every ranked row clickable,
+ * which keeps the destination one deliberate click away instead of arriving unasked.
+ */
+export function submitAction(
+  mode: Intent,
+  opts: { hasFigure?: boolean; canAsk?: boolean; hasDest?: boolean },
+): SubmitAction {
+  // A figure read from the report's own endpoint is deterministic and always wins.
+  if (opts.hasFigure) return 'figure'
+  if (mode === 'empty') return 'unanswered'
+  if (mode === 'ask') return opts.canAsk ? 'ask' : 'unanswered'
+  return opts.hasDest ? 'navigate' : 'unanswered'
+}

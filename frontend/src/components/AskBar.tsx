@@ -27,7 +27,7 @@ import { REPORT_CATEGORIES } from '@/lib/reports'
 import { canAccessPath, canSeeItem, TENANT_NAV, type Permissions, type Scope } from '@/lib/rbac'
 import { SCREENS } from '@/components/ScreenLink'
 import { buildCatalog, entityOnly, type StoreSource, type PersonSource } from '@/lib/search-catalog'
-import { rank, intent as searchIntent, askDoor, type Hit, type SearchKind } from '@/lib/search-rank'
+import { rank, intent as searchIntent, askDoor, submitAction, type Hit, type SearchKind } from '@/lib/search-rank'
 import { searchableRoutes } from '@/lib/route-index'
 // The SAME panel the helpdesk page mounts — one Ask AI in the product, mounted in the one
 // overlay that is already available everywhere (⌘/), so the assistant needed no new widget
@@ -165,6 +165,9 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   // product, not to the data door, which has no answer for it.
   const door = useMemo(() => askDoor(q), [q])
   const [canAskAI, setCanAskAI] = useState(false)
+  // WHY it cannot be asked, in the server's own words. Kept so an unanswered question can say what is
+  // missing instead of going quiet — or, as it did until now, navigating to the closest-looking page.
+  const [askWhy, setAskWhy] = useState('')
 
   // ⌘/ (Ctrl-/) opens — ⌘K is already taken by the nav menu-filter, so the ask bar uses a distinct key.
   // Esc is handled on the input.
@@ -215,10 +218,19 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   // Enter: the deterministic figure first, then the first thing that can be OPENED. When the console
   // judged the query a question nothing explains, Enter asks the assistant rather than navigating —
   // which is the owner's reported defect stated as a keystroke.
+  // Enter does whatever `submitAction` says, and nothing else. The fall-through this replaced is the
+  // reported defect: an unexplained question whose assistant was switched off navigated to the
+  // closest-looking page — Sales Report for "which sales rep worked in 509 today". A guess arriving
+  // as an answer is the one thing this console exists not to do, so 'unanswered' now stays put and
+  // the panel says why, with every ranked row still one click away.
+  const action = useMemo(
+    () => submitAction(mode, { hasFigure: !!ans?.href, canAsk: canAskAI && q.trim().length > 3, hasDest: !!firstDest }),
+    [mode, ans?.href, canAskAI, q, firstDest])
   const onSubmit = () => {
-    if (ans?.href) { go(ans.href); return }
-    if (mode === 'ask' && canAskAI && q.trim().length > 3) { setAskAI(q.trim()); return }
-    if (firstDest) go(firstDest.item.href)
+    if (action === 'figure' && ans?.href) { go(ans.href); return }
+    if (action === 'ask') { setAskAI(q.trim()); return }
+    if (action === 'navigate' && firstDest) { go(firstDest.item.href); return }
+    // 'unanswered' — deliberately nothing. The reason is on screen.
   }
 
   // ── THE ASSISTANT HAND-OFF (index §52) ───────────────────────────────────────────────────────
@@ -236,10 +248,15 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
   useEffect(() => {
     let live = true
     api(`/api/v1/core/data-qa/status${orgParam() ? `?${orgParam()}` : ''}`)
-      .then((d: { allowed?: boolean; configured?: boolean }) => {
-        if (live) setCanAskAI(!!d?.allowed && !!d?.configured)
+      .then((d: { allowed?: boolean; configured?: boolean; module_enabled?: boolean; reason?: string }) => {
+        if (!live) return
+        setCanAskAI(!!d?.allowed && !!d?.configured)
+        setAskWhy(d?.module_enabled === false ? 'The assistant is not switched on for this tenant yet.'
+          : d?.configured === false ? 'The assistant has no model key configured on this environment yet.'
+          : d?.allowed === false ? (d?.reason || 'Your login is not allowed to use the assistant.')
+          : '')
       })
-      .catch(() => { if (live) setCanAskAI(false) })
+      .catch(() => { if (live) { setCanAskAI(false); setAskWhy('The assistant could not be reached just now.') } })
     return () => { live = false }
   }, [])
   // Closing the overlay forgets the hand-off, so reopening never re-asks a question (or re-spends a
@@ -335,6 +352,13 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
                       </button>
                     )
                   })}
+                </div>
+              )}
+              {action === 'unanswered' && mode === 'ask' && !askAI && (
+                <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--text2)' }}>
+                  That reads as a question, and nothing on the platform is named that — so there is no page
+                  that answers it. {askWhy || 'The assistant is not available on this login.'}
+                  {hits.length > 0 && <span style={{ color: 'var(--text3)' }}> The closest matches are above; open one if it is what you wanted.</span>}
                 </div>
               )}
               {q && hits.length === 0 && mode !== 'ask' && (
