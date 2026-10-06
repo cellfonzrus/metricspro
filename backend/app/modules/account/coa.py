@@ -41,6 +41,22 @@ from app.modules.account import device_cogs as _device_cogs
 # `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
 from app.modules.account._period import parse_period  # noqa: F401
 
+
+def journal_rows(client, org_id, period):
+    """THE manual journal entries of a month — EVERY stored spelling (index §19.47).
+
+    One home because there were two readers and they disagreed: `statement_engine._journal_rows`
+    matched both spellings while `engine.compute_and_store` matched only the caller's, so the same
+    month's hand-entered cash, fixtures and owner capital reached one statement engine and not the
+    other. Both now dereference this. Never raises — a journal nobody can read is an empty journal,
+    not a failed P&L."""
+    try:
+        return (client.schema("commcalc").table("journal_entries").select("*")
+                .eq("org_id", org_id).in_("period", list(_period.period_keys(period)))
+                .execute().data) or []
+    except Exception:
+        return []
+
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 _log = logging.getLogger(__name__)

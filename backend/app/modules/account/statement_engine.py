@@ -556,13 +556,11 @@ def _stored_bs(client, org_id, scope_key, period):
 
 def _journal_rows(client, org_id, period):
     """Manual journal entries for the period — BOTH spellings (the finance-wide month-name /
-    numeric duality; the old exact-match read silently dropped a month on a mismatch)."""
-    try:
-        return (client.schema("commcalc").table("journal_entries").select("*")
-                .eq("org_id", org_id).in_("period", list(_period.period_keys(period)))
-                .execute().data) or []
-    except Exception:
-        return []
+    numeric duality; the old exact-match read silently dropped a month on a mismatch).
+
+    DEREFERENCES `coa.journal_rows`, the one home, so this and `engine.compute_and_store` can never
+    answer the question differently again (index §19.47)."""
+    return coa.journal_rows(client, org_id, period)
 
 
 def _scopes(inputs, companies, company_of, journal=None, matcher=None, profit_scopes=None):
@@ -699,7 +697,7 @@ def compute_and_store(client, org_id, period):
 
     # Purge ALL prior snapshots for the period first (orphan-scope rule, same as engine.py).
     client.schema("commcalc").table("account_statements").delete() \
-        .eq("org_id", org_id).eq("period", period).execute()
+        .eq("org_id", org_id).in_("period", list(_period.period_keys(period))).execute()
 
     written = 0
     for scope_key, scope_label, stores_in_scope, include_cw in scopes:

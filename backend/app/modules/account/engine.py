@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.modules.commcalc.calculator import safe_float
-from app.modules.account import coa
+from app.modules.account import coa, _period
 from app.modules.account.ai_limits import ACCOUNT_AI_TIMEOUT_S, ACCOUNT_AI_MAX_RETRIES
 
 ORG_ID = coa.ORG_ID
@@ -210,8 +210,11 @@ def compute_and_store(client, org_id, period):
     Claude narrates the CONSOLIDATED statements (one call) to bound cost; other scopes get a
     deterministic note. Returns a summary dict."""
     inputs = coa.build_inputs(client, org_id, period)
-    journal = (client.schema("commcalc").table("journal_entries").select("*")
-               .eq("org_id", org_id).eq("period", period).execute().data) or []
+    # EVERY stored spelling, through the one home (index §19.47). This read matched only the
+    # caller's spelling while its sibling `statement_engine._journal_rows` matched both, so a month
+    # entered as '2026-09' vanished from a compute invoked as 'September 2026' — the same defect
+    # wearing a hat.
+    journal = coa.journal_rows(client, org_id, period)
     # THE shared store→company attribution (owner bug 2026-09-02 "companies … proper information is
     # not being displayed"): exact match first (byte-identical where it used to match), then squashed
     # spelling, then unambiguous leading street number, else the default company — so a sales-feed
@@ -237,8 +240,13 @@ def compute_and_store(client, org_id, period):
     # that no longer exist (e.g. a store spelling the resolver now merges into another) linger as
     # orphan rows and keep re-appearing as duplicates in the /overview scope dropdown. _persist
     # below then inserts the current scopes cleanly.
+    # EVERY SPELLING, not just the caller's. The purge used to be `.eq("period", period)`, so a
+    # compute invoked as '2026-09' left the 'September 2026' snapshot of the SAME month standing and
+    # the dashboard then held two vintages of one month (live: this org carried both 'May 2026' and
+    # '2026-05', both 'June 2026' and '2026-06'). `_persist` stores the canonical spelling, so the
+    # set written below is the only one that survives (owner report 2026-10-06; index §19.47).
     client.schema("commcalc").table("account_statements").delete() \
-        .eq("org_id", org_id).eq("period", period).execute()
+        .eq("org_id", org_id).in_("period", list(_period.period_keys(period))).execute()
 
     written = 0
     for scope_key, scope_label, stores_in_scope, include_cw in scopes:
@@ -307,7 +315,11 @@ def _notes(scope_key, include_cw):
 
 
 def _persist(client, org_id, period, st_type, scope_key, scope_label, payload, narrative, model, ok):
-    row = {"org_id": org_id, "period": period, "statement_type": st_type, "scope_key": scope_key,
+    # ONE stored spelling per month — `_period.canonical_period` is the one home every ledger
+    # landing already stores through, so a compute invoked as '2026-09' and one invoked as
+    # 'September 2026' write the SAME row instead of two (index §19.47).
+    row = {"org_id": org_id, "period": _period.canonical_period(period),
+           "statement_type": st_type, "scope_key": scope_key,
            "scope_label": scope_label, "payload": payload, "narrative": narrative, "model": model,
            "crosscheck_ok": bool(ok), "computed_at": datetime.now(timezone.utc).isoformat()}
     # compute_and_store has already purged this period's snapshots, so a plain insert is clean.

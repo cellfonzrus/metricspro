@@ -279,10 +279,15 @@ def _periods_spanning(start, end, period=None, cap=24):
 def _canon_period(period):
     """The SINGLE canonical 'Month YYYY' spelling of a month-period — what the sweeps and the existing
     May/June calc_status + rep_commissions rows use. So '2026-07' and 'July 2026' collapse to one key
-    (calc_status upserts key on this to avoid two divergent status rows for the same month). Reuses the
-    file's _month_year helper; anything that can't be parsed as a month-period passes through unchanged."""
-    mo, yr = _month_year(period)
-    return f"{_calendar.month_name[mo]} {yr}" if (1 <= mo <= 12 and yr) else str(period or "").strip()
+    (calc_status upserts key on this to avoid two divergent status rows for the same month). Anything
+    that can't be parsed as a month-period passes through unchanged.
+
+    DEREFERENCES `account/_period.canonical_period` (index §19.47) rather than re-deriving the rule.
+    It WAS a second copy — same answer for every spelling this file could parse, but blind to the
+    abbreviated forms (`Aug 2026`, `Sept 2026`, `2026-8`) the one home has accepted since §30.15, so
+    a month landed under an abbreviation kept its own orphan status row here. One fact, one home."""
+    from app.modules.account import _period as _pd
+    return _pd.canonical_period(period)
 
 def _flatten_grouped_sales(df):
     """Flatten a B2B Soft GROUPED 'Sales Transaction Details (Legacy)' export. In the grouped layout
@@ -17924,7 +17929,11 @@ def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"
 @router.put("/config/{period}")
 def save_config(period: str, config: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    config.update({'period': period, 'org_id': org_id})
+    # ONE config row per month. The upsert keys on (org_id, period), so saving under '2026-07' when
+    # 'July 2026' already exists made a SECOND rate row for the same month — and `get_config` reads
+    # with `_pvariants(...).limit(1)`, so which rates the calculation used would come down to row
+    # order. Canonicalised through the one home (index §19.47).
+    config.update({'period': _canon_period(period), 'org_id': org_id})
     r = client.schema('commcalc').table('payout_config').upsert(config, on_conflict='org_id,period').execute()
     return r.data[0] if r.data else config
 
@@ -23545,11 +23554,29 @@ def _gp_snapshot_rows(result):
             for r in (result.get('store_rows') or [])]
 
 
+def _gp_snapshot_period(period):
+    """THE spelling a GP snapshot is stored and read under — `account/_period.canonical_period`
+    (owner report 2026-10-06; index §19.47).
+
+    The cache is keyed `(org_id, period)` and `period` was whatever string the caller happened to
+    hold, so one month reached the table twice: this org carried BOTH 'September 2026' (net profit
+    $201,289.22) and '2026-09' ($194,724.22), and BOTH 'October 2026' ($45,589.14) and '2026-10'
+    ($44,799.87). The trend keyed on the raw string, so it showed each of those months TWICE with
+    two different answers and pushed two real months out of its window. Dereferences the one home
+    every ledger landing already stores through — never a second copy of the rule."""
+    from app.modules.account import _period as _pd
+    return _pd.canonical_period(period)
+
+
 def _write_gp_snapshot(client, org_id, period, result):
-    """Cache per-period GP totals for the Trends hub (best-effort; never breaks the report)."""
+    """Cache per-period GP totals for the Trends hub (best-effort; never breaks the report).
+
+    Stored under the CANONICAL spelling (`_gp_snapshot_period`) so a month has one cache row however
+    the caller spelled it — the `on_conflict` is what makes that a de-dupe rather than a second row."""
     try:
         client.schema('commcalc').table('gp_snapshot').upsert(
-            {'org_id': org_id, 'period': period, 'store_rows': _gp_snapshot_rows(result),
+            {'org_id': org_id, 'period': _gp_snapshot_period(period),
+             'store_rows': _gp_snapshot_rows(result),
              'computed_at': _datetime.now(_timezone.utc).isoformat()},
             on_conflict='org_id,period').execute()
     except Exception as e:
@@ -23587,8 +23614,19 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", auth
 
 # ═══ TRENDS (month-over-month) — power the Trends hub + per-report charts ═════════════════════════
 def _tperiods(periods_present, months):
-    """Sort present 'Month YYYY' periods chronologically; keep the most recent `months`."""
-    kept = sorted({(p or '').strip() for p in periods_present if p},
+    """Sort present periods chronologically and keep the most recent `months` — ONE ENTRY PER MONTH.
+
+    De-duped on the CANONICAL spelling (`_gp_snapshot_period`), not on the raw string: 'September
+    2026' and '2026-09' are one month and must occupy one slot. Keying on the raw string is what let
+    this org's trend show September and October twice, each with a different number, while two older
+    months fell off the end of the window (owner report 2026-10-06; index §19.47)."""
+    canon = {}
+    for p in periods_present:
+        p = (p or '').strip()
+        if not p:
+            continue
+        canon.setdefault(_gp_snapshot_period(p), p)
+    kept = sorted(canon.keys(),
                   key=lambda p: (parse_period(p)['year'], parse_period(p)['month']))
     return kept[-months:] if months and months > 0 else kept
 
@@ -23705,8 +23743,18 @@ def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
     require_org(org_id)
     client = sb(); sc = client.schema('commcalc')
     try:
-        snaps = {r['period']: (r.get('store_rows') or []) for r in
-                 (sc.table('gp_snapshot').select('period,store_rows').eq('org_id', org_id).execute().data or [])}
+        # Fold every stored spelling onto its canonical month so a month cached under BOTH spellings
+        # is read ONCE, taking the NEWEST row (the stale copy is what disagreed). The writer above
+        # stores canonically now; this keeps the rows written before it harmless rather than
+        # requiring them to be deleted first (index §19.47).
+        snaps, _snap_at = {}, {}
+        for r in (sc.table('gp_snapshot').select('period,store_rows,computed_at')
+                  .eq('org_id', org_id).execute().data or []):
+            k = _gp_snapshot_period(r['period'])
+            at = str(r.get('computed_at') or '')
+            if k in snaps and at <= _snap_at.get(k, ''):
+                continue
+            snaps[k], _snap_at[k] = (r.get('store_rows') or []), at
     except Exception:
         snaps = {}   # migration 102 not run yet
     cand = set(snaps.keys())
