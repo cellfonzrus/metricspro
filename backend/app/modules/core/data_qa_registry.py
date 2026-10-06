@@ -291,6 +291,85 @@ DATA_QUESTIONS: dict[str, dict] = {
 }
 
 
+# ── THE DERIVED HALF (owner 2026-10-06, index 54.11) ─────────────────────────────────────────────
+# Measured the morning after the assistant shipped: the hand-written questions above reach 11
+# endpoints, against 58 reports and 815 GET routes. Owner: *"not a good experience it is not giving
+# the correct answers as expected"*, and earlier, plainly: *"we dont want to have any registered
+# questions, the assistant should be able to answer all questions"*.
+#
+# A hand list is the cause of that, not its cure — the index rule says a new report registers itself,
+# and a rule that depends on remembering decays. So every report the platform HAS is a question here,
+# derived by `harness_data_qa_catalog.py` from the report registry the Reports index already renders:
+# the report's own label and description become the question, its own page's data endpoint becomes
+# what is read, that endpoint's own parameters become what may be filtered.
+#
+# A HAND entry always wins: it carries wording, a grain sentence, an index reference and — the one
+# that matters — `self_safe`. A derived entry says nothing about self-scope, so it is manager-only by
+# the fail-closed rule above. That is deliberate: a report nobody has read the handler of must not
+# become a rep's window onto other people's pay.
+def _derived_rows():
+    """The generated catalogue, read as DATA rather than imported.
+
+    `harness_data_qa_lock.py` G1 requires this module to import nothing from `app`, and the reason
+    is worth keeping: the whole semantic layer is provable with no database because importing it
+    starts nothing. So the generated file — which is pure data by construction — is parsed with
+    `ast.literal_eval` instead of imported. Any failure yields nothing: a missing or malformed
+    catalogue must never black-hole the hand-written questions."""
+    import ast
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_qa_derived.py")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "DERIVED":
+                rows = ast.literal_eval(node.value)
+                return rows if isinstance(rows, list) else []
+    except Exception:
+        return []
+    return []
+
+
+def _derived_questions():
+    DERIVED = _derived_rows()
+    taken = {q["path"] for q in DATA_QUESTIONS.values()}
+    out = {}
+    for e in DERIVED:
+        path, key = e.get("path"), e.get("key")
+        if not path or not key or e.get("skip") or path in taken or key in DATA_QUESTIONS:
+            continue
+        # A parameter the page itself fixes travels as a BOUND value, not substituted into the path
+        # here: `path` stays the route the app serves, which is what lets
+        # `harness_data_qa_routes.py` keep proving every registered path against `app.openapi()`.
+        # `validate()` fills it, and the model is never asked for it (the eight Watchdog areas are
+        # one endpoint this way).
+        out[key] = {
+            "label": e.get("label") or key,
+            # Phrased as a question because that is what the model matches a user's words against.
+            # The report's own description follows it, so the assistant and the Reports index
+            # describe a report with the same sentence.
+            "answers": e.get("answers_override")
+                       or ("What does the %s report show? %s" % (e.get("label") or key,
+                                                                 e.get("answers") or "")).strip(),
+            "path": path,
+            "path_params": tuple(e.get("path_params") or ()),
+            "path_bound": {str(n): str(v) for n, v in (e.get("bound") or {}).items()},
+            "params": {n: _p(k) for n, k in sorted((e.get("params") or {}).items())
+                       if n not in (e.get("bound") or {})},
+            # The envelope is NOT declared for a derived question: `rows_from` discovers it. A
+            # declaration here would be a second copy of a fact the response already carries.
+            "rows_at": (),
+            "grain": "one row per row of the %s report" % (e.get("label") or key),
+            "module": e.get("module"),
+            "index": ("54.11",),
+            "derived": True,
+        }
+    return out
+
+
+DATA_QUESTIONS.update(_derived_questions())
+
+
 # ── pure helpers (every one of these is what the harness proves) ─────────────────────────────────
 def keys():
     """Every registered question key, in a stable order."""
@@ -373,6 +452,14 @@ def validate(key, given):
 
     given = dict(given or {})
     path = q["path"]
+    # A path parameter the REPORT fixes (a Watchdog area, say) is filled from the registry, never
+    # from the caller: it is part of which report this is. It is matched against a pattern like any
+    # other value, so a bad catalogue cannot put anything into a URL.
+    for name, val in (q.get("path_bound") or {}).items():
+        if _KIND_RE["store_code"].match(str(val)):
+            path = path.replace("{" + name + "}", str(val))
+        else:
+            errors.append(f"'{name}' is bound to a value that is not a plain identifier")
     for name in q.get("path_params") or ():
         raw = given.pop(name, None)
         vals = raw if isinstance(raw, list) else ([] if raw is None else [raw])
@@ -430,7 +517,44 @@ def rows_from(key, payload):
         v = payload.get(at)
         if isinstance(v, list):
             return v
+    # A HAND question declares its envelope and an undeclared key is never guessed at — guessing
+    # would make a declaration pointless and a typo read as "no data". A DERIVED question declares
+    # none and cannot: its catalogue is generated from the reports, and declaring 58 envelopes by
+    # hand is the hand list this derivation exists to remove. So discovery is scoped to exactly the
+    # questions that have no declaration to disagree with.
+    if q.get("derived"):
+        return _discover_rows(payload)
     return []
+
+
+# Envelope keys reports in this platform actually use, most specific first. Tried only when nothing
+# is declared, which is every DERIVED question: a derived catalogue cannot declare an envelope it has
+# never seen, and declaring one per report by hand is the hand list this file exists to stop.
+_ROW_KEYS = ("rows", "items", "data", "results", "records", "list", "entries")
+
+
+def _discover_rows(payload):
+    """The row list inside a response nothing declared an envelope for. PURE.
+
+    A named key wins; otherwise the longest list of dicts anywhere one level down, because a report
+    envelope's other lists are its chrome (a column spec, a store filter) and are shorter than its
+    rows. Returns `[]` rather than guessing at a list of scalars — a list of strings is a filter,
+    not a report."""
+    if not isinstance(payload, dict):
+        return []
+    for k in _ROW_KEYS:
+        v = payload.get(k)
+        if isinstance(v, list) and (not v or isinstance(v[0], dict)):
+            return v
+    best = []
+    for v in payload.values():
+        if isinstance(v, list) and v and isinstance(v[0], dict) and len(v) > len(best):
+            best = v
+        elif isinstance(v, dict):
+            inner = _discover_rows(v)
+            if len(inner) > len(best):
+                best = inner
+    return best
 
 
 def columns_of(rows):
