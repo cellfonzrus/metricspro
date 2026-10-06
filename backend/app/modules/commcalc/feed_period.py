@@ -46,7 +46,8 @@ import calendar
 PERIOD_FORMAT = "%B %Y"
 
 __all__ = ["period_of_day", "period_label", "month_spread", "day_values", "day_stamp",
-           "DayStampResult"]
+           "DayStampResult", "OPEN", "CLOSED", "UNKNOWN", "period_month_year",
+           "month_state", "archive_due"]
 
 
 def period_label(month, year):
@@ -161,3 +162,91 @@ def day_stamp(rows, column):
         counts[(yr, mo)] = counts.get((yr, mo), 0) + 1
     months = [(period_label(m, y), n) for (y, m), n in sorted(counts.items(), reverse=True)]
     return DayStampResult(stamped=True, rows=len(rows), unproven=0, months=months, reason=None)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# IS THIS MONTH STILL OPEN — one home, dereferenced (owner report 2026-10-06)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, on a "revenue/commission leak" alert for a single $35.33 sale: *"b2b is updated daily, that is
+# how our sales mtd is reporting the daily numbers"*. He is right, and it makes the alert wrong rather
+# than merely noisy. Measured live the same day on the house org: **October 2026 carried 3,001
+# `sales_leak` flags at severity critical** — October being the month in progress, whose month-end
+# archive cannot exist yet. September carried 11,233, one per transaction, because its archive was never
+# built at all. Neither number is a count of leaks; both are a comparison run against a side that had
+# not arrived.
+#
+# THE CLASS, not the instance (house rule: *a fix is a DESIGN fix or it is not a fix*). The general fact
+# that was wrong is not "September's basis is missing"; it is **"the month-end archive was treated as the
+# authority for every month"**. It is the authority for a CLOSED month and does not exist for an open
+# one — so "is this month still open" is a precondition of every feed-vs-archive comparison, and a
+# reconciliation must report a difference only when BOTH sides have actually arrived.
+#
+# THAT QUESTION ALREADY HAD THREE ANSWERS and no home (§19.18's shape, now for the fifth time):
+#   • `router._is_open_month(period)`          — `parse_period` + `date.today()`
+#   • `router.sales_derive_gap`                — `_canon_period(p) != _canon_period(_ftp_current_period())`
+#   • `commcalc/sales_recon.py`                — never asked, which is the defect itself
+# `sales_derive.current_period_label` / `prior_period_label` carry the month-boundary GRACE window and
+# are a different question (how long a just-closed month keeps finalizing), so they are left alone and
+# now derive their spelling from `period_label` here.
+#
+# PURE, like everything else in this module: no client, no FastAPI, no org, no carrier/tenant/product
+# name (RULE TWO). `today` is injected so the proof harness can stand on a fixed date.
+# Proof + lock: `backend/harness_sales_recon_basis.py`.
+
+OPEN = "open"          # the month in progress — the daily feed IS the record; no archive is due
+CLOSED = "closed"      # the month has ended — its month-end archive is the authority and IS due
+UNKNOWN = "unknown"    # not a month-period at all; a caller must not infer either state from it
+
+
+def period_month_year(period):
+    """PURE: (month, year) from EITHER spelling a commcalc table stores — 'October 2026', '2026-10',
+    '2026-10-06' — else (None, None).
+
+    The month-name branch is case- and abbreviation-tolerant ('oct 2026', 'Sept 2026') because the
+    period-spelling bug class in this module is always a reader that understood one form only: the
+    pre-existing `router._is_open_month` silently mapped '2026-07' to January, so July read as a
+    CLOSED month and took the wrong source.
+    """
+    s = str(period or "").strip()
+    if not s:
+        return (None, None)
+    if len(s) >= 7 and s[:4].isdigit() and s[4] == "-" and s[5:7].isdigit():
+        try:
+            yr, mo = int(s[:4]), int(s[5:7])
+        except ValueError:
+            return (None, None)
+        return (mo, yr) if 1 <= mo <= 12 else (None, None)
+    parts = s.replace(",", " ").split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        return (None, None)
+    name = parts[0].strip(".").lower()
+    for i in range(1, 13):
+        full = calendar.month_name[i].lower()
+        if name == full or (len(name) >= 3 and full.startswith(name)):
+            return (i, int(parts[1]))
+    return (None, None)
+
+
+def month_state(period, today=None):
+    """PURE: OPEN / CLOSED / UNKNOWN for a month-period, against `today` (a date; defaults to the real
+    one). A FUTURE month is OPEN — nothing about it has finished, so no archive is due for it either.
+
+    This is the ONE home for the question. Never re-derive it from `date.today().month`; read it.
+    """
+    mo, yr = period_month_year(period)
+    if not mo or not yr:
+        return UNKNOWN
+    if today is None:
+        import datetime as _dt
+        today = _dt.date.today()
+    return CLOSED if (yr, mo) < (today.year, today.month) else OPEN
+
+
+def archive_due(period, today=None):
+    """PURE: True when this period's month-end archive is DUE — i.e. the month has closed.
+
+    A caller comparing a live feed against a month-end archive must gate on this: a difference found
+    on a month whose archive is not due yet is a statement about the calendar, never about the money.
+    UNKNOWN is NOT due — an unparseable period may not be asserted either way.
+    """
+    return month_state(period, today) == CLOSED

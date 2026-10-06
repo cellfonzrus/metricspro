@@ -6027,6 +6027,7 @@ rendering the resolved name.
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.flags` · `flag_type='sales_basis_not_loaded'` | `sales_recon.sync_recon_flags` via `_persist` — **grain `period`** (the first type at that grain), keyed `source_ref = plabel` so re-running replaces the one row instead of accumulating, and retired by the same additive `flag_persist` path the per-transaction findings use | ONE condition for a closed month whose month-end archive never arrived — it REPLACED 11,233 September + 3,001 October per-transaction criticals. Registered in `flag_registry`, severity HIGH — §19.52 |
 | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount` / `termination_date` — EVERY writer passes `storeops/router.py::gate_pay_write` first (§19.44): `POST /storeops/employees`, `POST /storeops/employees/bulk`, `PATCH /storeops/employees/{id}` (+ `PATCH /hr/employees/{id}`), `POST /storeops/employees/bulk-payscale`, `POST /hr/employees`; `employee_id` is minted by the one `_ensure_employee_id` after EVERY insert, incl. the Roles path `core._ensure_employee` (§19.45) | the create / edit / upload handlers named | unchanged (§14 pay visibility) |
 | `storeops.payroll_change_log` (mig `414`) — ONE writer, `storeops/router.py::_log_payroll_change`; its `employee_id` / `employee_name` / `store_code` are built by `storeops/payroll_log_identity.resolve_log_identity` from the stored employee (§19.45); `DELETE /manual-hours/{mid}` no longer logs a repeat delete | 20 call sites (storeops router + `payroll_approval`) | `GET /storeops/payroll-change-log`; `payroll_actual_hours_detail` edit markers |
 | `storeops.payroll_change_log_id_backfill` (mig `1054`, **NOT applied**) — the exact rows mig 1054 filled (`log_id`, `org_id`, `filled_employee_id`, `source_employee_pk`), kept so the backfill reverts exactly | mig `1054` only | the mig's own `-- REVERT:` |
@@ -6254,6 +6255,7 @@ rendering the resolved name.
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/sales-recon` · `POST /commcalc/sales-recon/sync-flags` · `GET /commcalc/sales-derive-gap` — every payload now carries the comparability `verdict` (`comparable` / `archive_not_due` / `archive_not_loaded` / `no_feed` / `nothing_to_compare`), `archive_due`, `month_state` and the buckets the verdict allows; `sales-derive-gap`'s `is_closed_month` READS that verdict instead of string-comparing against `_ftp_current_period()` | `sales_recon.run_sales_recon` / `.sync_recon_flags` / `.derive_gap` → `comparability` → `feed_period.archive_due` | §19.52 |
 | `GET /commcalc/payout-schedule/preview` (`?period=`) — the RESIDUAL multi-month installment preview, READ-ONLY (`persist=False`). Since §19.51 its payload also carries `month_basis` (rows AND dollars per `activation_date` / `origin_period` / `window_edge`, plus `unanchored_rows` / `unanchored_amount`), `unresolved_schedule` (`subscribers`, `subscribers_with_no_carrier_id`, `by_carrier_id`), `totals.amount_no_rep` and `persisted` — and `note` is a real sentence instead of an unconditional `None` | `router.preview_payout_installments` `19762` → `installment_engine.compute_installments` | §7, §19.51 |
 | `POST /storeops/employees` · `POST /storeops/employees/bulk` · `POST /hr/employees` — pay fields pass the ONE pay-write gate: dropped and named in `pay_fields_ignored` for a caller who may not see pay (people still added), 403 for a non-manager sending pay; the StoreOps create echo is pay-stripped | `storeops/router.py::create_employee` / `bulk_create_employees` (now take `authorization`), `hr/router.py::hr_create_employee` → `gate_pay_write` | §19.44 |
 | `POST /storeops/employees/bulk-payscale` — was manager-only; now also refused (403 `PAY_WRITE_REFUSED`) for a manager below the org's pay line · `PATCH /storeops/employees/{id}` — same policy, now from the shared gate | `storeops/router.py::bulk_payscale` / `update_employee` → `gate_pay_write` | §19.44 |
@@ -6537,6 +6539,7 @@ rendering the resolved name.
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
 | **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |
 | **Who is a payroll change-log row about?** (employee number, name, store) | `storeops.employees.employee_id` / `name` / `home_store` of the STORED person (event store for shifts / punches) | `storeops/payroll_log_identity.resolve_log_identity`, called only by `_log_payroll_change`; lock `harness_payroll_log_identity_lock.py` (§19.45) |
 | **What else answers this question?** — asked of a changed file, by the build. 12 facts / 72 edges today; a 13th connected piece cannot land without being registered and its siblings named | `module_graph.connected(path)` (role, question, homes, siblings, index refs, locks) | ONE home the graph; dereferenced by `harness_module_graph_guard.py` (316 checks, 9 armed controls) and by ten existing locks; reported per pull request by the `impact` job — §50. Found two locks no workflow ran (`harness_alert_autofix`, `harness_ingest_freshness`), both now wired |
@@ -6733,6 +6736,83 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.52 **A RECONCILIATION REPORTS A DIFFERENCE ONLY WHEN BOTH SIDES HAVE ARRIVED — the sales-leak
+watchdog that called the live month's own sales a revenue leak** (owner 2026-10-06, on a `sales_leak`
+alert naming one $35.33 sale: *"b2b is updated daily, that is how our sales mtd is reporting the daily
+numbers"*; fixed).
+
+**THE REPORT.** The alert read *"Trans 211866 is in the daily feed ($35.33, 2026-09-18) but NOT in the
+authoritative monthly sales file — revenue/commission leak or an unrecorded void."* The owner's answer
+makes the comparison **wrong**, not merely noisy: the daily feed is the live record and the month-end
+archive is an archive.
+
+**MEASURED LIVE (read-only, house org `00000000-…-0001`, 2026-10-06).** `commcalc.flags` where
+`flag_type='sales_leak'`, and `commcalc.raw_sales` line counts:
+
+| period | `sales_leak` flags | `raw_sales` lines | what the flags actually were |
+|---|---|---|---|
+| October 2026 | **3,001** critical | **0** | the month IN PROGRESS — its archive cannot exist yet. All false |
+| September 2026 | **11,233** critical | **0** | closed, archive never built — **one** missing file reported once per transaction |
+| August 2026 | 8,001 | 29,181 (01–31, complete) | archive loaded: a REAL disagreement, untouched by this fix |
+| July 2026 | 0 | 39,731 | — |
+
+`daily_sales_feed` was current throughout (newest `trans_date` 2026-10-06; 32,428 September lines), so
+the daily feed never stopped — only the archive did. Trans 211866 is two feed lines, $31.33 + $4.00,
+store `1710 W 4th St`, `voided` empty: a normal sale absent from a file that does not exist.
+
+**WHY SEPTEMBER'S ARCHIVE IS EMPTY (reported, not "fixed" in code).** `commcalc.report_definitions`
+where `report_key='sales'` has **`auto = false`**, which is exactly the condition
+`import_audit` already warns about ("the monthly sales basis is set to manual while the daily feed is
+running"). The last hand upload in `upload_log` with `file_type='sales'` and a period is **2026-07-16**;
+August's 29,181 rows came from a manual `_promote_feed_to_raw_sales` run, and September never got one.
+Building it changes the commission basis, so it is surfaced for owner approval, never done unasked.
+
+**THE CLASS, not the instance.** The general fact that was wrong is not "September's basis is missing";
+it is **"the month-end archive was treated as the authority for every month"**. It is the authority for
+a CLOSED month and does not exist for an open one — so "has this month closed" is a *precondition* of
+every feed-vs-archive comparison, and an absent side is ONE condition at period grain, never N findings
+about N transactions.
+
+**THE SIBLINGS.** "Is this month still open" had THREE answers and no home (§19.18's shape, a fifth
+time): `router._is_open_month` (`parse_period` + `date.today()`, which read `'2026-07'` as January),
+`router.sales_derive_gap` (`_canon_period(p) != _canon_period(_ftp_current_period())`), and
+`sales_recon`, which never asked — the defect itself. The module-graph guard then named a fourth
+reader: `notify/report_registry._sales_recon`, the emailed Sales Feed Recon, which read `summary` raw
+and would still have delivered "11,233 leak(s)".
+
+| the one fact | home | dereferenced by |
+|---|---|---|
+| **Has this month closed, so is its month-end archive due?** — a FUTURE month is OPEN; both period spellings and the abbreviated forms resolve; `today` is INJECTED so nothing reads a hidden clock | `commcalc/feed_period.month_state` / `.archive_due` / `.period_month_year` (pure stdlib) | `router._is_open_month`, `router.sales_derive_gap` (`is_closed_month` now reads the gap's verdict), `sales_recon.comparability` |
+| **May these two sides be compared at all, and if not, why?** — `comparable` / `archive_not_due` / `archive_not_loaded` / `no_feed` / `nothing_to_compare`, each with the buckets it allows and a sentence a human can act on | `commcalc/sales_recon.comparability` + `REPORTABLE_BUCKETS` (pure) | `run_sales_recon`, `sync_recon_flags`, `derive_gap` (the derive console + login attention provider), `notify/report_registry._sales_recon` |
+
+**NOT A BLANKET MUTE OF THE OPEN MONTH.** `REPORTABLE_BUCKETS` withholds the ABSENCE buckets
+(`missing_in_monthly` / `missing_in_daily`) on an open month, because the hourly promote step fills the
+archive incrementally and the feed is always ahead of it — lag, not a leak. It keeps
+`amount_mismatch`: the same `trans_id` in BOTH tables at different money proves both sides arrived for
+that transaction, so it is a real disagreement and stays reported mid-month. A control in the harness
+originally asserted the opposite, failed, and is how that distinction was found.
+
+**THE ONE CONDITION.** `flag_type='sales_basis_not_loaded'` (registered in `flag_registry`, severity
+HIGH, **grain `period`** — the first type at that grain), keyed on `source_ref = plabel` so re-running
+replaces the single row instead of accumulating, and retired by the same additive `flag_persist` path
+the per-transaction findings use (one `_persist` for every branch, extracted so they cannot drift).
+`sync_recon_flags` also returns what was WRITTEN rather than what was counted, so a caller cannot
+re-derive the number the verdict just explained.
+
+**Lock:** `backend/harness_sales_recon_basis.py` (**66 checks**, DB-free — `app.core.database` is
+stubbed with a `get_supabase` that RAISES, so a tested path reaching for a client fails loudly). §A the
+one home across both spellings, the abbreviations, future months and a past year's same month; §B the
+precedence, with October's and September's live numbers as the regression; §C one condition at period
+grain; §D the lock — it FAILS THE BUILD if `_is_open_month` regrows a clock or a parse, if the
+derive-gap endpoint string-compares again, or if a caller stops dereferencing. On the
+carrier-vocab-guard workflow. `harness_feed_day_grain.py` §H2 is **tightened**, not relaxed: the
+row-stamping half must stay clock-free, the module's only clock is `month_state`'s, and it must be
+injected.
+
+**STILL TRUE AFTER THIS PR:** September's archive is still absent (a data step awaiting the owner), and
+August's 8,001 findings are a genuine feed-vs-archive disagreement on a month whose archive IS loaded,
+left fully reportable and not yet root-caused.
 
 §19.51 **AN INSTALMENT'S MONTH OF LIFE IS A PROPERTY OF THE ROW, NEVER OF THE WINDOW THE READER
 PULLED — the residual installment engine that would have paid the final instalment forever** (owner

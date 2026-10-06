@@ -23,7 +23,16 @@ type Summary = {
   missing_in_monthly: number; missing_in_daily: number; amount_mismatch: number
   missing_in_monthly_total: number; missing_in_daily_total: number; mismatch_delta_total: number
 }
-type Resp = { period: string; has_feed: boolean; summary: Summary; by_store: StoreSummary[]; rows: Row[] }
+// The comparability verdict (backend `sales_recon.comparability`, index §19.52). The page SHOWS the
+// difference either way — it is a report — but it must say when that difference is explained by a side
+// that has not arrived, or the headline reads as 11,233 leaks when the real finding is one missing file.
+type Verdict = {
+  verdict: 'comparable' | 'archive_not_due' | 'archive_not_loaded' | 'no_feed' | 'nothing_to_compare'
+  reportable: boolean; archive_due: boolean; month_state: 'open' | 'closed' | 'unknown'
+  reportable_buckets: string[]; reason: string | null
+}
+type Resp = { period: string; has_feed: boolean; comparable?: boolean; verdict?: Verdict
+  summary: Summary; by_store: StoreSummary[]; rows: Row[] }
 
 export default function SalesReconPage() {
   const { period } = usePeriod()
@@ -120,7 +129,14 @@ export default function SalesReconPage() {
   const s = data?.summary
   const tabMeta = TABS.find(t => t.key === tab)!
   const empty = data ? salesReconEmptyState({ applies: dailyFeed.applies, hasFeed: !!data.has_feed, pos, posDeclared, period }) : null
+  // A withheld verdict still allows flagging when it has a bucket to write (an open month's amount
+  // mismatches) or a condition to raise (a closed month with no archive) — the button is only dead
+  // when there is genuinely nothing to record.
+  const verdict = data?.verdict
+  const notComparable = !!verdict && verdict.reportable === false
   const canFlag = !!data?.has_feed && dailyFeed.applies !== 'not_defined'
+    && (!verdict || verdict.reportable || verdict.verdict === 'archive_not_loaded'
+        || (verdict.reportable_buckets || []).length > 0)
   const tabCount = (k: string) => (s ? (s as any)[k] as number : 0)
   const tabAmount =
     tab === 'missing_in_monthly' ? s?.missing_in_monthly_total
@@ -158,6 +174,28 @@ export default function SalesReconPage() {
           style={{ background: empty.kind === 'not_applicable' ? '#eff6ff' : '#fffbeb', border: `1px solid ${empty.kind === 'not_applicable' ? '#bfdbfe' : '#fde68a'}`,
             borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: empty.kind === 'not_applicable' ? '#1e40af' : '#92400e' }}>
           {empty.text}
+        </div>
+      )}
+
+      {/* THE PRECONDITION (index §19.52). The daily feed is the live record and the monthly file is an
+          ARCHIVE: for the month in progress no archive is due, and for a closed month that never got
+          one every feed transaction looks absent from it. Either way the difference below is explained
+          by a side that has not arrived, so it is stated here rather than read as a leak count. */}
+      {notComparable && verdict?.reason && (
+        <div role="status" data-verdict={verdict.verdict}
+          style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: 12,
+            marginBottom: 16, fontSize: 13, color: '#92400e' }}>
+          <strong>
+            {verdict.verdict === 'archive_not_due'
+              ? 'This month is still open — no monthly archive is due yet.'
+              : verdict.verdict === 'archive_not_loaded'
+              ? 'This month closed with no monthly archive loaded.'
+              : 'These two sources cannot be compared for this period.'}
+          </strong>{' '}
+          {verdict.reason}
+          {!(verdict.reportable_buckets || []).includes('missing_in_monthly') && (
+            <> The <em>Missing in Monthly</em> count below is therefore not a leak count.</>
+          )}
         </div>
       )}
 

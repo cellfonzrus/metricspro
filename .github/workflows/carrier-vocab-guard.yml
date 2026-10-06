@@ -485,6 +485,7 @@ on:
       - "backend/harness_feed_watchdog.py"
       - "backend/harness_empty_pull_verdict.py"
       - "backend/harness_feed_day_grain.py"
+      - "backend/harness_sales_recon_basis.py"
       - "backend/harness_period_one_spelling.py"
       - "backend/harness_pay_feed_balance.py"
       - "backend/app/modules/core/feed_read.py"
@@ -774,6 +775,9 @@ jobs:
       - name: Run the feed day-grain lock (a feed row's month is its OWN day's month, never the period someone picked; one home for the data-date map, dereferenced by the upload and the sweep; all-or-nothing stamping; every declared feed is day-keyed or declared period-grain with a reason — owner 2026-10-05, index §19.44)
         working-directory: backend
         run: python3 harness_feed_day_grain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the reconciliation-precondition lock (a reconciliation reports a difference only when BOTH sides have arrived; ONE home for "has this month closed, so is its archive due", dereferenced by the router and the recon; a closed month with no archive is ONE condition at period grain, never one leak per transaction; an amount DISAGREEMENT stays reported even mid-month — owner 2026-10-06, index §19.52)
+        working-directory: backend
+        run: python3 harness_sales_recon_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the one-spelling lock (one month, ONE stored spelling — every period-keyed writer stores the canonical form and every reader covers both and takes the newest; one home for a month's journal entries; a replace-per-period purge covers every spelling — owner 2026-10-06, index §19.47)
         working-directory: backend
         run: python3 harness_period_one_spelling.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -19,6 +19,7 @@ from datetime import date
 from app.core.database import get_supabase
 from app.modules.commcalc import report_labels as _report_labels
 from app.modules.commcalc import flag_registry as _reg
+from app.modules.commcalc import feed_period as _fp
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 TOLERANCE = 0.01          # $ difference per trans_id treated as a match
@@ -89,6 +90,107 @@ def _fetch(client, table, plabel, org_id=ORG_ID):
     return out
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# MAY THESE TWO SIDES BE COMPARED AT ALL — the precondition this module never had
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner 2026-10-06, on a `sales_leak` alert naming one $35.33 sale: *"b2b is updated daily, that is how
+# our sales mtd is reporting the daily numbers"*. Correct, and it makes the comparison itself wrong for
+# two whole classes of month. Measured live on the house org the same day:
+#
+#   • OCTOBER (the month in progress): 3,001 `sales_leak` flags at severity critical. A month-end
+#     archive for an unfinished month cannot exist, so every one of them is false — the finding is a
+#     statement about the calendar, not about the money.
+#   • SEPTEMBER (closed, archive never built): 11,233 flags, one per transaction in the feed. The real
+#     finding is ONE fact — "September's archive is missing" — and raising it 11,233 times is what
+#     buried it. `raw_sales` live: Jul 39,731 · Aug 29,181 · Sep 0 · Oct 0.
+#
+# THE CLASS: a reconciliation may report a difference only when BOTH sides have actually arrived. An
+# absent side is a condition of the FEED, reported once at period grain; it is never N findings about N
+# transactions. Both readers of that question in this module — the full `run_sales_recon` report and the
+# cheap `derive_gap` count — dereference the verdict below, and `sync_recon_flags` keys its writes on it.
+# "Is the archive due yet" is NOT re-derived here: it is read from `feed_period.archive_due`, the one
+# home (which `router._is_open_month` and the derive-gap endpoint now read too).
+#
+# PURE — no client, no I/O, no clock of its own. Proof: `backend/harness_sales_recon_basis.py`.
+
+COMPARABLE = "comparable"                    # both sides present → per-transaction findings are real
+ARCHIVE_NOT_DUE = "archive_not_due"          # the month is still open; no archive is owed yet
+ARCHIVE_NOT_LOADED = "archive_not_loaded"    # the month closed and its archive never arrived — ONE fact
+NO_FEED = "no_feed"                          # nothing in the daily feed to compare against
+NOTHING_TO_COMPARE = "nothing_to_compare"    # neither side has anything for this period
+
+# The verdicts under which a per-transaction ABSENCE may be raised as a finding. Anything else means
+# the absence is explained by a side that has not arrived, and the per-row findings are artifacts.
+REPORTABLE_VERDICTS = (COMPARABLE,)
+
+# WHICH BUCKETS SURVIVE WHICH VERDICT, and why this is not a blanket mute of the open month.
+# `missing_in_monthly` / `missing_in_daily` are claims that a side LACKS a transaction, so they are only
+# meaningful once that side is due and has arrived. `amount_mismatch` is different in kind: the same
+# trans_id is in BOTH tables at different money, which proves both sides arrived for that transaction —
+# a real disagreement, worth reporting even mid-month, and NOT the lag that the hourly promote step
+# produces. Silencing it with the rest would have been this fix overreaching.
+_ABSENCE = ("missing_in_monthly", "missing_in_daily")
+_MISMATCH = ("amount_mismatch",)
+REPORTABLE_BUCKETS = {
+    COMPARABLE: _ABSENCE + _MISMATCH,
+    ARCHIVE_NOT_DUE: _MISMATCH,
+    ARCHIVE_NOT_LOADED: (),
+    NO_FEED: (),
+    NOTHING_TO_COMPARE: (),
+}
+
+
+def comparability(period, monthly_lines, feed_lines, today=None):
+    """PURE: may the monthly archive and the daily feed be compared for `period`, and if not, why.
+
+    Returns a dict: `verdict` (one of the five above), `reportable` (True only for COMPARABLE),
+    `archive_due` (the one home's answer), `month_state`, and `reason` — a sentence a human can act on,
+    carrying no carrier/tenant/product name (RULE TWO; `{pos}` is substituted by the caller).
+
+    Precedence is deliberate and the order is load-bearing:
+      1. no feed at all      — this module has nothing to say; it is not a judgement about the archive.
+      2. archive not due     — an OPEN month. Checked BEFORE emptiness, because an open month's archive
+                               being empty is the normal, healthy state and must never be a finding.
+      3. archive not loaded  — a CLOSED month with an empty archive: one condition, period grain.
+      4. comparable          — both sides arrived; the per-transaction buckets mean what they say.
+    """
+    ml = int(monthly_lines or 0)
+    fl = int(feed_lines or 0)
+    due = _fp.archive_due(period, today)
+    state = _fp.month_state(period, today)
+    if fl <= 0 and ml <= 0:
+        return {"verdict": NOTHING_TO_COMPARE, "reportable": False, "archive_due": due,
+                "month_state": state, "reportable_buckets": REPORTABLE_BUCKETS[NOTHING_TO_COMPARE],
+                "reason": "neither the daily {pos} feed nor the monthly archive holds anything for "
+                          "this period, so there is nothing to reconcile."}
+    if fl <= 0:
+        return {"verdict": NO_FEED, "reportable": False, "archive_due": due, "month_state": state,
+                "reportable_buckets": REPORTABLE_BUCKETS[NO_FEED],
+                "reason": "the daily {pos} feed holds nothing for this period, so the monthly archive "
+                          "cannot be checked against it."}
+    if not due:
+        return {"verdict": ARCHIVE_NOT_DUE, "reportable": False, "archive_due": due,
+                "month_state": state, "reportable_buckets": REPORTABLE_BUCKETS[ARCHIVE_NOT_DUE],
+                "reason": "this month is still in progress, so its month-end archive is not due yet — "
+                          "the daily {pos} feed IS the record for an open month. Differences against an "
+                          "archive that does not exist are not leaks."}
+    if ml <= 0:
+        return {"verdict": ARCHIVE_NOT_LOADED, "reportable": False, "archive_due": due,
+                "month_state": state, "reportable_buckets": REPORTABLE_BUCKETS[ARCHIVE_NOT_LOADED],
+                "reason": "this month has closed and its month-end sales archive was never loaded, so "
+                          "every transaction in the daily {pos} feed looks absent from it. The month's "
+                          "commission basis is empty — build or upload the archive before reading any "
+                          "closed-month figure for it."}
+    return {"verdict": COMPARABLE, "reportable": True, "archive_due": due, "month_state": state,
+            "reportable_buckets": REPORTABLE_BUCKETS[COMPARABLE], "reason": None}
+
+
+def verdict_reason(verdict_row, pos):
+    """The verdict's sentence with the tenant's POS term substituted; '' when it carries none."""
+    txt = (verdict_row or {}).get("reason") or ""
+    return txt.replace("{pos}", str(pos or "POS"))
+
+
 def run_sales_recon(period: str, org_id: str = ORG_ID):
     client = get_supabase()
     plabel = _period_label(period)
@@ -153,9 +255,21 @@ def run_sales_recon(period: str, org_id: str = ORG_ID):
     for s in by_store_list:
         s["delta_total"] = round(s["delta_total"], 2)
 
+    # The precondition, BEFORE the buckets are believed: an absent side explains every difference.
+    # `comparability` is PURE and leaves `{pos}` unsubstituted; this is the impure wrapper, so the
+    # tenant's own POS term is applied here from the one home rather than at each reader (a page that
+    # substituted it itself would be a second copy of the vocabulary — index §19.36).
+    verdict = dict(comparability(plabel, monthly_lines, daily_lines))
+    try:
+        verdict["reason"] = verdict_reason(verdict, _report_labels.pos_term(client, org_id)) or None
+    except Exception:                       # never fail the report on a label lookup
+        pass
+
     return {
         "period": plabel,
         "has_feed": daily_lines > 0,
+        "comparable": verdict["reportable"],
+        "verdict": verdict,
         "summary": {
             "monthly_trans": len(monthly), "daily_trans": len(daily),
             "monthly_lines": monthly_lines, "daily_lines": daily_lines,
@@ -265,18 +379,48 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
     client = get_supabase()
     pos = _report_labels.pos_term(client, org_id)   # the tenant's POS name in copy — never a vendor spelled here
 
+    # ── THE PRECONDITION (owner 2026-10-06) ─────────────────────────────────────────────────────
+    # A difference is only a finding when both sides arrived. The verdict names which buckets survive:
+    # an ABSENCE claim needs the other side to be due and present, while an `amount_mismatch` proves
+    # both sides hold the transaction and stays reportable even mid-month. When the archive is due and
+    # never arrived, that is ONE condition at period grain — never one `sales_leak` per transaction
+    # (this replaced 11,233 September criticals and 3,001 October ones with one row and none).
+    _v = res.get("verdict") or comparability(plabel, res["summary"]["monthly_lines"],
+                                             res["summary"]["daily_lines"])
+    _buckets = _v.get("reportable_buckets") or ()
+
     flags = []
+    if _v.get("verdict") == ARCHIVE_NOT_LOADED:
+        flags.append({
+            "period": plabel, "period_month": pm, "period_year": py,
+            "flag_type": "sales_basis_not_loaded", "source": "sales_recon", "severity": "critical",
+            # Period grain: the identity IS the period, so re-running replaces this one row rather
+            # than accumulating, and flag_persist retires it the moment the archive lands.
+            "source_ref": plabel,
+            "store_address": "", "epay_salesperson": "",
+            "amount": res["summary"]["daily_total"],
+            "description": (f"{plabel} has closed and its monthly sales archive was never loaded: "
+                            f"{res['summary']['daily_trans']:,} transactions worth "
+                            f"${(res['summary']['daily_total'] or 0):,.2f} are in the daily {pos} "
+                            f"feed with no archive to check them against. The month's commission "
+                            f"basis is EMPTY — build it from the feed or upload the monthly file "
+                            f"before reading any closed-month figure for this period. This is one "
+                            f"missing file, not a leak per transaction."),
+        })
+
     for r in res["rows"]:
         b = r["bucket"]
+        if b not in _buckets:
+            continue                      # the verdict explains this difference; it is not a finding
         if b == "missing_in_monthly":
             flags.append({
                 "period": plabel, "period_month": pm, "period_year": py,
                 "flag_type": "sales_leak", "source": "sales_recon", "severity": "critical",
-                "store_address": r["store"], "epay_salesperson": r.get("salesperson") or "",
                 # mig 287 identity — the leaking transaction. The description carries dollar totals
                 # that move between runs, so it can never be the key.
                 "source_ref": str(r.get("trans_id") or "").strip(),
                 "amount": r.get("daily_total"),
+                "store_address": r["store"], "epay_salesperson": r.get("salesperson") or "",
                 "description": (f"Trans {r['trans_id']} is in the daily {pos} feed "
                                 f"(${(r.get('daily_total') or 0):,.2f}, {r.get('trans_date') or 'n/a'}) "
                                 f"but NOT in the authoritative monthly sales file — revenue/commission "
@@ -299,6 +443,29 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
     # the two could not be ordered together; `stamp` keeps the judgement and puts it on one scale.
     _reg.stamp(flags)
 
+    _persist(client, org_id, flags, plabel,
+             reason=f"the {plabel} transaction reconciles in the latest sweep")
+
+    _leaks = sum(1 for f in flags if f.get("flag_type") == "sales_leak")
+    return {
+        "period": plabel, "has_feed": res["has_feed"], "flagged": len(flags),
+        "verdict": _v.get("verdict"), "comparable": bool(_v.get("reportable")),
+        "reason": verdict_reason(_v, pos),
+        # What was WRITTEN, not what was counted — a run that withheld the absence findings must not
+        # report them anyway, or the caller re-derives the very number the verdict just explained.
+        "missing_in_monthly": _leaks,
+        "amount_mismatch": (sum(1 for f in flags if f.get("flag_type") == "sales_amount_mismatch")
+                            if include_mismatch else 0),
+        "leak_total": round(sum((f.get("amount") or 0)
+                                for f in flags if f.get("flag_type") == "sales_leak"), 2),
+    }
+
+
+def _persist(client, org_id, flags, plabel, reason):
+    """ONE home for writing this module's flags — store-code stamping, the additive sync, the legacy
+    fallback. Extracted 2026-10-06 so the `sales_basis_not_loaded` path and the per-transaction path
+    cannot drift in how they retire a condition that has since cleared.
+    """
     # Resolve each flag's store into `store_code` (mig 285) so it can reach the district manager whose
     # span covers it — a recon leak written with a POS spelling the span keyset doesn't know matches no
     # manager at all. Visibility only; nothing here changes an amount or a store_address.
@@ -318,11 +485,10 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
     _periods = _pvariants_recon(plabel)
     try:
         from app.modules.commcalc import flag_persist
-        _fp = flag_persist.sync(client, org_id, flags,
-                                periods=_periods, sources=["sales_recon"],
-                                reason=f"the {plabel} transaction reconciles in the latest sweep")
+        _fpr = flag_persist.sync(client, org_id, flags,
+                                 periods=_periods, sources=["sales_recon"], reason=reason)
         print(f"INFO sales_recon flags additive org={org_id} period={plabel} "
-              f"{ {k: v for k, v in _fp.items() if k != 'run_id'} }")
+              f"{ {k: v for k, v in _fpr.items() if k != 'run_id'} }")
     except Exception as e:                          # incl. FlagPersistUnavailable before migration 287
         print(f"WARN sales_recon additive flag write unavailable, using legacy path: {e}")
         (client.schema("commcalc").table("flags").delete()
@@ -332,13 +498,7 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
                 f["org_id"] = org_id
             for i in range(0, len(flags), 500):
                 client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
-
-    return {
-        "period": plabel, "has_feed": res["has_feed"], "flagged": len(flags),
-        "missing_in_monthly": res["summary"]["missing_in_monthly"],
-        "amount_mismatch": res["summary"]["amount_mismatch"] if include_mismatch else 0,
-        "leak_total": res["summary"]["missing_in_monthly_total"],
-    }
+    return len(flags)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -406,8 +566,14 @@ def derive_gap(period: str, org_id: str = ORG_ID, client=None):
     feed, fcap, flines = _trans_ids(client, "daily_sales_feed", org_id, variants)
     monthly, mcap, mlines = _trans_ids(client, "raw_sales", org_id, variants)
     missing = feed - monthly
+    plabel = _period_label(period)
+    # SIBLING of run_sales_recon, same precondition, same one home (owner 2026-10-06). This is the
+    # cheap counting path that the derive console and the login attention provider read, so it must not
+    # answer "is the archive due" its own way — `missing_in_monthly` on an OPEN month is the normal
+    # feed-ahead-of-archive state, and on a closed month with no archive it is the whole month.
+    verdict = comparability(plabel, mlines, flines)
     return {
-        "period": _period_label(period), "org_id": org_id,
+        "period": plabel, "org_id": org_id,
         "feed_trans": len(feed), "monthly_trans": len(monthly),
         "feed_lines": flines, "monthly_lines": mlines,
         "has_feed": len(feed) > 0,
@@ -415,4 +581,8 @@ def derive_gap(period: str, org_id: str = ORG_ID, client=None):
         "missing_in_daily": len(monthly - feed),
         "sample_missing": sorted(missing)[:25],
         "capped": bool(fcap or mcap),
+        "comparable": verdict["reportable"],
+        "verdict": verdict["verdict"],
+        "archive_due": verdict["archive_due"],
+        "month_state": verdict["month_state"],
     }
