@@ -23,6 +23,13 @@ from collections import defaultdict
 # Watchdog can order by severity across every writer of the table.
 from app.modules.commcalc import flag_registry as _reg
 
+# ONE home for "is this feed row money the carrier TOOK BACK" (index §54). This detector used to ask
+# `row['category'] == 'Chargeback'` — a category `commcalc.payment_categories` has never been able to
+# contain, so in four years it fired ZERO times while the house feed carried 474 withholding rows
+# ($7,123.39 taken back, measured live 2026-10-06). The test now dereferences the shared one, which
+# recognises a clawback by the DIRECTION the processor moved the money. See clawback.py for the class.
+from app.modules.commcalc import clawback as _clawback
+
 def safe_float(v) -> float:
     try: return float(v or 0)
     except: return 0.0
@@ -88,9 +95,22 @@ def calc_flags(
             model_by_imei[ser] = pd
 
     # ── 1. CHARGEBACK — show the REBATE LOST for that phone, not the bill-pay amount ──────
+    # The org's OWN declaration map, rebuilt from the rows the caller already stamped (router
+    # `_run_calculation` / `_compute_gp` both set `category` from commcalc.payment_categories). It is
+    # handed to the shared test rather than a category literal being compared here: RULE TWO, and the
+    # reason this detector was silent for four years (see the import note).
+    _cat_by_type = {}
     for r in pay_detail:
-        if str(r.get('category', '')).strip() == 'Chargeback':
-            amt = safe_float(r.get('amount'))
+        pt = str(r.get('payment_type', '') or '').strip()
+        if pt and pt not in _cat_by_type:
+            _cat_by_type[pt] = str(r.get('category', '') or '').strip()
+    _pay_cats = _clawback.pay_categories()
+    for r in pay_detail:
+        _cl = _clawback.classify_row(r, _cat_by_type, feed='epay', pay_cats=_pay_cats)
+        if _cl['clawback']:
+            # The DEBITED magnitude, always positive — the feed's sign convention is the shared
+            # module's business, not this detector's.
+            amt = -_cl['amount']
             if amt != 0:
                 imei = str(r.get('imei', '') or '').replace('.0', '').strip()
                 a = asset_by_imei.get(imei.upper()) if imei else None
