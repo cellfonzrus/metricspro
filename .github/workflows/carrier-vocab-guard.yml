@@ -489,6 +489,10 @@ on:
       - "backend/harness_pay_feed_balance.py"
       - "backend/app/modules/core/feed_read.py"
       - "backend/app/modules/commcalc/pay_data_quality.py"
+      - "backend/harness_expense_one_path.py"
+      - "backend/app/modules/commcalc/expenses_effective.py"
+      - "backend/app/modules/commcalc/labour_coverage.py"
+      - "backend/app/modules/account/statement_filter.py"
       - "backend/app/modules/account/_period.py"
       - "backend/app/modules/account/coa.py"
       - "backend/app/modules/account/engine.py"
@@ -766,6 +770,9 @@ jobs:
       - name: Run the pay-feed balance lock (every dollar the carrier paid is PLACED in a pay bucket or REPORTED unplaced with a reason; a feed read carries NO literal row ceiling and raises rather than returning a short list; two feeds for the same money must cover the same days — owner 2026-10-06, index §19.48)
         working-directory: backend
         run: python3 harness_pay_feed_balance.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the one-path expense lock (one question one path — a gated detector reports that it did not measure, a period filter matches every spelling and dedupes, and the expenses trend reads the SAME carry-forward rule as the P&L — owner 2026-10-06, index §19.50)
+        working-directory: backend
+        run: python3 harness_expense_one_path.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
         working-directory: backend
         run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

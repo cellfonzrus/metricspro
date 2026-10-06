@@ -23764,25 +23764,54 @@ def _trend_shape(kept, by_store, comp, mkt, value_keys):
 
 @router.get("/expenses-trend")
 def expenses_trend(months: int = 6, org_id: str = ORG_ID):
-    """Total store expenses per month, per store (+ company total). Cheap (store_expenses only)."""
+    """Total store expenses per month, per store (+ company total).
+
+    ONE PATH FOR "WHAT DID THIS STORE SPEND THAT MONTH?" (owner report 2026-10-06, index §19.50).
+    This read used to go straight at `store_expenses`, while the P&L (`account/coa.build_inputs`)
+    and the GP report (`_compute_gp`) both go through the carry-forward rule in
+    `commcalc/expenses_effective`. Same question, two paths, two answers: the house P&L booked
+    $379,108.81 of carried October store opex and this trend had no October row at all. It now
+    dereferences the SAME rule — `expenses_effective.effective_series`, which is proved against the
+    single-period reader the other two use — so a month the P&L carries is a month the trend shows.
+
+    The month axis is the union of the months expenses were ENTERED for and the months this org has
+    a computed statement for. Deriving it from entered rows alone is what hid a carried month: the
+    carry can only fill a slot that exists.
+    """
     require_org(org_id)
     sc = sb().schema('commcalc')
-    rows = sc.table('store_expenses').select('period,store_code,amount').eq('org_id', org_id).limit(200000).execute().data or []
+    from app.modules.commcalc import expenses_effective as _expfx
+    # `source_key` (mig 206) decides which rows carry — PROBED on its own, so a pre-206 schema still
+    # reads (every row manual, exactly as it was then) instead of failing the whole select.
+    _cols = 'period,store_code,amount'
+    if 'source_key' in _ct.present_columns(lambda: sc.table('store_expenses'),
+                                           lambda q: q.eq('org_id', org_id), ('source_key',)):
+        _cols += ',source_key'
+    rows = _feed_read.read_all(lambda: sc.table('store_expenses').select(_cols).eq('org_id', org_id))
+    try:
+        _stp = (sc.table('account_statements').select('period')
+                .eq('org_id', org_id).eq('statement_type', 'pl').execute().data) or []
+    except Exception:
+        _stp = []
     mkt = _trend_market_by_code(org_id)
-    kept = _tperiods({r.get('period') for r in rows}, months); ks = set(kept)
+    kept = _tperiods({r.get('period') for r in rows} | {r.get('period') for r in _stp}, months)
+    eff = _expfx.effective_series(rows, kept)
     by, comp = {}, {p: {'total': 0.0} for p in kept}
-    for r in rows:
-        p = (r.get('period') or '').strip()
-        if p not in ks:
-            continue
-        code = str(r.get('store_code') or '').strip()
-        amt = safe_float(r.get('amount'))
-        by.setdefault(code, {}).setdefault(p, {'total': 0.0})
-        by[code][p]['total'] += amt
-        comp[p]['total'] += amt
+    carried = {}
+    for p in kept:
+        cell = eff.get(p) or {'rows': [], 'carried_from': None}
+        if cell.get('carried_from'):
+            carried[p] = cell['carried_from']
+        for r in cell['rows']:
+            code = str(r.get('store_code') or '').strip()
+            amt = safe_float(r.get('amount'))
+            by.setdefault(code, {}).setdefault(p, {'total': 0.0})
+            by[code][p]['total'] += amt
+            comp[p]['total'] += amt
     stores, company = _trend_shape(kept, by, comp, mkt, ['total'])
     return {'months': kept, 'company': company, 'stores': stores,
-            'markets': _trend_markets(org_id, stores), 'money': True}
+            'markets': _trend_markets(org_id, stores), 'money': True,
+            'carried_from': carried}
 
 
 @router.get("/commission-trend")
