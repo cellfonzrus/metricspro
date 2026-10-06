@@ -2840,6 +2840,81 @@ who sells upgrades all month must be able to see that upgrades pay $0 this perio
 | Lock | `backend/harness_boost_terms_lock.py` (19 checks; CI job *Boost payout terms*) — fails the build if the engine or the document stops dereferencing the home, a second copy appears under `backend/app`, the home stops being pure, or the handout grows rate history |
 
 
+### 6q. A BACKGROUND JOB IS RUNNING UNTIL THE SERVER SAYS IT IS NOT — one home for a job control (owner report 2026-10-06)
+
+**The report.** Owner, having pressed ⚡ Run Calculation for August 2026: *"i ran the calculation it
+does not show it is runnig it shows run calculation again, then when you press it again it says it is
+already runnig - fix it"*.
+
+**The run was fine.** `commcalc.calc_status` for the house org, August 2026: started
+`2026-10-06T02:27:40.420Z`, finished `2026-10-06T02:28:36.078Z` — 56 seconds, `done`. Every fault was
+in the surface, and there were three:
+
+1. **The button never changed.** `commcalc/page.tsx` rendered `<button ...>⚡ Run Calculation</button>`
+   with no `disabled` and a fixed label. A run in flight was visually identical to no run; the only
+   evidence was a small `⏳ Running...` span on another row.
+2. **The page asked once, after two seconds, and never again.** `setTimeout(loadData, 2000)` against a
+   56-second job: the page read a status that was still mid-run and then stopped following it, so it
+   could never show the run completing.
+3. **The second press was refused with a 409.** `_calc_guard_acquire` was right to refuse it (§6 — two
+   recomputes would interleave the delete-and-rewrite of the commission rows). The refusal is the
+   surface blaming the person for a gap the surface left: a press that cannot succeed must not be
+   offered.
+
+**The class, not the instance.** The general fact that was wrong is *"the UI treated **the request was
+accepted** as **the job has finished**"*. Four surfaces made that mistake in two shapes — the CommCalc
+dashboard had no busy state at all; the connectors sweep, the daily-closing sweep and the auto-calc
+notice set a `busy` flag and cleared it in a `finally` the moment the POST returned, which is when the
+job *starts*. A fix to the dashboard alone would have been the patchwork the house rules forbid.
+
+| Piece | Where |
+|-------|-------|
+| **THE ONE HOME** — what the control shows and whether it may be pressed | `frontend/src/lib/job-run.ts`: `RUNNING_STATES` / `DONE_STATES` / `ERROR_STATES` (the vocabulary), `isRunning` / `isDone` / `isError`, `settleStatus`, `POLL_SCHEDULE` / `nextPollDelay` / `POLL_GIVE_UP_MS` / `isOverdue`, `buttonState`. Pure and import-free, so the proof drives the shipped functions |
+| Which status row IS the month's status | `backend/app/modules/commcalc/router.py` `_calc_status_pick` — see below |
+| Proof | `frontend/prove_job_run.mjs` — **87 checks**, §A replaying the reported press to the second, with armed controls at A5/A5b/A7, B6/B7, C7, D8, F6 |
+| Lock | §G of the same file: the four surfaces must dereference the home, each retired shape must stay retired, and the one cross-language copy of the vocabulary must agree (G12). CI job *Background job control* in `data-qa-guard.yml` |
+
+**The four rules the home encodes.** A press is a REQUEST; the job is running until the SERVER says it
+is not.
+
+- `isRunning` is the one definition of "in flight", and it is a SET of server words — `running`,
+  `queued`, `started`, `pending`, `busy`, `in_progress` all mean the same thing to a button, and a
+  button must not try to tell them apart. `AutoCalcNotice.tsx` held a third private copy of that set;
+  it now dereferences the home.
+- `buttonState` is the one answer to what the control renders, so the badge and the button cannot
+  disagree — which is precisely what was reported. A running job yields `disabled: true`, so the
+  double-press that earned the 409 cannot be made.
+- `settleStatus` is the one rule for reconciling a press with a status read: **a read that is not
+  strictly later than the press may not downgrade it.** That race is how a just-started run renders as
+  "not calculated yet" and invites the second press, and an absent `readAt` is treated as *not later*
+  (the safe direction).
+- `nextPollDelay` is the one schedule for following a job to its end, and it is BOUNDED — quick at
+  first, gaps widening, then `null`, at which point the surface says the run is taking longer than
+  expected and stays disabled. An overdue run is one we stopped watching, not one we know has died;
+  the server's stale-takeover window (`CALC_STALE_MINUTES_DEFAULT`) decides that.
+
+**The other half of the same defect, in the backend.** `GET /calc-status/{period}` matched
+`.in_('period', _pvariants(period)).limit(1)` with **no ordering**, while the writer
+(`_calc_guard_acquire`) only ever claims the CANONICAL spelling. Where a month is stored under more
+than one spelling the read returned whichever row the database handed back first — the house org holds
+both `'2026-07'` and `'July 2026'` (measured 2026-10-06) — so a read could report a finished legacy
+row while a run was in flight, render "✓ Calculated", and invite the press the guard then refused.
+`_calc_status_pick` is now the one named rule: **canonical spelling wins, then a row that says a run is
+in flight, then the most recently started, then the most recently finished.** Same period-spelling
+class as §19.47, in the read that checks on a job rather than the one that reports money.
+
+**What is NOT fixed, named rather than left silent.** `/connectors/{id}/run-now` dispatches through
+`_sweep_registry()` to each vendor's own sweep, and only the daily-closing sweep declares `'running'`
+before it works (`_do_closing_sweep`, which deliberately does **not** stamp `last_run_at` on start —
+that column means "when a run last finished"). Until every registered sweep does the same, the
+connectors page follows a run **it** started but cannot see one started elsewhere. The remaining work
+is one `'running'` write per sweep. `prove_job_run.mjs` §G9 fails the build if that excuse is deleted
+from the surface without the fix landing.
+
+**RULE TWO.** The home names no carrier, tenant, product, org id or endpoint — §F of the proof asserts
+each by name — so it cannot grow a per-tenant branch.
+
+
 ### 7a. REPORT — Residual per Subscriber (per store, month over month, vs commission)
 
 **Where.** `backend/app/modules/account/residual_subs.py` → `compute(client, org_id, months)`;
@@ -5971,6 +6046,7 @@ rendering the resolved name.
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
 | `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `FEED_CADENCE_BY_TABLE` / `FEED_LABEL_BY_TABLE` / `NOT_WATCHED_REASONS` (code registry) — **which feeds are watched, how often each is due, which column names the day its DATA is about (distinct from the ARRIVAL column in `FRESHNESS_COLUMN_BY_TABLE`), and the human name each is reported under.** `watched_feeds()` is DERIVED from `INGEST_TABLES_BY_MODULE` minus the declared exclusions, so a registered feed is watched the same day — 22 watched, 24 excused with a reason, 0 unaccounted | code | `router._data_freshness_report` (the set, each cadence, each label), `router._duty_last_loaded` (`data_date_column()` → `freshness_column()` fallback; `_DUTY_DATE_COL` deleted); lock `harness_feed_watchdog.py` (50) — §19.43 |
 | `data_lineage_registry.PERIOD_GRAIN_REASONS` + `day_keyed_date_columns()` / `is_day_keyed()` (code registry) — **which feeds are replaced by DAY and carry their own month, and which are replaced per PERIOD with a stated reason.** DERIVED from `DATA_DATE_COLUMN_BY_TABLE`, so a feed that declares a data-date column is day-keyed the same day; a declared table that is neither fails the build | code | `router._upload_file_impl` (`DATE_KEYED` is the derivation, no literal map), `epay_sweep._pull_and_store` / `_store_day_grain` / `_store_rows_by_day`; one parser `commcalc/feed_period.py`; lock `harness_feed_day_grain.py` (85) — §19.46 |
+| `job-run.isRunning` / `settleStatus` / `nextPollDelay` / `buttonState` (code) — **is this background job running, and may its control be pressed.** The ONE vocabulary of server words that mean "in flight", the ONE rule that a status read older than the press cannot downgrade it, the ONE bounded poll schedule, and the ONE derivation of a control's label/disabled/badge | code | `commcalc/page.tsx` (⚡ Run Calculation), `closing/imports/page.tsx` + `commcalc/connectors/page.tsx` (Run now), `commcalc/_lib/AutoCalcNotice.tsx`; backend companion `commcalc.router._calc_status_pick` + `CALC_RUNNING_STATES` (the one cross-language copy, pinned by G12); lock `frontend/prove_job_run.mjs` (87) — §6q |
 | `account/_period.canonical_period` / `period_keys` / `is_canonical_period` (code) — **the ONE spelling a month-period is STORED under, and every spelling a filter must match.** A second private copy, or a period-keyed write that passes the caller's raw string, fails the build | code | `commcalc.router._canon_period` (dereferences, no longer re-derives), `_write_gp_snapshot` / `_gp_snapshot_period` / `_tperiods` / `gp_trend` / `save_config`, `account/engine._persist` + its purge, `statement_engine` purge, the journal writer, `account/router.overview` + `_consolidated_pl`; `coa.journal_rows` is the one home for a month's manual journal entries; lock `harness_period_one_spelling.py` (60) — §19.47 |
 | `commcalc.asset_ledger` / `pos_tender_summary` / `inventory_value` — their **arrival** column, newly declared: these three have NO `created_at`, so the default left `last_ingest_at` None and the §19.18 arrival-vs-content diagnosis was dead on them | migrations (unchanged); `FRESHNESS_COLUMN_BY_TABLE` declares `uploaded_at` / `updated_at` / `updated_at` | `_table_feed_freshness` via `data_lineage_registry.freshness_column` — §19.43 |
 | `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
@@ -6461,6 +6537,7 @@ rendering the resolved name.
 | **How does an order reach this vendor, and may a sweep send it?** — two separate facts: whether the route can reach them at all, and whether using it PLACES an order | `order_transport.transport_for(vendor)` + `push_enabled(route, switch)` | ONE home `supply/order_transport.py`; the only dialect is `supply/shopify_draft_order.py`, selected by a config VALUE (RULE TWO); lock `harness_order_transport.py` (143) — §51. Nothing is switched on: `po_mode` is `off` for every tenant and no vendor declares a route |
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Which month does this feed row belong to, and what does this upload replace?** — the row's OWN data date, and the DAYS the file covers; never the period an operator picked or the month a sweep ran in. All or nothing: a row that cannot prove its day keeps the period replace | `data_lineage_registry.day_keyed_date_columns()` (+ `PERIOD_GRAIN_REASONS` for the archives) | ONE parser `commcalc/feed_period.py` (`period_of_day` / `month_spread` / `day_stamp`); dereferenced by the manual upload and the nightly sweep; lock `harness_feed_day_grain.py` (85) — §19.46. Live 2026-10-05: 80,614 payment-detail rows / $579,926.24 were filed under the wrong month, October reading 28x its own $15,460.69 |
+| **Is this background job running, and may its control be pressed?** — a press is a request; the job runs until the SERVER says otherwise, so a run in flight disables its own button | `job-run.isRunning` / `buttonState` / `settleStatus` / `nextPollDelay` | every job control dereferences it (⚡ Run Calculation, the daily-closing and connector Run-now buttons, the auto-calc notice); `commcalc.router._calc_status_pick` decides WHICH `calc_status` row is the month's; lock `frontend/prove_job_run.mjs` (87) — §6q. Live 2026-10-06: the August run took 56s while the page asked once at 2s and the button never disabled, so a second press earned the single-flight 409 |
 | **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |

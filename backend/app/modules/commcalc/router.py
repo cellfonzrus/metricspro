@@ -24772,11 +24772,53 @@ async def update_chargeback(item_id: str, body: UpdateChargebackIn, org_id: str 
     r = client.schema('commcalc').table('chargeback_items').update(update).eq('id', item_id).execute()
     return r.data[0] if r.data else {}
 
+# WHICH SERVER WORDS MEAN "a run is in flight". The frontend holds the same fact in
+# `frontend/src/lib/job-run.ts` RUNNING_STATES, because a browser cannot import Python; the two are
+# the one unavoidable cross-language copy here, so `harness_job_run_states_lock.py` FAILS THE BUILD
+# if they ever disagree. Do not add a word to one list without the other.
+CALC_RUNNING_STATES = ('running', 'queued', 'started', 'pending', 'busy', 'in_progress')
+
+
+def _calc_status_pick(rows, period):
+    """THE ONE RULE for "which of a month's status rows IS the month's status" (owner report
+    2026-10-06, index §6q).
+
+    `/calc-status/{period}` matched `.in_('period', _pvariants(period)).limit(1)` with NO ordering,
+    so where a month is stored under more than one spelling the answer was whichever row the
+    database happened to hand back first. The house org holds both '2026-07' and 'July 2026'
+    (measured 2026-10-06), and the WRITER only ever claims the canonical spelling — so a read could
+    return a finished legacy row while a run was in flight, render "✓ Calculated", invite a second
+    press and earn the single-flight guard's 409. That is the reported defect's other half.
+
+    The order is: the canonical spelling wins; then a row that says a run is IN FLIGHT, because a
+    running row is the only one that can be wrong in the dangerous direction; then the most recently
+    started, then the most recently finished. Pure, so the proof harness drives it directly."""
+    if not rows:
+        return None
+    canon = _canon_period(period)
+
+    def key(r):
+        return (
+            0 if (r or {}).get('period') == canon else 1,
+            0 if str((r or {}).get('calc_status') or '').strip().lower() in CALC_RUNNING_STATES else 1,
+        )
+
+    def recency(r):
+        return (str((r or {}).get('calc_started_at') or ''), str((r or {}).get('calc_finished_at') or ''))
+
+    # Two passes rather than one clever key: the first two terms sort ASCENDING (best = 0) and the
+    # recency terms sort DESCENDING, and mixing the two directions in one key is how this kind of
+    # rule quietly gets the order backwards.
+    best = sorted(rows, key=recency, reverse=True)
+    return min(best, key=key)
+
+
 @router.get("/calc-status/{period}")
 def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('calc_status').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
-    out = dict(r.data[0]) if r.data else {'calc_status': 'not_run'}
+    r = client.schema('commcalc').table('calc_status').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute()
+    picked = _calc_status_pick(r.data or [], period)
+    out = dict(picked) if picked else {'calc_status': 'not_run'}
     # WHAT THE LANDING HOOK DID FOR THIS MONTH (index §6l) — queued / calculated / refused / failed / off, as ONE
     # sentence the Rep Incentive page renders ("Auto-calculated at … from the upload of …"). Built by the hook's
     # own `view` from the row it wrote; best-effort, so this status read can never fail on it.
