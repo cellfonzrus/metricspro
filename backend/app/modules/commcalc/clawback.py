@@ -23,7 +23,15 @@ thing a person could pick from a list with no clawback on it.
 So the class is NOT "Boost's withholding rows are missed". The class is:
 
     **A CLAWBACK WAS RECOGNISED BY A CATEGORY NAME NOBODY CAN DECLARE, SO IT WAS RECOGNISED
-    NOWHERE — AND, BEING DECLARED AS EARNINGS, IT NETTED SILENTLY INTO COMMISSION.**
+    NOWHERE — AND, DECLARED UNDER A PAY CATEGORY, IT NETTED AWAY ANONYMOUSLY INSIDE COMMISSION.**
+
+Stated exactly, because it is money (corrected 2026-10-06 against the live rows, which the Boost
+commission audit measured independently): those 474 rows ARE negative, and the pay engine DOES
+already subtract them, so no commission total is overstated by them. What is wrong is that the
+subtraction is ANONYMOUS — the money reads as less commission earned rather than as commission the
+carrier took back, so no flag exists, no appeal can be filed, and nobody can ask whether it came
+back the following month. This report does not change a single total; it names what the subtraction
+was.
 
 Fix the class: recognise a clawback by **the direction the processor moved the money**. Every
 processor feed carries that, it is already a registered fact, it needs no tenant to declare
@@ -38,6 +46,23 @@ one function that applies it. This module imports both. If a third feed is added
 detection follows it with no edit here, and `harness_clawback_lock.py` FAILS THE BUILD if any
 module under `backend/app` goes back to testing a literal clawback category string, or if a second
 sign table appears.
+
+THE OTHER SIGN HOME, AND WHY IT IS NOT THIS ONE (asked by the Boost commission numbers audit,
+2026-10-06). The house has a SECOND declared sign fact: `commcalc.column_mapping.sign_convention`
+(migs 1006/1008, labels in `commission_ledger.SIGN_CONVENTION_LABELS`). It is not a duplicate of
+`FEED_SHAPES` and must not be used here, because the two govern DISJOINT tables:
+
+    column_mapping.sign_convention   an UPLOAD's amount COLUMN, per (org, report, carrier) — which
+                                     sign the sheet being mapped into commission_ledger means.
+    processor_ledger.FEED_SHAPES     a PROCESSOR FEED's own rows (raw_payment_detail and friends),
+                                     verified against live rows, no mapping involved.
+
+A clawback here is read off the second, so `raw_payment_detail` needs no tenant declaration to be
+classified and a tenant with no mapping row is not silently unclassifiable. The audit's point stands
+as a boundary, not a merge: no `sign_convention` row should ever be declared FOR a processor feed's
+amount column, because the feed is not an upload and nothing would read it. If a processor feed ever
+does arrive by upload, it gets a mapping row and `FEED_SHAPES` is where that is reconciled — one
+home, still, and `harness_clawback_lock.py` fails the build if a second sign table appears here.
 
 WHAT A CLAWBACK IS, STATED ONCE
 ───────────────────────────────
@@ -180,10 +205,11 @@ def declaration_findings(rows, category_of, feed="epay", pay_cats=None):
 
       `undeclared`   debits under a type the org has never mapped. Unknowable, not zero.
       `as_earnings`  debits under a type the org declares as a PAY category. These ARE the
-                     clawbacks this report counts — and because they are declared as earnings, the
-                     same rows net into the pay engine's commission bucket with no sign of having
-                     been taken back. That is a MONEY statement, so it is surfaced for a ruling
-                     rather than silently re-declared here.
+                     clawbacks this report counts. Their amounts are NOT missing from pay: being
+                     negative under a pay category, the engine already subtracts them. They are
+                     missing a NAME — the subtraction is indistinguishable from commission never
+                     earned. Re-declaring the type would move the same money onto a different P&L
+                     line, so it is a MONEY statement surfaced for a ruling, never changed here.
       `outside_pay`  debits the org declares as something other than pay. Correctly excluded; listed
                      so "nothing here" can be told apart from "nothing looked".
     """

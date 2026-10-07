@@ -19745,9 +19745,16 @@ type; it mapped it to `Commission`, which is the only honest thing a person coul
 with no clawback on it.
 
 **The class, named rather than the instance** (CLAUDE.md "a fix is a DESIGN fix"): *a clawback was
-recognised by a category name nobody can declare, so it was recognised nowhere — and, being declared
-as earnings, it netted silently into commission.* "Boost's withholding rows are missed" is the
-instance. A feed that renames its withholding line next quarter breaks a name test again, which is
+recognised by a category name nobody can declare, so it was recognised nowhere — and, declared under
+a pay category, it netted away anonymously inside commission.* "Boost's withholding rows are missed"
+is the instance.
+
+**Stated exactly, because it is money** (corrected 2026-10-06, cross-checked by the Boost commission
+numbers audit against the live rows): the 474 rows ARE negative and the pay engine DOES already
+subtract them, so no commission total is overstated and this report changes no total. What is wrong
+is that the subtraction is ANONYMOUS — it reads as commission never earned rather than commission
+taken back, so there is no flag, no appeal, and no way to ask whether it was paid the following
+month. The report supplies the name, not the arithmetic. A feed that renames its withholding line next quarter breaks a name test again, which is
 the failure mode `pay_data_quality` measured at **$288,813** for quarter-named promo lines.
 
 ### 55.2 ONE HOME — "is this feed row money the carrier took back"
@@ -19768,6 +19775,16 @@ nobody classified).
 `pay_data_quality.PLACEABLE_CATEGORIES` dereferenced, minus the phantom `Chargeback` entry this
 module exists to replace. Add a third feed shape there and clawback detection follows it with no
 edit here. RULE TWO holds: no carrier, tenant or payment-type literal drives behaviour.
+
+**The OTHER sign home, and why it is a boundary rather than a duplicate** (raised by the Boost
+commission numbers audit, 2026-10-06). `commcalc.column_mapping.sign_convention` (migs 1006/1008,
+labels in `commission_ledger.SIGN_CONVENTION_LABELS`) declares which sign an UPLOAD's amount COLUMN
+means, per (org, report, carrier), on its way into `commission_ledger`. `processor_ledger.FEED_SHAPES`
+declares what a PROCESSOR FEED's own rows mean (`raw_payment_detail` and friends) — no mapping
+involved. The tables are disjoint, so the two cannot drift about the same number, and **no
+`sign_convention` row should ever be declared for a processor feed's amount column**: the feed is
+not an upload and nothing would read it. This report reads the second home, which is why
+`raw_payment_detail` needs no tenant declaration to be classified.
 
 | the fact | its ONE home | who dereferences it |
 |---|---|---|
