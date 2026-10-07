@@ -475,6 +475,33 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_feed_read',),
         },
     },
+    'clawback_direction': {
+        "question": 'Is this processor-feed row money the carrier TOOK BACK — and was it recognised '
+                    'by the DIRECTION the money moved, or by a category name no tenant can declare?',
+        "homes": ('app/modules/commcalc/clawback.py',),
+        "index": ('55.2',),
+        "locks": ('harness_clawback_lock.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/flags.py': ('_clawback',),
+            'app/modules/commcalc/router.py': ('_cb',),
+            'app/modules/commcalc/withholding_report.py': ('_cb',),
+        },
+    },
+    'appeal_state_machine': {
+        "question": 'What are the legal appeal states for money the carrier has not paid, which '
+                    'transitions are allowed, and who may stamp them?',
+        "homes": ('app/modules/commcalc/discrepancy_appeals.py',),
+        "index": ('15.3', '55.4'),
+        "locks": ('harness_appeal_one_machine_lock.py',),
+        # TWO row homes, ONE machine: discrepancy_results (mig 947) and commcalc.flags (mig 1060)
+        # carry byte-identical column names so `apply_appeal` patches either with no branch.
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_da',),
+            'app/modules/commcalc/withholding_report.py': ('APPEAL_STATES',),
+        },
+    },
     'pay_feed_balance': {
         "question": 'Did this pay figure account for every dollar the carrier paid, or did it '
                     'silently drop what it could not place?',
@@ -484,6 +511,9 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/accessory_cost_audit.py': ('_f', 'pdq'),
+            # §55.2 — the one clawback test dereferences PLACEABLE_CATEGORIES for "which categories
+            # are pay", minus the phantom `Chargeback` entry it exists to replace.
+            'app/modules/commcalc/clawback.py': ('PLACEABLE_CATEGORIES',),
             'app/modules/commcalc/commission_drilldown.py': ('_pdq',),
             'app/modules/commcalc/commission_engine.py': ('_pdq_cfg',),
             'app/modules/commcalc/plan_pay_gate.py': ('_pdq',),

@@ -568,6 +568,14 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/commission-discrepancy', label: 'Commission Discrepancy', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // COMMISSION WITHHOLDING (owner ask 2026-10-06, index §55, mig 1060): the activations the
+    // carrier took commission BACK on — what was taken, whether it came back in a later month, the
+    // processor's own payment leg beside it, and the appeal state. Its home is this group because
+    // the findings ARE flag rows (the registered CHARGEBACK type), so this is the queue's report
+    // rather than a second store. Scopes are byte-identical to its Commission Discrepancy sibling,
+    // so this changes what is REACHABLE and nothing about who may see it; the server additionally
+    // refuses it to anyone without the carrier-commission grant (payout_audience).
+    { href: '/commcalc/commission-withholding', label: 'Commission Withholding', icon: '🔙', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions', tileOnly: true },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // First NAV home for the ingest-guard quarantine queue (page pre-existed, menu-less; admin tier).
@@ -653,6 +661,14 @@ export const NAV: NavGroup[] = [
     // off) + the /recovery open-claims chase list. Management scope (all/market) — it exposes the
     // org-wide unpaid ledger and appeal actions, same tier as its recon siblings above.
     { href: '/commcalc/commission-discrepancy', label: 'Commission Discrepancy', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // COMMISSION WITHHOLDING (owner ask 2026-10-06, index §55, mig 1060): the activations the
+    // carrier took commission BACK on — what was taken, whether it came back in a later month, the
+    // processor's own payment leg beside it, and the appeal state. Its home is this group because
+    // the findings ARE flag rows (the registered CHARGEBACK type), so this is the queue's report
+    // rather than a second store. Scopes are byte-identical to its Commission Discrepancy sibling,
+    // so this changes what is REACHABLE and nothing about who may see it; the server additionally
+    // refuses it to anyone without the carrier-commission grant (payout_audience).
+    { href: '/commcalc/commission-withholding', label: 'Commission Withholding', icon: '🔙', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions', tileOnly: true },
     // Vendor Rebate History (index §27, mig 1005) — what the carrier statement says it OWES, landed
     // per line. A LANDING view: it books nothing, so it is not gated like the money reports; it is
@@ -1232,6 +1248,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/commission-legs', 'comm'],
   ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
   ['/commcalc/discrepancy', 'comm'], ['/commcalc/commission-discrepancy', 'comm'], ['/commcalc/carrier-vs-pay', 'comm'],
+  ['/commcalc/commission-withholding', 'comm'],
   ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
   ['/commcalc/epay-fee-recon', 'comm'],
   ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],

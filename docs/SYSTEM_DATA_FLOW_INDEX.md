@@ -6183,6 +6183,7 @@ rendering the resolved name.
 | `commcalc.raw_ma_daily_tx` — via the onboarding intake | `_ingest_mapped_df` from the intake's `ma_daily_tx` layout (slice replace on `account_id` × `tx_date`, `upload_trace.source='onboarding-intake'`, §30.8) | the mig-939 bill-pay reader (`_ma_billpay_pred` row filter, `_vidapay_account_resolver`) — re-read through after landing |
 | `commcalc.raw_custom_import` (Activation Details, per device) — as the inventory check's SECOND sold-source | (unchanged) | `_intake_activation_rows` → `_cr_resolve_activation_details` (+ `mdn`) → `inventory_sold_recon.reconcile(activation_rows=)` (§11a, §30.8) |
 | `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row; **`basis` mig `1036`** — which cash the count counted, nullable, CHECK-tied to `envelope_report.ENVELOPE_BASES`, never backfilled) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`; amounts **and** basis from the one `envelope_report.count_row_fields` call) | `GET /closing/envelope-report` (a stored basis is resolved by `envelope_report.counted_basis`, which reports `recorded: false` for a pre-`1036` row rather than inventing one — §47.10), notify `closing_envelope_report` |
+| `commcalc.flags` — **APPEAL columns `appeal_status` / `appeal_note` / `appealed_by` / `appealed_at` (mig `1060`)**, byte-identical to mig 947's on `discrepancy_results` so ONE state machine patches both (§55.4) | detectors write the finding (`calc_flags`, `portout_flags`, `cash_watchdog`, `void_watchdog`, asset / account / payables / closing) through `flag_persist.sync` — never the appeal columns; the appeal is written ONLY by `PATCH /commcalc/commission-withholding/{flag_id}/appeal` (pure `discrepancy_appeals.apply_appeal`) | `GET /commcalc/flags`, `/compliance`, the Management Watchdog areas (§53), `GET /commcalc/commission-withholding` (§55) |
 | `commcalc.ops_chargeback` (mig `504`) | detection sweeps (`ops_chargebacks.py`: missed_closing/missed_dm_verify) **+ `POST /closing/envelope-count`** (reason `envelope_short`, parent rows only, amount = actual shortage) | policy editor (reasons-in-the-wild), decide endpoints, commission settlement `_settle_ops_chargebacks`/`_ops_chargeback_deductions` (`commcalc/router.py:11265-11550`) |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
@@ -6435,6 +6436,8 @@ rendering the resolved name.
 | `POST /discrepancy/run` (Boost + MA engines, best-effort each) | `19056` | §15 B2B ↔ MA recon |
 | `GET /discrepancy/{period}` (`?source=boost\|ma`) | `19099` | §15 |
 | `GET /discrepancy-appeals` (period-RANGE + source/status/appeal_status/store/date filters; distinct path so `/discrepancy/{period}` can't swallow it) | `commcalc/router.py` (`list_discrepancy_appeals`, beside the discrepancy block) | §15 Commission Discrepancy hub |
+| `GET /commcalc/commission-withholding` (**Commission Withholding**, §55; period RANGE + store / market / rep / appeal / outcome; carrier-gated by the registered key `commission_withholding`) — the clawback, the later-month recovery and the processor's own payment leg beside it, never netted | `commcalc/router.py` (`commission_withholding`); pure: `commcalc/withholding_report.py` + `commcalc/clawback.py`; reuses `marketing/router._es_commission_events` + `event_sales` for the join | §55, §55.3 |
+| `PATCH /commcalc/commission-withholding/{flag_id}/appeal` (the SAME appeal state machine as `/discrepancy-appeals`; touches only the four mig-1060 columns, never a detector field or an amount) | `commcalc/router.py` (`set_withholding_appeal`) | §55.4 |
 | `PATCH /discrepancy-appeals/{row_id}` (appeal state machine — validate against CURRENT row state, who/when stamped; org-scoped read-then-update) | `commcalc/router.py` (`set_discrepancy_appeal`) | §15 Commission Discrepancy hub |
 | `GET/POST /ma-payment-rules`, `PATCH/DELETE /ma-payment-rules/{rule_id}` | `19200-19270` | §15 B2B ↔ MA recon |
 | `GET /activation-counts/{period}` (b2b Activation-Details store/market counts; buckets via `activation_bucketing`, mig 313 — `total_activation` excludes BOTH Upgrade families) | `activation_counts` (search `@router.get("/activation-counts/`) | §15 Activation-Details basis |
@@ -6677,6 +6680,8 @@ rendering the resolved name.
 | **What a MA payout row CAN be attributed to (store / rep / date / activation)** | per `raw_ma_daily_tx` order-type family: rows, amount (−`retail_cost`), stores resolved via the mig-314 index, reps (`user_name`), dated (`tx_date`), and rows LINKED to a known `activation_order` through the mig-308 `order_number` key — with `ATTRIBUTION_NO_ACTIVATION_REASON` on the rest. Live: retroactive spiff 230/230 store, 230/230 rep, **0/230 activation** | `ma_store_pnl.ma_payout_attribution` (PURE read-out beside `ma_tx_bookings`/`ma_tx_coverage` — not a second join, moves no dollar); proof `harness_commission_backoffice_recon.py` §J |
 | **MA daily-tx booking COVERAGE (“everything has a reason”)** | every `raw_ma_daily_tx` `retail_cost` dollar, grouped by `order_type`, split into BOOKED (the line `ma_tx_bookings` books it to) and UNBOOKED with a reason — per-org `commission_org_config.pl_ma_unbooked_reasons` (mig `992`), else the literal `'no business rule configured'` (= `ma_recon.NO_RULE_REASON`, mig `312`) | `ma_store_pnl.ma_tx_coverage` (PURE; re-runs the SAME classification, moves no dollar) + `load_unbooked_reasons`; proof `harness_commission_backoffice_recon.py` §E |
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
+| Commission the carrier TOOK BACK, and whether it came back (per activation: taken back / paid back later and in which months / still out / not known) | the processor feed's DEBIT legs (`clawback.classify_row` — the direction the money moved, never a category name) folded per activation; the recovery is commission paid STRICTLY AFTER the last clawback leg, looked up by the one number-OR-device join with its IMEI fence | `withholding_report.withheld_findings` → `recovery` → `epay_leg` → `summarize`; findings persist as `commcalc.flags` CHARGEBACK rows via `flag_persist` (no new writer). The still-out total EXCLUDES every activation that could not be looked up and names the excluded amount (§55.3) |
+| The processor payment MADE against an activation, beside what was taken back | the feed's CREDIT legs for the same keys — reported in parallel and **never summed** with the clawback: they are two facts and one net number hides both | `withholding_report.epay_leg`; `GET /commcalc/commission-withholding` (§55.3) |
 | Commission not received + APPEAL pipeline (open $ / appeal filed / won / denied / written off, per range) | `discrepancy_results` rows (both engines) + mig-947 appeal columns; buckets computed by the PURE `discrepancy_appeals.summarize_appeals` (`no_rule_count` = the LITERAL `'no business rule configured'` marker only — evidence-first, never inferred) | `GET /discrepancy-appeals` → Commission Discrepancy hub cards (`commission-discrepancy/page.tsx`); chase list = mig-098 `/recovery/claims` (reused) |
 | Card settlement recon — store→MARKET + the market option list | THE canonical union index ONLY (`core.scope.market_by_code` / `org_market_options`, §13a/§13c) — the roster read takes ADDRESS only, so no market-vocabulary site exists to pin. Deliberately CANONICAL rather than the closing family's OVERLAY: a settlement-only store has no roster row, and a `store_mapping`-only market would otherwise vanish from the filter | `closing/router.external_credit_recon` (pinned `CANONICAL` in `harness_market_enumeration_guard`; nothing to pin in `harness_market_resolution_guard`); truth table `harness_external_credit_recon.py` §J |
 | Sales tax collected (report) / Sales tax payable (BS liability, mig `991`) | `raw_sales.tax` ∪ `daily_sales_feed.tax` (mig `105`), voids excluded; report headline `tax` also excludes `trans_type=='Return'`, the liability figure `tax_net` includes them (refunded tax is not owed). Store key = `coa.store_resolver` (§13a) for BOTH. Balance = cumulative from the accrual start through as-of, less remittances | **ONE pure pass** `commcalc/tax_collected.py aggregate()` → `GET /commcalc/tax-collected` (first caller) **and** `balance_sheet.sales_tax_payable_bookings` via `statement_engine.build_inputs_full` (`account_config.sales_tax_basis`: off default / collected; `sales_tax_accrual_start` or the earliest taxed sale). Remittance = a negative `journal_entries` row folded by label in `engine._assemble` — never a second ledger. Proof `harness_tax_collected.py` §I/§J + `harness_balance_sheet_truths.py` §J |
@@ -19788,3 +19793,178 @@ console surface that stops reading the derived index, stops gating it with `canA
 deciding the assistant's door fails the build (B10a–B10f), and so does a route index that stops
 declaring itself generated, drops an export, grows a permission rule or turns `preauth` into a bare
 flag (B18–B22).
+
+---
+
+## 55. COMMISSION WITHHOLDING — the activations the carrier took commission BACK on (owner ask 2026-10-06, mig `1060`)
+
+**Owner ask 2026-10-06, verbatim:** *"create a report for commisison withodimng which is a payment
+type in commimssion details reports uploaded everymonth- ti should be under flags which shows the
+acrrier has not paid the commimssion , need the standard filters as we enever got paid for these
+actiavtions and have to see what is the apeal status and whether they got paid int eh following
+month s- also need a report whch shows parrallely oif the epay payment was made for these
+activations"*
+
+### 55.1 The defect the ask uncovered, and the class it is an instance of
+
+A `CHARGEBACK` flag type has been registered since migration 002 and its detector has lived in
+`commcalc/flags.py` just as long. **It had never fired.** Measured live 2026-10-06, house org:
+
+| fact | measured |
+|---|---|
+| `commcalc.flags` rows with `flag_type = 'CHARGEBACK'` | **0, ever** |
+| `raw_payment_detail` rows with `payment_type = 'Commission Withholding'` | **474**, $7,123.39 taken back, latest 2026-10-05 |
+| what `commcalc.payment_categories` declares that type as | **`Commission`** |
+
+Both numbers are correct, and that is the defect. The detector asked `row['category'] ==
+'Chargeback'`, and `Chargeback` is a category **no org has ever been able to declare**:
+`payment_categories` is a free-text map the tenant fills in, and `pay_data_quality` had already
+written the consequence down in a comment — *"the calculator tests for it and `payment_categories`
+has never contained it, so that bucket has always been $0"*. The house org HAS mapped the payment
+type; it mapped it to `Commission`, which is the only honest thing a person could pick from a list
+with no clawback on it.
+
+**The class, named rather than the instance** (CLAUDE.md "a fix is a DESIGN fix"): *a clawback was
+recognised by a category name nobody can declare, so it was recognised nowhere — and, declared under
+a pay category, it netted away anonymously inside commission.* "Boost's withholding rows are missed"
+is the instance.
+
+**Stated exactly, because it is money** (corrected 2026-10-06, cross-checked by the Boost commission
+numbers audit against the live rows): the 474 rows ARE negative and the pay engine DOES already
+subtract them, so no commission total is overstated and this report changes no total. What is wrong
+is that the subtraction is ANONYMOUS — it reads as commission never earned rather than commission
+taken back, so there is no flag, no appeal, and no way to ask whether it was paid the following
+month. The report supplies the name, not the arithmetic. A feed that renames its withholding line next quarter breaks a name test again, which is
+the failure mode `pay_data_quality` measured at **$288,813** for quarter-named promo lines.
+
+### 55.2 ONE HOME — "is this feed row money the carrier took back"
+
+`backend/app/modules/commcalc/clawback.py`. A feed row is a commission clawback when BOTH hold:
+
+1. **the processor DEBITED it** — under that feed's own sign convention; and
+2. **the org's own category map places the type in a PAY category** — money that would otherwise
+   have reached a rep or the commission line.
+
+Condition 2 keeps a device purchase, a SIM charge or a terminal fee out: those are debits too and
+they are not commission coming back. A debit whose type the org has NEVER mapped is reported as
+`undeclared`, never guessed and never dropped (§19.26, "missing beats wrong", applied to a debit
+nobody classified).
+
+**Nothing is restated.** The sign rule stays in `processor_ledger.FEED_SHAPES` /
+`classify_amount` — per feed, verified against live rows — and the pay categories are
+`pay_data_quality.PLACEABLE_CATEGORIES` dereferenced, minus the phantom `Chargeback` entry this
+module exists to replace. Add a third feed shape there and clawback detection follows it with no
+edit here. RULE TWO holds: no carrier, tenant or payment-type literal drives behaviour.
+
+**The OTHER sign home, and why it is a boundary rather than a duplicate** (raised by the Boost
+commission numbers audit, 2026-10-06). `commcalc.column_mapping.sign_convention` (migs 1006/1008,
+labels in `commission_ledger.SIGN_CONVENTION_LABELS`) declares which sign an UPLOAD's amount COLUMN
+means, per (org, report, carrier), on its way into `commission_ledger`. `processor_ledger.FEED_SHAPES`
+declares what a PROCESSOR FEED's own rows mean (`raw_payment_detail` and friends) — no mapping
+involved. The tables are disjoint, so the two cannot drift about the same number, and **no
+`sign_convention` row should ever be declared for a processor feed's amount column**: the feed is
+not an upload and nothing would read it. This report reads the second home, which is why
+`raw_payment_detail` needs no tenant declaration to be classified.
+
+| the fact | its ONE home | who dereferences it |
+|---|---|---|
+| is this row money taken back | `clawback.classify_row` / `is_clawback` | `commcalc/flags.py` CHARGEBACK detector (**repaired**), `withholding_report.withheld_findings` |
+| which sign of a feed is a debit | `processor_ledger.FEED_SHAPES` + `classify_amount` | `clawback.debit_of`, the Processor Debits & Credits report |
+| which categories are pay | `pay_data_quality.PLACEABLE_CATEGORIES` | `clawback.pay_categories` (drops the phantom) |
+| which commission belongs to this activation | `event_sales.commission_event` / `index_commission_events` / `_line_event_uids` (**with its IMEI fence**) | `withholding_report.recovery` |
+| the appeal states and legal transitions | `discrepancy_appeals.py` | `PATCH /discrepancy-appeals/{row_id}` **and** `PATCH /commission-withholding/{flag_id}/appeal` |
+| does a manager's ruling survive the next upload | `flag_persist.py` | the findings ARE `commcalc.flags` rows |
+
+### 55.3 The report — four questions, one row per activation
+
+`backend/app/modules/commcalc/withholding_report.py` (PURE):
+
+- **what was taken back** — `withheld_findings`, folding every debit leg onto ONE finding per
+  activation with first/last date, the types and the periods. A manager appeals an activation, not a
+  ledger line. The activation key prefers the **device serial**, because the clawback leg is keyed by
+  it and carries no number at all (349 house rows, 349 imei, 0 mdn — §23s.8); a leg with neither
+  identifier is NAMED by type+date, never dropped.
+- **did it come back** — `recovery`, the commission paid against that same activation **strictly
+  after the last clawback leg**, with the months it landed in. Money paid before the clawback is not
+  a recovery of it; a payment carrying no date is reported as `undated_paid` and counted neither way.
+- **were we paid at all** — `epay_leg`, the processor's own payment legs for that activation,
+  **credits only and never netted** against the clawback. Two facts; one net number hides both.
+- **where is the appeal** — the state a manager set, through the one state machine.
+
+**ABSENCE IS NEVER A ZERO, twice.** Both legs carry the three-state census: an activation that could
+not be looked up reads `unmatchable` with its reason, is kept OUT of the still-out headline and is
+counted beside it; a `$0.00` where the answer is unknown would be a fabricated loss. `summarize`
+states the excluded amount in words rather than leaving it to subtraction, and `no_appeal` is a real
+bucket — "nobody has ruled" must be visible, not implied.
+
+### 55.4 Where the appeal state lives, and why there
+
+Migration `1060` adds `appeal_status` / `appeal_note` / `appealed_by` / `appealed_at` to
+`commcalc.flags`. Three homes were possible and two were rejected:
+
+- **a new table** — rejected; a third store of "money the carrier has not paid and what we are doing
+  about it" is the duplicate the build gate exists to stop.
+- **`discrepancy_results`** (mig 947's appeal columns) — rejected; its rows are two recon engines'
+  output, each delete-then-inserting its own `(org, period, source)` slice, and adding a third slice
+  owner to a money engine's table is not a free change.
+- **`commcalc.flags`** — chosen. The findings ARE flag rows, so `flag_persist` already guarantees the
+  one property an appeal needs: a ruling is never erased by the next run, and a cleared condition
+  retires in place. The owner asked for the report to live under Flags, and the ruling belongs on the
+  row the manager was looking at.
+
+The column names are **byte-identical to mig 947's**, so `discrepancy_appeals.apply_appeal` patches
+either table with no branch and no second truth table. **No CHECK constraint**, mirroring 947: the
+legal states and the legal TRANSITIONS are one fact, enforced where both are known; a CHECK could
+only restate the weaker half and would be a second copy to keep in step.
+
+### 55.5 The surface
+
+| what | where |
+|---|---|
+| `GET /commcalc/commission-withholding` (period RANGE, spelling-agnostic; store / market / rep / appeal / outcome filters) | `commcalc/router.py` (`commission_withholding`) |
+| `PATCH /commcalc/commission-withholding/{flag_id}/appeal` (the state machine; touches only the four appeal columns) | `commcalc/router.py` (`set_withholding_appeal`) |
+| page `/commcalc/commission-withholding` — StandardFilterBar (period range + store + market + rep), the two legs side by side, per-row appeal buttons | `frontend/src/app/(platform)/commcalc/commission-withholding/page.tsx` |
+| NAV — **Flags & Compliance** and **Incentives**, scopes byte-identical to its Commission Discrepancy sibling | `frontend/src/lib/rbac.ts`, `reports.ts`, `route-index.ts` |
+| carrier gate — refused without `carrier_commission_view` | `payout_audience.MANAGER_ONLY_SURFACES` key `commission_withholding` |
+
+**NO NEW WRITER.** The findings come from the existing `calc_flags` pass during a calculation — the
+detector this PR repaired — so there is no sweep, no second detector and no new source value. A
+clawback present in the FEED with no finding yet is reported as `pending_calculation` with the
+reason ("the calculation has not been run for that month"), never as a quietly shorter report.
+
+### 55.6 What is REPORTED rather than repaired, and what is excused
+
+**The money finding.** `Commission Withholding` is declared as `Commission`, so the same 474 rows
+also net into the pay engine's commission bucket with nothing on screen saying they were clawed back.
+`clawback.declaration_findings` surfaces that — with the amount, per type — in a banner on the page.
+Re-declaring it **moves money**, so it is the owner's ruling, not this PR's (CLAUDE.md: a defect found
+in live data is REPORTED, never "fixed" by code that hides it).
+
+**The three siblings left alone**, each because it BOOKS money off that dead bucket:
+
+| site | what it books | why it waits |
+|---|---|---|
+| `commcalc/gp_report.py` | the per-number `chb` bucket feeding **gross profit** | money; owner ruling |
+| `commcalc/router.py` (`cb_items`) | `commcalc.chargeback_items`, which the **P&L chargebacks line** books | money; owner ruling |
+| `commcalc/calculator.py` | the per-login `chb` bucket in **rep pay** | money; and the commission engine is owned by the Boost commission numbers audit in flight |
+
+`commcalc.commission_bucket`'s `chargebacks` bucket is excused separately: it classifies an uploaded
+STATEMENT's line label and books it to the P&L, so it answers the same question for a different
+source and wiring it to the sign rule would move money too.
+
+### 55.7 The locks
+
+| lock | fails the build on |
+|---|---|
+| `backend/harness_clawback_lock.py` | a category-name clawback test reappearing anywhere under `backend/app`; a second sign table being declared; a caller that stops dereferencing the one home. Carries an **EXACT excuse inventory** of the three money sites — a NEW site fails, and so does an excused one that gets fixed without being removed, so "excused" cannot quietly become "forgotten". 12 negative controls, each RED, plus 8 non-violations that must NOT be caught (an internal reason code, a filter selector, a P&L line key, a docstring naming the defect). |
+| `backend/harness_appeal_one_machine_lock.py` | a second appeal transition table; an `appeal_status` writer that bypasses `apply_appeal`; the mig-1060 columns drifting from mig 947's or from the patch builder's keys; a CHECK constraint restating the states. |
+| `backend/harness_clawback.py` | the sign rule, the pay-category test, the undeclared reporting, `declaration_findings`, and the REGRESSION — the live house shape is invisible to the old test and found by the new one. |
+| `backend/harness_withholding_report.py` | the leg folding, the serial-first key, the strictly-after cutoff, the IMEI fence, the credits-only parallel leg, the two three-state censuses, `summarize`'s honesty, and the live-shape regression end to end. |
+
+### 55.8 Money posture
+
+**BOOKS NOTHING, PAYS NOBODY, RE-DECLARES NOTHING.** `clawback.py` and `withholding_report.py` write
+no amount basis, rate, tier, schedule or paid/earned column, and no payout path reads anything they
+produce. The repaired detector writes `commcalc.flags`, which `flag_persist` states moves no money.
+The only behaviour change to an existing surface is that the Flags page and the Management Watchdog's
+Sales vs Commission area will now show CHARGEBACK findings that have always existed in the feed.

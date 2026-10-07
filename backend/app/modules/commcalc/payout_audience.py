@@ -138,6 +138,12 @@ MANAGER_ONLY_SURFACES = (
      "pages": ("/commcalc/discrepancy",)},
     {"key": "commission_discrepancy", "label": "Commission Discrepancy",
      "endpoints": ("/discrepancy-appeals",), "pages": ("/commcalc/commission-discrepancy",)},
+    # Commission Withholding (index §55): the activations the carrier took commission BACK on, with
+    # the appeal state and the processor's own payment leg beside each. Carrier money on both legs,
+    # so it sits at the same tier as its siblings above rather than on the open Flags page.
+    {"key": "commission_withholding", "label": "Commission Withholding",
+     "endpoints": ("/commission-withholding", "/commission-withholding/{flag_id}/appeal"),
+     "pages": ("/commcalc/commission-withholding",)},
     # a drill inside other pages (no page of its own) — refused on the server, nothing to hide in the nav
     {"key": "commission_device", "label": "Device commission story",
      "endpoints": ("/commission-device",), "pages": ()},
