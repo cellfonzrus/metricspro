@@ -6250,6 +6250,8 @@ rendering the resolved name.
 | `storeops.dm_visit_priority_rule` | `1050` | the tenant-configurable DM visit priority order (activations → accessories → KPI, seeded); the dropdown's OPTIONS are not here — they are dereferenced from `targets_engine.CATEGORIES` + `commcalc.carrier_kpi_metric` (§47.17) |
 | `storeops.dm_visit_assignment` | `1050` | which store a DM is assigned on which day, `manual` or `auto`, with the reason the priority rules picked it; unique on (org, date, DM, store), which is what makes the hourly fill idempotent (§47.17) |
 
+| `commcalc.payment_categories` | the tenant's OWN payment-type → pay-category map (free text, tenant-filled). ONE reader: **`commcalc/payment_category.py`** (`load_map`/`category_of`/`declared_categories`) — nine private readers existed before it and are an exact excused inventory in `harness_payment_category_home_lock.py`, every one a money path. A type with no row is **not** a category: reported as not classified, never guessed (live 2026-10-07: $573,241.39, 72% of 60 days of the house feed). Sentinel + placeable set dereferenced from `pay_data_quality`. Surfaces: the §57.2 Category filter/column on the processor ledger, §55 withholding — §57.1 |
+
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
@@ -6379,7 +6381,7 @@ rendering the resolved name.
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
-| `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options` |
+| `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options`. `categories=` filters by the org's own declared pay category, with `NO_CATEGORY_ID` for money whose payment type it never mapped — §57.2 |
 | `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing |
 | `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
 | `GET /sales-report` | `15792` | §3 |
@@ -6554,6 +6556,7 @@ rendering the resolved name.
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Which month does this feed row belong to, and what does this upload replace?** — the row's OWN data date, and the DAYS the file covers; never the period an operator picked or the month a sweep ran in. All or nothing: a row that cannot prove its day keeps the period replace | `data_lineage_registry.day_keyed_date_columns()` (+ `PERIOD_GRAIN_REASONS` for the archives) | ONE parser `commcalc/feed_period.py` (`period_of_day` / `month_spread` / `day_stamp`); dereferenced by the manual upload and the nightly sweep; lock `harness_feed_day_grain.py` (85) — §19.46. Live 2026-10-05: 80,614 payment-detail rows / $579,926.24 were filed under the wrong month, October reading 28x its own $15,460.69 |
 | **Is this background job running, and may its control be pressed?** — a press is a request; the job runs until the SERVER says otherwise, so a run in flight disables its own button | `job-run.isRunning` / `buttonState` / `settleStatus` / `nextPollDelay` | every job control dereferences it (⚡ Run Calculation, the daily-closing and connector Run-now buttons, the auto-calc notice); `commcalc.router._calc_status_pick` decides WHICH `calc_status` row is the month's; lock `frontend/prove_job_run.mjs` (87) — §6q. Live 2026-10-06: the August run took 56s while the page asked once at 2s and the button never disabled, so a second press earned the single-flight 409 |
+| **Is this processor line commission or a rebate?** — the org's own declared category for the payment type, with "never mapped" kept as its own answer rather than folded into either | `commcalc.payment_categories` (the tenant's map) × the processor feed's own `payment_type` | `payment_category.category_of` → `processor_ledger.assemble` → `GET /commcalc/processor-ledger` (`categories=`), Category column + filter on the page; proof `harness_payment_category.py` (30), lock `harness_payment_category_home_lock.py` — §57 |
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $68,479.60 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $70,157.10 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Have I read ALL of this feed, or just the first N rows?** — a read of a growing feed carries NO literal row ceiling; a failed read raises instead of returning a short list | `core/feed_read.read_all` (no `limit=` parameter exists to pass) | every pay-path and GP-path feed read dereferences it; lock `harness_pay_feed_balance.py` §G — §19.48. Live 2026-10-06: `.limit(50000)` against July's 82,999 payment-detail rows read $60,994.46 of carrier commission where the feed holds $123,700.62, losing 12 of 122 rep logins |
@@ -20026,3 +20029,102 @@ of re-deriving the question.
 **NOTHING.** No endpoint, table, migration or figure changes — the four charts read exactly the data
 they read before, the PNG export is byte-unchanged (§B5 proves the captions sit OUTSIDE the capture
 refs), and no money is booked, moved or re-declared.
+
+---
+
+## 57. PAY CATEGORY — telling commission from a rebate on a processor line (owner ask 2026-10-07)
+
+Owner, verbatim: *"in the EPay Daily Debits & Credits, we need one more filter for the rebates and
+commssion categories as it is virtually impossible to check which item is commsison or rebate by a
+user"*.
+
+He is right, and the reason is structural. The Processor Daily Debits & Credits report (§31) groups
+by the carrier's own `payment_type`, and the carrier ships 40+ of those per quarter ("Simplified SIM
+Loading Bounty - Month 4", "2026 Q3 Promo PIC Offer"). Which of them is commission and which is a
+rebate is not in the string — it is in the org's OWN `commcalc.payment_categories` map, which the
+report never read. A human had to know 154 mappings by heart.
+
+### 57.1 ONE HOME — "which pay category did this org declare for this payment type"
+
+`backend/app/modules/commcalc/payment_category.py`. `load_map(client, org_id)` is the read;
+`category_of(map, payment_type)` is the answer; `label_of` adds the human sentinel;
+`declared_categories` is the option list, derived from the tenant's rows.
+
+**The duplicate it replaced was already there.** `commcalc.payment_categories` had **nine** private
+readers before this file, each folding the lookup key its own way — some `.strip()`, some
+`.strip().lower()`, some neither — so `' Boost Auto Top-Up'` could be categorised by one caller and
+read as unmapped by the next. Adding a tenth for this filter would have been the defect.
+`harness_payment_category_home_lock.py` now fails the build if a tenth appears, and the nine are an
+**exact inventory with reasons**, every one of them a money path (rep pay, gross profit, the pay-feed
+balance, the two commission-leg trends, vendor POs, payables, event-sales attribution). Rewiring
+them moves dollars between buckets and is a separate surfaced change; the commission engine is
+additionally owned by the Boost commission numbers audit in flight.
+
+| the fact | its ONE home | who dereferences it |
+|---|---|---|
+| which category did the org declare for this type | `payment_category.category_of` | `processor_ledger.assemble`, `router._withholding_category_of` (**rewired**) |
+| the word for "never mapped" | `pay_data_quality.UNCATEGORISED` | `payment_category.label_of` |
+| which categories the pay engine can place | `pay_data_quality.PLACEABLE_CATEGORIES` | `payment_category.placeable_categories` |
+| which sign of a feed is a debit | `processor_ledger.FEED_SHAPES` + `classify_amount` | unchanged |
+
+RULE TWO holds: no category name appears in the module's code. "Commission", "Re-imbursement" and
+"MDF" are rows in the tenant's table, and a category the house has never heard of is offered the
+moment the tenant declares it. A tenant with an empty map is told nothing is declared — which is
+Total's live state (0 rows, measured 2026-10-07) — rather than being shown invented categories.
+
+### 57.2 The surface
+
+`GET /api/v1/commcalc/processor-ledger` gains `categories=` (comma-separated), and every cell now
+carries `category`. The page gains a **Categories** dropdown beside Transaction types, a **Category**
+column on each line, and the same column in the export so what you see is what leaves the page.
+
+The option list follows the §13c enumeration doctrine exactly as the market filter does: the org's
+**declared** categories ∪ the ones its own rows carry, never "whatever loaded", so a category
+declared but unused this month is still offered. `processor_ledger.NO_CATEGORY_ID`
+(`"(not classified)"`) is the sentinel for money whose type the org never mapped — appended by the
+page, and only when a visible cell needs it. It is **not** a category: `declared_categories` never
+returns it, and a category-less cell answers only to the explicit pick, never to a real category and
+never missing from the unfiltered view.
+
+### 57.3 Reported, never repaired — the hole the filter makes visible
+
+Measured live 2026-10-07, house org, last 60 days of `raw_payment_detail`:
+
+| declared category | money |
+|---|---|
+| **no category at all** | **$573,241.39** (72% of the feed, 14 payment types) |
+| Commission | $184,890.49 |
+| MDF | $32,000.00 |
+| Re-imbursement | $2,307.49 |
+
+That is why the page was unreadable: most of it had no category to read. Eight of the fourteen
+unmapped types have an **exact prior-year twin that IS declared** — `2024 Q3 Promo PIC Offer` →
+`Re-imbursement`, against `2026 Q3 Promo PIC Offer` → nothing — so the carrier renaming its promos
+each quarter is the whole mechanism. This is the same failure `pay_data_quality` measured at
+$288,813 (§19.26) and the same class §55.1 names.
+
+**Nothing is mapped by this change.** Deciding that a 2026 promo is a rebate moves money between the
+commission and rebate buckets across gross profit and rep pay, so it is the owner's ruling. The
+report states the amount per type in a banner and offers the `(not classified)` filter; the engine's
+own `unmapped_payment_type` reason (§19.26) already explains that this money reaches no rep.
+
+### 57.4 Proof
+
+`harness_payment_category.py` — 30 checks, stdlib-only, DB-free under `env -i`: the folding rule
+(case, surrounding and inner whitespace), absence reported as absence (including a mapping whose
+category cell is blank, and a failed read degrading to "nothing declared" rather than to a wrong
+category), the tenant-derived option list including a category the house does not know, the filter
+(single, multiple, case-insensitive, the `(not classified)` pick, AND-composition), and the fold
+carrying the category without widening its key or changing a total.
+
+`harness_payment_category_home_lock.py` — the home exists where `module_graph` says, no NEW reader
+of the table, the excused nine present **exactly** (a rewired-but-still-listed site fails too), no
+restated sentinel or placeable set, RULE TWO on the module's code strings, and the ledger wired to
+the home rather than reading the table itself.
+
+### 57.5 Money posture
+
+**Books nothing, maps nothing, re-declares nothing.** `payment_category.py` is read-only, writes no
+column, and no payout path reads anything it produces. The ledger's totals are unchanged — the
+harness asserts the money still ties across the new column. The one behaviour change to an existing
+surface is that the ledger now shows a Category column and names the unclassified money out loud.
