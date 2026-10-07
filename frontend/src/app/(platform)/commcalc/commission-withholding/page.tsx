@@ -42,6 +42,34 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SetupNotice } from '@/lib/setupNotice'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
+
+// The server's name for "this activation could not be looked up" (withholding_report.RECOVERY_UNKNOWN).
+// Named once here because three places have to agree that such a row shows no exposure figure at all:
+// the table cell, the export column and the sort accessor. A $0 there would be a fabricated loss.
+const RECOVERY_UNKNOWN = 'unmatchable'
+
+// Click-a-header sorting reads every cell through the ONE comparator in `@/lib/table-sort`
+// (owner directive 2026-08-10) — no asc/desc state of this page's own. The accessor is module scope so
+// the memo does not recompute each render, and it hands the comparator the RAW value, never the
+// formatted string: `withheld` as a number sorts numerically, and a null `recovered` / `epay_paid` is
+// an UNKNOWN that `compareValues` sinks to the bottom in both directions rather than reading as $0.
+// `still_out` is deliberately empty for an unmatchable finding, the same omission the export makes, so
+// a column of real exposure never sorts a guess into the middle of it.
+function cell(r: Row, field: string): any {
+  switch (field) {
+    case 'store': return r.store_code || r.store
+    case 'rep': return r.rep
+    case 'activation': return r.imei || r.mdn
+    case 'taken_back_on': return r.last_withheld_on
+    case 'withheld': return r.withheld
+    case 'outcome': return RECOVERY_LABEL[r.recovery_state] || r.recovery_state
+    case 'recovered': return r.recovered
+    case 'still_out': return r.recovery_state === RECOVERY_UNKNOWN ? null : r.still_out
+    case 'epay_paid': return r.epay_paid
+    default: return null
+  }
+}
 
 type Row = {
   flag_id: string; period: string; imei: string; mdn: string
@@ -173,6 +201,12 @@ export default function CommissionWithholdingPage() {
     return true
   }), [rows, filt, recFilter, appealFilter, search])
 
+  // Biggest exposure first by default, because that is the order a manager appeals in. Both the state
+  // and the comparison come from the shared mechanism — this page owns no asc/desc of its own — and
+  // `sorted` is what the table AND the export read, so what is on screen is what leaves the page
+  // (RULE FIVE, what-you-see-is-what-exports).
+  const { sorted, sort, toggle } = useTableSort(filtered, cell, { field: 'withheld', dir: 'desc' })
+
   const setAppeal = async (row: Row, next: string) => {
     let note: string | null = ''
     if (next) {
@@ -212,7 +246,7 @@ export default function CommissionWithholdingPage() {
       subtitle: `${from} → ${to} · taken back, paid back, and the processor payment beside it`,
       filename: `commission-withholding-${from}-${to}`,
       sheets: [{
-        name: 'Withholding', rows: filtered, columns: [
+        name: 'Withholding', rows: sorted, columns: [
           { header: 'Period', get: (r: Row) => r.period },
           { header: 'Store', get: (r: Row) => r.store_code || r.store },
           { header: 'Market', get: (r: Row) => r.market },
@@ -225,7 +259,7 @@ export default function CommissionWithholdingPage() {
           { header: 'Outcome', get: (r: Row) => RECOVERY_LABEL[r.recovery_state] || r.recovery_state },
           { header: 'Paid back later', get: (r: Row) => r.recovered },
           { header: 'Paid back in', get: (r: Row) => Object.keys(r.recovered_months || {}).join(', ') },
-          { header: 'Still out', get: (r: Row) => r.recovery_state === 'unmatchable' ? '' : r.still_out },
+          { header: 'Still out', get: (r: Row) => r.recovery_state === RECOVERY_UNKNOWN ? '' : r.still_out },
           { header: 'Why not known', get: (r: Row) => r.recovery_reason || '' },
           { header: 'Processor paid', get: (r: Row) => r.epay_paid },
           { header: 'Processor paid state', get: (r: Row) => EPAY_LABEL[r.epay_state] || r.epay_state },
@@ -382,19 +416,20 @@ export default function CommissionWithholdingPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1280 }}>
             <thead>
               <tr>
-                <th style={th}>Store · rep</th>
-                <th style={th}>Activation</th>
-                <th style={th}>Taken back</th>
-                <th style={{ ...th, textAlign: 'right' }}>Amount</th>
-                <th style={th}>Outcome</th>
-                <th style={{ ...th, textAlign: 'right' }}>Paid back</th>
-                <th style={{ ...th, textAlign: 'right' }}>Still out</th>
-                <th style={{ ...th, textAlign: 'right' }}>Processor paid</th>
-                <th style={th}>Appeal</th>
+                <SortableTh field="store" sort={sort} onSort={toggle} style={th}>Store · rep</SortableTh>
+                <SortableTh field="activation" sort={sort} onSort={toggle} style={th}>Activation</SortableTh>
+                <SortableTh field="taken_back_on" sort={sort} onSort={toggle} style={th}>Taken back</SortableTh>
+                <SortableTh field="withheld" sort={sort} onSort={toggle} style={{ ...th, textAlign: 'right' }}>Amount</SortableTh>
+                <SortableTh field="outcome" sort={sort} onSort={toggle} style={th}>Outcome</SortableTh>
+                <SortableTh field="recovered" sort={sort} onSort={toggle} style={{ ...th, textAlign: 'right' }}>Paid back</SortableTh>
+                <SortableTh field="still_out" sort={sort} onSort={toggle} style={{ ...th, textAlign: 'right' }}>Still out</SortableTh>
+                <SortableTh field="epay_paid" sort={sort} onSort={toggle} style={{ ...th, textAlign: 'right' }}>Processor paid</SortableTh>
+                {/* The appeal column holds buttons, not a value — nothing to compare. */}
+                <SortableTh field="appeal" sort={sort} onSort={toggle} style={th} disabled>Appeal</SortableTh>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(r => {
+              {sorted.map(r => {
                 const next = ALLOWED_NEXT[r.appeal_status || ''] || []
                 const months = Object.entries(r.recovered_months || {})
                 return (
@@ -435,7 +470,7 @@ export default function CommissionWithholdingPage() {
                     </td>
                     <td style={num}>{money(r.recovered)}</td>
                     <td style={{ ...num, fontWeight: r.still_out > 0 ? 600 : 400 }}>
-                      {r.recovery_state === 'unmatchable' ? '—' : fmt(r.still_out)}
+                      {r.recovery_state === RECOVERY_UNKNOWN ? '—' : fmt(r.still_out)}
                     </td>
                     <td style={num}>
                       {money(r.epay_paid)}
