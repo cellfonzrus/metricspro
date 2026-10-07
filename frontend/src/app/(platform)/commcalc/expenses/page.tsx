@@ -14,6 +14,27 @@ const shortPeriod = (p: string) => {
   return m ? `${m[1].slice(0, 3)} '${m[2].slice(2)}` : p
 }
 
+// ── THE LABOUR ROWS THIS PAGE AUTO-FILLS — a MIRROR of the backend's one home ────────────────────
+// Owner report 2026-10-07: *"the finance module is doubling the salaries, it is appearing in the
+// store expenses and also in separate line as the wages/ hourly payroll"*.
+//
+// This page is where the duplicate is CREATED: it ships the two row names below in DEFAULT_CATS and
+// auto-fills them from StoreOps worked hours and the calculated rep commissions — the very same two
+// sources `backend/app/modules/account/coa.py` books the `wages` and `rep_comm` P&L lines from.
+//
+// THE REGISTRY OF RECORD is `backend/app/modules/commcalc/labour_vocabulary.py`
+// (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`). These constants are the display-side mirror
+// of it, exactly as `accounts/_components/scopeFinancials.ts` mirrors `analysis.EXPENSE_SECTIONS`:
+// `backend/harness_labour_vocabulary.py` READS THE PYTHON SOURCE and FAILS THE BUILD if the two ever
+// differ, so a row name cannot be added, renamed or auto-filled here without the P&L learning that
+// it must not count it twice. The resolved per-org vocabulary is also served on
+// `GET /commcalc/expenses/apply-config` as `labour_rows`, for a reader that wants the live answer.
+// Only the rows the platform itself FILLS are here — a row it merely ships in DEFAULT_CATS (e.g.
+// 'Owner / Mgmt Salaries') is not auto-filled, is not re-derived anywhere, and is therefore not a
+// duplicate. The backend home states the membership test in full.
+const LABOUR_PAYROLL_ROWS = ['Employee Salaries'] as const
+const LABOUR_COMMISSION_ROWS = ['Employee Commission'] as const
+
 // Default expense list (name + Fixed/Variable). The user can add ad-hoc expenses.
 const DEFAULT_CATS: { name: string; type: string }[] = [
   { name: 'Rent / Lease', type: 'Variable' }, { name: 'B2B Platform Fee', type: 'Fixed' },
@@ -27,7 +48,7 @@ const DEFAULT_CATS: { name: string; type: string }[] = [
   { name: 'Owner / Mgmt Salaries', type: 'Fixed' },
 ]
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
-const SALARY_ROW = 'Employee Salaries'
+const SALARY_ROW = LABOUR_PAYROLL_ROWS[0]       // the auto-filled salary row (see the registry note above)
 // 'June 2026' → '2026-06' for the storeops payroll month filter (no Date() to dodge the UTC off-by-one).
 const MONTHS: Record<string, number> = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 }
 function periodToMonth(p: string): string {
@@ -51,7 +72,7 @@ function buildMonthPool(anchor: string, back: number): string[] {
   }
   return out
 }
-const COMMISSION_ROW = 'Employee Commission'
+const COMMISSION_ROW = LABOUR_COMMISSION_ROWS[0]  // the auto-filled commission row (same registry)
 // Matrix-upload support: map a store owner's own category labels → the canonical expense names, and the
 // rows to skip (computed totals / targets, which aren't expenses).
 const CAT_ALIASES: Record<string, string> = {
