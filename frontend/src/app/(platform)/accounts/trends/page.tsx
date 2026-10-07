@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { TrendChart, type TrendSeries } from '@/components/TrendChart'
+import ChartNote from '@/components/ChartNote'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { captureChartPng } from '@/lib/chart-capture'
@@ -184,18 +185,21 @@ export default function TrendsHubPage() {
                 series={[{ key: 'per_sub', name: 'Residual / sub', axis: 'left', money: true }, { key: 'commission', name: 'Commission', color: '#94a3b8', axis: 'right', money: true, dashed: true }]}
                 leftLabel="residual per subscriber ($)" rightLabel="commission paid ($)" />
             </div>
+            <ChartNote>Solid line: what the carrier pays you each month for one active customer — that month’s residual divided by the phone numbers you were actually paid on. Dashed line: what you paid reps that month. Solid rising = each customer is worth more. Dashed rising while solid falls = you paid more to win weaker customers, which is the pattern to act on.</ChartNote>
           </div>
           <div className="card" style={card}>
             <div style={cardTitle}>🧾 Total Expenses</div>
             <div ref={expRef}>
               <TrendChart data={expChart} height={260} series={[{ key: 'total', name: 'Total expenses', color: '#dc2626', money: true }]} leftLabel="total store expenses ($)" />
             </div>
+            <ChartNote>What the stores in view were booked to spend that month — rent, utilities, salary rows and the rest. Rising faster than revenue below is the squeeze. A month nobody entered inherits the previous month’s hand-entered figures, so a perfectly flat line can mean “nothing changed” or “not entered yet” — check the Expenses sheet before reading into it.</ChartNote>
           </div>
           <div className="card" style={card}>
             <div style={cardTitle}>🧮 Commissions Paid</div>
             <div ref={commRef}>
               <TrendChart data={commChart} height={260} series={[{ key: 'total', name: 'Commissions', color: '#f59e0b', money: true }]} leftLabel="commission paid to reps ($)" />
             </div>
+            <ChartNote>Every rep commission payout for the month — the same money as the dashed line in the first chart, on its own scale so you can read the dollars. Rising on its own is not bad; rising while revenue below stays flat means you are paying more for each dollar sold.</ChartNote>
           </div>
           <div className="card" style={card}>
             <div style={cardTitle}>📈 Net Profit <span style={{ fontWeight: 400, color: 'var(--text3)' }}>& revenue</span>{gp?.pending_months?.length ? <span style={{ fontWeight: 400, color: '#f59e0b' }}> · {gp.pending_months.length} month(s) computing</span> : ''}</div>
@@ -204,6 +208,7 @@ export default function TrendsHubPage() {
                 series={[{ key: 'net_profit', name: 'Net profit', color: '#16a34a', money: true }, { key: 'total_rev', name: 'Revenue', color: '#2e75b6', money: true, dashed: true }]}
                 leftLabel="net profit & revenue ($)" />
             </div>
+            <ChartNote>Dashed line: revenue. Solid line: what is left after rep commission, store expenses and what the phones cost you. The gap between the two lines is the cost of running the business — widening means margin improving, converging means margin shrinking. These months come from a saved calculation that fills in a few at a time, so “computing” above means those months are not calculated yet. It is the Gross Profit report’s bottom line, which measures differently from the P&L’s — compare each report to itself.</ChartNote>
           </div>
         </div>
       )}

@@ -479,7 +479,7 @@ FACTS: dict[str, dict] = {
         "question": 'Which pay CATEGORY did this org declare for this payment type — is this line '
                     'commission, a rebate, or something it has never mapped?',
         "homes": ('app/modules/commcalc/payment_category.py',),
-        "index": ('56.1',),
+        "index": ('57.1',),
         "locks": ('harness_payment_category_home_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
@@ -527,7 +527,7 @@ FACTS: dict[str, dict] = {
             # are pay", minus the phantom `Chargeback` entry it exists to replace.
             'app/modules/commcalc/clawback.py': ('PLACEABLE_CATEGORIES',),
             'app/modules/commcalc/commission_drilldown.py': ('_pdq',),
-            # §56.1 — the one payment-category home dereferences UNCATEGORISED (the word for "never
+            # §57.1 — the one payment-category home dereferences UNCATEGORISED (the word for "never
             # mapped") and PLACEABLE_CATEGORIES rather than restating either.
             'app/modules/commcalc/payment_category.py': ('PLACEABLE_CATEGORIES', 'UNCATEGORISED'),
             'app/modules/commcalc/commission_engine.py': ('_pdq_cfg',),

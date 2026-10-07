@@ -174,7 +174,7 @@ jobs:
         run: python3 harness_withholding_report.py | tee -a "$GITHUB_STEP_SUMMARY"
       # Owner ask 2026-10-07 ("impossible to check which item is commsison or rebate"): the pay
       # CATEGORY got one home because commcalc.payment_categories already had NINE private readers
-      # folding its key nine ways. These two keep the tenth from appearing — index §56.
+      # folding its key nine ways. These two keep the tenth from appearing — index §57.
       - name: Run the payment-category home lock (one reader, the excused nine, RULE TWO)
         working-directory: backend
         run: python3 harness_payment_category_home_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
