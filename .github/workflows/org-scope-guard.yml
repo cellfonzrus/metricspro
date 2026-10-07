@@ -144,6 +144,35 @@ jobs:
         working-directory: backend
         run: python3 harness_discrepancy_appeals.py | tee -a "$GITHUB_STEP_SUMMARY"
 
+  commission-withholding-locks:
+    # A CLAWBACK IS RECOGNISED BY THE MONEY'S DIRECTION, IN ONE HOME (2026-10-06, index §55). The
+    # CHARGEBACK detector asked `category == 'Chargeback'` — a category commcalc.payment_categories has
+    # never been able to contain — so in four years it fired ZERO times while the house feed carried 474
+    # 'Commission Withholding' rows worth $7,123.39 taken back, declared as `Commission` and therefore
+    # also netting into commission earnings. Stdlib + ast, no pip install. The locks: one home for the
+    # test, no second sign table, no revived category-name test (with an EXACT excuse inventory of the
+    # three money sites, so a new one fails AND a fixed one left listed fails), every caller wired, one
+    # appeal state machine across both its tables, and the mig-1060 columns matching mig 947's. The
+    # proofs carry the regression that reproduces the live shape end to end.
+    name: One clawback test, one appeal state machine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the clawback lock (one home, no second sign table, the excuse inventory)
+        working-directory: backend
+        run: python3 harness_clawback_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the appeal one-machine lock (one transition table, mig 1060 ⇄ mig 947)
+        working-directory: backend
+        run: python3 harness_appeal_one_machine_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the clawback proof (the sign rule, the declarations, the live-shape regression)
+        working-directory: backend
+        run: python3 harness_clawback.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the withholding-report proof (the cutoff, the IMEI fence, the parallel leg)
+        working-directory: backend
+        run: python3 harness_withholding_report.py | tee -a "$GITHUB_STEP_SUMMARY"
+
   row-save-lock:
     # ONE ROW, ONE SAVE (2026-09-29, index §19.35): HR → Employees & Pay had one save button PER SLICE of a row; the Vzone
     # admin typed hourly rates, pressed the Lunch button, and the pay PATCH was never sent (access log: 4x PUT lunch-config,

@@ -27015,6 +27015,230 @@ def set_discrepancy_appeal(row_id: int, payload: dict, org_id: str = ORG_ID,
     return {"ok": True, "id": row_id, **patch}
 
 
+# ═══ COMMISSION WITHHOLDING — the activations the carrier took commission back on (owner ask
+# 2026-10-06, index §55, mig 1060). *"create a report for commisison withodimng … ti should be under
+# flags which shows the acrrier has not paid the commimssion … have to see what is the apeal status
+# and whether they got paid int eh following month s - also need a report whch shows parrallely oif
+# the epay payment was made for these activations"*.
+#
+# NO NEW WRITER. The findings ARE `commcalc.flags` rows of the registered `CHARGEBACK` type, written
+# by the existing `calc_flags` pass during a calculation — which is the detector this PR repaired, so
+# it finally emits them. `flag_persist` therefore already guarantees that a manager's ruling survives
+# next month's upload and that a cleared condition retires in place. These endpoints READ those rows
+# and attach the two legs the owner asked for, computed live from the feeds:
+#
+#   · DID IT COME BACK  — commission paid against the same activation AFTER the clawback, by month,
+#                         through `marketing/router._es_commission_events` + `event_sales`' one
+#                         number-OR-device join (with its IMEI fence). Never re-derived here.
+#   · WAS WE PAID       — the processor's own payment legs for that activation, beside the clawback
+#                         and never netted against it.
+#
+# Every decision is PURE in `withholding_report.py` / `clawback.py` (proofs
+# harness_withholding_report.py, harness_clawback.py, harness_clawback_lock.py); these endpoints only
+# run queries and delegate. BOOKS NOTHING, PAYS NOBODY. ════════════════════════════════════════════
+
+_WITHHOLDING_FLAG_TYPE = "CHARGEBACK"           # the registered type (flag_registry.TYPES)
+_WITHHOLDING_SOURCE = "payment_detail"          # the source calc_flags stamps on it
+
+
+def _withholding_category_of(org_id: str):
+    """The org's OWN payment-type → category map. One read, the same shape every other caller uses
+    (`description` → `category`); never a copy of anybody's vocabulary in code."""
+    try:
+        rows = (sb().schema("commcalc").table("payment_categories")
+                .select("description,category").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return {}
+    return {str(r["description"]).strip(): r.get("category")
+            for r in rows if (r.get("description") or "").strip()}
+
+
+@router.get("/commission-withholding")
+def commission_withholding(period_from: str = "", period_to: str = "", store: str = "",
+                           market: str = "", rep: str = "", appeal_status: str = "",
+                           recovery_state: str = "", org_id: str = ORG_ID,
+                           authorization: str = Header(default="")):
+    """The Commission Withholding report: one row per open CHARGEBACK finding, each carrying what was
+    taken back, whether commission came back afterwards and in which months, and — in parallel — the
+    processor payment actually made against the same activation.
+
+    Period is a RANGE, spelling-agnostic through `discrepancy_appeals.period_range_variants` (the
+    `_pvariants` doctrine). Store / market / rep narrow it server-side on the same resolvers the rest
+    of the platform uses, so a store spelled differently in the feed cannot silently drop out.
+
+    `appeals_ready` is False on a pre-1060 database: the rows, both legs and every total still
+    render, and only the appeal control is withheld. A clawback present in the FEED with no finding
+    yet is counted in `pending_calculation` rather than quietly missing.
+    """
+    _require_carrier_view(authorization, org_id, "commission_withholding")
+    from app.modules.commcalc import discrepancy_appeals as _da
+    from app.modules.commcalc import withholding_report as _wr
+    from app.modules.commcalc import clawback as _cb
+    try:
+        pvars = _da.period_range_variants(period_from, period_to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    client = sb()
+
+    # ── 1. the findings. Open by default: a retired finding is history, not a queue item. ────────
+    def _q(with_appeal_filter):
+        q = (client.schema("commcalc").table("flags").select("*")
+             .eq("org_id", org_id).eq("flag_type", _WITHHOLDING_FLAG_TYPE)
+             .in_("period", pvars).eq("status", "open"))
+        if (store or "").strip():
+            q = q.eq("store_code", store.strip())
+        if (rep or "").strip():
+            q = q.eq("epay_salesperson", rep.strip())
+        if with_appeal_filter:
+            ap = (appeal_status or "").strip().lower()
+            if ap == "none":
+                q = q.is_("appeal_status", "null")
+            elif ap:
+                q = q.eq("appeal_status", ap)
+        return q.order("amount", desc=True).limit(5000).execute().data or []
+
+    appeals_ready = True
+    try:
+        flags = _q(True)
+    except Exception:
+        appeals_ready = False               # pre-1060: the appeal columns do not exist yet
+        try:
+            flags = _q(False)
+        except Exception as e:
+            raise HTTPException(500, f"withholding query failed: {e}")
+
+    # ── 2. the feed, for both legs and for the declaration findings ──────────────────────────────
+    cat_of = _withholding_category_of(org_id)
+    try:
+        pay_detail = _feed_read.read_all(
+            lambda: client.schema("commcalc").table("raw_payment_detail")
+            .select("id,mdn,imei,payment_type,amount,period,payment_date,business_address,"
+                    "rep_username")
+            .eq("org_id", org_id).in_("period", pvars))
+        feed_loaded = True
+    except Exception:
+        pay_detail, feed_loaded = [], False
+
+    # ── 3. market resolution on the SAME canonical chain every other report uses ─────────────────
+    try:
+        _resolve_market, _ = _store_market_resolver(client, org_id)
+    except Exception:
+        _resolve_market = lambda _x: ""          # noqa: E731 — a failed read must not drop rows
+
+    # ── 4. the findings, shaped for the pure legs. The flag row is the row of record, so its own
+    #       identifiers and money are what the legs are computed against — never a re-derivation.
+    base = []
+    for f in flags:
+        base.append({
+            "flag_id": f.get("id"), "key": str(f.get("flag_key") or f.get("id")),
+            "key_basis": f.get("key_basis"),
+            "imei": str(f.get("imei") or "").replace(".0", "").strip(),
+            "mdn": str(f.get("mdn") or "").replace(".0", "").strip(),
+            "store": f.get("store_address") or "", "store_code": f.get("store_code") or "",
+            "market": _resolve_market(f.get("store_code") or f.get("store_address")) or "",
+            "rep": f.get("epay_salesperson") or "",
+            "withheld": abs(float(f.get("amount") or 0.0)),
+            "rebate_lost": f.get("rebate_lost"), "phone_model": f.get("phone_model"),
+            "period": f.get("period"), "legs": 1, "types": [],
+            "first_withheld_on": str(f.get("transaction_date") or "")[:10],
+            "last_withheld_on": str(f.get("transaction_date") or "")[:10],
+            "description": f.get("description"),
+            "appeal_status": f.get("appeal_status"), "appeal_note": f.get("appeal_note"),
+            "appealed_by": f.get("appealed_by"), "appealed_at": f.get("appealed_at"),
+            "reviewed_by": f.get("reviewed_by"), "action_taken": f.get("action_taken"),
+        })
+    if (market or "").strip():
+        want_m = market.strip().lower()
+        base = [b for b in base if str(b.get("market") or "").lower() == want_m]
+
+    # ── 5. the recovery leg — the platform's one per-line commission read, bounded to these keys ──
+    as_of = _datetime.now(_timezone.utc).date().isoformat()
+    try:
+        from app.modules.marketing.router import _es_commission_events
+        from app.modules.marketing.event_sales import index_commission_events
+        lines = [{"mdn": b["mdn"], "serial_1": b["imei"]} for b in base]
+        events, feeds_loaded, _periods_read, _notes = _es_commission_events(org_id, lines)
+        index = index_commission_events(events)
+    except Exception as e:
+        print(f"WARN commission_withholding recovery leg unavailable: {e}")
+        index, feeds_loaded = {"mdn": {}, "imei": {}, "by_uid": {}}, []
+    rec = _wr.recovery(base, index, as_of=as_of, feeds_loaded=feeds_loaded)
+
+    # ── 6. the parallel payment leg ──────────────────────────────────────────────────────────────
+    par = _wr.epay_leg(rec["rows"], pay_detail, feed_loaded=feed_loaded)
+    rows = par["rows"]
+    rs = (recovery_state or "").strip()
+    if rs:
+        rows = [r for r in rows if r.get("recovery_state") == rs]
+
+    # ── 7. what the feed says but no finding carries yet ─────────────────────────────────────────
+    feed_findings = _wr.withheld_findings(pay_detail, cat_of) if feed_loaded else []
+    have = {b["imei"] for b in base if b["imei"]} | {b["mdn"] for b in base if b["mdn"]}
+    pending = [f for f in feed_findings if f["key"] not in have]
+
+    return {
+        "rows": rows,
+        "cards": _wr.summarize(rows),
+        "appeals_ready": appeals_ready,
+        "appeal_states": list(_da.APPEAL_STATES),
+        "period_from": (period_from or period_to), "period_to": (period_to or period_from),
+        "as_of": as_of, "feeds_loaded": feeds_loaded, "feed_loaded": feed_loaded,
+        "recovery_notes": rec["state_notes"], "cutoff_note": rec["cutoff_note"],
+        "epay_notes": par["state_notes"], "parallel_note": par["parallel_note"],
+        # Evidence-first. The org declaring a clawback as EARNINGS is a money statement, surfaced
+        # for a ruling rather than repaired by this report (index §55).
+        "declarations": _cb.declaration_findings(pay_detail, cat_of) if feed_loaded else None,
+        # "the feed has these and the queue does not" — a calculation that has not run for a month
+        # is a REASON, never a quietly shorter report.
+        "pending_calculation": {
+            "count": len(pending),
+            "withheld": round(sum(f["withheld"] for f in pending), 2),
+            "note": ("These clawbacks are in the feed but have no finding yet, because the "
+                     "calculation has not been run for the month they fall in. Run it and they "
+                     "join the queue." if pending else None),
+        },
+    }
+
+
+@router.patch("/commission-withholding/{flag_id}/appeal")
+def set_withholding_appeal(flag_id: str, payload: dict, org_id: str = ORG_ID,
+                           authorization: str = Header(default="")):
+    """Move ONE withholding finding through the appeal state machine. Body:
+    {appeal_status, appeal_note?} — '' clears back to no-appeal (full NULL reset).
+
+    The transition is decided PURELY by `discrepancy_appeals.validate_transition` against the row's
+    CURRENT state, which is read first and org-scoped (404 when the row is not this org's). That is
+    the SAME state machine `PATCH /discrepancy-appeals/{row_id}` uses, and migration 1060 gave
+    `commcalc.flags` the same four column names so one machine patches both — see
+    harness_appeal_one_machine_lock.py, which fails the build if a second one appears.
+
+    Touches ONLY the four appeal columns. It never writes a detector field, an amount, or the
+    manager's separate `reviewed_by` / `action_taken` review trail.
+    """
+    _require_carrier_view(authorization, org_id, "commission_withholding")
+    from app.modules.commcalc import discrepancy_appeals as _da
+    client = sb()
+    cur = (client.schema("commcalc").table("flags").select("id,flag_type,appeal_status")
+           .eq("org_id", org_id).eq("id", flag_id).limit(1).execute().data) or []
+    if not cur:
+        raise HTTPException(404, "finding not found for this org")
+    if str(cur[0].get("flag_type") or "") != _WITHHOLDING_FLAG_TYPE:
+        raise HTTPException(400, "that finding is not a commission withholding finding")
+    try:
+        patch = _da.apply_appeal(cur[0].get("appeal_status"), payload.get("appeal_status"),
+                                 payload.get("appeal_note"), _caller_uid(authorization),
+                                 _datetime.now(_timezone.utc).isoformat())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        client.schema("commcalc").table("flags").update(patch) \
+            .eq("org_id", org_id).eq("id", flag_id).execute()
+    except Exception as e:
+        raise HTTPException(400, "Could not save the appeal state — run migration "
+                                 f"1060_flag_appeal_state.sql first. [{e}]")
+    return {"ok": True, "id": flag_id, **patch}
+
+
 # ── MA PAYMENT RULES (mig 312) — the owner's uploadable "business rules" for the B2B ↔ MA recon ───
 # A rule EXPLAINS why an activation rung out in B2B is legitimately unpaid in MA Commission / MA TX
 # (e.g. BYOD SIM kits carry no MA payout). No rule = the unpaid activation still reports, with the

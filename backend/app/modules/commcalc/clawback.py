@@ -68,7 +68,7 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO
 PURE: stdlib plus `processor_ledger`'s two registered facts. No I/O, no framework import. Proven
 DB-free by `backend/harness_clawback.py`.
 
-Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §54.
+Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §55.
 """
 from __future__ import annotations
 

@@ -149,6 +149,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/column-mapping' },
   { path: '/commcalc/commission-category-map' },
   { path: '/commcalc/commission-discrepancy' },
+  { path: '/commcalc/commission-withholding' },
   { path: '/commcalc/commission-explain', label: 'Why This Commission', aliases: ['explain commission', 'how was this paid', 'commission explain'] },
   { path: '/commcalc/commission-import' },
   { path: '/commcalc/commission-ledger' },

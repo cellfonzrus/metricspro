@@ -52,7 +52,7 @@ declarations are wrong about the money (a clawback declared as earnings), `clawb
 REPORTS it for a ruling.
 
 PURE: stdlib plus the three modules above. Proven DB-free by `backend/harness_withholding_report.py`.
-Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §54.
+Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §55.
 """
 from __future__ import annotations
 

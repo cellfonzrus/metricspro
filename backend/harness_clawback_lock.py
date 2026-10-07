@@ -1,5 +1,5 @@
 """LOCK — a clawback is recognised by the money's DIRECTION, in one home, or the build fails
-(index §54, owner ask 2026-10-06).
+(index §55, owner ask 2026-10-06).
 
 THE DEFECT (measured live 2026-10-06, house org). `commcalc/flags.py`'s CHARGEBACK detector asked
 `row['category'] == 'Chargeback'`. `commcalc.payment_categories` is a free-text map a tenant fills
@@ -52,7 +52,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 APP = os.path.join(HERE, "app")
 
-ONE_HOME = os.path.join(APP, "modules/commcalc/clawback.py")
+# THE GRAPH IS THE ONE HOME FOR THE RULING (index §19.18 / §50). This lock does not carry its own
+# literal: `module_graph` says which file is allowed to answer this question, and this reads it. A
+# home moved there moves here with no edit.
+from app.modules.core.module_graph import home_under_app   # noqa: E402
+
+ONE_HOME = os.path.join(APP, home_under_app("clawback_direction"))
 SIGN_HOME = os.path.join(APP, "modules/commcalc/processor_ledger.py")
 CALLERS = (os.path.join(APP, "modules/commcalc/flags.py"),
            os.path.join(APP, "modules/commcalc/withholding_report.py"))
@@ -270,7 +275,7 @@ check("C: no excused site was fixed without being removed from the inventory%s"
       not fixed_but_listed)
 check("C: the pay engine's phantom tuple entry is still there to be excluded",
       "Chargeback" in read(os.path.join(APP, "modules/commcalc/pay_data_quality.py")))
-print("     excuse inventory (%d site(s), each money-touching — see §54):" % len(EXCUSED_SITES))
+print("     excuse inventory (%d site(s), each money-touching — see §55):" % len(EXCUSED_SITES))
 for (rel, lit), reason in sorted(EXCUSED_SITES.items()):
     print("       %s %r at line(s) %s" % (rel, lit, found.get((rel, lit), [])))
     print("         %s" % reason)
