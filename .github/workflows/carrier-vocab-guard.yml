@@ -207,6 +207,9 @@ on:
       - "backend/app/modules/account/engine.py"
       - "frontend/prove_pl_drill_path.mjs"
       - "database/migrations/1061_labour_vocabulary_mode.sql"
+      # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
+      - "backend/harness_trends_chart_notes.py"
+      - "frontend/src/components/ChartNote.tsx"
       # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
       - "backend/harness_scope_label.py"
       - "backend/harness_scope_label_lock.py"
@@ -599,6 +602,9 @@ jobs:
       - name: Run the P&L drill-detail proof + lock (a scope explains its own number; no second drill derivation — index §4e)
         working-directory: backend
         run: python3 harness_pl_drill_detail.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the chart-caption lock (every Trends chart says what a move MEANS; one home, ungated — index §56)
+        working-directory: backend
+        run: python3 harness_trends_chart_notes.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
         working-directory: backend
         run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

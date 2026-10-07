@@ -6719,6 +6719,7 @@ rendering the resolved name.
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
 | **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |
 | **Who is a payroll change-log row about?** (employee number, name, store) | `storeops.employees.employee_id` / `name` / `home_store` of the STORED person (event store for shifts / punches) | `storeops/payroll_log_identity.resolve_log_identity`, called only by `_log_payroll_change`; lock `harness_payroll_log_identity_lock.py` (§19.45) |
@@ -20145,3 +20146,60 @@ no amount basis, rate, tier, schedule or paid/earned column, and no payout path 
 produce. The repaired detector writes `commcalc.flags`, which `flag_persist` states moves no money.
 The only behaviour change to an existing surface is that the Flags page and the Management Watchdog's
 Sales vs Commission area will now show CHARGEBACK findings that have always existed in the feed.
+
+---
+
+## 56. A CHART THAT DOES NOT SAY WHAT A MOVE MEANS — the plain-language caption, one home (owner ask 2026-10-07)
+
+Owner, verbatim: *"how to read the Trends report in finance, explain under each graph what that means
+for a lay man"*.
+
+### 56.1 The class, not the instance
+
+The instance was "the four charts on the Finance Trends hub have no explanation". The CLASS is **a
+chart renders a number without telling the reader what moving up or down means** — and the four
+captions would have drifted apart the first time one card got a different font or the fifth chart
+shipped without one. So the caption is not four paragraphs; it is ONE component every chart card
+dereferences, with a lock that fails the build when a card stops doing so.
+
+| fact | ONE home | dereferenced by |
+|---|---|---|
+| what a chart's plain-language caption looks like and where it sits | `frontend/src/components/ChartNote.tsx` | all four chart cards on `frontend/src/app/(platform)/accounts/trends/page.tsx` |
+
+**NOT the `.pg-note` gate.** `globals.css` hides `.pg-note` unless a **Master admin** has turned help
+on (`lib/help-context.tsx`), which is right for a page-top developer banner and wrong here: the
+readers who need "up means what?" are the market managers who can never flip that switch. §A2 of the
+lock proves the caption is ungated. `ChartNote` also holds **no copy of its own** — every word is
+passed by the page, so RULE TWO cannot be broken inside the component.
+
+### 56.2 What the four captions say, and the two conditional numbers they confess
+
+Each caption names what the lines ARE and what a move MEANS. Two of them also carry a trap a lay
+reader would otherwise walk into, both of which are real behaviour documented elsewhere in this index:
+
+| chart | endpoint | the confession |
+|---|---|---|
+| 💵 Residual per subscriber vs commission paid | `GET /account/residual-per-sub` (§7a) | the solid line is an AVERAGE — a few stores with big residual and few paid lines lift it |
+| 🧾 Total Expenses | `GET /commcalc/expenses-trend` (§19.50) | a month nobody entered **inherits** the previous month's hand-entered rows (`commcalc/expenses_effective`), so a flat line can mean "nothing changed" **or** "not entered yet" |
+| 🧮 Commissions Paid | `GET /commcalc/commission-trend` | it is the same money as the first chart's dashed line, on its own scale |
+| 📈 Net Profit & revenue | `GET /commcalc/gp-trend` | the months come from the `gp_snapshot` cache, filled a few per load — "computing" means not calculated yet; and it is the **Gross Profit** report's bottom line, which measures differently from the P&L's |
+
+### 56.3 Siblings — checked, and declared rather than forgotten
+
+The other surfaces answering "read this graph" are `commcalc/comp-trend` (commission-agent-owned) and
+`accounts/analysis` (same `account_trends` grant). Both are **excused, not overlooked**: neither was
+what the owner asked about, and the component is already shared, so wiring either is a one-line change
+with no second implementation. The lock NAMES them (§D3) so the next agent extends the tuple instead
+of re-deriving the question.
+
+### 56.4 The lock
+
+| lock | fails the build on |
+|---|---|
+| `backend/harness_trends_chart_notes.py` | a chart card on the Trends hub without a caption, or a caption without a chart; a second caption implementation typed inline in the chart grid; `ChartNote` acquiring the `.pg-note`/`useHelp` gate or a `return null`; `ChartNote` acquiring copy of its own; a caption reduced to a label or one that stops saying what a MOVE means; the expenses/profit confessions being dropped; a carrier or tenant name in the component or any caption; a declared sibling chart page disappearing. Proven to BITE: deleting one caption turns §B2, §B3 and §C1 red. |
+
+### 56.5 Money posture
+
+**NOTHING.** No endpoint, table, migration or figure changes — the four charts read exactly the data
+they read before, the PNG export is byte-unchanged (§B5 proves the captions sit OUTSIDE the capture
+refs), and no money is booked, moved or re-declared.
