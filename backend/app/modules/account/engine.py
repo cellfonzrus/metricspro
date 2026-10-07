@@ -30,12 +30,33 @@ def _scoped(line, stores_in_scope, include_company_wide):
     by_store = line["by_store"]
     if stores_in_scope is None:
         amt = sum(by_store.values())
+        # Consolidated reads the org-wide roll-up `coa.add` has always kept — byte-identical, and it
+        # also picks up the few lines that write `detail` directly rather than through `add()`.
         detail = dict(line["detail"])
     else:
         amt = sum(v for s, v in by_store.items() if s in stores_in_scope)
-        detail = {}  # detail is company-wide; only meaningful consolidated
+        # ── A SCOPE EXPLAINS ITS OWN NUMBER (owner report 2026-10-07, index §4e) ─────────────────
+        # This used to be `detail = {}` with the comment "detail is company-wide; only meaningful
+        # consolidated" — and that is exactly the defect the owner reported: every per-company and
+        # per-store snapshot stored an EMPTY drill-down, so the dropdown behind a store's summary
+        # line had nothing in it, and a market/store-filtered read (which sums the matched per-store
+        # snapshots in `statement_filter.aggregate`) could only ever sum empty dicts.
+        # `coa.add` now records the drill label at the SAME grain as the dollars, so the detail of a
+        # scope is the sum of its own stores' detail — the same stores whose dollars make `amt`.
+        # Ties by construction: both sides of this `if` are driven by `stores_in_scope`.
+        detail = {}
+        for s in (line.get("detail_by_store") or {}):
+            if s not in stores_in_scope:
+                continue
+            for k, v in (line["detail_by_store"][s] or {}).items():
+                detail[k] = detail.get(k, 0.0) + safe_float(v)
     if include_company_wide:
         amt += line["company_wide"]
+        # The company-wide dollars are already in `amt` for a consolidated read, whose `detail`
+        # above is the roll-up that contains them; only a SCOPE that includes them needs them added.
+        if stores_in_scope is not None:
+            for k, v in (line.get("detail_company_wide") or {}).items():
+                detail[k] = detail.get(k, 0.0) + safe_float(v)
     return _round(amt), {k: _round(v) for k, v in detail.items() if v}
 
 

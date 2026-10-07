@@ -34848,16 +34848,28 @@ def upsert_expense_system_line(period: str, body: UpsertExpenseSystemLineIn, org
 # GET/PUT /expenses/apply-config) and matches an expense_name case-insensitively by SUBSTRING token.
 # The code default {commission, salary} applies until a tenant configures its own set, so protection
 # holds everywhere even before mig 205 runs.
-# Default protected tokens. 'salaries' is listed alongside 'salary' because the match is a plain substring
-# and the real category names are the PLURAL "Employee Salaries" / "Owner / Mgmt Salaries" (which 'salary'
-# alone would miss). All are lowercase; the match lowercases the expense name.
-_EXPENSE_APPLY_DEFAULT_TOKENS = ['commission', 'salary', 'salaries']
+# Default protected tokens — DEREFERENCED, never listed here (owner report 2026-10-07, index §4e).
+#
+# This was the THIRD copy of the platform's labour-row vocabulary: the Expenses sheet ships the row
+# names, each tenant's account_config names them again for the P&L, and this handler spelled the same
+# fact a third way as substring tokens. Three copies of one fact is the duplicate defect the index
+# rules forbid — they drift. The fact now lives in ONE home, `commcalc/labour_vocabulary.py`, and the
+# tokens are DERIVED from the resolved vocabulary (`apply_protection_tokens`), which yields a
+# SUPERSET of the hand-written default this replaced ('commission', 'salary', 'salaries' are all
+# still produced), so nothing that was protected becomes copyable.
+# `harness_labour_vocabulary.py` fails the build if this dereference is replaced by a literal list.
+def _expense_apply_default_tokens():
+    """The house default protected tokens, derived from THE labour vocabulary (one home)."""
+    from app.modules.commcalc import labour_vocabulary as _lv
+    v = _lv.resolve()
+    return list(v["apply_protection_tokens"])
 
 
 def _expense_apply_tokens(client, org_id):
     """The configured expense-name tokens EXCLUDED from cross-month apply (case-insensitive substring
-    match on expense_name). Read from commcalc.expense_apply_config (org-scoped); falls back to the seed
-    default {commission, salary} when the table/rows are absent — degrades gracefully before mig 205."""
+    match on expense_name). Read from commcalc.expense_apply_config (org-scoped); falls back to the
+    labour vocabulary's derived tokens when the table/rows are absent — degrades gracefully before
+    mig 205."""
     try:
         rows = (client.schema('commcalc').table('expense_apply_config')
                 .select('token').eq('org_id', org_id).execute().data) or []
@@ -34866,7 +34878,7 @@ def _expense_apply_tokens(client, org_id):
             return toks
     except Exception:
         pass
-    return list(_EXPENSE_APPLY_DEFAULT_TOKENS)
+    return _expense_apply_default_tokens()
 
 
 def _apply_to_months_expand(source_cells, target_periods, excluded_tokens=None, selection=None):
@@ -34928,7 +34940,12 @@ def _apply_to_months_expand(source_cells, target_periods, excluded_tokens=None, 
 @router.get("/expenses/apply-config")
 def get_expense_apply_config(org_id: str = ORG_ID):
     """The expense-name tokens excluded from 'apply to other months' (commission/salary by default).
-    `source` = 'config' when the org has saved its own set, else 'default' (the code fallback)."""
+    `source` = 'config' when the org has saved its own set, else 'default' (the code fallback).
+
+    ALSO serves `labour_rows` (owner report 2026-10-07, index §4e): the resolved labour-row
+    vocabulary from its ONE home, so the Expenses sheet DEREFERENCES which of its rows the platform
+    auto-fills and the P&L therefore must not count twice, instead of keeping a fourth copy of those
+    names in the page. Read-only; org-scoped; adds no derivation."""
     require_org(org_id)
     client = sb()
     toks = _expense_apply_tokens(client, org_id)
@@ -34939,8 +34956,20 @@ def get_expense_apply_config(org_id: str = ORG_ID):
         configured = bool(rows)
     except Exception:
         configured = False
+    labour = None
+    try:
+        from app.modules.account import coa as _coa
+        _cfg = _coa._account_config(client, org_id)
+        _v = _cfg.get("labour_vocabulary") or {}
+        labour = {"payroll": list(_v.get("payroll_names") or []),
+                  "commission": list(_v.get("commission_names") or []),
+                  "payroll_source": _v.get("payroll_source"),
+                  "commission_source": _v.get("commission_source"),
+                  "mode": _v.get("mode"), "grain": _v.get("grain")}
+    except Exception:
+        labour = None
     return {"tokens": toks, "source": "config" if configured else "default",
-            "default_tokens": list(_EXPENSE_APPLY_DEFAULT_TOKENS)}
+            "default_tokens": _expense_apply_default_tokens(), "labour_rows": labour}
 
 
 class PutExpenseApplyConfigIn(LaxModel):
