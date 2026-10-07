@@ -9,6 +9,13 @@ in-memory client that genuinely filters) — CI: the finance-royalty-proof job (
      with the new tables ABSENT (pre-migration), PRESENT-and-empty, and populated for ANOTHER org (no leak). The
      unclaimed sale lines appear ONLY in the side meta, never on the payload. (Set OLD_COA=<path to the 2f2bdfd coa.py>
      to re-derive the oracle live instead of reading the frozen copy.)
+     MODULO ONE INTENDED CHANGE, stated rather than re-frozen (owner report 2026-10-07, index §4e): a STORE scope now
+     carries its own per-line drill `detail` instead of the empty dict the pre-change `engine._scoped` stored for every
+     scope but consolidated. The oracle is NOT re-captured from the new code — re-freezing would turn a byte-identity
+     lock into a snapshot of whatever the code does today, and the next real regression would be blessed the same way.
+     So the identity is asserted with each STORE scope's line `detail` set aside (consolidated's detail is still
+     compared in full, so a consolidated drill regression still fails), and the change is then asserted POSITIVELY:
+     the store scope's drill-down is non-empty, is what the oracle had empty, and TIES to its own line.
   §B the royalty report books: the heads, the store (via its profit center), the note, the fees below gross profit,
      excluded / unmapped in statement meta; `book_pl=false` books nothing and still reports.
   §C the unclaimed-line map books to a revenue line; a target the royalty report books is suppressed (never both).
@@ -229,16 +236,62 @@ else:
     ORACLE, OLD_SPEC = _o["payload"], _o["pl_spec"]
 check("the oracle is a real statement (revenue booked from the fixture's device + accessory lines)",
       ORACLE["consolidated"]["sections"][0]["subtotal"] == 540.0, ORACLE["consolidated"]["sections"][0]["subtotal"])
+
+
+def without_store_detail(pay):
+    """THE ONE INTENDED DIFFERENCE, set aside — and nothing else (index §4e).
+
+    A STORE scope's per-line drill `detail` is dropped from both sides of the identity, because the
+    pre-change `engine._scoped` stored `{}` there for every scope but consolidated and the fix is
+    precisely that it no longer does. Everything else is compared verbatim: every amount, every
+    label, every note, every section subtotal, every total — and CONSOLIDATED's `detail` too, so a
+    regression in the drill-down a reader actually had still fails here."""
+    out = json.loads(json.dumps(pay, sort_keys=True))
+    for scope, st in out.items():
+        if not str(scope).startswith("store:"):
+            continue
+        for sec in st.get("sections") or []:
+            for ln in sec.get("lines") or []:
+                ln.pop("detail", None)
+    return out
+
+
+ORACLE_NO_STORE_DETAIL = without_store_detail(ORACLE)
+check("the set-aside is NARROW — it changes nothing about the consolidated scope",
+      without_store_detail(ORACLE)["consolidated"] == ORACLE["consolidated"])
+check("…and it really does set something aside on a store scope (the helper is not a no-op)",
+      "detail" in ORACLE["store:" + A]["sections"][2]["lines"][3]
+      and "detail" not in ORACLE_NO_STORE_DETAIL["store:" + A]["sections"][2]["lines"][3])
 L_absent = coa.build_inputs(Client(base_tables(HOUSE), absent=NEW_TABLES), HOUSE, PER)
 L_empty = coa.build_inputs(Client(base_tables(HOUSE)), HOUSE, PER)
 L_other = coa.build_inputs(Client({**base_tables(HOUSE), **other_org_rows()}), HOUSE, PER)
 for name, L in (("new tables ABSENT (pre-migration)", L_absent), ("new tables present, empty", L_empty),
                 ("another org's royalty report / map rules / centers present", L_other)):
-    check("P&L payload == the pre-change oracle — " + name, payload(L, coa.PL_SPEC, [A, B]) == ORACLE)
+    check("P&L payload == the pre-change oracle (modulo a store scope's own drill detail) — " + name,
+          without_store_detail(payload(L, coa.PL_SPEC, [A, B])) == ORACLE_NO_STORE_DETAIL)
+
+# THE INTENDED CHANGE, asserted POSITIVELY — the oracle pinned the defect, so saying "these are
+# equal apart from X" is only half an answer; X itself has to be right.
+_pl_store = payload(L_empty, coa.PL_SPEC, [A, B])["store:" + A]
+_opex_line = _pl_store["sections"][2]["lines"][3]
+check("the store scope's own line carries the fixture's expense row as a drill row",
+      _opex_line["detail"] == {"Rent": 1000.0}, _opex_line.get("detail"))
+check("…and it TIES to the line it sits under",
+      round(sum(_opex_line["detail"].values()), 2) == round(_opex_line["amount"], 2) == 1000.0)
+check("…where the pre-change oracle had an EMPTY drill-down (the defect the oracle pinned)",
+      ORACLE["store:" + A]["sections"][2]["lines"][3]["detail"] == {})
+check("the CONSOLIDATED drill-down is unchanged by all of this",
+      payload(L_empty, coa.PL_SPEC, [A, B])["consolidated"] == ORACLE["consolidated"])
 _mut = base_tables(HOUSE)
 _mut["raw_sales"][1]["ext_price"] = 40.01
 check("NEGATIVE CONTROL: one cent moved in the fixture breaks the comparison (the pin is not vacuous)",
-      payload(coa.build_inputs(Client(_mut), HOUSE, PER), coa.PL_SPEC, [A, B]) != ORACLE)
+      without_store_detail(payload(coa.build_inputs(Client(_mut), HOUSE, PER), coa.PL_SPEC, [A, B]))
+      != ORACLE_NO_STORE_DETAIL)
+_mut2 = base_tables(HOUSE)
+_mut2["store_expenses"][0]["expense_name"] = "Rent and rates"
+check("NEGATIVE CONTROL: a renamed CONSOLIDATED drill row still breaks it (detail is not excused everywhere)",
+      without_store_detail(payload(coa.build_inputs(Client(_mut2), HOUSE, PER), coa.PL_SPEC, [A, B]))
+      != ORACLE_NO_STORE_DETAIL)
 check("the unclaimed sale lines (voids excluded) are REPORTED in the side entry, not booked",
       L_empty["_unbooked_sales"]["unbooked"] == [
           {"department": "Shipping", "category": "UPS Ground", "amount": 25.5, "rows": 1, "stores": [B]},

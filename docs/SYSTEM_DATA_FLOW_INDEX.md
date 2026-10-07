@@ -26,6 +26,7 @@ Primary code homes:
 | 4 | **GP / P&L report** | "How is store gross-profit / P&L built? What's voided? Where's the money booked?" |
 | 4c | **P&L over a month range** | "Export the P&L for several months — a column per month plus a Total, same lines, drill rows and filters as the page — and is each month the same as viewing it alone? Why is a month blank rather than $0.00?" |
 | 4d | **Print each store's P&L** | "Print (or save as PDF) every store's P&L on its own page after picking stores in the P&L menu — and is each page the same as viewing that store alone?" |
+| 4e | **Labour double-count + the drill-down** | "Why is the salary counted twice — once in store expenses and again as Wages / hourly payroll? Why is a store's or a company's drill-down EMPTY, and why don't the rows behind a line tie to the line? How do I drill company → market → store → line?" |
 | 4a | **GP vs P&L — one home for MA commission** | "Why do the Gross Profit report and the P&L disagree about M1 commission, and why does one show a company total where the other shows stores?" |
 | 5 | **Daily Targets & actuals** | "How are daily targets computed vs actuals? What's an 'achieved' number? Accessory $ actual?" |
 | 6 | **Rep commission (Boost)** | "How is a rep paid? premium/byod/upgrade counts, acc/setup/trade-in, tiers, KPIs. Where stored?" |
@@ -1567,6 +1568,184 @@ allow-list now names `plStatement.ts` (the query builder) instead of the page, s
 `/api/v1/account/pl/` itself fails L7. 25/25.
 
 ---
+
+---
+
+## 4e. THE LABOUR DOUBLE-COUNT, and a scope that EXPLAINS ITS OWN NUMBER (owner report 2026-10-07)
+
+Owner Sanjot, verbatim (two complaints, one screenshot — store B-103 / `103 Fulton Ave`, August 2026, house org):
+*"the details are missing and the details with the drop down does not tie any information which appears on the
+summary line, details should be same as on the p&l page, the expenses should be able to drill down, each line
+should be able to drill down to get to each level and finally down to the line level. Also the finance module is
+doubling the salaries, it is appearing in the store expenses and also in separate line as the wages/ hourly
+payroll."*
+
+**Duplicate check (what was searched, what was reused, what was NOT created).** Searched this index for every
+existing mechanism that already answers "which expense rows are labour the statement books elsewhere?" and "what
+makes up this line?": the K2 payroll-authority vocabulary (§4, mig `621`), `labour_coverage.suppression_plan` /
+`.suppression_index` / `.suppresses_row` (the owner's 2026-09-08 commission decision), `expenses_effective` (the
+carry-forward), `coa.route_expense_line` (the source_key routing table), the cross-month apply protection
+(`commcalc/router._expense_apply_tokens`, mig `205`), `engine._scoped`, `statement_filter.aggregate` (§13), the
+Account hub drill-down (`scopeFinancials.ts`), `plStatement.plQuery` / `plStatementRows` (§4d) and `pl_range`
+(§4c). **Every one of them was EXTENDED; no sibling was created.** No new endpoint, no new table, no new
+derivation of a dollar. `statement_filter` was not touched at all — it was already right.
+
+### Part 1 — THE DOUBLE-COUNT
+
+**THE CLASS.** *The platform auto-fills a figure into one surface, then re-derives the same figure from the same
+source on another surface, and the only guard against the resulting double-count is opt-in config that ships
+EMPTY — so the default is wrong and every new tenant starts broken.*
+
+Not hypothetical. `frontend/.../commcalc/expenses/page.tsx` SHIPS `Employee Salaries`, `Employee Commission` and
+`Owner / Mgmt Salaries` in its default category list and **auto-fills** the first two from
+`GET /storeops/payroll-by-store` (worked/scheduled hours) and `GET /commcalc/commission-by-store` (calculated rep
+commissions). `coa.build_inputs` then books the SAME two sources again on their own P&L lines — `wages` from
+`coa.wages_by_store` → `derive_wage_cells` (the same hours) and `rep_comm` from
+`commcalc.rep_commissions.total_payout` (the same commissions). Both copies were subtracted from gross profit.
+
+**Measured live 2026-10-07 — 2 of 3 tenants were double-counting, in two different ways:**
+
+| org | `payroll_expense_names` | `labour_commission_expense_names` | grain | state |
+|---|---|---|---|---|
+| house `00000000-…0001` | `[]` | `[]` | `org` | **both double-counts live** |
+| `854f6d7b-…` | `['DM Salaries','Employee Salaries']` | `['Employee Commission']` | `store` | configured, correct |
+| `f4f1c16e-…` | `['Employee Salaries']` | `[]` | `org` | **commission double-count live** |
+
+House org, B-103 August 2026 — the screenshot, reproduced from the stored snapshot: `rep_comm` **$235.98**,
+`wages` **$4,471.00**, `store_opex` **$13,585.14** (whose rows include Employee Salaries $4,479.16, Employee
+Commission $235.98, Owner / Mgmt Salaries $1,450.00, Dm Salary $850.00), opex subtotal **$18,292.12**, NI
+**$3,026.55**. The commission is byte-identical twice; the salary is the same labour as the estimate beside it.
+
+**THE FIX — one home, a CORRECT default, the tenant still winning.** NEW pure module
+**`backend/app/modules/commcalc/labour_vocabulary.py`** (stdlib, no I/O) holds the platform's OWN labour rows —
+`DEFAULT_PAYROLL_ROWS` = `('Employee Salaries',)`, `DEFAULT_COMMISSION_ROWS` = `('Employee Commission',)`,
+`DEFAULT_PAYROLL_LINE` = `wages` — and `resolve(payroll_cfg, commission_cfg, grain_cfg, mode)`, the ONE
+resolution of "which expense rows are labour this statement already books from its own source".
+
+- **THE MEMBERSHIP TEST, stated so the list cannot grow by vibes:** a row belongs there ONLY if the platform
+  itself PUTS a figure in it **and** re-derives that same figure onto a dedicated P&L line from the same source.
+  A row the platform merely SHIPS in the default category list but never fills — `Owner / Mgmt Salaries`,
+  `Rent / Lease`, `Insurance` — is NOT a duplicate and is NOT there, and neither is a tenant-invented row like
+  the house org's hand-typed `Dm Salary`. This is not fastidiousness: membership CONFERS payroll authority,
+  which SUPPRESSES a store's hours estimate, so listing an unfilled row would let an owner-salary row suppress a
+  store's real employee wage estimate — the silent $0.00 mig `994` added the per-store grain to stop. **Measured
+  live 2026-10-07:** including `Owner / Mgmt Salaries` changed the correction by **$0.00** in all four periods
+  while making **six extra July stores** "payroll authoritative" on the strength of an owner-salary row alone
+  (`T-531`, `T-7812`, `T-902`, `T-957`, `T21880`, `T3560`). Same money, strictly more risk — so it is out.
+
+- **RULE TWO is intact.** These names are the PLATFORM'S shipped defaults, not tenant vocabulary — the platform
+  writes them and auto-fills them, so the platform must know not to count them twice. No `if org ==`, no carrier
+  / tenant / company name, and a non-empty tenant list still **wins wholesale** (never merged — merging would
+  move a configured tenant's statements unasked). `labour_vocabulary_mode='off'` (mig `1061`) is the per-org
+  opt-out and reproduces the pre-2026-10-07 behaviour exactly.
+- **The third copy is gone.** The same fact lived in THREE unwired places: the frontend `DEFAULT_CATS`, each
+  tenant's `account_config`, and `commcalc/router._EXPENSE_APPLY_DEFAULT_TOKENS = ['commission','salary',
+  'salaries']` (the only one whose default was already right). All three now dereference the home:
+  `coa._account_config` reads `resolve(...)` onto all four knobs; `_expense_apply_default_tokens()` DERIVES the
+  protection tokens from the vocabulary (a strict SUPERSET of the hand-written list — nothing protected became
+  copyable); the Expenses sheet keeps a pinned mirror, and the resolved per-org answer is SERVED as
+  `labour_rows` on `GET /commcalc/expenses/apply-config`.
+- **The authority grain is DERIVED, not a fourth knob.** Under the HOUSE vocabulary the grain is forced to
+  `store`: `org` means "one payroll row anywhere suppresses EVERY store's estimate", which is safe for a tenant
+  that listed its own rows but would make a store with no salary row book a silent $0.00 of labour. A tenant with
+  an EXPLICIT vocabulary keeps its stored grain.
+- **Salary lands on the salary line.** The house `payroll_expense_routes` send the payroll row to `wages`
+  (`DEFAULT_PAYROLL_LINE`), so the P&L shows the salary on its own line instead of inside "rent / utilities /
+  supplies" — which is also why the drill-down was unreadable. Routing moves a dollar between two OPEX lines;
+  **net income is unchanged by it.** `Owner / Mgmt Salaries` and `Dm Salary` stay on `store_opex` as the store
+  expenses they are, and Part 2 is what makes them legible: they are now drill rows of that store's own line. A manual row routed to `wages` now carries its own name as a drill row (a
+  `payroll_gross` PRODUCER row still carries none — it is one exact figure, not a breakdown).
+- **Three states, never two** — unchanged and reused: a commission row with NO rep pay for that store-month KEEPS
+  booking and is named with its dollars (`labour_coverage.suppression_plan`); a suppressed row is REMOVED, never
+  rendered $0.00.
+- **A tenant-invented labour row is NOT claimed.** The house org's hand-typed `Dm Salary` is not auto-filled by
+  the platform and nothing re-derives it, so it is not a duplicate and keeps booking as the store expense it is.
+
+**THE CORRECTION, quantified live (house org, from the stored per-store snapshots + the live expense rows):**
+
+| period | wages estimate dropped | commission copy dropped | **total expenses DOWN / net income UP** | commission KEPT (nothing to replace it) |
+|---|---|---|---|---|
+| July 2026 | $88,128.08 | $2,794.72 | **$90,922.80** | $253.86 |
+| August 2026 | $85,389.16 | $7,176.73 | **$92,565.89** | $400.89 |
+| September 2026 | $81,132.22 | $16,230.66 | **$97,362.88** | $215.35 |
+| October 2026 (carries September's rows) | $27,378.16 | $16,446.01 | **$43,824.17** | $0.00 |
+
+B-103, August 2026: opex **$18,292.12 → $13,585.14**, net income **$3,026.55 → $7,733.53** (−$4,471.00 estimate,
+−$235.98 commission copy). **MONEY-AFFECTING: expenses go DOWN and net income goes UP.** No stored figure moves
+until the owner recomputes those periods — surfaced, never done.
+
+### Part 2 — THE DRILL-DOWN
+
+**THE CLASS (the same shape).** *A drill-down was accumulated at ONE grain while the statement it explains is
+rendered at MANY grains.* `coa.add` kept each line's drill labels in a single org-wide dict, so
+`engine._scoped` had nothing per-store to give a scoped read and did the only honest thing available —
+`detail = {}`, with the comment *"detail is company-wide; only meaningful consolidated"*.
+
+**Evidence, measured live 2026-10-07:** of the house org's **40 stored August 2026 P&L scopes, exactly ONE**
+(`consolidated`) carried any drill detail; `store:103 Fulton Ave` stored `detail: {}` on every line, so the
+dropdown behind its $13,585.14 was empty. And a store/market FILTERED read sums the matched per-store snapshots
+in `statement_filter.aggregate` — which already summed `detail` correctly, and was therefore summing empty dicts
+forever.
+
+**THE FIX — one grain for both.** NEW pure **`coa.accrue_detail(line, store_key, label, amt)`** is THE one
+accumulation of drill detail, called by `coa.add`: it records the dollar in `detail` (the org-wide roll-up,
+unchanged, so consolidated is byte-identical), in `detail_by_store[store]` and in `detail_company_wide`.
+`engine._scoped` SUMS the stores in its own scope. The identity **Σ detail_by_store + detail_company_wide ==
+detail** holds by construction. `statement_filter` is **untouched**. Deliberate exclusion: the device-cost basis
+reports its detail as org-wide labels with no store, so it stays consolidated-only — a scope shows no device-cost
+breakdown, as before, rather than a wrong one.
+
+**The hub panel — SHIPS SEPARATELY (PR #408).** The backend half above lands on its own, because it needs no
+screen change to be right: the existing drill-down already renders each line's `detail`, so every per-store and
+per-company snapshot computed after this starts explaining its own number wherever a drill-down is already shown.
+The PANEL rewrite is a LAYOUT change and therefore waits for the owner's eyeball under the finance module's
+merge policy (Option B: backend / filter-logic fixes merge on green, layout opens a PR with a preview link and
+waits). What it does, for when it lands — `accounts/page.tsx` `ScopeDrillDown`, helpers in the EXISTING display
+home `_components/scopeFinancials.ts`:
+
+- renders **ALL FOUR sections** (Revenue, COGS, Operating Expenses, Other) with their subtotals and Gross Profit
+  / Net Operating Income / Net Income — "the same as on the p&l page"; it showed expenses only before;
+- descends **company → market → store → line**: `drillFilter` / `nextRung` / `drillRootLevels` /
+  `marketsForScope`. Every rung is the SAME canonical read `GET /account/pl/{period}`, spelled by the ONE
+  frontend helper `plStatement.plQuery`, with one more thing in the filter — so a rung ties to the rung above it
+  by construction (both are `statement_filter` over the same per-store snapshots, never two summations). The
+  market vocabulary is the canonical UNION market index `GET /core/markets` (§13), the same authority the P&L's
+  own market filter resolves through, so the drill cannot offer a market the filter cannot bind;
+- **every line drills to the rows behind it**, with `lineTieOut` STATING a disagreement instead of hiding it;
+- absence is not zero: a rung with no computed statement reads **"not reported"**, never $0.00;
+- the panel is KEYED on the scope and the period, so the reset is a React remount — never a `setState` in an
+  effect.
+
+**Migration `1061_labour_vocabulary_mode.sql`** — additive, idempotent, `-- REVERT:` note, MONEY-ADJACENT and
+surfaced for approval. The fix needs NO migration to work (an absent column resolves `'house'`); the column only
+adds the per-org opt-out.
+
+**Proofs.** `backend/harness_labour_vocabulary.py` (**109 checks**, stdlib — the home's purity and totality, the
+tenant winning wholesale, `mode='off'`, the derived grain, the token superset, the resolution driven through the
+REAL `coa._account_config` over an in-memory client on all three live config shapes AND on a schema with no
+opt-out column, the owner's B-103 regression reproduced and closed through the REAL
+`labour_coverage.suppression_plan`, the three states, and the LOCK: coa dereferences the home, the token literal
+is gone, the frontend mirror equals the home, NO second copy of the vocabulary in `backend/app` or
+`frontend/src`, RULE TWO, the migration's shape). `backend/harness_pl_drill_detail.py` (**56 checks** — the
+identity on the real accumulator, consolidated JSON-identical to the pre-fix `_scoped` run side by side, a scope
+explaining itself through the REAL `engine._assemble`, the filtered read tying through the REAL
+`statement_filter.aggregate`, the owner's regression, honesty, and the LOCK: no `detail = {}` for a scope, no
+second drill derivation in `backend/app`). `frontend/prove_pl_drill_path.mjs` (**58 checks** — the real
+`scopeFinancials.ts`: the drill path, the market vocabulary, all four sections, the line tie-out, level totals,
+and the page wiring: every rung the same `plQuery` read, no money URL of its own, RULE TWO) **lands with the
+panel, in PR #408**, and is wired into CI there as the `pl-drill-path-proof` job.
+**`backend/harness_royalty_pl.py` §A (81 → 88)** — its FROZEN pre-change oracle pinned the defect (a store scope's
+`detail: {}`), and it was deliberately **NOT re-captured from the new code**: re-freezing turns a byte-identity
+lock into a snapshot of whatever the code does today. Instead the identity is asserted with each STORE scope's
+line `detail` set aside (`without_store_detail`; CONSOLIDATED's detail is still compared in full), and the
+intended change is asserted POSITIVELY — the store scope's drill row is `{'Rent': 1000.0}`, it TIES to its
+$1,000.00 line, and the oracle had it empty — with two negative controls (a moved cent, and a renamed
+CONSOLIDATED drill row) proving the set-aside did not excuse detail everywhere. The one structural difference
+against the oracle was verified to be exactly that single key, nothing else.
+`frontend/prove_accounts_expenses_column.mjs` (52 → **57**) and `backend/harness_account_expenses_one_home.py`
+(42 → **43**) have their drill-down assertions re-stated against the new panel, strictly tighter (the panel must
+spell no money URL at all) — also **with the panel, in PR #408**, since they assert against it. The two backend
+harnesses are wired into the `carrier-vocab-guard` job here.
 
 ## 5. Daily Targets & actuals
 
@@ -6022,6 +6201,7 @@ rendering the resolved name.
 
 ## 16. Cross-reference: by TABLE
 
+- `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
 
@@ -6250,8 +6430,12 @@ rendering the resolved name.
 | `storeops.dm_visit_priority_rule` | `1050` | the tenant-configurable DM visit priority order (activations → accessories → KPI, seeded); the dropdown's OPTIONS are not here — they are dereferenced from `targets_engine.CATEGORIES` + `commcalc.carrier_kpi_metric` (§47.17) |
 | `storeops.dm_visit_assignment` | `1050` | which store a DM is assigned on which day, `manual` or `auto`, with the reason the priority rules picked it; unique on (org, date, DM, store), which is what makes the hourly fill idempotent (§47.17) |
 
+| `commcalc.payment_categories` | the tenant's OWN payment-type → pay-category map (free text, tenant-filled). ONE reader: **`commcalc/payment_category.py`** (`load_map`/`category_of`/`declared_categories`) — nine private readers existed before it and are an exact excused inventory in `harness_payment_category_home_lock.py`, every one a money path. A type with no row is **not** a category: reported as not classified, never guessed (live 2026-10-07: $573,241.39, 72% of 60 days of the house feed). Sentinel + placeable set dereferenced from `pay_data_quality`. Surfaces: the §57.2 Category filter/column on the processor ledger, §55 withholding — §57.1 |
+
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
+- `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
+- `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -6379,7 +6563,7 @@ rendering the resolved name.
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
-| `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options` |
+| `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options`. `categories=` filters by the org's own declared pay category, with `NO_CATEGORY_ID` for money whose payment type it never mapped — §57.2 |
 | `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing |
 | `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
 | `GET /sales-report` | `15792` | §3 |
@@ -6538,6 +6722,8 @@ rendering the resolved name.
 
 ## 18. Cross-reference: by METRIC / KPI
 
+- **Which expense rows are LABOUR the statement already books from its own source — so they must not be counted twice?** — ONE home `commcalc/labour_vocabulary.resolve` (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`; a non-empty tenant list wins wholesale; `mode='off'` opts out), dereferenced by `account/coa._account_config`, `commcalc/router._expense_apply_default_tokens` and the Expenses sheet's pinned mirror. Locks `harness_labour_vocabulary.py` (109). Live 2026-10-07: 2 of 3 tenants were double-counting; the house org by **$90,922.80 / $92,565.89 / $97,362.88** in July / August / September 2026 — §4e.
+- **What makes up THIS line, for THIS scope?** — `coa.accrue_detail` records every drill dollar at the store grain and `engine._scoped` sums the stores in its own scope (Σ `detail_by_store` + `detail_company_wide` == `detail`); `statement_filter.aggregate` already summed it and was unchanged. Before this, 39 of the house org's 40 stored August 2026 P&L scopes carried an EMPTY drill-down. Locks `harness_pl_drill_detail.py` (56); the panel and `prove_pl_drill_path.mjs` (58) land in PR #408 — §4e.
 - **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.16).
 
 | Metric | Source table.column | Reader function |
@@ -6554,6 +6740,7 @@ rendering the resolved name.
 | **Is every feed still arriving, and which one stopped?** — answered for EVERY registered feed, not the three a call site happened to name. Lateness is judged against the feed's own declared cadence (daily by default, so an unconsidered feed is watched keenly rather than ignored); a feed with no column naming its own day is judged on ARRIVAL alone | `data_lineage_registry.watched_feeds()` (derived from `INGEST_TABLES_BY_MODULE` minus `NOT_WATCHED_REASONS`) + `feed_cadence_days()` + `data_date_column()` + `freshness_column()` | ONE home the registry; dereferenced by `router._data_freshness_report` and `router._duty_last_loaded`; lock `harness_feed_watchdog.py` (50) — §19.43. Live house org 2026-10-03: the asset ledger reads 16 days late, data ending 2026-09-17, file last arriving 2026-09-28 — previously invisible |
 | **Which month does this feed row belong to, and what does this upload replace?** — the row's OWN data date, and the DAYS the file covers; never the period an operator picked or the month a sweep ran in. All or nothing: a row that cannot prove its day keeps the period replace | `data_lineage_registry.day_keyed_date_columns()` (+ `PERIOD_GRAIN_REASONS` for the archives) | ONE parser `commcalc/feed_period.py` (`period_of_day` / `month_spread` / `day_stamp`); dereferenced by the manual upload and the nightly sweep; lock `harness_feed_day_grain.py` (85) — §19.46. Live 2026-10-05: 80,614 payment-detail rows / $579,926.24 were filed under the wrong month, October reading 28x its own $15,460.69 |
 | **Is this background job running, and may its control be pressed?** — a press is a request; the job runs until the SERVER says otherwise, so a run in flight disables its own button | `job-run.isRunning` / `buttonState` / `settleStatus` / `nextPollDelay` | every job control dereferences it (⚡ Run Calculation, the daily-closing and connector Run-now buttons, the auto-calc notice); `commcalc.router._calc_status_pick` decides WHICH `calc_status` row is the month's; lock `frontend/prove_job_run.mjs` (87) — §6q. Live 2026-10-06: the August run took 56s while the page asked once at 2s and the button never disabled, so a second press earned the single-flight 409 |
+| **Is this processor line commission or a rebate?** — the org's own declared category for the payment type, with "never mapped" kept as its own answer rather than folded into either | `commcalc.payment_categories` (the tenant's map) × the processor feed's own `payment_type` | `payment_category.category_of` → `processor_ledger.assemble` → `GET /commcalc/processor-ledger` (`categories=`), Category column + filter on the page; proof `harness_payment_category.py` (30), lock `harness_payment_category_home_lock.py` — §57 |
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $68,479.60 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $70,157.10 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Have I read ALL of this feed, or just the first N rows?** — a read of a growing feed carries NO literal row ceiling; a failed read raises instead of returning a short list | `core/feed_read.read_all` (no `limit=` parameter exists to pass) | every pay-path and GP-path feed read dereferences it; lock `harness_pay_feed_balance.py` §G — §19.48. Live 2026-10-06: `.limit(50000)` against July's 82,999 payment-detail rows read $60,994.46 of carrier commission where the feed holds $123,700.62, losing 12 of 122 rep logins |
@@ -20026,3 +20213,102 @@ of re-deriving the question.
 **NOTHING.** No endpoint, table, migration or figure changes — the four charts read exactly the data
 they read before, the PNG export is byte-unchanged (§B5 proves the captions sit OUTSIDE the capture
 refs), and no money is booked, moved or re-declared.
+
+---
+
+## 57. PAY CATEGORY — telling commission from a rebate on a processor line (owner ask 2026-10-07)
+
+Owner, verbatim: *"in the EPay Daily Debits & Credits, we need one more filter for the rebates and
+commssion categories as it is virtually impossible to check which item is commsison or rebate by a
+user"*.
+
+He is right, and the reason is structural. The Processor Daily Debits & Credits report (§31) groups
+by the carrier's own `payment_type`, and the carrier ships 40+ of those per quarter ("Simplified SIM
+Loading Bounty - Month 4", "2026 Q3 Promo PIC Offer"). Which of them is commission and which is a
+rebate is not in the string — it is in the org's OWN `commcalc.payment_categories` map, which the
+report never read. A human had to know 154 mappings by heart.
+
+### 57.1 ONE HOME — "which pay category did this org declare for this payment type"
+
+`backend/app/modules/commcalc/payment_category.py`. `load_map(client, org_id)` is the read;
+`category_of(map, payment_type)` is the answer; `label_of` adds the human sentinel;
+`declared_categories` is the option list, derived from the tenant's rows.
+
+**The duplicate it replaced was already there.** `commcalc.payment_categories` had **nine** private
+readers before this file, each folding the lookup key its own way — some `.strip()`, some
+`.strip().lower()`, some neither — so `' Boost Auto Top-Up'` could be categorised by one caller and
+read as unmapped by the next. Adding a tenth for this filter would have been the defect.
+`harness_payment_category_home_lock.py` now fails the build if a tenth appears, and the nine are an
+**exact inventory with reasons**, every one of them a money path (rep pay, gross profit, the pay-feed
+balance, the two commission-leg trends, vendor POs, payables, event-sales attribution). Rewiring
+them moves dollars between buckets and is a separate surfaced change; the commission engine is
+additionally owned by the Boost commission numbers audit in flight.
+
+| the fact | its ONE home | who dereferences it |
+|---|---|---|
+| which category did the org declare for this type | `payment_category.category_of` | `processor_ledger.assemble`, `router._withholding_category_of` (**rewired**) |
+| the word for "never mapped" | `pay_data_quality.UNCATEGORISED` | `payment_category.label_of` |
+| which categories the pay engine can place | `pay_data_quality.PLACEABLE_CATEGORIES` | `payment_category.placeable_categories` |
+| which sign of a feed is a debit | `processor_ledger.FEED_SHAPES` + `classify_amount` | unchanged |
+
+RULE TWO holds: no category name appears in the module's code. "Commission", "Re-imbursement" and
+"MDF" are rows in the tenant's table, and a category the house has never heard of is offered the
+moment the tenant declares it. A tenant with an empty map is told nothing is declared — which is
+Total's live state (0 rows, measured 2026-10-07) — rather than being shown invented categories.
+
+### 57.2 The surface
+
+`GET /api/v1/commcalc/processor-ledger` gains `categories=` (comma-separated), and every cell now
+carries `category`. The page gains a **Categories** dropdown beside Transaction types, a **Category**
+column on each line, and the same column in the export so what you see is what leaves the page.
+
+The option list follows the §13c enumeration doctrine exactly as the market filter does: the org's
+**declared** categories ∪ the ones its own rows carry, never "whatever loaded", so a category
+declared but unused this month is still offered. `processor_ledger.NO_CATEGORY_ID`
+(`"(not classified)"`) is the sentinel for money whose type the org never mapped — appended by the
+page, and only when a visible cell needs it. It is **not** a category: `declared_categories` never
+returns it, and a category-less cell answers only to the explicit pick, never to a real category and
+never missing from the unfiltered view.
+
+### 57.3 Reported, never repaired — the hole the filter makes visible
+
+Measured live 2026-10-07, house org, last 60 days of `raw_payment_detail`:
+
+| declared category | money |
+|---|---|
+| **no category at all** | **$573,241.39** (72% of the feed, 14 payment types) |
+| Commission | $184,890.49 |
+| MDF | $32,000.00 |
+| Re-imbursement | $2,307.49 |
+
+That is why the page was unreadable: most of it had no category to read. Eight of the fourteen
+unmapped types have an **exact prior-year twin that IS declared** — `2024 Q3 Promo PIC Offer` →
+`Re-imbursement`, against `2026 Q3 Promo PIC Offer` → nothing — so the carrier renaming its promos
+each quarter is the whole mechanism. This is the same failure `pay_data_quality` measured at
+$288,813 (§19.26) and the same class §55.1 names.
+
+**Nothing is mapped by this change.** Deciding that a 2026 promo is a rebate moves money between the
+commission and rebate buckets across gross profit and rep pay, so it is the owner's ruling. The
+report states the amount per type in a banner and offers the `(not classified)` filter; the engine's
+own `unmapped_payment_type` reason (§19.26) already explains that this money reaches no rep.
+
+### 57.4 Proof
+
+`harness_payment_category.py` — 30 checks, stdlib-only, DB-free under `env -i`: the folding rule
+(case, surrounding and inner whitespace), absence reported as absence (including a mapping whose
+category cell is blank, and a failed read degrading to "nothing declared" rather than to a wrong
+category), the tenant-derived option list including a category the house does not know, the filter
+(single, multiple, case-insensitive, the `(not classified)` pick, AND-composition), and the fold
+carrying the category without widening its key or changing a total.
+
+`harness_payment_category_home_lock.py` — the home exists where `module_graph` says, no NEW reader
+of the table, the excused nine present **exactly** (a rewired-but-still-listed site fails too), no
+restated sentinel or placeable set, RULE TWO on the module's code strings, and the ledger wired to
+the home rather than reading the table itself.
+
+### 57.5 Money posture
+
+**Books nothing, maps nothing, re-declares nothing.** `payment_category.py` is read-only, writes no
+column, and no payout path reads anything it produces. The ledger's totals are unchanged — the
+harness asserts the money still ties across the new column. The one behaviour change to an existing
+surface is that the ledger now shows a Category column and names the unclassified money out loud.

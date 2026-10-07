@@ -201,6 +201,13 @@ on:
       - "backend/harness_account_expenses_one_home.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
       - "frontend/prove_pl_drill_path.mjs"
+      # index §4e — the labour double-count (ONE home for the platform's labour-row vocabulary)
+      # and the per-store drill detail (a scope explains its own number). Owner report 2026-10-07.
+      - "backend/harness_labour_vocabulary.py"
+      - "backend/harness_pl_drill_detail.py"
+      - "backend/app/modules/commcalc/labour_vocabulary.py"
+      - "backend/app/modules/account/engine.py"
+      - "database/migrations/1061_labour_vocabulary_mode.sql"
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
@@ -590,6 +597,12 @@ jobs:
       - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)
         working-directory: backend
         run: python3 harness_account_expenses_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the labour-vocabulary lock + proof (one home for the platform's labour rows; the default is CORRECT; no second copy — index §4e)
+        working-directory: backend
+        run: python3 harness_labour_vocabulary.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the P&L drill-detail proof + lock (a scope explains its own number; no second drill derivation — index §4e)
+        working-directory: backend
+        run: python3 harness_pl_drill_detail.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the chart-caption lock (every Trends chart says what a move MEANS; one home, ungated — index §56)
         working-directory: backend
         run: python3 harness_trends_chart_notes.py | tee -a "$GITHUB_STEP_SUMMARY"
