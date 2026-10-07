@@ -172,6 +172,15 @@ jobs:
       - name: Run the withholding-report proof (the cutoff, the IMEI fence, the parallel leg)
         working-directory: backend
         run: python3 harness_withholding_report.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # Owner ask 2026-10-07 ("impossible to check which item is commsison or rebate"): the pay
+      # CATEGORY got one home because commcalc.payment_categories already had NINE private readers
+      # folding its key nine ways. These two keep the tenth from appearing — index §56.
+      - name: Run the payment-category home lock (one reader, the excused nine, RULE TWO)
+        working-directory: backend
+        run: python3 harness_payment_category_home_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the payment-category proof (the fold, absence kept as absence, the filter)
+        working-directory: backend
+        run: python3 harness_payment_category.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   row-save-lock:
     # ONE ROW, ONE SAVE (2026-09-29, index §19.35): HR → Employees & Pay had one save button PER SLICE of a row; the Vzone

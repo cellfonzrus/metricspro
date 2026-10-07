@@ -27042,15 +27042,19 @@ _WITHHOLDING_SOURCE = "payment_detail"          # the source calc_flags stamps o
 
 
 def _withholding_category_of(org_id: str):
-    """The org's OWN payment-type → category map. One read, the same shape every other caller uses
-    (`description` → `category`); never a copy of anybody's vocabulary in code."""
-    try:
-        rows = (sb().schema("commcalc").table("payment_categories")
-                .select("description,category").eq("org_id", org_id).execute().data) or []
-    except Exception:
-        return {}
-    return {str(r["description"]).strip(): r.get("category")
-            for r in rows if (r.get("description") or "").strip()}
+    """The org's OWN payment-type → category lookup, as a callable.
+
+    REWIRED 2026-10-07 onto `commcalc.payment_category`, the ONE home for this question. It used to
+    be a tenth private read of `commcalc.payment_categories` with its own key folding, which is the
+    duplicate the build gate exists to stop (`harness_payment_category_home_lock.py` now fails the
+    build if an eleventh appears). The home also folds the key case- and whitespace-insensitively,
+    so a feed row whose type is spelled `' Boost Auto Top-Up '` is no longer read as undeclared.
+
+    `clawback.classify_row` and `withholding_report.withheld_findings` both accept a dict OR a
+    callable, so this returns the callable and no caller changes."""
+    from app.modules.commcalc import payment_category as _pcat
+    cmap = _pcat.load_map(sb(), org_id)
+    return lambda ptype: _pcat.category_of(cmap, ptype)
 
 
 @router.get("/commission-withholding")

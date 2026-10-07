@@ -29,18 +29,30 @@ import { useReportLabels } from '@/lib/report-labels'
 interface Cell {
   processor: string; date: string; tx_type: string
   store_code: string; store: string; market: string
+  category: string
   debits: number; credits: number; net: number; rows: number
 }
+interface UnclassifiedType { tx_type: string; debits: number; credits: number; net: number; rows: number }
 interface Payload {
   processor: { code: string; label: string; label_source?: string; resolved_from: string }
   market_options: string[]
+  category_options: string[]
+  categories: {
+    declared: string[]; placeable: string[]; map_rows: number
+    unclassified_types: UnclassifiedType[]; note: string
+  }
   feeds: { processor: string; source: string; rows: number; truncated: boolean; error?: string; classification: string }[]
   cells: Cell[]
   types: string[]
   meta: { date_from: string; date_to: string; net_rule: string }
 }
 interface StoreMeta { store_code: string; store_address: string; market: string }
-interface Row { date: string; tx_type: string; debits: number; credits: number; net: number; rows: number; isDay?: boolean }
+interface Row { date: string; tx_type: string; category: string; debits: number; credits: number; net: number; rows: number; isDay?: boolean }
+
+// The server's word for "this org declared no category for this payment type"
+// (processor_ledger.NO_CATEGORY_ID). A sentinel, not a category: it is appended to the dropdown
+// only when a visible cell actually needs it, the same rule §13c keeps for "(no market)".
+const NO_CATEGORY_ID = '(not classified)'
 
 function firstOfMonth(): string {
   const t = localToday()
@@ -58,6 +70,7 @@ export default function ProcessorLedgerPage() {
   const [fMarkets, setFMarkets] = useState<string[]>([])
   const [fStores, setFStores] = useState<string[]>([])
   const [fTypes, setFTypes] = useState<string[]>([])
+  const [fCats, setFCats] = useState<string[]>([])
   const [showDaySubtotals, setShowDaySubtotals] = useState(true)
 
   function load() {
@@ -83,16 +96,22 @@ export default function ProcessorLedgerPage() {
     [stores])
   const fMarketsFold = useMemo(() => new Set(fMarkets.map(m => m.trim().toLowerCase())), [fMarkets])
   const fTypesFold = useMemo(() => new Set(fTypes.map(t => t.trim().toLowerCase())), [fTypes])
+  const fCatsFold = useMemo(() => new Set(fCats.map(c => c.trim().toLowerCase())), [fCats])
 
   // Client-side filter over the server cells (WYSIWYG — what survives here is what totals/exports).
   // A market-less cell (an unmapped feed key) matches only the explicit "(no market)" pick — it is
   // never quietly folded into a real market, and never vanishes from the unfiltered view.
+  // A category-less cell matches only the explicit "(not classified)" pick — never a real category
+  // and never missing from the unfiltered view. Same contract as the market filter above, and the
+  // display twin of processor_ledger.filter_cells so screen and deep link agree.
   const cells: Cell[] = useMemo(() => (data?.cells || []).filter(c => {
     const mkt = (c.market || '').trim().toLowerCase()
+    const cat = (c.category || '').trim().toLowerCase()
     return (!fStores.length || fStores.includes(c.store_code)) &&
       (!fMarketsFold.size || (mkt ? fMarketsFold.has(mkt) : fMarketsFold.has(NO_MARKET_ID.toLowerCase()))) &&
-      (!fTypesFold.size || fTypesFold.has(c.tx_type.trim().toLowerCase()))
-  }), [data, fStores, fMarketsFold, fTypesFold])
+      (!fTypesFold.size || fTypesFold.has(c.tx_type.trim().toLowerCase())) &&
+      (!fCatsFold.size || (cat ? fCatsFold.has(cat) : fCatsFold.has(NO_CATEGORY_ID.toLowerCase())))
+  }), [data, fStores, fMarketsFold, fTypesFold, fCatsFold])
 
   // Day × transaction-type rollup of the visible cells, with per-day subtotal rows.
   const { rows, totals, dayCount } = useMemo(() => {
@@ -102,9 +121,11 @@ export default function ProcessorLedgerPage() {
     for (const c of cells) {
       const k = `${c.date} ${c.tx_type}`
       let r = byKey.get(k)
-      if (!r) { r = { date: c.date, tx_type: c.tx_type, debits: 0, credits: 0, net: 0, rows: 0 }; byKey.set(k, r) }
+      // `category` rides on the row rather than widening the key: it is a pure function of
+      // tx_type, so every cell folded under one (date, tx_type) carries the same one.
+      if (!r) { r = { date: c.date, tx_type: c.tx_type, category: c.category || '', debits: 0, credits: 0, net: 0, rows: 0 }; byKey.set(k, r) }
       let d = byDay.get(c.date)
-      if (!d) { d = { date: c.date, tx_type: '', debits: 0, credits: 0, net: 0, rows: 0, isDay: true }; byDay.set(c.date, d) }
+      if (!d) { d = { date: c.date, tx_type: '', category: '', debits: 0, credits: 0, net: 0, rows: 0, isDay: true }; byDay.set(c.date, d) }
       for (const s of [r, d, tot]) { s.debits += c.debits; s.credits += c.credits; s.rows += c.rows }
     }
     const typeRows = [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date) || a.tx_type.localeCompare(b.tx_type))
@@ -124,6 +145,15 @@ export default function ProcessorLedgerPage() {
   const typeOpts = useMemo(() => (data?.types || []).map(t => ({ id: t, label: t })), [data])
   // §13c: the canonical vocabulary from the endpoint (core.scope.org_market_options), with the
   // "(no market)" sentinel appended AFTER composing — and only when a cell actually needs it.
+  // §13c, applied to categories: the canonical list comes from the payload (the org's DECLARED
+  // categories ∪ the ones its rows carry), and the "(not classified)" sentinel is appended here —
+  // and only when a cell actually has no category, so the pick never appears on a tenant whose
+  // every line is mapped.
+  const categoryOptions = useMemo(() => {
+    const canon = data?.category_options || []
+    return (data?.cells || []).some(c => !c.category) ? [...canon, NO_CATEGORY_ID] : canon
+  }, [data])
+  const catOpts = useMemo(() => categoryOptions.map(c => ({ id: c, label: c })), [categoryOptions])
   const marketOptions = useMemo(() => {
     const canon = data?.market_options || []
     return (data?.cells || []).some(c => !c.market) ? [...canon, NO_MARKET_ID] : canon
@@ -132,6 +162,22 @@ export default function ProcessorLedgerPage() {
   // server-resolved label (same mig-953 source) and the neutral noun behind it.
   const procLabel = term('processor', data?.processor?.label || 'payment processor')
   const titleCase = procLabel.charAt(0).toUpperCase() + procLabel.slice(1)
+  // The unclassified census, computed from the VISIBLE cells so it ties to the table rather than
+  // to the unfiltered payload. Reported, never repaired: deciding what an unmapped promo IS moves
+  // money between the commission and rebate buckets, so it is the owner's ruling.
+  const unclassified = useMemo(() => {
+    const byType = new Map<string, { tx_type: string; moved: number; rows: number }>()
+    let moved = 0
+    for (const c of cells) {
+      if (c.category) continue
+      const t = byType.get(c.tx_type) || { tx_type: c.tx_type, moved: 0, rows: 0 }
+      t.moved += Math.abs(c.debits) + Math.abs(c.credits)
+      t.rows += c.rows
+      byType.set(c.tx_type, t)
+      moved += Math.abs(c.debits) + Math.abs(c.credits)
+    }
+    return { moved, types: [...byType.values()].sort((a, b) => b.moved - a.moved) }
+  }, [cells])
   const feedsWithRows = (data?.feeds || []).filter(f => f.rows > 0)
   const truncated = (data?.feeds || []).some(f => f.truncated)
   const rangeLabel = dateTo && dateTo !== dateFrom ? `${dateFrom} → ${dateTo}` : dateFrom
@@ -144,6 +190,7 @@ export default function ProcessorLedgerPage() {
       sheets: [{ name: 'Daily ledger', rows, columns: [
         { header: 'Date', get: (r: Row) => r.date },
         { header: 'Transaction type', get: (r: Row) => r.isDay ? `${r.date} TOTAL` : r.tx_type },
+        { header: 'Category', get: (r: Row) => r.isDay ? '' : (r.category || NO_CATEGORY_ID) },
         { header: 'Debits', get: (r: Row) => r.debits, money: true },
         { header: 'Credits', get: (r: Row) => r.credits, money: true },
         { header: 'Net', get: (r: Row) => r.net, money: true },
@@ -164,7 +211,9 @@ export default function ProcessorLedgerPage() {
             Every money movement your {procLabel} made on your account, by day and <strong>transaction
             type</strong>: <strong>debits</strong> (money taken or charged), <strong>credits</strong> (money paid to
             you), and the <strong>net</strong> per line. Same-day activity groups together so you can see what was
-            debited and credited on each date.
+            debited and credited on each date. The <strong>Category</strong> column is your own
+            mapping of each payment type — commission, rebate, or whatever your categories are
+            called — so you can filter to one kind of money instead of reading transaction names.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -192,6 +241,8 @@ export default function ProcessorLedgerPage() {
           selectedMarkets={fMarkets} onMarketsChange={setFMarkets}
           selectedStores={fStores} onStoresChange={setFStores}
         />
+        <CheckboxDropdown options={catOpts} value={fCats} onChange={setFCats}
+          placeholder="Categories…" width={210} ariaLabel="Pay category filter" />
         <CheckboxDropdown options={typeOpts} value={fTypes} onChange={setFTypes}
           placeholder="Transaction types…" width={220} ariaLabel="Transaction type filter" />
         <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -199,6 +250,20 @@ export default function ProcessorLedgerPage() {
         </label>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>{rows.filter(r => !r.isDay).length} line(s)</span>
       </div>
+
+      {unclassified.types.length > 0 && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#92400e', background: '#fffbeb', lineHeight: 1.55 }}>
+          <strong>{fmt(unclassified.moved)}</strong> across <strong>{unclassified.types.length}</strong> payment
+          type{unclassified.types.length === 1 ? '' : 's'} has no category, so it cannot be told apart as
+          commission or rebate. {data?.categories?.note}
+          <div style={{ marginTop: 6, fontSize: 12.5 }}>
+            {unclassified.types.slice(0, 8).map(t => (
+              <span key={t.tx_type} style={{ display: 'block' }}>· {t.tx_type} — {fmt(t.moved)} over {t.rows.toLocaleString()} row{t.rows === 1 ? '' : 's'}</span>
+            ))}
+            {unclassified.types.length > 8 && <span style={{ display: 'block' }}>· and {unclassified.types.length - 8} more — pick “{NO_CATEGORY_ID}” in Categories to see them all.</span>}
+          </div>
+        </div>
+      )}
 
       {truncated && (
         <div className="card" style={{ padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#b45309', background: '#fffbeb' }}>
@@ -212,20 +277,20 @@ export default function ProcessorLedgerPage() {
         <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
       ) : rows.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
-          No processor money movements for {rangeLabel}{fStores.length || fMarkets.length || fTypes.length ? ' with these filters' : ''}.
+          No processor money movements for {rangeLabel}{fStores.length || fMarkets.length || fTypes.length || fCats.length ? ' with these filters' : ''}.
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead><tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
-              {['Date', 'Transaction type', 'Debits', 'Credits', 'Net', 'Rows'].map(h =>
-                <th key={h} style={{ textAlign: h === 'Date' || h === 'Transaction type' ? 'left' : 'right', padding: '8px 12px', whiteSpace: 'nowrap' }}>{h}</th>)}
+              {['Date', 'Transaction type', 'Category', 'Debits', 'Credits', 'Net', 'Rows'].map(h =>
+                <th key={h} style={{ textAlign: h === 'Date' || h === 'Transaction type' || h === 'Category' ? 'left' : 'right', padding: '8px 12px', whiteSpace: 'nowrap' }}>{h}</th>)}
             </tr></thead>
             <tbody>
               {rows.map((r, i) => r.isDay ? (
                 <tr key={`day_${r.date}`} style={{ borderTop: '1px solid var(--border)', background: 'var(--surface2)', fontWeight: 700 }}>
                   <td style={{ padding: '8px 12px', fontSize: 12.5 }}>{r.date}</td>
-                  <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text2)' }}>DAY TOTAL</td>
+                  <td colSpan={2} style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text2)' }}>DAY TOTAL</td>
                   <td style={{ ...num, color: '#dc2626' }}>{r.debits ? fmt(r.debits) : '—'}</td>
                   <td style={{ ...num, color: '#16a34a' }}>{r.credits ? fmt(r.credits) : '—'}</td>
                   <td style={{ ...num, color: r.net >= 0 ? '#059669' : '#dc2626' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
@@ -235,6 +300,11 @@ export default function ProcessorLedgerPage() {
                 <tr key={`${r.date}_${r.tx_type}_${i}`} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '9px 12px', fontSize: 13, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{r.date}</td>
                   <td style={{ padding: '9px 12px', fontSize: 13, fontWeight: 600 }}>{r.tx_type}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12.5, whiteSpace: 'nowrap' }}>
+                    {r.category
+                      ? <span>{r.category}</span>
+                      : <span style={{ color: '#b45309' }} title="This org has never mapped this payment type to a pay category, so it belongs to no bucket.">not classified</span>}
+                  </td>
                   <td style={{ ...num, color: r.debits ? '#dc2626' : 'var(--text3)' }}>{r.debits ? fmt(r.debits) : '—'}</td>
                   <td style={{ ...num, color: r.credits ? '#16a34a' : 'var(--text3)' }}>{r.credits ? fmt(r.credits) : '—'}</td>
                   <td style={{ ...num, fontWeight: 700, color: r.net >= 0 ? '#059669' : '#dc2626' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
@@ -244,7 +314,7 @@ export default function ProcessorLedgerPage() {
             </tbody>
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)', fontWeight: 700 }}>
-                <td colSpan={2} style={{ padding: '10px 12px', fontSize: 13 }}>TOTAL ({dayCount} day(s))</td>
+                <td colSpan={3} style={{ padding: '10px 12px', fontSize: 13 }}>TOTAL ({dayCount} day(s))</td>
                 <td style={{ ...num, color: '#dc2626' }}>{fmt(totals.debits)}</td>
                 <td style={{ ...num, color: '#16a34a' }}>{fmt(totals.credits)}</td>
                 <td style={{ ...num, color: totals.net >= 0 ? '#059669' : '#dc2626' }}>{totals.net >= 0 ? '+' : ''}{fmt(totals.net)}</td>

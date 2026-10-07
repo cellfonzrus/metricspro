@@ -57,6 +57,13 @@ RESOLUTIONS REUSED (never a second path):
     end. No store-vocabulary table is read directly (the cached union index does it), so this adds
     no resolution site for harness_market_resolution_guard.
 
+  • Payment TYPE → pay CATEGORY (owner ask 2026-10-07, "impossible to check which item is
+    commsison or rebate"): `commcalc.payment_category` — the ONE reader of the org's own
+    `commcalc.payment_categories` map, which nine call sites had been reading privately. The
+    category is NOT derived from the type string here, and no category name appears in this module
+    (RULE TWO); a type the org never mapped carries '' and is reported as not classified, never
+    folded into a real category.
+
 PURE CORE (harness_processor_ledger.py proves it DB-free): `classify_amount`, `fold_cells`,
 `filter_cells`, `day_type_rollup`. IO lives only in `assemble` (client passed in, lazy app imports).
 READ-ONLY: this module writes nothing.
@@ -112,7 +119,9 @@ def fold_cells(events):
     credit}. Returns a list of cell dicts with debits/credits/net (net = credits − debits) and the
     folded row count, insertion-ordered by (date, tx_type, store). `market` rides along on the
     cell (it is a pure function of store_code, canonically resolved by the caller) so the market
-    filter never re-derives it from a roster join."""
+    filter never re-derives it from a roster join. `category` rides along the same way — it is a
+    pure function of tx_type, resolved by the caller through `payment_category`, and '' means the
+    org declared none for that type, which is NOT a category and must stay distinguishable."""
     cells = OrderedDict()
     for e in events:
         key = (e.get("processor") or "", str(e.get("date") or ""), e.get("tx_type") or "(blank)",
@@ -122,6 +131,7 @@ def fold_cells(events):
             c = cells[key] = {"processor": key[0], "date": key[1], "tx_type": key[2],
                               "store_code": key[3], "store": key[4],
                               "market": str(e.get("market") or ""),
+                              "category": str(e.get("category") or ""),
                               "debits": 0.0, "credits": 0.0, "rows": 0}
         c["debits"] += float(e.get("debit") or 0.0)
         c["credits"] += float(e.get("credit") or 0.0)
@@ -134,15 +144,29 @@ def fold_cells(events):
     return out
 
 
-def filter_cells(cells, stores=None, types=None, markets=None):
+# The filter value that means "the org declared no category for this payment type". A sentinel is
+# needed for the same reason §13c needs "(no market)": without one, the unclassified money is
+# reachable only by clearing the filter, and the owner's complaint was precisely that he cannot
+# single out one kind of money. It is spelled with brackets so it cannot collide with a category a
+# tenant declares, and it is NOT a category — `declared_categories` never returns it.
+NO_CATEGORY_ID = "(not classified)"
+
+
+def filter_cells(cells, stores=None, types=None, markets=None, categories=None):
     """Filter semantics shared by the endpoint, the page and the W3 builder: empty/None = no
     filter; a store filter matches store_code OR the store display string (case/whitespace-
     insensitive) so an unmapped feed key ('' store_code, raw string store) is still addressable;
-    the type and market filters match tx_type / the cell's canonically-resolved market the same
-    way. Filters AND-compose."""
+    the type, market and category filters match tx_type / the cell's canonically-resolved market /
+    the cell's declared pay category the same way. Filters AND-compose.
+
+    A cell with NO declared category matches only the explicit `NO_CATEGORY_ID` pick — never a real
+    category, and never quietly dropped from the unfiltered view. That is the same contract the
+    market filter already keeps for an unmapped feed key, and it is what lets the owner ask "show me
+    only the money nobody has classified" instead of inferring it by subtraction."""
     def _fold(vals):
         return {str(v or "").strip().lower() for v in (vals or []) if str(v or "").strip()}
     sf, tf, mf = _fold(stores), _fold(types), _fold(markets)
+    cf = _fold(categories)
     out = []
     for c in cells:
         if sf and not ({str(c.get("store_code") or "").strip().lower(),
@@ -152,6 +176,10 @@ def filter_cells(cells, stores=None, types=None, markets=None):
             continue
         if mf and str(c.get("market") or "").strip().lower() not in mf:
             continue
+        if cf:
+            cat = str(c.get("category") or "").strip().lower()
+            if cat not in cf and not (not cat and NO_CATEGORY_ID.lower() in cf):
+                continue
         out.append(c)
     return out
 
@@ -244,6 +272,7 @@ def assemble(client, org_id, date_from, date_to):
                                              _vidapay_account_resolver)
     from app.modules.account.coa import store_resolver as _coa_store_resolver
     from app.modules.commcalc import flag_store_resolver as _fsr
+    from app.modules.commcalc import payment_category as _pcat
 
     from app.core import scope as _cscope
 
@@ -254,6 +283,11 @@ def assemble(client, org_id, date_from, date_to):
     resolve_addr = _coa_store_resolver(client, org_id)
     code_index = _fsr.store_index(client, org_id)
     resolve_acct = _vidapay_account_resolver(client, org_id)
+    # The org's OWN payment-type → pay-category map (owner ask 2026-10-07: tell a human which line
+    # is commission and which is a rebate). ONE home — `payment_category` — never a tenth private
+    # read of `commcalc.payment_categories`. An empty map is honest: every cell then carries '' and
+    # the report says nothing is declared rather than inventing categories.
+    cat_map = _pcat.load_map(client, org_id)
     # §13a: store_code → market off the ONE cached canonical union index (both vocabularies), so a
     # store that carries its market on only one side still filters. Degrades to no stamps.
     try:
@@ -294,9 +328,13 @@ def assemble(client, org_id, date_from, date_to):
                 store_cache[ck] = _store_of(proc, raw_store)
             code, display, mkt = store_cache[ck]
             debit, credit = classify_amount(r.get(shape["amount_col"]), shape["credit_positive"])
+            tx_type = str(r.get(shape["type_col"]) or "").strip() or "(blank)"
             events.append({"processor": proc, "date": str(r.get(shape["date_col"]) or "")[:10],
-                           "tx_type": str(r.get(shape["type_col"]) or "").strip() or "(blank)",
+                           "tx_type": tx_type,
                            "store_code": code, "store": display, "market": mkt,
+                           # '' = this org declared no category for this payment type. Not a
+                           # category, and never folded into one.
+                           "category": _pcat.category_of(cat_map, tx_type) or "",
                            "debit": debit, "credit": credit})
         feeds_meta.append({"processor": proc, "source": f"commcalc.{shape['source']}",
                            "rows": len(rows), "truncated": truncated,
@@ -316,10 +354,48 @@ def assemble(client, org_id, date_from, date_to):
     except Exception as e:                       # pragma: no cover - I/O guard
         print(f"WARN processor_ledger org_market_options failed: {e}")
         market_options = sorted(present)
+    # The CATEGORY option list, composed the same way §13c composes markets: the org's DECLARED
+    # categories ∪ the ones these rows actually carry — never "whatever loaded" — so a category the
+    # tenant declared but did not use this month is still offered, and one used but since un-
+    # declared cannot go missing. The "(not classified)" sentinel is appended by the PAGE, and only
+    # when a cell needs it, exactly as the market doctrine requires.
+    present_cats = {c["category"] for c in cells if c.get("category")}
+    category_options = sorted(set(_pcat.declared_categories(cat_map)) | present_cats, key=str.lower)
+    # The declaration census. Reported, never repaired: an unmapped payment type is money the pay
+    # engine has nowhere to put (`pay_data_quality.UNPLACED_REASONS['unmapped_payment_type']`), and
+    # deciding what it is moves money, so it is the owner's call. Measured per TYPE so the owner can
+    # see which names need mapping rather than only that something does.
+    unclassified = {}
+    for c in cells:
+        if c.get("category"):
+            continue
+        d = unclassified.setdefault(c["tx_type"], {"tx_type": c["tx_type"], "debits": 0.0,
+                                                   "credits": 0.0, "rows": 0})
+        d["debits"] += c["debits"]
+        d["credits"] += c["credits"]
+        d["rows"] += c["rows"]
+    for d in unclassified.values():
+        d["debits"] = round(d["debits"], 2)
+        d["credits"] = round(d["credits"], 2)
+        d["net"] = round(d["credits"] - d["debits"], 2)
     return {
         "processor": {"code": code, "label": proc_label, "label_source": label_source,
                       "resolved_from": "config" if primary else ("feed_presence" if code else "")},
         "market_options": market_options,
+        "category_options": category_options,
+        "categories": {
+            "declared": _pcat.declared_categories(cat_map),
+            "placeable": list(_pcat.placeable_categories()),
+            "map_rows": len(cat_map),
+            "unclassified_types": sorted(unclassified.values(),
+                                         key=lambda d: -(abs(d["credits"]) + abs(d["debits"]))),
+            "note": ("This org has declared no payment-type categories at all, so no line can be "
+                     "told apart as commission or rebate here."
+                     if not cat_map else
+                     "A line with no category is a payment type this org has never mapped. It is "
+                     "money the pay engine has nowhere to put, so it is shown as not classified "
+                     "rather than counted as either."),
+        },
         "feeds": feeds_meta,
         "cells": cells,
         "types": sorted({c["tx_type"] for c in cells}, key=str.lower),

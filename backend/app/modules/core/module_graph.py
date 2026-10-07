@@ -475,6 +475,18 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_feed_read',),
         },
     },
+    'payment_category_map': {
+        "question": 'Which pay CATEGORY did this org declare for this payment type — is this line '
+                    'commission, a rebate, or something it has never mapped?',
+        "homes": ('app/modules/commcalc/payment_category.py',),
+        "index": ('56.1',),
+        "locks": ('harness_payment_category_home_lock.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/processor_ledger.py': ('_pcat',),
+            'app/modules/commcalc/router.py': ('_pcat',),
+        },
+    },
     'clawback_direction': {
         "question": 'Is this processor-feed row money the carrier TOOK BACK — and was it recognised '
                     'by the DIRECTION the money moved, or by a category name no tenant can declare?',
@@ -515,6 +527,9 @@ FACTS: dict[str, dict] = {
             # are pay", minus the phantom `Chargeback` entry it exists to replace.
             'app/modules/commcalc/clawback.py': ('PLACEABLE_CATEGORIES',),
             'app/modules/commcalc/commission_drilldown.py': ('_pdq',),
+            # §56.1 — the one payment-category home dereferences UNCATEGORISED (the word for "never
+            # mapped") and PLACEABLE_CATEGORIES rather than restating either.
+            'app/modules/commcalc/payment_category.py': ('PLACEABLE_CATEGORIES', 'UNCATEGORISED'),
             'app/modules/commcalc/commission_engine.py': ('_pdq_cfg',),
             'app/modules/commcalc/plan_pay_gate.py': ('_pdq',),
             'app/modules/commcalc/router.py': ('_pdq',),
