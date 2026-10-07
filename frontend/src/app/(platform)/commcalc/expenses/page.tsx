@@ -29,7 +29,10 @@ const shortPeriod = (p: string) => {
 // differ, so a row name cannot be added, renamed or auto-filled here without the P&L learning that
 // it must not count it twice. The resolved per-org vocabulary is also served on
 // `GET /commcalc/expenses/apply-config` as `labour_rows`, for a reader that wants the live answer.
-const LABOUR_PAYROLL_ROWS = ['Employee Salaries', 'Owner / Mgmt Salaries'] as const
+// Only the rows the platform itself FILLS are here — a row it merely ships in DEFAULT_CATS (e.g.
+// 'Owner / Mgmt Salaries') is not auto-filled, is not re-derived anywhere, and is therefore not a
+// duplicate. The backend home states the membership test in full.
+const LABOUR_PAYROLL_ROWS = ['Employee Salaries'] as const
 const LABOUR_COMMISSION_ROWS = ['Employee Commission'] as const
 
 // Default expense list (name + Fixed/Variable). The user can add ad-hoc expenses.

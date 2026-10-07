@@ -149,6 +149,30 @@ ok("B6 a tenant-invented labour row is NOT claimed by the house default",
    "dm salary" not in [n.lower() for n in LV.resolve()["payroll_names"]])
 ok("B7 …but a tenant CAN claim it, by naming it",
    "Dm Salary" in LV.resolve(["Dm Salary", "Employee Salaries"])["payroll_names"])
+# THE MEMBERSHIP TEST — the list may contain ONLY rows the platform itself fills and then
+# re-derives. A row it merely SHIPS in the Expenses sheet's default categories but never fills is
+# not a duplicate, and listing it would confer payroll authority that suppresses a store's real
+# hours estimate (a silent $0.00 of labour). Live house org 2026-10-07: including
+# 'Owner / Mgmt Salaries' changed the correction by $0.00 while making six extra July stores
+# authoritative on the strength of an owner-salary row alone.
+SHIPPED_BUT_NOT_FILLED = ("Owner / Mgmt Salaries", "Rent / Lease", "Insurance",
+                          "Taxes / Accounting", "ADT Security")
+for _nm in SHIPPED_BUT_NOT_FILLED:
+    ok(f"B7b {_nm!r} is shipped but not auto-filled, so it is NOT claimed as a duplicate",
+       _nm.lower() not in {n.lower() for n in LV.resolve()["payroll_names"]}
+       and _nm.lower() not in {n.lower() for n in LV.resolve()["commission_names"]}, _nm)
+ok("B7c the house payroll vocabulary is exactly the AUTO-FILLED salary row — one row, one duplicate",
+   len(LV.DEFAULT_PAYROLL_ROWS) == 1, LV.DEFAULT_PAYROLL_ROWS)
+ok("B7d …and the house commission vocabulary likewise",
+   len(LV.DEFAULT_COMMISSION_ROWS) == 1, LV.DEFAULT_COMMISSION_ROWS)
+ok("B7e an unfilled row therefore confers NO payroll authority on its own",
+   LC.authoritative_codes(
+       [{"store_code": "B-1", "expense_name": "Owner / Mgmt Salaries", "amount": 1450.0,
+         "source_key": None}], LV.resolve()["payroll_names"]) == frozenset())
+ok("B7f …while the auto-filled row does",
+   LC.authoritative_codes(
+       [{"store_code": "B-1", "expense_name": "Employee Salaries", "amount": 4479.16,
+         "source_key": None}], LV.resolve()["payroll_names"]) == frozenset({"B-1"}))
 ok("B8 a tenant's own route map is respected by resolve (it returns none of its own)",
    LV.resolve(["Employee Salaries"])["payroll_routes"] == {})
 ok("B9 the house routes send every house payroll row to ONE opex line",
@@ -370,6 +394,10 @@ ok("F8 expenses go DOWN and net income goes UP — never the other way",
 ok("F9 the tenant-invented row is NOT claimed and keeps booking as the real cost it is",
    "dm salary" not in {n.lower() for n in post["payroll_names"]}
    and not LC.suppresses_row(LC.suppression_index(post_plan), "Dm Salary", "B-103"))
+ok("F9b the shipped-but-unfilled owner-salary row likewise keeps booking, on store_opex",
+   "owner / mgmt salaries" not in {n.lower() for n in post["payroll_names"]}
+   and not LC.suppresses_row(LC.suppression_index(post_plan), "Owner / Mgmt Salaries", "B-103")
+   and coa.route_expense_line(None)[0] == "store_opex")
 ok("F10 real overhead is untouched",
    not LC.suppresses_row(LC.suppression_index(post_plan), "Rent / Lease", "B-103"))
 

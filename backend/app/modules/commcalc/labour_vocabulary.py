@@ -60,13 +60,29 @@ PURE: stdlib only, no I/O, no DB. Every function is a total function of its argu
 # from its own data. A row here is, by construction, already booked on a dedicated P&L line from
 # the same source — so its expense-side copy must not be counted a second time.
 #
-# A tenant-invented labour row (a hand-typed 'Dm Salary', say) is deliberately NOT here: the
-# platform does not auto-fill it, nothing re-derives it, and it is therefore NOT a duplicate. It
-# books as the ordinary store expense it is, exactly as before. A tenant that DOES want such a row
-# treated as payroll names it in its own config, which wins (see `resolve`).
+# THE TEST FOR MEMBERSHIP, stated so the list cannot grow by vibes: a row belongs here ONLY if the
+# platform itself puts a figure in it AND re-derives that same figure onto a dedicated P&L line from
+# the same source. Nothing else is a duplicate.
+#
+# So a row the platform merely SHIPS in the default category list but never fills — 'Owner / Mgmt
+# Salaries', 'Insurance', 'Rent / Lease' — is NOT here, and neither is a tenant-invented labour row
+# like a hand-typed 'Dm Salary'. Nothing re-derives them, so they are not double-counted, and they
+# book as the ordinary store expenses they are, exactly as before.
+#
+# This is not fastidiousness: membership here CONFERS PAYROLL AUTHORITY, which SUPPRESSES a store's
+# hours estimate. Listing a row the platform does not fill would let an owner-salary row suppress a
+# store's real employee wage estimate, and that store would book a silent $0.00 of labour — the very
+# defect mig 994 added the per-store grain to stop. Measured on the live house org 2026-10-07,
+# including 'Owner / Mgmt Salaries' changed the correction by $0.00 in all four periods while making
+# six extra July stores "payroll authoritative" on the strength of an owner-salary row alone. Same
+# money, strictly more risk; so it is out, and this comment is why.
+#
+# A tenant that DOES want such a row treated as payroll names it in its own config, which wins
+# wholesale (see `resolve`).
 
-#: Rows that carry SALARY/PAYROLL already derived onto the `wages` P&L line from StoreOps hours.
-DEFAULT_PAYROLL_ROWS = ("Employee Salaries", "Owner / Mgmt Salaries")
+#: Rows the platform AUTO-FILLS from StoreOps hours — the same source the `wages` line is derived
+#: from, hence the one payroll duplicate the platform creates.
+DEFAULT_PAYROLL_ROWS = ("Employee Salaries",)
 
 #: Rows that carry REP COMMISSION already booked onto the `rep_comm` P&L line from
 #: `commcalc.rep_commissions.total_payout` (owner decision 2026-09-08: "Rep commision should go in

@@ -1618,9 +1618,20 @@ Commission $235.98, Owner / Mgmt Salaries $1,450.00, Dm Salary $850.00), opex su
 
 **THE FIX — one home, a CORRECT default, the tenant still winning.** NEW pure module
 **`backend/app/modules/commcalc/labour_vocabulary.py`** (stdlib, no I/O) holds the platform's OWN labour rows —
-`DEFAULT_PAYROLL_ROWS`, `DEFAULT_COMMISSION_ROWS`, `DEFAULT_PAYROLL_LINE` — and `resolve(payroll_cfg,
-commission_cfg, grain_cfg, mode)`, the ONE resolution of "which expense rows are labour this statement already
-books from its own source".
+`DEFAULT_PAYROLL_ROWS` = `('Employee Salaries',)`, `DEFAULT_COMMISSION_ROWS` = `('Employee Commission',)`,
+`DEFAULT_PAYROLL_LINE` = `wages` — and `resolve(payroll_cfg, commission_cfg, grain_cfg, mode)`, the ONE
+resolution of "which expense rows are labour this statement already books from its own source".
+
+- **THE MEMBERSHIP TEST, stated so the list cannot grow by vibes:** a row belongs there ONLY if the platform
+  itself PUTS a figure in it **and** re-derives that same figure onto a dedicated P&L line from the same source.
+  A row the platform merely SHIPS in the default category list but never fills — `Owner / Mgmt Salaries`,
+  `Rent / Lease`, `Insurance` — is NOT a duplicate and is NOT there, and neither is a tenant-invented row like
+  the house org's hand-typed `Dm Salary`. This is not fastidiousness: membership CONFERS payroll authority,
+  which SUPPRESSES a store's hours estimate, so listing an unfilled row would let an owner-salary row suppress a
+  store's real employee wage estimate — the silent $0.00 mig `994` added the per-store grain to stop. **Measured
+  live 2026-10-07:** including `Owner / Mgmt Salaries` changed the correction by **$0.00** in all four periods
+  while making **six extra July stores** "payroll authoritative" on the strength of an owner-salary row alone
+  (`T-531`, `T-7812`, `T-902`, `T-957`, `T21880`, `T3560`). Same money, strictly more risk — so it is out.
 
 - **RULE TWO is intact.** These names are the PLATFORM'S shipped defaults, not tenant vocabulary — the platform
   writes them and auto-fills them, so the platform must know not to count them twice. No `if org ==`, no carrier
@@ -1638,10 +1649,11 @@ books from its own source".
   `store`: `org` means "one payroll row anywhere suppresses EVERY store's estimate", which is safe for a tenant
   that listed its own rows but would make a store with no salary row book a silent $0.00 of labour. A tenant with
   an EXPLICIT vocabulary keeps its stored grain.
-- **Salary lands on the salary line.** The house `payroll_expense_routes` send the payroll rows to `wages`
-  (`DEFAULT_PAYROLL_LINE`), so the P&L shows salary on its own line and `store_opex` holds only real store
-  overhead — which is also why the drill-down was unreadable. Routing moves a dollar between two OPEX lines;
-  **net income is unchanged by it.** A manual row routed to `wages` now carries its own name as a drill row (a
+- **Salary lands on the salary line.** The house `payroll_expense_routes` send the payroll row to `wages`
+  (`DEFAULT_PAYROLL_LINE`), so the P&L shows the salary on its own line instead of inside "rent / utilities /
+  supplies" — which is also why the drill-down was unreadable. Routing moves a dollar between two OPEX lines;
+  **net income is unchanged by it.** `Owner / Mgmt Salaries` and `Dm Salary` stay on `store_opex` as the store
+  expenses they are, and Part 2 is what makes them legible: they are now drill rows of that store's own line. A manual row routed to `wages` now carries its own name as a drill row (a
   `payroll_gross` PRODUCER row still carries none — it is one exact figure, not a breakdown).
 - **Three states, never two** — unchanged and reused: a commission row with NO rep pay for that store-month KEEPS
   booking and is named with its dollars (`labour_coverage.suppression_plan`); a suppressed row is REMOVED, never
@@ -1703,7 +1715,7 @@ breakdown, as before, rather than a wrong one.
 surfaced for approval. The fix needs NO migration to work (an absent column resolves `'house'`); the column only
 adds the per-org opt-out.
 
-**Proofs.** `backend/harness_labour_vocabulary.py` (**99 checks**, stdlib — the home's purity and totality, the
+**Proofs.** `backend/harness_labour_vocabulary.py` (**109 checks**, stdlib — the home's purity and totality, the
 tenant winning wholesale, `mode='off'`, the derived grain, the token superset, the resolution driven through the
 REAL `coa._account_config` over an in-memory client on all three live config shapes AND on a schema with no
 opt-out column, the owner's B-103 regression reproduced and closed through the REAL
@@ -1716,6 +1728,14 @@ explaining itself through the REAL `engine._assemble`, the filtered read tying t
 second drill derivation in `backend/app`). `frontend/prove_pl_drill_path.mjs` (**58 checks** — the real
 `scopeFinancials.ts`: the drill path, the market vocabulary, all four sections, the line tie-out, level totals,
 and the page wiring: every rung the same `plQuery` read, no money URL of its own, RULE TWO).
+**`backend/harness_royalty_pl.py` §A (81 → 88)** — its FROZEN pre-change oracle pinned the defect (a store scope's
+`detail: {}`), and it was deliberately **NOT re-captured from the new code**: re-freezing turns a byte-identity
+lock into a snapshot of whatever the code does today. Instead the identity is asserted with each STORE scope's
+line `detail` set aside (`without_store_detail`; CONSOLIDATED's detail is still compared in full), and the
+intended change is asserted POSITIVELY — the store scope's drill row is `{'Rent': 1000.0}`, it TIES to its
+$1,000.00 line, and the oracle had it empty — with two negative controls (a moved cent, and a renamed
+CONSOLIDATED drill row) proving the set-aside did not excuse detail everywhere. The one structural difference
+against the oracle was verified to be exactly that single key, nothing else.
 `frontend/prove_accounts_expenses_column.mjs` extended to **57** and `backend/harness_account_expenses_one_home.py`
 to **43** (their drill-down assertions re-stated against the new panel, strictly tighter: the panel must spell no
 money URL at all). All wired into CI (`carrier-vocab-guard` job + the new `pl-drill-path-proof` job).
@@ -6693,7 +6713,7 @@ rendering the resolved name.
 
 ## 18. Cross-reference: by METRIC / KPI
 
-- **Which expense rows are LABOUR the statement already books from its own source — so they must not be counted twice?** — ONE home `commcalc/labour_vocabulary.resolve` (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`; a non-empty tenant list wins wholesale; `mode='off'` opts out), dereferenced by `account/coa._account_config`, `commcalc/router._expense_apply_default_tokens` and the Expenses sheet's pinned mirror. Locks `harness_labour_vocabulary.py` (99). Live 2026-10-07: 2 of 3 tenants were double-counting; the house org by **$90,922.80 / $92,565.89 / $97,362.88** in July / August / September 2026 — §4e.
+- **Which expense rows are LABOUR the statement already books from its own source — so they must not be counted twice?** — ONE home `commcalc/labour_vocabulary.resolve` (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`; a non-empty tenant list wins wholesale; `mode='off'` opts out), dereferenced by `account/coa._account_config`, `commcalc/router._expense_apply_default_tokens` and the Expenses sheet's pinned mirror. Locks `harness_labour_vocabulary.py` (109). Live 2026-10-07: 2 of 3 tenants were double-counting; the house org by **$90,922.80 / $92,565.89 / $97,362.88** in July / August / September 2026 — §4e.
 - **What makes up THIS line, for THIS scope?** — `coa.accrue_detail` records every drill dollar at the store grain and `engine._scoped` sums the stores in its own scope (Σ `detail_by_store` + `detail_company_wide` == `detail`); `statement_filter.aggregate` already summed it and was unchanged. Before this, 39 of the house org's 40 stored August 2026 P&L scopes carried an EMPTY drill-down. Locks `harness_pl_drill_detail.py` (56) + `prove_pl_drill_path.mjs` (58) — §4e.
 - **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.16).
 
