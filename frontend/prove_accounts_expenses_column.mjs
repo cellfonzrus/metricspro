@@ -165,10 +165,29 @@ ck('the cell is the shared helper, not an inline formula', page.includes('<Expen
 ck('EVERY scope row drills through ONE mechanism (no per-table, per-tenant variant)',
   (page.match(/<ScopeDrillDown /g) || []).length === 1
   && (page.match(/setOpenKey\(/g) || []).length === 1)
+// UPDATED 2026-10-07 (index §4e): the panel is now KEYED on the row and the period, so opening a
+// different scope or changing the month remounts it at the root of its drill path — the reset is
+// React remounting, never a setState inside an effect.
 ck('only the OPEN row fetches (the panel is lazy)',
-  page.includes('{open && (') && page.includes('<ScopeDrillDown row={s} period={period} />'))
-ck('the panel builds no URL of its own — it calls the shared path helper',
-  !codeOnly(page.slice(page.indexOf('function ScopeDrillDown'))).includes('/api/v1/'))
+  page.includes('{open && (') && /<ScopeDrillDown key=.*row=\{s\} period=\{period\} \/>/.test(page))
+ck('the panel is keyed on the scope AND the period (the reset is a remount)',
+  page.includes('key={`${s.scope_key}|${period}`}'))
+// UPDATED 2026-10-07 (index §4e): the panel now descends company -> market -> store -> line, and
+// reads every MONEY figure through `plStatement.plQuery` — the one frontend spelling of the P&L
+// read, shared with the /accounts/pl page and the per-store print. The invariant is unchanged and
+// tightened: the panel spells no money URL of its own. The single URL it does build is the market
+// VOCABULARY index (/core/markets), the same authority the P&L's market filter resolves through.
+const panelSrc = codeOnly(page.slice(page.indexOf('function ScopeDrillDown')))
+const panelUrls = (panelSrc.match(/\/api\/v1\/[a-z0-9/_-]+/g) || [])
+  .filter(u => !u.startsWith('/api/v1/core/markets'))
+ck('the panel spells no money URL of its own — it calls the shared P&L query helper',
+  panelSrc.includes('plQuery(') && panelUrls.length === 0, panelUrls)
+ck('every drill rung is the SAME canonical read, one filter deeper (no second summation)',
+  panelSrc.includes('drillFilter(') && (panelSrc.match(/plQuery\(/g) || []).length >= 2)
+ck('a line drills to the rows behind it, and the tie-out is stated',
+  panelSrc.includes('lineTieOut(') && panelSrc.includes('l.detail'))
+ck('ALL four statement sections render, not only the expenses',
+  panelSrc.includes('allSections(') && page.includes('Net Operating Income'))
 ck('an uncomputed scope says so instead of showing zeros',
   page.includes("setState('uncomputed')") && page.includes('not the same as $0.00'))
 ck('RULE TWO — no tenant / carrier / company / store name in the added code',

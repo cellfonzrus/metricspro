@@ -839,6 +839,47 @@ def _account_config(client, org_id):
             cfg["device_cogs_mode"] = str(drows[0]["device_cogs_mode"]).strip()
     except Exception:
         pass
+    # ── THE LABOUR VOCABULARY, DEREFERENCED (owner report 2026-10-07, index §4e) ─────────────────
+    # Owner: "the finance module is doubling the salaries, it is appearing in the store expenses and
+    # also in separate line as the wages/ hourly payroll".
+    #
+    # The four knobs resolved above the tenant's own way — payroll names, commission names, the
+    # authority grain and the route map — are ONE decision ("which expense rows are labour this
+    # statement already books from its own source?"), and they shipped with EMPTY defaults, so the
+    # platform's own auto-filled rows were counted twice for every tenant that had not typed them in.
+    # That decision now has ONE HOME, `commcalc/labour_vocabulary.resolve`, which this is the only
+    # reader of in this file. A non-empty tenant list still wins wholesale; `mode='off'` restores
+    # the pre-2026-10-07 behaviour per org. `harness_labour_vocabulary.py` fails the build if this
+    # dereference is removed or a second copy of the vocabulary appears.
+    #
+    # `labour_vocabulary_mode` is read in its OWN defensive query, the same shape as every block
+    # above, so the fix works TODAY on a schema where that column does not exist yet (absent ⇒
+    # 'house', the correct default). Nothing here raises.
+    _lv_mode = None
+    try:
+        mrows = (client.schema("commcalc").table("account_config")
+                 .select("labour_vocabulary_mode").eq("org_id", org_id).limit(1).execute().data) or []
+        if mrows:
+            _lv_mode = mrows[0].get("labour_vocabulary_mode")
+    except Exception:
+        pass
+    try:
+        from app.modules.commcalc import labour_vocabulary as _lv
+        _vocab = _lv.resolve(cfg["payroll_expense_names_list"],
+                             cfg["labour_commission_expense_names_list"],
+                             cfg["payroll_authority_grain"], _lv_mode)
+        cfg["labour_vocabulary"] = _vocab
+        cfg["payroll_expense_names_list"] = list(_vocab["payroll_names"])
+        cfg["payroll_expense_names"] = {n.lower() for n in _vocab["payroll_names"]}
+        cfg["labour_commission_expense_names_list"] = list(_vocab["commission_names"])
+        cfg["labour_commission_expense_names"] = {n.lower() for n in _vocab["commission_names"]}
+        cfg["payroll_authority_grain"] = _vocab["grain"]
+        # A tenant's own route map always wins; the house routes apply only where it has none AND
+        # the vocabulary itself came from the house default (`resolve` returns {} otherwise).
+        if not cfg["payroll_expense_routes"]:
+            cfg["payroll_expense_routes"] = dict(_vocab["payroll_routes"])
+    except Exception as e:
+        _warn("labour vocabulary unresolved — the stored per-org lists are used as-is", e)
     return cfg
 
 
@@ -1005,6 +1046,36 @@ def route_expense_line(source_key):
     return _DEFAULT_EXPENSE_ROUTE
 
 
+def accrue_detail(line, store_key, label, amt):
+    """PURE: record one drill-down dollar at BOTH grains on ONE line (owner report 2026-10-07).
+
+    THE ONE accumulation of drill-down detail. `line` is a `build_inputs` line dict; `store_key` is
+    the canonical store address, or None for a dollar attributable to no store.
+
+      · `line['detail']`               — the org-wide roll-up, exactly as it has always been, so a
+                                         consolidated statement is byte-identical.
+      · `line['detail_by_store'][s]`   — the SAME dollar at the grain the statement is scoped by, so
+                                         a company / store / market read can explain its own number.
+      · `line['detail_company_wide']`  — the unattributable remainder, added by a scope that
+                                         includes company-wide dollars.
+
+    THE IDENTITY, which is why there is one function and not two call sites:
+        Σ detail_by_store + detail_company_wide == detail
+    It holds by construction because every grain is incremented by this one `+=`. The previous code
+    incremented only the first, which is why `engine._scoped` had nothing to give a scoped read and
+    stored `detail: {}` for every scope but consolidated — the owner's "the details are missing".
+    Proof: `harness_pl_drill_detail.py` §A. Never raises; a line dict missing either per-grain key
+    gains it."""
+    if not label or not amt:
+        return
+    line["detail"][label] = round(line["detail"].get(label, 0.0) + amt, 2)
+    if store_key:
+        bucket = line.setdefault("detail_by_store", {}).setdefault(store_key, {})
+    else:
+        bucket = line.setdefault("detail_company_wide", {})
+    bucket[label] = round(bucket.get(label, 0.0) + amt, 2)
+
+
 def _lcov_mod():
     """The shared labour/commission derivation (`commcalc/labour_coverage.py`) — the SAME module the
     GP report reads, so the salary-coverage banner and the commission-suppression decision are one
@@ -1079,7 +1150,26 @@ def build_inputs(client, org_id, period):
         """Processor account id → store address (None ⇒ company-wide, exactly as before mig 314)."""
         return _ma_acct_index.get(str(acct or "").strip()) or None
 
-    L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
+    # ── WHY `detail_by_store` EXISTS (owner report 2026-10-07, index §4e) ────────────────────────
+    # Owner: *"the details are missing and the details with the drop down does not tie any
+    # information which appears on the summary line … each line should be able to drill down to get
+    # to each level and finally down to the line level"*.
+    #
+    # THE CLASS: a drill-down was accumulated at ONE grain (org-wide) while the statement it explains
+    # is rendered at MANY grains (consolidated, per company, per store, per market filter). So every
+    # scope but `consolidated` stored `detail: {}` — `engine._scoped` had nothing per-store to give
+    # it and said so in a comment ("detail is company-wide; only meaningful consolidated"). Measured
+    # live 2026-10-07, house org: of 40 stored August P&L scopes, exactly ONE carried any drill
+    # detail. A store's drill-down was therefore empty, and a filtered read (which sums the per-store
+    # snapshots) could only ever sum empty dicts.
+    #
+    # THE FIX, one grain for both: detail is accumulated PER STORE, by the same `add()` every
+    # booking already goes through, and each reader SUMS the stores in its own scope. `detail` stays
+    # the org-wide roll-up so consolidated is byte-identical and nothing else has to change;
+    # `statement_filter.aggregate` already summed `detail` across matched snapshots and needed no
+    # change at all — it was summing empty dicts. One accumulation, every surface.
+    L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {},
+             "detail_by_store": {}, "detail_company_wide": {}} for k, *_ in PL_SPEC + BS_SPEC}
     if _reb_line == "rebate_income":
         # Rebates present as income for this org, so the contra-COGS line receives no dollars;
         # suppress its 0.00 row (engine._assemble passthrough, mig 934) rather than showing an
@@ -1097,7 +1187,7 @@ def build_inputs(client, org_id, period):
         else:
             L[key]["company_wide"] = round(L[key]["company_wide"] + amt, 2)
         if detail_label:
-            L[key]["detail"][detail_label] = round(L[key]["detail"].get(detail_label, 0.0) + amt, 2)
+            accrue_detail(L[key], s, detail_label, amt)
 
     # ── THE P&L COMMISSION SOURCE (owner 2026-09-21, mig 1013) ──────────────────────────────────
     # "p&l is not showing the commission received, it shows in the commission ledger but not
@@ -1518,6 +1608,13 @@ def build_inputs(client, org_id, period):
             add("device_cost", None, _dev["company_wide"])
         for _st, _amt in (_dev.get("by_store") or {}).items():
             add("device_cost", _st, _amt)
+        # DELIBERATE EXCLUSION from the per-store drill grain (index §4e): the device-cost basis
+        # reports its detail as org-wide label totals with no store attached, while its DOLLARS are
+        # booked per store above. Pushing those labels through `accrue_detail` with no store would
+        # file them as company-wide and a store scope would then show a breakdown that is not its
+        # own. So this stays the consolidated-only roll-up it has always been — a scope shows no
+        # device-cost breakdown, exactly as before, rather than a wrong one. Fixing it properly means
+        # the basis reporting its detail per store, which is a device-cost change, not a drill change.
         for _lbl, _amt in (_dev.get("detail") or {}).items():
             L["device_cost"]["detail"][_lbl] = round(
                 L["device_cost"]["detail"].get(_lbl, 0.0) + _amt, 2)
@@ -1799,7 +1896,14 @@ def build_inputs(client, org_id, period):
                     line_key = routed
                     fallback_label = "Payroll"
             if line_key == "wages":
-                add("wages", sa, r.get("amount"))            # exact Gross Payroll — relabelled below
+                # A row the PRODUCER sent (`payroll_gross`) is one exact figure, not a breakdown, so
+                # it carries no drill label — unchanged. A MANUAL row routed here by the labour
+                # vocabulary (owner report 2026-10-07) does carry its own name, so the salary line
+                # drills to the rows behind it ("Employee Salaries", "Owner / Mgmt Salaries") instead
+                # of being an unexplained total. Same rule as every other line: the drill row IS the
+                # expense_name the tenant typed.
+                add("wages", sa, r.get("amount"),
+                    detail_label=((r.get("expense_name") or "").strip() or None) if not sk else None)
                 # ONLY an authoritative exact-gross key suppresses the shifts×rate fallback.
                 if sk in _WAGES_AUTHORITATIVE_KEYS:
                     has_payroll_gross = True

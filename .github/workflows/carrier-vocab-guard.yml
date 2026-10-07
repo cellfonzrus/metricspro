@@ -199,6 +199,14 @@ on:
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/harness_account_expenses_one_home.py"
+      # index §4e — the labour double-count (ONE home for the platform's labour-row vocabulary)
+      # and the per-store drill detail (a scope explains its own number). Owner report 2026-10-07.
+      - "backend/harness_labour_vocabulary.py"
+      - "backend/harness_pl_drill_detail.py"
+      - "backend/app/modules/commcalc/labour_vocabulary.py"
+      - "backend/app/modules/account/engine.py"
+      - "frontend/prove_pl_drill_path.mjs"
+      - "database/migrations/1061_labour_vocabulary_mode.sql"
       # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
       - "backend/harness_scope_label.py"
       - "backend/harness_scope_label_lock.py"
@@ -585,6 +593,12 @@ jobs:
       - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)
         working-directory: backend
         run: python3 harness_account_expenses_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the labour-vocabulary lock + proof (one home for the platform's labour rows; the default is CORRECT; no second copy — index §4e)
+        working-directory: backend
+        run: python3 harness_labour_vocabulary.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the P&L drill-detail proof + lock (a scope explains its own number; no second drill derivation — index §4e)
+        working-directory: backend
+        run: python3 harness_pl_drill_detail.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
         working-directory: backend
         run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -892,6 +906,28 @@ jobs:
       - name: Run the scope display-name proof (the real scopeFinancials.ts; the regression; the leak matrix)
         working-directory: frontend
         run: node prove_scope_label.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE P&L DRILL-PATH PROOF (index §4e, owner report 2026-10-07) drives the REAL
+  # accounts/_components/scopeFinancials.ts: company -> market -> store -> line, every rung the SAME
+  # canonical P&L read one filter deeper, every line drilling to the rows behind it, and the panel
+  # spelling no money URL of its own. It transpiles the display module with the repo's own tsc, so it
+  # installs the frontend's dependencies. DB-free; no network beyond npm.
+  pl-drill-path-proof:
+    name: P&L drill-path proof (company -> market -> store -> line, each rung the same read)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Install the frontend's dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the P&L drill-path proof (the real scopeFinancials.ts; the page wiring; negative controls)
+        working-directory: frontend
+        run: node prove_pl_drill_path.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Account-hub expenses-column proof (the display contract behind the Expenses column)
+        working-directory: frontend
+        run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
