@@ -29247,6 +29247,9 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
                           # somewhere else. Populated only when exec_cfg is supplied, exactly like
                           # bill_qty, so every pre-existing caller is byte-identical.
                           '_billpay_exec': set(),
+                          # Transactions that ALREADY produced a box line in this cell — the guard the
+                          # activation-bucket addition below dereferences so a sale cannot be a box twice.
+                          '_box_txn': set(),
                           'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'setup_fee_rev': 0.0,
                           'box_count': 0,
                           'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
@@ -29324,6 +29327,10 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         # every surface that shares this aggregation (Sales Report / conversion / Productivity / Review).
         if dept in (acfg.get('box_departments') or _BOX_DEPTS):
             a['box_count'] += 1
+            # …and remember WHICH sale it was, so the bucket addition below can tell a sale that
+            # already has a box from one that has none. See the note on `_bcb`.
+            if tid:
+                a['_box_txn'].add(tid)
         _pl = str(r.get('product_desc') or '').lower()
         # Bill-payment membership is CONFIG-DRIVEN per org (mig 214; acfg['billpay_products']). When the org
         # has a NON-empty configured list, a line is a bill payment iff its product_desc EXACTLY matches
@@ -29372,19 +29379,28 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     # customer-phone / BYOD activation as a box). box_count is otherwise a DEVICE-LINE tally; here we add
     # the DISTINCT-transaction count of each configured bucket (byod/upgrade/premium) so the metric tallies
     # to the owner's expectation across EVERY surface that reads box_count (Sales-Report box count, Daily-
-    # Targets conversion + attainment, Productivity / Stack-Ranking / Review). A BYOD transaction carries NO
-    # device-department line, so this never double-counts an existing box. Empty set (house/Boost default,
+    # Targets conversion + attainment, Productivity / Stack-Ranking / Review). A transaction that ALREADY
+    # produced a box line is EXCLUDED here, measured per cell against `_box_txn` — the original note that
+    # "a BYOD transaction carries NO device-department line" was an assumption, not a fact, and it was
+    # already false on two tenants (see the loop below). Empty set (house/Boost default,
     # or pre-231) → no-op → BYTE-IDENTICAL. Exec MTD's "trending box" already = total activations (incl.
     # BYOD) and does not read box_count, so this ALIGNS the box-count surfaces with Exec MTD.
     _bcb = (acfg.get('box_count_buckets') if acfg else None) or set()
     if _bcb:
         for a in agg.values():
-            if 'byod' in _bcb:
-                a['box_count'] += len(a['_byod'])
-            if 'upgrade' in _bcb:
-                a['box_count'] += len(a['_upg'])
-            if 'premium' in _bcb:
-                a['box_count'] += len(a['_prem'])
+            # ONE SALE, AT MOST ONE BOX FROM A BUCKET. A bucket adds a box for the ABSENCE of a device
+            # line, so it may only count a transaction that produced no box line in this cell. The
+            # original code added `len(a['_byod'])` outright, on the assumption — written in the comment
+            # above — that "a BYOD transaction carries NO device-department line". That assumption is
+            # not a property of BYOD, it is a property of the org's `box_departments`, and it stops
+            # holding the moment an org ticks a department that BYOD sales also use. Measured live
+            # 2026-10-08 (September 2026): Luxelink Wireless double-counted 64 transactions and the
+            # house org 39, both silently. So the guard is dereferenced rather than assumed, and the
+            # same rule covers `upgrade` and `premium` — an upgrade almost always HAS a device line, so
+            # that bucket would have been the worse offender had anyone ticked it.
+            for _b, _k in (('byod', '_byod'), ('upgrade', '_upg'), ('premium', '_prem')):
+                if _b in _bcb:
+                    a['box_count'] += len(a[_k] - a['_box_txn'])
     return agg
 
 
