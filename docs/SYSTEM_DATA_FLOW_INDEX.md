@@ -20956,6 +20956,14 @@ A zero on this screen accuses a person, so nothing is allowed to look like a res
     config ROW is not a patch), and because Cellfonz's row doubles as the house-default row, setting it
     is what fixes the inheriting tenant too. Making the distinction expressible would take a migration
     and is not in this PR.
+    **WHAT THE OWNER'S FIRST ATTEMPT EXPOSED (2026-10-08, §59.8).** He ticked `BYOD` in the **"Box
+    (device-unit) departments"** list instead — a different control on the same panel, writing
+    `box_departments`, not `box_count_buckets`. Measured on September 2026: that counts 391 BYOD-DEPARTMENT
+    lines across only **286 receipts** (so one sale can count twice), of which **256 are not BYOD
+    activations at all**, while only **30 of the 601** BYOD activations have a line in that department.
+    The department is a product department, not the activation. Two lessons, both recorded rather than
+    re-derived: when telling anyone to set this, name the **heading** (the two controls sit inches
+    apart), and the attempt broke the bucket's own assumption — see §59.8.
   - **family_plan_pct** — `partial`, naming each store that did not resolve to a code. Blank means
     unmatched, never 0%. (It fires on no house store today: all 28 DLAR rows matched, keyed on
     `address` — `raw_dlar_store.store_code` is blank on every row, which is why the resolver is used.)
@@ -21060,3 +21068,54 @@ Lock: `harness_peer_comparison.py` §J (11 checks, the item) and §K (10 checks,
 items; it must not re-decide anything. Before it is designed, note the measured constraint: the org
 tree resolves a DM for only **6 of 29** Cellfonz stores and **0 of 20** Luxelink stores, so a card keyed
 on DM is blank for most stores today. Surface that gap; never guess an owner for a store.
+
+### 59.8 ONE SALE, AT MOST ONE BOX — the assumption the box-count bucket rested on, and the guard that replaces it
+
+**The class, not the instance.** `box_count_buckets` (mig 231) adds a box for a sale that has **no**
+device line — a BYOD activation, where the customer brought the phone. The code added the whole bucket
+outright, `box_count += len(cell['_byod'])`, and its own comment stated the licence: *"A BYOD
+transaction carries NO device-department line, so this never double-counts an existing box."*
+
+That is not a fact about BYOD. It is a fact about the org's `box_departments`, which is **config**, so
+any tenant can falsify it by ticking a department its BYOD sales also use. The general fact that was
+wrong: *a count derived from the absence of something may not be added without checking the thing is
+actually absent.*
+
+**The siblings, found before shipping.** Measured live 2026-10-08 against September 2026
+(`commcalc.accessory_config` + the sales union, read-only):
+
+| org | buckets | device-line boxes | bucket added, unguarded | guarded | phantom boxes removed |
+|---|---|---|---|---|---|
+| `00000000-…-0001` Cellfonz R Us | `['byod']` | 1,509 | 2,083 | **2,044** | 39 |
+| `854f6d7b-…` Luxelink Wireless | `['byod']` | 999 | 1,233 | **1,172** | 61 |
+| `f4f1c16e-…` Vzone | `['byod']` | — | — | — | no September rows |
+
+So this was **already live on a tenant nobody was looking at**: Luxelink has had the bucket on for
+months and was over-reporting 61 boxes in one month. The Cellfonz instance only surfaced because the
+owner ticked `BYOD` into `box_departments` (§59.5) — the instance, not the defect.
+
+**The fix, in the one home.** `router._sales_cell_agg` now records `cell['_box_txn']` — the
+transactions that already produced a box LINE in that cell — beside the existing `box_count` tally, and
+the bucket addition counts `len(cell[bucket] - cell['_box_txn'])`. The guard is **dereferenced, not
+assumed**, and it covers `byod`, `upgrade` and `premium` by the same rule rather than only the bucket
+that happened to be on: an upgrade almost always HAS a device line, so an `upgrade` tick under the old
+code would have double-counted nearly every upgrade. `_box_txn` is on the cell, so no caller re-derives
+"did this sale already have a box".
+
+**What does NOT change.** No bucket ticked → `_bcb` is empty → the addition never runs → byte-identical
+for every org that has not opted in. No money moves: `targets_engine.achieved_for_cat` pays on
+`prem` / `byod` / `upg` / `acc` and never on `box` (box feeds the Daily-Targets conversion display,
+Productivity, Stack Ranking and Review). The figures above are display corrections, downward.
+
+**The lock.** `harness_line_class.py` §H (8 checks), in the harness that already exercises this
+aggregation rather than a new sibling file. Armed three ways, each proven to redden: removing the guard
+(the original bug), recording `_box_txn` but not reading it (the §19.18 *registry written, callers not
+wired* trap), and guarding `byod` while leaving `upgrade` / `premium` unguarded (the *fixed the instance,
+not the class* trap). §H8 pins that a line with no `trans_id` cannot be guarded and is still counted
+once, never dropped.
+
+**Adjacent defect, NOT fixed here and not to be assumed away.** `box_departments` matching is
+case-SENSITIVE (`_accessory_config` builds `{b.strip()}` and `_sales_cell_agg` compares the raw
+department), so a feed that spells a department in another case silently contributes no boxes. Same
+class as the `b-1115` phantom-store defect that §29.12 closed for store codes. Recorded, not repaired, because repairing it
+changes which lines count as boxes on every tenant and wants its own measurement.
