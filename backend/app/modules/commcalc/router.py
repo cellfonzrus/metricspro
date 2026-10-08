@@ -11372,13 +11372,13 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
             return q.in_("period", pv) if pv else q
         return _feed_read.read_all(_make)      # PAGED through the one home — no row ceiling (§19.48)
 
-    # ── config: house defaults ← house org row ← this tenant's row (RULE TWO, mig 1061) ──────────
+    # ── config: house defaults ← house org row ← this tenant's row (RULE TWO, mig 1063) ──────────
     def _cfg_blob(oid):
         try:
             rows = (client.schema("commcalc").table("commission_org_config")
                     .select("device_reimb_recon_config").eq("org_id", oid).limit(1).execute().data) or []
         except Exception as e:                 # column/table absent → house defaults (contract §5)
-            print(f"WARN device_reimb_recon config unavailable (run migration 1061?): {e}")
+            print(f"WARN device_reimb_recon config unavailable (run migration 1063?): {e}")
             return None
         return (rows[0] if rows else {}).get("device_reimb_recon_config")
 
@@ -11414,9 +11414,15 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
     #    the pure reconciliation treats exactly like incomplete — an untested feed is not a tested
     #    one (§19.49). Both feeds are read for every month the recon can touch, not just `period`,
     #    because the distributor's claim month is a DATE and may fall outside the period filter.
-    months = sorted({_drr.month_key(r.get(cols["carrier_period"])) or
-                     _drr.month_key(r.get(cols["carrier_day"])) for r in carrier_rows} |
-                    {_drr.month_key(r.get(cols["distributor_date"])) for r in asset_rows} - {None})
+    _months = {_drr.month_key(r.get(cols["carrier_period"])) or
+               _drr.month_key(r.get(cols["carrier_day"])) for r in carrier_rows}
+    _months |= {_drr.month_key(r.get(cols["distributor_date"])) for r in asset_rows}
+    # DISCARD, not a set difference folded into the union: `|` binds looser than `-`, so writing this
+    # as one expression subtracts {None} from the SECOND set only and leaves a None in the result —
+    # which `sorted` then raises on. A row with no readable month is reported by the pure module's
+    # `unplaced` count instead (it can belong to no store-MONTH), so dropping it here loses nothing.
+    _months.discard(None)
+    months = sorted(_months)
     detail = _feed_read.read_all(lambda: client.schema("commcalc").table("raw_payment_detail")
                                  .select("payment_date").eq("org_id", org_id))
     coverage = {}

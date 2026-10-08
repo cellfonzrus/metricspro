@@ -150,7 +150,7 @@ FLAG_SOURCE = "device_reimb_recon"
 
 # ── CONFIG (RULE TWO). Every carrier / product / category string a human would tune lives here as
 #    DATA, per org, with these house defaults. Stored at
-#    `commcalc.commission_org_config.device_reimb_recon_config` (migration 1061); the loader degrades
+#    `commcalc.commission_org_config.device_reimb_recon_config` (migration 1063); the loader degrades
 #    to this dict when the column, row or table is absent, so every surface works unmigrated.
 CODE_DEFAULT = {
     "enabled": True,

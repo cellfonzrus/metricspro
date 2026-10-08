@@ -61,7 +61,7 @@ from app.modules.commcalc import flag_registry as FR
 MOD = "app/modules/commcalc/device_reimb_recon.py"
 ROUTER = "app/modules/commcalc/router.py"
 REG = "app/modules/commcalc/flag_registry.py"
-MIG = "../database/migrations/1061_device_reimb_recon_config.sql"
+MIG = "../database/migrations/1063_device_reimb_recon_config.sql"
 WORKFLOW = "../.github/workflows/carrier-vocab-guard.yml"
 INDEX = "../docs/SYSTEM_DATA_FLOW_INDEX.md"
 

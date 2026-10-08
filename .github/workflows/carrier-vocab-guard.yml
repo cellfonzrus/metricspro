@@ -511,7 +511,7 @@ on:
       - "backend/app/modules/commcalc/device_reimb_recon.py"
       - "backend/app/modules/commcalc/flag_registry.py"
       - "backend/app/modules/commcalc/pay_data_quality.py"
-      - "database/migrations/1061_device_reimb_recon_config.sql"
+      - "database/migrations/1063_device_reimb_recon_config.sql"
       - "backend/harness_installment_month_anchor.py"
       - "backend/app/modules/commcalc/installment_month.py"
       - "backend/app/modules/commcalc/installment_engine.py"

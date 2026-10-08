@@ -1637,7 +1637,7 @@ resolution of "which expense rows are labour this statement already books from i
 - **RULE TWO is intact.** These names are the PLATFORM'S shipped defaults, not tenant vocabulary — the platform
   writes them and auto-fills them, so the platform must know not to count them twice. No `if org ==`, no carrier
   / tenant / company name, and a non-empty tenant list still **wins wholesale** (never merged — merging would
-  move a configured tenant's statements unasked). `labour_vocabulary_mode='off'` (mig `1061`) is the per-org
+  move a configured tenant's statements unasked). `labour_vocabulary_mode='off'` (mig `1063`) is the per-org
   opt-out and reproduces the pre-2026-10-07 behaviour exactly.
 - **The third copy is gone.** The same fact lived in THREE unwired places: the frontend `DEFAULT_CATS`, each
   tenant's `account_config`, and `commcalc/router._EXPENSE_APPLY_DEFAULT_TOKENS = ['commission','salary',
@@ -6202,13 +6202,13 @@ rendering the resolved name.
 
 ## 16. Cross-reference: by TABLE
 
-- `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
+- `commcalc.account_config.labour_vocabulary_mode` (mig `1063`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
-| `commcalc.commission_org_config.device_reimb_recon_config` (mig `1061`, **NOT applied**) — the per-org declaration for the ePay-paid vs distributor-claimed device-reimbursement reconciliation: WHICH classified carrier dollars are the device-financing side (`carrier_sources`, seeded EMPTY on purpose — an undeclared org measures nothing and flags nobody), the distributor category/status spellings, tolerance, severity thresholds, evidence cap and column names. RULE TWO: no carrier, tenant, product or quarter name exists in code | an owner / admin (the migration's own commented UPDATE) | ONE reader `commcalc/router._device_reimb_recon_inputs` → `device_reimb_recon.config_from_rows` (the house row behind the tenant row); degrades to `CODE_DEFAULT` when the column is absent — §19.53 |
+| `commcalc.commission_org_config.device_reimb_recon_config` (mig `1063`, **NOT applied**) — the per-org declaration for the ePay-paid vs distributor-claimed device-reimbursement reconciliation: WHICH classified carrier dollars are the device-financing side (`carrier_sources`, seeded EMPTY on purpose — an undeclared org measures nothing and flags nobody), the distributor category/status spellings, tolerance, severity thresholds, evidence cap and column names. RULE TWO: no carrier, tenant, product or quarter name exists in code | an owner / admin (the migration's own commented UPDATE) | ONE reader `commcalc/router._device_reimb_recon_inputs` → `device_reimb_recon.config_from_rows` (the house row behind the tenant row); degrades to `CODE_DEFAULT` when the column is absent — §19.53 |
 | `commcalc.flags` · `flag_type='DEVICE_REIMB_CLAIMED_NOT_PAID'` / `'DEVICE_REIMB_NOT_MEASURED'` | `commcalc/router.device_reimbursement_recon_sync_flags` → `device_reimb_recon.recon_flags`, written through the ADDITIVE `flag_persist.sync` (mig 287) at **store_period** grain, keyed `source_ref = '<YYYY-MM>|<store>'` so a re-read refreshes the one row instead of accumulating | the existing all-flags board (`GET /commcalc/flags/{period}`, the "All Flags" tile, mig `1002`) and the Management Watchdog areas `distributor` / `feed`. Registered in `flag_registry` — §19.53 |
 | `commcalc.flags` · `flag_type='sales_basis_not_loaded'` | `sales_recon.sync_recon_flags` via `_persist` — **grain `period`** (the first type at that grain), keyed `source_ref = plabel` so re-running replaces the one row instead of accumulating, and retired by the same additive `flag_persist` path the per-transaction findings use | ONE condition for a closed month whose month-end archive never arrived — it REPLACED 11,233 September + 3,001 October per-transaction criticals. Registered in `flag_registry`, severity HIGH — §19.52 |
 | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount` / `termination_date` — EVERY writer passes `storeops/router.py::gate_pay_write` first (§19.44): `POST /storeops/employees`, `POST /storeops/employees/bulk`, `PATCH /storeops/employees/{id}` (+ `PATCH /hr/employees/{id}`), `POST /storeops/employees/bulk-payscale`, `POST /hr/employees`; `employee_id` is minted by the one `_ensure_employee_id` after EVERY insert, incl. the Roles path `core._ensure_employee` (§19.45) | the create / edit / upload handlers named | unchanged (§14 pay visibility) |
@@ -7033,7 +7033,7 @@ the configuration. A withheld shortfall lands on the SECOND type, which is the f
 in one line of code. `paid_above_claim` is reported and deliberately **not** flagged: it asks nobody to
 act, and a queue that cannot be worked through is a queue nobody works.
 
-**RULE TWO.** `commcalc.commission_org_config.device_reimb_recon_config` (mig `1061`, **surfaced for
+**RULE TWO.** `commcalc.commission_org_config.device_reimb_recon_config` (mig `1063`, **surfaced for
 approval, NOT applied**) carries the declared carrier classification keys, the distributor category /
 status spellings, the tolerance, the severity thresholds, the evidence cap and the COLUMN NAMES. The
 house seed deliberately leaves `carrier_sources` **empty**: declaring which carrier dollars are device

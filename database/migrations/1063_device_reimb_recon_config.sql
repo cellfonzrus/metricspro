@@ -1,4 +1,4 @@
--- 1061_device_reimb_recon_config.sql
+-- 1063_device_reimb_recon_config.sql
 -- ─────────────────────────────────────────────────────────────────────────────────────────────────
 -- ePAY-PAID vs DISTRIBUTOR-CLAIMED DEVICE REIMBURSEMENT — the per-org CONFIG for the reconciliation
 -- and its management flag (index §19.52, owner report 2026-10-08).
