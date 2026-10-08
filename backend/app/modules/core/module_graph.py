@@ -55,6 +55,18 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_peercmp',),
         },
     },
+    'manager_report_card': {
+        "question": 'What was assigned to this district manager for each of their stores, did the '
+                    'system record it as met, and who is accountable one level above them?',
+        "homes": ('app/modules/commcalc/manager_report_card.py',),
+        "index": ('59.9',),
+        "locks": ('harness_manager_report_card.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_mrcard',),
+        },
+    },
     'device_reimbursement_paid_vs_claimed': {
         "question": 'What did the carrier actually PAY for device financing, what does the '
                     'distributor CLAIM it reimbursed, and may the two be compared at all?',

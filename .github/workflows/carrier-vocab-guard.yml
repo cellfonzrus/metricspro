@@ -253,6 +253,8 @@ on:
       - "backend/harness_line_class.py"
       - "backend/harness_peer_comparison.py"
       - "backend/app/modules/commcalc/peer_comparison.py"
+      - "backend/harness_manager_report_card.py"
+      - "backend/app/modules/commcalc/manager_report_card.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_bucketing.py"
       - "backend/harness_sweep_failures_visible.py"
@@ -1014,6 +1016,12 @@ jobs:
       - name: "Peer sales comparison (index §59): the add-a-line ONE HOME over the whole measured vocabulary + the equivalence pin that says no promo column moved; the traffic band; and the un-wire lock on every _sales_cell_agg field it rolls up"
         working-directory: backend
         run: python3 harness_peer_comparison.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      # Runs HERE and not in the dependency-free job because §D reads the router's own source to prove
+      # the endpoint dereferences rather than re-derives, and the module graph names this lock — a lock
+      # no workflow runs is not a lock, and the module-graph guard fails the build to say so.
+      - name: "Manager report cards (index §59.9): the three-state check-off where absence is never performance, the item registry wired rather than decorative, the roll-up and the org tree INJECTED, and the summary CALLED rather than reassembled"
+        working-directory: backend
+        run: python3 harness_manager_report_card.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
         working-directory: backend
         run: python3 harness_activation_event.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
