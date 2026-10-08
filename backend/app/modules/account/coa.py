@@ -1393,27 +1393,66 @@ def build_inputs(client, org_id, period):
         except Exception as e:
             _warn("raw_ma_daily_tx P&L booking failed", e)
 
-    # raw_comp_report — carrier commissions/incentives. Broken into canonical components via
-    # carrier_category_map (framework): same carrier_comm total, with a Commission/SPIFF/Reimbursement
-    # drill-down. Unmapped rows fall under "Unmapped" so nothing is hidden. (zero change to totals.)
+    # ── raw_comp_report — EVERY CARRIER DOLLAR, CLASSIFIED IN ONE HOME (owner report 2026-10-08) ──
+    # OWNER: *"the commission is over stated as the device reimbursement is being added in the
+    # commision and also in device reimbursement … example is 103 fulton street ↳ Commission (promo)
+    # $7,583.96 / Device-financing reimbursements (Distributor) $7,999.93 … the report which pays us
+    # is same as what is reported in commision 7583.96"*, then *"need to move that amount from
+    # commssiomn to teh device reimbursement"*.
+    #
+    # WHAT WAS WRONG WAS NOT THESE THREE ROWS. Two maps answered one question and disagreed, and the
+    # one this block read never saw the org's own word: `carrier_category_map`'s generic keyword
+    # ladder called every period-renamed carrier offer COMMISSION, while `payment_categories` — the
+    # org's OWN declaration — calls those same offers a reimbursement, several on the EXACT same
+    # spelling. $2,784,846.76 of house carrier money (Mar–Oct 2026) was on the commission line
+    # against the org's own declaration; $775,198.35 more was labelled SPIFF against it.
+    #
+    # The classification now has ONE home — `commcalc.carrier_dollar_class` — which this block
+    # DEREFERENCES and never re-implements (lock: harness_carrier_dollar_class.py). The declaration
+    # wins; a period-renamed twin is used but travels LABELLED as an inference; the keyword ladder is
+    # the fallback for an undeclared type; and an undeclared type is REPORTED either way. Where each
+    # component books is per-org config (`carrier_component_lines`) — never a branch in this file —
+    # and the house default routes REIMBURSEMENT to the device-financing reimbursement line, which is
+    # the owner's "move that amount from commission to the device reimbursement".
+    #
+    # `_carrier_class_coverage` carries the whole accounting (by component, by basis, the inferred
+    # dollars named with their twin, the undeclared dollars named per type, and `balances`), so a
+    # figure resting on an inference can never be read as the org's own declaration.
+    _cc_tally = None
+    # Resolved ONCE and reused by the asset-ledger block below, so the carrier side and the
+    # distributor side can never read a different posture within one statement.
     try:
+        from app.modules.commcalc import carrier_dollar_class as _cdc
+        _cdc_cfg = _cdc.load_config(client, org_id)
+    except Exception as e:
+        _cdc, _cdc_cfg = None, None
+        _warn("carrier-dollar classification config unavailable", e)
+    try:
+        if _cdc is None:
+            raise RuntimeError("carrier_dollar_class unavailable")
         try:
             _cc_rules = carrier_map.load_rules(client, org_id)
         except Exception:
             _cc_rules = []
+        _cc_decl = _cdc.load_declarations(client, org_id)
         _CC_LABEL = {"COMMISSION": "Commission (promo)", "SPIFF": "SPIFF / bounty",
                      "REIMBURSEMENT": "Reimbursement", "RESIDUAL": "Residual"}
-        for r in _fetch_all(client, "raw_comp_report",
-                            "business_address,payment_amount,period,compensation_type",
-                            {"org_id": org_id, "period": period_keys}):
-            comp = None
-            if _cc_rules:
-                m = carrier_map.match_rule(_cc_rules, r.get("compensation_type"))
-                comp = m.get("component") if m else None
-            add_comm("carrier_comm", _norm_store(r.get("business_address")), r.get("payment_amount"),
-                     detail_label=_CC_LABEL.get(comp, "Unmapped"))
-    except Exception:
-        pass
+        _cc_rows = _fetch_all(client, "raw_comp_report",
+                              "business_address,payment_amount,period,compensation_type",
+                              {"org_id": org_id, "period": period_keys})
+        _cc_seen = {}
+        for r in _cc_rows:
+            _ct_raw = r.get("compensation_type")
+            _c = _cc_seen.get(_ct_raw)
+            if _c is None:
+                _c = _cc_seen[_ct_raw] = _cdc.classify(_cc_decl, _cc_rules, _ct_raw, _cdc_cfg)
+            _line = _cdc.component_line(_c["component"], _cdc_cfg.get("component_lines"),
+                                        "carrier_comm")
+            add_comm(_line, _norm_store(r.get("business_address")), r.get("payment_amount"),
+                     detail_label=_CC_LABEL.get(_c["component"], "Undeclared"))
+        _cc_tally = _cdc.tally(_cc_rows, _cc_decl, _cc_rules, _cdc_cfg)
+    except Exception as e:
+        _warn("raw_comp_report carrier classification failed", e)
 
     # activation-report feed (commcalc.activation_rebate_ledger, migration 867) — a DEDICATED,
     # collision-free source so this never shares raw_comp_report's wholesale per-period replace.
@@ -1636,8 +1675,36 @@ def build_inputs(client, org_id, period):
             "records cost AFTER the carrier subsidy and is negative on a subsidised handset. Upload the "
             "distributor's commission/fulfillment sheets for this period to measure it.")
 
-    # asset_ledger — reimbursement income (cash, by reimbursement_date), VIP fees (COGS),
-    # inventory value (BS), owed-to-VIP (BS). One scan, multiple lines.
+    # asset_ledger — the distributor's reimbursement CLAIM, VIP fees (COGS), inventory value (BS),
+    # owed-to-VIP (BS). One scan, multiple lines.
+    #
+    # ── ONE PAYMENT, TWO SIDES (owner 2026-10-08) ─────────────────────────────────────────────────
+    # OWNER: *"distributors payments are not in additon to the reimbursement they are the same
+    # payments but the discrepancy nbetween them shows that the distributor claims it was paid bunt
+    # epay never paid it"*.
+    #
+    # So this ledger's `reimbursement` is NOT a second receipt. The carrier statement is the money;
+    # this column is the distributor's CLAIM about that same money. Booking both — which is what
+    # happened until today — recognises the same dollars twice: at 103 Fulton in September the books
+    # carried the claim ($7,999.93) AND the carrier money misfiled as commission ($7,583.96), and
+    # the $415.97 gap is money the distributor says was paid that the carrier never paid — a
+    # receivable/exception, never income.
+    #
+    # Under the house default `device_reimb_source='carrier_paid'` the claim therefore books NO
+    # revenue and is HELD on `_distributor_reimb_claim`: visible, counted per store and per period,
+    # with the carrier figure beside it and the difference named. Nothing is silently dropped. The
+    # RECONCILIATION of that difference and its management-dashboard flag are deliberately NOT built
+    # here (separate owner, separate PR — this file must not grow a second reconciliation).
+    # `device_reimb_source='distributor_claim'` keeps the pre-2026-10-08 posture byte-identically
+    # for any org whose distributor ledger IS its receipt of record.
+    _dist_claim_books_revenue = ((_cdc_cfg or {}).get("device_reimb_source") or "distributor_claim") \
+        == "distributor_claim"
+    # `by_store` / `company_wide` stay EMPTY on every side entry: `engine.compute_and_store` walks
+    # `ln["by_store"]` over every value of L, so dollars under those keys would be bookable. The
+    # claim's own per-store figures live under `claim_by_store`, which no booking path reads.
+    _dist_claim = {"by_store": {}, "company_wide": 0.0, "rows": 0,
+                   "claim_by_store": {}, "claim_company_wide": 0.0,
+                   "books_revenue": _dist_claim_books_revenue}
     try:
         for r in _fetch_all(client, "asset_ledger",
                             "store,category,status,owed_to_vip,reimbursement,reimbursement_date,selling_price,acquired_date",
@@ -1648,9 +1715,17 @@ def build_inputs(client, org_id, period):
             owed = safe_float(r.get("owed_to_vip"))
             reimb = safe_float(r.get("reimbursement"))
             unsold = status.lower() == "on inventory"
-            # reimbursement income — recognized in the period it was received
+            # the distributor's claim — recognized in the period it says it was received
             if reimb and _in_period(r.get("reimbursement_date"), pm, py):
-                add("vip_reimb", st, reimb)
+                _dist_claim["rows"] += 1
+                if st:
+                    _dist_claim["claim_by_store"][st] = round(
+                        _dist_claim["claim_by_store"].get(st, 0.0) + reimb, 2)
+                else:
+                    _dist_claim["claim_company_wide"] = round(
+                        _dist_claim["claim_company_wide"] + reimb, 2)
+                if _dist_claim_books_revenue:
+                    add("vip_reimb", st, reimb)
             # VIP fee categories — book ONCE, in the month the fee was assessed (the ledger charge
             # date = acquired_date / the "Date" column). Was unfiltered ("count all on the books") →
             # re-booked in every period computed, so this month's COGS carried every prior month's fees.
@@ -2144,6 +2219,72 @@ def build_inputs(client, org_id, period):
                 L[_billpay_pl.OFFSET_KEY]["label"] = _bp_label
     except Exception as e:
         _warn("bill-pay pass-through carve-out skipped", e)
+
+    # ── THE CARRIER-DOLLAR SIDE ENTRIES (owner 2026-10-08) ───────────────────────────────────────
+    # Neither of these is a P&L line: `engine._assemble` builds the statement from PL_SPEC, so a
+    # `_`-prefixed entry rides alongside as evidence. They exist because a classified figure must be
+    # able to say what it rests on, and a de-recognised claim must stay VISIBLE.
+    #
+    #   `_carrier_class_coverage` — every carrier dollar by component and by BASIS, the inferred
+    #     dollars named with the earlier-period declaration each inference came from, the undeclared
+    #     dollars named per payment type, what the keyword ladder alone would have said, and
+    #     `balances`. An org that declares its whole vocabulary shows `undeclared_total` 0.00.
+    #   `_distributor_reimb_claim` — the distributor's reimbursement claim for the period, per store,
+    #     beside what the carrier actually paid, with the difference named. Under
+    #     `device_reimb_source='carrier_paid'` the claim books no revenue, so this entry is the only
+    #     place it appears and dropping it would be exactly the silent loss this is here to prevent.
+    if _cc_tally is not None:
+        L["_carrier_class_coverage"] = dict(_cc_tally, by_store={}, company_wide=0.0)
+    if _dist_claim["rows"] or _dist_claim["claim_company_wide"] or _dist_claim["claim_by_store"]:
+        _carrier_paid = 0.0
+        _carrier_paid_by_store = {}
+        if _cc_tally is not None:
+            _reimb_line = None
+            try:
+                _reimb_line = _cdc.component_line(
+                    "REIMBURSEMENT", (_cdc_cfg or {}).get("component_lines"), "carrier_comm")
+            except Exception:
+                _reimb_line = None
+            for _c in _cc_tally.get("by_component") or ():
+                if _c.get("component") == "REIMBURSEMENT":
+                    _carrier_paid = _c.get("amount") or 0.0
+            if _reimb_line and _reimb_line != "carrier_comm" and _reimb_line in L:
+                _carrier_paid_by_store = dict(L[_reimb_line].get("by_store") or {})
+        _claim_total = round(_dist_claim["claim_company_wide"]
+                             + sum(_dist_claim["claim_by_store"].values()), 2)
+        _dist_claim.update({
+            "claim_total": _claim_total,
+            "carrier_paid_total": round(_carrier_paid, 2),
+            "difference": round(_claim_total - _carrier_paid, 2),
+            "carrier_paid_by_store": _carrier_paid_by_store,
+            "status": "booked_as_revenue" if _dist_claim["books_revenue"] else "held_unreconciled",
+            "note": ("The distributor's reimbursement figure is a CLAIM about the money the carrier "
+                     "paid, not a second receipt, so it books no revenue. A positive difference is "
+                     "money the distributor says was paid that the carrier statement does not show "
+                     "— a receivable or an exception to chase, never income. Reconciling it line by "
+                     "line, and flagging it, is a separate mechanism and deliberately not done here."
+                     if not _dist_claim["books_revenue"] else
+                     "This org's distributor ledger is its receipt of record "
+                     "(device_reimb_source='distributor_claim'), so the claim books revenue as it "
+                     "always has."),
+        })
+        L["_distributor_reimb_claim"] = _dist_claim
+    # THE LABEL MUST STOP NAMING THE WRONG PAYER. PL_SPEC's label of record says "(Distributor)",
+    # which was true while the line carried the distributor's claim and is false once it carries
+    # what the carrier paid. This is the SAME `label` passthrough `engine._assemble` already honours
+    # for 'Gross Payroll' and the bill-pay offset — set only in this case, so every other org and
+    # every other line is byte-identical, and overridable per org by `pl_line_labels` (applied after
+    # this, so the owner's word always wins).
+    try:
+        _reimb_dest = None
+        if _cdc is not None:
+            _reimb_dest = _cdc.component_line("REIMBURSEMENT",
+                                              (_cdc_cfg or {}).get("component_lines"), "carrier_comm")
+        if (_reimb_dest and _reimb_dest != "carrier_comm" and _reimb_dest in L
+                and not _dist_claim["books_revenue"]):
+            L[_reimb_dest]["label"] = "Device-financing reimbursements (carrier-paid)"
+    except Exception:
+        pass
 
     # ── per-org P&L/BS line labels (mig 314, owner spec 2026-09-02: "it should say Residual on
     # Total side and Mi on boost side") — the SAME `label` passthrough engine._assemble already
