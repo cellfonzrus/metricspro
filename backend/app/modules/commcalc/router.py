@@ -24,6 +24,7 @@ from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, 
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
+from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -30855,6 +30856,73 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     return {'period': period, 'today': today.isoformat(), 'stores': out,
             'filters': filters, 'applied': applied, 'trending': trend_meta,
             'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
+
+
+@router.get("/targets/{period}/report-cards")
+async def get_manager_report_cards(period: str, today: str = "",
+                                   stores: Optional[List[str]] = Query(default=None),
+                                   markets: Optional[List[str]] = Query(default=None),
+                                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """MANAGER REPORT CARDS (owner 2026-10-08, index §59.9) — what was assigned to each district
+    manager, store by store, with the system's own check-off of whether it was met; and the same card
+    one level up, where the rows are the DMs beneath that manager so they are accountable too.
+
+    THIS ENDPOINT DERIVES NOTHING. Every number on a card comes from a home that already owns it:
+
+      · the per-store targets and achievement, and the roll-up, from `/targets/{period}/summary` —
+        which this handler CALLS rather than reassembling. One code path means a DM's card and the
+        DM's own Targets screen cannot disagree about the same store on the same day, and it also
+        inherits that endpoint's `scope_keyset` filtering for free, so a card never shows a store its
+        reader may not see.
+      · who owns a store, from `storeops/org_chain.dm_by_store` — THE org-tree walk, read in bulk.
+      · who is behind stores of the same footfall, from `_peer_comparison_payload` +
+        `peer_comparison.peer_items_by_store` (§59.4, §59.7) — the same verdict the action plan uses.
+      · the check-off itself and the cards, from pure `commcalc/manager_report_card.py`.
+
+    A store the org tree cannot place is REPORTED in `unassigned` with the reason, never dropped and
+    never given a guessed owner: measured 2026-10-08, the tree names a DM for only 6 of 29 house
+    stores, so most of the org lands there today and the note says what to fix.
+    """
+    summary = await get_targets_summary(period, today=today, stores=stores, markets=markets,
+                                        authorization=authorization, org_id=org_id)
+    rows = summary.get('stores') or []
+    client = sb()
+    cperiod = _period_or_400(period)
+
+    # WHO OWNS WHICH STORE — the one walk, in bulk. A failure here is reported, not swallowed into
+    # "nobody has a DM", because those two look identical on a card and only one is the owner's to fix.
+    chain, chain_error = {}, None
+    try:
+        from app.modules.storeops.router import org_chain_inputs
+        from app.modules.storeops import org_chain as _org_chain
+        chain = _org_chain.dm_by_store(**org_chain_inputs(org_id))
+    except Exception as e:
+        chain_error = f"the org tree could not be read ({e})"
+
+    # THE PEER VERDICT — the same assembly the screen and the action plan read, so all three agree
+    # about who is behind. Degrades to "not compared" with the reason stated; a card that silently
+    # ticked every store as keeping up would be worse than one that says it could not tell.
+    peer_items, peer_compared, peer_error = {}, set(), None
+    try:
+        _rows, _meta = _sales_rows_union(client, org_id, cperiod)
+        _payload, _cells, _unres = _peer_comparison_payload(client, org_id, cperiod, _rows)
+        peer_items = _peercmp.peer_items_by_store(_payload)
+        peer_compared = {str((r or {}).get('store') or '').strip().upper()
+                         for r in (_payload.get('rows') or [])
+                         if (r or {}).get('band') is not None}
+    except Exception as e:
+        peer_error = f"the peer comparison could not be computed ({e})"
+
+    cards = _mrcard.build(rows, chain, peer_items=peer_items,
+                          aggregate=targets_engine.aggregate_stores,
+                          peer_compared=peer_compared)
+    note = _mrcard.coverage_note(cards.get('coverage'))
+    return {'period': summary.get('period', period), 'today': summary.get('today'),
+            **cards,
+            'coverage_note': note,
+            'errors': [e for e in (chain_error, peer_error) if e],
+            'filters': summary.get('filters'), 'applied': summary.get('applied'),
+            'scope': summary.get('scope'), 'setup_hint': summary.get('setup_hint')}
 
 
 # KPI → commission tier inputs. Each is (key, label, payout_config column, default target %).

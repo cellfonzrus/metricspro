@@ -20907,8 +20907,8 @@ people walked in, so a gap in boxes sold is a gap in SELLING, not in footfall.
 
 **Shipped in stages, as stated to the owner.** §59.1–59.6 (the comparison screen, and the two facts it
 needed in the one home) shipped first. §59.7 — the action-plan prompt for rep / manager / DM / market
-manager — is the second stage. The DM and market-manager REPORT CARDS are the third and are NOT built;
-every stage reads §59.4's `lagging()` rather than re-deciding who is behind.
+manager — is the second stage, and §59.9 — the DM and market-manager report cards — is the third.
+Every stage reads §59.4's `lagging()` rather than re-deciding who is behind.
 
 ### 59.1 THE DUPLICATE CHECK (build gate) — and what it CHANGED about the build
 
@@ -21173,10 +21173,10 @@ Surfaces: `GET /api/v1/commcalc/targets/{period}/action-plan` (existing), render
 comparison" panel and now renders the `setup_hint` the backend was already raising and nothing showed.
 Lock: `harness_peer_comparison.py` §J (11 checks, the item) and §K (10 checks, the un-wire).
 
-**Stage 3 — the DM and market-manager report cards — is NOT built.** It reads `lagging()` and these
-items; it must not re-decide anything. Before it is designed, note the measured constraint: the org
-tree resolves a DM for only **6 of 29** Cellfonz stores and **0 of 20** Luxelink stores, so a card keyed
-on DM is blank for most stores today. Surface that gap; never guess an owner for a store.
+**Stage 3 — the DM and market-manager report cards — is §59.9.** It reads `lagging()` and these items
+and re-decides nothing. The measured constraint it had to live with: the org tree resolves a DM for
+only **6 of 29** Cellfonz stores and **0 of 20** Luxelink stores, so most stores are on nobody's card
+today — surfaced with the fix named, never a guessed owner.
 
 ### 59.8 ONE SALE, AT MOST ONE BOX — the assumption the box-count bucket rested on, and the guard that replaces it
 
@@ -21228,3 +21228,72 @@ case-SENSITIVE (`_accessory_config` builds `{b.strip()}` and `_sales_cell_agg` c
 department), so a feed that spells a department in another case silently contributes no boxes. Same
 class as the `b-1115` phantom-store defect that §29.12 closed for store codes. Recorded, not repaired, because repairing it
 changes which lines count as boxes on every tenant and wants its own measurement.
+
+### 59.9 THE REPORT CARDS — what was assigned to a manager, and the system's own check-off (stage 3)
+
+Owner: *"create a report card for the Dm based on all the items assigned to them per store and a check
+off by the system if those targets were met or not, the same report card will be made for the market
+manager for all the goals assigned to the Dm but a higher level reporting so they are also accoutable."*
+
+**THE CARDS DERIVE NOTHING.** Every number on them comes from a home that already owns it, and the
+lock (`harness_manager_report_card.py` §D) fails the build if that stops being true:
+
+| the question | the one home | how the card gets it |
+|---|---|---|
+| was this target met | `commcalc.targets` vs the actuals, through `targets_engine` | `GET /targets/{period}/summary`, **called** by the endpoint, never reassembled |
+| what is the manager's total | `targets_engine.aggregate_stores` — the same area roll-up the Targets page shows | injected into `build(aggregate=…)` |
+| did the store make its conversion | the summary row's own `meets_target` | dereferenced, never re-compared |
+| is the store behind comparable stores | `peer_comparison.lagging` / `peer_action_item` (§59.4, §59.7) | the same payload the screen and the action plan read |
+| who owns this store | `storeops/org_chain.dm_by_store` — THE org-tree walk | read once, in bulk, via `org_chain_inputs(org_id)` |
+
+Calling `get_targets_summary` rather than extracting its ~270-line assembly is deliberate and is the
+cheaper correctness: one code path means a DM's card and that DM's own Targets screen cannot disagree
+about the same store on the same day, and the card inherits the summary's `scope_keyset` filtering for
+free, so it can never show a store its reader may not see. The cost is one extra pass for this screen,
+which is a page a manager opens, not a sweep.
+
+**THE CHECK-OFF IS THREE-STATE: `met` / `missed` / `no_target`.** An item nobody set a target for is
+not an item the store failed, and `score_pct` is met ÷ *checked* — so a manager whose stores carry no
+targets scores **None**, never 0% and never 100%. This is `attainment_pct`'s own doctrine (§18) applied
+to a card, and it is the difference between a report that measures performance and one that accuses
+people over configuration. The peer item is the one exception to "needs a target": the comparison IS
+the target, so a store that was compared and is not behind reads `met`, a store named by `lagging()`
+reads `missed` with `peer_comparison`'s own sentence as its detail, and a store that could **not** be
+compared reads `no_target` with the reason — never a pass mark it did not earn.
+
+**THE ITEMS ARE ONE REGISTRY** (`manager_report_card.ITEMS`): the four target categories, conversion,
+and keeping up with stores of the same footfall. A seventh item is added there and every card, tally
+and roll-up picks it up; §C5 proves the registry is wired rather than decorative (the §19.18 trap).
+
+**THE LEVEL ABOVE.** One card per manager *above* a district, with a row per DM beneath them carrying
+that DM's own totals — not the store list repeated one level up (§B12). Every manager above the
+district gets one, so a regional or the owner is covered with no further mechanism.
+
+**MEASURED LIVE, September 2026** (house org, read-only through the real endpoint): 19 stores in the
+summary's universe, **6 with a district manager and 13 with none**; 3 DM cards and 2 manager cards
+above them. All three DMs are recorded against the SAME district, so the same 6 stores appear on three
+cards — `coverage.store_card_placements` (18) says so plainly rather than leaving three cards that do
+not add up to the org. Score 27.8% met across 36 checked items per DM, which is the Targets screen's
+own picture of September, not a second opinion.
+
+**A STORE THE TREE CANNOT PLACE IS REPORTED, NEVER DROPPED AND NEVER GIVEN A GUESSED OWNER.** It lands
+in `unassigned` with its own check-off kept and a reason that distinguishes *this district has no
+manager recorded* from *this store is not under a district at all* — different facts, and only one of
+them is fixed in the same place. `coverage_note` says it in one sentence above the cards and names the
+fix (the org chart). This is most of the org today — 6 of 29 house stores
+and 0 of 20 Luxelink stores resolve a DM — which is exactly why the gap is surfaced rather than hidden
+behind cards that look complete.
+
+Surfaces: `GET /api/v1/commcalc/targets/{period}/report-cards`, screen
+`frontend/src/app/(platform)/commcalc/targets/report-cards/page.tsx`, listed in NAV under **both**
+Management Overview and Targets & Coaching (one href, so RBAC and ⌘K see one report).
+Module-graph fact `manager_report_card`, written by hand (§50). Lock
+`harness_manager_report_card.py` (56 checks), every §D check armed against a planted violation —
+including the one that would matter most, a card computing its own attainment percentage.
+
+**A FIXTURE THAT ENCODES A SHAPE NOBODY SENDS IS A TEST OF A FICTION.** Recorded because it happened
+here: the first draft read `conversion.store` off the summary row. The live row carries `conversion`
+**flat**, so every store's conversion silently read as `no_target` and the harness agreed, because its
+fixture had been written from the same assumption. Caught by running the real endpoint against
+production, not by reading the code. §A14–A16 now pin the flat shape, prove the state dereferences
+`meets_target`, and prove the nested shape is not quietly accepted.
