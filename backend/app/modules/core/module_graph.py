@@ -70,16 +70,25 @@ FACTS: dict[str, dict] = {
     },
     'carrier_dollar_component': {
         "question": 'Is this carrier dollar a commission, a spiff, a residual or a reimbursement — '
-                    'and is that the ORG\'S OWN declaration or a guess the platform made?',
+                    'and is that the ORG\'S OWN declaration or a guess the platform made? Which '
+                    'P&L LINE and which GROSS-PROFIT COLUMN that component lands on is the same '
+                    'fact, read twice, and lives here too (`component_line` / `gp_column`).',
         "homes": ('app/modules/commcalc/carrier_dollar_class.py',),
         "index": ('58',),
-        "locks": ('harness_carrier_dollar_class.py',),
+        "locks": ('harness_carrier_dollar_class.py',
+                  'harness_gp_carrier_class_dereference.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed. `--bless` silently deleted 11 of 12
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.
         "callers": {
             'app/modules/account/coa.py': ('_cdc',),
-            'app/modules/commcalc/router.py': ('_cdc',),
+            # The GROSS PROFIT engine (owner report 2026-10-08: *"gross profit is still showing the
+            # old data m teh source of information should be the same"*). It carried TWO private
+            # classifications — a keyword guess on the compensation type and four exact compares on
+            # the pay category — which disagreed with the P&L by $418,922.21 on the same 11,114
+            # August 2026 rows. It now dereferences this home and states no ruling of its own.
+            'app/modules/commcalc/gp_report.py': ('_cdc',),
+            'app/modules/commcalc/router.py': ('_cdc', '_cdc_gp', '_cdc_leg'),
         },
     },
     'installment_month_of_life': {
@@ -542,8 +551,12 @@ FACTS: dict[str, dict] = {
             # §58 — the carrier-dollar COMPONENT ruling sits on top of this CATEGORY read and
             # keeps no copy of it; §57 decides the category, §58 decides what the category means.
             'app/modules/commcalc/carrier_dollar_class.py': ('_pc',),
+            # The GROSS PROFIT engine reads the org's declared category for an ePay payment type
+            # here rather than comparing it against four literals it spelled itself — one of which
+            # only ever matched the house's own hyphenated "Re-imbursement" (owner 2026-10-08).
+            'app/modules/commcalc/gp_report.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
-            'app/modules/commcalc/router.py': ('_pcat',),
+            'app/modules/commcalc/router.py': ('_payment_category', '_pcat'),
         },
     },
     'clawback_direction': {

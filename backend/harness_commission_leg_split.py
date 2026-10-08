@@ -358,7 +358,14 @@ mi_rows = [
     {"salesforce_id": "SF-GHOST", "actual_mi_payout": 999.0, "actual_atu_payout": 111.0,
      "mi_activation_date": "2026-06-01"},
 ]
-r = calc_gp_report(sales, pay_detail, mi_rows, [], [], [], store_map, PERIOD, comp_rows=comp_rows)
+# THE ORG'S OWN DECLARATION (§58.7) — the GP engine asks the one home instead of guessing from the
+# compensation type's text. Keyed by §57's folding rule, as `payment_category.load_map` returns it.
+COMP_DECL = {"new activation bounty - month 1": "Commission",
+             "boost ready bounty - month 6": "Commission",
+             "2026 sim card reimbursement": "Re-imbursement",
+             "mdf co-op": "MDF"}
+r = calc_gp_report(sales, pay_detail, mi_rows, [], [], [], store_map, PERIOD, comp_rows=comp_rows,
+                   carrier_declarations=COMP_DECL)
 T = r["totals"]
 rowA = next(x for x in r["store_rows"] if x["store"] == STORE_A)
 rowB = next(x for x in r["store_rows"] if x["store"] == STORE_B)
@@ -690,7 +697,18 @@ ROLLUP = [
     {"source": "comp_report", "period": "June 2026", "store_num": "1234",
      "label": "2026 SIM card reimbursement", "category": "", "amount": 400.0, "n": 1},  # comp REIMB
 ]
-store = {"store_mapping": STORE_ROWS, "carrier": [{"org_id": HOUSE, "code": "boost", "name": "Boost",
+# The trend classifies Comprehensive Comp through the §58 home, which reads THIS table (§57) — the
+# org's own declaration — instead of the keyword copy of gp_report's rule it used to carry.
+PAY_CATS = [{"org_id": HOUSE, "description": d, "category": c} for d, c in (
+    ("New Activation Bounty - Month 1", "Commission"),
+    ("New Activation Bounty - Month 2", "Commission"),
+    ("New Activation Bounty - Month 3", "Commission"),
+    ("Device Upgrade Bounty - Month 4", "Commission"),
+    ("Boost Auto Top-Up", "Commission"),
+    ("2026 SIM card reimbursement", "Re-imbursement"),
+)]
+store = {"store_mapping": STORE_ROWS, "payment_categories": PAY_CATS,
+         "carrier": [{"org_id": HOUSE, "code": "boost", "name": "Boost",
                                                    "is_default": True}],
          "raw_dlar_rep": [{"org_id": HOUSE, "period": "June 2026", "tmr3": 72.0},
                           {"org_id": HOUSE, "period": "June 2026", "tmr3": 68.0}],

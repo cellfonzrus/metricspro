@@ -86,7 +86,7 @@ def read(p):
 # ── The detectors, as functions, so the negative controls can run them over planted source. ─────
 #: THE EXCUSE INVENTORY — every category-name clawback test left in place, with the reason.
 #:
-#: These three are not oversights and they are not fixed in this PR. Each one BOOKS MONEY off that
+#: These are not oversights and they are not fixed in this PR. Each one BOOKS MONEY off that
 #: dead `Chargeback` bucket, so wiring it to the one home would start moving money the moment it
 #: merged: the P&L's chargebacks line, a store's gross profit, and a rep's payout. CLAUDE.md is
 #: explicit that money-touching changes are surfaced for owner approval rather than shipped with the
@@ -95,9 +95,22 @@ def read(p):
 #: The inventory is EXACT, not a skip-list: the check below asserts the found set equals this set,
 #: so a NEW category-name test fails the build, and so does an excused one that gets fixed without
 #: being removed from here. That is what stops "excused" quietly becoming "forgotten".
+#: REMOVED 2026-10-08 (index §58.7): `commcalc/gp_report.py`, which held
+#:     ("app/modules/commcalc/gp_report.py", "Chargeback")
+#: — "books the per-number `chb` bucket that feeds GROSS PROFIT — money; owner ruling needed."
+#: That site's `cat == 'Chargeback'` compare is GONE. It was one of four category literals the GP
+#: engine spelled itself, and all four were deleted when the report stopped classifying carrier
+#: money and started dereferencing the one home (§58). The `chb` column is now reached by the org's
+#: own DECLARED category through per-org config (`carrier_gp_category_columns`, mig 1064), so there
+#: is no category name in code to test any more — which is why this entry had to go rather than be
+#: re-excused: the inventory is EXACT in both directions.
+#:
+#: WHAT THAT DID *NOT* FIX, and is still an owner-approval money change: the GP `chb` column is
+#: still reached by a category DECLARATION, not by §55's direction-of-money rule. Wiring it to
+#: `clawback.py` would move dollars between `comm` and `chb` the moment it merged. Measured live
+#: read-only, house org July–October 2026: the house declares no chargeback category at all, so the
+#: column is $0.00 before and after §58.7 — the bucket is as dead as §55 found it.
 EXCUSED_SITES = {
-    ("app/modules/commcalc/gp_report.py", "Chargeback"):
-        "books the per-number `chb` bucket that feeds GROSS PROFIT — money; owner ruling needed.",
     ("app/modules/commcalc/router.py", "Chargeback"):
         "builds commcalc.chargeback_items, which the P&L's chargebacks line BOOKS — money; owner "
         "ruling needed.",

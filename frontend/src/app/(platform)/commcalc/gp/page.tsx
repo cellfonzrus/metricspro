@@ -20,6 +20,10 @@ interface StoreRow {
   acc_gp: number; setup_gp: number; phone_sales: number; plan_gp: number; other_gp: number
   comm: number; reimb: number; mdf: number; chargeback: number; unmapped: number
   comp_comm: number; comp_reimb: number; comp_mdf: number
+  // Comprehensive-Comp money the org declared as a chargeback, and money it has never declared
+  // at all (§58.7). The second one used to render as commission — $418,922.21 of August 2026
+  // reimbursement did, which is the defect these two columns make impossible to repeat.
+  comp_chb: number; comp_unmapped: number
   // COMMISSION LEG SPLIT (owner 2026-08-04) — a decomposition of the columns above, never an addition:
   // comm_m1 + comm_m2_12 + comm_unsplit === comm, and likewise for comp_comm / mi / atu.
   comm_m1: number; comm_m2_12: number; comm_unsplit: number
@@ -80,6 +84,10 @@ const COLS_BASE: ColDef[] = [
   { key: 'comp_comm',    label: 'Comp Comm',   group: 'Payments' },
   { key: 'comp_reimb',   label: 'Comp Rebate', group: 'Payments' },
   { key: 'comp_mdf',     label: 'Comp MDF',    group: 'Payments' },
+  { key: 'comp_chb',     label: 'Comp Chargeback', group: 'Payments',
+    title: 'Comprehensive-Comp money this company declared as a chargeback. Its own column — never netted into Comp Comm.' },
+  { key: 'comp_unmapped', label: 'Comp Unclassified', group: 'Payments',
+    title: 'Comprehensive-Comp money this company has not declared a payment category for, and no keyword rule resolved. It is NOT commission: declare the payment type on the Payment Categories screen to classify it.' },
   { key: 'chargeback',   label: 'Chargebacks', group: 'Payments' },
   { key: 'mi',           label: 'MI',          group: 'Payments' },
   { key: 'atu',          label: 'ATU',         group: 'Payments' },

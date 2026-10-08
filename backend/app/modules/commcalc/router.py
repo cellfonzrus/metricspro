@@ -79,6 +79,10 @@ from app.modules.commcalc import landing_identity as _landing    # 2026-09-20 �
 from app.modules.commcalc import auto_calc as _auto_calc        # 2026-09-28 — "data landed for org X, period P" (ONE home, index §6l)
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
+# §57: the ONE reader of commcalc.payment_categories (the read + the one folding rule for a
+# payment-type key). Imported at module level because the GROSS PROFIT path now dereferences
+# it instead of carrying its own private, case-sensitive copy of that read.
+from app.modules.commcalc import payment_category as _payment_category
 from app.modules.commcalc import column_mapping
 from app.modules.commcalc import commission_catalog
 from app.modules.commcalc import ma_upload
@@ -23738,14 +23742,37 @@ def _compute_gp(client, org_id, period, market=""):
                 _sm['market'] = _gp_resolve_market(_sm.get('store_address') or _sm.get('store_code'))
     except Exception as e:
         print(f"WARN _compute_gp market enrichment failed: {e}")
-    pay_cats   = sc.table('payment_categories').select('description,category').eq('org_id', org_id).execute().data or []
     comp_rows  = _feed_read.read_all(lambda: sc.table('raw_comp_report')   # PAGED, no row ceiling (§19.48)
                                      .select('business_address,compensation_type,payment_amount')
                                      .eq('org_id', org_id).in_('period', pv))
-    cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
+    # THE ORG'S OWN DECLARATION, READ THROUGH ITS ONE HOME (§57 `payment_category.load_map`).
+    # This was a private tenth read with its own folding rule — `.strip()` only, case-SENSITIVE —
+    # so a payment type the feed spelled with different casing than the declaration read as
+    # unmapped here while §57's readers read it as declared. The row-level `category` stays on the
+    # row (flag/display consumers downstream read it) but now carries §57's sentinel for
+    # "never mapped" rather than a literal spelled here.
+    pay_cat_map = _payment_category.load_map(client, org_id)
     for r in pay_detail:
-        pt = str(r.get('payment_type', '') or '').strip()
-        r['category'] = cat_map.get(pt, 'Unknown')
+        r['category'] = _payment_category.label_of(pay_cat_map, r.get('payment_type'))
+    # THE CARRIER-DOLLAR CLASSIFICATION POSTURE (§58 `carrier_dollar_class`) — the same three
+    # inputs `account/coa.build_inputs` resolves for the P&L, handed to the GP engine so the two
+    # reports classify one dollar once. Owner 2026-10-08: *"gross profit is still showing the old
+    # data m teh source of information should be the same"*. Every one of these degrades to the
+    # house default and never raises: a tenant whose config columns are absent gets the platform
+    # routing, which is exactly what it got before this wiring existed.
+    # `_gp_cc_decl` IS `pay_cat_map`: §58's `load_declarations` is defined as §57's `load_map`,
+    # dereferenced, so reading it a second time would be a second read of one table in one request.
+    _gp_cc_decl = pay_cat_map
+    _gp_cc_cfg, _gp_cc_rules = None, []
+    try:
+        from app.modules.commcalc import carrier_dollar_class as _cdc_gp
+        _gp_cc_cfg = _cdc_gp.load_config(client, org_id)
+    except Exception as _cce:
+        print(f'WARN gp carrier-dollar classification config unavailable: {_cce}')
+    try:
+        _gp_cc_rules = carrier_map.load_rules(client, org_id)
+    except Exception as _cre:
+        print(f'WARN gp carrier keyword ladder unavailable: {_cre}')
     # Bound BEFORE the reads: every one of these degrades to empty, and an empty trio reproduces the
     # pre-mig-992 department-only classification byte-for-byte. Binding them here (not inside the try)
     # is deliberate — a failed read must leave a usable empty list, never an unbound name.
@@ -23849,7 +23876,10 @@ def _compute_gp(client, org_id, period, market=""):
                             resolve_store_code=_resolve_code,
                             config_classify=config_classify, ma_income=ma_income,
                             resolve_store_canonical=_resolve_canonical, leg_classify=_legcls,
-                            acc_basis=_acc_basis, commission_suppression_names=_lc_comm)
+                            acc_basis=_acc_basis, commission_suppression_names=_lc_comm,
+                            pay_category_map=pay_cat_map,
+                            carrier_declarations=_gp_cc_decl, carrier_rules=_gp_cc_rules,
+                            carrier_class_config=_gp_cc_cfg)
     result['expenses_carried_from'] = _exp_carried_from
     # LABOUR COVERAGE (owner directive 2026-09-08: "salaries … not getting updated for a lot of
     # stores … actual hours if we have them, else scheduled hours, FOR THAT MONTH"). DISPLAY-ONLY —
@@ -24452,11 +24482,61 @@ def _leg_period_key(labels):
     return key
 
 
-def _leg_comp_is_commission(label):
-    """The Comprehensive Comp bucketing rule, IDENTICAL to gp_report's (reimbursement/rebate -> Re-imb,
-    mdf -> MDF, everything else -> Comm) so the trend explains the same money the GP column shows."""
-    ct = str(label or "").lower()
-    return not ("reimbursement" in ct or "rebate" in ct or "mdf" in ct)
+def _leg_carrier_class(client, org_id):
+    """The §58 classification posture for this org, resolved ONCE per request: `(declarations,
+    rules, cfg)`. Each part degrades to "nothing declared" / "no ladder" / the house default and
+    never raises, so the trend renders on a tenant with none of the config applied."""
+    decl, rules, cfg = {}, [], None
+    try:
+        from app.modules.commcalc import carrier_dollar_class as _cdc_leg
+        cfg = _cdc_leg.load_config(client, org_id)
+        decl = _cdc_leg.load_declarations(client, org_id)
+    except Exception as e:
+        print(f'WARN commission-leg carrier classification unavailable: {e}')
+    try:
+        rules = carrier_map.load_rules(client, org_id)
+    except Exception:
+        rules = []
+    return decl, rules, cfg
+
+
+def _leg_comp_commission_predicate(decl, rules, cfg):
+    """Which Comprehensive-Comp rows the trend counts as COMMISSION — the §58 home's ruling,
+    dereferenced and memoized per compensation type.
+
+    THIS FUNCTION USED TO BE A COPY. Its own docstring said so: *"IDENTICAL to gp_report's
+    (reimbursement/rebate -> Re-imb, mdf -> MDF, everything else -> Comm)"* — the keyword guess that
+    read $418,922.21 of declared August-2026 reimbursement as commission. gp_report no longer
+    classifies, so a copy of it had nothing left to be identical to; both now ask the one home, and
+    the trend explains exactly the money the GP column shows because they share the ruling rather
+    than share a rule written twice."""
+    from app.modules.commcalc import carrier_dollar_class as _cdc_leg
+    seen = {}
+
+    def is_commission(label):
+        s = str(label or '')
+        col = seen.get(s)
+        if col is None:
+            c = _cdc_leg.classify(decl, rules, s, cfg)
+            col = seen[s] = _cdc_leg.gp_column(c['component'], c.get('declared_category'), cfg)
+        return col == _cdc_leg.GP_COMMISSION_COLUMN
+    return is_commission
+
+
+def _leg_pay_commission_predicate(cfg):
+    """Which ePay payment-detail rows the trend counts as COMMISSION, from the DECLARED CATEGORY the
+    rollup already carries. Was `str(r.get('category')).strip() != 'Commission'` — a fifth hand-folded
+    compare against one spelling; it is now the one home's ruling for a declared category."""
+    from app.modules.commcalc import carrier_dollar_class as _cdc_leg
+    seen = {}
+
+    def is_commission(category):
+        s = str(category or '')
+        col = seen.get(s)
+        if col is None:
+            col = seen[s] = _cdc_leg.gp_column_of_declared_category(s or None, cfg)
+        return col == _cdc_leg.GP_COMMISSION_COLUMN
+    return is_commission
 
 
 def _leg_store_index(client, org_id):
@@ -24546,6 +24626,11 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
     except Exception:
         legcls = _commission_legs.default_classifier()
     store_idx, sfid_idx = _leg_store_index(client, org_id)
+    # The carrier classification is the ONE HOME's, resolved once per request and shared by both
+    # sides of this trend (§58). The trend used to carry its own keyword copy of gp_report's rule.
+    _cc_decl, _cc_rules, _cc_cfg = _leg_carrier_class(client, org_id)
+    _leg_comp_is_commission = _leg_comp_commission_predicate(_cc_decl, _cc_rules, _cc_cfg)
+    _leg_pay_is_commission = _leg_pay_commission_predicate(_cc_cfg)
 
     out = {lab: _leg_blank_period(lab) for lab in labels}
     comp_series = {lab: _leg_blank_period(lab) for lab in labels}
@@ -24564,12 +24649,9 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
         cap = min(len(labels), 3)
         notes.append(f'The full-window aggregate is not switched on for this company yet — it is computed month by '
                      f'month, so only the most recent {cap} month(s) are shown.')
-        try:
-            cat_map = {str(r['description']).strip(): r['category']
-                       for r in (sc.table('payment_categories').select('description,category')
-                                 .eq('org_id', org_id).execute().data or []) if r.get('description')}
-        except Exception:
-            cat_map = {}
+        # §57's one home, not a private read with a sixth folding rule. `_cc_decl` is that map,
+        # already loaded above for the classification — one read, both uses.
+        cat_map = _cc_decl
         for lab in labels[-cap:]:
             try:
                 pd = _feed_read.read_all(lambda: sc.table('raw_payment_detail')   # PAGED (§19.48)
@@ -24581,7 +24663,8 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
                 rows.append({'source': 'payment_detail', 'period': lab,
                              'store_num': str(r.get('business_address') or '').strip().split(' ')[0],
                              'label': str(r.get('payment_type') or '').strip(),
-                             'category': cat_map.get(str(r.get('payment_type') or '').strip(), 'Unknown'),
+                             # §57 owns the folding rule for the key AND the "never mapped" word
+                             'category': _payment_category.label_of(cat_map, r.get('payment_type')),
                              'amount': safe_float(r.get('amount')), 'n': 1})
 
     for r in rows:
@@ -24595,7 +24678,7 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
         amt = safe_float(r.get('amount'))
         label = r.get('label')
         if src == 'payment_detail':
-            if str(r.get('category') or '').strip() != 'Commission':
+            if not _leg_pay_is_commission(r.get('category')):
                 continue
             target = out[lab]
         elif src == 'comp_report':
@@ -24988,6 +25071,9 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
     except Exception:
         legcls = _commission_legs.default_classifier()
     store_idx, sfid_idx = _leg_store_index(client, org_id)
+    # Same one-home classification as /commission-leg-trend, resolved once (§58).
+    _cc_decl, _cc_rules, _cc_cfg = _leg_carrier_class(client, org_id)
+    _leg_comp_is_commission = _leg_comp_commission_predicate(_cc_decl, _cc_rules, _cc_cfg)
     notes, gaps, degraded = [], [], False
 
     # ── 1. ePay Payment Detail + Comprehensive Comp (mig 274 rollup, bounded fallback) ───────────
@@ -25001,12 +25087,9 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
         cap = min(len(labels), 3)
         notes.append(f'The full-window aggregate is not switched on for this company yet — the ePay rows are summed '
                      f'month by month, so only the most recent {cap} month(s) carry them.')
-        try:
-            cat_map = {str(r['description']).strip(): r['category']
-                       for r in (sc.table('payment_categories').select('description,category')
-                                 .eq('org_id', org_id).execute().data or []) if r.get('description')}
-        except Exception:
-            cat_map = {}
+        # §57's one home, not a private read with a sixth folding rule. `_cc_decl` is that map,
+        # already loaded above for the classification — one read, both uses.
+        cat_map = _cc_decl
         for lab in labels[-cap:]:
             try:
                 pd = _feed_read.read_all(lambda: sc.table('raw_payment_detail')   # PAGED (§19.48)
@@ -25018,7 +25101,8 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
                 pt = str(r.get('payment_type') or '').strip()
                 label_rows.append({'source': 'payment_detail', 'period': lab,
                                    'store_num': str(r.get('business_address') or '').strip().split(' ')[0],
-                                   'label': pt, 'category': cat_map.get(pt, 'Unknown'),
+                                   'label': pt,
+                                   'category': _payment_category.label_of(cat_map, pt),
                                    'amount': safe_float(r.get('amount')), 'n': 1})
 
     # Months that HAVE ePay payment detail are ePay months: VidaPay commission is the ePay-LESS
