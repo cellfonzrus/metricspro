@@ -9,18 +9,32 @@
 // `carrier?:` tags the Upload page used to carry are gone, and no vendor is named.
 //
 // `mode` MIRRORS the backend's real write semantics in backend/app/modules/commcalc/router.py
-// (`_upload_file_impl`) — keep it in sync if the backend's keying changes:
-//   • DATE_KEYED = {daily_sales, ma_commission, ma_daily_tx, ma_fulfillment} → delete-then-insert PER DAY
-//     ⇒ 'additive_daily': new days add, a re-upload of the same day refreshes only that day.
+// (`_upload_file_impl`):
 //   • x_report (upsert on org+close_date+store+tender_type) / inventory_aging (per-store snapshot upsert)
 //     ⇒ 'additive_keyed': nothing outside the file's own keys is ever cleared.
 //   • has_period types (sales, payment_detail, mi_report, dlar_rep, dlar_store, comp_report) → the
 //     SELECTED period is deleted then re-inserted ⇒ 'replace_period'.
 //   • catalog / master_cats (has_period === false) → the whole table is wiped ⇒ 'replace_all'.
+//
+// ── WHICH ROUTES REPLACE BY DAY IS READ, NEVER LISTED HERE (owner 2026-10-08) ─────────────────────
+// Owner: *"also can i just upload 1day of data, it says it will replace the whole period"*. It does
+// NOT, and had not for days: since index §19.46 the upload replaces per DAY whenever every row in the
+// file can prove its own date, and `raw_payment_detail` / `raw_comp_report` carry a date on every row.
+// The all-or-nothing fallback to a period replace happens only when a row cannot prove its day. This
+// file's header used to SPELL the backend's day-keyed set — `{daily_sales, ma_commission, ma_daily_tx,
+// ma_fulfillment}`, the pre-§19.46 four-entry literal — and `mode` was authored from it, so the page
+// kept warning that a whole period would be cleared and the owner stopped uploading a day he needed.
+// A warning that overstates what an upload destroys is a defect: it costs real data.
+//
+// So the day-grain answer is now DEREFERENCED from the one registry that decides it
+// (`data_lineage_registry.day_keyed_file_types`, the same derivation the upload handler replaces by),
+// served as `day_keyed_uploads` on GET /commcalc/report-kinds and applied by `uploadModeFor` below.
+// No list of feed names lives in the frontend; `backend/harness_statement_month_coverage.py` fails
+// the build if one reappears or if a surface stops asking.
 export type UploadMode = 'additive_daily' | 'additive_keyed' | 'replace_period' | 'replace_all'
 export const MODE_UI: Record<UploadMode, { verb: string; explain: string }> = {
   additive_daily: { verb: '⬆️ Upload additional file',
-    explain: 'Adds the days in the file. Re-uploading the same day is safe — it refreshes only that day; other days stay.' },
+    explain: 'Adds the days in the file. A one-day file replaces only that day — every other day stays, and the rest of the period is untouched.' },
   additive_keyed: { verb: '⬆️ Upload additional file',
     explain: 'Adds or refreshes only what this file covers — nothing outside it is cleared.' },
   replace_period: { verb: '📂 Replace period file',
@@ -29,6 +43,22 @@ export const MODE_UI: Record<UploadMode, { verb: string; explain: string }> = {
     explain: 'Replaces ALL stored rows for this report — not just one period.' },
 }
 export const modeVerb = (mode: UploadMode, prior: boolean) => (prior ? MODE_UI[mode].verb : '📂 Choose File')
+
+/** THE one answer to "what will THIS upload replace", for one route key.
+ *
+ *  `dayKeyedUploads` is GET /commcalc/report-kinds → `day_keyed_uploads`: the route keys whose landing
+ *  table is day grain, derived server-side from the same registry the upload handler replaces by. A
+ *  route named there replaces only the DAYS its file covers, whatever this file's shipped `mode` says —
+ *  which is the honest answer and the one the owner was denied (see the header).
+ *
+ *  HONEST BEFORE THE REGISTRY ANSWERS: while `loaded` is false the route keeps its shipped mode, so a
+ *  page never claims day-grain it has not been told. The registry is the authority, not this file.
+ */
+export function uploadModeFor(route: { id: string; mode: UploadMode },
+                              dayKeyedUploads: string[] | null | undefined): UploadMode {
+  if (route.mode === 'replace_period' && (dayKeyedUploads || []).includes(route.id)) return 'additive_daily'
+  return route.mode
+}
 
 /** A period / day-grain report posted to the generic /commcalc/upload/<file_type> capture. */
 export type PeriodRoute = { id: string; label: string; icon: string; required: boolean; desc: string; mode: UploadMode }
