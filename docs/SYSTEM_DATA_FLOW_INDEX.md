@@ -20059,8 +20059,11 @@ moves.
 
 ### 54.5 What this does NOT do
 
-(Written before §54.7; the first bullet is now narrower — the ⌘K index is still NAV-only, while ⌘/
-reads the derived page list, so ⌘/ finds strictly more than ⌘K does.)
+(Written before §54.7. **SUPERSEDED by §54.12**: the first bullet's claim that ⌘K keeps its own
+NAV-only index and its own ranker is no longer true. Both boxes now dereference ONE viewer gate, ONE
+catalogue and ONE ranker, so they find the same pages; ⌘K still shows only destinations, which is a
+display choice (`destinations()`), not a second index. Read the bullet below for the two boxes'
+different PURPOSE, not for how their page lists are built.)
 
 - **⌘K stays the nav destination search** and ⌘/ stays the question-and-entity console. The two were
   left distinct rather than merged: `layout.tsx`'s ⌘K index is already built from the post-RBAC,
@@ -20279,16 +20282,79 @@ Coverage after this change: **58 of 58 reports answerable, 69 questions** (13 ha
 derived entries fold into hand questions that already answer the same endpoint). The catalogue shown
 to the model is ~7.5k tokens, which is the one cost worth watching as reports are added.
 
+### 54.12 ONE page index for BOTH search boxes — a page in no menu was unfindable in the sidebar (owner 2026-10-08, fifth report)
+
+Owner: *"it is not appearing in the search bar also, which leads us to checking if all modules are
+searchable or they are hidden."* He had just shipped Spiff Impact (§60) and could not find it by
+typing. Nothing was broken for that page — but the question uncovered a real class.
+
+**The class.** Two surfaces answered "which pages exist?" with two different indexes, and only one
+of them was derived:
+
+| | ⌘K sidebar jump box (`app/(platform)/layout.tsx`) | ⌘/ question bar (`components/AskBar.tsx`) |
+|---|---|---|
+| page source | the rendered NAV groups only | `buildCatalog` over nav + reports + screens + the DERIVED `route-index.ts` |
+| ranker | a private 3-tier `localeCompare` scorer | `rank` from `search-rank.ts` (§54.1) |
+| pages unfindable | **27** | 0 |
+| destinations with an empty query | 322 | 2 |
+
+So a page reachable only from a row, a button or the account menu — 27 of them — could not be typed
+for in the box most people reach for, and nothing failed the build when a new page joined them.
+This is the duplicate defect the index rules forbid, in the one place a user notices it first.
+
+**The fix — one gate, one fold, one ranker, dereferenced by both.** `search-catalog.ts` was already
+the ONE home for the FOLD (what can be found). It is now also the ONE home for the GATE (what can
+THIS viewer find), as **FACT 4**:
+
+- `viewerSources(registries, viewer, entities)` takes the four registries plus the two permission
+  predicates as ARGUMENTS and returns the filtered sources: nav rows and report rows the viewer may
+  see, screen aliases whose page survived, routes `canAccessPath` admits, with `viewer.open` as the
+  not-enforced bypass. `viewerCatalog` folds that through `buildCatalog`; `destinations` drops the
+  entity-only rows for a surface that only jumps.
+- Both surfaces now call `viewerCatalog` with the same four registries and `rank` from §54.1. The
+  sidebar's private memo and private scorer are DELETED — not deprecated, deleted, which is the only
+  form of "one home" that cannot un-wire.
+
+**The menu-less page is now a DECLARED fact, not an accident.** `route-index.ts` gained a fourth
+human field, `menuless`, holding WHY a page is in no menu. Three are declared
+(`/account/password`, `/portal`, `/commcalc/commission-explain`); the other 26 sit on a FROZEN
+baseline in `prove_route_index.mjs` that **may only shrink** — the same pattern as
+`harness_unrun_pending.txt` (§50). Inventing 26 plausible reasons for pages whose history I do not
+know would be a guess dressed as a decision, which the registry's own rule (an exclusion states
+WHY) already forbids. A NEW page in no menu and on no baseline fails the build.
+
+**The locks.** `prove_search_console_lock.mjs` now separates SURFACES (the question bar) from
+JUMPERS (the sidebar) and requires of a jumper that it import AND CALL `viewerCatalog`,
+`searchableRoutes`, `rank` and `destinations`, pass `routes:`, call `canAccessPath`, and contain no
+private scorer (`score =`, `localeCompare`, `hay`, `STOPWORDS`). §D1–D16 and §I1–I10 are each armed
+against a deliberately broken copy.
+
+**The trigger allowlist now names its own subject.** `frontend/src/lib/rbac.ts` and
+`frontend/src/app/(platform)/layout.tsx` are added to the `search-console` `paths:` in
+`data-qa-guard.yml`. `prove_route_index.mjs` READS `rbac.ts` to know which routes must drop their
+nav label, so a nav-only PR could previously stale the generated registry with the ratchet silent —
+the §13e lesson a third time.
+
+**A lesson worth keeping: strip LINE comments before BLOCK comments.** Doing it the other way makes
+a line comment containing `/*` (a path glob, e.g. `// /commcalc/* page …`) read as a block opener
+and blanks everything to the next `*/` — 110 lines of `layout.tsx`, including the very calls under
+check. It cost two false failures on correctly wired code. Both provers now strip line comments
+first, with `[^:]` so `https://` survives, and say why.
+
+**Not touched here:** `prove_role_access_state.mjs` is 30 passed / 1 failed on `main` already
+(verified by stashing this branch); it is unrelated to the search console.
+
 ### 54.9 Status
 
-Code complete and proved: **275 checks** across four Node, dependency-free proofs
-(`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 73, `prove_route_index.mjs` 44,
-`prove_search_console_lock.mjs` 44), run by the `search-console` job in
+Code complete and proved: **327 checks** across four Node, dependency-free proofs
+(`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 94, `prove_route_index.mjs` 59,
+`prove_search_console_lock.mjs` 60), run by the `search-console` job in
 `.github/workflows/data-qa-guard.yml`. No migration. The entity half of the catalogue appears as soon
 as the two endpoints answer; the assistant half is live wherever `GET /core/data-qa/status` returns
 `allowed && configured` (§52.6).
 
-**The lock covers three facts, not two**: the ranker, the catalogue, and the derived page index. A
+**The lock covers four facts, not two** (§54.12 added the viewer gate): the ranker, the catalogue,
+the derived page index, and what THIS viewer can find. A
 console surface that stops reading the derived index, stops gating it with `canAccessPath`, or stops
 deciding the assistant's door fails the build (B10a–B10f), and so does a route index that stops
 declaring itself generated, drops an export, grows a permission rule or turns `preauth` into a bare

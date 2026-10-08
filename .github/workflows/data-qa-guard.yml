@@ -96,6 +96,14 @@ on:
       - "frontend/prove_search_rank.mjs"
       - "frontend/prove_search_catalog.mjs"
       - "frontend/prove_search_console_lock.mjs"
+      # Both search surfaces now dereference ONE viewer gate and ONE derived page index (§54.12),
+      # so every file the proofs READ is listed. rbac.ts decides which pages are in a menu at all
+      # (prove_route_index reads it to know which routes must drop their nav label) and supplies
+      # the two permission predicates the gate is given; the platform layout is the sidebar jump
+      # box the lock checks. A PR touching either without this entry would stale the registry with
+      # the ratchet silent — the §13e lesson a third time.
+      - "frontend/src/lib/rbac.ts"
+      - "frontend/src/app/(platform)/layout.tsx"
       # A background job's control — one home for "is it running, and may it be pressed" (index §6q).
       # Every surface the proof names is listed, because a job behind an allowlist that does not name
       # its own subject skips silently (the §13e lesson again).
@@ -113,6 +121,8 @@ on:
       - "backend/harness_data_qa_*.py"
       - "frontend/src/lib/search-*.ts"
       - "frontend/prove_search_*.mjs"
+      - "frontend/src/lib/rbac.ts"
+      - "frontend/src/app/(platform)/layout.tsx"
       - "frontend/src/lib/job-run.ts"
       - "frontend/prove_job_run.mjs"
   workflow_dispatch:

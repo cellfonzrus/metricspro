@@ -24,9 +24,10 @@ import { api, fmt, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { REPORT_CATEGORIES } from '@/lib/reports'
-import { canAccessPath, canSeeItem, TENANT_NAV, type Permissions, type Scope } from '@/lib/rbac'
+import { canAccessPath, canSeeItem, type Permissions, type Scope } from '@/lib/rbac'
 import { SCREENS } from '@/components/ScreenLink'
-import { buildCatalog, entityOnly, type StoreSource, type PersonSource } from '@/lib/search-catalog'
+import { viewerCatalog, entityOnly, type StoreSource, type PersonSource, type NavReg }
+  from '@/lib/search-catalog'
 import { rank, intent as searchIntent, askDoor, submitAction, type Hit, type SearchKind } from '@/lib/search-rank'
 import { searchableRoutes } from '@/lib/route-index'
 // The SAME panel the helpdesk page mounts — one Ask AI in the product, mounted in the one
@@ -81,35 +82,37 @@ const INTENTS: Intent[] = [
 // ALREADY exist — there is no catalogue declared here, which is the point: a second list of "which
 // pages exist" would drift from the nav the moment either changed.
 //
-// PERMISSIONS ARE APPLIED HERE, BEFORE RANKING, by each source's own existing gate: `canSeeItem` for
-// the nav and the report catalogue (so search can never surface a page the viewer could not already
-// click), and the server's own scope gate for the stores and people, which arrive already narrowed.
-function useSearchCatalog(permissions: Permissions, stores: StoreSource, people: PersonSource) {
-  return useMemo(() => {
-    // One shaped NavItem per candidate, so the nav and the report catalogue are gated by the SAME
-    // predicate (`canSeeItem`) rather than two readings of it. A ReportDef carries no icon.
-    const seeable = (href: string, label: string, module: string, scopes?: Scope[]) =>
-      canSeeItem(permissions, { href, label, icon: '', module, scopes })
-    const nav = TENANT_NAV
-      .map(g => ({ group: g.group, items: g.items.filter(it => seeable(it.href, it.label, it.module, it.scopes)) }))
-      .filter(g => g.items.length > 0)
-    const reports = REPORT_CATEGORIES
-      .map(c => ({ category: c.category, reports: c.reports.filter(r => seeable(r.href, r.label, r.module, r.scopes)) }))
-      .filter(c => c.reports.length > 0)
-    // SCREENS is the spellings registry (`ScreenLink`), and every one of its hrefs IS a nav href —
-    // which is what makes this safe: an alias only ever lands on a destination the fold already
-    // holds, or on nothing. A screen whose page the viewer may not open is dropped with it.
-    const openable = new Set(nav.flatMap(g => g.items.map(it => it.href.split('#')[0].split('?')[0])))
-    const screens = Object.values(SCREENS)
-      .filter(sc => openable.has(sc.href.split('#')[0].split('?')[0]))
-      .map(sc => ({ href: sc.href, label: sc.label, blurb: sc.blurb, aliases: sc.aliases }))
-    // EVERY page that exists, gated by the one home for "may this viewer open this path". Before
-    // this source the catalogue was curated and 34 pages were in no registry at all — the owner
-    // asked for a password reset and search found nothing, because `/account/password` is a real
-    // page that nothing listed. Passed last so the nav keeps the labels it has (§54.7).
-    const routes = searchableRoutes().filter(r => canAccessPath(permissions, r.path))
-    return buildCatalog({ nav, reports, screens, routes, stores, people })
-  }, [permissions, stores, people])
+// PERMISSIONS ARE APPLIED BEFORE RANKING, by each source's own existing gate — but the DECIDING is
+// no longer done here. `viewerCatalog` (§54.12) is the one home both this console and the sidebar's
+// ⌘K box call, so neither can assemble a different findable world: it applies `canSeeItem` to the
+// nav and report registries, `canAccessPath` to every page that exists, the not-enforced `open`
+// bypass to all of them, and hands the result to the fold. The stores and people arrive already
+// narrowed by the server's own scope gate.
+//
+// `navGroups` is the nav AFTER `applyNavLayout`, which this console did not used to apply — a page a
+// tenant admin had hidden stayed findable here while the sidebar dropped it (§54.12 divergence 3).
+function useSearchCatalog(permissions: Permissions, navGroups: NavReg, openApp: boolean,
+                          stores: StoreSource, people: PersonSource) {
+  return useMemo(() => viewerCatalog(
+    {
+      nav: navGroups,
+      reports: REPORT_CATEGORIES.map(c => ({ category: c.category, reports: c.reports })),
+      // SCREENS is the spellings registry (`ScreenLink`): what prose calls a screen, which is what
+      // somebody types. The gate drops any whose page the viewer may not open.
+      screens: Object.values(SCREENS)
+        .map(sc => ({ href: sc.href, label: sc.label, blurb: sc.blurb, aliases: sc.aliases })),
+      // EVERY page that exists. Before this source the catalogue was curated and 34 pages were in no
+      // registry at all — the owner asked for a password reset and search found nothing, because
+      // `/account/password` is a real page nothing listed. Passed last so the nav keeps its labels.
+      routes: searchableRoutes(),
+    },
+    {
+      open: openApp,
+      canSee: it => canSeeItem(permissions, { ...it, icon: '', scopes: it.scopes as Scope[] | undefined }),
+      canAccess: path => canAccessPath(permissions, path),
+    },
+    { stores, people },
+  ), [permissions, navGroups, openApp, stores, people])
 }
 
 // The stores and the people, from the endpoints that ALREADY serve them — no new data path, which is
@@ -148,13 +151,20 @@ const KIND_LABEL: Record<SearchKind, string> = {
   store: 'Store', person: 'Person', customer: 'Customer',
 }
 
-export default function AskBar({ collapsed }: { collapsed?: boolean }) {
+export default function AskBar({ collapsed, nav, openApp }: {
+  collapsed?: boolean
+  /** The viewer's own sidebar groups, already through RBAC and `applyNavLayout` — passed in by the
+   *  platform shell so this console and the ⌘K box search the SAME nav (§54.12). */
+  nav: NavReg
+  /** TRUE when login is not enforced; the shell already computes it. */
+  openApp?: boolean
+}) {
   const router = useRouter()
   const { period } = usePeriod()
   const { permissions } = useAuth()
   const [open, setOpen] = useState(false)
   const { stores, people } = useEntities(open)
-  const catalog = useSearchCatalog(permissions || {}, stores, people)
+  const catalog = useSearchCatalog(permissions || {}, nav, !!openApp, stores, people)
   const [q, setQ] = useState('')
   const [ans, setAns] = useState<{ intent: Intent; period: string; label: string; value?: string; href?: string; loading: boolean } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)

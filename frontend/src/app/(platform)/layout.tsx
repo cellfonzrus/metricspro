@@ -11,7 +11,7 @@ import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg, api } from '@/lib/client'
 import { setupRedirect, setupGateApplies, type SetupGate } from '@/lib/setup-gate'
 import { apiCached, CONFIG } from '@/lib/cache'
-import { NAV, platformOK, platformPathOK, isPlatformAdmin, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, platformOK, platformPathOK, isPlatformAdmin, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout, type Scope } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import { actingCompany, switcherOptions, switcherVisible, switchConfirmText } from '@/lib/tenant-scope'
 import HelpPanel from '@/components/HelpPanel'
@@ -20,6 +20,14 @@ import ChatEnvelope from '@/components/ChatEnvelope'
 import PlatformBanners from '@/components/PlatformBanners'
 import FlowReturnBar from '@/components/FlowReturnBar'
 import { apiUrl } from '@/lib/apiBase'
+// ONE findable world for BOTH search boxes (§54.12). The sidebar's ⌘K search used to build its own
+// index from NAV alone and rank it with its own private ladder, so 27 menu-less pages could not be
+// found here while ⌘/ found every one of them. Both now gate and fold through `viewerCatalog` and
+// rank through `search-rank.rank`.
+import { viewerCatalog, destinations, type NavReg } from '@/lib/search-catalog'
+import { rank as rankSearch } from '@/lib/search-rank'
+import { searchableRoutes } from '@/lib/route-index'
+import { SCREENS } from '@/components/ScreenLink'
 
 
 // Reports-directory category names ('Reports · Sales', …). tileOnly filtering (below) never applies
@@ -295,29 +303,54 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   const [hi, setHi] = useState(0)                       // highlighted result (keyboard)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const index = useMemo(
-    () => groups.flatMap(g => g.items.map(it => ({
-      href: it.href, icon: it.icon,
-      label: labelOf(it.href, it.label),
+  // The viewer's own sidebar, shaped as a registry: already through RBAC, capability, carrier and the
+  // admin layout override, and carrying the DISPLAYED label (tenant nicknames from navCfg). This one
+  // value is what both search boxes search — the ⌘/ console takes it as a prop, so the two cannot
+  // disagree about which nav a page is in or what it is called.
+  const navSearch: NavReg = useMemo(
+    () => groups.map(g => ({
       group: labelOf('group:' + g.group, g.group),
-    }))),
+      items: g.items.map(it => ({ href: it.href, label: labelOf(it.href, it.label),
+                                  module: it.module, scopes: it.scopes })),
+    })),
     [groups, labelOf])
+  // The icon a result row shows. The nav owns it; a page the nav does not list has none, and the
+  // generic page glyph is honest about that rather than borrowing another page's icon.
+  const iconOf = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const g of groups) for (const it of g.items) if (!m.has(it.href)) m.set(it.href, it.icon)
+    return (href: string) => m.get(href) || '▦'
+  }, [groups])
 
+  // EVERY destination this viewer can open, gated and folded in the one home (§54.12) — the nav, the
+  // report catalogue, the prose spellings, and every page that exists from the generated route
+  // registry. The last of those is the fix: a page in no menu is findable here now.
+  const searchCatalog = useMemo(
+    () => destinations(viewerCatalog(
+      {
+        nav: navSearch,
+        reports: REPORT_CATEGORIES.map(c => ({ category: c.category, reports: c.reports })),
+        screens: Object.values(SCREENS)
+          .map(sc => ({ href: sc.href, label: sc.label, blurb: sc.blurb, aliases: sc.aliases })),
+        routes: searchableRoutes(),
+      },
+      { open, canSee: it => canSeeItem(permissions, { ...it, icon: '', scopes: it.scopes as Scope[] | undefined }),
+        canAccess: path => canAccessPath(permissions, path) },
+    )),
+    [navSearch, open, permissions])
+
+  // ONE ranker for both boxes (`search-rank.rank`, §54.2): stopwords earn nothing alone, a digit run
+  // is always content, coverage beats loudness, and a loose match is a word prefix rather than a
+  // substring. The private `startsWith / includes / group-includes` ladder this replaced was a second
+  // answer to "what did they mean", and it could rank a page differently from the ⌘/ box for the
+  // same typed words.
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return []
-    const seen = new Set<string>()
-    // Rank: label starts-with, then label contains, then group contains. De-duped by href so an item
-    // the layout override placed in two groups (`also`) offers ONE destination, not a double row.
-    const rank = (r: typeof index[number]) => {
-      const l = r.label.toLowerCase()
-      return l.startsWith(q) ? 0 : l.includes(q) ? 1 : r.group.toLowerCase().includes(q) ? 2 : 9
-    }
-    return index.map(r => ({ r, k: rank(r) })).filter(x => x.k < 9)
-      .sort((a, b) => a.k - b.k || a.r.label.localeCompare(b.r.label))
-      .map(x => x.r).filter(r => (seen.has(r.href) ? false : (seen.add(r.href), true)))
-      .slice(0, 12)
-  }, [index, query])
+    if (!query.trim()) return []
+    return rankSearch(searchCatalog, query, 12).map(h => ({
+      href: h.item.href, icon: iconOf(h.item.href), label: h.item.label,
+      group: h.item.category || 'Page',
+    }))
+  }, [searchCatalog, query, iconOf])
 
   // Reset the keyboard highlight whenever the query changes (adjusted during render, not in an effect).
   const [hiQuery, setHiQuery] = useState(query)
@@ -412,7 +445,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         )}
 
         {/* Ask bar — natural-language query / report jump (⌘/). Deterministic quick answers + report search. */}
-        <AskBar collapsed={collapsed} />
+        <AskBar collapsed={collapsed} nav={navSearch} openApp={open} />
 
         {/* Global help-text toggle (approved roles only) — reveals the gated on-page explanations app-wide. */}
         <HelpToggle collapsed={collapsed} />

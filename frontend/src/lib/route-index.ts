@@ -8,7 +8,7 @@
 // page would have left the other 33, so the registry is derived instead (the `module_graph.py`
 // pattern, §50).
 //
-// THREE FIELDS ARE HUMAN and are PRESERVED across a re-bless:
+// FOUR FIELDS ARE HUMAN and are PRESERVED across a re-bless:
 //   label    — ONLY for a page the nav does not list, since the nav's own label is what the viewer
 //              sees for every page it does. A derived label reads like a path ("Account → Password");
 //              replace it with what people call the page.
@@ -17,6 +17,15 @@
 //              which is mechanically why a page like `/account/password` can only declare them here.
 //   preauth  — the REASON a page is deliberately not searchable (a sign-in screen, a public terms
 //              page). Not a flag: the string is the reason, so an exclusion cannot be silent.
+//   menuless — the REASON a page is deliberately in no menu. Same shape as `preauth` and for the
+//              same reason: 27 pages were menu-less by ACCIDENT, and before §54.12 that also made
+//              them unfindable in the sidebar's ⌘K box, which indexed the nav alone. Both boxes now
+//              search this registry, so a menu-less page is findable either way — but being in no
+//              menu is a decision, and §I fails the build when a NEW one is made silently.
+//
+// A COMMENT INSIDE THE ARRAY DOES NOT SURVIVE A BLESS — the renderer emits one line per entry and
+// nothing else, so a note written between entries is dropped the next time anyone runs `--bless`.
+// Put the reason in the entry itself (`preauth`, `menuless`) or in this header, where it lasts.
 //
 // Everything else about a page — may this viewer open it, what module gates it — stays where it
 // already lives (`rbac.canAccessPath`, `canSeeItem`). This file says only WHAT EXISTS.
@@ -30,11 +39,15 @@ export type RouteEntry = {
   aliases?: string[]
   /** Why this page is deliberately not offered by search. Absent = searchable. */
   preauth?: string
+  /** Why this page is deliberately in no menu. Absent and not on §I's baseline = the build is red,
+   *  so a page cannot fall out of the nav unnoticed. Findability does not depend on it: both search
+   *  boxes read this registry (§54.12). */
+  menuless?: string
 }
 
 export const ROUTES: RouteEntry[] = [
   { path: '/', label: 'Home', preauth: 'the marketing root — a signed-in user is redirected away from it' },
-  { path: '/account/password', label: 'My Password', aliases: ['password reset', 'reset password', 'change password', 'change my password', 'forgot password', 'new password'] },
+  { path: '/account/password', label: 'My Password', aliases: ['password reset', 'reset password', 'change password', 'change my password', 'forgot password', 'new password'], menuless: 'reached from the account menu under the avatar (layout.tsx) and forced on a must_reset_password login — personal, not a module, so it belongs in neither the sidebar nor a report category' },
   { path: '/accounts' },
   { path: '/accounts/analysis' },
   { path: '/accounts/balance-sheet' },
@@ -149,14 +162,14 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/column-mapping' },
   { path: '/commcalc/commission-category-map' },
   { path: '/commcalc/commission-discrepancy' },
-  { path: '/commcalc/commission-withholding' },
-  { path: '/commcalc/commission-explain', label: 'Why This Commission', aliases: ['explain commission', 'how was this paid', 'commission explain'] },
+  { path: '/commcalc/commission-explain', label: 'Why This Commission', aliases: ['explain commission', 'how was this paid', 'commission explain'], menuless: 'the menu-less carrier diagnostic — reached from a payout row, never browsed to (§54.7, and harness_payout_audience_lock §i2 holds its audience)' },
   { path: '/commcalc/commission-import' },
   { path: '/commcalc/commission-ledger' },
   { path: '/commcalc/commission-ledger/setup', label: 'Commission Ledger Setup', aliases: ['ledger setup', 'commission ledger mapping'] },
   { path: '/commcalc/commission-legs' },
   { path: '/commcalc/commission-plans' },
   { path: '/commcalc/commission-structure' },
+  { path: '/commcalc/commission-withholding' },
   { path: '/commcalc/comp-trend' },
   { path: '/commcalc/connectors' },
   { path: '/commcalc/custom-report' },
@@ -203,6 +216,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/payables' },
   { path: '/commcalc/payout-plans' },
   { path: '/commcalc/payout-schedules' },
+  { path: '/commcalc/peer-comparison', aliases: ['peer comparison', 'similar stores', 'bill payment band', 'traffic band', 'boxes per bill payment'] },
   { path: '/commcalc/plan-assignment-audit', label: 'Plan Assignment Audit', aliases: ['plan assignment', 'who is on which plan'] },
   { path: '/commcalc/plan-installments' },
   { path: '/commcalc/processor-ledger' },
@@ -211,14 +225,6 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/recovery' },
   { path: '/commcalc/rep-aliases' },
   { path: '/commcalc/report-mappings', label: 'Report Column Mappings', aliases: ['report mappings', 'column mapping'] },
-  // NAV names this page (it is listed under both Management Overview and Targets & Coaching), and
-  // NAV is the label authority — a second label here is the §G drift this registry forbids, so the
-  // entry carries only the words someone would actually type.
-  { path: '/commcalc/peer-comparison', aliases: ['peer comparison', 'similar stores', 'bill payment band', 'traffic band', 'boxes per bill payment'] },
-  // NAV names this page (it is listed under both Management Overview and Targets & Coaching), and NAV
-  // is the label authority — a second label here is the §G drift this registry forbids.
-  { path: '/commcalc/targets/report-cards', aliases: ['report card', 'report cards', 'dm scorecard', 'manager scorecard', 'dm accountability', 'targets met'] },
-  { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
   { path: '/commcalc/reports' },
   { path: '/commcalc/reports-index' },
   { path: '/commcalc/sales-analyzer' },
@@ -228,6 +234,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/sales-report' },
   { path: '/commcalc/schematic' },
   { path: '/commcalc/settings' },
+  { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
   { path: '/commcalc/store-match' },
   { path: '/commcalc/target-fields' },
   { path: '/commcalc/targets' },
@@ -235,6 +242,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/targets/action-plan' },
   { path: '/commcalc/targets/my' },
   { path: '/commcalc/targets/rep-map' },
+  { path: '/commcalc/targets/report-cards', aliases: ['report card', 'report cards', 'dm scorecard', 'manager scorecard', 'dm accountability', 'targets met'] },
   { path: '/commcalc/targets/settings' },
   { path: '/commcalc/tax-collected' },
   { path: '/commcalc/upload' },
@@ -289,7 +297,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/operator/operators' },
   { path: '/operator/tenants' },
   { path: '/payroll' },
-  { path: '/portal', label: 'Employee Portal', aliases: ['portal', 'my portal'] },
+  { path: '/portal', label: 'Employee Portal', aliases: ['portal', 'my portal'], menuless: 'the employee time-clock portal, outside the (platform) shell entirely — it has no module sidebar to be listed in, and a rep reaches it as their whole app rather than as a page' },
   { path: '/pos/activation-report' },
   { path: '/pos/activations' },
   { path: '/pos/customers' },
