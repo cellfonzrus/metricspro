@@ -7055,6 +7055,21 @@ a day he needed.** §19.18's shape for the fifth time, this time with the stale 
   day-grain copy now reads *"A one-day file replaces only that day — every other day stays, and the
   rest of the period is untouched."*
 
+**THE SIBLING WINDOW BUILDER WAS FOUND, AND IS EXCUSED WITH ITS REASON RATHER THAN LEFT IMPLIED.**
+`report_pull.month_windows` (driving the other portal's five date-filtered reports through
+`vidapay_sweep._fill_param_fields`) is the only other place this codebase decides a pull window's end.
+Its shape is NOT the comp report's: a WHOLE month ends at **23:59 of the last day**, so an
+end-exclusive reading still returns all but the last minute — but a window **CLIPPED by the caller's
+own end** lands at 00:00 of that day, and three of the five reports format the end DATE-ONLY, which is
+the same exposure if that portal is end-exclusive too. **It is not changed here**, because that feed
+holds **zero rows for this org** (measured read-only 2026-10-08: `raw_ma_daily_tx`,
+`raw_ma_commission` and `raw_ma_fulfillment` are all empty on the house org), so there is no evidence
+on an org we are permitted to read, and moving another tenant's pull window by a day on a guess is a
+money-adjacent change made without a measurement. What ships instead is a PIN: the lock's §F21-F23
+fix today's behaviour and fail the build if that builder grows a private `+1 day`, so whoever does
+measure that portal arrives at `feed_period.request_window` rather than inventing a second boundary
+rule.
+
 **THE LOCK.** `backend/harness_statement_month_coverage.py` — **118 checks, DB-free, verified RED with
 73 failures (45 passing) against `origin/main`**. §A reproduces the end-exclusive loss on a fixture
 portal and pins the regression; §B the boundary home (config, house default, inclusive untouched,

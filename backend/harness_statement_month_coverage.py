@@ -436,6 +436,30 @@ ok("F19 the day-grain copy actually tells the truth the owner was denied",
 # the real behavioural check of the frontend rule, run over the registry's own answer
 _shipped = {"payment_detail": "replace_period", "comp_report": "replace_period",
             "catalog": "replace_all", "sales": "replace_period"}
+# ── THE SIBLING WINDOW BUILDER, NAMED AND PINNED (the "find the siblings" rule) ──────────────────
+# `report_pull.month_windows` is the OTHER place this codebase decides a pull window's end, for the
+# other portal's five date-filtered reports (two format the end with %H:%M, three date-only). Its
+# shape is NOT the comp report's: a whole month ends at 23:59 of the last day, so an end-exclusive
+# reading still returns all but the last minute — and a window CLIPPED by the caller's own end lands
+# at 00:00 of that day, which IS exposed if that portal is end-exclusive too.
+#
+# IT IS NOT CHANGED HERE, and the reason is stated rather than left implied: that feed holds ZERO rows
+# for this org (measured 2026-10-08: raw_ma_daily_tx, raw_ma_commission and raw_ma_fulfillment are all
+# empty on the house org), so there is no evidence on an org we are allowed to read, and shifting
+# another tenant's pull window by a day on a guess is a money-adjacent change made without a
+# measurement. What this lock does instead is PIN today's behaviour, so the sibling cannot drift
+# quietly and whoever measures that portal arrives here rather than inventing a second boundary rule.
+_rp = __import__("app.modules.commcalc.report_pull", fromlist=["month_windows"])
+_rp_win = _rp.month_windows(dt.datetime(2026, 8, 1), dt.datetime(2026, 9, 30))
+ok("F21 the sibling builder ends a WHOLE month at 23:59 of its last day (a different shape from the "
+   "comp report's date-only end — pinned, not changed)",
+   _rp_win[0][1] == dt.datetime(2026, 8, 31, 23, 59))
+ok("F22 ... and a CLIPPED window keeps the caller's own end, which is the half that WOULD be exposed "
+   "if that portal is end-exclusive — named in index §19.54, unmeasurable on this org",
+   _rp_win[1][1] == dt.datetime(2026, 9, 30, 0, 0))
+ok("F23 the sibling grows no PRIVATE end-widening: a `+1 day` there must come through the one home",
+   "timedelta(days=1)" not in _code_only(_src("app/modules/commcalc/report_pull.py")))
+
 ok("F20 a day-keyed route's warning becomes day grain; a period/all route is untouched; and before "
    "the registry answers nothing is claimed",
    all([
