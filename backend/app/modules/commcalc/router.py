@@ -25919,6 +25919,90 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
     return out
 
 
+def _peer_comparison_payload(client, org_id, period, rows, *, resolve_market=None, bands=None,
+                             metric=None, params=None):
+    """THE Peer Sales Comparison payload (index §59), from sale rows the CALLER already read.
+
+    ONE home for assembling this report, because two callers now need it and they must not disagree
+    about who is lagging: the `/peer-comparison` screen and the Daily Action Plan's peer-gap item
+    (§59.7). The action plan does not re-derive the band, the gap or the verdict — it calls this and
+    reads `lagging()`.
+
+    `rows` is a sale-row list from `_sales_rows_union` (either `_SALES_DISPLAY_COLS` or the strictly
+    wider `_ACTUALS_COLS`; the extra `user_login` is ignored here), already scope- and market-filtered
+    by the caller. Nothing is read from the sales tables in here, so a caller that has the rows in
+    hand — as `get_action_plan` does, via `_fetch_actuals` — pays NO second feed read for this.
+
+    Returns (payload, cells, unresolved_stores).
+    """
+    # THE ONE AGGREGATION. `exec_cfg` is REQUIRED here, not optional: `_billpay_exec` — the peer basis —
+    # is only populated when it is supplied, so without it every store would come back unbanded.
+    acfg = _accessory_config(client, org_id)
+    exec_cfg = _exec_metric_config(client, org_id)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=exec_cfg)
+
+    # THE store resolver (the same one Daily-Targets actuals use) — so the carrier's store-grain KPI can
+    # attach, and so one store spelled two ways in the feed is one row here.
+    resolve_code = _store_code_resolver(client, org_id)
+    unresolved = set()
+
+    def _store_of(cell):
+        raw = str((cell or {}).get("store") or "").strip()
+        code = resolve_code(raw) if raw else ""
+        if raw and not code:
+            unresolved.add(raw)
+        return code or raw
+
+    # FAMILY PLAN / AAL CONVERSION — the CARRIER's own store KPI feed (raw_dlar_store, index §10). The
+    # sales feed carries no family-plan fact at all, so this column is the carrier's or it does not
+    # exist; the values are passed through untouched and a store with no row shows blank, never 0%.
+    store_kpis, kpi_feed = {}, None
+    try:
+        drows = (client.schema("commcalc").table("raw_dlar_store")
+                 .select("store_code,location,address,family_plan_pct,aal_conversion,as_of_date")
+                 .eq("org_id", org_id).in_("period", _pvariants(period)).limit(5000).execute().data) or []
+        for d in drows:
+            key = ""
+            for cand in (d.get("store_code"), d.get("address"), d.get("location")):
+                cand = str(cand or "").strip()
+                if not cand:
+                    continue
+                key = resolve_code(cand) or ""
+                if key:
+                    break
+            if not key:
+                continue
+            store_kpis[key] = {"family_plan_pct": d.get("family_plan_pct"),
+                               "aal_conversion": d.get("aal_conversion")}
+        if drows:
+            _asof = sorted({str(d.get("as_of_date") or "") for d in drows if d.get("as_of_date")})
+            kpi_feed = (f"Family plan % and AAL conversion % come from the carrier's own store report "
+                        f"for {period} ({len(store_kpis)} of {len(drows)} rows matched to a store"
+                        f"{', as of ' + _asof[-1] if _asof else ''}).")
+        else:
+            kpi_feed = (f"The carrier's store report has not landed for {period}, so the family plan % "
+                        f"column is blank for every store. Blank means not reported, never 0%.")
+    except Exception:
+        store_kpis, kpi_feed = {}, ("The carrier's store report could not be read, so the family plan % "
+                                    "column is blank for every store. Blank means not read, never 0%.")
+
+    line_rules = _line_rules_of(acfg)
+    out = _peercmp.build(
+        cells, bands=bands or None,
+        store_kpis=store_kpis, resolve_market=resolve_market, store_of=_store_of,
+        period=period, window_label=f"{period} to date",
+        aal_configured=_lc.add_a_line_configured(line_rules), kpi_feed=kpi_feed,
+        params=params or {"period": period, "metric": (metric or _peercmp.DEFAULT_GAP_METRIC)})
+    out["caveats"] = _peercmp.column_caveats(
+        out, device_dimension=_lc.devices_configured(line_rules),
+        box_count_buckets=(acfg.get("box_count_buckets") if acfg else None),
+        unresolved_stores=unresolved)
+    out["lagging"] = _peercmp.lagging(out, metric=(metric or _peercmp.DEFAULT_GAP_METRIC))
+    for item in out["lagging"]:
+        item["prompt"] = _peercmp.prompt_sentence(item)
+    return out, cells, unresolved
+
+
 @router.get("/peer-comparison")
 def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric: str = "",
                     authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -25980,73 +26064,16 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
 
     rows = [r for r in rows if _keep(r.get("store"))]
 
-    # THE ONE AGGREGATION. `exec_cfg` is REQUIRED here, not optional: `_billpay_exec` — the peer basis —
-    # is only populated when it is supplied, so without it every store would come back unbanded.
-    acfg = _accessory_config(client, org_id)
-    exec_cfg = _exec_metric_config(client, org_id)
-    cells = _sales_cell_agg(rows, acfg, exec_cfg=exec_cfg)
-
-    # THE store resolver (the same one Daily-Targets actuals use) — so the carrier's store-grain KPI can
-    # attach, and so one store spelled two ways in the feed is one row here.
-    resolve_code = _store_code_resolver(client, org_id)
-    unresolved = set()
-
-    def _store_of(cell):
-        raw = str((cell or {}).get("store") or "").strip()
-        code = resolve_code(raw) if raw else ""
-        if raw and not code:
-            unresolved.add(raw)
-        return code or raw
-
-    # FAMILY PLAN / AAL CONVERSION — the CARRIER's own store KPI feed (raw_dlar_store, index §10). The
-    # sales feed carries no family-plan fact at all, so this column is the carrier's or it does not
-    # exist; the values are passed through untouched and a store with no row shows blank, never 0%.
-    store_kpis, kpi_feed = {}, None
+    # THE ONE ASSEMBLY — `_peer_comparison_payload` above. It was inlined here until the Daily Action
+    # Plan needed the same verdict (§59.7); two copies of the band, the gap and "who is lagging" is
+    # exactly the drift the index rules forbid, so it moved up into a helper both callers read.
     try:
-        drows = (client.schema("commcalc").table("raw_dlar_store")
-                 .select("store_code,location,address,family_plan_pct,aal_conversion,as_of_date")
-                 .eq("org_id", org_id).in_("period", _pvariants(period)).limit(5000).execute().data) or []
-        for d in drows:
-            key = ""
-            for cand in (d.get("store_code"), d.get("address"), d.get("location")):
-                cand = str(cand or "").strip()
-                if not cand:
-                    continue
-                key = resolve_code(cand) or ""
-                if key:
-                    break
-            if not key:
-                continue
-            store_kpis[key] = {"family_plan_pct": d.get("family_plan_pct"),
-                               "aal_conversion": d.get("aal_conversion")}
-        if drows:
-            _asof = sorted({str(d.get("as_of_date") or "") for d in drows if d.get("as_of_date")})
-            kpi_feed = (f"Family plan % and AAL conversion % come from the carrier's own store report "
-                        f"for {period} ({len(store_kpis)} of {len(drows)} rows matched to a store"
-                        f"{', as of ' + _asof[-1] if _asof else ''}).")
-        else:
-            kpi_feed = (f"The carrier's store report has not landed for {period}, so the family plan % "
-                        f"column is blank for every store. Blank means not reported, never 0%.")
-    except Exception:
-        store_kpis, kpi_feed = {}, ("The carrier's store report could not be read, so the family plan % "
-                                    "column is blank for every store. Blank means not read, never 0%.")
-
-    line_rules = _line_rules_of(acfg)
-    try:
-        out = _peercmp.build(
-            cells, bands=[b for b in (bands or "").split(",") if b.strip()] or None,
-            store_kpis=store_kpis, resolve_market=resolve_market, store_of=_store_of,
-            period=period, window_label=f"{period} to date",
-            aal_configured=_lc.add_a_line_configured(line_rules), kpi_feed=kpi_feed,
+        out, cells, _unres = _peer_comparison_payload(
+            client, org_id, period, rows, resolve_market=resolve_market,
+            bands=[b for b in (bands or "").split(",") if b.strip()] or None,
+            metric=metric,
             params={"period": period, "markets": sorted(sel_markets),
                     "metric": (metric or _peercmp.DEFAULT_GAP_METRIC)})
-        out["caveats"] = _peercmp.column_caveats(
-            out, device_dimension=_lc.devices_configured(line_rules),
-            box_count_buckets=(acfg.get("box_count_buckets") if acfg else None),
-            unresolved_stores=unresolved)
-        out["lagging"] = _peercmp.lagging(out, metric=(metric or _peercmp.DEFAULT_GAP_METRIC))
-        for item in out["lagging"]:
-            item["prompt"] = _peercmp.prompt_sentence(item)
     except Exception as e:
         raise HTTPException(500, f"peer-comparison failed: {type(e).__name__}: {e}")
 
@@ -29713,7 +29740,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
     return out
 
 
-def _fetch_actuals(client, org_id, period):
+def _fetch_actuals(client, org_id, period, rows_out=None):
     """MTD 'achieved' actuals for Daily Targets — flowing from the EXACT SAME sales aggregation the Sales
     Report + Executive MTD use (owner directive 2026-07-16: "the Sales Report should flow into the Daily
     Targets"). Reads the SAME union (`_sales_rows_union`, the (day × store) cell-grain feed∪raw_sales the
@@ -29726,8 +29753,16 @@ def _fetch_actuals(client, org_id, period):
     for guaranteed consistency with the Sales Report (the owner's "never disagree again"): the feed still
     wins each store-day cell it holds, every other store fills from raw_sales (so luxelink's re-uploaded
     stores are still present), and in the healthy feed-only state the union is the feed verbatim → Boost
-    unchanged. Display-only (targets), never commission payout."""
+    unchanged. Display-only (targets), never commission payout.
+
+    `rows_out`, when a list is passed, is EXTENDED with the raw union rows this read already paid for,
+    so a caller needing the same sale rows for a second question does not read the feed twice. The
+    Daily Action Plan uses it for the peer-gap item (§59.7): `_ACTUALS_COLS` is strictly wider than the
+    `_SALES_DISPLAY_COLS` the peer comparison needs, so the one read serves both. It is an OUT
+    parameter and never changes what this function returns."""
     rows, _umeta = _sales_rows_union(client, org_id, period, cols=_ACTUALS_COLS)
+    if rows_out is not None:
+        rows_out.extend(rows)
     rows = _compute_feed_actuals_py(client, org_id, period, rows=rows)
     cmap = _rep_canon_map(client, org_id)
     for r in rows:
@@ -34681,8 +34716,47 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     stores = _storeops_roster(client, org_id, include_inactive=include_inactive,
                               keep_codes=set(by_code))
     shifts = _fetch_shifts(client, start, end, org_id)
-    actuals = _fetch_actuals(client, org_id, period)
+    # The peer-gap item (§59.7) needs the SAME sale rows this read already pays for, so it takes them
+    # back out rather than reading the feed a second time — `_ACTUALS_COLS` is strictly wider than what
+    # the peer comparison needs.
+    _sale_rows: list = []
+    actuals = _fetch_actuals(client, org_id, period, rows_out=_sale_rows)
     rank = targets_engine.SEV_RANK
+
+    # ── THE PEER GAP (owner 2026-10-08: "it should trigger in teh action plan for the sales reps their
+    #    managers and dm and market manager to prompt them to increase the sales for those laggin
+    #    stores as if one can do why not the other").
+    #
+    #    NO NEW FAN-OUT, AND THAT IS THE POINT. This plan is ALREADY scoped by `scope_keyset`, so one
+    #    store-level item reaches every audience the owner named: the rep sees it on their own store
+    #    (the self-scope substitution above), and their manager, DM and market manager each see it on
+    #    every store inside their span. Four new notification paths would have been four things to
+    #    drift apart; the existing scoping is the delivery.
+    #
+    #    AND NO SECOND VERDICT. Who is lagging is decided ONLY by `peer_comparison.lagging()`, the same
+    #    call the screen makes, through the same `_peer_comparison_payload`. This plan does not compute
+    #    a band, a median or a gap of its own, so the screen and the plan cannot name different stores.
+    #    A failure here costs the peer item and nothing else — the rest of the plan is unaffected.
+    peer_items, peer_meta = {}, None
+    try:
+        _peer_out, _pcells, _punres = _peer_comparison_payload(
+            client, org_id, period, _sale_rows,
+            resolve_market=_store_market_resolver(client, org_id)[0],
+            params={"period": period, "metric": _peercmp.DEFAULT_GAP_METRIC,
+                    "source": "action-plan"})
+        peer_items = _peercmp.peer_items_by_store(_peer_out)
+        peer_meta = {"stores_compared": len(_peer_out.get("rows") or []),
+                     "bands": len(_peer_out.get("bands") or []),
+                     "lagging": len(_peer_out.get("lagging") or []),
+                     "unbanded": len(_peer_out.get("unbanded") or []),
+                     "gap_metric": _peercmp.DEFAULT_GAP_METRIC,
+                     "caveats": _peer_out.get("caveats") or []}
+    except Exception as _e:
+        # REPORTED, never silently absent: a reader must be able to tell "no store is behind its peers"
+        # from "the comparison did not run", because the two look identical on a screen.
+        peer_meta = {"error": f"{type(_e).__name__}: {_e}",
+                     "note": "The peer comparison could not be computed, so no peer-gap item is shown. "
+                             "That is not the same as no store being behind its peers."}
 
     # ── Commission context: KPI targets + each rep's computed tier ($ at risk = the
     #    payout forfeited below tier 1.0 = subtotal × (1 − tier)). Empty/graceful if
@@ -34795,6 +34869,13 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                                            round_counts=True, month_end=month_end)
         store_conv = targets_engine.scope_conversion(actuals, code, None, today)
         store_items = targets_engine.build_action_items(res, store_conv, include_categories=True)
+        # THE PEER GAP, dereferenced — the item is built in `peer_comparison`, keyed on the store code
+        # this loop is already on. A store the peer report did not band (no bill-payment traffic) or
+        # could not resolve to a code simply is not in the map, so nothing is ever attached to a store
+        # the comparison could not place.
+        peer_item = peer_items.get(code.upper())
+        if peer_item:
+            store_items.append(dict(peer_item))
 
         # Target-vs-achieved metrics per category (what's expected vs what they're doing).
         metrics = []
@@ -34846,7 +34927,15 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             if not store_code:
                 if not rep_plans:
                     continue
-                store_items = []
+                # …EXCEPT the peer gap. This suppression exists because "a store-wide figure is a
+                # cross-rep figure" (see below) — it keeps one rep from reading what the rest of the
+                # shop is leaving on the table. The peer item is not that: it compares this STORE with
+                # other STORES on the same footfall, and its `leader` is a store code, never a person,
+                # so it names no colleague and discloses nobody's tier, payout or at-risk figure. The
+                # owner asked for exactly this prompt to reach "the sales reps" (2026-10-08), so a rep
+                # looking at their own plan keeps it and loses the rest.
+                store_items = [it for it in store_items
+                               if it.get('metric') == _peercmp.PEER_METRIC_LABEL]
         store_at_risk = round(sum((rp['commission'] or {}).get('at_risk', 0)
                                   for rp in rep_plans if rp.get('commission')), 2)
         # A STORE-WIDE FIGURE IS A CROSS-REP FIGURE. "$X across N reps" tells a rep what the rest of
@@ -34885,10 +34974,28 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     # `get_targets_summary` raises for the same cause).
     setup_hint = ("No store is assigned to your login yet, so there is nothing to plan — ask your "
                   "manager to set your store." if no_self_store else "")
+    # HONEST LIMITATION, stated rather than left as a silent omission. This loop skips a store with no
+    # monthly target (`sum(monthly.values()) <= 0` above) and a store outside the caller's span, so a
+    # store that IS behind its peers can be missing from the plan for a reason that has nothing to do
+    # with its selling. Count them and say so; inventing a plan for a store with no target would be the
+    # fabricated denominator the house rules forbid.
+    _shown = {str(r.get('store_code') or '').upper() for r in out}
+    if isinstance(peer_meta, dict) and 'error' not in peer_meta:
+        _missed = sorted(k for k in peer_items if k not in _shown)
+        peer_meta['items_shown'] = sum(1 for r in out for it in r['items']
+                                       if it.get('metric') == _peercmp.PEER_METRIC_LABEL)
+        peer_meta['lagging_not_planned'] = _missed
+        if _missed:
+            peer_meta['note'] = (
+                f"{len(_missed)} store(s) are behind their traffic band but carry no peer item here, "
+                f"because this plan only covers stores with a monthly target set and inside your span: "
+                f"{', '.join(_missed[:6])}{' …' if len(_missed) > 6 else ''}. "
+                f"Set a target for them, or see the full list on Peer Sales Comparison.")
     return {'period': period, 'today': today.isoformat(),
             'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out),
                         'commission_at_risk': round(tot_at_risk, 2)},
             'setup_hint': setup_hint,
+            'peer': peer_meta,
             'stores': out}
 
 

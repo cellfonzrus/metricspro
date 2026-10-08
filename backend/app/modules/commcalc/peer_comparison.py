@@ -439,3 +439,85 @@ def prompt_sentence(item):
     return (f"{i.get('store')} is at {mine:,.2f} {str(i.get('label') or '').lower()} against a "
             f"{med:,.2f} median for stores in its own traffic band ({i.get('band_label')})."
             f"{tail} The same number of people walked in, so this gap is sell-through, not footfall.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE ACTION-PLAN ITEM (index §59.7, owner 2026-10-08: "it should trigger in teh action plan for the
+# sales reps their managers and dm and market manager to prompt them to increase the sales for those
+# laggin stores as if one can do why not the other").
+#
+# WHY THIS LIVES HERE AND NOT IN THE ACTION PLAN. "Which stores are behind their peers" already has
+# ONE home — `lagging()` above — and the coaching sentence has one home in `prompt_sentence()`. The
+# action plan DEREFERENCES both; it does not re-decide who is behind, because the screen, the plan
+# and (next) the two report cards disagreeing about which stores are lagging is exactly the drift
+# these rules forbid. All this function does is put that one verdict into the shape the plan's
+# renderer already consumes: {severity, metric, title, detail}.
+#
+# SEVERITY IS A MEASUREMENT, NOT A MOOD — and the first draft of this rule was neither.
+#
+# THE BUG, KEPT AS A COMMENT BECAUSE IT IS INSTRUCTIVE. The first rule was "`critical` when the store
+# is further from the band's BEST than from its median". That is not a measurement, it is ARITHMETIC:
+# if mine < median <= best then (best - mine) >= (median - mine) ALWAYS. So every lagging store came
+# back `critical` — all 12 of them on live September data — and the check that was supposed to prove
+# the rule (§J6) passed because it asserted a tautology. A severity whose every case is the worst case
+# carries no information, and it would have added 12 to a "critical items" count that means "today".
+#
+# THE RULE, CHOSEN FROM THE MEASURED SPREAD. How far below the median, as a SHARE of the median —
+# which does discriminate. Live September 2026, the 12 lagging stores ran from 5.3% to 42.1% below
+# their own band median, and a 25% cut splits them 6/6: B-2509 at 42% below is a real gap to coach,
+# B-3PL at 5.3% below is noise and must not shout. So:
+#   · critical — more than CRITICAL_SHORTFALL below the band median.
+#   · warning  — behind the median by less than that.
+# A store with no leader to point at (a band of one, or a band whose best IS its median) is never
+# `critical` whatever its shortfall: there is no proof anybody did better on that traffic, so the plan
+# does not imply there is.
+PEER_METRIC_LABEL = "peer_gap"
+CRITICAL_SHORTFALL = 0.25
+
+
+def peer_action_item(item):
+    """ONE lagging row (from `lagging()`) → the action plan's own item shape, or None.
+
+    PURE. Returns None for a row that cannot support a prompt — no numbers, or no band median — so a
+    caller can map this over `lagging()` and filter, and never renders an item that accuses a store
+    on a figure the report could not compute."""
+    i = item or {}
+    sentence = prompt_sentence(i)
+    if not sentence:
+        return None
+    med, best, lead = i.get("band_median"), i.get("band_best"), i.get("leader")
+    gap_med = i.get("gap_to_median") or 0.0
+    gap_best = i.get("gap_to_best") or 0.0
+    # Somebody must demonstrably have done better on the same traffic for this to be `critical` —
+    # otherwise the owner's "if one can do why not the other" has no "one".
+    has_leader = bool(lead) and best is not None and med is not None and best > med
+    shortfall = (gap_med / med) if med else 0.0
+    sev = "critical" if (has_leader and shortfall > CRITICAL_SHORTFALL) else "warning"
+    label = str(i.get("label") or "").lower()
+    title = (f"Behind {lead} on the same traffic — {label}" if has_leader
+             else f"Behind its traffic band on {label}")
+    return {"severity": sev, "metric": PEER_METRIC_LABEL,
+            "title": title, "detail": sentence,
+            "shortfall_pct": round(shortfall * 100.0, 1),
+            # The numbers the sentence is built from, so a surface can render its own layout without
+            # re-deriving the verdict (and so the report cards can tick it off against a target).
+            "peer": {"band": i.get("band"), "band_label": i.get("band_label"),
+                     "billpay_txns": i.get("billpay_txns"),
+                     "mine": i.get("mine"), "band_median": med, "band_best": best,
+                     "gap_to_median": gap_med, "gap_to_best": gap_best,
+                     "leader": lead, "gap_metric": i.get("metric")}}
+
+
+def peer_items_by_store(payload, metric=DEFAULT_GAP_METRIC, min_gap=0.0):
+    """{STORE: item} for every lagging store that can support a prompt, keyed UPPER-CASE because the
+    action plan keys on `store_code.upper()`. PURE — and it is `lagging()` that decides who is in
+    here, so a caller cannot widen or narrow the definition of behind by accident."""
+    out = {}
+    for row in lagging(payload, metric=metric, min_gap=min_gap):
+        it = peer_action_item(row)
+        if not it:
+            continue
+        key = str(row.get("store") or "").strip().upper()
+        if key:
+            out[key] = it
+    return out

@@ -430,6 +430,108 @@ ck("I10 … and threads them into every _promo_type call (no bare call left)",
    "_promo_type(ct, _line_rules)" in _arecon and "_promo_type(ct)" not in _arecon)
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# §J  THE ACTION-PLAN ITEM — the prompt the owner asked for, and ONE verdict behind it (§59.7)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§J  the action-plan item")
+_LAG = P.lagging(OUT)
+ck("J1 there is something lagging in the fixture to build an item from", len(_LAG) >= 1)
+
+_items = [P.peer_action_item(r) for r in _LAG]
+ck("J2 every lagging row yields an item in the plan's own shape",
+   all(i and set(("severity", "metric", "title", "detail")) <= set(i) for i in _items))
+ck("J3 the severity vocabulary is the plan's, so the existing sort and counts pick it up",
+   all(i["severity"] in ("critical", "warning") for i in _items))
+ck("J4 the detail IS `prompt_sentence`, not a second wording",
+   all(i["detail"] == P.prompt_sentence(r) for i, r in zip(_items, _LAG)))
+
+# SEVERITY IS A MEASUREMENT, AND THE CHECK OF IT MUST BE ONE TOO. §J6 in its first draft asserted
+# `gap_to_best > gap_to_median`, which is TRUE OF EVERY LAGGING ROW BY ARITHMETIC (mine < median <=
+# best), so it passed while the rule it guarded marked all 12 live stores `critical`. A check that
+# cannot fail proves nothing — the same vacuity as §I5 and §K8 before it. What follows tests the cut
+# itself: a planted pair either side of CRITICAL_SHORTFALL must come back with DIFFERENT severities.
+_crit = [i for i in _items if i["severity"] == "critical"]
+
+
+def _planted(shortfall, *, leader="B-9", best=None):
+    """A lagging row whose store sits `shortfall` BELOW a median of 100, with a real leader above it."""
+    mine = 100.0 * (1.0 - shortfall)
+    return P.peer_action_item({"store": "B-1", "label": "Boxes per bill payment", "mine": mine,
+                               "band": 2, "band_label": "150-249 bill payments",
+                               "band_median": 100.0,
+                               "band_best": (150.0 if best is None else best), "leader": leader,
+                               "gap_to_median": 100.0 - mine,
+                               "gap_to_best": (150.0 if best is None else best) - mine})
+
+
+_cut = P.CRITICAL_SHORTFALL
+ck("J5 a critical item always has a leader who actually beat the band median",
+   all(i["peer"]["leader"] and i["peer"]["band_best"] is not None
+       and i["peer"]["band_best"] > i["peer"]["band_median"] for i in _crit))
+ck("J6 the cut DISCRIMINATES — the same row either side of it changes severity",
+   _planted(_cut + 0.05)["severity"] == "critical"
+   and _planted(_cut - 0.05)["severity"] == "warning")
+ck("J7 … and every real critical item is on the far side of that cut, every warning on the near one",
+   all(i["shortfall_pct"] > _cut * 100.0 for i in _crit)
+   and all(i["shortfall_pct"] <= _cut * 100.0
+           for i in _items
+           if i["severity"] == "warning" and i["peer"]["leader"]
+           and i["peer"]["band_best"] and i["peer"]["band_best"] > i["peer"]["band_median"]))
+_no_leader = P.peer_action_item({"store": "B-1", "label": "Boxes per bill payment", "mine": 1.0,
+                                 "band_median": 2.0, "band_best": None, "leader": None,
+                                 "band_label": "150-249 bill payments", "gap_to_median": 1.0})
+ck("J7b with nobody to point at it is a warning, never critical — however far behind",
+   _no_leader and _no_leader["severity"] == "warning"
+   and _planted(0.9, leader=None, best=None)["severity"] == "warning"
+   and _planted(0.9, best=100.0)["severity"] == "warning")
+ck("J7c the shortfall is reported as a share of the median, so a surface need not re-derive it",
+   abs(_planted(0.30)["shortfall_pct"] - 30.0) < 0.05)
+ck("J8 a row with no numbers yields NO item (never an accusation on a figure we lack)",
+   P.peer_action_item({"store": "B-1"}) is None
+   and P.peer_action_item({"store": "B-1", "mine": 1.0}) is None
+   and P.peer_action_item(None) is None)
+
+_by_store = P.peer_items_by_store(OUT)
+ck("J9 the map is keyed UPPER-CASE, as the action plan keys its stores",
+   all(k == k.upper() for k in _by_store))
+ck("J10 and it holds exactly the lagging stores that could support a prompt",
+   set(_by_store) == {str(r["store"]).upper() for r, i in zip(_LAG, _items) if i})
+# The map must not be a second filter: widening or narrowing "behind" belongs to `lagging()` alone.
+ck("J11 `min_gap` is passed through to `lagging`, not re-implemented here",
+   set(P.peer_items_by_store(OUT, min_gap=10 ** 9)) == set())
+
+# ── §K  the un-wire lock for the action plan ──────────────────────────────────────────────────────
+print("\n§K  the action plan dereferences the verdict, and pays no second read")
+_ap = _src.split("async def get_action_plan", 1)[1].split("\n@router.", 1)[0]
+ck("K1 the plan asks the ONE assembly for the payload",
+   "_peer_comparison_payload(" in _ap)
+ck("K2 … and takes `who is lagging` from the one home, never deciding it itself",
+   "_peercmp.peer_items_by_store(" in _ap)
+ck("K3 the plan computes NO band, median or gap of its own",
+   not any(t in _ap for t in ("band_of(", "HOUSE_BANDS", "_median(", "resolve_bands(",
+                              "gap_to_median", "behind_median")))
+ck("K4 it reuses the sale rows the actuals read already paid for (no second feed read)",
+   "rows_out=_sale_rows" in _ap and "_sales_rows_union(" not in _ap)
+ck("K5 the item is attached by STORE CODE, from the map",
+   "peer_items.get(code.upper())" in _ap)
+ck("K6 a comparison that could not run is REPORTED, not silently absent",
+   '"error"' in _ap and "not the same as no store being behind" in _ap)
+ck("K7 lagging stores the plan cannot carry are counted and named",
+   "lagging_not_planned" in _ap)
+# K8 WAS VACUOUS on its first draft: it looked for `it.get('metric') == PEER_METRIC_LABEL`, which also
+# occurs in the `items_shown` tally further down, so planting the regression did not redden it. Test
+# the SUPPRESSION site itself — the rep-focused view must filter store items, never blank them.
+ck("K8 the peer item survives the cross-store rep view (the owner asked reps be prompted)",
+   "store_items = [it for it in store_items" in _ap and "store_items = []" not in _ap)
+# THE SHARED ASSEMBLY MUST STAY SHARED. Two copies of it is two bands, two medians and two answers to
+# "who is lagging" — the duplicate defect, with the screen and the plan coaching different stores.
+ck("K9 the screen reads the same assembly (one caller is not a shared home)",
+   _src.count("_peer_comparison_payload(") >= 3)
+ck("K10 … and the assembly reads the feed for nobody: its rows are the caller's",
+   "_sales_rows_union(" not in _src.split("def _peer_comparison_payload", 1)[1]
+                                   .split("\n@router.", 1)[0])
+
+
 print("\n" + "=" * 70)
 if FAIL:
     print(f"FAILED {len(FAIL)}: " + ", ".join(FAIL))
