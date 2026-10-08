@@ -967,7 +967,12 @@ _all_routes = _flatten_routes(real_app.routes)
 #           findings written to the EXISTING `commcalc.flags` board through the additive merge).
 #           The pair mirrors the shipped `/commcalc/sales-recon` + `.../sync-flags` shape: one read
 #           surface carrying the evidence, one writer. No new page, table, queue or tile.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1745"))
+# Re-pinned 1745 -> 1746 on 2026-10-08, measured against origin/main d03b299 (the tree that had
+# just re-pinned to 1745 for #412, merged into this branch). The delta is ONE route and it is
+# named: GET /commcalc/peer-comparison (the Peer Sales Comparison report, index §59). Verified by
+# diffing the branch against main for route decorators — exactly one added, NONE removed — so the
+# pin was re-taken on a known addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1746"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

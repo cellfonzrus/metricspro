@@ -11,6 +11,7 @@ from app.modules.asset.market_filter import (
 # §53 — ONE home for "what kind of finding is this, and how bad": every writer of
 # `commcalc.flags` dereferences the registry instead of spelling its own severity.
 from app.modules.commcalc import flag_registry as _reg
+from app.modules.commcalc import line_class as _lc   # THE add-a-line predicate (index §59)
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -2178,15 +2179,31 @@ def _in_period(r, month=None, year=None, week_friday=None):
 # contract-type taxonomy (commcalc/calculator.py). The combined-type precedence
 # (e.g. "Port-In Add A Line" -> AAL) is the ONE business assumption here — flip the
 # order below if Boost's hotsheet treats those as Port-In instead.
-def _promo_type(contract_type):
-    ct = (contract_type or "").strip().lower()
+#
+# THE AAL TEST IS DEREFERENCED, not spelled (owner directive "a fix is a DESIGN fix",
+# 2026-10-08). It was `"add a line" in ct or ct == "aal" or ct.endswith(" aal")` — the only
+# other answer on the platform to "is this an add-a-line", and a bare contract_type
+# substring invisible to a tenant whose POS carries the fact elsewhere. It now asks the ONE
+# home, `line_class.is_add_a_line`, over the org's configured fields and words. Verified
+# byte-identical over ALL 34 non-blank contract_type values live on the platform
+# (harness_add_a_line_one_home.py §C pins the equivalence), so no promo column moves.
+#
+# THE UPGRADE / PORT TESTS BELOW ARE THE SAME KIND OF COPY AND ARE DELIBERATELY LEFT.
+# `line_class.activation_class` would answer them, but NOT identically: its precedence is
+# byod > upgrade > port, so 'BYOD Upgrade' and 'BYOD Port' would move from promo_upgrade /
+# promo_port_in to promo_non_port. This report compares an EXPECTED reimbursement against a
+# received one, so that is a money change and is surfaced for the owner's decision rather
+# than ridden in on an unrelated PR. Tracked in index §59 "known second copy".
+def _promo_type(contract_type, line_rules=None):
+    ct = (contract_type or "").strip()
+    ctl = ct.lower()
     if not ct:
         return None
-    if "upgrade" in ct:
+    if "upgrade" in ctl:
         return "promo_upgrade"
-    if "add a line" in ct or ct == "aal" or ct.endswith(" aal"):
+    if _lc.is_add_a_line({"contract_type": ct}, line_rules):
         return "promo_aal"
-    if "port" in ct:                 # port-in: new line, number ported
+    if "port" in ctl:                # port-in: new line, number ported
         return "promo_port_in"
     return "promo_non_port"          # plain Activation / non-ported new line / BYOD
 
@@ -2239,6 +2256,19 @@ def _effective_promos(entries, acquired_date):
 def _compute_hotsheet_recon(client, org_id, store="", market="", month=None, year=None, tolerance=1.0):
     hs = _hotsheet_lookup(client, org_id)
     hotsheet_loaded = bool(hs)
+    # THE ORG'S activation-type rules, resolved ONCE for the whole recon and threaded into
+    # `_promo_type` below. Dereferencing `line_class.is_add_a_line` while passing it no rules would be
+    # a nominal fix only — the home would answer with the HOUSE words and a tenant whose POS carries
+    # the fact in its category path would be no better served than by the bare substring this
+    # replaced. That half-measure is the §19.18 trap (a registry written but not wired), so the rules
+    # are read here. Lazy import: commcalc.router is heavy and importing it at module scope would
+    # couple the two routers. Adaptive like every other config reader — a failure degrades to the
+    # house words and never raises, which is exactly today's behaviour.
+    try:
+        from app.modules.commcalc.router import _accessory_config, _line_rules_of
+        _line_rules = _line_rules_of(_accessory_config(client, org_id))
+    except Exception:
+        _line_rules = None
     rows = _fetch_asset_rows(
         client, org_id, store=store, market=market,
         select=("store,market,esn_imei,phone_number,device_model,contract_type,"
@@ -2298,7 +2328,7 @@ def _compute_hotsheet_recon(client, org_id, store="", market="", month=None, yea
             continue
 
         ct = (r.get("contract_type") or "").strip()
-        ptype = _promo_type(ct)
+        ptype = _promo_type(ct, _line_rules)
         actual = float(r.get("reimbursement") or 0)
         model = r.get("device_model") or ""
         nm = _norm_model(model)

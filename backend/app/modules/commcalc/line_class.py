@@ -188,6 +188,26 @@ HOUSE_NEW_ACTIVATION = {"classes": ["activation", "port", "byod"], "exclusions":
 NEW_ACTIVATION_SENTENCE = ("new activations = the Executive MTD Total Activation less Upgrade "
                            "(activation + port + BYOD), less any unit excluded by kind")
 
+# ── THE ADD-A-LINE MODIFIER (owner 2026-10-08, index §59) — "the next columns will be aal" ─────────
+# An add-a-line is NOT a sixth class: it is a MODIFIER on one. Every measured AAL value already names
+# its class too ('Activation AAL' is an activation, 'BYOD Port AAL' is a byod, 'Eligible Port-In Add A
+# Line' is a port), which is why the house `activation` tokens have carried ' aal' / 'add a line' since
+# the beginning — an AAL has always counted as the activation it is. This adds the SECOND question
+# ("…and was it an add-a-line?") without moving a single class, so no count anywhere changes.
+#
+# ONE HOME, and the copy it replaces. `asset/router._promo_type` carried the ONLY other answer to this
+# question — `"add a line" in ct or ct == "aal" or ct.endswith(" aal")`, a bare `contract_type`
+# substring, invisible to a tenant whose POS carries the fact in the category path. That is the same
+# class `exclusion_class` fixed for 'swap' (above), in the same file, and it is fixed the same way:
+# matched by CONTAINS over the SAME configured `fields` the class predicate reads, with the vocabulary
+# as config (RULE TWO) under `activation_details_rules.add_a_line`.
+#
+# PRECISION OF THE HOUSE WORDS, measured 2026-10-08 over ALL 34 non-blank `contract_type` values live
+# on the platform (daily_sales_feed + raw_sales): 'aal' names exactly the 8 values that end in AAL and
+# NOTHING else; 'add a line' / 'add-a-line' name the other 8 (including the 3 'Add a Line' spellings).
+# 16 of 34 values are an add-a-line and the predicate finds all 16 with no false positive. Pinned.
+HOUSE_ADD_A_LINE = ["add a line", "add-a-line", "aal"]
+
 
 # ── THE DEVICE DIMENSION (owner 2026-09-28, index §6n) — WHAT an activation event activated ───────
 # Owner, verbatim: *"need to add tablets and watches as a fix and a different commission for those, tablet
@@ -301,6 +321,14 @@ def resolve_exclusions(raw=None):
     nothing), because "we have no word for a swap" is a real answer. Unknown kinds are dropped. PURE."""
     raw = raw if isinstance(raw, dict) else {}
     return {k: _norm_tokens(raw.get(k), HOUSE_EXCLUSIONS[k]) for k in EXCLUSION_KINDS}
+
+
+def resolve_add_a_line(raw=None):
+    """The org's ADD-A-LINE vocabulary (`activation_details_rules.add_a_line`) → [tokens]. Missing /
+    junk → the house words. An explicitly EMPTY list is honoured ("our POS does not say" is a real
+    answer, and the report then says the column cannot be answered rather than printing a false zero).
+    PURE."""
+    return _norm_tokens(raw, HOUSE_ADD_A_LINE)
 
 
 def resolve_new_activation(raw=None):
@@ -450,6 +478,7 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None, device_rules=No
     mhints_raw = raw.get("metric_hints") if isinstance(raw.get("metric_hints"), dict) else {}
     declared = {"fields": isinstance(raw.get("fields"), (list, tuple)) and bool(raw.get("fields")),
                 "tokens": bool(tokens_raw), "exact": bool(exact),
+                "add_a_line": isinstance(raw.get("add_a_line"), (list, tuple)),
                 "devices": bool(isinstance(raw.get("devices"), dict) and raw["devices"].get("enabled"))}
     return {
         "fields": fields,
@@ -465,6 +494,9 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None, device_rules=No
         # recognises an excluded unit, and which classes / exclusions make the count.
         "exclusions": resolve_exclusions(raw.get("exclusions")),
         "new_activation": resolve_new_activation(raw.get("new_activation")),
+        # THE ONE HOME for "is this an add-a-line" (owner 2026-10-08) — a MODIFIER on the class, never
+        # a class of its own; `declared` below reports whether the tenant authored the words.
+        "add_a_line": resolve_add_a_line(raw.get("add_a_line")),
         # THE DEVICE DIMENSION (owner 2026-09-28) — house: no words, no dimension (the pin).
         "devices": resolve_devices(raw.get("devices"), device_rules, catalog_cat_of),
         "declared": declared,
@@ -754,6 +786,46 @@ def exclusion_kinds(row, rules=None):
     texts = _texts(row, r)
     words = r.get("exclusions") or HOUSE_EXCLUSIONS
     return tuple(k for k in EXCLUSION_KINDS if _hit(words.get(k) or [], texts))
+
+
+def is_add_a_line(row, rules=None):
+    """Is ONE sale line an add-a-line? Read by CONTAINS over the SAME configured `fields` the class
+    predicate reads, over the org's `add_a_line` words. PURE, never raises.
+
+    ONE HOME — see HOUSE_ADD_A_LINE above for the copy this replaces and why the house words are exact.
+    This says nothing about the line's CLASS: an AAL is still the activation / port / byod it is, and
+    `activation_class` is untouched by this function's existence."""
+    r = rules or HOUSE_RULES
+    # `or` would be wrong here: an explicitly EMPTY vocabulary is a real answer ("our POS does not
+    # say"), and falling back to the house words on it would make the column report add-a-lines the
+    # tenant has declared it cannot see. Absent key → house; present-and-empty → matches nothing.
+    toks = r["add_a_line"] if "add_a_line" in r else HOUSE_ADD_A_LINE
+    return _hit(toks, _texts(row, r))
+
+
+def add_a_line_configured(rules=None):
+    """Does this org have ANY word for an add-a-line? False = the column cannot be answered for it, and
+    a report must say so rather than print a 0 (an explicitly emptied list is a real answer). PURE."""
+    return bool((rules or HOUSE_RULES).get("add_a_line"))
+
+
+def add_a_line_units(rows, rules=None, skip=None, txn_field="trans_id"):
+    """DISTINCT transactions carrying an add-a-line line over `rows` (after `skip(row)`). The same
+    transaction grain every other box count on a peer / sales report uses — a 3-line AAL receipt is one
+    add-a-line sale, not three. PURE.
+
+    Returns {'transactions': n, 'lines': n, 'configured': bool}."""
+    r = rules or HOUSE_RULES
+    txns, lines = set(), 0
+    for i, row in enumerate(rows or []):
+        if skip is not None and skip(row):
+            continue
+        if not is_add_a_line(row, r):
+            continue
+        lines += 1
+        tid = str((row or {}).get(txn_field) or "").strip() or f"_row{i}"
+        txns.add(tid)
+    return {"transactions": len(txns), "lines": lines, "configured": add_a_line_configured(r)}
 
 
 def new_activation_units(rows, rules=None, skip=None, txn_of=None, unit=None, require_txn=True,

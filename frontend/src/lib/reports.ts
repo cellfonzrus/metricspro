@@ -22,6 +22,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/coaching', label: 'Rep Coaching', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Retention Analysis', module: 'commissions', scopes: ['all', 'market', 'store'], desc: '3-month retention by rep/store — cohort retained vs churned, driven by whether the month-3 residual was paid' },
     { href: '/commcalc/sales-comparison', label: 'Sales Comparison', module: 'commissions', desc: 'Month-over-month / year-over-year % change per item sold (phones, BYOD, accessories, tablets, financing) across all stores' },
+    { href: '/commcalc/peer-comparison', label: 'Peer Sales Comparison', module: 'commissions', scopes: ['all', 'market'], desc: 'Stores grouped by bill-payment volume — the measure of people through the door — then compared on total boxes (with the new / port / BYOD / upgrade / swap / tablet split), add-a-line, family plan %, accessory $ and accessory $ per box. Within a band the footfall is the same, so a gap is sell-through rather than location; each store is scored against its own band median and best.' },
     { href: '/commcalc/comp-trend', label: 'Total Compensation', module: 'commissions', scopes: ['all', 'market'] },
     // DM GATE — mirrors the rbac.ts NAV row 1:1 (owner directive 2026-08-07). This catalog is the
     // SECOND door to the same page (Report Center /reports + the employee portal), and clearedFor()
