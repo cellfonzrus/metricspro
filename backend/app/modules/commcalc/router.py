@@ -11424,8 +11424,9 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
     months = sorted(_months)
     #    Coverage is only ever CONSULTED for a store-month where the statement has rows (every other
     #    row is already `carrier_statement_absent` before the floor rule is reached), so the
-    #    per-line feed is read through the SAME period filter as the statement — narrowed, this is
-    #    ~1,700 rows for one month where the unnarrowed read is 245,195 and 246 round trips. A
+    #    per-line feed is read through the SAME period filter as the statement — measured live
+    #    2026-10-08, that is 21,943 rows for September 2026 where the unnarrowed read is 245,195 rows
+    #    and ~246 round trips (and 1,723 rows for October, the shortest month on file). A
     #    claim-only month therefore gets no coverage entry, which the pure module treats as UNKNOWN
     #    and never as complete, so narrowing can only ever withhold a finding, never invent one.
     detail = _read("raw_payment_detail", "payment_date")
