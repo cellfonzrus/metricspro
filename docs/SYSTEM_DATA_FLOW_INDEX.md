@@ -1637,7 +1637,7 @@ resolution of "which expense rows are labour this statement already books from i
 - **RULE TWO is intact.** These names are the PLATFORM'S shipped defaults, not tenant vocabulary — the platform
   writes them and auto-fills them, so the platform must know not to count them twice. No `if org ==`, no carrier
   / tenant / company name, and a non-empty tenant list still **wins wholesale** (never merged — merging would
-  move a configured tenant's statements unasked). `labour_vocabulary_mode='off'` (mig `1063`) is the per-org
+  move a configured tenant's statements unasked). `labour_vocabulary_mode='off'` (mig `1061`) is the per-org
   opt-out and reproduces the pre-2026-10-07 behaviour exactly.
 - **The third copy is gone.** The same fact lived in THREE unwired places: the frontend `DEFAULT_CATS`, each
   tenant's `account_config`, and `commcalc/router._EXPENSE_APPLY_DEFAULT_TOKENS = ['commission','salary',
@@ -6202,7 +6202,7 @@ rendering the resolved name.
 
 ## 16. Cross-reference: by TABLE
 
-- `commcalc.account_config.labour_vocabulary_mode` (mig `1063`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
+- `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
 
