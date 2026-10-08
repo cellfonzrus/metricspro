@@ -162,14 +162,20 @@ def rule_suppression_derived(be):
 GUARDED_SITES = (
     "add_comm(_line, (_mi_sf_index.get(_sf) if _sf else None), _amt)",
     "add_comm(_line, _ma_store(_acct), _amt, detail_label=_dlabel)",
-    "add_comm(_line, None, _amt)", 'add_comm("carrier_comm", _norm_store(r.get("business_address"))',
+    "add_comm(_line, None, _amt)",
+    # §58 (owner 2026-10-08) gave the carrier dollar's classification ONE home, so the comp-report
+    # site no longer spells its P&L line: the line comes from `carrier_dollar_class.component_line`
+    # and rides in as `_line`. Same move as mig 1033 above — the rule this protects, "a
+    # commission-FEED dollar reaches the ledger-aware adder, never the plain one", is unchanged and
+    # is still checked here, on the new spelling.
+    'add_comm(_line, _norm_store(r.get("business_address"))',
     'add_comm("carrier_comm", st, safe_float(r.get("commission_amount"))', "add_comm(_reb_line, st, _reb_sign",
 )
 UNGUARDED_SPELLINGS = (
     # the residual lines must never book through the plain adder, however they are spelled
     'add("mi_income"', 'add("atu_income"', "add(_line, (_mi_sf_index",
     "add(_line, _ma_store(", "add(_line, None, _amt)",
-    'add("carrier_comm"', "add(_reb_line",
+    'add("carrier_comm"', 'add(_line, _norm_store(r.get("business_address"))', "add(_reb_line",
 )
 
 
@@ -244,7 +250,7 @@ def main():
     ok, d = rule_registered(files);         check("(g) registered: migration file (surfaced, REVERT), index names the column and this lock, CI runs it", ok, d)
 
     print("\n(h) NEGATIVE CONTROLS — each rule must go RED on a broken source")
-    b2 = dict(be); b2[COA] = be[COA].replace('add_comm("carrier_comm", _norm_store(r.get("business_address"))', 'add("carrier_comm", _norm_store(r.get("business_address"))')
+    b2 = dict(be); b2[COA] = be[COA].replace('add_comm(_line, _norm_store(r.get("business_address"))', 'add(_line, _norm_store(r.get("business_address"))')
     check("h1 the comp-report site back on add( → (d) RED", not rule_guarded_adder(b2)[0])
     b2 = dict(be); b2[LP] = be[LP] + '\nLINE_MAP = {"commission": "carrier_comm"}\n'
     check("h2 a literal bucket → line map in ledger_pnl → (b) RED", not rule_booking_dereferences(b2)[0])

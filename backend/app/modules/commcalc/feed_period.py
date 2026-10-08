@@ -47,7 +47,8 @@ PERIOD_FORMAT = "%B %Y"
 
 __all__ = ["period_of_day", "period_label", "month_spread", "day_values", "day_stamp",
            "DayStampResult", "OPEN", "CLOSED", "UNKNOWN", "period_month_year",
-           "month_state", "archive_due"]
+           "month_state", "archive_due", "month_days",
+           "END_EXCLUSIVE", "END_INCLUSIVE", "END_BOUNDARY_DEFAULT", "request_window"]
 
 
 def period_label(month, year):
@@ -250,3 +251,102 @@ def archive_due(period, today=None):
     UNKNOWN is NOT due — an unparseable period may not be asserted either way.
     """
     return month_state(period, today) == CLOSED
+
+
+# ── WHAT WINDOW DO I ASK A SOURCE FOR, SO THE LAST DAY ACTUALLY ARRIVES? ─────────────────────────
+# THE CLASS (owner 2026-10-08: *"why is the last day of the month missing and we need to build a fix
+# for it"*). A window's END BOUNDARY is an assumption about SOMEBODY ELSE'S system, and a feed pulled
+# over a window can be short its final day without anything saying so. The instance was the carrier's
+# compensation statement: `commcalc.raw_comp_report` stops exactly one day short of every month, with
+# no exception, re-measured live read-only on the house org 2026-10-08 —
+#
+#   March 03-01…03-30 (03-31 missing, $15,361.59 / 436 rows present in the payment detail) · April
+#   04-01…04-29 (04-30, $23,050.60 / 2,746) · May 05-01…05-30 (05-31, $16,101.89 / 627) · June
+#   06-01…06-29 (06-30, $12,835.05 / 470) · July 07-01…07-30 (07-31, $17,096.33 / 565) · August
+#   08-01…08-30 (08-31, $16,628.09 / 702) · September 09-01…09-29 (09-30, $10,875.67 / 495) —
+#   $111,949.22 in all, and October, PULLED on 2026-10-03, stops at 10-02.
+#
+# Read the shape precisely: 31-day months stop at the 30th, 30-day months at the 29th, and the month
+# pulled mid-flight stops the day before the pull. That is not a late posting (August and September
+# were pulled five weeks and three days after those days posted and still stopped short), not our
+# trailing window (`_recent_days(n)` ends TODAY, inclusive, which cannot produce it), and not our
+# sweep at all (the comp leg has never once succeeded — every stored row arrived through the manual
+# upload path, a human exporting a Start/End range). It is an END DATE BEING TREATED AS EXCLUSIVE by
+# the source, every single time, including when the window end was the pull date rather than a month
+# end. For the days both feeds DO cover they agree to the penny: August 1–30 is $523,093.67 on both
+# sides, and October's two shared days are $15,460.69 = $15,460.69. Same money; a day in one and not
+# the other is a feed that arrived incomplete.
+#
+# WE CANNOT CHANGE SOMEBODY ELSE'S PORTAL. What we can do is ask for a window that cannot lose the day
+# we intend to cover, in ONE place, and say WHY — which is this function. A caller states the days it
+# INTENDS (`covers_through`); this returns the boundary to put in the widget. No caller adds a day of
+# its own: a `+1` scattered through callers is how the assumption gets made twice and corrected once.
+#
+# RULE TWO — the boundary is CONFIG, not a branch. `end_boundary` comes from the per-report row
+# (`commcalc.report_definitions`, like `arrears_days` / `refresh_days` / `sweep_hour` already do), with
+# the HOUSE DEFAULT below, so a tenant whose source honours an inclusive end overrides a row instead of
+# anybody editing code. The default is `exclusive` because that is what every month of real data shows.
+END_EXCLUSIVE = "exclusive"   # the source returns days STRICTLY BEFORE the end date it was given
+END_INCLUSIVE = "inclusive"   # the source returns the end date itself
+END_BOUNDARY_DEFAULT = END_EXCLUSIVE
+
+
+def request_window(begin, covers_through, end_boundary=None):
+    """PURE: the window to ASK a source for, so that `begin … covers_through` really arrives.
+
+    Returns {begin, end, covers_through, end_boundary, widened}: `end` is what the caller puts in the
+    source's End Date, `covers_through` is the last day it INTENDS to receive. Under an end-exclusive
+    source `end` is one day later and `widened` is True; under an inclusive one they are equal and
+    nothing moves.
+
+    An unreadable end date is returned untouched with `widened` False — a window we cannot parse is a
+    window we must not silently move; guessing here would hide the bigger problem.
+
+    NO CLOCK, deliberately, and not even a `datetime` import: this is date ARITHMETIC on the day the
+    caller named. The module's one clock stays confined to `month_state`, where it is injected
+    (harness_feed_day_grain.py §H2a), and the next-day step below uses the `calendar` this module
+    already reads rather than opening a second door to "today".
+    """
+    boundary = str(end_boundary or "").strip().lower() or END_BOUNDARY_DEFAULT
+    if boundary not in (END_EXCLUSIVE, END_INCLUSIVE):
+        boundary = END_BOUNDARY_DEFAULT
+    out = {"begin": begin, "end": covers_through, "covers_through": covers_through,
+           "end_boundary": boundary, "widened": False}
+    if boundary != END_EXCLUSIVE:
+        return out
+    nxt = _next_day(covers_through)
+    if nxt is None:
+        return out
+    out["end"] = nxt
+    out["widened"] = True
+    return out
+
+
+def _next_day(iso):
+    """PURE: the ISO day after `iso`, or None when it cannot be read. Calendar arithmetic only."""
+    s = str(iso or "")[:10]
+    parts = s.split("-")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    y, m, d = (int(p) for p in parts)
+    if not (1 <= m <= 12) or not (1 <= d <= calendar.monthrange(y, m)[1]):
+        return None
+    if d < calendar.monthrange(y, m)[1]:
+        return f"{y:04d}-{m:02d}-{d + 1:02d}"
+    if m < 12:
+        return f"{y:04d}-{m + 1:02d}-01"
+    return f"{y + 1:04d}-01-01"
+
+
+def month_days(period):
+    """PURE: every calendar day of a month-period as ISO strings, oldest first; [] when the period is
+    not a month.
+
+    THE set a CLOSED month's completeness is judged against: a month whose statement does not cover
+    every one of these days is not a finished month, however many days it does carry.
+    """
+    mo, yr = period_month_year(period)
+    if not mo or not yr:
+        return []
+    n = calendar.monthrange(yr, mo)[1]
+    return [f"{yr:04d}-{mo:02d}-{d:02d}" for d in range(1, n + 1)]

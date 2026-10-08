@@ -508,6 +508,17 @@ on:
       - "backend/harness_pay_feed_balance.py"
       - "backend/app/modules/core/feed_read.py"
       - "backend/app/modules/commcalc/pay_data_quality.py"
+      # index §19.54 — a window's end boundary is somebody else's assumption, and a month that is a
+      # day short is not a finished month. The lock reads the boundary home, the coverage verdict,
+      # the sweep that asks for the window, the upload handler's day-keyed derivation and the three
+      # frontend files that render what an upload replaces, so a change to any of them must run it.
+      - "backend/harness_statement_month_coverage.py"
+      - "backend/app/modules/commcalc/feed_period.py"
+      - "backend/app/modules/commcalc/epay_sweep.py"
+      - "backend/app/modules/commcalc/data_lineage_registry.py"
+      - "frontend/src/app/(platform)/commcalc/_lib/uploadRoutes.ts"
+      - "frontend/src/app/(platform)/commcalc/upload/page.tsx"
+      - "frontend/src/lib/report-kinds.ts"
       # index §19.51 — an instalment's month of life comes from the ROW'S OWN anchor, never the
       # lookback window's edge. The lock reads the one home, BOTH multi-month engines, the router's
       # notice channel and migration 1059, so a change to any of them must run it.
@@ -520,6 +531,13 @@ on:
       - "backend/app/modules/commcalc/flag_registry.py"
       - "backend/app/modules/commcalc/pay_data_quality.py"
       - "database/migrations/1063_device_reimb_recon_config.sql"
+      # index §58 — "is this carrier dollar commission or a reimbursement?" has ONE home, and the
+      # org's OWN payment_categories declaration beats the generic keyword ladder. The lock reads
+      # the home, BOTH callers (the P&L carrier block and the payment-detail recon), the module
+      # graph and the index, so a change to any of them must run it.
+      - "backend/harness_carrier_dollar_class.py"
+      - "backend/app/modules/commcalc/carrier_dollar_class.py"
+      - "backend/app/modules/commcalc/carrier_map.py"
       - "backend/harness_installment_month_anchor.py"
       - "backend/app/modules/commcalc/installment_month.py"
       - "backend/app/modules/commcalc/installment_engine.py"
@@ -820,6 +838,9 @@ jobs:
       - name: Run the pay-feed balance lock (every dollar the carrier paid is PLACED in a pay bucket or REPORTED unplaced with a reason; a feed read carries NO literal row ceiling and raises rather than returning a short list; two feeds for the same money must cover the same days — owner 2026-10-06, index §19.48)
         working-directory: backend
         run: python3 harness_pay_feed_balance.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the statement month-end coverage lock (the window we ASK for has one home and cannot lose its last day; a CLOSED month whose statement misses a day is reported incomplete, named and priced; the shipped day-coverage question is dereferenced, not re-derived; what an upload REPLACES is the registry's answer on every surface — owner 2026-10-08, index §19.54)
+        working-directory: backend
+        run: python3 harness_statement_month_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the earned-crosscheck lock (a statement's crosscheck verdict is COMPUTED, never defaulted; `not_measured` is never a pass; both statement writers dereference the one resolver — owner 2026-10-06, index §19.49)
         working-directory: backend
         run: python3 harness_statement_crosscheck_earned.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -832,6 +853,9 @@ jobs:
       - name: Run the instalment-month anchor lock (which month of a multi-month curve a row is in comes from the ROW'S OWN activation date, never the lookback window's edge; both multi-month engines share one home for the arithmetic; an unanchored month, an unresolved schedule, a raised engine and an incomplete ledger write are all REPORTED rather than read as $0.00 — index §19.51)
         working-directory: backend
         run: python3 harness_installment_month_anchor.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the carrier-dollar classification lock (a carrier dollar's component has ONE home; the org's own payment_categories declaration beats the generic keyword ladder, a period-renamed twin is used but LABELLED as an inference, an undeclared type is reported and never guessed, and the distributor's reimbursement claim is held rather than booked as a second receipt — owner 2026-10-08, index §58)
+        working-directory: backend
+        run: python3 harness_carrier_dollar_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
         working-directory: backend
         run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

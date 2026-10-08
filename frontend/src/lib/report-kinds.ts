@@ -41,6 +41,10 @@ export type ReportKindsPayload = {
   all_keys: { key: string; label: string; applies_to_pos: string[]; applies_to_carrier: string[] }[]
   /** the ONE consumers map, per landing table (landing_identity.CONSUMERS) — for a surface that knows a table, not a kind */
   consumers?: Record<string, Consumer[]>
+  /** the upload route keys whose landing table is DAY grain, so a one-day file replaces only that day
+   *  (data_lineage_registry.day_keyed_file_types — the same derivation the upload handler replaces by).
+   *  Read it through uploadModeFor; never keep a list of feed names in a page (owner 2026-10-08). */
+  day_keyed_uploads?: string[]
 }
 
 /**
@@ -194,6 +198,9 @@ export function useReportKinds() {
   return {
     payload, loaded, error, reload, visible, uploadTypes, forSurface, allows, labelFor, byKey, feedFor, showsIn, feedsFor,
     consumers: payload?.consumers || {},
+    // null until the registry answers — a surface must not claim day-grain it has not been told
+    // (uploadModeFor keeps the route's shipped mode while this is null).
+    dayKeyedUploads: payload ? (payload.day_keyed_uploads || []) : null,
     declaration: payload?.declaration || null,
     filenameRules: payload?.filename_rules || [],
     standard: payload?.standard || null,

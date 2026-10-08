@@ -56,6 +56,20 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_drr',),
         },
     },
+    'carrier_dollar_component': {
+        "question": 'Is this carrier dollar a commission, a spiff, a residual or a reimbursement — '
+                    'and is that the ORG\'S OWN declaration or a guess the platform made?',
+        "homes": ('app/modules/commcalc/carrier_dollar_class.py',),
+        "index": ('58',),
+        "locks": ('harness_carrier_dollar_class.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed. `--bless` silently deleted 11 of 12
+        # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
+        # real import graph rather than regenerating it.
+        "callers": {
+            'app/modules/account/coa.py': ('_cdc',),
+            'app/modules/commcalc/router.py': ('_cdc',),
+        },
+    },
     'installment_month_of_life': {
         "question": 'Which instalment month is this subscriber or sale in, and is that month PROVEN '
                     'by the row or assumed from the window the reader pulled?',
@@ -193,15 +207,28 @@ FACTS: dict[str, dict] = {
         },
     },
     'month_archive_due': {
-        "question": "Has this month closed, so is its month-end archive due — and may a live feed be "
-                    "compared against that archive at all?",
+        # §19.54 widened this ONE question rather than standing up a second home for the same
+        # subject: "which days and months is this feed's window actually about" covers both when a
+        # month has CLOSED (so its archive is due and may be compared) and which days that closed
+        # month is OWED — plus the window a pull must ASK for so its last day arrives at all
+        # (`request_window`, `month_days`). A second module for the boundary would have been a
+        # second place to answer the same thing, which is the defect the graph exists to stop.
+        "question": "Which days and months is this feed's window about — has the month closed so its "
+                    "month-end archive is due and comparable, which days is a closed month owed, and "
+                    "what window must a pull ASK for so its last day actually arrives?",
         "homes": ('app/modules/commcalc/feed_period.py', 'app/modules/commcalc/sales_recon.py'),
-        "index": ('19.52',),
-        "locks": ('harness_sales_recon_basis.py', 'harness_feed_day_grain.py'),
-        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "index": ('19.52', '19.54'),
+        "locks": ('harness_sales_recon_basis.py', 'harness_feed_day_grain.py',
+                  'harness_statement_month_coverage.py'),
+        # SNAPSHOT — written BY HAND, multi-line, not blessed. `--bless` silently deleted 11 of 12
+        # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
+        # real import graph rather than regenerating it.
         "callers": {
             'app/modules/commcalc/epay_sweep.py': ('_feed_period',),
             'app/modules/commcalc/import_audit.py': ('_recon',),
+            # §19.54 — the statement-coverage verdict dereferences `month_state` for "is this month
+            # closed" and `month_days` for the calendar it is judged against; it owns neither.
+            'app/modules/commcalc/pay_data_quality.py': ('_fp',),
             'app/modules/commcalc/router.py': ('_feed_period', 'sales_recon'),
             'app/modules/notify/report_registry.py': ('SR',),
         },
@@ -375,6 +402,9 @@ FACTS: dict[str, dict] = {
             'app/modules/account/ledger_pnl.py': ('_ct',),
             'app/modules/account/ma_store_pnl.py': ('_ct',),
             'app/modules/account/residual_subs.py': ('_ct',),
+            # §58 — the carrier-dollar classification's per-org config columns (mig 1062) are
+            # PROBED, never assumed, so the code is inert until the migration is applied.
+            'app/modules/commcalc/carrier_dollar_class.py': ('_ct',),
             'app/modules/commcalc/commission_engine.py': ('_ct',),
             'app/modules/commcalc/dlar_sweep.py': ('_ct',),
             'app/modules/commcalc/expenses_effective.py': ('_ct',),
@@ -496,6 +526,9 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_payment_category_home_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
+            # §58 — the carrier-dollar COMPONENT ruling sits on top of this CATEGORY read and
+            # keeps no copy of it; §57 decides the category, §58 decides what the category means.
+            'app/modules/commcalc/carrier_dollar_class.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
             'app/modules/commcalc/router.py': ('_pcat',),
         },
@@ -531,8 +564,11 @@ FACTS: dict[str, dict] = {
         "question": 'Did this pay figure account for every dollar the carrier paid, or did it '
                     'silently drop what it could not place?',
         "homes": ('app/modules/commcalc/pay_data_quality.py',),
-        "index": ('19.48',),
-        "locks": ('harness_pay_feed_balance.py',),
+        # §19.54 — "and does this month's statement cover every day it is owed" is the same question
+        # one layer out (a dollar that never ARRIVED cannot be placed), so it lives in the same home
+        # and is locked by the new harness beside the old one.
+        "index": ('19.48', '19.54'),
+        "locks": ('harness_pay_feed_balance.py', 'harness_statement_month_coverage.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/accessory_cost_audit.py': ('_f', 'pdq'),

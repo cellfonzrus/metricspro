@@ -204,7 +204,12 @@ ok("E1 router assigns no LITERAL date-column map", not _literal_maps,
    f"hand-written map(s) found: {_literal_maps} — derive from day_keyed_date_columns()")
 _upload = _code_only(_func_src(ROUTER, "_upload_file_impl"))
 ok("E2 router DEREFERENCES the registry for the day map",
-   "day_keyed_date_columns()" in _upload)
+   # §19.54 moved the derivation itself into the registry (`day_keyed_file_types`, which is
+   # `day_keyed_date_columns()` narrowed by the caller's TABLE_MAP — proved in
+   # harness_statement_month_coverage.py §F12), because the surface that TELLS a human what an upload
+   # replaces needs the same answer and was still spelling the pre-fix list by hand. Either accessor
+   # satisfies the rule this check exists for: the handler must not carry its own map.
+   "day_keyed_date_columns()" in _upload or "day_keyed_file_types(TABLE_MAP)" in _upload)
 ok("E3 router stamps each row from its own day", "_feed_period.day_stamp(" in _upload)
 _sweep_src = _src(SWEEP)
 ok("E4 the sweep dereferences the same registry accessor",

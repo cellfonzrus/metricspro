@@ -5,7 +5,7 @@ import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
-import { MODE_UI, modeVerb, PERIOD_ROUTES, PERIODLESS, MODULE_ROUTES, LINK_ROUTES, ALL_TRACE_KEYS, type ModuleRoute } from '../_lib/uploadRoutes'
+import { MODE_UI, modeVerb, uploadModeFor, PERIOD_ROUTES, PERIODLESS, MODULE_ROUTES, LINK_ROUTES, ALL_TRACE_KEYS, type ModuleRoute } from '../_lib/uploadRoutes'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierCode } from '@/lib/rbac'
 import { useReportLabels } from '@/lib/report-labels'
@@ -388,8 +388,13 @@ export default function UploadPage() {
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {periodTiles.map(({ id, label, icon, required, desc, mode }) => {
+        {periodTiles.map(({ id, label, icon, required, desc, mode: shipped }) => {
           const status = statuses[id] || 'idle'; const msg = messages[id] || ''; const prior = lastUpload(id)
+          // WHAT THIS UPLOAD REPLACES is the REGISTRY's answer, not this file's memory of it (owner
+          // 2026-10-08: "can i just upload 1day of data, it says it will replace the whole period").
+          // A day-keyed feed replaces only the days the file covers; the page said otherwise and he
+          // stopped uploading a day he needed. One home, dereferenced — see uploadRoutes.ts.
+          const mode = uploadModeFor({ id, mode: shipped }, kinds.dayKeyedUploads)
           // "has data already" for the BUTTON wording = anything this report ever ingested (not just the
           // selected period) — a day-grain feed has no period badge at all.
           const everLanded = !!prior || !!lastData[id]?.last_at
