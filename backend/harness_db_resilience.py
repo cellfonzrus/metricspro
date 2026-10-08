@@ -958,7 +958,11 @@ _all_routes = _flatten_routes(real_app.routes)
 #     + 2  /vision/*     — health, health/run-due
 # Every one of those is a report, editor or sweep trigger that landed in its own PR with its own
 # proof; this package still adds none of them (see I0b, which is the drift-proof form).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1743"))
+# Re-pinned 1743 -> 1744 on 2026-10-08, measured against origin/main 1f033fe. The delta is ONE
+# route and it is named: GET /commcalc/peer-comparison (the Peer Sales Comparison report, index
+# §59). Verified by diffing the branch against main for route decorators — exactly one added,
+# NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1744"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
