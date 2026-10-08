@@ -35,7 +35,7 @@ encodes, in order:
      often has an identically-stemmed prior-period twin that IS declared. That twin is used — and
      `basis` says `inferred_prior_year_twin`, `inferred` is True, and `twin_of` names the row the
      inference came from. Same shape as index §19.48/§19.49/§19.51: an inferred fact never travels
-     without saying it was inferred. $1,077,227.91 of the house total is inferred, not declared.
+     without saying it was inferred. $1,078,862.83 of the house total is inferred, not declared.
   3. **THE KEYWORD LADDER IS THE FALLBACK, NEVER THE OVERRIDE.** `carrier_category_map` decides only
      for a type the org has not declared and whose stem has no declared twin.
   4. **AN UNDECLARED TYPE IS REPORTED, NEVER QUIETLY ADOPTED.** `declared` is False for every
