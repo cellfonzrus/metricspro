@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
+import { useTableSort, SortableTh } from '@/components/SortableTh'
 
 // MANAGER REPORT CARDS — owner directive 2026-10-08: "create a report card for the Dm based on all the
 // items assigned to them per store and a check off by the system if those targets were met or not, the
@@ -79,6 +80,92 @@ function Pill({ state }: { state: string }) {
   )
 }
 
+// ── CLICK-A-HEADER SORTING (owner directive 2026-08-10, "sort function by clicking on the header for
+// all reports") ───────────────────────────────────────────────────────────────────────────────────
+// Each accessor is MODULE scope on purpose: `useTableSort` memoizes on the accessor's identity, so a
+// closure defined in the component body would re-sort on every render.
+//
+// An ITEM column sorts by its CHECK-OFF STATE, not by the raw number, and ascending puts the misses
+// at the top. That is the order a DM actually needs ("what did I miss"), and the three states are not
+// comparable as numbers anyway — a 2-of-3 accessory average and a 30% conversion share no scale.
+const STATE_RANK: Record<string, number> = { missed: 0, met: 1, no_target: 2 }
+const storeCell = (r: StoreRow, f: string): any => {
+  if (f === 'store') return r.store_code
+  if (f === 'market') return r.market
+  if (f === 'score') return r.tally?.score_pct
+  const it = (r.items || []).find(i => i.key === f)
+  if (!it) return null                        // this store has no such item -> empty, sorted last
+  const rank = STATE_RANK[it.state]
+  return rank === undefined ? 3 : rank        // an unknown state sorts after the three known ones
+}
+const dmCell = (d: { name: string; stores: number; tally: Tally }, f: string): any =>
+  f === 'name' ? d.name : f === 'stores' ? d.stores : d.tally?.score_pct
+const unassignedCell = (u: { store_code: string; market: string | null; reason: string; tally: Tally }, f: string): any =>
+  f === 'store' ? u.store_code : f === 'market' ? u.market : f === 'reason' ? u.reason : u.tally?.score_pct
+
+// The per-DM table is its own component because the hook cannot be called inside the `.map` over
+// cards — and each card then keeps its OWN sort, which is what a reader expanding two cards expects.
+function DmStoreTable({ rows, items }: { rows: StoreRow[]; items: { key: string; label: string; unit: string; source: string }[] }) {
+  const { sorted, sort, toggle } = useTableSort(rows, storeCell)
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+      <thead>
+        <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
+          <SortableTh field="store" sort={sort} onSort={toggle} style={{ textAlign: 'left', padding: '7px 10px' }}>Store</SortableTh>
+          {items.map(i => (
+            <SortableTh key={i.key} field={i.key} sort={sort} onSort={toggle} title={i.source}
+                        style={{ textAlign: 'center', padding: '7px 10px', whiteSpace: 'nowrap' }}>{i.label}</SortableTh>
+          ))}
+          <SortableTh field="score" sort={sort} onSort={toggle} style={{ textAlign: 'right', padding: '7px 10px' }}>Score</SortableTh>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map(r => (
+          <tr key={r.store_code} style={{ borderTop: '1px solid var(--border)' }}>
+            <td style={{ padding: '7px 10px' }}>
+              <b>{r.store_code}</b>
+              <span style={{ color: 'var(--text3)', marginLeft: 6 }}>{r.market || ''}</span>
+            </td>
+            {r.items.map(it => (
+              <td key={it.key} title={it.detail || undefined} style={{ textAlign: 'center', padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                <Pill state={it.state} />
+                <span style={{ marginLeft: 6, color: 'var(--text3)', fontSize: 12 }}>
+                  {it.state === 'no_target' ? '' : `${fmtVal(it.achieved, it.unit)} / ${fmtVal(it.target, it.unit)}`}
+                </span>
+              </td>
+            ))}
+            <td style={{ textAlign: 'right', padding: '7px 10px' }}><Score t={r.tally} /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function MgrDmTable({ rows }: { rows: { employee_id: string; name: string; stores: number; tally: Tally }[] }) {
+  const { sorted, sort, toggle } = useTableSort(rows, dmCell)
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 10 }}>
+      <thead>
+        <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
+          <SortableTh field="name" sort={sort} onSort={toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>District manager</SortableTh>
+          <SortableTh field="stores" sort={sort} onSort={toggle} style={{ textAlign: 'right', padding: '6px 10px' }}>Stores</SortableTh>
+          <SortableTh field="score" sort={sort} onSort={toggle} style={{ textAlign: 'right', padding: '6px 10px' }}>Score</SortableTh>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map(d => (
+          <tr key={d.employee_id} style={{ borderTop: '1px solid var(--border)' }}>
+            <td style={{ padding: '6px 10px' }}>{d.name}</td>
+            <td style={{ textAlign: 'right', padding: '6px 10px' }}>{d.stores}</td>
+            <td style={{ textAlign: 'right', padding: '6px 10px' }}><Score t={d.tally} /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 export default function ManagerReportCardsPage() {
   const [period, setPeriod] = useState(thisMonth())
   const [data, setData] = useState<Resp | null>(null)
@@ -98,6 +185,9 @@ export default function ManagerReportCardsPage() {
   const dmCards = data?.dm_cards || []
   const mgrCards = data?.manager_cards || []
   const unassigned = data?.unassigned || []
+  // Unconditional: this table's rows arrive with the response, so the hook cannot sit behind the
+  // `unassigned.length > 0` guard that hides the table.
+  const uSort = useTableSort(unassigned, unassignedCell)
 
   return (
     <div style={{ padding: '18px 22px', maxWidth: 1500 }}>
@@ -155,36 +245,7 @@ export default function ManagerReportCardsPage() {
                 </button>
                 {isOpen && (
                   <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
-                          <th style={{ textAlign: 'left', padding: '7px 10px' }}>Store</th>
-                          {items.map(i => (
-                            <th key={i.key} title={i.source} style={{ textAlign: 'center', padding: '7px 10px', whiteSpace: 'nowrap' }}>{i.label}</th>
-                          ))}
-                          <th style={{ textAlign: 'right', padding: '7px 10px' }}>Score</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(c.store_rows || []).map(r => (
-                          <tr key={r.store_code} style={{ borderTop: '1px solid var(--border)' }}>
-                            <td style={{ padding: '7px 10px' }}>
-                              <b>{r.store_code}</b>
-                              <span style={{ color: 'var(--text3)', marginLeft: 6 }}>{r.market || ''}</span>
-                            </td>
-                            {r.items.map(it => (
-                              <td key={it.key} title={it.detail || undefined} style={{ textAlign: 'center', padding: '7px 10px', whiteSpace: 'nowrap' }}>
-                                <Pill state={it.state} />
-                                <span style={{ marginLeft: 6, color: 'var(--text3)', fontSize: 12 }}>
-                                  {it.state === 'no_target' ? '' : `${fmtVal(it.achieved, it.unit)} / ${fmtVal(it.target, it.unit)}`}
-                                </span>
-                              </td>
-                            ))}
-                            <td style={{ textAlign: 'right', padding: '7px 10px' }}><Score t={r.tally} /></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <DmStoreTable rows={c.store_rows || []} items={items} />
                   </div>
                 )}
               </div>
@@ -204,24 +265,7 @@ export default function ManagerReportCardsPage() {
                   </span>
                   <span style={{ marginLeft: 'auto' }}><Score t={c.tally} /></span>
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 10 }}>
-                  <thead>
-                    <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
-                      <th style={{ textAlign: 'left', padding: '6px 10px' }}>District manager</th>
-                      <th style={{ textAlign: 'right', padding: '6px 10px' }}>Stores</th>
-                      <th style={{ textAlign: 'right', padding: '6px 10px' }}>Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(c.dm_rows || []).map(d => (
-                      <tr key={d.employee_id} style={{ borderTop: '1px solid var(--border)' }}>
-                        <td style={{ padding: '6px 10px' }}>{d.name}</td>
-                        <td style={{ textAlign: 'right', padding: '6px 10px' }}>{d.stores}</td>
-                        <td style={{ textAlign: 'right', padding: '6px 10px' }}><Score t={d.tally} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <MgrDmTable rows={c.dm_rows || []} />
               </div>
             ))}
           </>}
@@ -241,14 +285,14 @@ export default function ManagerReportCardsPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
-                    <th style={{ textAlign: 'left', padding: '6px 10px' }}>Store</th>
-                    <th style={{ textAlign: 'left', padding: '6px 10px' }}>Market</th>
-                    <th style={{ textAlign: 'left', padding: '6px 10px' }}>Why</th>
-                    <th style={{ textAlign: 'right', padding: '6px 10px' }}>Score</th>
+                    <SortableTh field="store" sort={uSort.sort} onSort={uSort.toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>Store</SortableTh>
+                    <SortableTh field="market" sort={uSort.sort} onSort={uSort.toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>Market</SortableTh>
+                    <SortableTh field="reason" sort={uSort.sort} onSort={uSort.toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>Why</SortableTh>
+                    <SortableTh field="score" sort={uSort.sort} onSort={uSort.toggle} style={{ textAlign: 'right', padding: '6px 10px' }}>Score</SortableTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {unassigned.map(u => (
+                  {uSort.sorted.map(u => (
                     <tr key={u.store_code} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '6px 10px' }}><b>{u.store_code}</b></td>
                       <td style={{ padding: '6px 10px' }}>{u.market || '—'}</td>
