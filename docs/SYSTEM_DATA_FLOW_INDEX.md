@@ -20434,11 +20434,11 @@ also net into the pay engine's commission bucket with nothing on screen saying t
 Re-declaring it **moves money**, so it is the owner's ruling, not this PR's (CLAUDE.md: a defect found
 in live data is REPORTED, never "fixed" by code that hides it).
 
-**The three siblings left alone**, each because it BOOKS money off that dead bucket:
+**The siblings left alone**, each because it BOOKS money off that dead bucket:
 
 | site | what it books | why it waits |
 |---|---|---|
-| `commcalc/gp_report.py` | the per-number `chb` bucket feeding **gross profit** | money; owner ruling |
+| ~~`commcalc/gp_report.py`~~ — **no longer a category-name test** (2026-10-08, §58.7): its four category literals were deleted when the report stopped classifying carrier money; the `chb` column is now reached by the org's own DECLARED category through config (`carrier_gp_category_columns`, mig `1064`) | the per-number `chb` bucket feeding **gross profit** | STILL not on §55's direction rule, which remains a money change and the owner's ruling. Measured live Jul–Oct 2026: the house declares no chargeback category, so the column is $0.00 either way |
 | `commcalc/router.py` (`cb_items`) | `commcalc.chargeback_items`, which the **P&L chargebacks line** books | money; owner ruling |
 | `commcalc/calculator.py` | the per-login `chb` bucket in **rep pay** | money; and the commission engine is owned by the Boost commission numbers audit in flight |
 
