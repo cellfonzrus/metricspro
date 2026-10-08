@@ -1,7 +1,7 @@
 -- 1063_device_reimb_recon_config.sql
 -- ─────────────────────────────────────────────────────────────────────────────────────────────────
 -- ePAY-PAID vs DISTRIBUTOR-CLAIMED DEVICE REIMBURSEMENT — the per-org CONFIG for the reconciliation
--- and its management flag (index §19.52, owner report 2026-10-08).
+-- and its management flag (index §19.53, owner report 2026-10-08).
 --
 -- OWNER, verbatim:
 --   "i just checked the commission details for boost, the commission is over stated as the device
@@ -63,7 +63,7 @@ ALTER TABLE commcalc.commission_org_config
 
 COMMENT ON COLUMN commcalc.commission_org_config.device_reimb_recon_config IS
   'Per-org config for the ePay-paid vs distributor-claimed device-reimbursement reconciliation '
-  '(index §19.52). Keys: enabled, tolerance, carrier_sources [{component, subtype}] = WHICH '
+  '(index §19.53). Keys: enabled, tolerance, carrier_sources [{component, subtype}] = WHICH '
   'classified carrier dollars are the device-financing side (empty = nothing declared, every '
   'store-month reports not-measured rather than a $0.00 paid side), distributor_categories, '
   'distributor_statuses, columns, severity_high_at, severity_critical_at, '
