@@ -43,7 +43,7 @@ sys.path.insert(0, HERE)
 
 from app.modules.commcalc import empty_pull_verdict as V        # noqa: E402
 from app.modules.commcalc import epay_sweep as ES               # noqa: E402
-from app.modules.commcalc import feed_period as FP              # noqa: E402  (§19.53 — the one boundary home)
+from app.modules.commcalc import feed_period as FP              # noqa: E402  (§19.54 — the one boundary home)
 
 PASS = FAIL = 0
 FAILURES = []
@@ -154,7 +154,7 @@ check("B13 required_window_days falls back to the house default for junk config"
 # ── §C — THE WINDOW IS NEVER NARROWER THAN THE ARREARS ────────────────────────────────────────────
 print("\n§C  the day-grain window (the root cause of the two missing months)")
 
-# THE SPAN IS MEASURED ON THE INTENT, NOT ON THE BOUNDARY ASKED FOR (§19.53, 2026-10-08). The job now
+# THE SPAN IS MEASURED ON THE INTENT, NOT ON THE BOUNDARY ASKED FOR (§19.54, 2026-10-08). The job now
 # carries both: `covers_through` is the last day it means to receive, and `end` is what goes in the
 # source's End Date widget — one day later under an end-exclusive source, because the carrier statement
 # was short the final day of every month ($111,949.22) for exactly that reason. The arrears FLOOR is a
@@ -172,7 +172,7 @@ check("C2 THE LIVE CONFIG (refresh_days=1) can no longer produce a 1-day window"
       f"span={span} window={t['begin']}..{t['covers_through']}")
 check("C3 the window ends today and reaches back, so it can contain in-arrears data",
       len(t["days"]) == 7 and t["covers_through"] == t["days"][-1] and t["begin"] == t["days"][0])
-check("C6 and the END ASKED FOR cannot lose that last day (§19.53): under the house end-exclusive "
+check("C6 and the END ASKED FOR cannot lose that last day (§19.54): under the house end-exclusive "
       "boundary the request runs one day past the intent, and says so",
       t["end"] == FP._next_day(t["covers_through"]) and t["end_widened"] is True
       and t["end_boundary"] == FP.END_EXCLUSIVE)

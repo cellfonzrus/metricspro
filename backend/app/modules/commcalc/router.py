@@ -11315,7 +11315,7 @@ def pay_feed_balance(period: str = "", org_id: str = ORG_ID):
     And since 2026-10-08 it reports `statement_month` — whether a CLOSED month's statement covers
     every day of its own calendar, named and PRICED when it does not. The two-feed gap alone cannot
     see a day BOTH feeds lost, which is precisely what an end-exclusive pull window produces
-    (index §19.53).
+    (index §19.54).
     """
     require_org(org_id)
     client = sb()
