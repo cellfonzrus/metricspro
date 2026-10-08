@@ -6230,7 +6230,9 @@ rendering the resolved name.
 | `job-run.isRunning` / `settleStatus` / `nextPollDelay` / `buttonState` (code) — **is this background job running, and may its control be pressed.** The ONE vocabulary of server words that mean "in flight", the ONE rule that a status read older than the press cannot downgrade it, the ONE bounded poll schedule, and the ONE derivation of a control's label/disabled/badge | code | `commcalc/page.tsx` (⚡ Run Calculation), `closing/imports/page.tsx` + `commcalc/connectors/page.tsx` (Run now), `commcalc/_lib/AutoCalcNotice.tsx`; backend companion `commcalc.router._calc_status_pick` + `CALC_RUNNING_STATES` (the one cross-language copy, pinned by G12); lock `frontend/prove_job_run.mjs` (87) — §6q |
 | `core/feed_read.read_all` / `PAGE` / `MAX_PAGES` / `IncompleteRead` (code) — **"give me ALL of this feed": one paged read with NO limit parameter and no default cap, so a row count is a property of the DATA and never of a literal.** A failed read RAISES rather than returning a short list | code | `commcalc.router` input loader (`fetch`), `_compute_gp` (payment detail + comp report), the three period-rollup reads, the ePay-split read, the two unnarrowed `raw_sales` reads, the three comp-report reads; lock `harness_pay_feed_balance.py` §G (107) — §19.48 |
 | `commcalc/installment_month` — `resolve_month` / `month_span` / `in_schedule` / `horizon` / `period_index` / `index_of_date` / `BasisTally` / `BASIS_ACTIVATION`·`BASIS_ORIGIN_PERIOD`·`BASIS_WINDOW_EDGE` (code) — **"which instalment month is this row in, and is that month PROVEN by the row or assumed from the window the reader pulled": the answer never travels without its BASIS.** Pure stdlib: no DB, no clock, no carrier / tenant / product name, and it never decides WHICH column holds a date | code | `installment_engine.compute_installments` (`_im`, anchored on the row's own `mi_activation_date`) and `sale_installment_engine.compute_sale_installments` (`_im`, anchored on the row's own origin month — byte-identical to its retired inline expressions); lock `harness_installment_month_anchor.py` (151) — §19.51 |
-| `commcalc/pay_data_quality.reconcile_pay_feed` + `PLACEABLE_CATEGORIES` + `UNPLACED_REASONS` + `day_coverage_gap` (code) — **the pay feed's BALANCE: every dollar PLACED in a pay bucket or REPORTED unplaced under a named reason, with `balances` as the arithmetic proof.** Never decides what a category means — the caller hands in the org's own map (RULE TWO) | code | `commcalc.router.pay_feed_balance` (`GET /commcalc/pay-feed-balance`); the ONE statement of which buckets `calculator.pay_by_login` actually reads; lock `harness_pay_feed_balance.py` (107) — §19.48 |
+| `commcalc/pay_data_quality.reconcile_pay_feed` + `PLACEABLE_CATEGORIES` + `UNPLACED_REASONS` + `day_coverage_gap` + `statement_month_coverage` + `VERDICT_PASSED`/`VERDICT_FAILED`/`VERDICT_NOT_MEASURED` (code) — **the pay feed's BALANCE: every dollar PLACED in a pay bucket or REPORTED unplaced under a named reason, with `balances` as the arithmetic proof.** Never decides what a category means — the caller hands in the org's own map (RULE TWO) | code | `commcalc.router.pay_feed_balance` (`GET /commcalc/pay-feed-balance`); the ONE statement of which buckets `calculator.pay_by_login` actually reads; locks `harness_pay_feed_balance.py` (107) + `harness_statement_month_coverage.py` (118) — §19.48, §19.53 |
+| `commcalc/feed_period.request_window` + `END_EXCLUSIVE`/`END_INCLUSIVE`/`END_BOUNDARY_DEFAULT` + `month_days` (code) — **the window a pull must ASK for so its last day actually arrives, and the calendar a closed month is judged against.** A window's end boundary is an assumption about SOMEBODY ELSE'S system: per-report config (`report_definitions.end_boundary`) with the house default `exclusive`, which is what every month of real data shows. Pure stdlib; an unreadable end date is never silently moved | code | `epay_sweep._expand_jobs` (the ONLY caller that widens anything — `_set_daily_range` types what it is given and no caller adds a `+1`); `pay_data_quality.statement_month_coverage` reads `month_days` / `month_state`; lock `harness_statement_month_coverage.py` (118) — §19.53 |
+| `commcalc/data_lineage_registry.day_keyed_file_types(table_map)` (code) — **"what does an upload of this report REPLACE": {file_type → data-date column}, DERIVED from `day_keyed_date_columns()`.** It was an inline comprehension in the upload handler, so the only thing that knew a one-day file replaces one DAY was the handler — and the Upload page went on warning that the whole period would be cleared | code | `router._upload_file_impl` (`DATE_KEYED` IS this call) and `router.report_kinds_endpoint` (`day_keyed_uploads`, rendered by `uploadRoutes.uploadModeFor`); lock `harness_statement_month_coverage.py` §F — §19.53 |
 | `account/analysis.statement_crosscheck` / `pl_crosscheck` / `CROSSCHECK_TOLERANCE` (code) — **"was this statement checked, and did it pass?": the verdict is EARNED, tri-state (`passed`/`failed`/`not_measured`), and `ok` is None for anything that cannot be judged.** A boolean cannot tell "checked and fine" from "never checked" | code | `account/engine._persist`'s caller and `account/statement_engine` (both writers dereference it, so the stored flag and the served flag can never disagree); the P&L identity reads `pl_totals` -> `EXPENSE_SECTIONS`, never re-summing sections; lock `harness_statement_crosscheck_earned.py` (63) — §19.49 |
 | `commcalc/expenses_effective.effective_series` (code) — **what a store spent in a month, for a whole AXIS of months at once, including a month it never saved.** Dereferences `pick_carry_period` + `manual_rows`, the same two pure facts the single-period reader uses, so a series and a single month cannot drift; proved equivalent by the lock, not asserted | code | `commcalc.router.expenses_trend` (`GET /commcalc/expenses-trend`, which read the raw table and so had no October while the P&L booked $379,108.81 carried); `effective_expense_rows` for the P&L and GP report; lock `harness_expense_one_path.py` §B/§C/§E (129) — §19.50 |
 | `commcalc/labour_coverage.VERDICT_MEASURED` / `VERDICT_NOT_CONFIGURED` (code) — **did this check actually RUN, or is its clean result just an empty config?** `total_double_booked` is None when nothing was measured, so an absence cannot be summed or charted | code | `labour_coverage.commission_collisions` → the GP payload's `labour_double_booked`; the sibling `suppression_plan` already said so via `active`; lock `harness_expense_one_path.py` §A/§E (129) — §19.50. Live 2026-10-06: the house org reported $0.00 double-booked against a real $19,860.23 overlap (Jul–Sep) because its name list is empty |
@@ -6476,7 +6478,8 @@ rendering the resolved name.
 | `GET /commcalc/commissions-range?period_from=&period_to=` — the Rep Incentive report over a month range (≤ 12), one row per rep per month + month subtotals + total. READ-ONLY; each month IS `get_commissions(month)` | `router.get_commissions_range` → `account/_period.month_range` → `get_commissions` (per month, in-process) → `rep_incentive_range.assemble` | §6g |
 | `GET /commcalc/commission-explain` · the reports **🔍 Plan commission** drill (`PlanLineBreakdown`) — every plan line now carries `event_id / event_key / event_key_kind / event_type` when a rule pays per activation; the pay-gate report `pay_gate.unit.activation_events` (events, ambiguous invoices, config) | `commission_engine.preview(detail=True)` → `commission_drilldown.explain_rep`; frontend `planLines.toPlanLine` / `eventsOf` | §6f |
 | `GET/PUT /commcalc/commission-plans/pay-gate` — now also `unit_basis.auto_event_fields` (⑥ once per activation / upgrade) | `router.get_pay_gate` / put | §6f |
-| `GET /commcalc/report-kinds` — WHICH REPORT KINDS THIS TENANT MAY UPLOAD, computed never listed: `declaration` (+ reasons), `kinds` (visible, provenance per row), `hidden` (with why), `surfaces`, `upload_types`, `filename_rules` (the declared POS standard restricted to visible kinds), `standard`, `caps`, `registry_ready`. READ-ONLY, org-scoped `{org, house}` | `router.report_kinds_endpoint` → `report_kinds.load_registry` / `tenant_declaration` (THE one reader) / `_intake_caps` / `load_signatures` / `_pos_profile` → `report_kinds.payload` (`visible_kinds`) | §30.9; every upload surface renders from it through `lib/report-kinds.useReportKinds` (locked by `harness_report_kind_lock.py`). Proof `harness_report_kinds.py` §G |
+| `GET /commcalc/pay-feed-balance?period=` — EVERY DOLLAR the carrier paid, PLACED in a pay bucket or REPORTED unplaced under a named reason, with `balances` as the arithmetic proof that `placed + unplaced == feed_total` to the cent; `day_coverage` (two feeds for the same money must cover the same days); and, since §19.53, `statement_month` — whether a CLOSED month's statement covers every day of its own calendar, the missing days NAMED and PRICED, §19.49's tri-state verdict. READ-ONLY, org-scoped: books nothing, pays nobody | `router.pay_feed_balance` → `core/feed_read.read_all` + `pay_data_quality.reconcile_pay_feed` / `.day_coverage_gap` / `.statement_month_coverage` | §19.48, §19.53 |
+| `GET /commcalc/report-kinds` — WHICH REPORT KINDS THIS TENANT MAY UPLOAD, computed never listed: `declaration` (+ reasons), `kinds` (visible, provenance per row), `hidden` (with why), `surfaces`, `upload_types`, `filename_rules` (the declared POS standard restricted to visible kinds), `standard`, `caps`, `registry_ready`, and **`day_keyed_uploads`** (§19.53 — the upload route keys whose landing table is DAY grain, from `data_lineage_registry.day_keyed_file_types`, the SAME derivation `_upload_file_impl` replaces by, so what the page warns and what the write does cannot disagree; rendered through `uploadRoutes.uploadModeFor`). READ-ONLY, org-scoped `{org, house}` | `router.report_kinds_endpoint` → `report_kinds.load_registry` / `tenant_declaration` (THE one reader) / `_intake_caps` / `load_signatures` / `_pos_profile` → `report_kinds.payload` (`visible_kinds`) | §30.9; every upload surface renders from it through `lib/report-kinds.useReportKinds` (locked by `harness_report_kind_lock.py`). Proof `harness_report_kinds.py` §G |
 | `GET /commcalc/report-kinds` **`kinds[].shows_in` + `kinds[].where` + `consumers`** (§32, 2026-09-20) — per visible kind: the table its upload lands in and that table's readers (ScreenLink screen keys + the fields each needs), the page to upload it on; the ONE consumers map by table | `router.py` `report_kinds_endpoint` → `landing_identity.shows_in` / `where_to_upload` / `CONSUMERS` | every upload surface renders it through `components/ShowsIn.tsx` via `useReportKinds().showsIn(key \| upload_type)` — Upload page tiles, Upload wizard steps, Email / FTP import routes, intake 2.0 cards + 2.1 + the 2.6 result, Stage 5 runbook lines; pinned by `harness_landing_identity_lock.py` |
 | `GET /commcalc/report-kinds` **read the other way round — `lib/report-kinds.feedsForScreen(visible, screen)` / `useReportKinds().feedsFor(screen)`** (§6e, 2026-09-20): the visible kinds whose `shows_in.consumers` name a report screen, each with its `where` — the inverse of `showsInFor` over the same payload, no second link map | (frontend selector over the same endpoint; backend twin by construction = `landing_identity.feeds_for_table`) | `commcalc/_lib/CommissionWaysHeader.tsx` `ExecMtdFeeds` ("The Executive MTD counts what is uploaded as: <kind> under <page>") on the Employee Commission Structure page. Proof `frontend/prove_commission_structure_order.mjs` §C |
 | `GET /commcalc/connector-registry` — WHICH CONNECTORS APPLY TO THIS TENANT, computed never listed (§12a.2, mig `1014`): `declaration` (the same one reader as /report-kinds), `connectors` (visible, provenance), `hidden` (why), `all_keys`, `caps`, `pos` (term + declared), `neutral_line`, `registry_ready`. READ-ONLY, org-scoped `{org, house}` | `router.connector_registry_endpoint` → `connector_registry.scope_context` / `payload` (`report_kinds.visible_kinds`, `connector:` namespace) / `report_labels.pos_term` | every connector surface through `lib/connectors.useConnectors` (locked by `harness_connector_scope_lock.py`). Proof `harness_connector_registry.py` §B |
@@ -6744,7 +6747,9 @@ rendering the resolved name.
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $68,479.60 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $70,157.10 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Have I read ALL of this feed, or just the first N rows?** — a read of a growing feed carries NO literal row ceiling; a failed read raises instead of returning a short list | `core/feed_read.read_all` (no `limit=` parameter exists to pass) | every pay-path and GP-path feed read dereferences it; lock `harness_pay_feed_balance.py` §G — §19.48. Live 2026-10-06: `.limit(50000)` against July's 82,999 payment-detail rows read $60,994.46 of carrier commission where the feed holds $123,700.62, losing 12 of 122 rep logins |
-| **Do these two feeds for the SAME carrier money cover the same days?** — a month whose coverage is incomplete is not a finished month | `raw_payment_detail.payment_date` vs `raw_comp_report.begin_date` | `pay_data_quality.day_coverage_gap` → `GET /commcalc/pay-feed-balance`; §19.48. Live 2026-10-06: the statement is missing the final day of all seven closed months ($111,949.22); October has two days in both and ties to the penny |
+| **What window must a pull ASK for, so the last day it intends to cover actually arrives?** — a window's end boundary is an assumption about somebody else's system, and an end-exclusive source silently drops the end date it was given | `commcalc.report_definitions.end_boundary` per org, house default `exclusive` (RULE TWO) | ONE home `commcalc/feed_period.request_window`, dereferenced by `epay_sweep._expand_jobs`; no caller adds a day of its own; lock `harness_statement_month_coverage.py` §A/§B/§F — §19.53. Live 2026-10-08: the carrier statement stops one day short of **every** month — 31-day months at the 30th, 30-day at the 29th, and October (pulled 10-03) at the 2nd — **$111,949.22** across seven closed months |
+| **Does this month's STATEMENT cover every day the month is owed — and what is missing worth?** — a CLOSED month is judged against the CALENDAR (the only authority that does not come from a window), an OPEN month only against the days the per-line feed received; the missing days are NAMED and PRICED, and a day nothing can price is reported unpriced, never valued at $0.00 | `feed_period.month_days` × `raw_comp_report.begin_date`, priced from `raw_payment_detail.amount` | `pay_data_quality.statement_month_coverage` (which DEREFERENCES `day_coverage_gap`, never a sibling) → `GET /commcalc/pay-feed-balance`.`statement_month`; §19.49's tri-state verdict, `not_measured` when no statement day arrived at all; lock `harness_statement_month_coverage.py` (118) — §19.53. Live 2026-10-08: seven closed months each FAILED on their own final day; two feeds that AGREE are still not a finished month |
+| **Do these two feeds for the SAME carrier money cover the same days?** — a month whose coverage is incomplete is not a finished month | `raw_payment_detail.payment_date` vs `raw_comp_report.begin_date` | `pay_data_quality.day_coverage_gap` → `GET /commcalc/pay-feed-balance`; §19.48. Live 2026-10-06, re-verified 2026-10-08: the statement is missing the final day of all seven closed months ($111,949.22); October has two days in both and ties to the penny, and August 1-30 is $523,093.67 on both sides. ⚠ This question alone is BLIND to a day BOTH feeds lost — that is `statement_month_coverage`'s calendar question above (§19.53) |
 | **Which month of a multi-month curve is this subscriber / sale in — and is that month PROVEN?** — the ROW'S OWN anchor (`mi_activation_date`, or the row's own origin month), never the oldest month the reader happened to pull; the basis is reported with every row (`activation_date` / `origin_period` / `window_edge`) and an unanchored row is counted AND priced, never absorbed | `commcalc.raw_mi.mi_activation_date` per subscriber; the sale path's own `sale_period` | ONE home `commcalc/installment_month.resolve_month` (+ `in_schedule` / `horizon`), dereferenced by BOTH multi-month engines; `month_basis` on the ledger row and `month_basis.unanchored_amount` on the result; lock `harness_installment_month_anchor.py` (151) — §19.51. Live 2026-10-06: the window-edge derivation put **16,757 rows / $119,887.50 of $177,462.50** at month 6 of a 6-month curve, payable again every month, and disagreed with the rows' own activation date on **11,780 of 15,337 (76.8%)** anchored subscribers |
 | **Did the multi-month residual engine actually pay nothing, or could it not place anything?** — an unresolved schedule, an unanchored month, payout naming no rep and an incomplete ledger write are each REPORTED with their counts and dollars; a raised engine is a CRITICAL notice, never a $0.00 | the org's own `payout_schedule` rows (RULE TWO) × what the feed stamps on its rows | `installment_engine`'s `unresolved_schedule` / `month_basis` / `totals.amount_no_rep` / `persisted` → `router._apply_new_engines` notices (the SAME channel the sale engine has used since mig 245/247); lock `harness_installment_month_anchor.py` §I/§J — §19.51. Live 2026-10-06: `residual_installment_comm` is **$0.00 across all 571 rep_commissions rows** and `subscriber_installments` is **empty**, because `raw_mi.carrier_id` is NULL on **326,051/326,051** rows while all 14 active schedules name a carrier that is not in this org's `carrier` table |
 | **Was this statement actually crosschecked, and did it pass?** — `passed` / `failed` / `not_measured`; an absence is never a pass | the statement payload's own sections (P&L: `gross_profit == revenue − cogs` and `net_income == gross_profit − expenses`), `balanced` for a balance sheet, `tied` for a cash flow | `analysis.statement_crosscheck` → the stored `account_statements.crosscheck_ok` and the flag `account/router` serves; lock `harness_statement_crosscheck_earned.py` (63) — §19.49. Live 2026-10-06: all **329** stored P&L snapshots pass at a **$0.00** total gap (the arithmetic is SOUND, proven not assumed), while the flag had been an unconditional `True` that checked nothing; `balance_sheet` fails 327/329 and `cash_flow` 159/166, both already surfaced by the Journal note |
@@ -6929,6 +6934,142 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.53 **A WINDOW'S END BOUNDARY IS SOMEBODY ELSE'S ASSUMPTION, AND A MONTH THAT IS A DAY SHORT IS NOT
+A FINISHED MONTH — the carrier statement missing the last day of every month** (owner 2026-10-08:
+*"why is the last day of the month missing and we need to build a fix for it"*; and, same subject,
+*"also can i just upload 1day of data, it says it will replace the whole period"*).
+
+**MEASURED LIVE, read-only through the REST API, house org, re-verified 2026-10-08.**
+`commcalc.raw_comp_report` — the carrier's own compensation statement, the feed the P&L's "Carrier
+commissions & incentives" line reads — stops **exactly one day short of every month, with no
+exception**, while `raw_payment_detail` holds that day's money:
+
+| period | statement covers | missing day | in `raw_payment_detail` | rows |
+|---|---|---|---|---|
+| March 2026 | 03-01 … 03-30 | 03-31 | $15,361.59 | 436 |
+| April 2026 | 04-01 … 04-29 | 04-30 | $23,050.60 | 2,746 |
+| May 2026 | 05-01 … 05-30 | 05-31 | $16,101.89 | 627 |
+| June 2026 | 06-01 … 06-29 | 06-30 | $12,835.05 | 470 |
+| July 2026 | 07-01 … 07-30 | 07-31 | $17,096.33 | 565 |
+| August 2026 | 08-01 … 08-30 | 08-31 | $16,628.09 | 702 |
+| September 2026 | 09-01 … 09-29 | 09-30 | $10,875.67 | 495 |
+| October 2026 | 10-01 … 10-02 | — (pulled 10-03) | — | — |
+| **total** | | | **$111,949.22** | **6,041** |
+
+`comp_report` holds **0 rows** on each of those days. Read the shape precisely: 31-day months stop at
+the 30th, 30-day months at the 29th, and October — pulled on 2026-10-03 — stops at the 2nd. **That is
+an END DATE BEING TREATED AS EXCLUSIVE**, every time, including when the window end was the pull date
+rather than a month end.
+
+**THE TWO FEEDS ARE THE SAME MONEY**, which is why a one-sided day is an incomplete ARRIVAL and never a
+discrepancy to reconcile away. For the days both cover they agree to the penny: August 1–30 is
+**$523,093.67 = $523,093.67** (verified again on 2026-10-08 after the owner re-uploaded the month) and
+October's two shared days are **$15,460.69 = $15,460.69** (§19.48's control).
+
+**THREE EXPLANATIONS RULED OUT BEFORE THE FIX, so nobody re-investigates them.**
+1. **Not late posting.** August and September were pulled on 2026-10-03 — five weeks and three days
+   after those days posted — and still stopped one day short. (Compensation posts ~11:30 PM the same
+   day, which is why `report_definitions.comp_report` has its own late `sweep_hour`. Real, and it
+   cannot explain a pull made weeks later.)
+2. **Not our trailing window.** `epay_sweep._recent_days(n)` is the last n days *ending today,
+   inclusive*, which cannot produce this pattern.
+3. **Not our sweep at all.** The comp leg has never once succeeded — `upload_log` holds zero sweep rows
+   for `comp_report` ever. **Every stored row arrived through the MANUAL upload path**: a human
+   exporting a Start Date / End Date range from the portal, whose filter panel offers only "Summarize
+   by" plus Start/End and has no month control.
+
+So the one-day shortfall is in the **portal's own Start/End semantics**, not in our ingest. We cannot
+change somebody else's portal, so the fix is the two things we can honestly do.
+
+**THE CLASS, NOT THE INSTANCE.** The instance is "August is missing the 31st". The class is: *a
+window's end boundary is an assumption about somebody else's system, and a feed pulled over a window
+can be short its final day without anything saying so.*
+
+**THE ONE HOMES.**
+- **`commcalc/feed_period.request_window(begin, covers_through, end_boundary)`** — the window we ASK
+  for. Returns `{begin, end, covers_through, end_boundary, widened}`: `end` goes in the source's End
+  Date widget, `covers_through` is the last day we INTEND to receive. Under an end-exclusive source
+  `end` is one day later and `widened` says so; under an inclusive one nothing moves; an unreadable
+  end date is **never silently moved**. **RULE TWO** — the boundary is per-report config
+  (`report_definitions.end_boundary`, like `arrears_days` / `refresh_days` / `sweep_hour` already are)
+  with the house default `exclusive`, which is what every month of real data shows. **No caller adds a
+  day of its own**: `epay_sweep._expand_jobs` dereferences it, `_set_daily_range` types what it is
+  given, and the ledger / verdict / log lines quote `covers_through` so a zero-row verdict still names
+  the days it meant rather than the widened boundary.
+- **`commcalc/feed_period.month_days(period)`** — every calendar day of a month, the only authority
+  for completeness that does not come from a window.
+- **`commcalc/pay_data_quality.statement_month_coverage(...)`** — the verdict. It **DEREFERENCES the
+  shipped `day_coverage_gap`** (§19.48) rather than siring a sibling, and adds the one thing that
+  question cannot see: **a day BOTH feeds lost**. A CLOSED month is judged against the calendar; an
+  OPEN month only against the days the per-line feed has actually received, so it never cries wolf
+  mid-month. What is missing is **NAMED and PRICED** from the per-line feed, and a day nothing can
+  price is listed as `unpriced_missing_days` rather than valued at $0.00 — an absence is not a zero.
+  The verdict vocabulary is **§19.49's tri-state**, `passed` / `failed` / `not_measured` with `ok` None
+  for anything unjudgeable (the strings are kept literal here exactly as `analysis.CASH_KEYS` is, and
+  the lock pins them equal to what `analysis.pl_crosscheck` emits) — not a fifth vocabulary.
+
+**THE SURFACE THAT STARTED ASKING.** `GET /commcalc/pay-feed-balance` already asked the two-feed
+question; it now also carries `statement_month` = the closed-month verdict, its named days and their
+price. Nothing new was built to hold it — **an existing surface asking an existing question is the
+whole fix** for part 2. It remains READ-ONLY: it books nothing and pays nobody.
+
+**⚠ THE $111,949.22 IS A DATA GAP — REPORTED, NOT CODED AROUND.** The code stops the next automated
+pull losing a day; it cannot invent seven days the portal never gave us. **The owner must re-pull them
+from the portal's Comprehensive Comp report, Summarize by = Daily, and — because the End Date is
+EXCLUSIVE — ask for an end date ONE DAY PAST the day wanted:**
+
+| to get | Start Date | End Date |
+|---|---|---|
+| 2026-03-31 | 2026-03-31 | 2026-04-01 |
+| 2026-04-30 | 2026-04-30 | 2026-05-01 |
+| 2026-05-31 | 2026-05-31 | 2026-06-01 |
+| 2026-06-30 | 2026-06-30 | 2026-07-01 |
+| 2026-07-31 | 2026-07-31 | 2026-08-01 |
+| 2026-08-31 | 2026-08-31 | 2026-09-01 |
+| 2026-09-30 | 2026-09-30 | 2026-10-01 |
+
+One file per day is fine and **safe**: since §19.46 a comp-report upload replaces only the DAYS the
+file covers, so a one-day file cannot disturb the rest of the month. A single 2026-03-31 … 2026-10-01
+range works too and replaces only the days it carries. No migration and no data repair SQL is involved
+— this is a missing pull, not a corrupted row.
+
+**THE SECOND DEFECT, SAME SUBJECT, FIXED IN THE SAME CHANGE.** Owner: *"also can i just upload 1day of
+data, it says it will replace the whole period"*. **He can, and the warning was stale.** Since §19.46
+the manual upload is day-keyed: `router._upload_file_impl` derives `DATE_KEYED` from the registry and,
+when every row proves its day (`feed_period.day_stamp(...).stamped`), **the replace is per DAY**; the
+all-or-nothing fall back to a period replace happens only when a row cannot prove its day
+(`raw_dlar_*`, ~85% blank on `as_of_date`). `raw_payment_detail` and `raw_comp_report` carry a date on
+every row. But `frontend/.../commcalc/_lib/uploadRoutes.ts` carried **its own copy of the pre-§19.46
+day-keyed set** — the four-entry literal `{daily_sales, ma_commission, ma_daily_tx, ma_fulfillment}` —
+and authored each tile's `mode` from it, so the Upload page went on promising to clear the whole
+period. **A warning that overstates what an upload destroys is a defect: it stopped the owner uploading
+a day he needed.** §19.18's shape for the fifth time, this time with the stale copy in the frontend.
+- **One home, dereferenced.** `data_lineage_registry.day_keyed_file_types(table_map)` is now the ONE
+  derivation of {file_type → data-date column} — the inline comprehension that was in the upload
+  handler. `router.DATE_KEYED` is that call, and `GET /commcalc/report-kinds` serves the same answer as
+  `day_keyed_uploads`, so the warning and the write cannot disagree.
+- **Read, never listed.** `uploadRoutes.uploadModeFor(route, dayKeyedUploads)` returns day grain for a
+  day-keyed route whatever the shipped literal says; the Upload page renders that, and the hook keeps
+  `dayKeyedUploads` null until the registry answers so nothing claims day grain it was not told. The
+  day-grain copy now reads *"A one-day file replaces only that day — every other day stays, and the
+  rest of the period is untouched."*
+
+**THE LOCK.** `backend/harness_statement_month_coverage.py` — **118 checks, DB-free, verified RED with
+73 failures (45 passing) against `origin/main`**. §A reproduces the end-exclusive loss on a fixture
+portal and pins the regression; §B the boundary home (config, house default, inclusive untouched,
+unparseable never moved); §C the calendar basis; §D the verdict, including **two feeds AGREEING is not
+a finished month**; §E all seven live months and the two controls as the oracle; §F the un-wiring locks
+(every caller dereferences the one home, no second `timedelta(days=1)` in the sweep, exactly one
+definition of each home under `backend/app`, both surfaces keep ASKING, no day-keyed feed list in the
+frontend, the stale four-entry literal cannot come back); §G the verdict vocabulary pinned equal to
+§19.49's; §H purity and RULE TWO. A missing home FAILS BY NAME rather than erroring, so a revert is
+reported rather than crashing the job. CI: `carrier-vocab-guard` (paths filter + step).
+
+**WHAT IS NOT WRONG, so nobody re-investigates it.** The §19.46 month-stamping repair still holds and
+the two feeds tie on every shared day. `comp_report`'s own late `sweep_hour` is correct and is not the
+cause. Separately and already known (§19.46 / §19.48): **2026-08-21 … 08-30 has no payment detail at
+all**, a pull that never ran — a different missing pull, on the other feed, still owed.
 
 §19.52 **A RECONCILIATION REPORTS A DIFFERENCE ONLY WHEN BOTH SIDES HAVE ARRIVED — the sales-leak
 watchdog that called the live month's own sales a revenue leak** (owner 2026-10-06, on a `sales_leak`

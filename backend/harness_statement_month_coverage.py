@@ -90,6 +90,41 @@ FE_ROUTES = "../frontend/src/app/(platform)/commcalc/_lib/uploadRoutes.ts"
 FE_PAGE = "../frontend/src/app/(platform)/commcalc/upload/page.tsx"
 FE_HOOK = "../frontend/src/lib/report-kinds.ts"
 
+# ── A LOCK MUST FAIL, NEVER ERROR ─────────────────────────────────────────────────────────────────
+# Run against a tree where the one home does not exist yet (which is how a RED measurement is taken,
+# and how a future revert presents itself), a harness that reaches straight for the attribute dies
+# with a traceback and reports NOTHING. These shims make an absent home a FAILURE with a name.
+class _Missing(dict):
+    """Indexes and nests forever, equals nothing, contains nothing — every check reads it as a
+    failure with a name instead of a traceback."""
+
+    def __getitem__(self, k):
+        return _Missing()
+
+    def get(self, k, d=None):
+        return _Missing()
+
+
+class _MissingList(list):
+    def __getitem__(self, i):
+        return "<the one home is missing>"
+
+
+def _fn(mod, name, empty):
+    f = getattr(mod, name, None)
+    return f if callable(f) else (lambda *a, **k: empty())
+
+
+def _const(mod, name):
+    return getattr(mod, name, "<the one home is missing>")
+
+
+def _after(txt, marker):
+    """Everything after `marker`, or '' when it is not there — so a scan FAILS instead of raising."""
+    parts = txt.split(marker, 1)
+    return parts[1] if len(parts) > 1 else ""
+
+
 PASS, FAIL = 0, 0
 
 
@@ -131,6 +166,18 @@ def _code_only(src):
     return txt
 
 
+# The three homes this proof is about, reached through the shims above.
+_RW = _fn(FP, "request_window", _Missing)
+_MD = _fn(FP, "month_days", _MissingList)
+_SMC = _fn(PDQ, "statement_month_coverage", _Missing)
+V_PASSED = _const(PDQ, "VERDICT_PASSED")
+V_FAILED = _const(PDQ, "VERDICT_FAILED")
+V_NOT_MEASURED = _const(PDQ, "VERDICT_NOT_MEASURED")
+END_EXCLUSIVE = _const(FP, "END_EXCLUSIVE")
+END_INCLUSIVE = _const(FP, "END_INCLUSIVE")
+END_BOUNDARY_DEFAULT = _const(FP, "END_BOUNDARY_DEFAULT")
+_DAY_KEYED_FILE_TYPES = _fn(LIN, "day_keyed_file_types", dict)
+
 TODAY = dt.date(2026, 10, 8)
 
 # The live measurement, as the oracle. Day -> (rows, dollars present in the per-line feed).
@@ -150,12 +197,24 @@ OCT_SHARED_BOTH_SIDES = 15460.69    # the control month, two shared days
 
 # ── §A THE DEFECT, REPRODUCED ─────────────────────────────────────────────────────────────────────
 print("\n§A THE DEFECT: asking an end-exclusive source for its own last day LOSES that day")
+ok("A0 the three homes this proof is about EXIST (a lock must fail by name, never error)",
+   callable(getattr(FP, "request_window", None)) and callable(getattr(FP, "month_days", None))
+   and callable(getattr(PDQ, "statement_month_coverage", None))
+   and callable(getattr(LIN, "day_keyed_file_types", None)))
+
+
+def _last(xs):
+    """The last day of a window, or a sentinel for an empty one — so a check fails, not raises."""
+    return xs[-1] if xs else "<no day arrived>"
 
 
 def _portal(begin_iso, end_iso):
     """A source that returns days in [begin, end) — the measured behaviour, stated as a fixture."""
-    b = dt.date.fromisoformat(begin_iso)
-    e = dt.date.fromisoformat(end_iso)
+    try:
+        b = dt.date.fromisoformat(str(begin_iso)[:10])
+        e = dt.date.fromisoformat(str(end_iso)[:10])
+    except ValueError:
+        return []   # a window we cannot read returns no days — the check FAILS by name, never errors
     out, d = [], b
     while d < e:
         out.append(d.isoformat())
@@ -166,23 +225,23 @@ def _portal(begin_iso, end_iso):
 # PRE-FIX: a caller that puts the last day it wants straight into the End Date widget.
 _naive = _portal("2026-08-01", "2026-08-31")
 ok("A1 the pre-fix window asks 08-01..08-31 and 08-31 never arrives",
-   _naive[-1] == "2026-08-30" and "2026-08-31" not in _naive)
+   _last(_naive) == "2026-08-30" and "2026-08-31" not in _naive)
 ok("A2 it loses exactly ONE day, which is why 31-day months stop at the 30th and 30-day at the 29th",
-   len(_naive) == 30 and _portal("2026-09-01", "2026-09-30")[-1] == "2026-09-29")
+   len(_naive) == 30 and _last(_portal("2026-09-01", "2026-09-30")) == "2026-09-29")
 ok("A3 and the same off-by-one when the window END was the PULL DATE, not a month end "
    "(October, pulled 2026-10-03, stops at 10-02)",
-   _portal("2026-10-01", "2026-10-03")[-1] == "2026-10-02")
+   _last(_portal("2026-10-01", "2026-10-03")) == "2026-10-02")
 
 # POST-FIX: the one home resolves the boundary, and the day arrives.
-_w = FP.request_window("2026-08-01", "2026-08-31")
+_w = _RW("2026-08-01", "2026-08-31")
 _fixed = _portal(_w["begin"], _w["end"])
 ok("A4 REGRESSION — through request_window the day we intend to cover actually arrives",
-   _fixed[-1] == "2026-08-31" and len(_fixed) == 31)
+   _last(_fixed) == "2026-08-31" and len(_fixed) == 31)
 ok("A5 and no extra day beyond the intent arrives either", "2026-09-01" not in _fixed)
 for _d in sorted(LIVE_MISSING):
     _m = _d[:7]
     _first = f"{_m}-01"
-    _wd = FP.request_window(_first, _d)
+    _wd = _RW(_first, _d)
     ok(f"A6 {_m}: the lost day {_d} arrives under the resolved boundary",
        _d in _portal(_wd["begin"], _wd["end"]))
 
@@ -190,48 +249,48 @@ for _d in sorted(LIVE_MISSING):
 # ── §B ONE HOME FOR THE BOUNDARY ──────────────────────────────────────────────────────────────────
 print("\n§B request_window — ONE home, config with a house default, nothing silently moved")
 ok("B1 the house default is end-EXCLUSIVE, which is what every month of real data shows",
-   FP.END_BOUNDARY_DEFAULT == FP.END_EXCLUSIVE)
+   END_BOUNDARY_DEFAULT == END_EXCLUSIVE)
 ok("B2 an exclusive source gets a widened end and SAYS it was widened",
    _w["end"] == "2026-09-01" and _w["widened"] is True and _w["end_boundary"] == "exclusive")
 ok("B3 the INTENT is carried alongside, so a caller can still name the days it meant",
    _w["covers_through"] == "2026-08-31" and _w["begin"] == "2026-08-01")
-_inc = FP.request_window("2026-08-01", "2026-08-31", FP.END_INCLUSIVE)
+_inc = _RW("2026-08-01", "2026-08-31", END_INCLUSIVE)
 ok("B4 an INCLUSIVE source is left alone — the boundary is config, not a branch (RULE TWO)",
    _inc["end"] == "2026-08-31" and _inc["widened"] is False)
-_junk = FP.request_window("2026-08-01", "not-a-date")
+_junk = _RW("2026-08-01", "not-a-date")
 ok("B5 an unreadable end date is NEVER silently moved (we must not hide a window we cannot parse)",
    _junk["end"] == "not-a-date" and _junk["widened"] is False)
 ok("B6 an unknown boundary spelling falls back to the house default rather than guessing",
-   FP.request_window("2026-08-01", "2026-08-31", "sideways")["end"] == "2026-09-01")
+   _RW("2026-08-01", "2026-08-31", "sideways")["end"] == "2026-09-01")
 ok("B7 a single-day window widens to cover that one day",
-   FP.request_window("2026-10-07", "2026-10-07")["end"] == "2026-10-08")
+   _RW("2026-10-07", "2026-10-07")["end"] == "2026-10-08")
 ok("B8 a month-end roll-over crosses the year correctly",
-   FP.request_window("2026-12-01", "2026-12-31")["end"] == "2027-01-01")
+   _RW("2026-12-01", "2026-12-31")["end"] == "2027-01-01")
 ok("B9 request_window mutates nothing and returns a fresh dict each time",
-   FP.request_window("2026-08-01", "2026-08-31") is not _w)
+   _RW("2026-08-01", "2026-08-31") is not _w)
 
 
 # ── §C THE CALENDAR BASIS ─────────────────────────────────────────────────────────────────────────
 print("\n§C month_days — the only authority that does not come from a window")
 ok("C1 a 31-day month is 31 days, first to last",
-   FP.month_days("August 2026")[0] == "2026-08-01" and FP.month_days("August 2026")[-1] == "2026-08-31"
-   and len(FP.month_days("August 2026")) == 31)
-ok("C2 a 30-day month is 30 days", len(FP.month_days("September 2026")) == 30)
-ok("C3 February 2028 is a leap February", len(FP.month_days("February 2028")) == 29)
+   _MD("August 2026")[0] == "2026-08-01" and _MD("August 2026")[-1] == "2026-08-31"
+   and len(_MD("August 2026")) == 31)
+ok("C2 a 30-day month is 30 days", len(_MD("September 2026")) == 30)
+ok("C3 February 2028 is a leap February", len(_MD("February 2028")) == 29)
 ok("C4 both stored spellings answer the same (one month, one answer — §19.47)",
-   FP.month_days("October 2026") == FP.month_days("2026-10"))
+   _MD("October 2026") == _MD("2026-10"))
 ok("C5 a non-month yields NO expected days rather than a guessed set",
-   FP.month_days("Q3 2026") == [] and FP.month_days("") == [])
+   _MD("Q3 2026") == [] and _MD("") == [])
 
 
 # ── §D THE VERDICT ────────────────────────────────────────────────────────────────────────────────
 print("\n§D statement_month_coverage — a closed month short a day is NOT a finished month")
-_aug = PDQ.statement_month_coverage(
+_aug = _SMC(
     "August 2026",
-    FP.month_days("August 2026"),
-    FP.month_days("August 2026")[:-1],
+    _MD("August 2026"),
+    _MD("August 2026")[:-1],
     {"2026-08-31": LIVE_MISSING["2026-08-31"][1]}, TODAY)
-ok("D1 a CLOSED month missing its final day FAILS", _aug["verdict"] == PDQ.VERDICT_FAILED
+ok("D1 a CLOSED month missing its final day FAILS", _aug["verdict"] == V_FAILED
    and _aug["ok"] is False)
 ok("D2 the missing day is NAMED", _aug["missing_days"] == ["2026-08-31"])
 ok("D3 and PRICED from the per-line feed", _aug["missing_amount"] == 16628.09)
@@ -242,48 +301,48 @@ ok("D5 the reason sentence names the month, the count, the money and what to re-
    and "2026-08-31" in _aug["reason"] and "end boundary is exclusive" in _aug["reason"])
 
 # THE CASE THE TWO-FEED GAP CANNOT SEE: both feeds lost the same day, so they agree perfectly.
-_both = PDQ.statement_month_coverage(
-    "August 2026", FP.month_days("August 2026")[:-1], FP.month_days("August 2026")[:-1],
+_both = _SMC(
+    "August 2026", _MD("August 2026")[:-1], _MD("August 2026")[:-1],
     {}, TODAY)
 ok("D6 two feeds AGREEING is not a finished month — a day both lost still FAILS",
-   _both["gap"]["complete"] is True and _both["verdict"] == PDQ.VERDICT_FAILED
+   _both["gap"]["complete"] is True and _both["verdict"] == V_FAILED
    and _both["missing_days"] == ["2026-08-31"])
 ok("D7 a day nothing can price is REPORTED as unpriced, never valued at $0.00",
    _both["unpriced_missing_days"] == ["2026-08-31"] and _both["missing_amount"] == 0.0
    and "nothing can price" in _both["reason"])
 
-_full = PDQ.statement_month_coverage("August 2026", FP.month_days("August 2026"),
-                                     FP.month_days("August 2026"), {}, TODAY)
-ok("D8 a closed month covering every day PASSES", _full["verdict"] == PDQ.VERDICT_PASSED
+_full = _SMC("August 2026", _MD("August 2026"),
+                                     _MD("August 2026"), {}, TODAY)
+ok("D8 a closed month covering every day PASSES", _full["verdict"] == V_PASSED
    and _full["ok"] is True and _full["missing_days"] == [])
 
-_open = PDQ.statement_month_coverage("October 2026", ["2026-10-01", "2026-10-02"],
+_open = _SMC("October 2026", ["2026-10-01", "2026-10-02"],
                                      ["2026-10-01", "2026-10-02"], {}, TODAY)
 ok("D9 an OPEN month is judged on the days that ARRIVED, never on days that have not happened",
-   _open["month_state"] == FP.OPEN and _open["verdict"] == PDQ.VERDICT_PASSED
+   _open["month_state"] == FP.OPEN and _open["verdict"] == V_PASSED
    and _open["days_expected"] == 2)
-_open_short = PDQ.statement_month_coverage("October 2026", ["2026-10-01", "2026-10-02"],
+_open_short = _SMC("October 2026", ["2026-10-01", "2026-10-02"],
                                            ["2026-10-01"], {"2026-10-02": 100.0}, TODAY)
 ok("D10 an open month whose statement is behind the per-line feed still FAILS, priced",
-   _open_short["verdict"] == PDQ.VERDICT_FAILED and _open_short["missing_days"] == ["2026-10-02"]
+   _open_short["verdict"] == V_FAILED and _open_short["missing_days"] == ["2026-10-02"]
    and _open_short["missing_amount"] == 100.0)
 
-_none = PDQ.statement_month_coverage("August 2026", FP.month_days("August 2026"), [], {}, TODAY)
+_none = _SMC("August 2026", _MD("August 2026"), [], {}, TODAY)
 ok("D11 NO statement day at all is `not_measured`, not a failed month and never a complete $0.00",
-   _none["verdict"] == PDQ.VERDICT_NOT_MEASURED and _none["ok"] is None
+   _none["verdict"] == V_NOT_MEASURED and _none["ok"] is None
    and "not measured" in _none["reason"] and "missing feed" in _none["reason"])
-_unk = PDQ.statement_month_coverage("Q3 2026", ["2026-08-01"], ["2026-08-01"], {}, TODAY)
+_unk = _SMC("Q3 2026", ["2026-08-01"], ["2026-08-01"], {}, TODAY)
 ok("D12 a period that is not a month cannot be judged — `not_measured`, ok None",
-   _unk["verdict"] == PDQ.VERDICT_NOT_MEASURED and _unk["ok"] is None
+   _unk["verdict"] == V_NOT_MEASURED and _unk["ok"] is None
    and _unk["month_state"] == FP.UNKNOWN)
 ok("D13 the two-feed gap is carried whole, so a caller still has day_coverage_gap's own answer",
    set(_aug["gap"]) >= {"missing_from_statement", "missing_from_detail", "complete",
                         "days_detail", "days_statement"})
 ok("D14 it mutates neither argument",
-   (lambda a, b: (PDQ.statement_month_coverage("August 2026", a, b, {}, TODAY),
+   (lambda a, b: (_SMC("August 2026", a, b, {}, TODAY),
                   a == ["2026-08-01"] and b == ["2026-08-01"])[1])(["2026-08-01"], ["2026-08-01"]))
 ok("D15 a future month is OPEN, so nothing is owed and nothing is cried about",
-   PDQ.statement_month_coverage("December 2026", ["2026-12-01"], ["2026-12-01"], {},
+   _SMC("December 2026", ["2026-12-01"], ["2026-12-01"], {},
                                 TODAY)["month_state"] == FP.OPEN)
 
 
@@ -292,21 +351,21 @@ print("\n§E THE LIVE FIGURES, pinned — re-breaking this fails HERE, not on so
 _tot = 0.0
 for day, (rows, amt) in sorted(LIVE_MISSING.items()):
     per = FP.period_of_day(day)[0]
-    cov = PDQ.statement_month_coverage(per, FP.month_days(per), FP.month_days(per)[:-1],
+    cov = _SMC(per, _MD(per), _MD(per)[:-1],
                                        {day: amt}, TODAY)
     _tot += amt
     ok(f"E {per}: missing {day}, ${amt:,.2f} ({rows:,} rows in the per-line feed) — FAILED",
-       cov["verdict"] == PDQ.VERDICT_FAILED and cov["missing_days"] == [day]
+       cov["verdict"] == V_FAILED and cov["missing_days"] == [day]
        and cov["missing_amount"] == round(amt, 2))
     ok(f"E   and {day} is the month's LAST calendar day (the end-exclusive signature)",
-       FP.month_days(per)[-1] == day)
+       _MD(per)[-1] == day)
 ok(f"E8 the seven closed months total ${LIVE_TOTAL:,.2f}", round(_tot, 2) == LIVE_TOTAL)
 ok("E9 the August control: 1-30 ties to the penny on both sides, which is why a one-sided day is an "
    "incomplete ARRIVAL and never a discrepancy to reconcile",
    round(AUG_SHARED_BOTH_SIDES - AUG_SHARED_BOTH_SIDES, 2) == 0.0)
 ok("E10 the October control: two shared days, $15,460.69 = $15,460.69, and the month is OPEN so it "
    "is judged on what arrived",
-   OCT_SHARED_BOTH_SIDES == 15460.69 and _open["verdict"] == PDQ.VERDICT_PASSED)
+   OCT_SHARED_BOTH_SIDES == 15460.69 and _open["verdict"] == V_PASSED)
 
 
 # ── §F THE UN-WIRING LOCKS ────────────────────────────────────────────────────────────────────────
@@ -325,7 +384,7 @@ ok("F4 request_window has exactly ONE definition under backend/app",
 
 _pdq_code = _code_only(_src(PDQ_PATH))
 ok("F5 statement_month_coverage DEREFERENCES day_coverage_gap — it is not a sibling derivation",
-   "day_coverage_gap(" in _pdq_code.split("def statement_month_coverage", 1)[1])
+   "day_coverage_gap(" in _after(_pdq_code, "def statement_month_coverage"))
 ok("F6 and it dereferences the one month-state / calendar home rather than its own calendar",
    "_fp.month_state(" in _pdq_code and "_fp.month_days(" in _pdq_code
    and "monthrange" not in _pdq_code)
@@ -348,7 +407,7 @@ ok("F10 the upload handler's day-keyed map is the registry's DERIVATION, not a s
 ok("F11 GET /report-kinds serves the day-keyed route keys, so no page has to remember them",
    'out["day_keyed_uploads"]' in _rt and "day_keyed_file_types(column_mapping.TABLE_MAP)" in _rt)
 ok("F12 day_keyed_file_types is DERIVED from day_keyed_date_columns — no second literal map",
-   "day_keyed_date_columns()" in _code_only(_src(LIN_PATH)).split("def day_keyed_file_types", 1)[1])
+   "day_keyed_date_columns()" in _after(_code_only(_src(LIN_PATH)), "def day_keyed_file_types"))
 
 # The frontend half of the same fact: a page may not keep its own list of day-keyed feed names.
 _fe_routes = _src(FE_ROUTES)
@@ -361,12 +420,12 @@ ok("F14 the Upload page renders the DERIVED mode, not the shipped literal",
 ok("F15 the hook exposes the registry's answer and is null until it loads",
    "dayKeyedUploads" in _src(FE_HOOK) and "payload ? (payload.day_keyed_uploads || []) : null"
    in _src(FE_HOOK))
-_live_day_keyed = set(LIN.day_keyed_file_types(
+_live_day_keyed = set(_DAY_KEYED_FILE_TYPES(
     __import__("app.modules.commcalc.column_mapping", fromlist=["TABLE_MAP"]).TABLE_MAP))
 ok("F16 the registry really does say the two carrier feeds are day keyed today "
    "(a lock whose scan matches nothing is not a lock)",
    {"payment_detail", "comp_report"} <= _live_day_keyed)
-_umf_body = _fe_routes_code.split("export function uploadModeFor", 1)[1].split("\n}", 1)[0]
+_umf_body = _after(_fe_routes_code, "export function uploadModeFor").split("\n}", 1)[0]
 ok("F17 uploadModeFor decides from its registry ARGUMENT alone — no feed name in its body",
    "dayKeyedUploads" in _umf_body
    and not any(f"'{ft}'" in _umf_body for ft in _live_day_keyed))
@@ -399,11 +458,11 @@ def _pl(gross, net):
 
 _shape = ANA.pl_crosscheck(_pl(6.0, 5.0))
 ok("G1 `passed` is spelled exactly as the shipped crosscheck spells it",
-   PDQ.VERDICT_PASSED == _shape["verdict"] == "passed")
+   V_PASSED == _shape["verdict"] == "passed")
 _bad = ANA.pl_crosscheck(_pl(99.0, 5.0))
-ok("G2 `failed` likewise", PDQ.VERDICT_FAILED == _bad["verdict"] == "failed")
+ok("G2 `failed` likewise", V_FAILED == _bad["verdict"] == "failed")
 ok("G3 `not_measured` likewise, and `ok` is None on both sides for a thing that cannot be judged",
-   PDQ.VERDICT_NOT_MEASURED == ANA.pl_crosscheck({})["verdict"] == "not_measured"
+   V_NOT_MEASURED == ANA.pl_crosscheck({})["verdict"] == "not_measured"
    and ANA.pl_crosscheck({})["ok"] is None and _none["ok"] is None)
 ok("G4 no fourth verdict value is invented",
    {v for k, v in vars(PDQ).items() if k.startswith("VERDICT_")}
@@ -417,20 +476,20 @@ for banned in ("supabase", "requests", "psycopg", "fastapi", "HTTPException", "s
     ok(f"H1 feed_period imports no {banned}", banned not in _fp_code)
     ok(f"H2 pay_data_quality imports no {banned}", banned not in _pdq_code)
 ok("H3 request_window takes no clock — the boundary is arithmetic on the dates it is given",
-   "date.today()" not in _fp_code.split("def request_window", 1)[1].split("def month_days")[0]
-   and "now()" not in _fp_code.split("def request_window", 1)[1].split("def month_days")[0])
+   "date.today()" not in _after(_fp_code, "def request_window").split("def month_days")[0]
+   and "now()" not in _after(_fp_code, "def request_window").split("def month_days")[0])
 ok("H4 statement_month_coverage's `today` is INJECTED, so a proof can stand on a fixed date",
-   "today" in PDQ.statement_month_coverage.__code__.co_varnames)
+   "today" in getattr(_SMC, "__code__").co_varnames)
 ok("H5 the expected-day basis is a PARAMETER of the month's state, never a literal month length",
-   "31" not in _pdq_code.split("def statement_month_coverage", 1)[1])
+   "31" not in (_after(_pdq_code, "def statement_month_coverage") or "31"))
 for word in ("boost", "luxelink", "cellfonz", "verizon", "vidapay", "t-mobile", "total wireless",
              "epay", "tcetra"):
     ok(f"H6 RULE TWO — no '{word}' in the boundary code", word not in _fp_code.lower())
     ok(f"H7 RULE TWO — no '{word}' in the coverage code", word not in _pdq_code.lower())
 ok("H8 the end boundary is CONFIG with a house default, read from the per-report row",
-   'rc.get("end_boundary")' in _sw and FP.END_BOUNDARY_DEFAULT in (FP.END_EXCLUSIVE, FP.END_INCLUSIVE))
+   'rc.get("end_boundary")' in _sw and END_BOUNDARY_DEFAULT in (END_EXCLUSIVE, END_INCLUSIVE))
 ok("H9 no portal credential name is anywhere near this change",
-   "portal_pass" not in _sw.split("def _expand_jobs", 1)[1]
+   "portal_pass" not in _after(_sw, "def _expand_jobs")
    and "portal_pass" not in _fp_code and "portal_pass" not in _pdq_code)
 
 print(f"\n{PASS} passed, {FAIL} failed")

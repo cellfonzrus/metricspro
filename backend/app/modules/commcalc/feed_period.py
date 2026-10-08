@@ -301,8 +301,12 @@ def request_window(begin, covers_through, end_boundary=None):
 
     An unreadable end date is returned untouched with `widened` False — a window we cannot parse is a
     window we must not silently move; guessing here would hide the bigger problem.
+
+    NO CLOCK, deliberately, and not even a `datetime` import: this is date ARITHMETIC on the day the
+    caller named. The module's one clock stays confined to `month_state`, where it is injected
+    (harness_feed_day_grain.py §H2a), and the next-day step below uses the `calendar` this module
+    already reads rather than opening a second door to "today".
     """
-    import datetime as _dt
     boundary = str(end_boundary or "").strip().lower() or END_BOUNDARY_DEFAULT
     if boundary not in (END_EXCLUSIVE, END_INCLUSIVE):
         boundary = END_BOUNDARY_DEFAULT
@@ -310,13 +314,28 @@ def request_window(begin, covers_through, end_boundary=None):
            "end_boundary": boundary, "widened": False}
     if boundary != END_EXCLUSIVE:
         return out
-    try:
-        d = _dt.date.fromisoformat(str(covers_through or "")[:10])
-    except ValueError:
+    nxt = _next_day(covers_through)
+    if nxt is None:
         return out
-    out["end"] = (d + _dt.timedelta(days=1)).isoformat()
+    out["end"] = nxt
     out["widened"] = True
     return out
+
+
+def _next_day(iso):
+    """PURE: the ISO day after `iso`, or None when it cannot be read. Calendar arithmetic only."""
+    s = str(iso or "")[:10]
+    parts = s.split("-")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    y, m, d = (int(p) for p in parts)
+    if not (1 <= m <= 12) or not (1 <= d <= calendar.monthrange(y, m)[1]):
+        return None
+    if d < calendar.monthrange(y, m)[1]:
+        return f"{y:04d}-{m:02d}-{d + 1:02d}"
+    if m < 12:
+        return f"{y:04d}-{m + 1:02d}-01"
+    return f"{y + 1:04d}-01-01"
 
 
 def month_days(period):
