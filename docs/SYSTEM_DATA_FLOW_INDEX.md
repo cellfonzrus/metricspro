@@ -9144,6 +9144,19 @@ that does not shrink when the debt is paid stops measuring anything. Same shape 
 Pinned at **334**: this change wires `harness_activation_bucketing.py` into `carrier-vocab-guard.yml` (stdlib job —
 its placement checked by the §19.25b rule), so the list shrinks by one on the very change that introduces it.
 
+**Ratchet 325 → 324, 2026-10-08 (owner: "do it").** `harness_db_resilience.py` is de-registered and now runs in the
+`db-resilience-proof` job of `carrier-vocab-guard.yml` (pip-install job — it imports the app and inspects the installed
+postgrest / httpcore source). It is the only assertion that a dropped idle Supabase connection is **retried rather than
+surfaced as a 500**, and that a failed write is never replayed. Two of its checks are deliberate **tripwires**, and a
+red one is a question for a human rather than a test to edit away: `A1` pins the exact installed
+supabase / postgrest / httpx / httpcore / h2 versions (the root cause is read out of those packages' own source, so a
+version move must re-read them before the pin is advanced — never relaxed; `backend/requirements.txt` is named in that
+workflow's paths for this reason, per the §13e "an allowlist that does not name its own subject skips silently"
+lesson), and `I0` pins the leaf route count, so **any PR that adds an endpoint re-pins it** — confirm the delta is
+yours and that nothing was REMOVED, then document it the way the comment block above `_expect_routes` does. `I0b` is
+the drift-proof form of the same claim and never needs re-pinning. The owner was told that route-count tax before the
+job was wired, and accepted it.
+
 §19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
 (owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
 door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`

@@ -206,6 +206,14 @@ on:
       - "backend/app/modules/commcalc/labour_vocabulary.py"
       - "backend/app/modules/account/engine.py"
       - "database/migrations/1061_labour_vocabulary_mode.sql"
+      # The database-resilience proof (db-resilience-proof job). requirements.txt is named here
+      # because its A1 check pins the installed supabase / postgrest / httpx / httpcore / h2 versions
+      # and is read out of those packages' own source — a version bump MUST run the canary, and a
+      # lock whose allowlist does not name its own subject skips silently (the §13e lesson).
+      # app.core.db_resilience and app/main.py (the route count) are already covered by
+      # backend/app/**/*.py above.
+      - "backend/harness_db_resilience.py"
+      - "backend/requirements.txt"
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
@@ -1320,3 +1328,36 @@ jobs:
       - name: Run the notify send-identity proof (one home for the report's name; the history never shows a machine key — index §15.3)
         working-directory: backend
         run: python3 harness_notify_send_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE DATABASE-RESILIENCE PROOF — owner directive 2026-10-08 ("do it"), taking this file off
+  # backend/harness_unrun_pending.txt. It is the only thing asserting that a dropped Supabase
+  # connection is retried rather than surfaced as a 500, and it asserts that through the REAL
+  # app.core.db_resilience over a local socket that genuinely disconnects, plus source-level reads of
+  # the installed postgrest / httpcore.
+  #
+  # Two of its checks are TRIPWIRES by design, and a red one here is a question for a human, not a
+  # test to edit away:
+  #   A1  pins the exact installed versions of supabase / postgrest / httpx / httpcore / h2. It fires
+  #       on ANY version move, because the root cause is read out of those packages' own source. The
+  #       answer is to RE-READ the sources and then advance the pin (see the dated notes above
+  #       PINNED_STACK for how 2026-09-06 and 2026-10-08 were handled) — never to relax it.
+  #       `backend/requirements.txt` is named in this workflow's paths for exactly this reason: a lock
+  #       whose allowlist does not name its own subject skips silently (the §13e lesson).
+  #   I0  pins the app's leaf route count, so it fires on any PR that adds or removes an endpoint.
+  #       That is expected and cheap: confirm the delta is yours and nothing was REMOVED, then
+  #       re-pin, documenting the delta the way the comment block above _expect_routes does. I0b is
+  #       the drift-proof form of the same claim and never needs re-pinning.
+  # It imports the app and inspects the installed stack, so it runs with the backend's dependencies.
+  db-resilience-proof:
+    name: Database resilience (the real transport, a socket that really drops)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the database-resilience proof (a dropped idle connection is retried, never a 500; writes are never replayed; A1 = version canary, I0 = route-count tripwire)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_db_resilience.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
