@@ -167,6 +167,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/peer-comparison', 'commissions'],
+  ['/commcalc/targets/report-cards', 'commissions'],
   ['/commcalc/spiff-impact', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
@@ -525,6 +526,10 @@ export const NAV: NavGroup[] = [
     // ranked on what they do with it. Listed in BOTH management review and Targets & Coaching, as the
     // owner asked: it is a review surface and a coaching surface, and one page serves both.
     { href: '/commcalc/peer-comparison', label: 'Peer Sales Comparison', icon: '🏁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // MANAGER REPORT CARDS (owner directive 2026-10-08) — what each DM was assigned per store and
+    // whether the system says it was met, then the same roll-up one level up. Listed in BOTH
+    // Management Overview and Targets & Coaching, like the comparison it reads: one href, one report.
+    { href: '/commcalc/targets/report-cards', label: 'Manager Report Cards', icon: '🗂️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // SPIFF IMPACT (owner ask 2026-10-08) — one carrier pay type against a store's commission revenue
     // and its net profit, and which stores are not earning it on the sales they make. A management
     // review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
@@ -739,6 +744,7 @@ export const NAV: NavGroup[] = [
     // The same page as the Management Overview row above (owner directive 2026-10-08: "this should be
     // under management review and targets and coaching"). One href, so RBAC and ⌘K see one report.
     { href: '/commcalc/peer-comparison', label: 'Peer Sales Comparison', icon: '🏁', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/targets/report-cards', label: 'Manager Report Cards', icon: '🗂️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
     { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
@@ -1254,6 +1260,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/sales-report', 'sales'], ['/commcalc/custom-report', 'sales'],
   ['/commcalc/sales-comparison', 'sales'], ['/commcalc/zero-sales', 'sales'],
   ['/commcalc/peer-comparison', 'sales'],
+  ['/commcalc/targets/report-cards', 'sales'],
   ['/commcalc/spiff-impact', 'comm'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],

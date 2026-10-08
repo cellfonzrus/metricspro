@@ -70,6 +70,18 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_spiffimp',),
         },
     },
+    'manager_report_card': {
+        "question": 'What was assigned to this district manager for each of their stores, did the '
+                    'system record it as met, and who is accountable one level above them?',
+        "homes": ('app/modules/commcalc/manager_report_card.py',),
+        "index": ('59.9',),
+        "locks": ('harness_manager_report_card.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_mrcard',),
+        },
+    },
     'device_reimbursement_paid_vs_claimed': {
         "question": 'What did the carrier actually PAY for device financing, what does the '
                     'distributor CLAIM it reimbursed, and may the two be compared at all?',
@@ -85,16 +97,25 @@ FACTS: dict[str, dict] = {
     },
     'carrier_dollar_component': {
         "question": 'Is this carrier dollar a commission, a spiff, a residual or a reimbursement — '
-                    'and is that the ORG\'S OWN declaration or a guess the platform made?',
+                    'and is that the ORG\'S OWN declaration or a guess the platform made? Which '
+                    'P&L LINE and which GROSS-PROFIT COLUMN that component lands on is the same '
+                    'fact, read twice, and lives here too (`component_line` / `gp_column`).',
         "homes": ('app/modules/commcalc/carrier_dollar_class.py',),
         "index": ('58',),
-        "locks": ('harness_carrier_dollar_class.py',),
+        "locks": ('harness_carrier_dollar_class.py',
+                  'harness_gp_carrier_class_dereference.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed. `--bless` silently deleted 11 of 12
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.
         "callers": {
             'app/modules/account/coa.py': ('_cdc',),
-            'app/modules/commcalc/router.py': ('_cdc',),
+            # The GROSS PROFIT engine (owner report 2026-10-08: *"gross profit is still showing the
+            # old data m teh source of information should be the same"*). It carried TWO private
+            # classifications — a keyword guess on the compensation type and four exact compares on
+            # the pay category — which disagreed with the P&L by $418,922.21 on the same 11,114
+            # August 2026 rows. It now dereferences this home and states no ruling of its own.
+            'app/modules/commcalc/gp_report.py': ('_cdc',),
+            'app/modules/commcalc/router.py': ('_cdc', '_cdc_gp', '_cdc_leg'),
         },
     },
     'installment_month_of_life': {
@@ -563,8 +584,12 @@ FACTS: dict[str, dict] = {
             # §58 — the carrier-dollar COMPONENT ruling sits on top of this CATEGORY read and
             # keeps no copy of it; §57 decides the category, §58 decides what the category means.
             'app/modules/commcalc/carrier_dollar_class.py': ('_pc',),
+            # The GROSS PROFIT engine reads the org's declared category for an ePay payment type
+            # here rather than comparing it against four literals it spelled itself — one of which
+            # only ever matched the house's own hyphenated "Re-imbursement" (owner 2026-10-08).
+            'app/modules/commcalc/gp_report.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
-            'app/modules/commcalc/router.py': ('_pcat',),
+            'app/modules/commcalc/router.py': ('_payment_category', '_pcat'),
             # §60 — the spiff-impact report folds a PAY-TYPE KEY (its option list and its per-store
             # tally must agree about whether two spellings are one type) and dereferences §57's one
             # folding rule rather than keeping a second. It reads the TABLE through §58, never here,

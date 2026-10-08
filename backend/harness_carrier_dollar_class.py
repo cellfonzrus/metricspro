@@ -236,10 +236,11 @@ ok("E6 a missing config column is REPORTED on the tally, so a surface can say 'a
    C.tally([], DECL, RULES, dict(CFG, config_columns_missing=["carrier_component_lines"],
                                  config_migrations_missing=["1062_carrier_dollar_class.sql"])
            )["config_migrations_missing"] == ["1062_carrier_dollar_class.sql"])
-ok("E7 every config column names the migration that adds it",
+ok("E7 every config column names the migration that adds it, in column order and deduped "
+   "(1064 added the GP-column twin of the P&L routing — §58.7)",
    all(m for _c, m in C.CONFIG_COLUMNS)
    and C.config_migrations_missing([c for c, _m in C.CONFIG_COLUMNS])
-   == ["1062_carrier_dollar_class.sql"])
+   == ["1062_carrier_dollar_class.sql", "1064_carrier_gp_columns.sql"])
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("F. COMPONENT → P&L LINE IS CONFIG, and an unrouted component never vanishes")
@@ -403,8 +404,10 @@ FACT = "carrier_dollar_component"
 f = MG.FACTS.get(FACT) or {}
 ok("K1 the fact is registered in the module graph", bool(f), sorted(MG.FACTS))
 ok("K2 its home is this module", f.get("homes") == (HOME_REL,), f.get("homes"))
-ok("K3 both callers are named in the snapshot",
+ok("K3 every caller is named in the snapshot (the GROSS PROFIT engine joined them in §58.7: it "
+   "carried two private classifications that disagreed with the P&L by $418,922.21)",
    set((f.get("callers") or {})) == {"app/modules/account/coa.py",
+                                     "app/modules/commcalc/gp_report.py",
                                      "app/modules/commcalc/router.py"}, f.get("callers"))
 ok("K4 this lock is the fact's lock", "harness_carrier_dollar_class.py" in (f.get("locks") or ()))
 ok("K5 the index section it points at exists",

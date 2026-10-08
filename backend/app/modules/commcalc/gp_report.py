@@ -11,6 +11,15 @@ from typing import Any
 # own, so this file stays the dependency-free calculator it has always been (calculator.py imports
 # gp_report, so anything reaching back into calculator here would be a cycle).
 from app.modules.commcalc import commission_legs as _legs
+# The TWO homes this engine dereferences instead of classifying carrier money itself:
+#   §57 `payment_category` — the org's declared category for a payment type (the read + the
+#        ONE folding rule for the key);
+#   §58 `carrier_dollar_class` — what that declaration MEANS (component) and which money
+#        column it lands in (`gp_column`), the GP twin of the P&L's `component_line`.
+# Both are PURE here: every DB read happens in the caller and arrives as an argument, so this
+# module stays DB-free and provable without a database.
+from app.modules.commcalc import carrier_dollar_class as _cdc
+from app.modules.commcalc import payment_category as _pc
 # Commission double-book suppression (owner decision 2026-09-08 "Rep commision should go in p&l").
 # Also a PURE leaf module — its only import is the shared period parser, and that one is lazy — so
 # the calculator stays dependency-free. The DECISION lives there, not here: this file only asks it
@@ -213,6 +222,10 @@ def calc_gp_report(
     leg_classify=None,
     acc_basis: str = 'gp',
     commission_suppression_names: list = None,
+    pay_category_map: dict = None,
+    carrier_declarations: dict = None,
+    carrier_rules: list = None,
+    carrier_class_config: dict = None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -247,6 +260,17 @@ def calc_gp_report(
     classifier. This is a DECOMPOSITION ONLY: it adds `*_m1` / `*_m2_12` / `*_unsplit` companions to
     `comm`, `comp_comm`, `mi` and `atu`; each trio sums to its existing column to the cent, and no
     existing money column, total_rev, rep_pay, net_profit or bucket classification changes at all.
+    pay_category_map / carrier_declarations / carrier_rules / carrier_class_config (owner report
+    2026-10-08 — "gross profit is still showing the old data m teh source of information should be
+    the same"): the inputs this report's CARRIER CLASSIFICATION is now dereferenced from, instead of
+    deciding it here. `pay_category_map` is §57's `payment_category.load_map` (the org's declared
+    payment-type → category map, folded by its ONE rule); `carrier_declarations` / `carrier_rules` /
+    `carrier_class_config` are §58's `carrier_dollar_class.load_declarations` /
+    `carrier_map.load_rules` / `carrier_dollar_class.load_config`. Every bucket below is decided by
+    `carrier_dollar_class.gp_column`, the same home the P&L's `component_line` sits in, so the GP
+    columns and the P&L lines cannot state two different things about one dollar again. Omitted =
+    nothing declared and no keyword rule, which honestly reports the money as unclassified rather
+    than calling it commission.
     acc_basis (owner directive 2026-09-02 — "Acc Gp should show the price at which the accessories
     were sold not the Gross profit as they are not entered correct … renamed to Acc Sales"):
       'gp'    — the legacy column: Σ `gp` of accessory lines (this FUNCTION's default, so every
@@ -271,6 +295,10 @@ def calc_gp_report(
     """
     if leg_classify is None:
         leg_classify = _legs.default_classifier()
+    # The carrier-classification posture for this org. The caller (`router._compute_gp`) resolves it
+    # from `commission_org_config`; the house defaults stand in when it did not, so a tenant whose
+    # mig-1062/1064 columns are absent gets the platform's own routing and never a code branch.
+    _cc_cfg = carrier_class_config or _cdc.default_config()
     acc_basis = 'sales' if str(acc_basis or '').strip().lower() == 'sales' else 'gp'
     _acc_field = 'ext_price' if acc_basis == 'sales' else 'gp'
     leg_ladder: dict[str, dict] = {}
@@ -394,44 +422,71 @@ def calc_gp_report(
             store_by_num[num] = s
 
     # ── Payment detail bucketed by store street_num ───────────────
+    # WHICH COLUMN A DOLLAR LANDS IN IS NOT DECIDED HERE (owner report 2026-10-08). It used to be,
+    # with four exact string compares — `cat == 'Commission'`, `== 'Re-imbursement'`, `== 'MDF'`,
+    # `== 'Chargeback'` — which hard-coded the house org's own spellings and folded the lookup key
+    # itself. "Re-imbursement" does not contain "reimburs", and a tenant that spells its category
+    # "Reimbursement" or "  commission" had every one of those dollars read as unclassified. The
+    # ruling now comes from the ONE home (§57 for the category, §58 for what the category MEANS),
+    # so this engine states no classification of its own.
     pay_by_num: dict[str, dict] = {}
+    _pay_col_seen: dict[str, str] = {}
     for r in pay_detail:
         num = street_num(r.get('business_address', ''))
         if not num: continue
         if num not in pay_by_num:
-            pay_by_num[num] = {'comm': 0, 'reimb': 0, 'mdf': 0, 'chb': 0, 'unmapped': 0,
-                               'comm_legs': _legs.empty_split(), 'comm_ladder': {}}
-        cat = str(r.get('category') or '').strip()
+            pay_by_num[num] = {k: 0 for k in _cdc.GP_COLUMNS}
+            pay_by_num[num].update(comm_legs=_legs.empty_split(), comm_ladder={})
+        # The org's DECLARED category for this payment type, read through §57's one home when the
+        # caller handed the map over, else from the category the caller already attached to the row
+        # (the legacy row shape — same folding rule either way, because both go through §58 below).
+        if pay_category_map is not None:
+            cat = _pc.category_of(pay_category_map, r.get('payment_type'))
+        else:
+            cat = str(r.get('category') or '').strip() or None
         amt = safe_float(r.get('amount'))
-        if   cat == 'Commission':
-            pay_by_num[num]['comm']    += amt
+        col = _pay_col_seen.get(cat or '')
+        if col is None:
+            col = _pay_col_seen[cat or ''] = _cdc.gp_column_of_declared_category(cat, _cc_cfg)
+        pay_by_num[num][col] += amt
+        if col == _cdc.GP_COMMISSION_COLUMN:
             # LEG SPLIT (decomposition only): the ePay payment type names its own month-of-life
             # ("New Activation Bounty - Month 3"). Every Commission dollar lands in exactly one of
             # m1 / trailing / unsplit, so the three always re-sum to 'comm'.
             _b, _leg, _ = leg_classify.label(r.get('payment_type'))
             pay_by_num[num]['comm_legs'][_b] += amt
             _leg_ladder_add(pay_by_num[num]['comm_ladder'], 'l', _leg, amt)
-        elif cat == 'Re-imbursement': pay_by_num[num]['reimb']   += amt
-        elif cat == 'MDF':            pay_by_num[num]['mdf']     += amt
-        elif cat == 'Chargeback':     pay_by_num[num]['chb']     += amt
-        else:                         pay_by_num[num]['unmapped'] += amt
 
     # ── Comp report bucketed by store street_num ──────────────────
+    # THE DEFECT THE OWNER REPORTED, AND WHERE IT LIVED (2026-10-08: *"gross profit is still showing
+    # the old data m teh source of information should be the same"*). This block used to guess the
+    # classification from keywords in the compensation type — `'reimbursement' in ct or 'rebate' in
+    # ct` -> reimbursement, `'mdf' in ct` -> MDF, EVERYTHING ELSE -> commission. The org's declared
+    # reimbursement types are period-named promo/offer/upgrade spellings whose text contains neither
+    # word, so essentially all of them fell through to commission: on the SAME 11,114 August 2026
+    # rows totalling $539,721.76, this said commission $538,879.26 / reimbursement $842.50 while the
+    # P&L — which dereferences the one home — said $120,799.55 / $418,922.21.
+    #
+    # It now dereferences that same home (§58 `carrier_dollar_class`): the org's own declaration
+    # wins, a period-renamed twin is an inference, the keyword ladder is the fallback for an
+    # undeclared type, and a type nothing can resolve lands in the unclassified column instead of
+    # being called commission. No classification and no folding rule is stated in this file.
     comp_by_num: dict[str, dict] = {}
+    _comp_seen: dict[str, dict] = {}
     for r in (comp_rows or []):
         num = street_num(r.get('business_address', ''))
         if not num: continue
         if num not in comp_by_num:
-            comp_by_num[num] = {'comm': 0, 'reimb': 0, 'mdf': 0,
-                                'comm_legs': _legs.empty_split(), 'comm_ladder': {}}
-        ct = str(r.get('compensation_type') or '').lower()
+            comp_by_num[num] = {k: 0 for k in _cdc.GP_COLUMNS}
+            comp_by_num[num].update(comm_legs=_legs.empty_split(), comm_ladder={})
+        ct = str(r.get('compensation_type') or '')
         amt = safe_float(r.get('payment_amount'))
-        if 'reimbursement' in ct or 'rebate' in ct:
-            comp_by_num[num]['reimb'] += amt
-        elif 'mdf' in ct:
-            comp_by_num[num]['mdf'] += amt
-        else:
-            comp_by_num[num]['comm'] += amt
+        _c = _comp_seen.get(ct)
+        if _c is None:
+            _c = _comp_seen[ct] = _cdc.classify(carrier_declarations, carrier_rules, ct, _cc_cfg)
+            _c['gp_column'] = _cdc.gp_column(_c['component'], _c.get('declared_category'), _cc_cfg)
+        comp_by_num[num][_c['gp_column']] += amt
+        if _c['gp_column'] == _cdc.GP_COMMISSION_COLUMN:
             # Same vocabulary as the Payment Detail (verified on the real Comprehensive Comp export),
             # so the same label classifier splits it.
             _b, _leg, _ = leg_classify.label(r.get('compensation_type'))
@@ -568,6 +623,11 @@ def calc_gp_report(
         comp_comm  = comp.get('comm', 0)
         comp_reimb = comp.get('reimb', 0)
         comp_mdf   = comp.get('mdf', 0)
+        comp_chb   = comp.get('chb', 0)
+        # Comp-report money the org has NOT declared and no keyword rule resolved. Its own column,
+        # never folded into Comp Comm — that fold is what made $418,922.21 of August 2026
+        # reimbursement read as commission (owner report 2026-10-08).
+        comp_unmapped = comp.get('unmapped', 0)
 
         mi_data    = mi_by_sfid.get(sfid, {'mi': 0, 'atu': 0}) if sfid else {'mi': 0, 'atu': 0}
         mi_amt     = mi_data['mi']
@@ -633,6 +693,7 @@ def calc_gp_report(
             'plan_gp': plan_gp, 'other_gp': other_gp,
             'comm': comm_recv, 'reimb': reimb, 'mdf': mdf,
             'comp_comm': comp_comm, 'comp_reimb': comp_reimb, 'comp_mdf': comp_mdf,
+            'comp_chb': comp_chb, 'comp_unmapped': comp_unmapped,
             'chargeback': chargeback, 'unmapped': unmapped,
             'mi': mi_amt, 'atu': atu_amt,
             # ── commission MONTH LADDER (owner 2026-09-21) — {rung: $} for THIS store, keys from
@@ -705,6 +766,7 @@ def calc_gp_report(
             'acc_gp': 0.0, 'setup_gp': 0.0, 'phone_sales': 0.0, 'plan_gp': 0.0, 'other_gp': 0.0,
             'comm': _c, 'reimb': 0.0, 'mdf': _md,
             'comp_comm': 0.0, 'comp_reimb': 0.0, 'comp_mdf': 0.0,
+            'comp_chb': 0.0, 'comp_unmapped': 0.0,
             'chargeback': 0.0, 'unmapped': _um, 'mi': _mi2, 'atu': _a,
             'comm_ladder': {_legs.ladder_key(_lk): round(safe_float(_lv), 2)
                             for _lk, _lv in _months.items()},
@@ -743,6 +805,11 @@ def calc_gp_report(
             'comm_earned': safe_float(comm_row.get('total_payout')),
         })
 
+    # The coverage report for the comp-report classification above — `tally` is the one home's own
+    # pure accounting, called on the very rows this engine bucketed, so it can never describe a
+    # different classification from the one the columns show.
+    _cc_coverage = _cdc.tally(comp_rows or [], carrier_declarations, carrier_rules, _cc_cfg)
+
     store_rows.sort(key=lambda x: x['net_profit'], reverse=True)
     rep_rows.sort(key=lambda x: x['acc_gp'], reverse=True)
 
@@ -756,6 +823,8 @@ def calc_gp_report(
         'comp_comm': sum(r['comp_comm'] for r in store_rows),
         'comp_reimb': sum(r['comp_reimb'] for r in store_rows),
         'comp_mdf': sum(r['comp_mdf'] for r in store_rows),
+        'comp_chb': sum(r['comp_chb'] for r in store_rows),
+        'comp_unmapped': sum(r['comp_unmapped'] for r in store_rows),
         'chargeback': sum(r['chargeback'] for r in store_rows),
         # `unmapped` is one of total_rev's terms and was never summed here — the SAME missing-column
         # defect the note below describes, found by the 2026-09-21 MA rewiring when carrier revenue
@@ -946,6 +1015,13 @@ def calc_gp_report(
             # org that has configured no commission expense name.
             'labour_commission_suppressed': commission_suppressed,
             'commission_legs': commission_legs_block,
+            # EVIDENCE FOR THE CARRIER COLUMNS (owner report 2026-10-08). The SAME coverage report
+            # the P&L carries, from the SAME pure function on the SAME rows — by component, by
+            # basis, the inferred dollars named with their twin, the undeclared dollars named per
+            # compensation type, and `balances` as the arithmetic proof. A Comp column resting on an
+            # inference or on an undeclared type can therefore say so, instead of presenting a guess
+            # with the same confidence as the org's own declaration.
+            'carrier_class_coverage': _cc_coverage,
             'bucket_composition': bucket_composition, 'unmapped_departments': unmapped_departments,
             'bucket_composition_excluded': excluded,
             'bucket_composition_basis': 'countable sale lines (voided / Return / unattributed excluded — '

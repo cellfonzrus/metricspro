@@ -972,13 +972,17 @@ _all_routes = _flatten_routes(real_app.routes)
 # named: GET /commcalc/peer-comparison (the Peer Sales Comparison report, index §59). Verified by
 # diffing the branch against main for route decorators — exactly one added, NONE removed — so the
 # pin was re-taken on a known addition, never relaxed to make CI green.
-# Re-pinned 1746 -> 1747 on 2026-10-08, measured against origin/main f27acee (the tree that had
-# just re-pinned to 1746 for #415) and this branch. The delta is ONE route and it is named:
-# GET /commcalc/spiff-impact (the Spiff Impact report, index §60). Verified by diffing the branch
-# against main for route decorators — exactly one added, NONE removed (`git diff origin/main..HEAD
-# | grep -c '^+@router\.'` = 1, `'^-@router\.'` = 0) — so the pin was re-taken on a known
-# addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1747"))
+# Re-pinned 1746 -> 1747 on 2026-10-08, measured against origin/main f27acee. The delta is again ONE
+# route and it is named: GET /commcalc/targets/{period}/report-cards (the Manager Report Cards,
+# index §59.9). Same verification, same rule: `git diff origin/main -- backend/ | grep '^[+-]@router\.'`
+# printed exactly one added line and zero removed. This pin WILL redden the next PR that adds an
+# endpoint; re-measure and re-pin it then, never widen or delete it.
+# Re-pinned 1747 -> 1748 on 2026-10-08, measured against origin/main 547dd49 (the tree that had
+# just re-pinned to 1747 for #420) after merging it into this branch. The delta is ONE route and it
+# is named: GET /commcalc/spiff-impact (the Spiff Impact report, index §60). Verified the same way:
+# `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
+# added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1748"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

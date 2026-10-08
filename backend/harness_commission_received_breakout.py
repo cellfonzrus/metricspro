@@ -269,6 +269,11 @@ gp_pd = [{"business_address": "100 Main St", "payment_type": "New Activation Bou
           "amount": 9999.0, "category": "Re-imbursement"}]
 gp_sm = [{"store_address": "100 Main St", "salesforce_id": "SF1", "market": "NY", "store_code": "S100"},
          {"store_address": "200 Oak Ave", "salesforce_id": "SF2", "market": "NJ", "store_code": "S200"}]
+# THE ORG'S OWN DECLARATION (§58.7). The GP engine no longer guesses a comp type's component from
+# keywords in its text, so the fixture declares what the house declares — keyed by §57's folding
+# rule, the way `payment_category.load_map` returns it.
+GP_DECL = {"device upgrade bounty - month 1": "Commission",
+           "2026 sim card reimbursement": "Re-imbursement"}
 gp_epay = calc_gp_report(sales=[], pay_detail=gp_pd, mi_rows=gp_mi_rows, rep_commissions=[],
                          expenses=[], catalog=[], store_mapping=gp_sm, period="April 2026",
                          comp_rows=[{"business_address": "100 Main St",
@@ -277,6 +282,7 @@ gp_epay = calc_gp_report(sales=[], pay_detail=gp_pd, mi_rows=gp_mi_rows, rep_com
                                     {"business_address": "100 Main St",
                                      "compensation_type": "2026 SIM card reimbursement",
                                      "payment_amount": 400.0}],
+                         carrier_declarations=GP_DECL,
                          leg_classify=legcls)
 et = gp_epay["totals"]
 out_ep = build(ma_rows=[], tx_rows=[])

@@ -253,6 +253,8 @@ on:
       - "backend/harness_line_class.py"
       - "backend/harness_peer_comparison.py"
       - "backend/app/modules/commcalc/peer_comparison.py"
+      - "backend/harness_manager_report_card.py"
+      - "backend/app/modules/commcalc/manager_report_card.py"
       # index §60 — one carrier pay type against a store's commission revenue and its net profit. The
       # lock reads the home, the endpoint that wires it, §59's band machinery it borrows, and the
       # per-store P&L snapshot read it shares with the filtered statement, so a change to any of them
@@ -541,6 +543,15 @@ on:
       - "backend/harness_carrier_dollar_class.py"
       - "backend/app/modules/commcalc/carrier_dollar_class.py"
       - "backend/app/modules/commcalc/carrier_map.py"
+      # index §58.7 — the GROSS PROFIT report renders the SAME fact and must keep dereferencing the
+      # same home (owner 2026-10-08: "gross profit is still showing the old data m teh source of
+      # information should be the same"). The lock reads the home, the GP engine, the router's
+      # wiring of it (_compute_gp and both commission-leg endpoints), the module graph and the
+      # index, so a change to any of them must run it.
+      - "backend/harness_gp_carrier_class_dereference.py"
+      - "backend/app/modules/commcalc/gp_report.py"
+      - "backend/app/modules/commcalc/payment_category.py"
+      - "database/migrations/1064_carrier_gp_columns.sql"
       - "backend/harness_installment_month_anchor.py"
       - "backend/app/modules/commcalc/installment_month.py"
       - "backend/app/modules/commcalc/installment_engine.py"
@@ -868,6 +879,9 @@ jobs:
       - name: Run the carrier-dollar classification lock (a carrier dollar's component has ONE home; the org's own payment_categories declaration beats the generic keyword ladder, a period-renamed twin is used but LABELLED as an inference, an undeclared type is reported and never guessed, and the distributor's reimbursement claim is held rather than booked as a second receipt — owner 2026-10-08, index §58)
         working-directory: backend
         run: python3 harness_carrier_dollar_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the GP carrier-classification dereference lock (the Gross Profit report classifies no carrier dollar of its own — the comp-report keyword guess and the four pay-category literal compares are gone, the trend's self-declared COPY of them is gone, and $418,922.21 of August 2026 declared reimbursement no longer renders as commission while gross profit itself moves $0.00 — owner 2026-10-08, index §58.7)
+        working-directory: backend
+        run: python3 harness_gp_carrier_class_dereference.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
         working-directory: backend
         run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1021,6 +1035,12 @@ jobs:
       - name: "Peer sales comparison (index §59): the add-a-line ONE HOME over the whole measured vocabulary + the equivalence pin that says no promo column moved; the traffic band; and the un-wire lock on every _sales_cell_agg field it rolls up"
         working-directory: backend
         run: python3 harness_peer_comparison.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      # Runs HERE and not in the dependency-free job because §D reads the router's own source to prove
+      # the endpoint dereferences rather than re-derives, and the module graph names this lock — a lock
+      # no workflow runs is not a lock, and the module-graph guard fails the build to say so.
+      - name: "Manager report cards (index §59.9): the three-state check-off where absence is never performance, the item registry wired rather than decorative, the roll-up and the org tree INJECTED, and the summary CALLED rather than reassembled"
+        working-directory: backend
+        run: python3 harness_manager_report_card.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: "Spiff impact (index §60): the share is of the P&L line the dollars actually book to; a profit lift is only reported from a profit; the un-wire lock on the four homes it dereferences; and a borrowed metric ranks through the peer bands' OWN median and gap"
         working-directory: backend
         run: python3 harness_spiff_impact.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
