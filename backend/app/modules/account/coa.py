@@ -1690,13 +1690,17 @@ def build_inputs(client, org_id, period):
     # the $415.97 gap is money the distributor says was paid that the carrier never paid — a
     # receivable/exception, never income.
     #
-    # Under the house default `device_reimb_source='carrier_paid'` the claim therefore books NO
-    # revenue and is HELD on `_distributor_reimb_claim`: visible, counted per store and per period,
-    # with the carrier figure beside it and the difference named. Nothing is silently dropped. The
-    # RECONCILIATION of that difference and its management-dashboard flag are deliberately NOT built
-    # here (separate owner, separate PR — this file must not grow a second reconciliation).
-    # `device_reimb_source='distributor_claim'` keeps the pre-2026-10-08 posture byte-identically
-    # for any org whose distributor ledger IS its receipt of record.
+    # Under `device_reimb_source='carrier_paid'` the claim therefore books NO revenue and is HELD on
+    # `_distributor_reimb_claim`: visible, counted per store and per period, with the carrier figure
+    # beside it and the difference named. Nothing is silently dropped. The RECONCILIATION of that
+    # difference and its management-dashboard flag are deliberately NOT built here (separate owner,
+    # separate PR — this file must not grow a second reconciliation).
+    #
+    # THE HOUSE DEFAULT IS STILL `'distributor_claim'`, the pre-2026-10-08 posture, byte-identical —
+    # because de-recognising the claim REDUCES booked revenue and a P&L restatement is a money move
+    # only the owner approves. Mig `1062` is what flips it (surfaced, not applied); index §58.4 has
+    # the measured figures. `'distributor_claim'` also remains correct, permanently, for any org
+    # whose distributor ledger IS its receipt of record.
     _dist_claim_books_revenue = ((_cdc_cfg or {}).get("device_reimb_source") or "distributor_claim") \
         == "distributor_claim"
     # `by_store` / `company_wide` stay EMPTY on every side entry: `engine.compute_and_store` walks
