@@ -43,6 +43,19 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    'device_reimbursement_paid_vs_claimed': {
+        "question": 'What did the carrier actually PAY for device financing, what does the '
+                    'distributor CLAIM it reimbursed, and may the two be compared at all?',
+        "homes": ('app/modules/commcalc/device_reimb_recon.py',),
+        "index": ('19.53',),
+        "locks": ('harness_device_reimb_recon.py',),
+        # SNAPSHOT — written BY HAND, multi-line, not blessed. `--bless` silently deleted 11 of 12
+        # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
+        # real import graph rather than regenerating it.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_drr',),
+        },
+    },
     'installment_month_of_life': {
         "question": 'Which instalment month is this subscriber or sale in, and is that month PROVEN '
                     'by the row or assumed from the window the reader pulled?',

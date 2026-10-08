@@ -58,6 +58,7 @@ Primary code homes:
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
 | 19.31 | **One activation count · Feed vs Transactions** | "How many new activations, and says who? What does the carrier's report claim against what the store's transactions say, and what accounts for every difference — a counting definition, a stale feed slice, or nothing?" |
 | 19.32 | **Daily port-out fraud report** | "Which port-in activations ported out again before they paid for themselves, how much was sold alongside them, and — said in the same breath — how many could we not decide about at all?" |
+| 19.53 | **ePay paid vs the distributor's reimbursement claim** | "The distributor says it reimbursed us for a device and the carrier statement does not show that money — which stores and months, how much, and which devices? Why is a store-month reported as NOT MEASURED instead of flagged, and what do I re-pull to settle it? Why is money we received that nobody claimed kept in its own bucket instead of netted off?" |
 | 19.38 | **No database / hosting names in customer copy** | "Why does a page / toast / tooltip / API message say `raw_comp_report`, `commcalc.store_mapping`, `RESEND_API_KEY` or \"Railway\" — and what stops the next one?" |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
@@ -6207,6 +6208,8 @@ rendering the resolved name.
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.commission_org_config.device_reimb_recon_config` (mig `1061`, **NOT applied**) — the per-org declaration for the ePay-paid vs distributor-claimed device-reimbursement reconciliation: WHICH classified carrier dollars are the device-financing side (`carrier_sources`, seeded EMPTY on purpose — an undeclared org measures nothing and flags nobody), the distributor category/status spellings, tolerance, severity thresholds, evidence cap and column names. RULE TWO: no carrier, tenant, product or quarter name exists in code | an owner / admin (the migration's own commented UPDATE) | ONE reader `commcalc/router._device_reimb_recon_inputs` → `device_reimb_recon.config_from_rows` (the house row behind the tenant row); degrades to `CODE_DEFAULT` when the column is absent — §19.53 |
+| `commcalc.flags` · `flag_type='DEVICE_REIMB_CLAIMED_NOT_PAID'` / `'DEVICE_REIMB_NOT_MEASURED'` | `commcalc/router.device_reimbursement_recon_sync_flags` → `device_reimb_recon.recon_flags`, written through the ADDITIVE `flag_persist.sync` (mig 287) at **store_period** grain, keyed `source_ref = '<YYYY-MM>|<store>'` so a re-read refreshes the one row instead of accumulating | the existing all-flags board (`GET /commcalc/flags/{period}`, the "All Flags" tile, mig `1002`) and the Management Watchdog areas `distributor` / `feed`. Registered in `flag_registry` — §19.53 |
 | `commcalc.flags` · `flag_type='sales_basis_not_loaded'` | `sales_recon.sync_recon_flags` via `_persist` — **grain `period`** (the first type at that grain), keyed `source_ref = plabel` so re-running replaces the one row instead of accumulating, and retired by the same additive `flag_persist` path the per-transaction findings use | ONE condition for a closed month whose month-end archive never arrived — it REPLACED 11,233 September + 3,001 October per-transaction criticals. Registered in `flag_registry`, severity HIGH — §19.52 |
 | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount` / `termination_date` — EVERY writer passes `storeops/router.py::gate_pay_write` first (§19.44): `POST /storeops/employees`, `POST /storeops/employees/bulk`, `PATCH /storeops/employees/{id}` (+ `PATCH /hr/employees/{id}`), `POST /storeops/employees/bulk-payscale`, `POST /hr/employees`; `employee_id` is minted by the one `_ensure_employee_id` after EVERY insert, incl. the Roles path `core._ensure_employee` (§19.45) | the create / edit / upload handlers named | unchanged (§14 pay visibility) |
 | `storeops.payroll_change_log` (mig `414`) — ONE writer, `storeops/router.py::_log_payroll_change`; its `employee_id` / `employee_name` / `store_code` are built by `storeops/payroll_log_identity.resolve_log_identity` from the stored employee (§19.45); `DELETE /manual-hours/{mid}` no longer logs a repeat delete | 20 call sites (storeops router + `payroll_approval`) | `GET /storeops/payroll-change-log`; `payroll_actual_hours_detail` edit markers |
@@ -6440,6 +6443,7 @@ rendering the resolved name.
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/device-reimbursement-recon?period=` — what ePay PAID vs what the distributor CLAIMS it reimbursed, per store per month: `carrier_paid`, `distributor_claimed`, `difference` + `direction` (`claimed_not_paid` / `paid_above_claim` / `agreed`), `verdict` (`measured` / `measured_floor` / `not_measured`) + `reason`, the claim's devices, the statement's missing days and its per-day run-rate, and `carrier_not_claimed_by_class`. READ-ONLY — books nothing, pays nobody, writes no flag. `POST /commcalc/device-reimbursement-recon/sync-flags` writes the findings to `commcalc.flags` through the additive merge | `router.device_reimbursement_recon` / `.device_reimbursement_recon_sync_flags` → `_device_reimb_recon_inputs` → `device_reimb_recon.carrier_side` / `.distributor_side` / `.reconcile` / `.recon_flags` | §19.53 |
 | `GET /commcalc/sales-recon` · `POST /commcalc/sales-recon/sync-flags` · `GET /commcalc/sales-derive-gap` — every payload now carries the comparability `verdict` (`comparable` / `archive_not_due` / `archive_not_loaded` / `no_feed` / `nothing_to_compare`), `archive_due`, `month_state` and the buckets the verdict allows; `sales-derive-gap`'s `is_closed_month` READS that verdict instead of string-comparing against `_ftp_current_period()` | `sales_recon.run_sales_recon` / `.sync_recon_flags` / `.derive_gap` → `comparability` → `feed_period.archive_due` | §19.52 |
 | `GET /commcalc/payout-schedule/preview` (`?period=`) — the RESIDUAL multi-month installment preview, READ-ONLY (`persist=False`). Since §19.51 its payload also carries `month_basis` (rows AND dollars per `activation_date` / `origin_period` / `window_edge`, plus `unanchored_rows` / `unanchored_amount`), `unresolved_schedule` (`subscribers`, `subscribers_with_no_carrier_id`, `by_carrier_id`), `totals.amount_no_rep` and `persisted` — and `note` is a real sentence instead of an unconditional `None` | `router.preview_payout_installments` `19762` → `installment_engine.compute_installments` | §7, §19.51 |
 | `POST /storeops/employees` · `POST /storeops/employees/bulk` · `POST /hr/employees` — pay fields pass the ONE pay-write gate: dropped and named in `pay_fields_ignored` for a caller who may not see pay (people still added), 403 for a non-manager sending pay; the StoreOps create echo is pay-stripped | `storeops/router.py::create_employee` / `bulk_create_employees` (now take `authorization`), `hr/router.py::hr_create_employee` → `gate_pay_write` | §19.44 |
@@ -6728,6 +6732,7 @@ rendering the resolved name.
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (108) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
 | **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |
@@ -6929,6 +6934,127 @@ rendering the resolved name.
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.53 **THE CARRIER STATEMENT AND THE DISTRIBUTOR'S REIMBURSEMENT LEDGER ARE THE SAME MONEY — and a
+shortfall against a FEED THAT ARRIVED SHORT is not an accusation** (owner report 2026-10-08).
+
+**THE REPORT, verbatim.** *"i just checked the commission details for boost, the commission is over
+stated as the device reimbursement is being added in the commision and also in device reimbursement …
+example is 103 fulton street / Commission (promo) $7,583.96 / Device-financing reimbursements
+(Distributor) $7,999.93 / the report which pays us is same as what is reported in commision 7583.96"*,
+and then the sentence that defines the reconciliation: *"distributors payments are not in additon to
+the reimbursement they are the same payments but the discrepancy nbetween them shows that the
+distributor claims it was paid bunt epay never paid it"*.
+
+So the two P&L lines are ONE flow of money, and the two sides are **not symmetric**: the carrier
+statement is the money RECEIVED, and the distributor's `reimbursement` column is a **CLAIM about that
+same money**. Claimed above paid is therefore the exception — the distributor says it was reimbursed
+and the carrier never paid it. Paid above claimed is a DIFFERENT fact (money received that the ledger
+never claimed) and is reported in its own bucket, never netted into one signed total: netting the house
+org's September 2026 figures would report **−$584.10** where the two real findings are **$415.97**
+claimed-not-paid at one store and **$1,000.07** paid-above-claim at another.
+
+**THE P&L HALF IS NOT THIS SECTION.** Which line a carrier dollar books on, and holding the
+distributor's claim as an unaccounted amount instead of a second receipt, is §55
+(`carrier_dollar_class`, the finance module's one classification home). THIS section is the
+reconciliation and the flag, and it **dereferences** that classification rather than building a second.
+
+**MEASURED LIVE, read-only, house org, 2026-10-08 — the owner's example reproduces to the cent.**
+September 2026, store `103 Fulton Ave`: the statement classifies **$7,583.96** under the key his figure
+falls under (three quarter-named promo types, $3,964.96 + $3,204.00 + $415.00), the distributor's ledger
+claims **$7,999.93** across **30 devices** acquired back to 2025-12-23, and the gap is **$415.97**. The
+same store-month also carries **$5,082.50** the org's own map classifies as a DIFFERENT kind of
+reimbursement (ramp-up, trade-in, SIM) which is not device financing — which is why "component =
+REIMBURSEMENT" is not a safe guess and why the carrier side is a declared config key, not a code branch.
+
+**AND WHY THAT $415.97 IS NOT FLAGGED AS "CLAIMED AND NEVER PAID" TODAY.** The statement for September
+arrived **missing 2026-09-30** — it is missing the final day of EVERY closed month ($111,949.22 in
+total, §19.48), and as of 2026-10-08 four of October's six days as well. So the paid side is a **FLOOR**,
+and the coverage rule is **direction-asymmetric**:
+
+| direction | coverage complete | coverage short |
+|---|---|---|
+| paid above the claim | `measured` | **`measured_floor` — PROVEN**: a floor above the claim stays above it |
+| claimed above paid | `measured` — the finding | **`not_measured` / `carrier_coverage_incomplete`** — the shortfall may BE the missing day |
+
+At 103 Fulton the statement averages **$505.60 a day** of device-financing money over the days that did
+arrive, which is MORE than the $415.97 shortfall: the gap and the missing day are indistinguishable
+from the data. Flagging the store for a theft-shaped "the distributor says it was paid and ePay never
+paid it" on that evidence would be a **false accusation about a real person's store**, so the flag says
+what is missing and what to re-pull instead. The dollars withheld are counted, never hidden
+(`unconfirmed_claimed_not_paid_total`).
+
+**THE CENSUS, under the candidate declaration (COMMISSION / `promo`, the key the owner's own figure
+falls under), measured through the shipped code per period:**
+
+| period | store-months | `measured_floor` | confirmed claimed-not-paid | WITHHELD claimed-not-paid | paid above claim | flags written |
+|---|---|---|---|---|---|---|
+| Mar 2026 | 27 | 8 | 0 — $0.00 | 17 — $44,419.15 | $10,816.92 | 18 |
+| Apr 2026 | 27 | 9 | 0 — $0.00 | 16 — $48,173.58 | $8,250.04 | 17 |
+| May 2026 | 27 | 17 | 0 — $0.00 | 8 — $11,691.08 | $24,954.03 | 9 |
+| Jun 2026 | 28 | 13 | 0 — $0.00 | 12 — $19,849.02 | $50,345.51 | 13 |
+| Jul 2026 | 29 | 4 | 0 — $0.00 | 23 — $83,658.39 | $13,049.95 | 24 |
+| Aug 2026 | 29 | 11 | 0 — $0.00 | 16 — $31,495.50 | $24,105.78 | 17 |
+| Sep 2026 | 29 | 18 | 0 — $0.00 | 9 — $16,044.03 | $37,066.17 | 10 |
+| Oct 2026 | 29 | 1 | 0 — $0.00 | 15 — $32,036.89 | $240.00 | 25 |
+
+**Not one confirmed shortfall in any month**, because not one month's statement arrived complete —
+$287,367.64 of claimed-above-paid is withheld pending a re-pull, and every withheld store-month says so
+by name. That is the honest state of the data, reported rather than hidden: the fix is the
+end-date-exclusive statement pull (§19.48), not code here. A further **317** store-months (mostly
+2023–2025 claims, which predate the statement feed entirely) report `carrier_statement_absent`.
+
+**AN ABSENCE IS NEVER A ZERO** — the §19.48/§19.49/§19.50/§19.51/§19.52 shape, dereferenced rather than
+re-invented. Five reasons, each with a sentence a human can act on, and `difference` is `None` for every
+one of them: `no_device_financing_rule_configured` (org-level, so it flags no store),
+`carrier_statement_absent`, `carrier_side_not_classified` (which reports the dollars that ARE there, by
+classification key, so the config can be corrected from the report), `distributor_claim_absent` (no
+claim, no finding) and `carrier_coverage_incomplete`.
+
+| the one fact | home | dereferenced by |
+|---|---|---|
+| **What did the carrier actually PAY for device financing, what does the distributor CLAIM it reimbursed, and may the two be compared at all?** — per store per month, both directions in separate buckets, every absence reported with its reason, the carrier side a FLOOR when its month arrived short | `commcalc.raw_comp_report` (the statement the P&L books `carrier_comm` from) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` (the claim the P&L books `vip_reimb` from) | ONE home `commcalc/device_reimb_recon.py` (pure, stdlib only) → `GET /commcalc/device-reimbursement-recon`, `POST /commcalc/device-reimbursement-recon/sync-flags`; lock `harness_device_reimb_recon.py` (**108 checks**) |
+
+**EVERYTHING ELSE IS DEREFERENCED, NOT REBUILT** — which is the duplicate check, stated:
+`carrier_map.load_rules` / `.classify` for "is this carrier dollar device-financing reimbursement"
+(§55 owns the ruling); `account/coa.store_resolver` for the store key, so this recon groups on the SAME
+key the P&L books under; `pay_data_quality.day_coverage_gap` for "do two feeds for the same money cover
+the same days" (§19.48); `core/feed_read.read_all` for every feed read, so no literal row ceiling
+(36,239 live `asset_ledger` rows, 73,678 statement rows); `flag_registry` for the type/area/severity;
+`flag_persist.sync` for the ADDITIVE write, so a district manager's review survives a re-read; and
+`commcalc.flags` + `GET /commcalc/flags/{period}` + the "All Flags" tile on Management Overview
+(mig `1002`) for the board. **No new table, page, queue or tile.**
+
+**TWO FLAG TYPES, in two different review areas, because they ask for two different actions.**
+`DEVICE_REIMB_CLAIMED_NOT_PAID` (area `distributor`, severity by config threshold) is a confirmed
+shortfall — go to the distributor. `DEVICE_REIMB_NOT_MEASURED` (area `feed`, MEDIUM) is a store-month
+that could not be reconciled, with the reason, the missing days and the run-rate — go to the feed or
+the configuration. A withheld shortfall lands on the SECOND type, which is the false-accusation guard
+in one line of code. `paid_above_claim` is reported and deliberately **not** flagged: it asks nobody to
+act, and a queue that cannot be worked through is a queue nobody works.
+
+**RULE TWO.** `commcalc.commission_org_config.device_reimb_recon_config` (mig `1061`, **surfaced for
+approval, NOT applied**) carries the declared carrier classification keys, the distributor category /
+status spellings, the tolerance, the severity thresholds, the evidence cap and the COLUMN NAMES. The
+house seed deliberately leaves `carrier_sources` **empty**: declaring which carrier dollars are device
+financing is a money decision and the owner's call (§6d), and until it is declared every store-month
+reports `no_device_financing_rule_configured` rather than a $0.00 paid side. The migration carries the
+one-line UPDATE that makes the declaration once he confirms it.
+
+**Lock:** `backend/harness_device_reimb_recon.py` (**108 checks**, DB-free, stdlib only). §A the two
+sides and the four injected facts; §B the owner's own numbers through the shipped code; §C every
+not-measured reason with `difference is None`; §D the direction-asymmetric floor rule, including a
+forged "complete" verdict and a month with no verdict at all; §E the two buckets never netted; §F the
+flags, the registry, the additive write and the absences that deliberately earn none; §G RULE TWO and
+purity; §H the un-wiring locks (the build fails if a caller stops dereferencing the classification, the
+store key, the coverage home or the paged read, or if this harness leaves CI); §I five controls, each
+mutating the guard to show it is what produces the honest answer. On the carrier-vocab-guard workflow.
+
+**GRAIN, STATED RATHER THAN IMPLIED.** The distributor side is device-keyed and a finding carries the
+devices that make up the claim. The carrier side is a statement total with **no device grain at all**,
+so `carrier_has_device_grain` is False on every row and nobody is invited to click through to a device
+on the paid side. A device-for-device match does not exist in this data and this module never pretends
+it does.
 
 §19.52 **A RECONCILIATION REPORTS A DIFFERENCE ONLY WHEN BOTH SIDES HAVE ARRIVED — the sales-leak
 watchdog that called the live month's own sales a revenue leak** (owner 2026-10-06, on a `sales_leak`
