@@ -211,7 +211,10 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/recovery' },
   { path: '/commcalc/rep-aliases' },
   { path: '/commcalc/report-mappings', label: 'Report Column Mappings', aliases: ['report mappings', 'column mapping'] },
-  { path: '/commcalc/peer-comparison', label: 'Peer Sales Comparison', aliases: ['peer comparison', 'similar stores', 'bill payment band', 'traffic band', 'boxes per bill payment'] },
+  // NAV names this page (it is listed under both Management Overview and Targets & Coaching), and
+  // NAV is the label authority — a second label here is the §G drift this registry forbids, so the
+  // entry carries only the words someone would actually type.
+  { path: '/commcalc/peer-comparison', aliases: ['peer comparison', 'similar stores', 'bill payment band', 'traffic band', 'boxes per bill payment'] },
   { path: '/commcalc/reports' },
   { path: '/commcalc/reports-index' },
   { path: '/commcalc/sales-analyzer' },

@@ -20952,3 +20952,20 @@ A zero on this screen accuses a person, so nothing is allowed to look like a res
 Module-graph fact: `peer_traffic_band` — home `app/modules/commcalc/peer_comparison.py`, callers
 `app/modules/commcalc/router.py`, index `59`, lock `harness_peer_comparison.py`. Written **by hand,
 multi-line** (never `--bless` — §50).
+
+**Two derived registries this report had to enter, both of which failed the build until it did — and
+that is the design working.** Neither is a hand list, so neither could be "remembered":
+
+- **The data-assistant catalogue** (§54.11) — `app/modules/core/data_qa_derived.py` is DERIVED from
+  `reports.ts` + the page's own fetched endpoint + the live OpenAPI parameters, and
+  `harness_data_qa_catalog.py` reddens when it and the reports disagree. The entry
+  `commcalc_peer_comparison` reads `/api/v1/commcalc/peer-comparison` with `period` as its one
+  pattern-matched parameter, so the assistant can be asked about this report rather than answering
+  from the nearest thing it knows. Generated, then diffed before it was applied: exactly one entry
+  added, none changed, none removed.
+- **The derived page index** (§54.7) — `route-index.ts`. Its §G rule is that **NAV is the label
+  authority**, so a page NAV names carries NO label of its own here; this report is in NAV twice, and
+  the label it shipped with was a second spelling of its name. Removed; the entry keeps only the
+  aliases someone would actually type. `prove_route_index.mjs` §E2 (every label survives a re-bless)
+  and §G1 caught it together, which is the point of a round-trip proof: a field the generator would
+  drop is drift already.
