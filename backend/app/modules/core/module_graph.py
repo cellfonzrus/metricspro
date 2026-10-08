@@ -56,6 +56,20 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_drr',),
         },
     },
+    'carrier_dollar_component': {
+        "question": 'Is this carrier dollar a commission, a spiff, a residual or a reimbursement — '
+                    'and is that the ORG\'S OWN declaration or a guess the platform made?',
+        "homes": ('app/modules/commcalc/carrier_dollar_class.py',),
+        "index": ('58',),
+        "locks": ('harness_carrier_dollar_class.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed. `--bless` silently deleted 11 of 12
+        # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
+        # real import graph rather than regenerating it.
+        "callers": {
+            'app/modules/account/coa.py': ('_cdc',),
+            'app/modules/commcalc/router.py': ('_cdc',),
+        },
+    },
     'installment_month_of_life': {
         "question": 'Which instalment month is this subscriber or sale in, and is that month PROVEN '
                     'by the row or assumed from the window the reader pulled?',
@@ -388,6 +402,9 @@ FACTS: dict[str, dict] = {
             'app/modules/account/ledger_pnl.py': ('_ct',),
             'app/modules/account/ma_store_pnl.py': ('_ct',),
             'app/modules/account/residual_subs.py': ('_ct',),
+            # §58 — the carrier-dollar classification's per-org config columns (mig 1062) are
+            # PROBED, never assumed, so the code is inert until the migration is applied.
+            'app/modules/commcalc/carrier_dollar_class.py': ('_ct',),
             'app/modules/commcalc/commission_engine.py': ('_ct',),
             'app/modules/commcalc/dlar_sweep.py': ('_ct',),
             'app/modules/commcalc/expenses_effective.py': ('_ct',),
@@ -509,6 +526,9 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_payment_category_home_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
+            # §58 — the carrier-dollar COMPONENT ruling sits on top of this CATEGORY read and
+            # keeps no copy of it; §57 decides the category, §58 decides what the category means.
+            'app/modules/commcalc/carrier_dollar_class.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
             'app/modules/commcalc/router.py': ('_pcat',),
         },
