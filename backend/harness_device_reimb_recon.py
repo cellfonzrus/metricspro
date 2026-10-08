@@ -204,9 +204,11 @@ ok("A9 the store key is INJECTED too — no second store-resolution chain here",
    "resolve_store" in _fn_src(MOD, "carrier_side")
    and "store_mapping" not in _code_only(_src(MOD))
    and "store_aliases" not in _code_only(_src(MOD)))
-ok("A10 the coverage verdict is INJECTED — this module runs no day-coverage test of its own",
+ok("A10 the coverage verdict is INJECTED — this module runs no coverage test of its own and knows "
+   "nothing about calendars",
    "coverage" in _fn_src(MOD, "reconcile")
-   and "day_coverage_gap" not in _code_only(_src(MOD)))
+   and not any(w in _code_only(_src(MOD))
+               for w in ("day_coverage_gap", "month_days", "month_state", "calendar", "monthrange")))
 eq("A11 the paid side is honest about having NO device grain, so nobody is invited to click through",
    _r["carrier_has_device_grain"], False)
 eq("A12 a month spelling is read from either feed's own form",
@@ -314,6 +316,35 @@ eq("D9 a coverage dict that claims complete while listing a missing day is not b
              coverage={"2026-09": {"complete": True,
                                    "missing_from_statement": ["2026-09-30"]}})[1],
          STORE_A, "2026-09")["reason"], R.REASON_COVERAGE_INCOMPLETE)
+# The coverage home's OWN answer shape (§19.54), read through the one helper.
+HOME_SHORT = {"2026-09": {"verdict": "failed", "ok": False, "missing_days": ["2026-09-30"],
+                          "missing_amount": 23050.60,
+                          "gap": {"complete": False, "missing_from_statement": ["2026-09-30"]}}}
+HOME_OK = {"2026-09": {"verdict": "passed", "ok": True, "missing_days": [], "missing_amount": 0.0}}
+HOME_UNMEASURED = {"2026-09": {"verdict": "not_measured", "ok": None, "missing_days": [],
+                               "missing_amount": 0.0}}
+eq("D11 the coverage home's own verdict is read — `ok` decides, and a named missing day is carried",
+   R.coverage_verdict(HOME_SHORT["2026-09"]), (False, ["2026-09-30"], 23050.60))
+eq("D12 ... `ok is None` is NOT complete: a month nobody measured is never a pass (§19.49)",
+   R.coverage_verdict(HOME_UNMEASURED["2026-09"])[0], False)
+eq("D13 ... and a complete month is complete, with nothing missing",
+   R.coverage_verdict(HOME_OK["2026-09"]), (True, [], 0.0))
+eq("D14 ... a flag claiming complete while naming a missing day is not believed",
+   R.coverage_verdict({"ok": True, "missing_days": ["2026-09-30"]})[0], False)
+eq("D15 ... an unpriceable shortfall reports None, never $0.00",
+   R.coverage_verdict({"ok": False, "missing_days": ["2026-09-30"]})[2], None)
+eq("D16 ... and the older two-feed answer is still read, so no caller is forced to fabricate",
+   R.coverage_verdict({"complete": False, "missing_from_statement": ["2026-09-30"]}),
+   (False, ["2026-09-30"], None))
+_c10, _r10 = run([carrier(STORE_A, "September 2026", "PROMO TYPE ONE", 7583.96, "2026-09-03")],
+                 [device(STORE_A, "2026-09-14", 7999.93)], coverage=HOME_SHORT)
+_x = rowof(_r10, STORE_A, "2026-09")
+eq("D17 a withheld shortfall carries what the missing days were WORTH, measured not estimated",
+   (_x["verdict"], _x["reason"], _x["carrier_missing_amount"]),
+   (R.VERDICT_NOT_MEASURED, R.REASON_COVERAGE_INCOMPLETE, 23050.60))
+ok("D18 ... and says so in the words a manager reads",
+   "$23,050.60" in R.recon_flags(_r10, _c10, period_label="September 2026")[0]["description"])
+
 eq("D10 agreement within tolerance on a complete month is MEASURED and reports a real 0.00",
    [(r["verdict"], r["difference"], r["direction"]) for r in run(
        [carrier(STORE_A, "September 2026", "PROMO TYPE ONE", 1000.00, "2026-09-03")],
@@ -469,8 +500,12 @@ ok("H1 the classification comes from the ONE classification home, bound to the o
    "carrier_map.load_rules" in _inp and "carrier_map.classify" in _inp)
 ok("H2 the store key comes from the ONE store canonicalization the P&L books under",
    "coa.store_resolver" in _inp)
-ok("H3 the day-coverage verdict comes from the ONE coverage home (§19.48)",
-   "_pdq.day_coverage_gap" in _inp)
+ok("H3 the coverage verdict comes from the ONE coverage home — the month-complete one (§19.54), "
+   "not the bare two-feed gap, so a CLOSED month is judged against its whole calendar",
+   "_pdq.statement_month_coverage" in _inp and "_pdq.day_coverage_gap" not in _inp)
+ok("H3b ... and this module reads that answer in ONE place, which honours `ok is None` as NOT complete",
+   _code_only(_src(MOD)).count("coverage_verdict(") == 2          # the definition + the one use
+   and '"ok" in e' in _fn_src(MOD, "coverage_verdict"))
 ok("H4 every feed read goes through the ONE complete paged read — no literal row ceiling (§19.48)",
    # the local `_read` helper IS that read, and the one read that cannot use it (the distributor
    # snapshot has no period column) calls it directly. Both are counted, so a fourth read added by

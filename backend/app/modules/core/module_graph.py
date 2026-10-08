@@ -193,15 +193,28 @@ FACTS: dict[str, dict] = {
         },
     },
     'month_archive_due': {
-        "question": "Has this month closed, so is its month-end archive due — and may a live feed be "
-                    "compared against that archive at all?",
+        # §19.54 widened this ONE question rather than standing up a second home for the same
+        # subject: "which days and months is this feed's window actually about" covers both when a
+        # month has CLOSED (so its archive is due and may be compared) and which days that closed
+        # month is OWED — plus the window a pull must ASK for so its last day arrives at all
+        # (`request_window`, `month_days`). A second module for the boundary would have been a
+        # second place to answer the same thing, which is the defect the graph exists to stop.
+        "question": "Which days and months is this feed's window about — has the month closed so its "
+                    "month-end archive is due and comparable, which days is a closed month owed, and "
+                    "what window must a pull ASK for so its last day actually arrives?",
         "homes": ('app/modules/commcalc/feed_period.py', 'app/modules/commcalc/sales_recon.py'),
-        "index": ('19.52',),
-        "locks": ('harness_sales_recon_basis.py', 'harness_feed_day_grain.py'),
-        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "index": ('19.52', '19.54'),
+        "locks": ('harness_sales_recon_basis.py', 'harness_feed_day_grain.py',
+                  'harness_statement_month_coverage.py'),
+        # SNAPSHOT — written BY HAND, multi-line, not blessed. `--bless` silently deleted 11 of 12
+        # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
+        # real import graph rather than regenerating it.
         "callers": {
             'app/modules/commcalc/epay_sweep.py': ('_feed_period',),
             'app/modules/commcalc/import_audit.py': ('_recon',),
+            # §19.54 — the statement-coverage verdict dereferences `month_state` for "is this month
+            # closed" and `month_days` for the calendar it is judged against; it owns neither.
+            'app/modules/commcalc/pay_data_quality.py': ('_fp',),
             'app/modules/commcalc/router.py': ('_feed_period', 'sales_recon'),
             'app/modules/notify/report_registry.py': ('SR',),
         },
@@ -531,8 +544,11 @@ FACTS: dict[str, dict] = {
         "question": 'Did this pay figure account for every dollar the carrier paid, or did it '
                     'silently drop what it could not place?',
         "homes": ('app/modules/commcalc/pay_data_quality.py',),
-        "index": ('19.48',),
-        "locks": ('harness_pay_feed_balance.py',),
+        # §19.54 — "and does this month's statement cover every day it is owed" is the same question
+        # one layer out (a dollar that never ARRIVED cannot be placed), so it lives in the same home
+        # and is locked by the new harness beside the old one.
+        "index": ('19.48', '19.54'),
+        "locks": ('harness_pay_feed_balance.py', 'harness_statement_month_coverage.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/accessory_cost_audit.py': ('_f', 'pdq'),

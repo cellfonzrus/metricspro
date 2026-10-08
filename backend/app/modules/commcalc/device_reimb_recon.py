@@ -40,9 +40,11 @@ WHAT IT DELIBERATELY DOES NOT DO
     duplicate defect CLAUDE.md forbids.
   · **It books, unbooks and pays nothing.** It computes a reconciliation and the flag rows that
     describe it. No amount, rate, tier, plan, schedule or paid/earned column is reachable from here.
-  · **It does not test feed coverage itself.** "Do two feeds for the same carrier money cover the
-    same days" has ONE home — `commcalc/pay_data_quality.day_coverage_gap` (index §19.48). The
-    caller hands its verdict in.
+  · **It does not test feed coverage itself.** "Does this period's statement cover every day it is
+    owed, and what is the shortfall worth" has ONE home — `pay_data_quality.statement_month_coverage`
+    (§19.54, which knows a CLOSED month is owed its whole calendar and prices the missing days from
+    the per-line feed), over `day_coverage_gap`'s two-feed answer (§19.48). The caller hands that
+    verdict in and `coverage_verdict` below is the one place this module reads it.
 
 AN ABSENCE IS NEVER A ZERO (the §19.48 / §19.49 / §19.50 / §19.51 house shape, fourth precedent
 dereferenced rather than a fifth vocabulary invented)
@@ -278,6 +280,37 @@ def day_key(value) -> str | None:
     return None
 
 
+def coverage_verdict(entry):
+    """PURE. (complete, missing_days, missing_amount) from the COVERAGE HOME's own answer.
+
+    The home is `commcalc/pay_data_quality.statement_month_coverage` (§19.54) — "does this period's
+    statement cover every day it is owed, and what is the shortfall worth". It knows a CLOSED month is
+    owed its whole calendar, which a two-feed day gap cannot know, and it PRICES the missing days from
+    the per-line feed. This module reads that answer and never re-derives it.
+
+    `ok` is authoritative when present: True means complete, False means short, and **None means
+    nothing was measured, which is NOT complete** (§19.49 — an absence is never a pass). An entry from
+    the older two-feed gap (`complete` / `missing_from_statement`) is still read, so a caller that has
+    only that answer is not forced to fabricate the richer one.
+
+    `missing_amount` is None when the shortfall could not be priced — reported, never valued at $0.00.
+    """
+    e = entry if isinstance(entry, dict) else {}
+    if "ok" in e:
+        complete = e.get("ok") is True
+    else:
+        complete = bool(e.get("complete"))
+    missing = list(e.get("missing_days") or e.get("missing_from_statement") or ())
+    if missing:
+        complete = False                      # a named missing day outranks any flag claiming complete
+    amt = e.get("missing_amount")
+    try:
+        amt = float(amt) if amt is not None else None
+    except Exception:
+        amt = None
+    return complete, missing, amt
+
+
 def normalize_config(raw, base=None) -> dict:
     """PURE. Coerce a stored config blob into a complete, in-range dict. Never raises.
 
@@ -475,9 +508,7 @@ def reconcile(carrier, distributor, cfg, coverage=None):
         c = ccells.get((st, mk)) or {}
         d = dcells.get((st, mk)) or {}
         paid, claimed = _f(c.get("paid")), _f(d.get("claimed"))
-        cm = cov.get(mk) or {}
-        missing_days = list(cm.get("missing_from_statement") or ())
-        complete = bool(cm.get("complete")) and not missing_days
+        complete, missing_days, missing_amount = coverage_verdict(cov.get(mk))
         paid_days = sorted(c.get("paid_days") or ())
         row = {
             "store": st, "month": mk, "month_label": month_label(mk),
@@ -490,6 +521,9 @@ def reconcile(carrier, distributor, cfg, coverage=None):
             "carrier_per_day": round(paid / len(paid_days), 2) if paid_days else None,
             "carrier_coverage_complete": complete,
             "carrier_missing_days": missing_days,
+            # What the missing days are WORTH in the per-line feed, measured by the coverage home —
+            # None when nothing can price them, never 0.00.
+            "carrier_missing_amount": missing_amount,
             "carrier_has_device_grain": False,
             "devices_claimed": int(d.get("devices") or 0),
             "device_sample": list(d.get("sample") or ()),
@@ -625,9 +659,12 @@ def recon_flags(result, cfg, period_label=None):
                         f"averages ${r['carrier_per_day']:,.2f} a day for this store, so a "
                         f"${_f(r['difference']):,.2f} shortfall cannot be separated from the missing "
                         f"day(s) until the statement is re-pulled") if r["carrier_per_day"] else ""
+                worth = (f", worth ${r['carrier_missing_amount']:,.2f} across the company in the "
+                         f"per-line feed" if r["carrier_missing_amount"] is not None else
+                         ", and nothing can price what they held")
                 extra = (f" The statement for {ml} is missing "
                          f"{len(r['carrier_missing_days'])} day(s)"
-                         f" ({', '.join(r['carrier_missing_days'][:5])});{rate}.")
+                         f" ({', '.join(r['carrier_missing_days'][:5])}){worth};{rate}.")
             elif r["reason"] == REASON_CARRIER_UNCLASSIFIED and r["carrier_not_claimed_total"]:
                 extra = (f" The statement carries ${r['carrier_not_claimed_total']:,.2f} for this "
                          f"store-month under other classifications "
