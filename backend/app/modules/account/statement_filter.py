@@ -438,6 +438,36 @@ def aggregate(payloads, statement_type, structure=None):
     return out
 
 
+def store_snapshots(client, org_id, period, st_type):
+    """THE read of a period's PER-STORE statement snapshots → a list of rows, deduped. IO.
+
+    ONE home, because two reports now need the same rows and must not read them two ways: this
+    module's filtered statement, and §60's spiff-impact report (which needs each store's net income
+    beside the carrier money that produced it). It returns the ROWS rather than just their payloads
+    so a caller can also report WHEN the figures were computed — a stored snapshot does not
+    recompute when a screen loads, and a report that does not say so invites a reader to take a
+    stale number for a current one.
+
+    EVERY SPELLING OF THE MONTH, DEDUPED (owner report 2026-10-06, index §19.50). The original of
+    this read matched ONE period spelling, so a month computed under the other form returned no
+    store snapshots at all and the filtered P&L came back `computed: true` with an EMPTY statement
+    and net income $0.00 — a filter that reads as "this subset earned nothing" rather than "not
+    computed". Widening alone would be a WORSE defect: a month stored under BOTH spellings would
+    contribute each store twice and every figure would DOUBLE, so the widened read goes through the
+    ONE "freshest wins" rule (`analysis.dedupe_latest`) rather than a second copy of it.
+
+    A period whose month cannot be parsed has no month key, so the dedupe cannot judge it at all and
+    would return nothing. Such rows are kept verbatim — widening must never be able to return LESS
+    than the one-spelling read it replaced."""
+    rows = (client.schema("commcalc").table("account_statements")
+            .select("period,statement_type,scope_key,scope_label,payload,computed_at")
+            .eq("org_id", org_id).in_("period", list(_per.period_keys(period)))
+            .eq("statement_type", st_type)
+            .like("scope_key", "store:%").execute().data) or []
+    idx = _analysis.dedupe_latest(rows)
+    return list(idx.values()) if idx else rows
+
+
 def filtered_statement(client, org_id, period, st_type, scope, stores_csv, markets_csv):
     """Build the store/market-filtered P&L or Balance Sheet for a period.
 
@@ -460,15 +490,7 @@ def filtered_statement(client, org_id, period, st_type, scope, stores_csv, marke
     # widened read goes through the ONE "freshest wins" rule (`analysis.dedupe_latest`) that the
     # analysis payload already uses — never a second copy of it.
     _pkeys = list(_per.period_keys(period))
-    rows = (client.schema("commcalc").table("account_statements")
-            .select("period,statement_type,scope_key,scope_label,payload,computed_at")
-            .eq("org_id", org_id).in_("period", _pkeys).eq("statement_type", st_type)
-            .like("scope_key", "store:%").execute().data) or []
-    _idx = _analysis.dedupe_latest(rows)
-    # A period whose month cannot be parsed has no month key, so the dedupe cannot judge it at all
-    # and would return nothing. Keep such rows verbatim — widening must never be able to return LESS
-    # than the one-spelling read it replaced.
-    rows = list(_idx.values()) if _idx else rows
+    rows = store_snapshots(client, org_id, period, st_type)
     picked, matched_addrs = [], []
     for r in rows:
         addr = (r.get("scope_key") or "")[len("store:"):]

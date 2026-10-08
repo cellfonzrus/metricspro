@@ -83,6 +83,8 @@ Primary code homes:
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 | 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
 | 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, which origins may the API be called from, what does a production build refuse to ship without (§40.10), what was actually measured during the two 2026-10-03 outages (§40.11 the morning one, §40.12 the afternoon one), what proves a LIVE deployment can actually reach its backend (the §40.12 preventive), and why an unreachable backend must never read as "login not enforced" (§40.13)?" |
+| 59 | **Peer sales comparison (traffic bands)** | "Which stores see the same number of people through the door, and which of them sells less on that traffic? Where is the band from, why is a store alone in its band never accused, and how does the same verdict reach the rep, the manager, the DM and the market manager?" |
+| 60 | **Spiff impact (one pay type, per store)** | "What is a certain spiff worth to a store’s commission payout revenue, by what % does it raise net profit, and which stores are not earning it on the sales they make? Why is a “spiff” sometimes not commission at all, why is a store’s lift blank, and why can the units-per-100-boxes rate exceed 100%?" |
 
 ---
 
@@ -6445,6 +6447,7 @@ rendering the resolved name.
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
 - `GET /commcalc/peer-comparison?period=&metric=&bands=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7).
+- `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -6744,6 +6747,7 @@ rendering the resolved name.
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
+| **What is ONE carrier pay type worth to a store — to its commission payout revenue and to its net profit — and which stores are not earning it on the sales they make?** The share is of the P&L line the dollars actually book to (a “spiff” the org declares a reimbursement is NOT commission revenue, and the report says so); the lift is `spiff ÷ (net_income − spiff)` and is withheld with its reason when no positive base survives; the rate is paid units per 100 boxes, flagged as a different cohort when the pay type names a month rung | `commcalc.raw_comp_report` (`compensation_type`, `payment_amount`, `quantity`) classified through `commcalc/carrier_dollar_class` × the stored `commcalc.account_statements` per-store P&L × `router._sales_cell_agg`’s `box_count` / `_billpay_exec` | ONE home `commcalc/spiff_impact.py` (`pay_type_options` / `default_selection` / `store_money` / `profit_effect` / `units_per_100_boxes` / `caveats` / `build`) → `GET /commcalc/spiff-impact`; reads NO sale line and classifies NO dollar itself (both AST-locked); module-graph fact `spiff_store_impact`; lock `harness_spiff_impact.py` — §60. Live September 2026 (house org): $110,780.14 to `carrier_comm` and $373,211.61 to `vip_reimb`, both tying to the cent to the 31 stored per-store snapshots; **77% of the statement is not commission**, only 3 of 49 pay types carry the SPIFF component, and 13 of 28 stores have no positive profit base for a lift |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
@@ -21297,3 +21301,173 @@ here: the first draft read `conversion.store` off the summary row. The live row 
 fixture had been written from the same assumption. Caught by running the real endpoint against
 production, not by reading the code. §A14–A16 now pin the flat shape, prove the state dereferences
 `meets_target`, and prove the nested shape is not quietly accepted.
+## 60. SPIFF IMPACT — what ONE pay type is worth to a store's commission revenue and its profit, and who is not earning it (owner ask 2026-10-08)
+
+Owner, verbatim: *"create a report for management review to assess the affect of a certain spiff on the
+overall commisison payout revenue for the store and what % does that help to increase the profitablity
+and then report whoich stores are lakcing those sales in terms of % sales which are contriuting to that
+profitability"*.
+
+**THE IDEA.** A spiff is a lever management can pull, and nobody could see what pulling it was worth.
+The carrier ships 49 distinct pay types in a month (measured, house org, September 2026) and the only
+surfaces that held them were the statement itself and the P&L's rolled-up carrier lines — so "is this
+spiff carrying a store, and which stores are not earning it" could not be asked at all. Three
+questions, in the owner's order, each answered with ONE number plus the reason it can or cannot be
+answered:
+
+1. **What is it worth to the commission payout revenue?** Its dollars as a share of every carrier
+   dollar that books to the **same P&L line**.
+2. **By how much does it raise profitability?** Net profit WITH it against net profit WITHOUT it —
+   `spiff ÷ (net_income − spiff)` — because the carrier pays it on sales the store already made: take
+   it away and the revenue goes while every cost stays.
+3. **Who is not earning it?** The spiff's **paid units per 100 boxes sold**, ranked inside the store's
+   own §59 traffic band, so the finding is "same door, same boxes, less of this spiff" rather than
+   "this store is small".
+
+### 60.1 THE DUPLICATE CHECK (build gate) — every number here is somebody else's already
+
+Searched before a line was written: §57 (pay category), §58 (the carrier dollar's classification), §59
+(peer traffic bands), §4 / §4b / §4e (the P&L and its per-scope totals), §4c (`pl_range`), §6 (rep
+commission and its spiff rates), **§6a (`GET /commcalc/setup-fee/impact` — the nearest-named thing on
+the platform)**, §19.50 (one month, one stored spelling), §19.52 (`device_reimb_recon`, the other
+reader of this feed), and the report lists in §17/§18.
+
+| the fact the report needs | the ONE home it DEREFERENCES |
+|---|---|
+| is this carrier dollar commission / spiff / residual / reimbursement, and on whose authority | `carrier_dollar_class.classify` (§58) — injected; the module never looks at the string |
+| which P&L line a component books to | `carrier_dollar_class.component_line` (§58) — config, never a branch |
+| which category the org DECLARED for a pay type | `payment_category` (§57), reached **through** §58 — no tenth reader |
+| the ONE folding rule for a pay-type key | `payment_category._fold` (§57) — the option list and the per-store tally must agree about whether two spellings are one type |
+| does the label NAME a month rung | `commission_ledger.parse_payment_month` (§4a) — exactly that function's own question; the month-of-life LEG question stays with `month_leg_of` |
+| boxes sold, and people through the door | `router._sales_cell_agg` via §59 — **not one sale line is read here** |
+| the traffic band, the median, the gap, "behind", and the sentence | `peer_comparison.band_of` / `_gaps` / `lagging` / `prompt_sentence` (§59.4) |
+| revenue / net income for a store | `account/analysis.pl_totals` (§4) off the STORED per-store snapshot, read through `statement_filter.store_snapshots` (§19.50's deduped read, **extracted in this PR** so both callers share it) |
+| which store is this, spelled any way | `router._store_code_resolver` (§59's and Daily-Targets' resolver) |
+
+**NEW here and nowhere else:** the share of the line, the profit-with-against-without arithmetic, the
+paid-units-per-100-boxes measure, and the honesty rules in §60.4.
+
+**NOT a sibling of §6a.** `setup-fee/impact` asks *"what would REP pay be at a percentage nobody has
+set yet"* — forward-looking, per rep, on an unset rate. This asks *"what did the CARRIER already pay
+for one of its own pay types, and what is that worth to the store's books"* — backward-looking,
+measured, per store. Different money, different grain, different question.
+
+### 60.2 ONE DEFINITION OF "BEHIND", BORROWED RATHER THAN COPIED — `peer_comparison.with_extra_metric`
+
+This report's third question is §59's question asked about a number §59 does not compute. Both
+alternatives were the defect the index rules forbid: re-implement the median, the gap, `lagging()` and
+`prompt_sentence()` over here (two definitions of behind, certain to drift the first time
+`BAND_MIN_PEERS` or the median rule changes), or teach §59 to read the carrier statement (a second
+derivation of money §58 owns).
+
+So `_gaps` gained a `metrics=` **parameter** (defaulting to §59's own declared set, so every existing
+caller is byte-identical) and §59 gained `with_extra_metric(payload, key, label, values,
+higher_is_better=True)`: the caller hands in its number per store, and the band, the median, the gap,
+the verdict and the sentence all stay in §59. A report using it **cannot** disagree with the peer
+screen or the action plan about who is behind, because it is the same code deciding. `higher_is_better`
+is declared, not assumed, so a future lower-is-better metric cannot silently invert every gap.
+
+### 60.3 THE SURFACES
+
+- **Endpoint** `GET /commcalc/spiff-impact?period&spiff&bands&markets` — `router.spiff_impact`, RBAC
+  store-scoped through `scope_keyset` / `in_keyset` like every other sales report. The carrier feed is
+  read PAGED through `feed_read.read_all` with **no literal row ceiling** (§19.48's rule; 11,054 rows a
+  month). READ-ONLY: books nothing, pays nobody, recomputes no statement.
+- **Page** `frontend/src/app/(platform)/commcalc/spiff-impact/page.tsx`, registered in **BOTH** NAV
+  groups as ONE href (*Management Overview* `module: 'commissions'`, beside Peer Sales Comparison, and
+  *Targets & Coaching* `module: 'targets'`), plus `REPORT_DIRECTORY` `'comm'`, `reports.ts`,
+  `route-index.ts` and the derived data-assistant catalogue (§54.11, `commcalc_spiff_impact`,
+  regenerated and diffed: exactly one entry added, none changed, none removed). The page renders and
+  never computes — in particular it never fills a blank with a 0.
+- **The dropdown is the tenant's own rows**, never a list in code (RULE TWO, the §13c enumeration
+  doctrine §57.2 follows for its category filter): every pay type on the month's statement, biggest
+  money first, each labelled with §58's component and whether the org declared it. With nothing picked
+  the report opens on the largest SPIFF-component type **and says it chose** (`selection_basis`), and a
+  pick the window cannot honour is `requested_not_found` rather than a silent substitution.
+
+### 60.4 THE HONESTY RULES, because this report ranks stores and names them to their managers
+
+- **A spiff that does not book to the commission line says so, loudly.** On the live house org MOST
+  carrier promo money classifies as REIMBURSEMENT (§58's ruling), so those dollars are not commission
+  revenue at all. The report names the line the selected type books to and reports its share of THAT
+  line. Showing a reimbursement as commission would restate the very money §58 just moved.
+- **A profit LIFT is only reported from a profit.** `net_income − spiff` at or below zero carries no
+  percentage — **13 of 28** house stores were at a loss in September 2026 — so the lift is `None` with
+  the reason said and the DOLLARS are the answer. A base of exactly zero likewise: a lift of infinity
+  is not a number.
+- **A paid unit is not a sale when the pay type names a month rung.** The carrier pays its bounties in
+  six monthly instalments, so a "Month 3" type pays on activations made three months ago; its units
+  against THIS month's boxes compare two cohorts and the rate can exceed 100%. The report still
+  computes it (every store's numerator is the same kind of thing, so the RANKING is sound) and the
+  caveat says plainly what the numerator counts. This is the same trap §19.48 recorded from the other
+  side: comp-report **quantity** summed across instalment rungs reads ~6× the activations.
+- **Zero is a measurement; missing is not.** A store the carrier paid nothing for this type shows
+  **$0.00 and 0 units** — that IS the finding the owner asked for. A store with no P&L snapshot shows
+  `None` and says "not computed, never zero". The two never render the same.
+- **The profit columns say WHEN they were computed**, because a stored snapshot does not recompute when
+  a screen loads and a report that does not say so invites a reader to take a stale number for a
+  current one.
+
+### 60.5 MEASURED LIVE, and the defect REPORTED rather than coded around
+
+House org, read-only, **September 2026** (`raw_comp_report`, 9,846 rows, 49 distinct pay types,
+28 stores; 22,914 sale rows; 31 stored per-store P&L snapshots):
+
+| | amount |
+|---|---|
+| classified to `carrier_comm` (COMMISSION $105,340.19 + SPIFF $5,295.00 + unresolved $144.95) | **$110,780.14** |
+| classified to `vip_reimb` (REIMBURSEMENT) | **$373,211.61** |
+
+**Both tie to the cent to the sum of the 31 stored per-store P&L snapshots** — which is the whole claim
+this report makes: it reads the same dollars the P&L books. Pinned as the oracle (§H).
+
+- **77% of the live statement books to the reimbursement line, not the commission line.** Only three
+  types carry the SPIFF component at all (`$2,632.50` / `$2,037.50` / `$625.00`), and the largest is
+  **2.38%** of the commission line. A manager asking "what is my spiff worth" was, before this,
+  looking at a number that mostly was not commission.
+- **Jun / Jul / Aug / Sep / Oct 2026 are all recomputed on §58's new basis** (verified by reading the
+  snapshots back, computed 2026-10-08 19:16–20:18 UTC). **May 2026 is not** — it still carries the
+  pre-§58 posture, and the report names its snapshot time rather than branching on a label.
+- **A store-identity defect, REPORTED.** One house store's carrier statement spells an address that
+  resolves to no store code, while `account_statements` holds P&L snapshots under **three** spellings of
+  it plus a bare `<2022>` key — so its profit is split and its carrier money is unjoinable. The report
+  puts it on its own row with the reason and raises the `unresolved_identity` caveat naming the
+  mapping as the thing to fix. It is **not** merged, guessed at, or dropped. Same class as §23b and
+  the `store_identity_merge` runbook.
+- **$144.95 resolves to no component at all** (two undeclared types with no twin and no keyword rule).
+  It rides onto the commission line on §58's own fallback and is reported there, never folded silently.
+
+### 60.6 THE LOCK
+
+`backend/harness_spiff_impact.py` — DB-free, network-free, stdlib only, wired into
+`.github/workflows/carrier-vocab-guard.yml` in both the paths filter and as a step. Sections: **§A** the
+option list is derived from the tenant's rows and carries §58's verdict · **§B** the report never
+silently chooses its own subject · **§C** the share is of the line the dollars actually book to, and
+the per-line buckets sum to the carrier total · **§D** the profit effect, and the percentage a loss
+cannot carry · **§E** the rate, and the denominator that is not a zero · **§F** the payload, the
+estate tying to its own rows, and the identity `net_income − spiff == net_income_ex_spiff` on every
+row · **§G** the caveats, each firing on its condition **and not otherwise** (a clean tenant raises
+none — the panel is not decorative) · **§H** THE REGRESSION, the live September figures above ·
+**§I** THE UN-WIRE LOCK: this module may read no raw sale field, import no classifier, keep no median
+or gap of its own, and must keep dereferencing §58 / §57 / §4 / §59 — plus RULE TWO over every code
+literal and a purity check that it does no IO · **§J** `with_extra_metric`, including that absence is
+never ranked as a zero, a store alone in its band still carries no gap, and `GAP_METRICS` is unchanged
+by this PR.
+
+**One existing check was re-aimed, and it is worth recording.** `harness_expense_one_path.py` §D10
+asserted "no second freshest-wins loop" as *"the word `computed_at` does not appear above
+`filtered_statement`"*. That was a PROXY: extracting the per-store snapshot read into
+`store_snapshots` (whose `select` legitimately names the column, so a report can say when the figures
+were computed) reddened it, while a hand-rolled `max(...)` written **below** the split point would have
+passed. It now measures the rule itself — exactly one dereference of `dedupe_latest`, and no private
+newest-wins pick — and was armed: planting a `sorted(rows, key=lambda r: r["computed_at"])` reddens it.
+Same §19.28 class, in both directions at once.
+
+Module-graph fact: `spiff_store_impact` — home `app/modules/commcalc/spiff_impact.py`, callers
+`app/modules/commcalc/router.py`, index `60`, lock `harness_spiff_impact.py`. Written **by hand,
+multi-line** (never `--bless`, which silently deleted 11 of 12 facts on 2026-10-04 — §50). Three
+existing facts gained an edge the same way: `payment_category_map` and `peer_traffic_band` ←
+`spiff_impact.py`, and `statement_crosscheck_verdict` ← `commcalc/router.py`.
+
+**Money posture: books nothing, maps nothing, re-declares nothing.** The module is read-only, writes no
+column, and no payout path reads anything it produces. No migration.

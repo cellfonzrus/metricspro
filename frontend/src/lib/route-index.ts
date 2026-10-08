@@ -218,6 +218,7 @@ export const ROUTES: RouteEntry[] = [
   // NAV names this page (it is listed under both Management Overview and Targets & Coaching), and NAV
   // is the label authority — a second label here is the §G drift this registry forbids.
   { path: '/commcalc/targets/report-cards', aliases: ['report card', 'report cards', 'dm scorecard', 'manager scorecard', 'dm accountability', 'targets met'] },
+  { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
   { path: '/commcalc/reports' },
   { path: '/commcalc/reports-index' },
   { path: '/commcalc/sales-analyzer' },
