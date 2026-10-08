@@ -23,9 +23,17 @@ interface StorePlan {
   metrics: Metric[]; items: Item[]; reps: RepPlan[]; commission_at_risk: number
   counts: { critical: number; warning: number }
 }
+interface PeerMeta {
+  stores_compared?: number; bands?: number; lagging?: number; unbanded?: number
+  gap_metric?: string; items_shown?: number; lagging_not_planned?: string[]
+  caveats?: { column: string; severity: string; message: string }[]
+  note?: string; error?: string
+}
 interface Resp {
   period: string; today: string
   summary: { critical: number; warning: number; stores: number; commission_at_risk: number }
+  setup_hint?: string
+  peer?: PeerMeta | null
   stores: StorePlan[]
 }
 
@@ -182,6 +190,39 @@ export default function ActionPlanPage() {
             <div style={{ fontSize: 26, fontWeight: 800, color: data.summary.commission_at_risk > 0 ? '#b45309' : 'var(--green)' }}>${Math.round(data.summary.commission_at_risk || 0).toLocaleString()}</div>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>commission at risk</div>
           </div>
+        </div>
+      )}
+
+      {/* THE PEER COMPARISON'S OWN HONESTY, above the items (index §59.7). Three different things a
+          reader would otherwise mistake for "nobody is behind their peers": the comparison failed,
+          a lagging store has no target so carries no item here, or a column the comparison could not
+          answer. Each is stated; none is rendered as a number. */}
+      {data?.peer && (data.peer.error || data.peer.note || (data.peer.caveats?.length ?? 0) > 0) && (
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 18, borderLeft: '4px solid #92400e' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
+            About the peer comparison
+          </div>
+          {data.peer.error && (
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>{data.peer.note}</div>
+          )}
+          {!data.peer.error && data.peer.note && (
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>{data.peer.note}</div>
+          )}
+          {(data.peer.caveats || []).map((c, i) => (
+            <div key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>{c.message}</div>
+          ))}
+          {!data.peer.error && (
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+              {data.peer.stores_compared ?? 0} stores compared across {data.peer.bands ?? 0} traffic
+              band(s); {data.peer.lagging ?? 0} behind their own band&apos;s median.
+            </div>
+          )}
+        </div>
+      )}
+
+      {data?.setup_hint && (
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 18 }}>
+          <div style={{ fontSize: 13 }}>{data.setup_hint}</div>
         </div>
       )}
 

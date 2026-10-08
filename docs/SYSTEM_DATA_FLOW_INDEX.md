@@ -6444,6 +6444,7 @@ rendering the resolved name.
 
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
+- `GET /commcalc/peer-comparison?period=&metric=&bands=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -6740,6 +6741,7 @@ rendering the resolved name.
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
@@ -20794,9 +20796,10 @@ through the door: nobody walks in to pay a bill because a salesperson persuaded 
 into TRAFFIC BANDS by bill-payment count and the comparison inside a band is fair — the same number of
 people walked in, so a gap in boxes sold is a gap in SELLING, not in footfall.
 
-**Shipped in stages, as stated to the owner.** §59.1–59.5 (the comparison screen, and the two facts it
-needed in the one home) are this PR. The action-plan prompt and the DM / market-manager report cards
-are the next two, and they read §59.4's `lagging()` rather than re-deciding who is behind.
+**Shipped in stages, as stated to the owner.** §59.1–59.6 (the comparison screen, and the two facts it
+needed in the one home) shipped first. §59.7 — the action-plan prompt for rep / manager / DM / market
+manager — is the second stage. The DM and market-manager REPORT CARDS are the third and are NOT built;
+every stage reads §59.4's `lagging()` rather than re-deciding who is behind.
 
 ### 59.1 THE DUPLICATE CHECK (build gate) — and what it CHANGED about the build
 
@@ -21001,3 +21004,59 @@ that is the design working.** Neither is a hand list, so neither could be "remem
   aliases someone would actually type. `prove_route_index.mjs` §E2 (every label survives a re-bless)
   and §G1 caught it together, which is the point of a round-trip proof: a field the generator would
   drop is drift already.
+
+### 59.7 THE ACTION-PLAN PROMPT — the same verdict, carried to the people who can act on it (stage 2)
+
+Owner: *"it should trigger in teh action plan for the sales reps their managers and dm and market
+manager to prompt them to increase the sales for those laggin stores as if one can do why not the
+other."* Shipped as **no new endpoint, no new notification path and no second feed read** — three
+findings made that possible, and all three are duplicate-check results, not luck:
+
+1. **The audience fan-out already exists.** `get_action_plan` keys its items by store and resolves the
+   viewer's reach through `scope_keyset`, so ONE store item is already seen by the rep, the store
+   manager, the DM and the market manager. The owner named four audiences; the plan needed none of
+   them added. A separate "peer alert" would have been a fifth notification path answering a question
+   the plan already answers.
+2. **The sale rows are already in hand.** `_fetch_actuals` reads the union for the plan's own actuals;
+   it now takes `rows_out=` and hands the raw rows back, so the peer comparison is computed off rows
+   already paid for. `harness_peer_comparison.py` §K4 locks that (`rows_out=_sale_rows` present, and
+   no `_sales_rows_union(` call of the plan's own).
+3. **"Behind" is already defined, once.** The plan calls `_peer_comparison_payload` (the shared
+   assembly, extracted from the `/peer-comparison` endpoint in this PR so BOTH callers read it) and
+   then `peer_comparison.peer_items_by_store`. It computes no band, no median and no gap of its own —
+   §K3 reddens on the mere mention of one. The screen and the plan cannot coach different stores.
+
+**The item.** `peer_comparison.peer_action_item(row)` turns ONE `lagging()` row into the plan's own
+`{severity, metric, title, detail}` shape, with `metric = "peer_gap"`, `detail` **being**
+`prompt_sentence(row)` (never a second wording, §J4) and the band numbers under `peer` so a surface —
+and stage 3's report cards — can render or tick off without re-deriving the verdict.
+
+**SEVERITY, AND THE BUG THAT A VACUOUS CHECK LET THROUGH.** Recorded because it is the third instance
+of the same trap (§19.28, §I5, §K8) and the only one that reached live numbers. The first rule was
+"`critical` when the store is further from the band's BEST than from its median". That is arithmetic,
+not a measurement: if `mine < median <= best` then `(best - mine) >= (median - mine)` **always**. Every
+lagging store came back `critical` — all 12 on live September 2026 data — and §J6, the check written to
+prove the rule, **passed because it asserted the tautology**. The rule now measures the shortfall as a
+SHARE of the band median (`CRITICAL_SHORTFALL = 0.25`), chosen from the measured spread: the 12 live
+stores ran 5.3%–42.1% below their own band median, and the cut splits them **5 critical / 7 warning** —
+B-2509 at 42% below is a gap to coach, the 5.3% store is noise and must not shout. A store with no
+leader to point at (a band of one, or a band whose best IS its median) is never `critical` whatever its
+shortfall: nothing proves anybody did better on that traffic. §J6 now plants a row either side of the
+cut and requires the severity to CHANGE, so restoring the tautology reddens it; §J7b plants a 90%
+shortfall with no leader. Both were armed.
+
+**Honesty, same as the screen.** A comparison that could not run is REPORTED in `peer_meta.error`, not
+silently absent ("a comparison that did not run is not the same as no store being behind" — §K6), and
+lagging stores the plan could not carry are counted and named in `peer_meta.lagging_not_planned` (§K7).
+The plan's cross-store rep view filters store items but must KEEP the peer item, because the owner
+asked reps be prompted — §K8, rewritten after its first draft proved vacuous.
+
+Surfaces: `GET /api/v1/commcalc/targets/{period}/action-plan` (existing), rendered by
+`frontend/src/app/(platform)/commcalc/targets/action-plan/page.tsx`, which gained an "About the peer
+comparison" panel and now renders the `setup_hint` the backend was already raising and nothing showed.
+Lock: `harness_peer_comparison.py` §J (11 checks, the item) and §K (10 checks, the un-wire).
+
+**Stage 3 — the DM and market-manager report cards — is NOT built.** It reads `lagging()` and these
+items; it must not re-decide anything. Before it is designed, note the measured constraint: the org
+tree resolves a DM for only **6 of 29** Cellfonz stores and **0 of 20** Luxelink stores, so a card keyed
+on DM is blank for most stores today. Surface that gap; never guess an owner for a store.
