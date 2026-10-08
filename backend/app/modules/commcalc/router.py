@@ -19,6 +19,7 @@ from app.core import import_batches as _import_batches   # DDIA Phase 1 idempote
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
+from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
@@ -11374,6 +11375,180 @@ def pay_feed_balance(period: str = "", org_id: str = ORG_ID):
     return {"period": period, "balance": bal, "day_coverage": coverage,
             "statement_month": month_coverage,
             "detail_rows": len(detail), "statement_rows": len(statement)}
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ePAY-PAID vs DISTRIBUTOR-CLAIMED DEVICE REIMBURSEMENT (index §19.52, owner report 2026-10-08)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# 💰 MOVES NO MONEY. Both endpoints compute a reconciliation and (the POST) write visibility rows to
+# `commcalc.flags`. No amount, rate, tier, plan, schedule or paid/earned column is reachable here,
+# and no P&L line is booked or unbooked — that half is the finance module's, by owner directive.
+def _device_reimb_recon_inputs(client, org_id: str, period: str):
+    """Everything the PURE reconciliation needs, read ONCE through the platform's existing one homes.
+
+    Nothing in here decides anything: the classification is `carrier_map`, the store key is
+    `coa.store_resolver`, the day-coverage verdict is `pay_data_quality.day_coverage_gap`, the config
+    is the org's own row inheriting the house row. This function only fetches and wires them.
+    """
+    pv = _pvariants(period) if period else None
+
+    def _read(table, select):
+        def _make():
+            q = client.schema("commcalc").table(table).select(select).eq("org_id", org_id)
+            return q.in_("period", pv) if pv else q
+        return _feed_read.read_all(_make)      # PAGED through the one home — no row ceiling (§19.48)
+
+    # ── config: house defaults ← house org row ← this tenant's row (RULE TWO, mig 1063) ──────────
+    def _cfg_blob(oid):
+        try:
+            rows = (client.schema("commcalc").table("commission_org_config")
+                    .select("device_reimb_recon_config").eq("org_id", oid).limit(1).execute().data) or []
+        except Exception as e:                 # column/table absent → house defaults (contract §5)
+            print(f"WARN device_reimb_recon config unavailable (run migration 1063?): {e}")
+            return None
+        return (rows[0] if rows else {}).get("device_reimb_recon_config")
+
+    cfg = _drr.config_from_rows(_cfg_blob(org_id), _cfg_blob(ORG_ID) if org_id != ORG_ID else None)
+    cols = cfg["columns"]
+
+    # ── the ONE classification home, bound to this org's own rules ────────────────────────────────
+    rules = carrier_map.load_rules(client, org_id)
+    classify = lambda cat: carrier_map.classify(rules, cat)        # noqa: E731
+
+    # ── the ONE store canonicalization, so this recon groups on the SAME key the P&L books under ──
+    try:
+        from app.modules.account import coa as _coa
+        resolve_store = _coa.store_resolver(client, org_id)
+    except Exception as e:
+        print(f"WARN device_reimb_recon store resolver unavailable, using raw spellings: {e}")
+        resolve_store = None
+
+    carrier_rows = _read("raw_comp_report", ",".join(sorted({
+        cols["carrier_store"], cols["carrier_amount"], cols["carrier_category"],
+        cols["carrier_period"], cols["carrier_day"]})))
+    # The distributor ledger is a wipe-and-replace SNAPSHOT with NO period column (asset-2 / mig 300)
+    # — its month is the reimbursement DATE's month — so it is read whole, org-scoped, and bucketed
+    # by that date. PAGED through the one home: 36,239 live house rows against any literal ceiling.
+    _acols = ",".join(sorted({
+        cols["distributor_store"], cols["distributor_amount"], cols["distributor_date"],
+        cols["distributor_category"], cols["distributor_status"], cols["distributor_device_id"],
+        cols["distributor_device_model"], cols["distributor_acquired"]}))
+    asset_rows = _feed_read.read_all(lambda: client.schema("commcalc").table("asset_ledger")
+                                     .select(_acols).eq("org_id", org_id))
+
+    # ── DAY COVERAGE through the ONE home. A month absent from this map is UNKNOWN coverage, which
+    #    the pure reconciliation treats exactly like incomplete — an untested feed is not a tested
+    #    one (§19.49).
+    _months = {_drr.month_key(r.get(cols["carrier_period"])) or
+               _drr.month_key(r.get(cols["carrier_day"])) for r in carrier_rows}
+    _months |= {_drr.month_key(r.get(cols["distributor_date"])) for r in asset_rows}
+    # DISCARD, not a set difference folded into the union: `|` binds looser than `-`, so writing this
+    # as one expression subtracts {None} from the SECOND set only and leaves a None in the result —
+    # which `sorted` then raises on. A row with no readable month is reported by the pure module's
+    # `unplaced` count instead (it can belong to no store-MONTH), so dropping it here loses nothing.
+    _months.discard(None)
+    months = sorted(_months)
+    #    `statement_month_coverage` (§19.54) is that home, not the bare two-feed gap: it knows a
+    #    CLOSED month is owed its WHOLE CALENDAR — which is the case every one of these months is in —
+    #    and it PRICES the missing days from the per-line feed, so a withheld finding can say what the
+    #    missing days were worth instead of only that they are missing.
+    #    Coverage is only ever CONSULTED for a store-month where the statement has rows (every other
+    #    row is already `carrier_statement_absent` before the floor rule is reached), so the
+    #    per-line feed is read through the SAME period filter as the statement — measured live
+    #    2026-10-08, that is 21,943 rows for September 2026 where the unnarrowed read is 245,195 rows
+    #    and ~246 round trips (and 1,723 rows for October, the shortest month on file). A
+    #    claim-only month therefore gets no coverage entry, which the pure module treats as UNKNOWN
+    #    and never as complete, so narrowing can only ever withhold a finding, never invent one.
+    detail = _read("raw_payment_detail", "payment_date,amount")
+    _det_days, _by_day = set(), {}
+    for r in detail:
+        d = str(r.get("payment_date") or "")[:10]
+        if len(d) == 10:
+            _det_days.add(d)
+            _by_day[d] = round(_by_day.get(d, 0.0) + safe_float(r.get("amount")), 2)
+    _stm_days = {d for d in (str(r.get(cols["carrier_day"]) or "")[:10] for r in carrier_rows)
+                 if len(d) == 10}
+    coverage = {}
+    for m in months:
+        if not m:
+            continue
+        coverage[m] = _pdq.statement_month_coverage(
+            _drr.month_label(m),
+            {d for d in _det_days if d.startswith(m)},
+            {d for d in _stm_days if d.startswith(m)},
+            amount_by_day={d: v for d, v in _by_day.items() if d.startswith(m)})
+    return cfg, carrier_rows, asset_rows, classify, resolve_store, coverage
+
+
+def _device_reimb_recon_run(client, org_id: str, period: str):
+    cfg, carrier_rows, asset_rows, classify, resolve_store, coverage = \
+        _device_reimb_recon_inputs(client, org_id, period)
+    carrier = _drr.carrier_side(carrier_rows, cfg, classify, resolve_store)
+    distributor = _drr.distributor_side(asset_rows, cfg, resolve_store)
+    res = _drr.reconcile(carrier, distributor, cfg, coverage)
+    res["period"] = period
+    res["config"] = {k: v for k, v in cfg.items() if k != "columns"}
+    res["coverage"] = coverage
+    return cfg, res
+
+
+@router.get("/device-reimbursement-recon")
+def device_reimbursement_recon(period: str = "", org_id: str = ORG_ID):
+    """WHAT ePAY PAID vs WHAT THE DISTRIBUTOR CLAIMS IT REIMBURSED — per store, per month.
+
+    OWNER 2026-10-08: *"distributors payments are not in additon to the reimbursement they are the
+    same payments but the discrepancy nbetween them shows that the distributor claims it was paid
+    bunt epay never paid it"*. So the carrier statement is the money RECEIVED, the distributor's
+    reimbursement column is a CLAIM about that same money, and claimed-above-paid is the exception.
+
+    READ-ONLY. BOOKS NOTHING, PAYS NOBODY, WRITES NO FLAG. The two directions are kept in separate
+    buckets and never netted, and a store-month that could not be measured says so with its reason
+    instead of reporting a clean $0.00 difference (§19.52).
+    """
+    require_org(org_id)
+    _cfg, res = _device_reimb_recon_run(sb(), org_id, period)
+    return res
+
+
+@router.post("/device-reimbursement-recon/sync-flags")
+def device_reimbursement_recon_sync_flags(period: str = "", org_id: str = ORG_ID):
+    """Persist this reconciliation's findings into `commcalc.flags` so they reach the management
+    board through the EXISTING all-flags surface (`GET /commcalc/flags/{period}`, the "All Flags"
+    tile on Management Overview, mig 1002) — no new page, no new table, no new queue.
+
+    ADDITIVE through `flag_persist.sync` (mig 287): a finding that still holds keeps its row and its
+    district manager's review, one that has since reconciled is RETIRED with a reason, and a new one
+    is inserted. Nothing is deleted.
+    """
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    client = sb()
+    cfg, res = _device_reimb_recon_run(client, org_id, period)
+    flags = _drr.recon_flags(res, cfg, period_label=period)
+    for f in flags:
+        mk = _drr.month_key(f.get("period") or period)
+        if mk:
+            f["period_month"], f["period_year"] = int(mk[5:7]), int(mk[:4])
+    flag_registry.stamp(flags)                      # ONE home for what a severity means (§53)
+    try:
+        from app.modules.commcalc import flag_store_resolver
+        flag_store_resolver.stamp_flags(client, org_id, flags)
+    except Exception as e:                          # never fail a recon on a routing lookup
+        print(f"WARN device_reimb_recon store_code stamping skipped: {e}")
+    written = {"flagged": len(flags)}
+    try:
+        written = flag_persist.sync(client, org_id, flags,
+                                    periods=_pvariants(period), sources=[_drr.FLAG_SOURCE],
+                                    reason=(f"the {period} device reimbursement for this store "
+                                            f"reconciles in the latest read"))
+    except Exception as e:
+        # NOT a silent fallback to delete-first: this writer is additive-only by design, and a
+        # pre-287 database is REPORTED rather than quietly churning a manager's reviews away.
+        print(f"WARN device_reimb_recon flag write unavailable (run migration 287?): {e}")
+        return {"period": period, "written": None, "write_error": str(e),
+                "flags": len(flags), "totals": res["totals"]}
+    return {"period": period, "written": {k: v for k, v in written.items() if k != "run_id"},
+            "flags": len(flags), "configured": res["configured"], "totals": res["totals"]}
 
 
 

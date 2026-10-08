@@ -536,6 +536,15 @@ on:
       - "backend/app/modules/commcalc/installment_engine.py"
       - "backend/app/modules/commcalc/sale_installment_engine.py"
       - "database/migrations/1059_subscriber_installment_pay_period_key.sql"
+      # index §19.53 — the ePay-paid vs distributor-claimed device-reimbursement reconciliation and
+      # its management flag. The lock reads the pure home, the router's wiring, the flag registry,
+      # the migration and the index, so a change to ANY of them must run it (the §13e lesson: a
+      # harness at the backend ROOT and a migration are outside the backend/app glob above).
+      - "backend/harness_device_reimb_recon.py"
+      - "backend/app/modules/commcalc/device_reimb_recon.py"
+      - "backend/app/modules/commcalc/flag_registry.py"
+      - "backend/app/modules/commcalc/pay_data_quality.py"
+      - "database/migrations/1063_device_reimb_recon_config.sql"
       - "backend/harness_statement_crosscheck_earned.py"
       - "backend/app/modules/account/analysis.py"
       - "backend/harness_expense_one_path.py"
@@ -840,6 +849,9 @@ jobs:
       - name: Run the one-path expense lock (one question one path — a gated detector reports that it did not measure, a period filter matches every spelling and dedupes, and the expenses trend reads the SAME carry-forward rule as the P&L — owner 2026-10-06, index §19.50)
         working-directory: backend
         run: python3 harness_expense_one_path.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the device-reimbursement reconciliation lock (the carrier statement and the distributor's reimbursement ledger are the SAME money, so claimed-above-paid is the exception and paid-above-claim is its own bucket, never netted; an absence is reported with its reason and never as a $0.00 difference; and a shortfall against a month whose statement arrived SHORT is withheld as not-measured rather than flagged against the store — owner 2026-10-08, index §19.53)
+        working-directory: backend
+        run: python3 harness_device_reimb_recon.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the instalment-month anchor lock (which month of a multi-month curve a row is in comes from the ROW'S OWN activation date, never the lookback window's edge; both multi-month engines share one home for the arithmetic; an unanchored month, an unresolved schedule, a raised engine and an incomplete ledger write are all REPORTED rather than read as $0.00 — index §19.51)
         working-directory: backend
         run: python3 harness_installment_month_anchor.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
