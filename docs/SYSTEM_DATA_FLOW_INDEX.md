@@ -6444,6 +6444,7 @@ rendering the resolved name.
 
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
+- `GET /commcalc/peer-comparison?period=&metric=&bands=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -6742,6 +6743,7 @@ rendering the resolved name.
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
@@ -20885,3 +20887,344 @@ callers `app/modules/account/coa.py`, `app/modules/commcalc/gp_report.py` (§58.
 `app/modules/commcalc/router.py`, index `55`, locks `harness_carrier_dollar_class.py` and
 `harness_gp_carrier_class_dereference.py`. Written **by hand, multi-line** (never `--bless`, which silently
 deleted 11 of 12 facts on 2026-10-04 — §50).
+
+## 59. PEER SALES COMPARISON — stores of comparable FOOT TRAFFIC, ranked on what they do with it (owner directive 2026-10-08)
+
+Owner, verbatim: *"need to create another module for sales comparison between the performance of store
+who have similar bill payments, since bill payments define the number of people coming in, the
+comparison should include the total boxes with a drill down into new / port / byod / swap / upgrade /
+tablet etc of whatever that number is made of, then the next columns will be aal and then family plans
+and total acc and Accessory per box, this should be under management review and tARGETS AND COACHING,
+also it should trigger in teh action plan for the sales reps their managers and dm and market manager
+to prompt them to increase the sales for those laggin stores as if one can do why not the other and
+then create a report card for the Dm … the same report card will be made for the market manager."*
+
+**THE IDEA.** A store's sales are not comparable with another's in the raw — a high-street door sees
+ten times the people a side street does. The owner's insight is that BILL PAYMENTS measure the people
+through the door: nobody walks in to pay a bill because a salesperson persuaded them to. Group stores
+into TRAFFIC BANDS by bill-payment count and the comparison inside a band is fair — the same number of
+people walked in, so a gap in boxes sold is a gap in SELLING, not in footfall.
+
+**Shipped in stages, as stated to the owner.** §59.1–59.6 (the comparison screen, and the two facts it
+needed in the one home) shipped first. §59.7 — the action-plan prompt for rep / manager / DM / market
+manager — is the second stage. The DM and market-manager REPORT CARDS are the third and are NOT built;
+every stage reads §59.4's `lagging()` rather than re-deciding who is behind.
+
+### 59.1 THE DUPLICATE CHECK (build gate) — and what it CHANGED about the build
+
+The first draft of `peer_comparison.py` counted boxes, the activation split, swaps, tablets, accessory
+dollars and bill payments **for itself** out of the sale lines. Searching the index for each one showed
+that EVERY ONE of them is already computed, per (store × rep × day) cell, by `router._sales_cell_agg` —
+THE shared sales aggregation behind the Sales Report, Executive MTD, Daily Targets, Productivity, Stack
+Ranking, Review and zero-sales (§2 / §18 / §9). A second derivation would have been exactly the defect
+these rules forbid: two paths answering one question, certain to drift the first time a tenant edited
+its `box_departments`.
+
+**So the module was rewritten to touch no sale line at all.** It is handed the cells and does only the
+genuinely new work. Every column is therefore the SAME number the Sales Report shows *by construction*,
+and a tenant's box / bill-payment / accessory configuration reaches this report for free.
+
+| Column | The ONE home it dereferences |
+|--------|------------------------------|
+| total boxes | `cell['box_count']` — config `box_departments` (mig `218`) + the `box_count_buckets` opt-in (mig `231`) |
+| new / port / byod / upgrade | `_prem` / `_port` / `_byod` / `_upg` — `line_class.activation_class` (§6, THE activation predicate). 'new' is the owner's word for the platform's `premium` class, mapped once in `BOX_PARTS` and never renamed in the home every money surface reads |
+| swap | `cell['_swap']` — `line_class.exclusion_class` (THE one home, owner ruling 2026-09-27) |
+| tablet | `cell['_dev_tablet']` — the device dimension (owner 2026-09-28, §6n) |
+| aal | `cell['_aal']` — `line_class.is_add_a_line`, **new one home, §59.2** |
+| bill payments | `cell['_billpay_exec']` — the Exec-MTD `bill_payment` predicate (mig `962`, `exec_metric_defs.line_match`) at TRANSACTION grain, **added to the one home, §59.3** |
+| total acc | `cell['accessory_rev']` — THE shared `_is_accessory` classifier |
+| family plan % | `commcalc.raw_dlar_store.family_plan_pct` (+ `aal_conversion`) — the CARRIER's own store KPI feed, already the one home for a store KPI (§10). The sales feed carries **no** family-plan fact, so this column is the carrier's or it does not exist |
+| store identity | `router._store_code_resolver` (the resolver Daily-Targets actuals use) — so one store spelled two ways in the feed is one row, and the carrier's store-grain KPI can attach |
+| market | `core.scope.market_by_code` via `_store_market_resolver` |
+
+**NEW here and nowhere else:** the traffic band, `boxes_per_billpay`, `accessory_per_box`, the peer gap,
+and `lagging()` / `prompt_sentence()` — THE one definition of "this store is behind", so the screen, the
+action plan and both report cards cannot disagree about who is being coached.
+
+**Not a sibling of §6f Sales Comparison**, and the distinction is worth keeping straight: that report is
+ONE store across TWO times (period-over-period % change per item). This one is MANY stores at ONE time,
+grouped by traffic. They answer different questions and now share their counting through `_sales_cell_agg`
+rather than through two tallies that happen to agree.
+
+### 59.2 THE ADD-A-LINE ONE HOME — `line_class.is_add_a_line`
+
+An add-a-line is **NOT a sixth class**: it is a MODIFIER on one. Every measured AAL value already names
+its class too ('Activation AAL' is an activation, 'BYOD Port AAL' a byod, 'Eligible Port-In Add A Line' a
+port), which is why the house `activation` tokens have carried `' aal'` / `'add a line'` since the
+beginning — an AAL has always counted as the activation it is. This adds the SECOND question ("…and was
+it an add-a-line?") without moving a single class, so **no count anywhere changes**.
+
+- **The copy it replaces.** `asset/router._promo_type` carried the ONLY other answer to this question —
+  `"add a line" in ct or ct == "aal" or ct.endswith(" aal")`, a bare `contract_type` substring, invisible
+  to a tenant whose POS carries the fact in the category path. Same class `exclusion_class` fixed for
+  'swap', in the same file, fixed the same way: CONTAINS over the SAME configured `fields` the class
+  predicate reads, vocabulary as config (RULE TWO) under `activation_details_rules.add_a_line`.
+- **The equivalence pin.** `harness_peer_comparison.py` §C5 proves the new home is byte-identical to the
+  retired expression over all 34 live `contract_type` values, so **no promo column and no expected
+  reimbursement moved** when the asset router started dereferencing it.
+- **Precision of the house words**, measured 2026-10-08 over ALL 34 non-blank `contract_type` values on
+  the platform (`daily_sales_feed` + `raw_sales`): `'aal'` names exactly the 8 values ending in AAL and
+  NOTHING else; `'add a line'` / `'add-a-line'` name the other 8 (the three 'Add a Line' spellings
+  included). 16 of 34 are an add-a-line and the predicate finds all 16 with no false positive. Pinned as
+  the harness fixture, so the predicate is proved against the real vocabulary.
+- An explicitly EMPTY vocabulary is honoured ("our POS does not say" is a real answer) and reported
+  through `add_a_line_configured`, so the column shows blank rather than a false 0. **A bug the harness
+  caught:** the first draft used `r.get("add_a_line") or HOUSE_ADD_A_LINE`, and `or` silently restored
+  the house words on an empty list — the one case the feature exists to respect.
+
+**KNOWN SECOND COPY, DELIBERATELY LEFT.** `_promo_type`'s **upgrade** and **port** tests are the same
+kind of bare substring. `line_class.activation_class` would answer them but NOT identically — its
+precedence is byod > upgrade > port, so 'BYOD Upgrade' and 'BYOD Port' would move from `promo_upgrade` /
+`promo_port_in` to `promo_non_port`. That report compares an EXPECTED reimbursement against a received
+one, so this is a money change and is surfaced for the owner's decision rather than ridden in on an
+unrelated PR.
+
+### 59.3 THE BILL-PAYMENT VISIT — the cell had two bill-payment facts and NEITHER answered the question
+
+| fact | predicate | grain | what it is for |
+|------|-----------|-------|----------------|
+| `_billpay` | `_BILLPAY_DEFAULT_TOKENS` / mig-`214` `billpay_products` | transaction | the Daily-Targets conversion denominator. The index already records this vocabulary as **over-matching** (§19) |
+| `bill_qty` | `exec_cfg['bill_payment']` (mig `962`) — the declared predicate | **LINE** | Exec MTD's Bill Payment Qty |
+| **`_billpay_exec`** (new) | the SAME declared predicate | **transaction** | "how many people came in to pay a bill" — the peer basis |
+
+One more fact in the one home, populated inside the existing `if exec_cfg:` block beside `bill_qty`, so
+every pre-existing caller is byte-identical and a caller that omits `exec_cfg` gets every store
+**unbanded with the reason said** rather than a silent zero.
+
+### 59.4 THE BANDS, THE GAP, AND THE ONE DEFINITION OF "BEHIND"
+
+- **Bands are CONFIG (RULE TWO).** `HOUSE_BANDS = (150, 250, 400)` — the lower bound of each band, taken
+  from the live distribution measured 2026-10-08 over September 2026 (28 banded stores, 83 to 616
+  bill-payment transactions), so the cuts fall where the stores actually cluster. `?bands=` overrides per
+  call; an explicitly EMPTY list means one band holding the whole estate.
+- **A band is named by its TRAFFIC, never by a judgement** — "250–399 bill payments", never "mid-tier".
+  The report rests on the bands being a measurement, and a store cannot argue with its own count.
+  Pinned (§A5).
+- **The median INCLUDES the store itself**, or a band of two has no median and a band of three measures
+  each store against one other store while calling it a median.
+- **`BAND_MIN_PEERS = 2`** — a band of ONE carries no gap at all, and the band says so. Being alone in a
+  band is not under-performance, and a gap invented from a single store is the false accusation this
+  report must never make.
+- **Direction is DECLARED, not assumed** (`GAP_METRICS`' `higher_is_better`), so a future metric where
+  less is better (a port-out rate) cannot silently invert every gap.
+- **`lagging(payload, metric)`** is THE definition of behind — behind the store's OWN band median — and
+  `prompt_sentence` is THE sentence, carrying the store's number, the median, the band and the peer who
+  did better on the same traffic. Both live in the module, not the screen, so §59's stage 2 and 3 cannot
+  drift from stage 1. Default metric `boxes_per_billpay`: the conversion of footfall into a sale, which
+  is the owner's actual question.
+
+### 59.5 THE HONESTY RULES, and the three configuration facts that read as performance
+
+A zero on this screen accuses a person, so nothing is allowed to look like a result when it is a setting.
+
+- A store with NO bill-payment transactions is **not banded and not compared** — it lands in `unbanded`
+  with the reason, naming Exec Metric Definitions as the thing to check, because a zero there usually
+  means the tenant's bill-payment vocabulary is not the one Exec MTD counts.
+- A column that cannot be answered is `None`, **never 0** — family plan with no carrier feed, AAL with
+  the vocabulary emptied, a ratio with no denominator.
+- **The drill-down is reported BESIDE the total, never as a partition of it**, and the payload says so in
+  words. `box_count` has its own rule (device departments + configured buckets) and a receipt naming two
+  activation types counts in both parts. Pinned (§E13/§E14).
+- **`column_caveats`** states what the table cannot answer for this tenant, rendered ABOVE the numbers.
+  Measured on the house org 2026-10-08, two fire:
+  - **tablet** — `cannot_answer`. The device dimension is off, so `_dev_tablet` is empty by design and
+    the Tablet column reads 0 for every store. That is a setting, not a sales result. **A tablet has
+    always counted as a BOX**, because `'TABLET - XP'` is one of the org's `box_departments` (mig 218)
+    and `box_count` is counted off those lines — 48 such lines live in September 2026. So what the
+    device dimension withholds is the **split**, never a box. The caveat says so in those words and
+    §H2b pins it, because "Tablet: 0" beside a device-dimension caveat otherwise reads as "tablets are
+    missing from the total", which is the opposite of the owner's ruling.
+    **Turning the dimension on is not a display-only flip**: `line_class.resolve_devices` leaves
+    `applies_to` defaulting to EVERY activation-type class, so a declared device re-prices what it
+    applies to. To light the column without touching pay it needs `applies_to: []` (counted, never
+    paid) alongside the device rules — a money-adjacent decision, so it is surfaced, not flipped.
+  - **boxes** — `understated`. **The same question is answered two ways across tenants today**
+    (measured 2026-10-08, `commcalc.accessory_config`): `box_count_buckets` is `['byod']` on Luxelink
+    Wireless and Vzone, and **EMPTY on Cellfonz R Us** — which is also the house-default row
+    `00000000-…-0001`, so NY LOGISTICS (no row of its own) inherits the empty answer. A BYOD sale
+    carries no device-department line, so on Cellfonz it adds no box — **on every box surface on the
+    platform, not just this one** (Sales Report box count, Daily-Targets conversion and attainment,
+    Productivity, Stack Ranking, Review).
+    The owner has ruled it twice — 2026-07-24 ("customer phone = BYOD must count toward total boxes")
+    and again **2026-10-08** ("byod and tablets count towards the total boxes") — so the empty row is
+    not a tenant preference, it is the ruling not applied.
+    **Scale, measured on September 2026 for Cellfonz:** 601 distinct BYOD transactions against 1,159
+    device-department box lines, so boxes go **1,159 → 1,760 (+52%)** and the Daily-Targets conversion
+    rate (boxes ÷ bill payments) rises with them. **No payout moves**: `targets_engine.achieved_for_cat`
+    pays on `prem` / `byod` / `upg` / `acc`, never on `box`, and BYOD is already its own pay category —
+    the tick adds BYOD to the box TOTAL, it does not pay anything twice.
+    **The control already ships and the owner can press it himself**: the tick *"Count BYOD /
+    customer-phone toward total boxes sold"* in the Sales Report's Classification settings
+    (`PUT /commcalc/accessory-config`, `box_count_buckets`). No migration, no SQL. The caveat names
+    that tick rather than the column, and §H5b pins it — a caveat that names a defect but not its
+    control is a complaint, not a fix.
+    **Why no house default in code can fix this.** `box_count_buckets` is `TEXT[] NOT NULL DEFAULT '{}'`
+    (mig 231), so the schema cannot tell "never declared" from "declared empty"; every reader sees `{}`
+    and must take it as an answer. A code-side house default of `['byod']` would therefore override a
+    tenant that genuinely means empty. The per-org row IS the mechanism here (RULE TWO: a per-tenant
+    config ROW is not a patch), and because Cellfonz's row doubles as the house-default row, setting it
+    is what fixes the inheriting tenant too. Making the distinction expressible would take a migration
+    and is not in this PR.
+    **WHAT THE OWNER'S FIRST ATTEMPT EXPOSED (2026-10-08, §59.8).** He ticked `BYOD` in the **"Box
+    (device-unit) departments"** list instead — a different control on the same panel, writing
+    `box_departments`, not `box_count_buckets`. Measured on September 2026: that counts 391 BYOD-DEPARTMENT
+    lines across only **286 receipts** (so one sale can count twice), of which **256 are not BYOD
+    activations at all**, while only **30 of the 601** BYOD activations have a line in that department.
+    The department is a product department, not the activation. Two lessons, both recorded rather than
+    re-derived: when telling anyone to set this, name the **heading** (the two controls sit inches
+    apart), and the attempt broke the bucket's own assumption — see §59.8.
+  - **family_plan_pct** — `partial`, naming each store that did not resolve to a code. Blank means
+    unmatched, never 0%. (It fires on no house store today: all 28 DLAR rows matched, keyed on
+    `address` — `raw_dlar_store.store_code` is blank on every row, which is why the resolver is used.)
+
+### 59.6 Surfaces, and the lock
+
+- **Endpoint** `GET /commcalc/peer-comparison?period&bands&markets&metric` — `router.peer_comparison`,
+  RBAC store-scoped through `scope_keyset` / `in_keyset` like every other sales report.
+- **Page** `frontend/src/app/(platform)/commcalc/peer-comparison/page.tsx`. Registered in
+  **BOTH** NAV groups the owner named, as ONE href so RBAC and ⌘K see one report: *Management Overview*
+  (`module: 'commissions'`, beside Sales Comparison — the management-review surface) and *Targets &
+  Coaching* (`module: 'targets'`, beside the Action Plan it will prompt into). Plus `REPORT_DIRECTORY`
+  `'sales'`, `reports.ts` and `route-index.ts`. The page renders and never computes — in particular it
+  never fills a blank with a 0.
+- **Proof / lock** `backend/harness_peer_comparison.py` — DB-free, stdlib, ~130 checks. §A bands ·
+  §B config · §C THE ADD-A-LINE ONE HOME over the whole measured vocabulary + the equivalence pin ·
+  §D the roll-up and **the distinct-transaction defect it avoids** (a receipt shared by two reps counts
+  ONCE; summing the cell counts would have said 3 — reproduced as a negative control) · §E the honesty
+  rules · §F the gap · §G one definition of lagging · §H the caveats · **§I the un-wire lock**: every
+  cell field this module reads must still be initialised in `_sales_cell_agg`, `_aal` must still be
+  populated from `_lc.is_add_a_line`, `asset/router._promo_type` must still dereference the home, and
+  `peer_comparison.py` must read **no raw sale-line field and import no classifier**.
+  **§I is an AST check, and that is not a style choice** — a textual one cannot work here: prose must be
+  allowed to discuss a field (the caveat sentences name `box_departments`), and blanking the string
+  literals to let prose through also blanks `r.get("contract_type")`, which made the first draft vacuous
+  and pass a planted violation. Arming it is what exposed that (the §19.28 trap, in the other direction).
+  Every lock check was armed and proven to fail.
+
+Module-graph fact: `peer_traffic_band` — home `app/modules/commcalc/peer_comparison.py`, callers
+`app/modules/commcalc/router.py`, index `59`, lock `harness_peer_comparison.py`. Written **by hand,
+multi-line** (never `--bless` — §50).
+
+**Two derived registries this report had to enter, both of which failed the build until it did — and
+that is the design working.** Neither is a hand list, so neither could be "remembered":
+
+- **The data-assistant catalogue** (§54.11) — `app/modules/core/data_qa_derived.py` is DERIVED from
+  `reports.ts` + the page's own fetched endpoint + the live OpenAPI parameters, and
+  `harness_data_qa_catalog.py` reddens when it and the reports disagree. The entry
+  `commcalc_peer_comparison` reads `/api/v1/commcalc/peer-comparison` with `period` as its one
+  pattern-matched parameter, so the assistant can be asked about this report rather than answering
+  from the nearest thing it knows. Generated, then diffed before it was applied: exactly one entry
+  added, none changed, none removed.
+- **The derived page index** (§54.7) — `route-index.ts`. Its §G rule is that **NAV is the label
+  authority**, so a page NAV names carries NO label of its own here; this report is in NAV twice, and
+  the label it shipped with was a second spelling of its name. Removed; the entry keeps only the
+  aliases someone would actually type. `prove_route_index.mjs` §E2 (every label survives a re-bless)
+  and §G1 caught it together, which is the point of a round-trip proof: a field the generator would
+  drop is drift already.
+
+### 59.7 THE ACTION-PLAN PROMPT — the same verdict, carried to the people who can act on it (stage 2)
+
+Owner: *"it should trigger in teh action plan for the sales reps their managers and dm and market
+manager to prompt them to increase the sales for those laggin stores as if one can do why not the
+other."* Shipped as **no new endpoint, no new notification path and no second feed read** — three
+findings made that possible, and all three are duplicate-check results, not luck:
+
+1. **The audience fan-out already exists.** `get_action_plan` keys its items by store and resolves the
+   viewer's reach through `scope_keyset`, so ONE store item is already seen by the rep, the store
+   manager, the DM and the market manager. The owner named four audiences; the plan needed none of
+   them added. A separate "peer alert" would have been a fifth notification path answering a question
+   the plan already answers.
+2. **The sale rows are already in hand.** `_fetch_actuals` reads the union for the plan's own actuals;
+   it now takes `rows_out=` and hands the raw rows back, so the peer comparison is computed off rows
+   already paid for. `harness_peer_comparison.py` §K4 locks that (`rows_out=_sale_rows` present, and
+   no `_sales_rows_union(` call of the plan's own).
+3. **"Behind" is already defined, once.** The plan calls `_peer_comparison_payload` (the shared
+   assembly, extracted from the `/peer-comparison` endpoint in this PR so BOTH callers read it) and
+   then `peer_comparison.peer_items_by_store`. It computes no band, no median and no gap of its own —
+   §K3 reddens on the mere mention of one. The screen and the plan cannot coach different stores.
+
+**The item.** `peer_comparison.peer_action_item(row)` turns ONE `lagging()` row into the plan's own
+`{severity, metric, title, detail}` shape, with `metric = "peer_gap"`, `detail` **being**
+`prompt_sentence(row)` (never a second wording, §J4) and the band numbers under `peer` so a surface —
+and stage 3's report cards — can render or tick off without re-deriving the verdict.
+
+**SEVERITY, AND THE BUG THAT A VACUOUS CHECK LET THROUGH.** Recorded because it is the third instance
+of the same trap (§19.28, §I5, §K8) and the only one that reached live numbers. The first rule was
+"`critical` when the store is further from the band's BEST than from its median". That is arithmetic,
+not a measurement: if `mine < median <= best` then `(best - mine) >= (median - mine)` **always**. Every
+lagging store came back `critical` — all 12 on live September 2026 data — and §J6, the check written to
+prove the rule, **passed because it asserted the tautology**. The rule now measures the shortfall as a
+SHARE of the band median (`CRITICAL_SHORTFALL = 0.25`), chosen from the measured spread: the 12 live
+stores ran 5.3%–42.1% below their own band median, and the cut splits them **5 critical / 7 warning** —
+B-2509 at 42% below is a gap to coach, the 5.3% store is noise and must not shout. A store with no
+leader to point at (a band of one, or a band whose best IS its median) is never `critical` whatever its
+shortfall: nothing proves anybody did better on that traffic. §J6 now plants a row either side of the
+cut and requires the severity to CHANGE, so restoring the tautology reddens it; §J7b plants a 90%
+shortfall with no leader. Both were armed.
+
+**Honesty, same as the screen.** A comparison that could not run is REPORTED in `peer_meta.error`, not
+silently absent ("a comparison that did not run is not the same as no store being behind" — §K6), and
+lagging stores the plan could not carry are counted and named in `peer_meta.lagging_not_planned` (§K7).
+The plan's cross-store rep view filters store items but must KEEP the peer item, because the owner
+asked reps be prompted — §K8, rewritten after its first draft proved vacuous.
+
+Surfaces: `GET /api/v1/commcalc/targets/{period}/action-plan` (existing), rendered by
+`frontend/src/app/(platform)/commcalc/targets/action-plan/page.tsx`, which gained an "About the peer
+comparison" panel and now renders the `setup_hint` the backend was already raising and nothing showed.
+Lock: `harness_peer_comparison.py` §J (11 checks, the item) and §K (10 checks, the un-wire).
+
+**Stage 3 — the DM and market-manager report cards — is NOT built.** It reads `lagging()` and these
+items; it must not re-decide anything. Before it is designed, note the measured constraint: the org
+tree resolves a DM for only **6 of 29** Cellfonz stores and **0 of 20** Luxelink stores, so a card keyed
+on DM is blank for most stores today. Surface that gap; never guess an owner for a store.
+
+### 59.8 ONE SALE, AT MOST ONE BOX — the assumption the box-count bucket rested on, and the guard that replaces it
+
+**The class, not the instance.** `box_count_buckets` (mig 231) adds a box for a sale that has **no**
+device line — a BYOD activation, where the customer brought the phone. The code added the whole bucket
+outright, `box_count += len(cell['_byod'])`, and its own comment stated the licence: *"A BYOD
+transaction carries NO device-department line, so this never double-counts an existing box."*
+
+That is not a fact about BYOD. It is a fact about the org's `box_departments`, which is **config**, so
+any tenant can falsify it by ticking a department its BYOD sales also use. The general fact that was
+wrong: *a count derived from the absence of something may not be added without checking the thing is
+actually absent.*
+
+**The siblings, found before shipping.** Measured live 2026-10-08 against September 2026
+(`commcalc.accessory_config` + the sales union, read-only):
+
+| org | buckets | device-line boxes | bucket added, unguarded | guarded | phantom boxes removed |
+|---|---|---|---|---|---|
+| `00000000-…-0001` Cellfonz R Us | `['byod']` | 1,509 | 2,083 | **2,044** | 39 |
+| `854f6d7b-…` Luxelink Wireless | `['byod']` | 999 | 1,233 | **1,172** | 61 |
+| `f4f1c16e-…` Vzone | `['byod']` | — | — | — | no September rows |
+
+So this was **already live on a tenant nobody was looking at**: Luxelink has had the bucket on for
+months and was over-reporting 61 boxes in one month. The Cellfonz instance only surfaced because the
+owner ticked `BYOD` into `box_departments` (§59.5) — the instance, not the defect.
+
+**The fix, in the one home.** `router._sales_cell_agg` now records `cell['_box_txn']` — the
+transactions that already produced a box LINE in that cell — beside the existing `box_count` tally, and
+the bucket addition counts `len(cell[bucket] - cell['_box_txn'])`. The guard is **dereferenced, not
+assumed**, and it covers `byod`, `upgrade` and `premium` by the same rule rather than only the bucket
+that happened to be on: an upgrade almost always HAS a device line, so an `upgrade` tick under the old
+code would have double-counted nearly every upgrade. `_box_txn` is on the cell, so no caller re-derives
+"did this sale already have a box".
+
+**What does NOT change.** No bucket ticked → `_bcb` is empty → the addition never runs → byte-identical
+for every org that has not opted in. No money moves: `targets_engine.achieved_for_cat` pays on
+`prem` / `byod` / `upg` / `acc` and never on `box` (box feeds the Daily-Targets conversion display,
+Productivity, Stack Ranking and Review). The figures above are display corrections, downward.
+
+**The lock.** `harness_line_class.py` §H (8 checks), in the harness that already exercises this
+aggregation rather than a new sibling file. Armed three ways, each proven to redden: removing the guard
+(the original bug), recording `_box_txn` but not reading it (the §19.18 *registry written, callers not
+wired* trap), and guarding `byod` while leaving `upgrade` / `premium` unguarded (the *fixed the instance,
+not the class* trap). §H8 pins that a line with no `trans_id` cannot be guarded and is still counted
+once, never dropped.
+
+**Adjacent defect, NOT fixed here and not to be assumed away.** `box_departments` matching is
+case-SENSITIVE (`_accessory_config` builds `{b.strip()}` and `_sales_cell_agg` compares the raw
+department), so a feed that spells a department in another case silently contributes no boxes. Same
+class as the `b-1115` phantom-store defect that §29.12 closed for store codes. Recorded, not repaired, because repairing it
+changes which lines count as boxes on every tenant and wants its own measurement.

@@ -251,6 +251,8 @@ on:
       - "backend/harness_landing_identity_lock.py"
       - "backend/harness_line_class_lock.py"
       - "backend/harness_line_class.py"
+      - "backend/harness_peer_comparison.py"
+      - "backend/app/modules/commcalc/peer_comparison.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_bucketing.py"
       - "backend/harness_sweep_failures_visible.py"
@@ -364,6 +366,7 @@ on:
       - "backend/app/modules/commcalc/gp_report.py"
       - "backend/app/modules/account/ma_store_pnl.py"
       - "backend/app/modules/commcalc/line_class.py"
+      - "backend/app/modules/asset/router.py"
       - "backend/app/modules/commcalc/calculator.py"
       - "backend/app/modules/commcalc/exec_metric_defs.py"
       - "backend/app/modules/commcalc/activation_bucketing.py"
@@ -1020,6 +1023,9 @@ jobs:
       - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
         working-directory: backend
         run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "Peer sales comparison (index §59): the add-a-line ONE HOME over the whole measured vocabulary + the equivalence pin that says no promo column moved; the traffic band; and the un-wire lock on every _sales_cell_agg field it rolls up"
+        working-directory: backend
+        run: python3 harness_peer_comparison.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
         working-directory: backend
         run: python3 harness_activation_event.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
