@@ -439,5 +439,68 @@ check("G12 merge_into_raw records the attestation with the name and the measured
       set(m["broad_attested"]) == {"activation:activation", "upgrade:upgrade"} and m["broad_attested"]["activation:activation"]["by"] == "pat"
       and m["broad_attested"]["activation:activation"]["ratio"] == 0.99 and set(m2["broad_attested"]) == {"upgrade:upgrade"}, (m.get("broad_attested"), m2.get("broad_attested")))
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("§H one sale, at most one box from a bucket (mig 231's guard)")
+# WHY THIS EXISTS. `box_count_buckets` adds a box for a transaction that has NO device line — a BYOD
+# sale, where the customer brought the phone. The original code added the whole bucket outright on the
+# comment's assumption that "a BYOD transaction carries NO device-department line". That is not a fact
+# about BYOD; it is a fact about the ORG's `box_departments`, and it stopped holding the moment a
+# tenant ticked a department BYOD sales also use. Measured live 2026-10-08 on September 2026: Luxelink
+# Wireless was double-counting 64 transactions and the house org 39, in silence. The fix is the
+# `_box_txn` guard, and these checks are what stop it being assumed again.
+_BOX_ACFG = {"departments": set(), "categories": set(), "products": set(), "departments_list": [],
+             "categories_list": [], "products_list": [], "acima_tenders_list": [],
+             "box_departments": {"BYOD", "IPHONE - XP"},  # real case: _accessory_config strips, never folds "setup_fee_products": set(),
+             "setup_fee_keywords_list": [], "billpay_products": set(), "contract_type_map": {},
+             "activation_rules": [], "line_rules": LC.resolve_rules(None),
+             "box_count_buckets": set(), "catalog_classify_enabled": False, "catalog_classifier": None}
+# T1 is a BYOD sale with a line in a box department (the overlap that was double-counted).
+# T2 is a BYOD sale with NO box line at all (the case the bucket exists for).
+_BOX_ROWS = [
+    {"trans_id": "T1", "trans_date": "2026-09-02", "store": "B-1", "user_login": "u1", "salesperson": "Rep A",
+     "department": "BYOD", "category": "", "product_desc": "sim", "contract_type": "BYOD",
+     "ext_price": 10.0},
+    {"trans_id": "T2", "trans_date": "2026-09-02", "store": "B-1", "user_login": "u1", "salesperson": "Rep A",
+     "department": "Miscellaneous", "category": "", "product_desc": "case", "contract_type": "BYOD",
+     "ext_price": 5.0},
+]
+
+
+def _boxes(buckets, rows=None):
+    cs = R._sales_cell_agg(rows if rows is not None else _BOX_ROWS,
+                           {**_BOX_ACFG, "box_count_buckets": set(buckets)})
+    return sum(c["box_count"] for c in cs.values())
+
+
+check("H1 with no bucket ticked the box count is the DEVICE-LINE tally alone (byte-identical; T1's BYOD-department line is the only box)",
+      _boxes([]) == 1, _boxes([]))
+check("H2 ticking byod adds a box ONLY for the sale that has none — 2, not 3",
+      _boxes(["byod"]) == 2, _boxes(["byod"]))
+# THE REGRESSION ITSELF, as a number: the old code added len(_byod) = 2 on top of the 1 device line.
+check("H3 …and that is strictly fewer than the un-guarded sum, so the guard is doing work (not a no-op dressed as a fix)",
+      _boxes(["byod"]) < 1 + 2)
+_cells = R._sales_cell_agg(_BOX_ROWS, {**_BOX_ACFG, "box_count_buckets": {"byod"}})
+check("H4 the cell EXPOSES which sales already had a box, so no caller has to re-derive it",
+      set().union(*(c["_box_txn"] for c in _cells.values())) == {"T1"})
+check("H5 BYOD out of the box departments → both sales are bucket boxes, and neither is a line box",
+      _boxes(["byod"], None) == 2
+      and sum(c["box_count"] for c in R._sales_cell_agg(
+          _BOX_ROWS, {**_BOX_ACFG, "box_departments": {"IPHONE - XP"},
+                      "box_count_buckets": {"byod"}}).values()) == 2)
+# THE SIBLING THE SAME BUG WOULD HAVE HIT HARDER. An upgrade nearly always carries a device line, so
+# an `upgrade` bucket under the old code double-counted almost every upgrade. Same guard, same rule.
+_UPG_ROWS = [{"trans_id": "U1", "trans_date": "2026-09-02", "store": "B-1", "user_login": "u1", "salesperson": "Rep A",
+              "department": "IPHONE - XP", "category": "", "product_desc": "iphone",
+              "contract_type": "Upgrade", "ext_price": 900.0}]
+check("H6 the guard covers `upgrade` too: an upgrade WITH a device line is one box, never two",
+      _boxes(["upgrade"], _UPG_ROWS) == 1, _boxes(["upgrade"], _UPG_ROWS))
+check("H7 …and `premium` likewise",
+      _boxes(["premium"], [dict(_UPG_ROWS[0], trans_id="P1", contract_type="New Activation")]) == 1)
+check("H8 a row with no trans_id cannot be guarded, and is still counted once as a line box (never dropped)",
+      sum(c["box_count"] for c in R._sales_cell_agg(
+          [{"trans_date": "2026-09-02", "store": "B-1", "user_login": "u1", "salesperson": "Rep A", "department": "BYOD",
+            "category": "", "product_desc": "sim", "contract_type": "BYOD", "ext_price": 1.0}],
+          {**_BOX_ACFG, "box_count_buckets": {"byod"}}).values()) == 1)
+
 print(f"\n══ line class: {_pass} passed, {_fail} failed ══")
 sys.exit(1 if _fail else 0)
