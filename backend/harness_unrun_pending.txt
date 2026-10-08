@@ -95,7 +95,6 @@ harness_cron_registrar_schema.py
 harness_cross_tenant_isolation.py
 harness_dashboard_shortover_fields.py
 harness_data_sources_dispatch.py
-harness_db_resilience.py
 harness_db_singleton.py
 harness_deposit_accountability.py
 harness_device_cost_recon.py
