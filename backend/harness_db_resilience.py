@@ -78,7 +78,17 @@ print("   " + "  ".join(f"{k}={v}" for k, v in VERS.items()))
 # installed stack, and no assertion anywhere in this harness inspects the `h2` package's own source
 # — h2's behaviour is asserted through httpcore, which is unmoved at 1.0.9. So the pin is advanced,
 # not the assertion relaxed: it still demands an EXACT match on all five.
-PINNED_STACK = {"supabase": "2.31.0", "postgrest": "2.31.0", "httpx": "0.28.1",
+# 2026-10-08 — `supabase` and `postgrest` moved 2.31.0 -> 2.32.0 and this fired, same as designed.
+# The sources were re-read on the installed 2.32.0: A2 (send_with_retry still has no try/except
+# around req.send()), A3 (should_retry still only fires on a RETURNED 503/520), A5 (RequestConfig.send
+# is still a bare session.request()) and A11 (pool construction) all hold VERBATIM, so the root cause
+# is unchanged — a transport exception still escapes .execute() and the app's own
+# RetryOnDisconnectTransport is still the only thing that saves it. `httpx`, `httpcore` and `h2` did
+# not move, so A6-A10 (the actual root cause, in httpcore's HTTP/2 connection) are untouched.
+# ONE source-level fact DID change, and A4 below is rewritten to pin the new one: upstream fixed the
+# `"HTTP"` typo in should_retry's verb guard, so HEAD is now retried alongside GET. That widens
+# postgrest's own 503/520 retry very slightly and takes nothing away from ours.
+PINNED_STACK = {"supabase": "2.32.0", "postgrest": "2.32.0", "httpx": "0.28.1",
                 "httpcore": "1.0.9", "h2": "4.4.1"}
 check("A1. pinned stack is the one the diagnosis was read from",
       VERS == PINNED_STACK,
@@ -93,8 +103,13 @@ check("A2. postgrest send_with_retry has NO try/except around req.send()",
 sr_src = inspect.getsource(pg_base.RequestConfig.should_retry)
 check("A3. should_retry only fires on a RETURNED 503/520 response",
       "response.status_code == 503" in sr_src and "520" in sr_src)
-check("A4. …and its verb guard says 'HTTP' (typo for HEAD) so HEAD is never retried either",
-      'self.http_method == "HTTP"' in sr_src)
+# A4 used to pin the opposite fact: through postgrest 2.31.0 this verb guard read
+# `self.http_method == "HTTP"` — a typo for HEAD — so a HEAD request was never retried even on a
+# returned 503/520. Upstream fixed it in 2.32.0. The assertion is re-pointed at the FIXED source
+# rather than deleted, and it demands the typo be ABSENT, so an upstream regression fires here.
+check("A4. …and its verb guard reads GET-or-HEAD (the 2.31.0 'HTTP' typo is fixed upstream)",
+      'self.http_method == "HEAD"' in sr_src and 'self.http_method == "HTTP"' not in sr_src,
+      sr_src)
 send_src = inspect.getsource(pg_base.RequestConfig.send)
 check("A5. RequestConfig.send is a bare session.request() — exception escapes .execute()",
       "try" not in send_src and "self.session.request(" in send_src)
@@ -926,7 +941,24 @@ _all_routes = _flatten_routes(real_app.routes)
 #             index §6n / §17)
 #     1691  + GET /commcalc/portout-fraud (#317, the daily port-out fraud report — merged beside #318, whose pin
 #           was taken on a tree without it; main read 1691 against a pin of 1690 until this re-pin).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1695"))
+# Re-pinned 1695 -> 1743 on 2026-10-08, measured on main 4c6c5c6 with THIS file's own
+# _flatten_routes. Note the 1695 pin was itself one short: the tree it was taken on (d5ea200,
+# #340) already read 1696, the same off-by-one the 1690/1691 note above records. Against that
+# d5ea200 baseline the delta is +47 and NOTHING was removed, which is the claim that matters:
+#     +19  /storevisit/*  — visit assignments (GET/POST/PATCH/DELETE, auto-fill, auto-fill/run-due),
+#          priority rules (GET/PUT/DELETE + options), quota config (GET/PUT), alerts config (GET/PUT)
+#          + run-now/run-due, dm-visit-performance, visit-plan/health, visits/{id}/todos
+#     +13  /commcalc/*   — commission-withholding (GET + PATCH appeal), manager-followup (+ alerts
+#          run-now/run-due), pay-feed-balance, payout-terms/history, watchdog (board, rules, voids,
+#          area/{area}, run-now, run-due)
+#     + 8  /closing/*    — resume, source-config (GET/PUT), derive-day/-due/-range,
+#          billpay-declaration-alerts run-now/run-due
+#     + 3  /supply/*     — vendors/{id}/customers (+ .csv), vendors/{id}/catalog/api-read
+#     + 2  /data-qa      — GET /data-qa/status, POST /data-qa
+#     + 2  /vision/*     — health, health/run-due
+# Every one of those is a report, editor or sweep trigger that landed in its own PR with its own
+# proof; this package still adds none of them (see I0b, which is the drift-proof form).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1743"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

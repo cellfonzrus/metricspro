@@ -208,6 +208,14 @@ on:
       - "backend/app/modules/commcalc/labour_vocabulary.py"
       - "backend/app/modules/account/engine.py"
       - "database/migrations/1061_labour_vocabulary_mode.sql"
+      # The database-resilience proof (db-resilience-proof job). requirements.txt is named here
+      # because its A1 check pins the installed supabase / postgrest / httpx / httpcore / h2 versions
+      # and is read out of those packages' own source — a version bump MUST run the canary, and a
+      # lock whose allowlist does not name its own subject skips silently (the §13e lesson).
+      # app.core.db_resilience and app/main.py (the route count) are already covered by
+      # backend/app/**/*.py above.
+      - "backend/harness_db_resilience.py"
+      - "backend/requirements.txt"
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
@@ -502,9 +510,27 @@ on:
       - "backend/harness_pay_feed_balance.py"
       - "backend/app/modules/core/feed_read.py"
       - "backend/app/modules/commcalc/pay_data_quality.py"
+      # index §19.54 — a window's end boundary is somebody else's assumption, and a month that is a
+      # day short is not a finished month. The lock reads the boundary home, the coverage verdict,
+      # the sweep that asks for the window, the upload handler's day-keyed derivation and the three
+      # frontend files that render what an upload replaces, so a change to any of them must run it.
+      - "backend/harness_statement_month_coverage.py"
+      - "backend/app/modules/commcalc/feed_period.py"
+      - "backend/app/modules/commcalc/epay_sweep.py"
+      - "backend/app/modules/commcalc/data_lineage_registry.py"
+      - "frontend/src/app/(platform)/commcalc/_lib/uploadRoutes.ts"
+      - "frontend/src/app/(platform)/commcalc/upload/page.tsx"
+      - "frontend/src/lib/report-kinds.ts"
       # index §19.51 — an instalment's month of life comes from the ROW'S OWN anchor, never the
       # lookback window's edge. The lock reads the one home, BOTH multi-month engines, the router's
       # notice channel and migration 1059, so a change to any of them must run it.
+      # index §58 — "is this carrier dollar commission or a reimbursement?" has ONE home, and the
+      # org's OWN payment_categories declaration beats the generic keyword ladder. The lock reads
+      # the home, BOTH callers (the P&L carrier block and the payment-detail recon), the module
+      # graph and the index, so a change to any of them must run it.
+      - "backend/harness_carrier_dollar_class.py"
+      - "backend/app/modules/commcalc/carrier_dollar_class.py"
+      - "backend/app/modules/commcalc/carrier_map.py"
       - "backend/harness_installment_month_anchor.py"
       - "backend/app/modules/commcalc/installment_month.py"
       - "backend/app/modules/commcalc/installment_engine.py"
@@ -805,6 +831,9 @@ jobs:
       - name: Run the pay-feed balance lock (every dollar the carrier paid is PLACED in a pay bucket or REPORTED unplaced with a reason; a feed read carries NO literal row ceiling and raises rather than returning a short list; two feeds for the same money must cover the same days — owner 2026-10-06, index §19.48)
         working-directory: backend
         run: python3 harness_pay_feed_balance.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the statement month-end coverage lock (the window we ASK for has one home and cannot lose its last day; a CLOSED month whose statement misses a day is reported incomplete, named and priced; the shipped day-coverage question is dereferenced, not re-derived; what an upload REPLACES is the registry's answer on every surface — owner 2026-10-08, index §19.54)
+        working-directory: backend
+        run: python3 harness_statement_month_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the earned-crosscheck lock (a statement's crosscheck verdict is COMPUTED, never defaulted; `not_measured` is never a pass; both statement writers dereference the one resolver — owner 2026-10-06, index §19.49)
         working-directory: backend
         run: python3 harness_statement_crosscheck_earned.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -814,6 +843,9 @@ jobs:
       - name: Run the instalment-month anchor lock (which month of a multi-month curve a row is in comes from the ROW'S OWN activation date, never the lookback window's edge; both multi-month engines share one home for the arithmetic; an unanchored month, an unresolved schedule, a raised engine and an incomplete ledger write are all REPORTED rather than read as $0.00 — index §19.51)
         working-directory: backend
         run: python3 harness_installment_month_anchor.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the carrier-dollar classification lock (a carrier dollar's component has ONE home; the org's own payment_categories declaration beats the generic keyword ladder, a period-renamed twin is used but LABELLED as an inference, an undeclared type is reported and never guessed, and the distributor's reimbursement claim is held rather than booked as a second receipt — owner 2026-10-08, index §58)
+        working-directory: backend
+        run: python3 harness_carrier_dollar_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed-watchdog lock (every registered feed is watched or excused with a reason; no monthly archive is watched; cadence, data-date column and label dereferenced from the registry — owner 2026-10-03, index §19.43)
         working-directory: backend
         run: python3 harness_feed_watchdog.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1332,3 +1364,36 @@ jobs:
       - name: Run the notify send-identity proof (one home for the report's name; the history never shows a machine key — index §15.3)
         working-directory: backend
         run: python3 harness_notify_send_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE DATABASE-RESILIENCE PROOF — owner directive 2026-10-08 ("do it"), taking this file off
+  # backend/harness_unrun_pending.txt. It is the only thing asserting that a dropped Supabase
+  # connection is retried rather than surfaced as a 500, and it asserts that through the REAL
+  # app.core.db_resilience over a local socket that genuinely disconnects, plus source-level reads of
+  # the installed postgrest / httpcore.
+  #
+  # Two of its checks are TRIPWIRES by design, and a red one here is a question for a human, not a
+  # test to edit away:
+  #   A1  pins the exact installed versions of supabase / postgrest / httpx / httpcore / h2. It fires
+  #       on ANY version move, because the root cause is read out of those packages' own source. The
+  #       answer is to RE-READ the sources and then advance the pin (see the dated notes above
+  #       PINNED_STACK for how 2026-09-06 and 2026-10-08 were handled) — never to relax it.
+  #       `backend/requirements.txt` is named in this workflow's paths for exactly this reason: a lock
+  #       whose allowlist does not name its own subject skips silently (the §13e lesson).
+  #   I0  pins the app's leaf route count, so it fires on any PR that adds or removes an endpoint.
+  #       That is expected and cheap: confirm the delta is yours and nothing was REMOVED, then
+  #       re-pin, documenting the delta the way the comment block above _expect_routes does. I0b is
+  #       the drift-proof form of the same claim and never needs re-pinning.
+  # It imports the app and inspects the installed stack, so it runs with the backend's dependencies.
+  db-resilience-proof:
+    name: Database resilience (the real transport, a socket that really drops)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the database-resilience proof (a dropped idle connection is retried, never a 500; writes are never replayed; A1 = version canary, I0 = route-count tripwire)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_db_resilience.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

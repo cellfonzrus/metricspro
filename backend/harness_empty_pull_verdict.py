@@ -43,6 +43,7 @@ sys.path.insert(0, HERE)
 
 from app.modules.commcalc import empty_pull_verdict as V        # noqa: E402
 from app.modules.commcalc import epay_sweep as ES               # noqa: E402
+from app.modules.commcalc import feed_period as FP              # noqa: E402  (§19.54 — the one boundary home)
 
 PASS = FAIL = 0
 FAILURES = []
@@ -153,23 +154,33 @@ check("B13 required_window_days falls back to the house default for junk config"
 # ── §C — THE WINDOW IS NEVER NARROWER THAN THE ARREARS ────────────────────────────────────────────
 print("\n§C  the day-grain window (the root cause of the two missing months)")
 
+# THE SPAN IS MEASURED ON THE INTENT, NOT ON THE BOUNDARY ASKED FOR (§19.54, 2026-10-08). The job now
+# carries both: `covers_through` is the last day it means to receive, and `end` is what goes in the
+# source's End Date widget — one day later under an end-exclusive source, because the carrier statement
+# was short the final day of every month ($111,949.22) for exactly that reason. The arrears FLOOR is a
+# property of the days we intend to cover, so these checks read `covers_through`; C6 below pins the
+# boundary itself so neither half can drift.
 jobs = ES._expand_jobs(["comp_report"], {"comp_report": {"refresh_days": 1}})
 _k, t = jobs[0]
 check("C1 with no arrears configured the house default still applies",
-      V.window_days(t["begin"], t["end"]) >= V.required_window_days(None), t)
+      V.window_days(t["begin"], t["covers_through"]) >= V.required_window_days(None), t)
 
 jobs = ES._expand_jobs(["comp_report"], {"comp_report": {"refresh_days": 1, "arrears_days": 7}})
 _k, t = jobs[0]
-span = V.window_days(t["begin"], t["end"])
+span = V.window_days(t["begin"], t["covers_through"])
 check("C2 THE LIVE CONFIG (refresh_days=1) can no longer produce a 1-day window", span == 7,
-      f"span={span} window={t['begin']}..{t['end']}")
+      f"span={span} window={t['begin']}..{t['covers_through']}")
 check("C3 the window ends today and reaches back, so it can contain in-arrears data",
-      len(t["days"]) == 7 and t["end"] == t["days"][-1] and t["begin"] == t["days"][0])
+      len(t["days"]) == 7 and t["covers_through"] == t["days"][-1] and t["begin"] == t["days"][0])
+check("C6 and the END ASKED FOR cannot lose that last day (§19.54): under the house end-exclusive "
+      "boundary the request runs one day past the intent, and says so",
+      t["end"] == FP._next_day(t["covers_through"]) and t["end_widened"] is True
+      and t["end_boundary"] == FP.END_EXCLUSIVE)
 
 jobs = ES._expand_jobs(["comp_report"], {"comp_report": {"refresh_days": 14, "arrears_days": 7}})
 _k, t = jobs[0]
 check("C4 a wider refresh_days still wins — arrears is a FLOOR, not an override",
-      V.window_days(t["begin"], t["end"]) == 14)
+      V.window_days(t["begin"], t["covers_through"]) == 14)
 
 check("C5 a zero the widened window produces is now classifiable as a real answer",
       V.classify_empty_pull(empty_allowed=True, label="r", arrears_days=7,

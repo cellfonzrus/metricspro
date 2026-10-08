@@ -302,7 +302,10 @@ def _defer_empty(ledger, result, spec, target, evidence=None):
     place in this module that decides what a zero means."""
     ev = {"empty_allowed": bool(spec.get("empty_ok")),
           "label": spec.get("label") or spec.get("registry_key"),
-          "window": ([target["begin"], target["end"]]
+          # The window the verdict is ABOUT is the one we intended to cover, not the boundary we had
+          # to ask for: under an end-exclusive source those differ by a day (feed_period.request_window),
+          # and a zero-row verdict that quoted the widened boundary would name a day it never meant.
+          "window": ([target["begin"], target.get("covers_through") or target["end"]]
                      if target and target.get("kind") == "day_range" else None)}
     ev.update(evidence or {})
     controls = spec.get("controls") or ()
@@ -700,6 +703,11 @@ def _set_daily_range(page, begin_iso, end_iso):
     as fatal, because an unfiltered comp run returns an empty workbook that is indistinguishable
     from a legitimately quiet day — silently reporting "no data posted" when in truth we never set
     the filter is exactly how this leg stayed broken for eight weeks.
+
+    `end_iso` is ALREADY the boundary to put in the widget, resolved once in
+    `feed_period.request_window` from the source's configured end-boundary semantics. This function
+    types what it is given and adds no day of its own — an off-by-one corrected in two places is an
+    off-by-one applied twice.
     """
     try:
         iv = page.evaluate(_SET_INTERVAL_JS, "Daily")
@@ -1077,7 +1085,9 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
         # this zero is the source's own answer is settled by `empty_pull_verdict` once the run's
         # evidence is complete, never by the registry flag alone (index §19.41).
         if spec.get("empty_ok"):
-            win = (f"{target['begin']}..{target['end']}"
+            # The INTENDED window, not the boundary asked for (feed_period.request_window) — a human
+            # reading "nothing posted for …" must see the days we meant to pull.
+            win = (f"{target['begin']}..{target.get('covers_through') or target['end']}"
                    if target and target.get("kind") == "day_range" else "default window")
             res = {"report": key, "label": spec["label"], "rows": 0, "mode": "no_data",
                    "window": win, "period": None,
@@ -1217,7 +1227,19 @@ def _expand_jobs(keys, report_cfg=None):
             # (`report_definitions.arrears_days`), with the house default in empty_pull_verdict.
             days = _recent_days(max(int(rc.get("refresh_days") or DEFAULT_REFRESH_DAYS),
                                     _verdict.required_window_days(rc.get("arrears_days"))))
-            jobs.append((k, {"kind": "day_range", "begin": days[0], "end": days[-1],
+            # ── AND THE WINDOW WE ASK FOR CANNOT LOSE ITS LAST DAY (owner 2026-10-08) ────────────
+            # `days[-1]` is the last day this job INTENDS to cover. What goes in the source's End
+            # Date widget is not the same thing, because the source's end boundary is an assumption
+            # about somebody else's system — and the measurement says it is EXCLUSIVE: the stored
+            # statement stops one day short of every single month ($111,949.22 across seven closed
+            # months; see feed_period.request_window for the numbers). So the boundary is resolved
+            # in THAT one home, from config (`report_definitions.end_boundary`, house default), and
+            # no caller here adds a day of its own. `covers_through` keeps the INTENT, so the day
+            # split and the empty-pull verdict still speak about the days we meant to pull.
+            win = _feed_period.request_window(days[0], days[-1], rc.get("end_boundary"))
+            jobs.append((k, {"kind": "day_range", "begin": win["begin"], "end": win["end"],
+                             "covers_through": win["covers_through"],
+                             "end_boundary": win["end_boundary"], "end_widened": win["widened"],
                              "days": days, "period": None}))
         else:
             jobs.append((k, None))
@@ -1308,8 +1330,10 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                 tmp.close()
                 tgt = ""
                 if target and target.get("kind") == "day_range":
-                    tgt = (f" [{target['begin']}]" if target["begin"] == target["end"]
-                           else f" [{target['begin']}..{target['end']}]")
+                    # the INTENDED coverage (feed_period.request_window), not the widened boundary
+                    _ct = target.get("covers_through") or target["end"]
+                    tgt = (f" [{target['begin']}]" if target["begin"] == _ct
+                           else f" [{target['begin']}..{_ct}]")
                 elif target and target.get("period"):
                     tgt = f" [{target['period']}]"
 
