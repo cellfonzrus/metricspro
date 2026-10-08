@@ -215,6 +215,7 @@ export const ROUTES: RouteEntry[] = [
   // NAV is the label authority — a second label here is the §G drift this registry forbids, so the
   // entry carries only the words someone would actually type.
   { path: '/commcalc/peer-comparison', aliases: ['peer comparison', 'similar stores', 'bill payment band', 'traffic band', 'boxes per bill payment'] },
+  { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
   { path: '/commcalc/reports' },
   { path: '/commcalc/reports-index' },
   { path: '/commcalc/sales-analyzer' },

@@ -24,6 +24,7 @@ from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, 
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
+from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -26083,6 +26084,190 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
     out["org_id"] = org_id
     return out
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SPIFF IMPACT (index §60) — owner ask 2026-10-08: *"create a report for management review to assess
+# the affect of a certain spiff on the overall commisison payout revenue for the store and what %
+# does that help to increase the profitablity and then report whoich stores are lakcing those sales
+# in terms of % sales which are contriuting to that profitability"*.
+#
+# NOTHING IS DERIVED HERE. This function fetches and WIRES; every number comes from a home that
+# already owns it — §58 for what a carrier dollar IS and which P&L line it books to, §57 (through
+# §58) for the org's declaration, §4's `analysis.pl_totals` off the stored per-store P&L read through
+# §19.50's deduped `statement_filter.store_snapshots`, §59 for boxes / traffic / band / "behind", and
+# the Daily-Targets store resolver for which store a spelling names. `commcalc/spiff_impact.py`
+# carries the duplicate check in full.
+def _spiff_impact_inputs(client, org_id: str, period: str):
+    """Everything the PURE module needs, read ONCE through the platform's existing one homes."""
+    pv = _pvariants(period)
+
+    # THE CARRIER STATEMENT — paged through the one home, NO literal row ceiling (§19.48's lock
+    # fails the build on one, and this feed is 11,054 rows a month).
+    def _comp_q():
+        return (client.schema("commcalc").table("raw_comp_report")
+                .select("business_address,compensation_type,payment_amount,quantity,period")
+                .eq("org_id", org_id).in_("period", pv))
+    comp_rows = _feed_read.read_all(_comp_q)
+
+    # THE CLASSIFICATION — §58's one home, bound to this org's own declarations and config, so this
+    # report reads the SAME verdict the P&L books with. Never a keyword guess of its own.
+    from app.modules.commcalc import carrier_dollar_class as _cdc
+    cdc_cfg = _cdc.load_config(client, org_id)
+    try:
+        cdc_rules = carrier_map.load_rules(client, org_id)
+    except Exception:
+        cdc_rules = []
+    cdc_decl = _cdc.load_declarations(client, org_id)
+    _cls_cache = {}
+
+    def classify(raw_type):
+        key = str(raw_type or "")
+        c = _cls_cache.get(key)
+        if c is None:
+            c = _cls_cache[key] = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg)
+        return c
+
+    def component_line(component):
+        return _cdc.component_line(component, cdc_cfg.get("component_lines"), "carrier_comm")
+
+    # "Does this pay type's label NAME a month rung" — `commission_ledger.parse_payment_month` is
+    # exactly that question's home and its docstring says so. The report asks only that; the
+    # month-of-life LEG question belongs to `month_leg_of` and is not asked here.
+    from app.modules.commcalc.commission_ledger import parse_payment_month as _month_token
+
+    # THE STORE KEY — the same resolver §59 and the Daily-Targets actuals use, so the carrier money,
+    # the sales rows and the P&L snapshots all land on ONE key per store.
+    resolve_code = _store_code_resolver(client, org_id)
+
+    def store_of(raw):
+        s = str(raw or "").strip()
+        return (resolve_code(s) if s else "") or s
+
+    # THE STORED PER-STORE P&L — `statement_filter.store_snapshots` (§19.50's deduped read, shared
+    # with the filtered statement) and `analysis.pl_totals` (§4's one home for the four totals). A
+    # store with no snapshot is ABSENT from this map, which the pure module reports as not computed.
+    pl_by_store, pl_computed = {}, []
+    try:
+        from app.modules.account import statement_filter as _sf, analysis as _an
+        for r in _sf.store_snapshots(client, org_id, period, "pl"):
+            addr = str(r.get("scope_key") or "")[len("store:"):]
+            key = store_of(addr)
+            if not key:
+                continue
+            pl_by_store[key] = _an.pl_totals(r.get("payload") or {})
+            if r.get("computed_at"):
+                pl_computed.append(str(r["computed_at"]))
+    except Exception as e:
+        print(f"WARN spiff_impact per-store P&L unavailable: {e}")
+    pl_computed_at = (min(pl_computed)[:19].replace("T", " ") + " UTC") if pl_computed else None
+    return (comp_rows, classify, component_line, _month_token, store_of, pl_by_store,
+            pl_computed_at, component_line("COMMISSION"))
+
+
+@router.get("/spiff-impact")
+def spiff_impact(period: str = "", spiff: str = "", bands: str = "", markets: str = "",
+                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """SPIFF IMPACT — what one carrier pay type is worth to a store's commission revenue and profit,
+    and which stores are not earning it on the sales they make.
+
+    OWNER 2026-10-08: *"create a report for management review to assess the affect of a certain spiff
+    on the overall commisison payout revenue for the store and what % does that help to increase the
+    profitablity and then report whoich stores are lakcing those sales in terms of % sales which are
+    contriuting to that profitability"*.
+
+    `spiff` is one of the pay types the payload's `options` list for the period — derived from the
+    org's OWN rows, never from a list in code — and with none given the report opens on the
+    largest-dollar spiff and SAYS it chose (`selection_basis`).
+
+    Three columns, three homes: the share of the P&L line the money actually books to (§58's
+    classification, the same one the P&L uses), the profit with it against without it (the stored
+    per-store P&L via §4's `pl_totals`), and the paid units per 100 boxes ranked inside the store's
+    own traffic band (§59's bands, median, gap and `lagging()` — this report adds its metric THROUGH
+    them so "behind" keeps one definition). READ-ONLY: it books nothing, pays nobody and recomputes
+    no statement.
+    """
+    require_org(org_id)
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+
+    try:
+        (comp_rows, classify, component_line, month_token, store_of, pl_by_store,
+         pl_computed_at, commission_line) = _spiff_impact_inputs(client, org_id, period)
+    except Exception as e:
+        raise HTTPException(500, f"spiff-impact read failed: {type(e).__name__}: {e}")
+
+    # ── RBAC + the market filter, exactly as every other sales report scopes itself ───────────────
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        ks, in_keyset = None, None
+    sel_markets = {m.strip() for m in (markets or "").split(",") if m.strip()}
+
+    def _keep(store_raw):
+        st = store_of(store_raw)
+        if ks is not None and in_keyset is not None and not in_keyset(ks, st)                 and not in_keyset(ks, str(store_raw or "").strip()):
+            return False
+        if sel_markets and (resolve_market(st) or "") not in sel_markets:
+            return False
+        return True
+
+    comp_rows = [r for r in comp_rows if _keep(r.get("business_address"))]
+
+    options = _spiffimp.pay_type_options(
+        comp_rows, classify, component_line=component_line, month_token=month_token)
+    selected, selection_basis = _spiffimp.default_selection(options, requested=spiff)
+    sel_entry = next((o for o in options if o["type"] == selected), None)
+
+    money, pl_line, unresolved = _spiffimp.store_money(
+        comp_rows, selected, classify, component_line=component_line, store_of=store_of)
+
+    # ── THE SALES SIDE, through §59 — the bands, the boxes and the ONE definition of "behind" ─────
+    peer_out, peer_err = None, None
+    try:
+        srows, smeta = _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS)
+        srows = [r for r in srows if _keep(r.get("store"))]
+        peer_out, _cells, _unres = _peer_comparison_payload(
+            client, org_id, period, srows, resolve_market=resolve_market,
+            bands=[b for b in (bands or "").split(",") if b.strip()] or None,
+            params={"period": period, "markets": sorted(sel_markets),
+                    "metric": _spiffimp.SPIFF_METRIC})
+        # The metric is folded in THROUGH §59's own machinery, so the median, the gap, the verdict
+        # and the coaching sentence are the peer screen's, not a second copy of them.
+        _rate = {}
+        for r in (peer_out.get("rows") or []) + (peer_out.get("unbanded") or []):
+            m = money.get(r.get("store")) or {}
+            _rate[r.get("store")] = _spiffimp.units_per_100_boxes(
+                m.get("spiff_units", 0), r.get("boxes"))
+        peer_out = _peercmp.with_extra_metric(
+            peer_out, _spiffimp.SPIFF_METRIC, _spiffimp.SPIFF_METRIC_LABEL, _rate)
+    except Exception as e:
+        peer_err = f"{type(e).__name__}: {e}"
+        print(f"WARN spiff_impact peer comparison unavailable: {peer_err}")
+
+    out = _spiffimp.build(
+        money, peer_out, pl_by_store,
+        selected=selected, selected_entry=sel_entry, selection_basis=selection_basis,
+        options=options, commission_line=commission_line, period=period,
+        window_label=f"{period} to date", unresolved_stores=unresolved,
+        pl_computed_at=pl_computed_at,
+        params={"period": period, "spiff": selected, "markets": sorted(sel_markets),
+                "metric": _spiffimp.SPIFF_METRIC})
+    # A comparison that did not run is REPORTED, never silently absent — "a comparison that did not
+    # run is not the same as no store being behind" (§59.7's §K6 rule, same posture here).
+    out["peer_meta"] = {"ran": bool(peer_out), "error": peer_err,
+                        "band_cuts": (peer_out or {}).get("band_cuts")}
+    out["markets"] = sorted({m for m in ([resolve_market(store_of(r.get("business_address")))
+                                          for r in comp_rows] + list(all_markets)) if m})
+    out["pl_line"] = pl_line
+    out["source_meta"] = {"comp_rows": len(comp_rows), "pay_types": len(options),
+                          "pl_stores": len(pl_by_store)}
+    out["org_id"] = org_id
+    return out
 
 @router.get("/sales-diagnostics")
 def sales_diagnostics(period: str = "", org_id: str = ORG_ID):

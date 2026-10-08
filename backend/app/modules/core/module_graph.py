@@ -53,6 +53,21 @@ FACTS: dict[str, dict] = {
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
             'app/modules/commcalc/router.py': ('_peercmp',),
+            # §60 — the spiff-impact report ranks its own metric THROUGH this home
+            # (`with_extra_metric` / `lagging` / `prompt_sentence`) so "behind" keeps one definition.
+            'app/modules/commcalc/spiff_impact.py': ('_pc',),
+        },
+    },
+    'spiff_store_impact': {
+        "question": 'What is ONE carrier pay type worth to a store\'s commission payout revenue and '
+                    'to its net profit, and which stores are not earning it on the sales they make?',
+        "homes": ('app/modules/commcalc/spiff_impact.py',),
+        "index": ('60',),
+        "locks": ('harness_spiff_impact.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_spiffimp',),
         },
     },
     'device_reimbursement_paid_vs_claimed': {
@@ -344,7 +359,10 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/ledger_batch.py': ('CL',),
             'app/modules/commcalc/ledger_ma_sync.py': ('commission_ledger',),
             'app/modules/commcalc/onboarding_intake.py': ('CL',),
-            'app/modules/commcalc/router.py': ('commission_ledger',),
+            # `_month_token` is §60's binding of `parse_payment_month` — "does this label SAY a
+            # month", which is exactly that function's own question (its docstring is explicit that
+            # the month-of-life LEG question belongs to `month_leg_of` instead).
+            'app/modules/commcalc/router.py': ('_month_token', 'commission_ledger'),
             'app/modules/commcalc/sale_installment_engine.py': ('month_leg_of',),
         },
     },
@@ -516,6 +534,9 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_engine.py': ('_analysis',),
             'app/modules/account/statement_filter.py': ('_analysis',),
             'app/modules/account/valuation.py': ('analysis',),
+            # §60 — the spiff-impact endpoint reads each store's revenue / net income off the STORED
+            # per-store P&L through `analysis.pl_totals`, this module's one home for those totals.
+            'app/modules/commcalc/router.py': ('_an',),
         },
     },
     'complete_feed_read': {
@@ -544,6 +565,11 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/carrier_dollar_class.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
             'app/modules/commcalc/router.py': ('_pcat',),
+            # §60 — the spiff-impact report folds a PAY-TYPE KEY (its option list and its per-store
+            # tally must agree about whether two spellings are one type) and dereferences §57's one
+            # folding rule rather than keeping a second. It reads the TABLE through §58, never here,
+            # so §57's reader inventory is unchanged.
+            'app/modules/commcalc/spiff_impact.py': ('_pc_fold',),
         },
     },
     'clawback_direction': {

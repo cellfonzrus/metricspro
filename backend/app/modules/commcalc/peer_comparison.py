@@ -209,15 +209,20 @@ GAP_METRICS = (
 DEFAULT_GAP_METRIC = "boxes_per_billpay"
 
 
-def _gaps(store_row, peers):
+def _gaps(store_row, peers, metrics=GAP_METRICS):
     """How far ONE store is from the BEST and the MEDIAN of its band, per ranked metric. PURE.
 
     `peers` is every store in the band INCLUDING this one — the median must include it, or a band of
-    two has no median. Returns {} when the band is too small to have a peer."""
+    two has no median. Returns {} when the band is too small to have a peer.
+
+    `metrics` is the ranked set, defaulting to this report's own. It is a PARAMETER so that another
+    report can rank its stores inside the same bands WITHOUT a second median, a second gap rule or a
+    second idea of "behind" — see `with_extra_metric`. Every caller that does not pass it is
+    byte-identical to before the parameter existed."""
     if len(peers) < BAND_MIN_PEERS:
         return {}
     out = {}
-    for key, label, higher in GAP_METRICS:
+    for key, label, higher in metrics:
         mine = store_row.get(key)
         vals = [p.get(key) for p in peers if p.get(key) is not None]
         if mine is None or not vals:
@@ -439,6 +444,51 @@ def prompt_sentence(item):
     return (f"{i.get('store')} is at {mine:,.2f} {str(i.get('label') or '').lower()} against a "
             f"{med:,.2f} median for stores in its own traffic band ({i.get('band_label')})."
             f"{tail} The same number of people walked in, so this gap is sell-through, not footfall.")
+
+
+# ── ONE CALLER-SUPPLIED METRIC, RANKED THROUGH THIS MODULE'S OWN MACHINERY ───────────────────────
+# WHY THIS EXISTS. §60's spiff-impact report asks "which stores are lacking the sales that earn this
+# spiff" — which is this module's question ("behind its own traffic band") asked about a number this
+# module does not compute. The alternatives were both the defect the index rules forbid: re-implement
+# the median, the gap, `lagging()` and `prompt_sentence()` over there (two definitions of behind,
+# certain to drift the first time BAND_MIN_PEERS or the median rule changes), or teach this module to
+# read the carrier statement (a second derivation of money that §58 already owns).
+#
+# So instead the caller hands in ITS number per store, and the band, the median, the gap, the verdict
+# and the sentence all stay here. A report that uses this cannot disagree with the peer screen about
+# who is behind, because it is the same code deciding.
+def with_extra_metric(payload, key, label, values, higher_is_better=True):
+    """Fold ONE caller-supplied per-store metric into a built payload and re-rank the bands. PURE.
+
+    `values` is {store: number-or-None}. A store missing from it, or carrying None, keeps NO value
+    for the metric and so is skipped by `_gaps` exactly as a store with no family-plan figure is —
+    absence is never ranked as a zero.
+
+    Mutates and returns `payload` (it is the caller's own freshly-built dict). `gap_metrics` gains
+    the entry so a surface can render the column, and `lagging(payload, metric=key)` /
+    `prompt_sentence` then work on it unchanged — which is the whole point."""
+    if not payload or not key:
+        return payload
+    metrics = tuple(GAP_METRICS) + ((key, label or key, bool(higher_is_better)),)
+    vals = values or {}
+    for bucket in ("rows", "unbanded"):
+        for r in payload.get(bucket) or ():
+            v = vals.get(r.get("store"))
+            r[key] = (None if v is None else round(float(v), 2))
+    by_band = {}
+    for r in payload.get("rows") or ():
+        by_band.setdefault(r.get("band"), []).append(r)
+    for r in payload.get("rows") or ():
+        r["gaps"] = _gaps(r, by_band[r.get("band")], metrics=metrics)
+    gm = payload.setdefault("gap_metrics", [])
+    if not any(g.get("key") == key for g in gm):
+        gm.append({"key": key, "label": label or key, "higher_is_better": bool(higher_is_better)})
+    for b in payload.get("bands") or ():
+        peers = by_band.get(b.get("band")) or []
+        pv = [p.get(key) for p in peers if p.get(key) is not None]
+        b[f"{key}_best"] = (max(pv) if pv else None)
+        b[f"{key}_median"] = _median(pv)
+    return payload
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

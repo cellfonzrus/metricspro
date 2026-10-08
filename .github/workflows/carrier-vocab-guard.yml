@@ -253,6 +253,13 @@ on:
       - "backend/harness_line_class.py"
       - "backend/harness_peer_comparison.py"
       - "backend/app/modules/commcalc/peer_comparison.py"
+      # index §60 — one carrier pay type against a store's commission revenue and its net profit. The
+      # lock reads the home, the endpoint that wires it, §59's band machinery it borrows, and the
+      # per-store P&L snapshot read it shares with the filtered statement, so a change to any of them
+      # must run it.
+      - "backend/harness_spiff_impact.py"
+      - "backend/app/modules/commcalc/spiff_impact.py"
+      - "backend/app/modules/account/statement_filter.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_bucketing.py"
       - "backend/harness_sweep_failures_visible.py"
@@ -1014,6 +1021,9 @@ jobs:
       - name: "Peer sales comparison (index §59): the add-a-line ONE HOME over the whole measured vocabulary + the equivalence pin that says no promo column moved; the traffic band; and the un-wire lock on every _sales_cell_agg field it rolls up"
         working-directory: backend
         run: python3 harness_peer_comparison.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "Spiff impact (index §60): the share is of the P&L line the dollars actually book to; a profit lift is only reported from a profit; the un-wire lock on the four homes it dereferences; and a borrowed metric ranks through the peer bands' OWN median and gap"
+        working-directory: backend
+        run: python3 harness_spiff_impact.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
         working-directory: backend
         run: python3 harness_activation_event.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
