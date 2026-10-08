@@ -11376,6 +11376,7 @@ def pay_feed_balance(period: str = "", org_id: str = ORG_ID):
             "detail_rows": len(detail), "statement_rows": len(statement)}
 
 
+
 @router.get("/comp-by-component")
 def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_ID):
     """Apply the category map to raw_comp_report → $ per canonical component (the payoff)."""
@@ -27222,7 +27223,7 @@ def commission_withholding(period_from: str = "", period_to: str = "", store: st
         "recovery_notes": rec["state_notes"], "cutoff_note": rec["cutoff_note"],
         "epay_notes": par["state_notes"], "parallel_note": par["parallel_note"],
         # Evidence-first. The org declaring a clawback as EARNINGS is a money statement, surfaced
-        # for a ruling rather than repaired by this report (index §55).
+        # for a ruling rather than repaired by this report (index §58).
         "declarations": _cb.declaration_findings(pay_detail, cat_of) if feed_loaded else None,
         # "the feed has these and the queue does not" — a calculation that has not run for a month
         # is a REASON, never a quietly shorter report.
@@ -41853,19 +41854,23 @@ _RECON_BOUNTY_COMPS = {"NAB", "SSLB", "BRB", "DFB", "ISDFB", "BYOD_SPIFF", "DUB"
 _RECON_REIMB_COMPS = {"DEVICE_REIMB", "SIMCR", "DUPGB"}
 
 
-def _recon_cat_bucket(cat):
-    """Map an org `payment_categories.category` label to a recon bucket, or None to defer to comp_type."""
-    c = " ".join(str(cat or "").strip().split()).lower()
-    if not c or c in ("unknown", "other", "uncategorized", "n/a"):
-        return None
-    if any(x in c for x in ("commission", "bounty", "spiff")):
-        return "bounty"
-    if any(x in c for x in ("rebate", "reimburs", "promo", "offer", "discount")):
-        return "reimbursement"
-    if any(x in c for x in ("rtr", "airtime", "replenish", "top up", "top-up", "topup",
-                            "bill", "fee", "residual", "minute")):
-        return "other"
-    return None
+# What a DECLARED category means is NOT decided here. Owner 2026-10-08: two maps answered "is this
+# carrier dollar commission or a reimbursement?" and disagreed, so the answer has ONE home
+# (`carrier_dollar_class`) and this path DEREFERENCES it (lock: harness_carrier_dollar_class.py).
+# This map is the last mile only — which of the back office's THREE workbook columns a canonical
+# component belongs to — and it is the one fact this recon owns.
+_RECON_COMPONENT_BUCKET = {"COMMISSION": "bounty", "SPIFF": "bounty",
+                           "REIMBURSEMENT": "reimbursement", "RESIDUAL": "other"}
+
+
+def _recon_cat_bucket(cat, class_cfg=None):
+    """Map an org `payment_categories.category` label to a recon bucket, or None to defer to
+    comp_type. The category→component step is `carrier_dollar_class`'s, never a second copy: a
+    category this org's map cannot honour returns None and the comp_type decides, exactly as an
+    unrecognised category always did."""
+    from app.modules.commcalc import carrier_dollar_class as _cdc
+    comp = _cdc.component_of_declared_category(cat, class_cfg)
+    return _RECON_COMPONENT_BUCKET.get(comp or "")
 
 
 def _recon_payment_bucketer(client, org_id, notes):
@@ -41874,17 +41879,15 @@ def _recon_payment_bucketer(client, org_id, notes):
     `discrepancy_engine.parse_payment_type`'s comp_type decides. Never raises (missing config table →
     comp_type-only classification)."""
     from app.modules.commcalc.discrepancy_engine import parse_payment_type as _ppt
-    try:
-        cats = (client.schema("commcalc").table("payment_categories")
-                .select("description,category").eq("org_id", org_id).execute().data) or []
-    except Exception:
-        cats = []
-    cat_of = {str(c.get("description") or "").strip(): str(c.get("category") or "").strip()
-              for c in cats if c.get("description")}
+    from app.modules.commcalc import carrier_dollar_class as _cdc
+    # THE ONE READ of the org's declaration (index §58) — this path no longer keeps its own copy of
+    # `{description: category}`, so the P&L and this recon can never read a different declaration.
+    cat_of = _cdc.load_declarations(client, org_id)
+    class_cfg = _cdc.load_config(client, org_id)
 
     def bucket(payment_type):
         pt = str(payment_type or "").strip()
-        b = _recon_cat_bucket(cat_of.get(pt))
+        b = _recon_cat_bucket(cat_of.get(pt), class_cfg)
         if b:
             return b
         try:
