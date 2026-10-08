@@ -342,6 +342,16 @@ TYPES: dict[str, dict] = {
         "label": "Rebate earned but never received",
         "area": "distributor", "sev": MEDIUM, "writer": "payables/engine.py", "grain": "transaction",
     },
+    # Owner report 2026-10-08 (§19.52): the carrier statement and the distributor's reimbursement
+    # ledger are the SAME money, so the distributor claiming more than the carrier paid means it says
+    # it was reimbursed and the carrier never paid it. Store-month grain because the paid side is a
+    # statement total with no device grain — a manager cannot click through to a device on that side
+    # and this registry says so rather than letting them try.
+    "DEVICE_REIMB_CLAIMED_NOT_PAID": {
+        "label": "Distributor claims a device reimbursement the carrier never paid",
+        "area": "distributor", "sev": HIGH, "writer": "commcalc/device_reimb_recon.py",
+        "grain": "store_period",
+    },
 
     # ── Feed & Data Integrity ───────────────────────────────────────────────────────────────────
     "MISSING_STORE_SALES": {
@@ -355,6 +365,15 @@ TYPES: dict[str, dict] = {
     "UNMAPPED_PAYMENT_TYPE": {
         "label": "Payment type the platform does not recognise",
         "area": "feed", "sev": LOW, "writer": "commcalc/flags.py", "grain": "store_period",
+    },
+    # The other half of §19.52, and the half that protects a real person's store: a store-month whose
+    # carrier statement arrived short, or whose device-financing money is not classified, is reported
+    # HERE — as something to settle in the feed or the configuration — instead of as a shortfall
+    # finding against the store. An absence is never a zero, and it is never an accusation either.
+    "DEVICE_REIMB_NOT_MEASURED": {
+        "label": "Device reimbursement could not be reconciled for this store-month",
+        "area": "feed", "sev": MEDIUM, "writer": "commcalc/device_reimb_recon.py",
+        "grain": "store_period",
     },
 }
 

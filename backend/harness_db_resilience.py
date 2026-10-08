@@ -958,11 +958,21 @@ _all_routes = _flatten_routes(real_app.routes)
 #     + 2  /vision/*     — health, health/run-due
 # Every one of those is a report, editor or sweep trigger that landed in its own PR with its own
 # proof; this package still adds none of them (see I0b, which is the drift-proof form).
-# Re-pinned 1743 -> 1744 on 2026-10-08, measured against origin/main 1f033fe. The delta is ONE
-# route and it is named: GET /commcalc/peer-comparison (the Peer Sales Comparison report, index
-# §59). Verified by diffing the branch against main for route decorators — exactly one added,
-# NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1744"))
+# Re-pinned 1743 -> 1745 on 2026-10-08, measured with THIS file's own `_flatten_routes` against
+# origin/main 131be2e9 (1743) and this branch (1745) — the delta is EXACTLY the two endpoints below
+# and NOTHING was removed, which is the half of the arithmetic the count alone cannot show:
+#     1745  + GET  /commcalc/device-reimbursement-recon            (#412, index §19.53 — what ePay
+#           PAID vs what the distributor CLAIMS it reimbursed, per store per month; READ-ONLY)
+#           + POST /commcalc/device-reimbursement-recon/sync-flags (#412, index §19.53 — the same
+#           findings written to the EXISTING `commcalc.flags` board through the additive merge).
+#           The pair mirrors the shipped `/commcalc/sales-recon` + `.../sync-flags` shape: one read
+#           surface carrying the evidence, one writer. No new page, table, queue or tile.
+# Re-pinned 1745 -> 1746 on 2026-10-08, measured against origin/main d03b299 (the tree that had
+# just re-pinned to 1745 for #412, merged into this branch). The delta is ONE route and it is
+# named: GET /commcalc/peer-comparison (the Peer Sales Comparison report, index §59). Verified by
+# diffing the branch against main for route decorators — exactly one added, NONE removed — so the
+# pin was re-taken on a known addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1746"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
