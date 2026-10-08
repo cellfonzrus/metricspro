@@ -402,7 +402,16 @@ _apromo = _asset.split("def _promo_type", 1)[1].split("\ndef ", 1)[0]
 ck("I7 `asset/router._promo_type` asks the one home for the AAL question",
    "_lc.is_add_a_line" in _apromo)
 ck("I8 … and no longer spells it itself",
-   "add a line" not in _apromo.lower().split("#")[0] or '"add a line" in ct' not in _apromo)
+   '"add a line" in ct' not in _apromo and 'ct == "aal"' not in _apromo)
+# AND THE RULES MUST BE THREADED. Dereferencing the home while handing it no rules is a NOMINAL fix:
+# the home answers with the HOUSE words and a tenant whose POS carries the fact in its category path
+# is no better served than by the substring this replaced. That is the §19.18 trap (a registry written
+# but not wired), so the caller must resolve the org's rules and pass them.
+_arecon = _asset.split("def _compute_hotsheet_recon", 1)[1].split("\ndef ", 1)[0]
+ck("I9 the asset recon resolves the ORG's activation-type rules",
+   "_line_rules_of(_accessory_config(client, org_id))" in _arecon)
+ck("I10 … and threads them into every _promo_type call (no bare call left)",
+   "_promo_type(ct, _line_rules)" in _arecon and "_promo_type(ct)" not in _arecon)
 
 
 print("\n" + "=" * 70)

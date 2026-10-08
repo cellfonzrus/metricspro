@@ -2256,6 +2256,19 @@ def _effective_promos(entries, acquired_date):
 def _compute_hotsheet_recon(client, org_id, store="", market="", month=None, year=None, tolerance=1.0):
     hs = _hotsheet_lookup(client, org_id)
     hotsheet_loaded = bool(hs)
+    # THE ORG'S activation-type rules, resolved ONCE for the whole recon and threaded into
+    # `_promo_type` below. Dereferencing `line_class.is_add_a_line` while passing it no rules would be
+    # a nominal fix only — the home would answer with the HOUSE words and a tenant whose POS carries
+    # the fact in its category path would be no better served than by the bare substring this
+    # replaced. That half-measure is the §19.18 trap (a registry written but not wired), so the rules
+    # are read here. Lazy import: commcalc.router is heavy and importing it at module scope would
+    # couple the two routers. Adaptive like every other config reader — a failure degrades to the
+    # house words and never raises, which is exactly today's behaviour.
+    try:
+        from app.modules.commcalc.router import _accessory_config, _line_rules_of
+        _line_rules = _line_rules_of(_accessory_config(client, org_id))
+    except Exception:
+        _line_rules = None
     rows = _fetch_asset_rows(
         client, org_id, store=store, market=market,
         select=("store,market,esn_imei,phone_number,device_model,contract_type,"
@@ -2315,7 +2328,7 @@ def _compute_hotsheet_recon(client, org_id, store="", market="", month=None, yea
             continue
 
         ct = (r.get("contract_type") or "").strip()
-        ptype = _promo_type(ct)
+        ptype = _promo_type(ct, _line_rules)
         actual = float(r.get("reimbursement") or 0)
         model = r.get("device_model") or ""
         nm = _norm_model(model)
