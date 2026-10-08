@@ -265,10 +265,23 @@ ok("E5b the hub READS `expenses` off the payload (scopeExpenses), never recomput
    "scopeExpenses(" in hub
    and "gross_profit - " not in hub and "gross_profit -" not in hub.replace("gross_profit - expenses", ""))
 hub_new = hub[hub.index("function ExpenseCell("):]          # the code this PR added
-ok("E5c the drill-down reads the canonical /account/pl endpoint, adds no new one",
-   "scopeStatementPath(" in code_only(hub_new) and "/api/v1/account/pl/" in code_only(fe_helper)
+# UPDATED 2026-10-07 (index §4e): the drill-down now descends company -> market -> store -> line,
+# so it reads the canonical P&L through `plStatement.plQuery` — the SAME spelling the /accounts/pl
+# page and the per-store print use — instead of its own `scopeStatementPath`. The invariant is
+# STRONGER, not weaker: the panel must not spell a money URL at all, and the one URL it does build
+# is the market VOCABULARY index (`/core/markets`), the same authority the P&L's market filter
+# resolves through.
+hub_money_urls = [u for u in re.findall(r"/api/v1/[a-z0-9/_-]+", code_only(hub_new))
+                  if not u.startswith("/api/v1/core/markets")]
+ok("E5c the drill-down reads the canonical /account/pl through the ONE query helper, adds no "
+   "endpoint and spells no money URL of its own",
+   "plQuery(" in code_only(hub_new)
+   and "/api/v1/account/pl/" in code_only(open(os.path.join(FE_DIR, "_components/plStatement.ts")).read())
    and "store_expenses" not in code_only(hub) and "store_expenses" not in code_only(fe_helper)
-   and "/api/v1/" not in code_only(hub_new))          # the panel builds no URL of its own
+   and hub_money_urls == [], hub_money_urls)
+ok("E5c2 the drill-down descends to the store and to the line level (the owner's ask)",
+   all(t in hub_new for t in ("drillFilter(", "nextRung(", "levelTotals(", "lineTieOut("))
+   and "l.detail" in hub_new)
 ok("E5d RULE TWO — no tenant/carrier/store-name branch in the code this PR adds",
    not re.search(r"(?i)\b(boost|luxelink|nova\s*wave|cellfonz|t-?mobile|verizon)\b",
                  code_only(hub_new) + code_only(fe_helper)))

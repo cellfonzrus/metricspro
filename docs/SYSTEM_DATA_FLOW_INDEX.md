@@ -1695,7 +1695,7 @@ detail** holds by construction. `statement_filter` is **untouched**. Deliberate 
 reports its detail as org-wide labels with no store, so it stays consolidated-only — a scope shows no device-cost
 breakdown, as before, rather than a wrong one.
 
-**The hub panel — SHIPS SEPARATELY (PR #404).** The backend half above lands on its own, because it needs no
+**The hub panel — SHIPS SEPARATELY (PR #408).** The backend half above lands on its own, because it needs no
 screen change to be right: the existing drill-down already renders each line's `detail`, so every per-store and
 per-company snapshot computed after this starts explaining its own number wherever a drill-down is already shown.
 The PANEL rewrite is a LAYOUT change and therefore waits for the owner's eyeball under the finance module's
@@ -1733,7 +1733,7 @@ explaining itself through the REAL `engine._assemble`, the filtered read tying t
 second drill derivation in `backend/app`). `frontend/prove_pl_drill_path.mjs` (**58 checks** — the real
 `scopeFinancials.ts`: the drill path, the market vocabulary, all four sections, the line tie-out, level totals,
 and the page wiring: every rung the same `plQuery` read, no money URL of its own, RULE TWO) **lands with the
-panel, in PR #404**, and is wired into CI there as the `pl-drill-path-proof` job.
+panel, in PR #408**, and is wired into CI there as the `pl-drill-path-proof` job.
 **`backend/harness_royalty_pl.py` §A (81 → 88)** — its FROZEN pre-change oracle pinned the defect (a store scope's
 `detail: {}`), and it was deliberately **NOT re-captured from the new code**: re-freezing turns a byte-identity
 lock into a snapshot of whatever the code does today. Instead the identity is asserted with each STORE scope's
@@ -1744,7 +1744,7 @@ CONSOLIDATED drill row) proving the set-aside did not excuse detail everywhere. 
 against the oracle was verified to be exactly that single key, nothing else.
 `frontend/prove_accounts_expenses_column.mjs` (52 → **57**) and `backend/harness_account_expenses_one_home.py`
 (42 → **43**) have their drill-down assertions re-stated against the new panel, strictly tighter (the panel must
-spell no money URL at all) — also **with the panel, in PR #404**, since they assert against it. The two backend
+spell no money URL at all) — also **with the panel, in PR #408**, since they assert against it. The two backend
 harnesses are wired into the `carrier-vocab-guard` job here.
 
 ## 5. Daily Targets & actuals
@@ -6731,7 +6731,7 @@ rendering the resolved name.
 ## 18. Cross-reference: by METRIC / KPI
 
 - **Which expense rows are LABOUR the statement already books from its own source — so they must not be counted twice?** — ONE home `commcalc/labour_vocabulary.resolve` (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`; a non-empty tenant list wins wholesale; `mode='off'` opts out), dereferenced by `account/coa._account_config`, `commcalc/router._expense_apply_default_tokens` and the Expenses sheet's pinned mirror. Locks `harness_labour_vocabulary.py` (109). Live 2026-10-07: 2 of 3 tenants were double-counting; the house org by **$90,922.80 / $92,565.89 / $97,362.88** in July / August / September 2026 — §4e.
-- **What makes up THIS line, for THIS scope?** — `coa.accrue_detail` records every drill dollar at the store grain and `engine._scoped` sums the stores in its own scope (Σ `detail_by_store` + `detail_company_wide` == `detail`); `statement_filter.aggregate` already summed it and was unchanged. Before this, 39 of the house org's 40 stored August 2026 P&L scopes carried an EMPTY drill-down. Locks `harness_pl_drill_detail.py` (56); the panel and `prove_pl_drill_path.mjs` (58) land in PR #404 — §4e.
+- **What makes up THIS line, for THIS scope?** — `coa.accrue_detail` records every drill dollar at the store grain and `engine._scoped` sums the stores in its own scope (Σ `detail_by_store` + `detail_company_wide` == `detail`); `statement_filter.aggregate` already summed it and was unchanged. Before this, 39 of the house org's 40 stored August 2026 P&L scopes carried an EMPTY drill-down. Locks `harness_pl_drill_detail.py` (56); the panel and `prove_pl_drill_path.mjs` (58) land in PR #408 — §4e.
 - **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.16).
 
 | Metric | Source table.column | Reader function |

@@ -185,3 +185,138 @@ export function marginIdentity(row: ScopeRow): { checked: boolean; agree: boolea
   const delta = Math.round((row.gross_profit - e.amount - row.net_income) * 100) / 100
   return { checked: true, agree: Math.abs(delta) < 0.015, delta }
 }
+
+// ── THE DRILL PATH: company → market → store → line (owner report 2026-10-07, index §4e) ─────────
+// Owner, verbatim: *"the details are missing and the details with the drop down does not tie any
+// information which appears on the summary line, details should be same as on the p&l page, the
+// expenses should be able to drill down, each line should be able to drill down to get to each level
+// and finally down to the line level."*
+//
+// THREE things were wrong, and all three are the same class — a surface answering a question at a
+// grain the answer was never produced at:
+//
+//   1. the panel showed only the EXPENSE sections, so it was not "the same as on the p&l page";
+//   2. every per-company and per-store snapshot stored `detail: {}` (fixed in the BACKEND —
+//      `coa.accrue_detail` + `engine._scoped`), so no line could drill to its rows;
+//   3. there was no way down from a company to a market to a store at all.
+//
+// NOTHING BELOW DERIVES A DOLLAR. Every figure at every level is the server's own
+// `GET /account/pl/{period}` answer, spelled by the ONE frontend query helper
+// `_components/plStatement.plQuery` — the same request the P&L page makes. A market level is that
+// request with the market in the filter; a store level is that request with the store in the filter.
+// So a level TIES to the level above it by construction: both are the same read of the same
+// per-store snapshots through `statement_filter`, not two summations.
+//
+// The market vocabulary is the canonical UNION market index (`GET /core/markets`, index §13) — the
+// same authority the P&L's own market filter resolves through, so this drill can never offer a
+// market the statement filter cannot bind.
+//
+// RULE TWO: a scope key, a market name and a store address are opaque strings here. Nothing branches
+// on a tenant, carrier, company or store.
+
+/** One rung of the drill path. `key` is what the request carries; `label` is what a human reads. */
+export type DrillLevel = { kind: 'scope' | 'market' | 'store'; key: string; label: string }
+
+/** The filter a path resolves to: the scope stays the ROOT scope (so a company's drill can never
+ *  wander outside that company) and the market / store ride in the filter, exactly as the P&L page
+ *  composes them. */
+export function drillFilter(path: DrillLevel[]): { scope: string; stores: string[]; markets: string[] } {
+  const root = path.find(p => p.kind === 'scope')
+  const market = [...path].reverse().find(p => p.kind === 'market')
+  const store = [...path].reverse().find(p => p.kind === 'store')
+  return {
+    scope: root ? root.key : 'consolidated',
+    // A store is more specific than its market, so once a store is chosen the market adds nothing
+    // and is dropped — carrying both would ask the filter to satisfy two predicates for one answer.
+    stores: store ? [store.key] : [],
+    markets: store ? [] : (market ? [market.key] : []),
+  }
+}
+
+/** What the NEXT rung down offers. A store is the last rung — below it are the statement's own
+ *  lines, and below those each line's drill rows. */
+export function nextRung(path: DrillLevel[]): 'market' | 'store' | 'line' {
+  if (path.some(p => p.kind === 'store')) return 'line'
+  if (path.some(p => p.kind === 'market')) return 'store'
+  return 'market'
+}
+
+/** A store scope has no markets or stores beneath it — the hub's By Store rows go straight to lines. */
+export function drillRootLevels(scopeKey: string, scopeLabel: string): DrillLevel[] {
+  const root: DrillLevel = { kind: 'scope', key: scopeKey, label: scopeLabel }
+  return isStoreScope(scopeKey)
+    ? [root, { kind: 'store', key: scopeAddress(scopeKey), label: scopeLabel }]
+    : [root]
+}
+
+/** The markets of the org, as the canonical union index serves them, narrowed to the ones that
+ *  actually have a store in this drill's scope when that store list is known. An empty `inScope`
+ *  means "not known yet" and offers every market — never a silently shortened list. */
+export function marketsForScope(allMarkets: string[], inScope?: string[] | null): string[] {
+  const want = (inScope || []).map(s => String(s || '').trim().toLowerCase()).filter(Boolean)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const m of allMarkets || []) {
+    const k = String(m || '').trim()
+    if (!k || seen.has(k.toLowerCase())) continue
+    if (want.length > 0 && !want.includes(k.toLowerCase())) continue
+    seen.add(k.toLowerCase())
+    out.push(k)
+  }
+  return out
+}
+
+/** EVERY section of a statement, in the P&L page's own order, empty ones dropped. The expense-only
+ *  reader above is kept for the Expenses column's tie-out; this is what the panel renders, because
+ *  the owner asked for "the same as on the p&l page". */
+export const ALL_SECTIONS = ['revenue', 'cogs', 'opex', 'other'] as const
+
+export function allSections(st: Statement | null | undefined): StatementSection[] {
+  const secs = st?.sections || []
+  const out: StatementSection[] = []
+  for (const t of ALL_SECTIONS) {
+    const s = secs.find(x => x?.type === t)
+    if (s && (s.lines || []).length > 0) out.push(s)
+  }
+  return out
+}
+
+/** Display titles for every section — the same words the P&L page prints. */
+export const SECTION_TITLE: Record<string, string> = {
+  revenue: 'Revenue', cogs: 'Cost of Goods Sold', opex: 'Operating Expenses', other: 'Other',
+}
+
+/** TIE-OUT ONLY (never a source): does a line's drill-down add up to the line it sits under?
+ *  Since the backend fix both come from the same per-store accumulation, so a mismatch means a
+ *  stale snapshot — said out loud rather than hidden. `checked:false` = the line carries no drill
+ *  rows, which is not a failure. */
+export function lineTieOut(line: StatementLine | null | undefined):
+  { checked: boolean; agree: boolean; detail: number; delta: number } {
+  const d = line?.detail || {}
+  const keys = Object.keys(d)
+  if (keys.length === 0) return { checked: false, agree: true, detail: 0, delta: 0 }
+  let t = 0
+  for (const k of keys) t += Number(d[k] || 0)
+  const detail = Math.round(t * 100) / 100
+  const delta = Math.round((detail - Number(line?.amount || 0)) * 100) / 100
+  return { checked: true, agree: Math.abs(delta) < 0.005, detail, delta }
+}
+
+/** The headline figures of a drill level, read straight off its statement — never recomputed.
+ *  `reported:false` when the level has no computed statement: absent is not zero. */
+export function levelTotals(st: Statement | null | undefined): {
+  reported: boolean; revenue: number; gross_profit: number; expenses: number; net_income: number
+} {
+  if (!st) return { reported: false, revenue: 0, gross_profit: 0, expenses: 0, net_income: 0 }
+  const secs = st.sections || []
+  const sub = (t: string) => Number((secs.find(x => x?.type === t) || {}).subtotal || 0)
+  return {
+    reported: true,
+    revenue: sub('revenue'),
+    gross_profit: Number(st.gross_profit || 0),
+    // The SAME definition as the hub's Expenses column (`EXPENSE_SECTIONS`), dereferenced — not a
+    // second idea of what an expense is.
+    expenses: Math.round(EXPENSE_SECTIONS.reduce((a, t) => a + sub(t), 0) * 100) / 100,
+    net_income: Number(st.net_income || 0),
+  }
+}

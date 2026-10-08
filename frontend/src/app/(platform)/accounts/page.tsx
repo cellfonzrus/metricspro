@@ -6,10 +6,15 @@ import { usePeriod } from '@/lib/period-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import NarrativeBanner from '@/components/NarrativeBanner'
 import {
-  EXPENSE_SECTION_TITLE, expenseSections, expenseTieOut, isStoreScope, marginIdentity,
-  scopeBalanceSheetHref, scopeDetailHref, scopeDisplay, scopeExpenses, scopeStatementPath,
-  type ScopeRow, type Statement,
+  allSections, drillFilter, drillRootLevels, expenseTieOut, isStoreScope, levelTotals,
+  lineTieOut, marginIdentity, marketsForScope, nextRung, SECTION_TITLE,
+  scopeBalanceSheetHref, scopeDetailHref, scopeDisplay, scopeExpenses,
+  type DrillLevel, type ScopeRow, type Statement,
 } from './_components/scopeFinancials'
+import { plQuery } from './_components/plStatement'
+
+/** The headline figures of one drill rung, as `levelTotals` reports them. */
+type LevelTotals = ReturnType<typeof levelTotals>
 
 export default function AccountsDashboard() {
   const { period } = usePeriod()
@@ -482,7 +487,11 @@ function ScopeTable({ title, rows, period }: { title: string; rows: ScopeRow[]; 
                   {open && (
                     <tr style={{ background: 'var(--surface2, #f8fafc)' }}>
                       <td colSpan={8} style={{ padding: '0 16px 14px' }}>
-                        <ScopeDrillDown row={s} period={period} />
+                        {/* Keyed on the row AND the period: opening a different scope, or
+                            changing the month, gives a FRESH panel at the top of its drill
+                            path. React remounting is the reset — never a setState in an
+                            effect, which cascades renders (react-hooks/set-state-in-effect). */}
+                        <ScopeDrillDown key={`${s.scope_key}|${period}`} row={s} period={period} />
                       </td>
                     </tr>
                   )}
@@ -496,40 +505,134 @@ function ScopeTable({ title, rows, period }: { title: string; rows: ScopeRow[]; 
   )
 }
 
-// ── THE DRILL-DOWN: a preview of the canonical statement, not a second computation ───────────────
-// Owner: *"let each store be drilled down to get more details"*. It fetches `GET /account/pl/{period}
-// ?scope=<scope_key>` — the SAME endpoint /accounts/pl reads, with no filter, so what renders here is
-// the stored snapshot byte for byte: the expense lines behind the column, each line's own stored
-// drill-down detail, and the declared-zero notes the statement carries. Everything deeper lives on
-// the P&L page, which is linked; this panel deliberately answers only "what makes up that number".
+// ── THE DRILL-DOWN: the SAME statement the P&L page shows, down to the line level ────────────────
+// Owner report 2026-10-07, verbatim: *"the details are missing and the details with the drop down
+// does not tie any information which appears on the summary line, details should be same as on the
+// p&l page, the expenses should be able to drill down, each line should be able to drill down to get
+// to each level and finally down to the line level."*
+//
+// What this panel is, and what it deliberately is NOT:
+//   · It renders the server's own `GET /account/pl/{period}` answer, requested through the ONE
+//     frontend query helper `plQuery` — byte for byte the request the /accounts/pl page makes for the
+//     same scope and filter. It is NOT a second computation, and it adds up nothing.
+//   · Every rung down — company → market → store — is that SAME request with one more thing in the
+//     filter. So a rung ties to the rung above it by construction: both are `statement_filter`
+//     summing the same per-store snapshots, never two different summations.
+//   · Below the store rung are the statement's own LINES, and below each line its own drill rows,
+//     which the backend now records at the store grain (`coa.accrue_detail`). Before this release
+//     every per-store snapshot stored an EMPTY drill-down, which is why the dropdown showed nothing
+//     that tied to the summary line.
+//   · ALL FOUR sections are shown (Revenue, COGS, Operating Expenses, Other) with their subtotals
+//     and Gross Profit / Net Operating Income / Net Income — "the same as on the p&l page". The
+//     earlier panel showed only expenses.
+// RULE TWO: a scope key, a market name and a store address are opaque strings; nothing branches on a
+// tenant, carrier, company or store.
 function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
+  const [path, setPath] = useState<DrillLevel[]>(() => drillRootLevels(row.scope_key, scopeDisplay(row)))
   const [st, setSt] = useState<Statement | null>(null)
+  const [filteredStores, setFilteredStores] = useState<string[]>([])
   const [state, setState] = useState<'loading' | 'ready' | 'uncomputed' | 'error'>('loading')
   const [err, setErr] = useState('')
+  const [markets, setMarkets] = useState<string[]>([])
+  const [childTotals, setChildTotals] = useState<Record<string, LevelTotals>>({})
+  const [openLines, setOpenLines] = useState<Record<string, boolean>>({})
 
+  // A drill path belongs to ONE scope and ONE month: the parent keys this panel on both, so a
+  // different row or a different period REMOUNTS it at the root rather than resetting state from
+  // inside an effect (which cascades renders).
+  const filt = drillFilter(path)
+  const rung = nextRung(path)
+  // The filter as PRIMITIVES, so an effect can depend on the values rather than on a fresh object
+  // every render.
+  const fScope = filt.scope
+  const fStores = filt.stores.join('|')
+  const fMarkets = filt.markets.join('|')
+
+  // THE level's own statement — the canonical read, one request per level, only the open one.
   useEffect(() => {
     let live = true
-    setState('loading')
-    api(scopeStatementPath(period, row.scope_key, ORG_ID))
-      .then((d: { computed?: boolean; statement?: Statement } | null) => {
+    api(plQuery(period, fScope, fStores ? fStores.split('|') : [], fMarkets ? fMarkets.split('|') : [], ORG_ID))
+      .then((d: { computed?: boolean; statement?: Statement; filtered_stores?: string[] } | null) => {
         if (!live) return
+        setFilteredStores(d?.filtered_stores || [])
         if (!d?.computed) { setSt(null); setState('uncomputed'); return }
         setSt(d.statement || null); setState('ready')
       })
       .catch((e: unknown) => { if (live) { setErr(e instanceof Error ? e.message : String(e)); setState('error') } })
     return () => { live = false }
-  }, [period, row.scope_key])
+  }, [period, fScope, fStores, fMarkets])
 
+  // The market vocabulary — the canonical UNION market index, the same authority the P&L's own
+  // market filter resolves through. Fetched once; a failure leaves the market rung empty rather
+  // than offering a market the filter could not bind.
+  useEffect(() => {
+    if (rung !== 'market' || markets.length > 0) return
+    let live = true
+    api(`/api/v1/core/markets?org_id=${ORG_ID}`)
+      .then((d: { markets?: string[] } | null) => { if (live) setMarkets(d?.markets || []) })
+      .catch(() => { if (live) setMarkets([]) })
+    return () => { live = false }
+  }, [rung, markets.length])
+
+  // Each child rung's own headline figures — again the canonical read, one request per child, so a
+  // child row can never disagree with what opening it shows.
+  const children: DrillLevel[] = rung === 'market'
+    ? marketsForScope(markets, null).map(m => ({ kind: 'market' as const, key: m, label: m }))
+    : rung === 'store'
+      ? filteredStores.map(s => ({ kind: 'store' as const, key: s, label: s }))
+      : []
+  const childKeys = children.map(c => `${c.kind}:${c.key}`).join('||')
+
+  useEffect(() => {
+    if (!childKeys) return
+    let live = true
+    // Rebuilt from the serialized keys, so this effect depends on VALUES only. Each child's figures
+    // are the same canonical read, one rung deeper — `drillFilter` composes the request, here over
+    // the minimal path (root scope + this child), which is what the full path resolves to anyway.
+    const kids: DrillLevel[] = childKeys.split('||').map(k => {
+      const i = k.indexOf(':')
+      return { kind: k.slice(0, i) as DrillLevel['kind'], key: k.slice(i + 1), label: k.slice(i + 1) }
+    })
+    Promise.all(kids.map(c => {
+      const f = drillFilter([{ kind: 'scope', key: fScope, label: '' }, c])
+      return api(plQuery(period, f.scope, f.stores, f.markets, ORG_ID))
+        .then((d: { computed?: boolean; statement?: Statement } | null) =>
+          [`${c.kind}:${c.key}`, levelTotals(d?.computed ? (d.statement || null) : null)] as const)
+        .catch(() => [`${c.kind}:${c.key}`, levelTotals(null)] as const)
+    })).then(pairs => {
+      if (!live) return
+      setChildTotals(prev => {
+        const next = { ...prev }
+        for (const [k, v] of pairs) next[k] = v
+        return next
+      })
+    })
+    return () => { live = false }
+  }, [period, fScope, childKeys])
+
+  const secs = allSections(st)
   const col = scopeExpenses(row)
-  const secs = expenseSections(st)
   const tie = expenseTieOut(col, st)
   const ident = marginIdentity(row)
+  const atRoot = path.length === drillRootLevels(row.scope_key, scopeDisplay(row)).length
 
   return (
     <div className="card" style={{ padding: 14, background: 'var(--surface, #fff)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 700 }}>
-          Expenses — {scopeDisplay(row)} · {period}
+          {/* The breadcrumb IS the way back up. Clicking a crumb truncates the path to it. */}
+          {path.map((p, i) => (
+            <Fragment key={`${p.kind}:${p.key}`}>
+              {i > 0 && <span style={{ color: 'var(--text3)', margin: '0 5px' }}>›</span>}
+              {i === path.length - 1
+                ? <span>{p.label}</span>
+                : <button onClick={() => setPath(path.slice(0, i + 1))}
+                    style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--link, #2563eb)', fontSize: 12, fontWeight: 700 }}>
+                    {p.label}
+                  </button>}
+            </Fragment>
+          ))}
+          <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {period}</span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <Link className="btn" style={{ fontSize: 12, padding: '3px 10px' }} href={scopeDetailHref(row.scope_key)}>Full P&amp;L</Link>
@@ -541,11 +644,58 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
       </div>
 
       {state === 'loading' && <div style={{ padding: 12, color: 'var(--text3)', fontSize: 12 }}>Reading the statement…</div>}
-      {state === 'error' && <div style={{ padding: 12, color: '#991b1b', fontSize: 12 }}>Could not read this scope&rsquo;s statement: {err}</div>}
+      {state === 'error' && <div style={{ padding: 12, color: '#991b1b', fontSize: 12 }}>Could not read this statement: {err}</div>}
       {state === 'uncomputed' && (
         <div style={{ padding: 12, color: 'var(--text3)', fontSize: 12 }}>
-          No P&amp;L computed for this scope and period — there is nothing to report, which is not the same as $0.00.
+          No P&amp;L computed for this selection and period — there is nothing to report, which is not the same as $0.00.
           Use <strong>Compute statements</strong> above.
+        </div>
+      )}
+
+      {/* ── THE RUNG BELOW: markets, then stores. Each row is the same canonical read, one level
+             deeper, so the rows add up to the statement printed under them. ── */}
+      {children.length > 0 && (
+        <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ padding: '6px 10px', fontSize: 11, textTransform: 'uppercase', fontWeight: 700, color: 'var(--text2)', borderBottom: '1px solid var(--border)' }}>
+            {rung === 'market' ? 'By market — open one to reach its stores' : 'By store — open one to reach its lines'}
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ fontSize: 10.5, color: 'var(--text2)', textTransform: 'uppercase' }}>
+                <th style={{ textAlign: 'left', padding: '5px 10px' }}>{rung === 'market' ? 'Market' : 'Store'}</th>
+                <th style={{ textAlign: 'right', padding: '5px 8px' }}>Revenue</th>
+                <th style={{ textAlign: 'right', padding: '5px 8px' }}>Gross Profit</th>
+                <th style={{ textAlign: 'right', padding: '5px 8px' }}>Expenses</th>
+                <th style={{ textAlign: 'right', padding: '5px 8px' }}>Net Income</th>
+              </tr>
+            </thead>
+            <tbody>
+              {children.map(c => {
+                const t = childTotals[`${c.kind}:${c.key}`]
+                return (
+                  <tr key={`${c.kind}:${c.key}`} style={{ borderTop: '1px solid var(--border)', fontSize: 12 }}>
+                    <td style={{ padding: '5px 10px' }}>
+                      <button onClick={() => setPath([...path, c])}
+                        style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--link, #2563eb)', fontSize: 12, textAlign: 'left' }}>
+                        ▸ {c.label}
+                      </button>
+                    </td>
+                    {/* Absent is NOT zero: a level with no computed statement says so. */}
+                    {t === undefined
+                      ? <td colSpan={4} style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>reading…</td>
+                      : !t.reported
+                        ? <td colSpan={4} style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>not reported</td>
+                        : <>
+                            <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(t.revenue)}</td>
+                            <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(t.gross_profit)}</td>
+                            <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(t.expenses)}</td>
+                            <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600, color: t.net_income >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(t.net_income)}</td>
+                          </>}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -555,67 +705,105 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
             <tbody>
               {secs.length === 0 && (
                 <tr><td style={{ padding: '8px 4px', fontSize: 12, color: 'var(--text3)' }}>
-                  The computed P&amp;L carries no expense lines for this scope.
+                  The computed P&amp;L carries no lines for this selection.
                 </td></tr>
               )}
               {secs.map(sec => (
                 <Fragment key={sec.type}>
                   <tr>
                     <td colSpan={2} style={{ padding: '8px 4px 4px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text2)' }}>
-                      {EXPENSE_SECTION_TITLE[String(sec.type)] || sec.type}
+                      {SECTION_TITLE[String(sec.type)] || sec.type}
                     </td>
                   </tr>
-                  {(sec.lines || []).map((l, i) => (
-                    <Fragment key={String(l.key || l.label || i)}>
-                      <tr style={{ borderTop: '1px solid var(--border)' }}>
-                        <td style={{ padding: '6px 4px', fontSize: 12.5 }}>
-                          {l.label}
-                          {/* Ruling K3(b): a DECLARED zero must say so — the reader cannot tell a
-                              measured $0 from an unmeasured one by looking at the number. */}
-                          {l.note && (
-                            <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 560 }}>
-                              <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
-                              {l.note}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 12.5, color: l.amount ? 'var(--text)' : 'var(--text3)' }}>
-                          {l.amount ? fmt(l.amount) : '—'}
-                        </td>
-                      </tr>
-                      {Object.entries(l.detail || {}).map(([dl, dv]: [string, number]) => (
-                        <tr key={String(l.key) + ':' + dl}>
-                          <td style={{ padding: '3px 4px 3px 26px', fontSize: 11.5, color: 'var(--text2)' }}>↳ {dl}</td>
-                          <td style={{ padding: '3px 4px', textAlign: 'right', fontSize: 11.5, color: 'var(--text2)' }}>{fmt(dv)}</td>
+                  {(sec.lines || []).map((l, i) => {
+                    const lk = `${sec.type}:${l.key || l.label || i}`
+                    const drill = Object.entries(l.detail || {})
+                    const lt = lineTieOut(l)
+                    const open = !!openLines[lk]
+                    return (
+                      <Fragment key={lk}>
+                        <tr style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '6px 4px', fontSize: 12.5 }}>
+                            {/* EVERY line drills — down to the rows behind it. A line with no rows
+                                says so rather than offering an empty dropdown. */}
+                            {drill.length > 0 ? (
+                              <button onClick={() => setOpenLines({ ...openLines, [lk]: !open })}
+                                aria-expanded={open}
+                                title={open ? 'Hide the rows behind this line' : 'Show the rows behind this line'}
+                                style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 11, marginRight: 6, padding: 0, color: 'var(--text2)' }}>
+                                {open ? '▾' : '▸'}
+                              </button>
+                            ) : <span style={{ display: 'inline-block', width: 17 }} />}
+                            {l.label}
+                            {drill.length > 0 && (
+                              <span style={{ marginLeft: 6, fontSize: 10.5, color: 'var(--text3)' }}>({drill.length})</span>
+                            )}
+                            {/* Ruling K3(b): a DECLARED zero must say so — the reader cannot tell a
+                                measured $0 from an unmeasured one by looking at the number. */}
+                            {l.note && (
+                              <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 560 }}>
+                                <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
+                                {l.note}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 12.5, color: l.amount ? 'var(--text)' : 'var(--text3)' }}>
+                            {l.amount ? fmt(l.amount) : '—'}
+                          </td>
                         </tr>
-                      ))}
-                    </Fragment>
-                  ))}
+                        {open && drill.map(([dl, dv]) => (
+                          <tr key={lk + ':' + dl}>
+                            <td style={{ padding: '3px 4px 3px 43px', fontSize: 11.5, color: 'var(--text2)' }}>↳ {dl}</td>
+                            <td style={{ padding: '3px 4px', textAlign: 'right', fontSize: 11.5, color: 'var(--text2)' }}>{fmt(Number(dv))}</td>
+                          </tr>
+                        ))}
+                        {/* The line-level tie-out is STATED, never assumed. Since the backend records
+                            drill rows at the store grain, the rows and the line come from one
+                            accumulation — a mismatch means a stale snapshot, and the reader is told. */}
+                        {open && lt.checked && !lt.agree && (
+                          <tr>
+                            <td colSpan={2} style={{ padding: '2px 4px 6px 43px', fontSize: 11, color: '#991b1b' }}>
+                              ⚠ These rows add to {fmt(lt.detail)} against {fmt(Number(l.amount || 0))} on the line ({fmt(lt.delta)} apart) — recompute this period, then re-open.
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  })}
                   <tr style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: '6px 4px', fontSize: 11.5, fontWeight: 600, color: 'var(--text2)' }}>
-                      Subtotal — {EXPENSE_SECTION_TITLE[String(sec.type)] || sec.type}
+                      Subtotal — {SECTION_TITLE[String(sec.type)] || sec.type}
                     </td>
                     <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 12.5, fontWeight: 600 }}>{fmt(Number(sec.subtotal || 0))}</td>
                   </tr>
                 </Fragment>
               ))}
+              {/* The page's own totals, in the page's own order — so this IS the P&L, not a summary of it. */}
               <tr style={{ borderTop: '2px solid var(--border)' }}>
-                <td style={{ padding: '8px 4px', fontSize: 13, fontWeight: 700 }}>Expenses (this scope, {period})</td>
-                <td style={{ padding: '8px 4px', textAlign: 'right', fontSize: 13, fontWeight: 700 }}>
-                  {col.reported ? fmt(col.amount) : <span style={{ fontSize: 12, color: 'var(--text3)' }}>not reported</span>}
-                </td>
+                <td style={{ padding: '7px 4px', fontSize: 12.5, fontWeight: 700 }}>Gross Profit</td>
+                <td style={{ padding: '7px 4px', textAlign: 'right', fontSize: 12.5, fontWeight: 700 }}>{fmt(Number(st?.gross_profit || 0))}</td>
+              </tr>
+              <tr>
+                <td style={{ padding: '5px 4px', fontSize: 12.5, fontWeight: 700 }}>Net Operating Income</td>
+                <td style={{ padding: '5px 4px', textAlign: 'right', fontSize: 12.5, fontWeight: 700 }}>{fmt(Number(st?.net_operating_income || 0))}</td>
+              </tr>
+              <tr>
+                <td style={{ padding: '5px 4px', fontSize: 13, fontWeight: 700 }}>Net Income</td>
+                <td style={{ padding: '5px 4px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: Number(st?.net_income || 0) >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(Number(st?.net_income || 0))}</td>
               </tr>
             </tbody>
           </table>
 
-          {/* The tie-out is stated, never assumed. The column and this panel come from the same
+          {/* The tie-out is stated, never assumed. The hub column and this panel come from the same
               snapshot through the same definition, so a mismatch means something upstream changed
-              between the two reads — and the reader is told, not shown a quiet second number. */}
-          <div style={{ marginTop: 8, fontSize: 11.5, color: tie.checked && !tie.agree ? '#991b1b' : 'var(--text3)' }}>
-            {tie.checked && tie.agree && <>✓ Ties to the Expenses column above, and to the P&amp;L for this scope — one statement, read once.</>}
-            {tie.checked && !tie.agree && <>⚠ This detail sums to {fmt(tie.detail)} against {fmt(col.amount)} in the column ({fmt(tie.delta)} apart) — the snapshot changed between the two reads. Recompute, then re-open.</>}
-            {!tie.checked && <>Figures read from the stored statement for this scope.</>}
-            {ident.checked && !ident.agree && (
+              between the two reads — and the reader is told, not shown a quiet second number. It is
+              checked only at the ROOT of the drill: a market or a store is a part, not the whole. */}
+          <div style={{ marginTop: 8, fontSize: 11.5, color: atRoot && tie.checked && !tie.agree ? '#991b1b' : 'var(--text3)' }}>
+            {atRoot && tie.checked && tie.agree && <>✓ Expenses here tie to the Expenses column above, and to the P&amp;L for this scope — one statement, read once.</>}
+            {atRoot && tie.checked && !tie.agree && <>⚠ The expenses here sum to {fmt(tie.detail)} against {fmt(col.amount)} in the column ({fmt(tie.delta)} apart) — the snapshot changed between the two reads. Recompute, then re-open.</>}
+            {atRoot && !tie.checked && <>Figures read from the stored statement for this scope.</>}
+            {!atRoot && <>Figures read from the same stored per-store statements the P&amp;L page reads, filtered to this selection — the rungs above add up to this one.</>}
+            {atRoot && ident.checked && !ident.agree && (
               <div style={{ color: '#991b1b', marginTop: 3 }}>
                 ⚠ Gross Profit − Expenses does not equal Net Income for this scope ({fmt(ident.delta)} apart).
               </div>
