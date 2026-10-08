@@ -538,6 +538,22 @@ def day_keyed_date_columns() -> dict:
             if c and t not in PERIOD_GRAIN_REASONS}
 
 
+def day_keyed_file_types(table_map) -> dict:
+    """PURE: {upload file_type: data-date column} for every upload route whose LANDING TABLE is day
+    grain. `table_map` is the caller's {file_type: table} (commcalc.column_mapping.TABLE_MAP).
+
+    THE one derivation of "what does an upload of this report REPLACE". It existed as an inline
+    comprehension in the upload handler, which meant the only thing that knew a one-day file replaces
+    one DAY was the handler itself — so the Upload page went on warning that the whole PERIOD would be
+    replaced, and the owner stopped uploading a day he needed (2026-10-08: *"also can i just upload
+    1day of data, it says it will replace the whole period"*). Both the handler and every surface that
+    TELLS a human what an upload does now dereference this; a hand-written list of feed names in a
+    page is the §19.46 defect wearing a hat, and `harness_statement_month_coverage.py` fails the build
+    on one."""
+    dk = day_keyed_date_columns()
+    return {ft: dk[tb] for ft, tb in (table_map or {}).items() if tb in dk}
+
+
 def is_day_keyed(table: str) -> bool:
     """PURE: True when `table` is replaced by DAY and its rows carry their own month."""
     return table in day_keyed_date_columns()

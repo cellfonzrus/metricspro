@@ -1929,8 +1929,10 @@ async def _upload_file_impl(
     # DEREFERENCES it, so a feed that declares a data-date column is day-keyed the same day and the
     # map cannot fall behind the registry — it IS the registry.
     # `harness_feed_day_grain.py` fails the build on a second copy of this map.
-    _DAY_KEYED = _lineage.day_keyed_date_columns()
-    DATE_KEYED = {_ft: _DAY_KEYED[_tb] for _ft, _tb in TABLE_MAP.items() if _tb in _DAY_KEYED}
+    # The derivation itself now lives in the registry too (`day_keyed_file_types`), because the
+    # surface that TELLS a human what an upload replaces needs the same answer and was still spelling
+    # the pre-§19.46 four-entry list by hand (owner 2026-10-08) — see GET /report-kinds.
+    DATE_KEYED = _lineage.day_keyed_file_types(TABLE_MAP)
 
     # ── A ROW'S MONTH IS ITS OWN DAY'S MONTH, never the period someone picked ────────────────────
     # All or nothing, and the refusal is the safe side: when ANY row cannot prove its day, the rows
@@ -11306,6 +11308,11 @@ def pay_feed_balance(period: str = "", org_id: str = ORG_ID):
     Also reports DAY COVERAGE against the carrier's own statement, because the two feeds are the
     same money: October 2026 has two days in both and ties to the penny, while the statement is
     missing the final day of every closed month ($10,875.67-$23,050.60 each).
+
+    And since 2026-10-08 it reports `statement_month` — whether a CLOSED month's statement covers
+    every day of its own calendar, named and PRICED when it does not. The two-feed gap alone cannot
+    see a day BOTH feeds lost, which is precisely what an end-exclusive pull window produces
+    (index §19.53).
     """
     require_org(org_id)
     client = sb()
@@ -11342,12 +11349,27 @@ def pay_feed_balance(period: str = "", org_id: str = ORG_ID):
     bal = _pdq.reconcile_pay_feed(detail, lambda t: cat_map.get(t), placed_logins)
 
     statement = _read("raw_comp_report", "begin_date,payment_amount")
-    coverage = _pdq.day_coverage_gap(
-        {str(r.get("payment_date") or "")[:10] for r in detail if r.get("payment_date")},
-        {str(r.get("begin_date") or "")[:10] for r in statement if r.get("begin_date")})
+    _detail_days = {str(r.get("payment_date") or "")[:10] for r in detail if r.get("payment_date")}
+    _stmt_days = {str(r.get("begin_date") or "")[:10] for r in statement if r.get("begin_date")}
+    coverage = _pdq.day_coverage_gap(_detail_days, _stmt_days)
     coverage["statement_total"] = round(sum(safe_float(r.get("payment_amount")) for r in statement), 2)
 
+    # ── AND IS THIS A FINISHED MONTH? (owner 2026-10-08) ─────────────────────────────────────────
+    # `day_coverage_gap` answers "do the two feeds cover the same days" — the right question, and
+    # blind to a day BOTH feeds lost, which is exactly what an end-exclusive pull window produces.
+    # So this surface now also asks the CLOSED-MONTH question against the calendar, the one authority
+    # that does not come from a window, and PRICES what is short from the per-line feed. Same home
+    # (`pay_data_quality`), no new mechanism: `statement_month_coverage` dereferences the gap above.
+    # Measured live 2026-10-08: seven closed months each missing their final day, $111,949.22.
+    _by_day = {}
+    for r in detail:
+        d = str(r.get("payment_date") or "")[:10]
+        if d:
+            _by_day[d] = _by_day.get(d, 0.0) + safe_float(r.get("amount"))
+    month_coverage = _pdq.statement_month_coverage(period, _detail_days, _stmt_days, _by_day)
+
     return {"period": period, "balance": bal, "day_coverage": coverage,
+            "statement_month": month_coverage,
             "detail_rows": len(detail), "statement_rows": len(statement)}
 
 
@@ -11752,6 +11774,13 @@ def report_kinds_endpoint(org_id: str = ORG_ID):
         r["where"] = _landing.where_to_upload(r)
     out["consumers"] = {t: [{"screen": c["screen"], "label": c["label"], "needs": c.get("needs") or [], "gate": bool(c.get("gate"))}
                             for c in cons] for t, cons in _landing.CONSUMERS.items()}
+    # WHAT AN UPLOAD OF EACH ROUTE REPLACES — the registry's own answer, not a page's memory of it
+    # (owner 2026-10-08: *"can i just upload 1day of data, it says it will replace the whole
+    # period"*). It does not: since §19.46 a file whose every row can prove its day replaces only
+    # THOSE DAYS. The Upload page's warning still said otherwise because it carried its own copy of
+    # the pre-§19.46 day-keyed list. ONE home, dereferenced — `day_keyed_file_types` is the same
+    # derivation `_upload_file_impl` replaces by, so the warning and the write cannot disagree.
+    out["day_keyed_uploads"] = sorted(_lineage.day_keyed_file_types(column_mapping.TABLE_MAP))
     return out
 
 

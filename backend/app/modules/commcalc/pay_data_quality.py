@@ -365,3 +365,95 @@ def day_coverage_gap(detail_days, statement_days):
         "missing_from_detail": only_statement,
         "complete": not only_detail and not only_statement,
     }
+
+
+# ── IS THIS MONTH'S STATEMENT A FINISHED MONTH? ───────────────────────────────────────────────────
+# THE CLASS (owner 2026-10-08: *"why is the last day of the month missing and we need to build a fix
+# for it"*). `day_coverage_gap` above answers "do the two feeds cover the same days". That is the right
+# question and it is not enough on its own, because it can only see a day ONE of the feeds has: if a
+# window lost 08-31 from both, the two agree perfectly and the month is still a day short. A CLOSED
+# month is judged against the CALENDAR, which is the only authority that does not come from a window.
+#
+# WHY THIS IS NOT A SECOND MECHANISM. It DEREFERENCES `day_coverage_gap` for the two-feed question and
+# `feed_period.month_days` / `month_state` for the calendar one; it re-implements neither, and there is
+# no second place that decides whether a month is closed.
+#
+# THE VERDICT VOCABULARY IS THE SHIPPED ONE (§19.49's tri-state, kept literal here exactly as
+# `account/analysis.CASH_KEYS` is kept literal — so this module stays app-import-free apart from the
+# pure parser — with the harness pinning these three strings equal to what `analysis.statement_crosscheck`
+# emits, so they can never drift). `passed` / `failed` / `not_measured`, and `ok` is None for anything
+# that cannot be judged: an ABSENCE IS NOT A ZERO and a month nobody could measure is never a pass.
+VERDICT_PASSED = "passed"
+VERDICT_FAILED = "failed"
+VERDICT_NOT_MEASURED = "not_measured"
+
+
+def statement_month_coverage(period, detail_days, statement_days, amount_by_day=None, today=None):
+    """Does this period's STATEMENT cover every day the period is owed — and what is missing worth?
+
+    `period` a month spelling · `detail_days` / `statement_days` the days each feed holds ·
+    `amount_by_day` {day: amount} from the per-line feed, used to PRICE what the statement is short ·
+    `today` injected so a proof can stand on a fixed date.
+
+    EXPECTED, per month state (`feed_period.month_state`, the one home):
+      · CLOSED — every calendar day of the month (`feed_period.month_days`). This is the case the
+        $111,949.22 lives in: seven closed months each missing their final day.
+      · OPEN   — only the days the per-line feed has demonstrably received. A month in progress is not
+        owed days that have not happened yet, and claiming otherwise would cry wolf every morning.
+      · UNKNOWN (not a month spelling) — nothing is expected and the verdict is `not_measured`.
+
+    Also `not_measured` when the statement holds NO day at all for the period: "the statement has not
+    arrived" and "the statement arrived short" are different facts and must not render as one.
+
+    Returns the verdict, the named missing days, their price, and the two-feed gap nested whole under
+    `gap` so a caller still has `day_coverage_gap`'s own answer. `unpriced_missing_days` names any day
+    we cannot price — an absence we report rather than valuing at $0.00.
+    """
+    from app.modules.commcalc import feed_period as _fp
+    state = _fp.month_state(period, today)
+    stmt = {str(x)[:10] for x in (statement_days or ()) if str(x or "").strip()}
+    det = {str(x)[:10] for x in (detail_days or ()) if str(x or "").strip()}
+    gap = day_coverage_gap(sorted(det), sorted(stmt))
+    out = {"period": period, "month_state": state, "expected_basis": None, "days_expected": 0,
+           "missing_days": [], "missing_amount": 0.0, "unpriced_missing_days": [],
+           "verdict": VERDICT_NOT_MEASURED, "ok": None, "reason": "", "gap": gap}
+
+    if state == _fp.UNKNOWN:
+        out["reason"] = (f"{period or 'this period'} is not a month, so there is no calendar to judge "
+                         f"its statement against — nothing was measured.")
+        return out
+    if not stmt:
+        out["reason"] = (f"No statement day has arrived for {period} at all, so its completeness was "
+                         f"not measured. That is a missing feed, not a complete month of $0.00.")
+        return out
+
+    if state == _fp.CLOSED:
+        expected, basis = set(_fp.month_days(period)), "calendar"
+    else:
+        expected, basis = set(det), "per-line feed (the month is still open)"
+    out["expected_basis"], out["days_expected"] = basis, len(expected)
+
+    missing = sorted(expected - stmt)
+    prices = {str(k)[:10]: v for k, v in (amount_by_day or {}).items()}
+    priced = [d for d in missing if d in prices]
+    out["missing_days"] = missing
+    out["unpriced_missing_days"] = [d for d in missing if d not in prices]
+    out["missing_amount"] = round(sum(float(prices[d] or 0) for d in priced), 2)
+    out["verdict"] = VERDICT_FAILED if missing else VERDICT_PASSED
+    out["ok"] = not missing
+    if missing:
+        where = ("every day of the closed month" if basis == "calendar"
+                 else "the days the per-line feed has received")
+        out["reason"] = (
+            f"{period} is NOT a finished month: its statement is missing {len(missing)} of the "
+            f"{len(expected)} days it is owed ({', '.join(missing[:8])}"
+            f"{', …' if len(missing) > 8 else ''}), worth {out['missing_amount']:.2f} in the per-line "
+            f"feed" + (f" plus {len(out['unpriced_missing_days'])} day(s) nothing can price"
+                       if out["unpriced_missing_days"] else "") +
+            f". Expected: {where}. Re-pull those days from the source before this month is read as "
+            f"final — and ask for an end date ONE DAY PAST the last day wanted, because the source's "
+            f"end boundary is exclusive (feed_period.request_window).")
+    else:
+        out["reason"] = (f"{period}'s statement covers all {len(expected)} day(s) it is owed "
+                         f"({basis}).")
+    return out
