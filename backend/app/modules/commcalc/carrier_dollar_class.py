@@ -107,6 +107,21 @@ UNDECLARED_BASES = (BASIS_INFERRED_TWIN, BASIS_KEYWORD, BASIS_DECLARED_UNMAPPED,
 # default, so a typo can never silently re-recognise revenue.
 DEVICE_REIMB_SOURCES = ("carrier_paid", "distributor_claim")
 
+# WHICH GROSS-PROFIT MONEY COLUMN a carrier dollar lands in. `component_line` (below) answers the
+# same shape of question for the P&L; this answers it for the Gross Profit report's own columns, and
+# it lives HERE for the same reason: the GP report used to carry a private keyword guess
+# (`'reimbursement' in ct or 'rebate' in ct`) that disagreed with the P&L by $418,922.21 in August
+# 2026 alone on the very same 11,114 rows (owner report 2026-10-08: *"gross profit is still showing
+# the old data m teh source of information should be the same"*). One home, two renderings.
+#
+# The VALUES are the GP engine's own column keys — platform vocabulary, no carrier/tenant/product in
+# any of it — and both maps are per-org config with the house defaults below.
+GP_COLUMNS = ("comm", "reimb", "mdf", "chb", "unmapped")
+GP_COMMISSION_COLUMN = "comm"
+# A dollar whose component could not be resolved is NOT quietly called commission: it lands here and
+# is reported, which is the whole difference between a fact and a guess.
+GP_UNCLASSIFIED_COLUMN = "unmapped"
+
 CONFIG_COLUMNS = (
     ("carrier_class_declaration_wins", "1062_carrier_dollar_class.sql"),
     ("carrier_class_category_components", "1062_carrier_dollar_class.sql"),
@@ -115,6 +130,8 @@ CONFIG_COLUMNS = (
     ("carrier_class_rename_lookback", "1062_carrier_dollar_class.sql"),
     ("carrier_component_lines", "1062_carrier_dollar_class.sql"),
     ("pl_device_reimb_source", "1062_carrier_dollar_class.sql"),
+    ("carrier_gp_component_columns", "1064_carrier_gp_columns.sql"),
+    ("carrier_gp_category_columns", "1064_carrier_gp_columns.sql"),
 )
 CONFIG_MIGRATION = dict(CONFIG_COLUMNS)
 
@@ -175,6 +192,22 @@ def default_config():
         #   The HOUSE DEFAULT is the legacy posture for the same reason `component_lines` is empty:
         #   de-recognising the claim is a revenue reduction, and that is the owner's call to apply.
         "device_reimb_source": "distributor_claim",
+        # WHICH GP COLUMN A COMPONENT LANDS IN (owner report 2026-10-08). Keyed by COMPONENT, so a
+        # fifth component can only be routed in one place; a component with no row here lands in
+        # `GP_UNCLASSIFIED_COLUMN` and is reported rather than folded into a column that would mean
+        # something else. These defaults reproduce what the GP report's columns have always MEANT —
+        # the defect was never the columns, it was the classification feeding them.
+        "gp_component_columns": {
+            "COMMISSION": GP_COMMISSION_COLUMN,
+            "SPIFF": GP_COMMISSION_COLUMN,
+            "RESIDUAL": GP_COMMISSION_COLUMN,
+            "REIMBURSEMENT": "reimb",
+        },
+        # The GP report has two money columns the four-component vocabulary has no component for.
+        # They are keyed by the org's DECLARED CATEGORY (normalised by `_norm`, so the hyphen and the
+        # casing the house actually stores cannot miss) and exist so an MDF or chargeback dollar
+        # keeps its own column instead of becoming unclassified money.
+        "gp_category_columns": {"mdf": "mdf", "chargeback": "chb"},
         "config_columns_missing": [],
         "config_migrations_missing": [],
     }
@@ -231,6 +264,18 @@ def load_config(client, org_id):
         src = _norm(r.get("pl_device_reimb_source"))
         if src in DEVICE_REIMB_SOURCES:
             cfg["device_reimb_source"] = src
+        for _key, _col, _upper in (("gp_component_columns", "carrier_gp_component_columns", True),
+                                   ("gp_category_columns", "carrier_gp_category_columns", False)):
+            v = r.get(_col)
+            if isinstance(v, dict):
+                # explicit {} honoured: the org can route every dollar to the unclassified column
+                m = {}
+                for k, col in v.items():
+                    key = str(k or "").strip().upper() if _upper else _norm(k)
+                    col = str(col or "").strip()
+                    if key and col in GP_COLUMNS:
+                        m[key] = col
+                cfg[_key] = m
         lb = r.get("carrier_class_rename_lookback")
         if isinstance(lb, int) and not isinstance(lb, bool) and lb >= 0:
             cfg["rename_lookback"] = lb
@@ -388,6 +433,37 @@ def component_line(component, line_map, default_line):
     if not component:
         return default_line
     return (line_map or {}).get(str(component).upper()) or default_line
+
+
+def gp_column(component, declared_category=None, cfg=None):
+    """PURE: the Gross-Profit money column a carrier dollar lands in — the GP analogue of
+    `component_line`, and the ONLY place that decision is made.
+
+    `component` is what `classify` resolved (or `component_of_declared_category` for a feed whose
+    row already carries the org's declared category). `declared_category` is consulted ONLY for the
+    two columns the component vocabulary has no component for (MDF, chargeback), through the org's
+    own `gp_category_columns`. Nothing resolvable either way lands in `GP_UNCLASSIFIED_COLUMN`,
+    never in commission — an unclassified dollar that renders as commission is exactly the defect
+    this function exists to end."""
+    cfg = cfg or default_config()
+    if component:
+        col = (cfg.get("gp_component_columns") or {}).get(str(component).upper())
+        if col:
+            return col
+    if declared_category:
+        col = (cfg.get("gp_category_columns") or {}).get(_norm(declared_category))
+        if col:
+            return col
+    return GP_UNCLASSIFIED_COLUMN
+
+
+def gp_column_of_declared_category(category, cfg=None):
+    """PURE: the GP column for a row that already carries the org's DECLARED CATEGORY (the ePay
+    payment-detail shape). Composition of the two rulings above — the category's component, then
+    that component's column — so the payment-detail side and the comp-report side can never fold
+    the same category two ways. Replaces four exact string compares, one of which only ever matched
+    the house's own hyphenated spelling of "Re-imbursement"."""
+    return gp_column(component_of_declared_category(category, cfg), category, cfg)
 
 
 def tally(rows, declarations, rules, cfg=None, amount_key="payment_amount",
