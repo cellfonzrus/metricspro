@@ -2242,7 +2242,10 @@ async def _upload_file_impl(
     # was used instead, so a feed that starts arriving without its date is a sentence, not a silent
     # re-run of the September-into-October duplicate.
     if day_stamp is not None:
-        out["day_grain"] = {"date_column": _DAY_KEYED.get(table), "stamped": day_stamp.stamped,
+        # the registry's own column for this feed — the same derivation the replace used above, so the
+        # sentence the upload reply carries cannot name a column the write did not key on.
+        out["day_grain"] = {"date_column": _lineage.day_keyed_date_columns().get(table),
+                            "stamped": day_stamp.stamped,
                             "rows": day_stamp.get("rows"), "unproven": day_stamp.get("unproven"),
                             "months": day_stamp.get("months"), "reason": day_stamp.get("reason")}
     # DATA LANDED (index §6l) — the ONE post-landing hook: queues one standard Run Calculation per month this
