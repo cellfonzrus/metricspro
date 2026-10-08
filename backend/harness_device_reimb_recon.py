@@ -451,8 +451,11 @@ eq("G11 the house defaults inherit and a tenant row overrides them key by key",
    (R.config_from_rows({"tolerance": 0.5}, {"severity_high_at": 10.0})["tolerance"],
     R.config_from_rows({"tolerance": 0.5}, {"severity_high_at": 10.0})["severity_high_at"]),
    (0.5, 10.0))
-ok("G12 the reconciliation is org-scoped at every read, and the CI guard can see it",
-   _fn_src(ROUTER, "_device_reimb_recon_inputs").count('eq("org_id", org_id)') >= 3)
+# Counted rather than eyeballed: EVERY `.table(...)` in the reader carries an org filter, so a read
+# added later without one changes the balance and fails this.
+_inp_g = _fn_src(ROUTER, "_device_reimb_recon_inputs")
+ok("G12 the reconciliation is org-scoped at every read — one org filter per table touched",
+   _inp_g.count(".table(") >= 3 and _inp_g.count(".table(") == _inp_g.count('.eq("org_id"'))
 ok("G13 the migration is additive, idempotent, reversible and declares no money decision",
    all(w in _src_opt(MIG) for w in ("ADD COLUMN IF NOT EXISTS", "-- REVERT:", "IS NULL",
                                 '"carrier_sources": []'))
@@ -469,7 +472,11 @@ ok("H2 the store key comes from the ONE store canonicalization the P&L books und
 ok("H3 the day-coverage verdict comes from the ONE coverage home (§19.48)",
    "_pdq.day_coverage_gap" in _inp)
 ok("H4 every feed read goes through the ONE complete paged read — no literal row ceiling (§19.48)",
-   _inp.count("_feed_read.read_all") >= 3
+   # the local `_read` helper IS that read, and the one read that cannot use it (the distributor
+   # snapshot has no period column) calls it directly. Both are counted, so a fourth read added by
+   # hand with its own page loop fails this.
+   "_feed_read.read_all" in _inp and _inp.count("_feed_read.read_all") >= 2
+   and _inp.count('_read("') + _inp.count("_feed_read.read_all") >= 4
    and "range(" not in _inp
    # the only `.limit(` allowed is the single-row CONFIG read; a feed read may never carry one
    and _inp.count(".limit(") == _inp.count(".limit(1)"))

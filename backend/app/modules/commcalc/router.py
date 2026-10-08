@@ -11412,8 +11412,7 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
 
     # ── DAY COVERAGE through the ONE home. A month absent from this map is UNKNOWN coverage, which
     #    the pure reconciliation treats exactly like incomplete — an untested feed is not a tested
-    #    one (§19.49). Both feeds are read for every month the recon can touch, not just `period`,
-    #    because the distributor's claim month is a DATE and may fall outside the period filter.
+    #    one (§19.49).
     _months = {_drr.month_key(r.get(cols["carrier_period"])) or
                _drr.month_key(r.get(cols["carrier_day"])) for r in carrier_rows}
     _months |= {_drr.month_key(r.get(cols["distributor_date"])) for r in asset_rows}
@@ -11423,16 +11422,22 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
     # `unplaced` count instead (it can belong to no store-MONTH), so dropping it here loses nothing.
     _months.discard(None)
     months = sorted(_months)
-    detail = _feed_read.read_all(lambda: client.schema("commcalc").table("raw_payment_detail")
-                                 .select("payment_date").eq("org_id", org_id))
+    #    Coverage is only ever CONSULTED for a store-month where the statement has rows (every other
+    #    row is already `carrier_statement_absent` before the floor rule is reached), so the
+    #    per-line feed is read through the SAME period filter as the statement — narrowed, this is
+    #    ~1,700 rows for one month where the unnarrowed read is 245,195 and 246 round trips. A
+    #    claim-only month therefore gets no coverage entry, which the pure module treats as UNKNOWN
+    #    and never as complete, so narrowing can only ever withhold a finding, never invent one.
+    detail = _read("raw_payment_detail", "payment_date")
+    _det_days = {d for d in (str(r.get("payment_date") or "")[:10] for r in detail) if len(d) == 10}
+    _stm_days = {d for d in (str(r.get(cols["carrier_day"]) or "")[:10] for r in carrier_rows)
+                 if len(d) == 10}
     coverage = {}
     for m in months:
         if not m:
             continue
-        coverage[m] = _pdq.day_coverage_gap(
-            {d for d in (str(r.get("payment_date") or "")[:10] for r in detail) if d.startswith(m)},
-            {d for d in (str(r.get(cols["carrier_day"]) or "")[:10] for r in carrier_rows)
-             if d.startswith(m)})
+        coverage[m] = _pdq.day_coverage_gap({d for d in _det_days if d.startswith(m)},
+                                            {d for d in _stm_days if d.startswith(m)})
     return cfg, carrier_rows, asset_rows, classify, resolve_store, coverage
 
 
