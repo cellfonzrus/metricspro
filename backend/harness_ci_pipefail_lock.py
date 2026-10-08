@@ -267,7 +267,9 @@ def misplaced(files, read_source, wheels):
 
 # ── THE THIRD RULE — a harness no workflow runs is a file, not a gate ─────────────────────────────
 PENDING_FILE = os.path.join(HERE, "harness_unrun_pending.txt")
-PINNED_MAX = 325          # must equal the number of entries in harness_unrun_pending.txt
+PINNED_MAX = 324          # must equal the number of entries in harness_unrun_pending.txt
+                          # 325 -> 324 on 2026-10-08: harness_db_resilience.py is now run by the
+                          # db-resilience-proof job in carrier-vocab-guard.yml (owner: "do it").
 
 
 def read_pending(text):
