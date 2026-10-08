@@ -211,6 +211,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/recovery' },
   { path: '/commcalc/rep-aliases' },
   { path: '/commcalc/report-mappings', label: 'Report Column Mappings', aliases: ['report mappings', 'column mapping'] },
+  { path: '/commcalc/peer-comparison', label: 'Peer Sales Comparison', aliases: ['peer comparison', 'similar stores', 'bill payment band', 'traffic band', 'boxes per bill payment'] },
   { path: '/commcalc/reports' },
   { path: '/commcalc/reports-index' },
   { path: '/commcalc/sales-analyzer' },

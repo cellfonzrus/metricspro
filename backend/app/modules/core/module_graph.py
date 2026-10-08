@@ -43,6 +43,18 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    'peer_traffic_band': {
+        "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), and how far is '
+                    'each one behind the best and the median of its own band?',
+        "homes": ('app/modules/commcalc/peer_comparison.py',),
+        "index": ('59',),
+        "locks": ('harness_peer_comparison.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_peercmp',),
+        },
+    },
     'carrier_dollar_component': {
         "question": 'Is this carrier dollar a commission, a spiff, a residual or a reimbursement — '
                     'and is that the ORG\'S OWN declaration or a guess the platform made?',
@@ -277,6 +289,7 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_line_class_lock.py', 'harness_activation_event_lock.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
+            'app/modules/asset/router.py': ('_lc',),
             'app/modules/closing/router.py': ('_lcls',),
             'app/modules/commcalc/calculator.py': ('_lc',),
             'app/modules/commcalc/commission_engine.py': ('_lc',),

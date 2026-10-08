@@ -22,6 +22,7 @@ from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
+from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -25743,6 +25744,144 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
     return out
 
 
+@router.get("/peer-comparison")
+def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric: str = "",
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """PEER SALES COMPARISON — stores of comparable foot traffic, ranked on what they do with it.
+
+    Owner directive 2026-10-08: compare stores that have SIMILAR BILL PAYMENTS, because bill payments
+    measure the people walking through the door. Inside a traffic band the comparison is fair, so a gap
+    in boxes sold is a gap in selling rather than in footfall — "if one can do why not the other".
+
+    Columns: total boxes with the new / port / BYOD / upgrade / swap / tablet drill-down beside it, then
+    add-a-line, family plan %, total accessory $ and accessory $ per box. Plus the two ratios the report
+    exists for: boxes per bill payment (the conversion of footfall into a sale) and each store's gap to
+    the BEST and the MEDIAN of its own band.
+
+    NOT A SECOND DERIVATION OF ANYTHING. Every column is a roll-up of `_sales_cell_agg` — THE shared
+    sales aggregation the Sales Report, Executive MTD, Daily Targets and Productivity all read — so these
+    numbers are the same numbers those screens show by construction, and a tenant's box / bill-payment /
+    accessory configuration reaches this report for free. `commcalc/peer_comparison.py` carries the
+    duplicate check in full.
+
+    `bands` = comma-separated bill-payment cut-offs (the lower bound of each band) overriding the house
+    cuts for this call; `markets` filters; `metric` picks which gap the "lagging" list ranks on. The read
+    is RBAC store-scoped exactly like every other sales report.
+    """
+    require_org(org_id)
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+
+    try:
+        rows, meta = _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS)
+    except Exception as e:
+        raise HTTPException(500, f"peer-comparison read failed: {type(e).__name__}: {e}")
+
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        ks, in_keyset = None, None
+    sel_markets = {m.strip() for m in (markets or "").split(",") if m.strip()}
+
+    def _scope_only(store):
+        st = str(store or "").strip()
+        return not (ks is not None and in_keyset is not None and not in_keyset(ks, st))
+
+    opt_stores = sorted({str(r.get("store") or "").strip() for r in rows
+                         if r.get("store") and _scope_only(r.get("store"))})
+    opt_markets = sorted({m for m in ([resolve_market(s) for s in opt_stores] + list(all_markets)) if m})
+
+    def _keep(store):
+        st = str(store or "").strip()
+        if not _scope_only(st):
+            return False
+        if sel_markets and (resolve_market(st) or "") not in sel_markets:
+            return False
+        return True
+
+    rows = [r for r in rows if _keep(r.get("store"))]
+
+    # THE ONE AGGREGATION. `exec_cfg` is REQUIRED here, not optional: `_billpay_exec` — the peer basis —
+    # is only populated when it is supplied, so without it every store would come back unbanded.
+    acfg = _accessory_config(client, org_id)
+    exec_cfg = _exec_metric_config(client, org_id)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=exec_cfg)
+
+    # THE store resolver (the same one Daily-Targets actuals use) — so the carrier's store-grain KPI can
+    # attach, and so one store spelled two ways in the feed is one row here.
+    resolve_code = _store_code_resolver(client, org_id)
+    unresolved = set()
+
+    def _store_of(cell):
+        raw = str((cell or {}).get("store") or "").strip()
+        code = resolve_code(raw) if raw else ""
+        if raw and not code:
+            unresolved.add(raw)
+        return code or raw
+
+    # FAMILY PLAN / AAL CONVERSION — the CARRIER's own store KPI feed (raw_dlar_store, index §10). The
+    # sales feed carries no family-plan fact at all, so this column is the carrier's or it does not
+    # exist; the values are passed through untouched and a store with no row shows blank, never 0%.
+    store_kpis, kpi_feed = {}, None
+    try:
+        drows = (client.schema("commcalc").table("raw_dlar_store")
+                 .select("store_code,location,address,family_plan_pct,aal_conversion,as_of_date")
+                 .eq("org_id", org_id).in_("period", _pvariants(period)).limit(5000).execute().data) or []
+        for d in drows:
+            key = ""
+            for cand in (d.get("store_code"), d.get("address"), d.get("location")):
+                cand = str(cand or "").strip()
+                if not cand:
+                    continue
+                key = resolve_code(cand) or ""
+                if key:
+                    break
+            if not key:
+                continue
+            store_kpis[key] = {"family_plan_pct": d.get("family_plan_pct"),
+                               "aal_conversion": d.get("aal_conversion")}
+        if drows:
+            _asof = sorted({str(d.get("as_of_date") or "") for d in drows if d.get("as_of_date")})
+            kpi_feed = (f"Family plan % and AAL conversion % come from the carrier's own store report "
+                        f"for {period} ({len(store_kpis)} of {len(drows)} rows matched to a store"
+                        f"{', as of ' + _asof[-1] if _asof else ''}).")
+        else:
+            kpi_feed = (f"The carrier's store report has not landed for {period}, so the family plan % "
+                        f"column is blank for every store. Blank means not reported, never 0%.")
+    except Exception:
+        store_kpis, kpi_feed = {}, ("The carrier's store report could not be read, so the family plan % "
+                                    "column is blank for every store. Blank means not read, never 0%.")
+
+    line_rules = _line_rules_of(acfg)
+    try:
+        out = _peercmp.build(
+            cells, bands=[b for b in (bands or "").split(",") if b.strip()] or None,
+            store_kpis=store_kpis, resolve_market=resolve_market, store_of=_store_of,
+            period=period, window_label=f"{period} to date",
+            aal_configured=_lc.add_a_line_configured(line_rules), kpi_feed=kpi_feed,
+            params={"period": period, "markets": sorted(sel_markets),
+                    "metric": (metric or _peercmp.DEFAULT_GAP_METRIC)})
+        out["caveats"] = _peercmp.column_caveats(
+            out, device_dimension=_lc.devices_configured(line_rules),
+            box_count_buckets=(acfg.get("box_count_buckets") if acfg else None),
+            unresolved_stores=unresolved)
+        out["lagging"] = _peercmp.lagging(out, metric=(metric or _peercmp.DEFAULT_GAP_METRIC))
+        for item in out["lagging"]:
+            item["prompt"] = _peercmp.prompt_sentence(item)
+    except Exception as e:
+        raise HTTPException(500, f"peer-comparison failed: {type(e).__name__}: {e}")
+
+    out["stores"] = opt_stores
+    out["markets"] = opt_markets
+    out["source_meta"] = {"sales": meta, "rows": len(rows), "cells": len(cells)}
+    out["org_id"] = org_id
+    return out
+
+
 @router.get("/sales-diagnostics")
 def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
     """Why do the Action-Plan / targets tiles show what they show? For a period this reports what the
@@ -28891,6 +29030,21 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
                           '_txn': set(), '_prem': set(), '_byod': set(), '_upg': set(),
                           '_port': set(), '_swap': set(), '_newact': set(), '_billpay': set(),
                           '_dev_tablet': set(), '_dev_watch': set(),
+                          # ADD-A-LINE (owner 2026-10-08, index §59) — distinct transactions carrying
+                          # an add-a-line line, through THE one home `line_class.is_add_a_line`. An AAL
+                          # is a MODIFIER on a class, never a class, so this adds a set and moves no
+                          # existing count: `_prem` / `_byod` / `_port` / box_count are untouched.
+                          '_aal': set(),
+                          # BILL-PAYMENT VISITS on the DECLARED predicate (same owner directive). The
+                          # cell already carried two bill-payment facts and NEITHER answers "how many
+                          # people came in to pay a bill": `_billpay` is distinct-transaction but rides
+                          # the Daily-Targets conversion vocabulary (_BILLPAY_DEFAULT_TOKENS, which the
+                          # index records as over-matching), and `bill_qty` rides the right predicate
+                          # (exec_cfg['bill_payment'], mig 962) but counts LINES. This is that predicate
+                          # at TRANSACTION grain — one more fact in the one home, not a third tally
+                          # somewhere else. Populated only when exec_cfg is supplied, exactly like
+                          # bill_qty, so every pre-existing caller is byte-identical.
+                          '_billpay_exec': set(),
                           'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'setup_fee_rev': 0.0,
                           'box_count': 0,
                           'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
@@ -28940,6 +29094,13 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         # byte-identical. (Independent tally; changes none of the buckets above.)
         if tid and _lc.exclusion_class(r, line_rules) == 'swap':
             a['_swap'].add(tid)
+        # ADD-A-LINE — distinct-txn, through THE ONE add-a-line vocabulary (`line_class.is_add_a_line`,
+        # owner 2026-10-08). Exactly the shape of the swap tally above and for the same reason: the only
+        # other answer to this question on the platform was a bare contract_type substring in
+        # `asset/router._promo_type`, which now dereferences the same home. INDEPENDENT tally — an AAL
+        # keeps counting in whichever bucket its class puts it, so no existing number moves.
+        if tid and _lc.is_add_a_line(r, line_rules):
+            a['_aal'].add(tid)
         # NEW ACTIVATIONS — the owner's denominator, per cell, from the one derivation above.
         if _uid and _uid in _newact_units:
             a['_newact'].add(_uid)
@@ -28987,6 +29148,9 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
             if _exec_line_match(exec_cfg['bill_payment']['rules'], _d, _c, _pl):
                 a['bill_qty'] += 1
                 a['bill_amt'] += ext
+                # the same matched line at TRANSACTION grain — see the '_billpay_exec' note above
+                if tid:
+                    a['_billpay_exec'].add(tid)
                 # Bill-pay TENDER split (owner 2026-09-02 #2, config mig 944): the SAME classified
                 # line, bucketed by the receipt's tender_type — 'card' answers "bill payments
                 # received on credit card from the sales transactions for that day". Multi-tender
