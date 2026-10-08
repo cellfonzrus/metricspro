@@ -26238,11 +26238,16 @@ def spiff_impact(period: str = "", spiff: str = "", bands: str = "", markets: st
                     "metric": _spiffimp.SPIFF_METRIC})
         # The metric is folded in THROUGH §59's own machinery, so the median, the gap, the verdict
         # and the coaching sentence are the peer screen's, not a second copy of them.
+        # A store the carrier statement never NAMED carries no rate — not a 0.00. Its money is
+        # somewhere else (an unresolved spelling on another row), and ranking it last in its band
+        # would accuse a mapping defect of being a sales result. A store the statement DID name,
+        # paid $0.00 of this type, is a real zero and stays ranked: that IS the owner's finding.
         _rate = {}
         for r in (peer_out.get("rows") or []) + (peer_out.get("unbanded") or []):
             m = money.get(r.get("store")) or {}
-            _rate[r.get("store")] = _spiffimp.units_per_100_boxes(
+            _rate[r.get("store")] = (_spiffimp.units_per_100_boxes(
                 m.get("spiff_units", 0), r.get("boxes"))
+                if r.get("store") in money else None)
         peer_out = _peercmp.with_extra_metric(
             peer_out, _spiffimp.SPIFF_METRIC, _spiffimp.SPIFF_METRIC_LABEL, _rate)
     except Exception as e:

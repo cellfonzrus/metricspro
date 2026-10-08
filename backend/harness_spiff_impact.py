@@ -303,6 +303,27 @@ ck("F8 … and it says WHY it has no peers either",
    "no sales rows" in str(_rows["D-unmapped"].get("reason") or ""))
 ck("F9 the zero-earning store is NOT hidden — it is the finding",
    _rows["C"]["spiff_amount"] == 0.0 and _rows["C"][S.SPIFF_METRIC] == 0.0)
+# THE FALSE ACCUSATION THIS REPORT MUST NEVER MAKE. Store C is on the statement and was paid $0.00
+# of this type: a real zero, ranked. A store the statement never named at all is NOT a zero — its
+# money is somewhere else (an unresolved spelling) and ranking it last in its band would accuse a
+# mapping defect of being a sales result. Found on LIVE data 2026-10-08: B-2778 had 116 boxes, its
+# carrier money on a separate unjoinable row, and came back "lagging" with 0.00.
+_ghost = S.build({}, PEER_BUILT, PL, selected="Beta Spiff", selected_entry=_by["beta spiff"],
+                 selection_basis="requested", commission_line="carrier_comm")
+_grows = {r["store"]: r for r in _ghost["rows"]}
+ck("F9b a store the statement never named carries NO rate — a zero there is a false accusation",
+   _grows["A"][S.SPIFF_METRIC] is None, _grows["A"][S.SPIFF_METRIC])
+# …and the RANKING excludes it too, because the rate handed to §59 is None for such a store (the
+# endpoint applies the same rule at the source — §I13b locks that it still does).
+_ghost_peer = P.with_extra_metric(
+    {k: ([dict(r) for r in v] if k in ("rows", "unbanded", "bands") else v)
+     for k, v in PEER.items()},
+    S.SPIFF_METRIC, S.SPIFF_METRIC_LABEL, {"A": None, "B": None, "C": None})
+ck("F9c … and is therefore not in the lagging list at all",
+   S.build({}, _ghost_peer, PL, selected="Beta Spiff", selected_entry=_by["beta spiff"],
+           selection_basis="requested", commission_line="carrier_comm")["lagging"] == [])
+ck("F9d … while a store the statement DID name, paid $0.00, stays ranked",
+   _rows["C"][S.SPIFF_METRIC] == 0.0)
 ck("F10 rows are ordered by the money, biggest first",
    [r["store"] for r in OUT["rows"]][0] == "A", [r["store"] for r in OUT["rows"]])
 ck("F11 the band, the traffic and the boxes come from the peer payload",
@@ -356,6 +377,15 @@ ck("G3 an undeclared type says the component is not the org's own word",
 ck("G4 … and names the twin when the component came from an inference",
    any("older gamma offer" in c["message"] for c in
        S.caveats(_by["gamma offer"], commission_line="carrier_comm")))
+# §58 returns a twin as a (description, category) PAIR, so printing it raw put a Python tuple in
+# front of a manager — live 2026-10-08 the caveat read "(['2026 q2 promo upgrade', 'Re-imbursement'])".
+ck("G4b the twin is named by its DESCRIPTION, never printed as a tuple",
+   S.twin_name(["a declared type", "Re-imbursement"]) == "a declared type"
+   and S.twin_name("a declared type") == "a declared type" and S.twin_name(None) == "")
+_pair = dict(_by["gamma offer"], twin_of=["a declared type", "Re-imbursement"])
+ck("G4c … and the caveat built from a pair carries no bracket or quote",
+   not any(ch in next(c["message"] for c in S.caveats(_pair, commission_line="carrier_comm")
+                      if c["severity"] == "not_declared") for ch in "[]"))
 ck("G5 … and a DECLARED type raises no such caveat",
    "not_declared" not in sevs(entry=_by["alpha bounty"], commission_line="carrier_comm"))
 _rung = S.pay_type_options([row("A", "Alpha Bounty - Month 3", 10.0, 1)], classify,
@@ -488,6 +518,8 @@ ck("I12 the carrier feed is read PAGED, with NO literal row ceiling (§19.48's r
    "_feed_read.read_all(" in _ep and ".limit(" not in _ep)
 ck("I13 a comparison that could not run is REPORTED, not silently absent",
    "peer_meta" in _ep and '"ran"' in _ep)
+ck("I13b the endpoint's rate honours the same rule: unnamed by the statement is not a zero",
+   'if r.get("store") in money else None' in _ep, "missing the store-in-money guard")
 # 5) THE EXTRACTED HOME MUST STAY ONE HOME. Two readers of the per-store snapshots is §19.50 again.
 _sf = open(f"{_here}/app/modules/account/statement_filter.py").read()
 ck("I14 `store_snapshots` exists where the report expects it", "def store_snapshots(" in _sf)
@@ -560,6 +592,23 @@ ck("J10 absence is NOT ranked as a zero — a None keeps no value",
    _ar["B"]["mine"] is None and "mine" not in (_ar["B"]["gaps"] or {}), _ar["B"])
 ck("J11 … and a store missing from the map likewise",
    _ar["C"]["mine"] is None and "mine" not in (_ar["C"]["gaps"] or {}))
+ck("J11b the band records WHO holds the metric's best, so the sentence names a real leader",
+   J["bands"][0]["mine_leader"] == "A", J["bands"][0].get("mine_leader"))
+_lag_mine = P.lagging(J, metric="mine")
+ck("J11c … and `lagging` prefers it over the band's BOXES leader",
+   _lag_mine[0]["leader"] == "A", _lag_mine[0]["leader"])
+# The live bug this fixes: the band's boxes leader was held up as proof on a metric it does not
+# lead — and in one live case was the lagging store ITSELF ("B-2778 is at 0.00 … B-2778 is at 51.72
+# on the same traffic"). A leader that is this very store is no leader.
+_self = P.with_extra_metric(fresh(), "mine", "Mine", {"A": 5.0, "B": 40.0, "C": 20.0})
+for _b in _self["bands"]:
+    _b["mine_leader"] = None          # force the fallback to the boxes leader, which is "A"
+_sl = P.lagging(_self, metric="mine")
+ck("J11d a 'leader' that is the lagging store itself is dropped, not quoted at it",
+   [i["leader"] for i in _sl if i["store"] == "A"] == [None], _sl)
+ck("J11e … and the sentence then makes no claim anybody did better",
+   "on the same traffic" not in P.prompt_sentence(
+       next(i for i in _sl if i["store"] == "A")))
 ck("J12 the band summary carries the borrowed metric's best and median",
    J["bands"][0]["mine_best"] == 40.0 and J["bands"][0]["mine_median"] == 20.0, J["bands"][0])
 # BYTE-IDENTICAL FOR EVERY EXISTING CALLER. `_gaps`' metrics parameter must default to §59's own set,

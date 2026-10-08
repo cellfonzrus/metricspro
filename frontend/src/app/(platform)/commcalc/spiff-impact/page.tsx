@@ -25,6 +25,12 @@ function num(v: number | null | undefined, digits = 0): string {
   if (v === null || v === undefined) return '—'
   return digits ? v.toFixed(digits) : String(v)
 }
+// §58 hands a period-rename twin back as a (description, category) PAIR, so rendering it raw would
+// put a JSON array in front of a manager. Name the description — the thing he would recognise.
+function twinName(v: any): string {
+  if (Array.isArray(v)) return v.length ? String(v[0]) : ''
+  return v === null || v === undefined ? '' : String(v)
+}
 function pct(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined) return '—'
   return `${v.toFixed(digits)}%`
@@ -197,7 +203,9 @@ export default function SpiffImpactPage() {
           <b>{entry.type}</b> — classified <b>{String(entry.component || 'unresolved').toLowerCase()}</b>,
           booking to <b>{entry.pl_line}</b>{entry.declared
             ? ' on this org’s own declared pay category'
-            : entry.inferred ? ` on an inference from ${entry.twin_of}` : ' on the platform’s keyword fallback'}.
+            : entry.inferred && twinName(entry.twin_of)
+              ? ` on an inference from this org’s earlier declaration of “${twinName(entry.twin_of)}”`
+              : ' on the platform’s keyword fallback'}.
           {data?.lift_note && <> · {data.lift_note}</>}
         </div>}
 

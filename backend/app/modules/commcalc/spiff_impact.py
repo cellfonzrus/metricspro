@@ -320,10 +320,20 @@ def units_per_100_boxes(units, boxes):
 
 
 # ── CAVEATS — what this table cannot answer for this tenant, said ABOVE the numbers ───────────────
+def twin_name(twin):
+    """A twin is §58's `(twin_description, twin_category)` PAIR, so printing it raw puts a Python
+    tuple in front of a manager — live 2026-10-08 a caveat read "(['<a declared type>',
+    'Re-imbursement'])". Name the DESCRIPTION, the thing he would recognise. PURE."""
+    if isinstance(twin, (list, tuple)):
+        return str(twin[0]) if twin else ""
+    return str(twin or "")
+
+
 def _source_phrase(entry, twin):
     """Where an undeclared type's component came FROM, in words. PURE."""
-    if entry.get("inferred") and twin:
-        return f"an inference from an earlier-period declaration ({twin})"
+    name = twin_name(twin)
+    if entry.get("inferred") and name:
+        return f"an inference from this org's earlier declaration of \u201c{name}\u201d"
     return "the platform's own keyword fallback"
 
 
@@ -446,8 +456,17 @@ def build(money, peer_payload, pl_by_store, *, selected, selected_entry, selecti
             "carrier_total": _r2(m.get("carrier_total", 0.0)),
             "share_of_line_pct": m.get("share_of_line_pct"),
             "share_of_carrier_pct": m.get("share_of_carrier_pct"),
-            SPIFF_METRIC: (p.get(SPIFF_METRIC) if SPIFF_METRIC in p
-                           else units_per_100_boxes(m.get("spiff_units", 0), boxes)),
+            # A store the carrier statement never NAMED carries NO rate — not a 0.00. Its money is
+            # somewhere else (an unresolved spelling, on its own row), so ranking it last in its
+            # band would accuse a MAPPING defect of being a sales result. Found on live data
+            # 2026-10-08: one house store had 116 boxes, its carrier money unjoinable, and came
+            # back "lagging" at 0.00. A store the statement DID name, paid $0.00 of this type, is a
+            # real zero and stays ranked — that IS the owner's finding. Authoritative here
+            # whoever computed the value, and the endpoint applies the same rule at the source so
+            # the RANKING excludes it too (§I13b locks that).
+            SPIFF_METRIC: (None if store not in (money or {})
+                           else (p.get(SPIFF_METRIC) if SPIFF_METRIC in p
+                                 else units_per_100_boxes(m.get("spiff_units", 0), boxes))),
             "gaps": (p.get("gaps") or {}).get(SPIFF_METRIC),
             "peers": p.get("peers"),
         }

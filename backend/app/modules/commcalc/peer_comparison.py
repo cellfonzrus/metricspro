@@ -413,8 +413,19 @@ def build(cells, *, bands=None, store_kpis=None, resolve_market=None, store_of=N
 # ── THE PROMPT — one definition of "behind", so every surface coaches the same stores ─────────────
 def lagging(payload, metric=DEFAULT_GAP_METRIC, min_gap=0.0):
     """Every store BEHIND ITS BAND'S MEDIAN on `metric`, worst gap first. THE one definition of
-    "lagging" for this report, read by the screen, the action plan and both report cards. PURE."""
-    leaders = {b.get("band"): b.get("leader") for b in (payload or {}).get("bands") or []}
+    "lagging" for this report, read by the screen, the action plan and both report cards. PURE.
+
+    THE LEADER IS THE LEADER ON THIS METRIC. `bands[*]['leader']` is the band's top store by BOXES,
+    which is the right name for the default gap and the WRONG one for any other: a store can trail
+    its band on accessories while leading it on boxes, and the sentence would then hold up the
+    laggard's own neighbour — or, as §60 found on live data, the laggard ITSELF ("B-2778 is at
+    0.00 … B-2778 is at 51.72 on the same traffic") — as proof it could be done. So a
+    metric-specific leader (`<metric>_leader`, written by `with_extra_metric`) wins when one is
+    recorded, and a "leader" that turns out to be this very store is dropped: nothing then proves
+    anybody did better on that traffic, which is exactly what `peer_action_item` already refuses to
+    imply. Byte-identical for every metric that records no leader of its own."""
+    leaders = {b.get("band"): (b.get(f"{metric}_leader") or b.get("leader"))
+               for b in (payload or {}).get("bands") or []}
     out = []
     for r in (payload or {}).get("rows") or []:
         g = (r.get("gaps") or {}).get(metric)
@@ -428,7 +439,8 @@ def lagging(payload, metric=DEFAULT_GAP_METRIC, min_gap=0.0):
                     "label": g.get("label"), "mine": g.get("mine"),
                     "band_median": g.get("band_median"), "band_best": g.get("band_best"),
                     "gap_to_median": g.get("gap_to_median"), "gap_to_best": g.get("gap_to_best"),
-                    "leader": leaders.get(r.get("band"))})
+                    "leader": (None if leaders.get(r.get("band")) == r["store"]
+                               else leaders.get(r.get("band")))})
     out.sort(key=lambda x: -(x.get("gap_to_median") or 0))
     return out
 
@@ -488,6 +500,16 @@ def with_extra_metric(payload, key, label, values, higher_is_better=True):
         pv = [p.get(key) for p in peers if p.get(key) is not None]
         b[f"{key}_best"] = (max(pv) if pv else None)
         b[f"{key}_median"] = _median(pv)
+        # …and WHO holds that best, so `lagging` can name a leader on THIS metric rather than the
+        # band's boxes leader — who may be the laggard itself (§60 found exactly that live).
+        _best = None
+        for p_ in peers:
+            v_ = p_.get(key)
+            if v_ is None:
+                continue
+            if _best is None or ((v_ > _best[1]) if higher_is_better else (v_ < _best[1])):
+                _best = (p_.get("store"), v_)
+        b[f"{key}_leader"] = (_best[0] if _best else None)
     return payload
 
 
