@@ -262,9 +262,15 @@ def column_caveats(payload, *, device_dimension=None, box_count_buckets=None,
                                 tablets". Measured on the house org 2026-10-08: off.
       · `box_count_buckets`   — `acfg['box_count_buckets']`. Empty = a BYOD transaction carries no
                                 device-department line and so adds no box, which contradicts the
-                                owner's own 2026-07-24 ruling ("customer phone = BYOD must count
-                                toward total boxes"). Measured on the house org 2026-10-08: empty, so
-                                every box surface on the platform is currently excluding BYOD boxes.
+                                owner's own ruling, given twice (2026-07-24 and again 2026-10-08:
+                                "byod and tablets count towards the total boxes"). Measured
+                                2026-10-08: EMPTY on Cellfonz R Us (which is also the house-default
+                                row, so NY LOGISTICS inherits it), but ['byod'] on Luxelink and
+                                Vzone — the same question answered two ways across tenants. On
+                                September 2026 the tick moves Cellfonz boxes 1,159 -> 1,760 (+52%)
+                                and raises the Daily-Targets conversion rate with them. TABLETS need
+                                nothing here: 'TABLET - XP' is already a box department, so a tablet
+                                has always counted as a box (48 such lines in September).
       · `unresolved_stores`   — stores whose raw key did not resolve to a store code, so a carrier
                                 KPI keyed on the code cannot reach them.
     """
@@ -274,16 +280,20 @@ def column_caveats(payload, *, device_dimension=None, box_count_buckets=None,
             "column": "tablet", "severity": "cannot_answer",
             "message": ("The Tablet column reads 0 for every store because this tenant has not "
                         "declared which products are tablets — the device dimension is off, so no "
-                        "sale is ever tagged as one. That is a setting, not a sales result. Turn it "
-                        "on under the activation-type rules and the column fills itself in.")})
+                        "sale is ever tagged as one. That is a setting, not a sales result. Tablets "
+                        "ARE already in the box total (a tablet sale carries a tablet "
+                        "device-department line, which is what a box is counted from), so this is "
+                        "the SPLIT that cannot be shown, never a missing box. Declaring the device "
+                        "dimension fills the column in.")})
     if box_count_buckets is not None and not box_count_buckets:
         out.append({
             "column": "boxes", "severity": "understated",
             "message": ("Total boxes currently counts device-department lines only. A BYOD sale "
                         "carries no device line, so BYOD boxes are NOT in this total — on any screen "
                         "on the platform, not just this one. The 2026-07-24 ruling was that a "
-                        "customer-phone / BYOD activation should count as a box; switching 'byod' on "
-                        "in the box-count buckets is what applies it.")})
+                        "customer-phone / BYOD activation should count as a box; the tick "
+                        "\u201cCount BYOD / customer-phone toward total boxes sold\u201d, in the Sales "
+                        "Report\u2019s Classification settings, is what applies it.")})
     n = len(unresolved_stores or ())
     if n:
         out.append({

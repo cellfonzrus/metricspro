@@ -319,12 +319,28 @@ ck("H1 the tablet column says it CANNOT be answered, rather than reading 0",
    _by_col["tablet"]["severity"] == "cannot_answer")
 ck("H2 … and says it is a setting, not a sales result",
    "setting, not a sales result" in _by_col["tablet"]["message"])
+# A tablet sale carries a 'TABLET - XP' device-department line and `box_count` is counted from those
+# lines, so a tablet has ALWAYS been a box (48 such lines live in September 2026). The device
+# dimension only decides whether the sale can be NAMED a tablet, i.e. whether the SPLIT can be shown.
+# Without this sentence a reader sees "Tablet: 0" beside a caveat about the device dimension and
+# reasonably concludes tablets are missing from the box total too — the opposite of the owner's
+# ruling of 2026-10-08 ("byod and tablets count towards the total boxes"). Pinned so the wording
+# cannot drift back to implying a missing box.
+ck("H2b … and says tablets are already IN the box total, so only the split is missing",
+   "ARE already in the box total" in _by_col["tablet"]["message"]
+   and "never a missing box" in _by_col["tablet"]["message"])
 ck("H3 an empty box-count-buckets config is reported as UNDERSTATED boxes",
    _by_col["boxes"]["severity"] == "understated")
 ck("H4 … naming the owner's own ruling that is not switched on",
    "2026-07-24" in _by_col["boxes"]["message"])
 ck("H5 … and saying it affects every box surface, not just this screen",
    "not just this one" in _by_col["boxes"]["message"])
+# A caveat that names a defect but not the control is a complaint. The control already ships: the
+# tick in the Sales Report's Classification settings (mig 231, `box_count_buckets`), which the owner
+# can press himself — no migration, no SQL, no engineer. Naming it is what makes the caveat a fix.
+ck("H5b … and naming the control that applies it, not just the setting's name",
+   "Classification settings" in _by_col["boxes"]["message"]
+   and "toward total boxes sold" in _by_col["boxes"]["message"])
 ck("H6 unmatched stores are named, and blank is explained as unmatched",
    _by_col["family_plan_pct"]["severity"] == "partial"
    and "never 0%" in _by_col["family_plan_pct"]["message"]

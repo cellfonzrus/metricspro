@@ -20916,11 +20916,43 @@ A zero on this screen accuses a person, so nothing is allowed to look like a res
 - **`column_caveats`** states what the table cannot answer for this tenant, rendered ABOVE the numbers.
   Measured on the house org 2026-10-08, two fire:
   - **tablet** — `cannot_answer`. The device dimension is off, so `_dev_tablet` is empty by design and
-    the Tablet column reads 0 for every store. That is a setting, not a sales result.
-  - **boxes** — `understated`. `box_count_buckets` is **EMPTY** on the house org, so a BYOD sale (which
-    carries no device-department line) adds no box — **on every box surface on the platform, not just
-    this one**. The owner's own 2026-07-24 ruling was that a customer-phone / BYOD activation should
-    count as a box; switching `'byod'` on is what applies it. Reported, never worked around.
+    the Tablet column reads 0 for every store. That is a setting, not a sales result. **A tablet has
+    always counted as a BOX**, because `'TABLET - XP'` is one of the org's `box_departments` (mig 218)
+    and `box_count` is counted off those lines — 48 such lines live in September 2026. So what the
+    device dimension withholds is the **split**, never a box. The caveat says so in those words and
+    §H2b pins it, because "Tablet: 0" beside a device-dimension caveat otherwise reads as "tablets are
+    missing from the total", which is the opposite of the owner's ruling.
+    **Turning the dimension on is not a display-only flip**: `line_class.resolve_devices` leaves
+    `applies_to` defaulting to EVERY activation-type class, so a declared device re-prices what it
+    applies to. To light the column without touching pay it needs `applies_to: []` (counted, never
+    paid) alongside the device rules — a money-adjacent decision, so it is surfaced, not flipped.
+  - **boxes** — `understated`. **The same question is answered two ways across tenants today**
+    (measured 2026-10-08, `commcalc.accessory_config`): `box_count_buckets` is `['byod']` on Luxelink
+    Wireless and Vzone, and **EMPTY on Cellfonz R Us** — which is also the house-default row
+    `00000000-…-0001`, so NY LOGISTICS (no row of its own) inherits the empty answer. A BYOD sale
+    carries no device-department line, so on Cellfonz it adds no box — **on every box surface on the
+    platform, not just this one** (Sales Report box count, Daily-Targets conversion and attainment,
+    Productivity, Stack Ranking, Review).
+    The owner has ruled it twice — 2026-07-24 ("customer phone = BYOD must count toward total boxes")
+    and again **2026-10-08** ("byod and tablets count towards the total boxes") — so the empty row is
+    not a tenant preference, it is the ruling not applied.
+    **Scale, measured on September 2026 for Cellfonz:** 601 distinct BYOD transactions against 1,159
+    device-department box lines, so boxes go **1,159 → 1,760 (+52%)** and the Daily-Targets conversion
+    rate (boxes ÷ bill payments) rises with them. **No payout moves**: `targets_engine.achieved_for_cat`
+    pays on `prem` / `byod` / `upg` / `acc`, never on `box`, and BYOD is already its own pay category —
+    the tick adds BYOD to the box TOTAL, it does not pay anything twice.
+    **The control already ships and the owner can press it himself**: the tick *"Count BYOD /
+    customer-phone toward total boxes sold"* in the Sales Report's Classification settings
+    (`PUT /commcalc/accessory-config`, `box_count_buckets`). No migration, no SQL. The caveat names
+    that tick rather than the column, and §H5b pins it — a caveat that names a defect but not its
+    control is a complaint, not a fix.
+    **Why no house default in code can fix this.** `box_count_buckets` is `TEXT[] NOT NULL DEFAULT '{}'`
+    (mig 231), so the schema cannot tell "never declared" from "declared empty"; every reader sees `{}`
+    and must take it as an answer. A code-side house default of `['byod']` would therefore override a
+    tenant that genuinely means empty. The per-org row IS the mechanism here (RULE TWO: a per-tenant
+    config ROW is not a patch), and because Cellfonz's row doubles as the house-default row, setting it
+    is what fixes the inheriting tenant too. Making the distinction expressible would take a migration
+    and is not in this PR.
   - **family_plan_pct** — `partial`, naming each store that did not resolve to a code. Blank means
     unmatched, never 0%. (It fires on no house store today: all 28 DLAR rows matched, keyed on
     `address` — `raw_dlar_store.store_code` is blank on every row, which is why the resolver is used.)
