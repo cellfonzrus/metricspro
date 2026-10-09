@@ -235,6 +235,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/schematic' },
   { path: '/commcalc/settings' },
   { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
+  { path: '/commcalc/accessory-target-plan', aliases: ['accessory target allocation', 'accessory target plan', 'company accessory goal', 'assign accessory targets', 'accessory goal', 'set accessory targets', 'accessories per box target', 'proportionate target'] },
   { path: '/commcalc/store-match' },
   { path: '/commcalc/target-fields' },
   { path: '/commcalc/targets' },

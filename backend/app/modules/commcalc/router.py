@@ -25,6 +25,7 @@ from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
 from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
+from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
@@ -31046,6 +31047,261 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     return {'period': period, 'today': today.isoformat(), 'stores': out,
             'filters': filters, 'applied': applied, 'trending': trend_meta,
             'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# ACCESSORY TARGET ALLOCATION  (index §61; engine: commcalc/accessory_target_plan.py)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER ASK 2026-10-09: *"as a company we can decide what is my company target for accesories sales, we
+# need a new report which decides how the tragets should be assigned for the stores based on the historic
+# performance of the stores … the propotionate sales target required to be achived by the store based on
+# thier accessories per box history and the actual total boxes sold … assign this target proportionately
+# to all stores or selected stores"*.
+#
+# THESE TWO ENDPOINTS DERIVE NOTHING OF THEIR OWN. Every figure is read through the home that already
+# owns it — `_fetch_actuals` (§5's processed sales, the accessory-TARGET basis: accessory $ + device
+# set-up fee) for the two history months and the month to date, `_targets_trending_by_code` for the
+# projection Executive MTD already shows, `commcalc.targets` (mig 006) for the target in force — and the
+# arithmetic lives in the pure module so `harness_accessory_target_plan.py` can drive it DB-free.
+#
+# NO NEW TABLE. The suggestion is written into mig 006's own `accessories_monthly`, the row §5's
+# Accessory Sales Targets page reads, through the SAME `_require_target_edit` gate the single-store save
+# uses. A second home for a store's accessory target would drift from the tracker inside a month.
+
+
+def _acc_plan_month_by_code(client, org_id, period):
+    """{STORE_CODE: {'acc': $, 'boxes': n}} for ONE month, off §5's processed sales rows.
+
+    `acc_gp` is the accessory-TARGET basis (accessory revenue + the device set-up fee, owner directive
+    2026-07-17) and `box_count` is the box tally §59.8's `_box_txn` guard already de-duplicates — so
+    this never counts a BYOD sale that also carried a device line twice. Degrades to {} rather than
+    raising: a report must never 500 on a feed read."""
+    try:
+        rows = _fetch_actuals(client, org_id, period) or []
+    except Exception as e:
+        print(f"WARN accessory target plan actuals failed for {period}: {e}")
+        return {}
+    out = {}
+    for r in rows:
+        code = str(r.get('store_code') or '').strip().upper()
+        if not code:
+            continue
+        d = out.setdefault(code, {'acc': 0.0, 'boxes': 0})
+        d['acc'] += safe_float(r.get('acc_gp'))
+        d['boxes'] += int(r.get('box_count') or 0)
+    for d in out.values():
+        d['acc'] = round(d['acc'], 2)
+    return out
+
+
+@router.get("/accessory-target-plan/{period}")
+def get_accessory_target_plan(period: str, today: str = "",
+                              mode: str = "", value: str = "", basis: str = "",
+                              stores: Optional[List[str]] = Query(default=None),
+                              markets: Optional[List[str]] = Query(default=None),
+                              include_inactive: bool = False,
+                              authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE ACCESSORY TARGET ALLOCATION REPORT (index §61). Read-only — writes nothing, ever.
+
+    Per store: accessory sales in each of the last two months (their own columns), month to date, the
+    projected month-end, the target currently in force, the proportionate target this store's own
+    accessories-per-box history implies against the boxes it is actually selling, and the EXTENSION
+    that target represents over the one it has now.
+
+    `mode` / `value` / `basis` are the company goal the user sets at the top of the page: a fixed
+    dollar total, or a % up or down from a NAMED basis (last month's actual by default). Nothing
+    entered → every suggestion is `null` with the reason said, never a planned $0.
+
+    `stores` / `markets` are RULE FIVE's standardized filters. They do TWO distinct jobs here and the
+    response says which: `markets` narrows the window (which stores the report is about), while
+    `stores` is the owner's multi-select — the stores the goal is split across. Every store NOT in that
+    selection keeps the target it has, and its target is RESERVED out of the company goal rather than
+    assumed away, so assigning to three stores makes no silent promise about the rest."""
+    require_org(org_id)
+    client = sb()
+    cperiod = _period_or_400(period)
+    _start, _end, today_d = _period_bounds(cperiod, today)
+    m1_period = _prior_period(cperiod)
+    m2_period = _prior_period(m1_period)
+
+    # The target in force for this month, and the roster that gives a store its name and market.
+    trows = (client.schema('commcalc').table('targets')
+             .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
+    tgt_by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
+    roster = _storeops_roster(client, org_id, include_inactive=include_inactive,
+                              keep_codes=set(tgt_by_code))
+
+    mtd = _acc_plan_month_by_code(client, org_id, cperiod)
+    m1 = _acc_plan_month_by_code(client, org_id, m1_period)
+    m2 = _acc_plan_month_by_code(client, org_id, m2_period)
+    trend_by_code, _trend_meta = _targets_trending_by_code(client, org_id, cperiod, today=today_d)
+
+    # ── Market filter FIRST: it decides which stores the report (and therefore the company goal) is
+    #    about. The store multi-select is applied downstream, as the SELECTION the goal is split over.
+    want_markets = {str(m).strip().lower() for m in (markets or ()) if str(m or '').strip()}
+    src, market_opts = [], set()
+    for s in roster:
+        code = str(s.get('store_code') or '').strip()
+        if not code:
+            continue
+        cu = code.upper()
+        mkt = str(s.get('market') or '').strip()
+        if mkt:
+            market_opts.add(mkt)
+        if want_markets and mkt.lower() not in want_markets:
+            continue
+        tr = trend_by_code.get(cu, {})
+        src.append({
+            'store_code': code,
+            'address': s.get('address') or code,
+            'market': mkt or None,
+            'is_active': _store_active(s),
+            'm2_acc': (m2.get(cu) or {}).get('acc', 0.0),
+            'm2_boxes': (m2.get(cu) or {}).get('boxes', 0),
+            'm1_acc': (m1.get(cu) or {}).get('acc', 0.0),
+            'm1_boxes': (m1.get(cu) or {}).get('boxes', 0),
+            'mtd_acc': (mtd.get(cu) or {}).get('acc', 0.0),
+            'mtd_boxes': (mtd.get(cu) or {}).get('boxes', 0),
+            # The projection Executive MTD and the Accessory Sales Targets tracker already show, on the
+            # SAME basis as the achieved columns beside it (accessory $ + set-up fee).
+            'projected_acc': safe_float(tr.get('trending_acc_plus_setup')
+                                        or tr.get('trending_acc_sales')),
+            'projected_boxes': int(tr.get('trending_box') or 0),
+            'current_target': safe_float((tgt_by_code.get(cu) or {}).get('accessories_monthly')),
+            'has_target_row': cu in tgt_by_code,
+        })
+
+    # RBAC span: a manager plans only their own stores. Applied to the WINDOW, so the goal they see is
+    # the goal over the stores they can act on (the same posture `get_targets` takes).
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        src = [r for r in src if in_keyset(ks, r.get('store_code'), r.get('address'))]
+
+    selected = [str(s).strip() for s in (stores or ()) if str(s or '').strip()]
+    # The multi-select sends either a store_code or an address (RULE FIVE accepts both); resolve each
+    # to the code the allocation keys on so a selection by address is not silently empty.
+    by_addr = {str(r.get('address') or '').strip().lower(): r['store_code'] for r in src}
+    sel_codes = []
+    for s in selected:
+        cu = s.strip().upper()
+        if any(r['store_code'].upper() == cu for r in src):
+            sel_codes.append(cu)
+        elif s.strip().lower() in by_addr:
+            sel_codes.append(by_addr[s.strip().lower()].upper())
+
+    result = _accplan.plan(src, mode=(mode or None), value=(value or None),
+                                        basis=(basis or None), selected=sel_codes or None)
+    can_edit, _caller = _can_edit_targets(authorization, org_id)
+    result.update({
+        'period': cperiod, 'today': today_d.isoformat(),
+        'history_periods': {'m1': m1_period, 'm2': m2_period},
+        'goal_modes': [{'value': k, 'label': _accplan.GOAL_MODE_LABELS[k]}
+                       for k in _accplan.GOAL_MODES],
+        'goal_bases': [{'value': k, 'label': _accplan.GOAL_BASIS_LABELS[k]}
+                       for k in _accplan.GOAL_BASES],
+        'filters': {'stores': [{'value': r['store_code'], 'label': r['address']} for r in src],
+                    'markets': sorted(market_opts)},
+        'applied': {'markets': sorted(want_markets), 'stores': sel_codes},
+        'scope': {'restricted': ks is not None, 'can_edit_targets': bool(can_edit),
+                  'stores_in_scope': len(src)},
+    })
+    return result
+
+
+class AssignAccessoryTargetsIn(LaxModel):
+    mode: Any = None
+    value: Any = None
+    basis: Any = None
+    stores: Any = None            # the multi-select: which stores the goal is split across
+    markets: Any = None           # the window the company goal is measured over
+    include_inactive: Any = None
+    confirm_store_codes: Any = None   # belt-and-braces: only these codes may be written
+
+
+@router.post("/accessory-target-plan/{period}/assign")
+def assign_accessory_target_plan(period: str, body: Optional[AssignAccessoryTargetsIn] = None,
+                                 today: str = "", authorization: str = Header(default=""),
+                                 org_id: str = ORG_ID):
+    """Write the suggested accessory targets into `commcalc.targets` for the selected stores.
+
+    RECOMPUTES the plan server-side from the same goal inputs rather than trusting a client-supplied
+    number — the browser may not name what a store's target is going to be. The write then goes store
+    by store through `_require_target_edit`, the SAME gate `PUT /targets/{period}` uses, so a district
+    manager can only assign inside their own span.
+
+    NOTHING ELSE ON THE ROW MOVES. Only `accessories_monthly` is written; the activation / upgrade /
+    BYOD figures and the note are carried from the existing row, or seeded from `_carry_forward_map`
+    exactly as `GET /targets/{period}` would have displayed them when no row exists yet — so saving an
+    accessory plan cannot zero a target this page does not show. A store whose suggestion could not be
+    computed is OMITTED, never written as 0."""
+    b = body or AssignAccessoryTargetsIn()
+    _require_target_edit(authorization, org_id)      # the permission half, before any read
+    plan_result = get_accessory_target_plan(
+        period, today=today, mode=str(b.mode or ''), value=('' if b.value is None else str(b.value)),
+        basis=str(b.basis or ''), stores=[str(x) for x in (b.stores or [])],
+        markets=[str(x) for x in (b.markets or [])],
+        include_inactive=bool(b.include_inactive), authorization=authorization, org_id=org_id)
+    payload = _accplan.assignment_payload(
+        plan_result, store_codes=[str(x) for x in (b.confirm_store_codes or [])] or None)
+    if not payload:
+        return {'period': plan_result['period'], 'written': 0, 'rows': [],
+                'reason': (plan_result.get('goal') or {}).get('reason')
+                          or (plan_result.get('allocation') or {}).get('reason')
+                          or 'nothing_to_assign',
+                'goal': plan_result.get('goal'), 'allocation': plan_result.get('allocation')}
+
+    client = sb()
+    cperiod = plan_result['period']
+    pm = parse_period(cperiod)
+    existing = {str(r.get('store_code', '')).upper(): r
+                for r in ((client.schema('commcalc').table('targets').select('*')
+                           .eq('org_id', org_id).in_('period', _pvariants(cperiod))
+                           .execute().data) or [])}
+    codes = {p['store_code'].upper() for p in payload}
+    need_seed = [c for c in codes if c not in existing]
+    seed = {}
+    if need_seed:
+        # The SAME carry-forward the targets GET seeds its rows from, so a first-ever save preserves
+        # what that page was showing for the other categories instead of writing them as 0.
+        roster = _storeops_roster(client, org_id, include_inactive=True)
+        try:
+            seed = (_carry_forward_map(client, org_id, cperiod,
+                                       [s for s in roster
+                                        if str(s.get('store_code') or '').strip().upper() in codes])
+                    or {}).get('by_code', {}) or {}
+        except Exception as e:
+            print(f"WARN accessory target assign carry-forward failed: {e}")
+            seed = {}
+    byod_def = _byod_pct_default(client, cperiod, org_id)
+    uid = _caller_uid(authorization)
+    written, out = 0, []
+    for p in payload:
+        code = p['store_code']
+        cu = code.upper()
+        _require_target_edit(authorization, org_id, code)     # the SPAN half, per store
+        prev = existing.get(cu) or {}
+        sd = seed.get(cu, {}) if not prev else {}
+        row = {
+            'org_id': org_id, 'store_code': code, 'period': cperiod,
+            'period_month': pm['month'], 'period_year': pm['year'],
+            'activations_monthly': safe_float(prev.get('activations_monthly')
+                                              if prev else sd.get('activations_monthly')),
+            'upgrades_monthly': safe_float(prev.get('upgrades_monthly')
+                                           if prev else sd.get('upgrades_monthly')),
+            'accessories_monthly': p['accessories_monthly'],
+            'byod_pct': (prev.get('byod_pct') if prev else sd.get('byod_pct')) or byod_def,
+            'notes': prev.get('notes') if prev else None,
+            'updated_by': uid,
+        }
+        (client.schema('commcalc').table('targets')
+         .upsert(row, on_conflict='org_id,store_code,period').execute())
+        written += 1
+        out.append({'store_code': code, 'accessories_monthly': p['accessories_monthly'],
+                    'previous': safe_float(prev.get('accessories_monthly')) if prev else None,
+                    'seeded_other_categories': bool(sd)})
+    return {'period': cperiod, 'written': written, 'rows': out, 'reason': None,
+            'goal': plan_result.get('goal'), 'allocation': plan_result.get('allocation')}
 
 
 @router.get("/targets/{period}/report-cards")
