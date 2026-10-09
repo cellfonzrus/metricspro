@@ -248,7 +248,7 @@ def calc_flags(
                 })
 
     # ── 6. LOW PORT-IN RATE (from DLAR store) ─────────────────────
-    # CORRECTED 2026-10-09 (index §61). This detector read the same column and got both its DIRECTION
+    # CORRECTED 2026-10-09 (index §62). This detector read the same column and got both its DIRECTION
     # and its SCALE wrong: `raw_dlar_store.port_pct` is the carrier's PORT-IN share (filled from the
     # portal's `port_ins` / the upload's 'Port %' column) and it is already a percent, 0-100. The old
     # test `safe_float(port_pct) * 100 > 15` therefore turned 66.67% into 6667 and fired on EVERY

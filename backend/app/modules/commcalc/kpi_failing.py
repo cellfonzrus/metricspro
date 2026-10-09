@@ -111,7 +111,7 @@ REP_KPI_KEYS = tuple(k for (k, _l, _c, _d) in BUILTIN_KPI_DEFS)
 
 
 # ── THE CARRIER'S PORT-IN RATE — ONE HOME, because its meaning was wrong at the only place that
-# ── read it (owner directive 2026-10-09, index §61; defect found 2026-10-09) ──────────────────────
+# ── read it (owner directive 2026-10-09, index §62; defect found 2026-10-09) ──────────────────────
 #
 # `commcalc.raw_dlar_store.port_pct` has existed since migration 002 and NOTHING on the platform
 # displays it. The one consumer, `commcalc/flags.py`, read it as a port-OUT rate, multiplied it by

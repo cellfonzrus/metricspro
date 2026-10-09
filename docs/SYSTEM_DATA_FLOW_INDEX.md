@@ -85,7 +85,8 @@ Primary code homes:
 | 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, which origins may the API be called from, what does a production build refuse to ship without (§40.10), what was actually measured during the two 2026-10-03 outages (§40.11 the morning one, §40.12 the afternoon one), what proves a LIVE deployment can actually reach its backend (the §40.12 preventive), and why an unreachable backend must never read as "login not enforced" (§40.13)?" |
 | 59 | **Peer sales comparison (traffic bands)** | "Which stores see the same number of people through the door, and which of them sells less on that traffic? Where is the band from, why is a store alone in its band never accused, and how does the same verdict reach the rep, the manager, the DM and the market manager?" |
 | 60 | **Spiff impact (one pay type, per store)** | "What is a certain spiff worth to a store’s commission payout revenue, by what % does it raise net profit, and which stores are not earning it on the sales they make? Why is a “spiff” sometimes not commission at all, why is a store’s lift blank, and why can the units-per-100-boxes rate exceed 100%?" |
-| 61 | **Product mix & ports (per store, per rep)** | "Which phone is each store actually selling, and what did the customer pay for it? Which reps are low on accessory $ per box AND porting in less at the same time — and does the cheap-phone mix really cost us the accessory sale, measured rather than assumed? Where was the carrier’s port-in rate all this time, and why was the only reader of it flagging the estate’s BEST porting stores for churn?" |
+| 61 | **Accessory target allocation (one company goal, split per store)** | “I have one accessory sales number for the company this month — what should each store carry, given what each one actually attaches per box and how many boxes it is going to sell?” |
+| 62 | **Product mix & ports (per store, per rep)** | "Which phone is each store actually selling, and what did the customer pay for it? Which reps are low on accessory $ per box AND porting in less at the same time — and does the cheap-phone mix really cost us the accessory sale, measured rather than assumed? Where was the carrier’s port-in rate all this time, and why was the only reader of it flagging the estate’s BEST porting stores for churn?" |
 
 ---
 
@@ -6449,7 +6450,8 @@ rendering the resolved name.
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
 - `GET /commcalc/peer-comparison?period=&metric=&bands=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7).
 - `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
-- `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§61).
+- `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
+- `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -6750,7 +6752,8 @@ rendering the resolved name.
 |--------|--------------------|-----------------|
 | **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
 | **What is ONE carrier pay type worth to a store — to its commission payout revenue and to its net profit — and which stores are not earning it on the sales they make?** The share is of the P&L line the dollars actually book to (a “spiff” the org declares a reimbursement is NOT commission revenue, and the report says so); the lift is `spiff ÷ (net_income − spiff)` and is withheld with its reason when no positive base survives; the rate is paid units per 100 boxes, flagged as a different cohort when the pay type names a month rung | `commcalc.raw_comp_report` (`compensation_type`, `payment_amount`, `quantity`) classified through `commcalc/carrier_dollar_class` × the stored `commcalc.account_statements` per-store P&L × `router._sales_cell_agg`’s `box_count` / `_billpay_exec` | ONE home `commcalc/spiff_impact.py` (`pay_type_options` / `default_selection` / `store_money` / `profit_effect` / `units_per_100_boxes` / `caveats` / `build`) → `GET /commcalc/spiff-impact`; reads NO sale line and classifies NO dollar itself (both AST-locked); module-graph fact `spiff_store_impact`; lock `harness_spiff_impact.py` — §60. Live September 2026 (house org): $110,780.14 to `carrier_comm` and $373,211.61 to `vip_reimb`, both tying to the cent to the 31 stored per-store snapshots; **77% of the statement is not commission**, only 3 of 49 pay types carry the SPIFF component, and 13 of 28 stores have no positive profit base for a lift |
-| **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §61. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
+| **Given ONE company accessory sales goal, what target should each store carry?** Weighted by the store's own accessories-per-box over the last two months x the boxes it is projected to sell; a store that sold boxes and attached nothing is weighted at the COMPANY rate and flagged, never given a $0 target; an unselected store's target is RESERVED out of the goal rather than assumed away; the assignments foot to the goal by largest remainder | `commcalc.daily_sales_feed`/`raw_sales` via `router._fetch_actuals` (`acc_gp` = accessory revenue + device set-up fee; `box_count`) x `router._targets_trending_by_code` (the projection) x `commcalc.targets.accessories_monthly` (mig `006`, the target in force — read AND written) | ONE home `commcalc/accessory_target_plan.py` (`company_goal` / `basis_amounts` / `company_rate` / `capacity_row` / `allocate` / `plan` / `assignment_payload`) → `GET /commcalc/accessory-target-plan/{period}` + its gated `/assign`; reads NO sale line and derives NO projection of its own (both AST-locked); module-graph fact `accessory_target_allocation`; lock `harness_accessory_target_plan.py` — §61. No new table: the suggestion is written into mig `006`'s own column, the row §5's Accessory Sales Targets tracker reads |
+| **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §62. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
@@ -21558,7 +21561,124 @@ column, and no payout path reads anything it produces. No migration.
 
 ---
 
-## 61. PRODUCT MIX & PORTS — is a rep selling, or just handing out the cheap phone? (owner directive 2026-10-09)
+## 61. ACCESSORY TARGET ALLOCATION — one company accessory goal, split on what each store's own accessories-per-box history says it can carry (owner ask 2026-10-09)
+
+Owner, verbatim: *"as a company we can decide what is my company target for accesories sales, we need a
+new report which decides how the tragets should be assigned for the stores based on the historic
+performance of the stores, the report will have he columns for last 2 months of sales in separate
+columns, projected sale this month, current target and extended target to meet the company goal, the
+next column will calculate the propotionate sales target required to be achived by the store based on
+thier accessories per box history and the actual total boxes sold, the targets could be a fixed number
+or a % increase from last month or even a % decrease from last month, the report should have all this as
+user defined ont opt of the page and , the suer should jave the option to assign this target
+proportionately to all stores or selected stores from the from the dropdown multi select menu"*.
+
+**THE IDEA.** The company names ONE accessory number; the report says who has to sell what to get
+there. Every accessory target on the platform until now was typed by hand or carried forward ±10% by
+`_carry_forward_map` — so a company goal could be *stated* and never *distributed*, and the per-store
+numbers were nobody's arithmetic. The weight is each store's own **accessories per box**, because that
+is the part of accessory performance a store controls; the multiplier is the **boxes it is actually
+selling this month**, because that is the part it does not.
+
+### 61.1 THE DUPLICATE CHECK (build gate) — nothing here is a second derivation
+
+Searched before a line was written: §5 (Daily Targets & actuals — the Accessory Sales Targets page,
+`_carry_forward_map`, `_fetch_actuals`, `_targets_trending_by_code`), §3 (the sales report and the
+shared `_sales_cell_agg`), §59 / §59.8 (the other reports keyed on boxes, and the box-count bucket
+guard), §60 (the other report that ranks stores on boxes), §19.28 (KPI targets), §16–18.
+
+| the fact the report needs | the ONE home it DEREFERENCES |
+|---|---|
+| accessory $ a store sold in a month, on the accessory-TARGET basis (accessory revenue + the device set-up fee, owner 2026-07-17) | `router._fetch_actuals` → `_compute_feed_actuals_py` → `_sales_cell_agg` (§5 / §3) — **not one sale line is read** in the engine, and the lock proves it |
+| boxes sold | the same `box_count` off the same pass, already de-duplicated by §59.8's `_box_txn` guard |
+| the projected month-end accessory $ and boxes | `router._targets_trending_by_code` → `_exec_mtd` (§5) — the projection Executive MTD and the Accessory Sales Targets tracker already show, so three surfaces cannot disagree |
+| the accessory target in force | `commcalc.targets.accessories_monthly` (mig `006`) — the row §5's tracker reads and `PUT /targets/{period}` writes |
+| which store is this, spelled any way | `router._storeops_roster` + `_store_code_resolver` (§5's and §59's) |
+| may this caller set this store's target | `router._require_target_edit` (§5) — the same permission + store-span gate as the single-store save |
+| what the other target categories are, when a store has no row yet | `router._carry_forward_map` (§5) — so a first-ever accessory save cannot zero the activation / upgrade / BYOD figures the targets page was displaying |
+
+**NEW here and nowhere else:** the accessories-per-box capacity measure, the company-goal vocabulary,
+the proportional split with its fallback ladder, and the largest-remainder rounding that makes the
+column foot to the goal.
+
+**NO NEW TABLE, NO MIGRATION.** A second home for a store's accessory target is exactly the "two paths
+answering one question" the index rules forbid, and it would drift from the tracker inside a month. The
+suggestion is computed on every load and only ever written into mig `006`'s own column.
+
+**NOT a sibling of §5's Accessory Sales Targets page.** That page TRACKS a target somebody already set
+(target vs achieved vs pace vs today). This one DERIVES the target from a company figure. One is the
+scoreboard, the other is the draft; they share the row, which is the point.
+
+### 61.2 THE ARITHMETIC, stated so it can be argued with
+
+```
+rate     = (acc$ last month + acc$ month before) / (boxes last month + boxes month before)
+boxes    = projected boxes this month            (fallback: average of the two history months)
+CAPACITY = rate x boxes
+target   = goal_to_split x capacity / Σ capacity
+extend   = target − current_target                ← the owner's "extended target"
+```
+
+Two months and not one, because a single month of attachment is noisy and the rate is the whole weight.
+The rate is history and the box count is the future **on purpose**: attachment is a property of how a
+store sells, traffic is a property of this month — so a store whose boxes are up carries more of the
+goal at the same attachment rate. The report also states the **implied** rate (`required_acc_per_box`),
+so a manager can see whether the ask is "sell more boxes" or "attach more per box" before arguing about
+the dollars.
+
+### 61.3 THE GOAL IS USER-DEFINED, AND THE BASIS IS NAMED
+
+`GOAL_MODES` = `fixed` | `pct_increase` | `pct_decrease`; `GOAL_BASES` = `last_month_actual` (default) |
+`two_month_average` | `projected_this_month` | `current_targets`. Both are declared data the UI picks
+from (pick-don't-type, §3b's posture), and the basis is NAMED on the payload with its measured dollars —
+"+10%" over a projection and over last month's actual are different goals, and a report that does not
+say which is unauditable. The basis is summed over **every** store in the window, never the selection,
+so narrowing the dropdown cannot move the company's own goal.
+
+### 61.4 THE HONESTY RULES — each one is a check in `harness_accessory_target_plan.py`
+
+- **A goal nobody entered is not zero.** No figure typed → `goal: null`, every suggestion `null`, the
+  reason said (`no_goal_entered`). A report that silently plans to $0 is worse than one that plans
+  nothing. A *deliberate* 0, though, IS a goal — blank and zero are told apart (`_blank`).
+- **A % of nothing is not a number.** `no_basis`, never `goal: 0` — §59's and §60's rule, kept here.
+- **ZERO ATTACHMENT IS A FINDING, NOT A WEIGHT OF ZERO.** A store that sold boxes and attached no
+  accessories is precisely the store a target is for; weighting it at zero would hand it a $0 target
+  and call that planning. It is weighted at the COMPANY's own measured rate and the row SAYS SO
+  (`company_rate_zero_attach`), so a suggestion is never mistaken for a measurement.
+- **No history is not no capacity** (`company_rate_no_history`), and a window with nothing measurable
+  anywhere is `no_basis` — a store with no capacity is dropped from the SPLIT and NAMED in
+  `unweighted`, not given a share of zero, because a zero in the assignments would be written over a
+  target this report could not compute.
+- **An unselected store is never silently re-planned.** Its current target is RESERVED out of the goal
+  and only the remainder is split, so assigning to three stores makes no silent promise about the other
+  twenty-five. When the unselected targets already exceed the whole goal, nothing is suggested and the
+  overage is NAMED (`goal_already_committed` + `shortfall`).
+- **The assignments SUM to the goal.** Independently rounded proportional shares miss by up to a dollar
+  per store; the largest-remainder pass puts the residue on the largest fractions, so the column foots.
+- **The write moves ONE column.** Only `accessories_monthly`; the other categories are carried from the
+  existing row or seeded through `_carry_forward_map`. The POST recomputes the plan server-side rather
+  than trusting a client-supplied dollar figure, and goes store by store through `_require_target_edit`.
+- **NOT MONEY.** `targets_engine.achieved_for_cat` pays on prem/byod/upg/acc **actuals** and never reads
+  a target, so no suggestion on this page can move a payout.
+
+### 61.5 Where it lives
+
+- **Engine (pure, DB-free):** `backend/app/modules/commcalc/accessory_target_plan.py` —
+  `company_goal` · `basis_amounts` · `company_rate` · `capacity_row` · `allocate` ·
+  `_largest_remainder` · `plan` · `assignment_payload`.
+- **Endpoints:** `GET /commcalc/accessory-target-plan/{period}` (read-only) ·
+  `POST /commcalc/accessory-target-plan/{period}/assign` (gated), plus `_acc_plan_month_by_code`,
+  both in `commcalc/router.py`.
+- **Frontend:** `commcalc/accessory-target-plan/page.tsx`. A Management Overview / Targets **tile**
+  (`tileOnly`, the owner's "cleaner look" ruling), registered in `rbac.ts` (NAV ×2, module map, report
+  category), `reports.ts`, `route-index.ts`.
+- **Table:** `commcalc.targets` (mig `006`) — read and written; **no new table, no migration**.
+- **Module graph:** fact `accessory_target_allocation` (§50).
+- **Lock:** `backend/harness_accessory_target_plan.py`, **107 checks**, run by `carrier-vocab-guard`.
+  §I is the un-wire lock: the engine may not read a sale line, re-derive a projection, open a client,
+  name a carrier/tenant/product, or open a second home for a store's target; and the endpoint must be
+  shown to DEREFERENCE each home rather than re-deriving it.
+## 62. PRODUCT MIX & PORTS — is a rep selling, or just handing out the cheap phone? (owner directive 2026-10-09)
 
 **Owner directive, verbatim:** *"sales by each store as per the product sold, if the store is selling more
 of a particular phone at a cheaper price or free it could be that the sales person is just pushing cheaper
@@ -21602,7 +21722,7 @@ unrelated things and hide the rep who ports well and attaches nothing. The fourt
 two LAGGING behaviours share a cause (the rep who hands out the free phone also does not ask for the
 number), which is what makes the `both` verdict a coachable story rather than a coincidence.
 
-### 61.1 Duplicate check (build gate) — what was searched, what is reused
+### 62.1 Duplicate check (build gate) — what was searched, what is reused
 
 Every number was looked up in this index before a line was written:
 
@@ -21615,13 +21735,13 @@ Every number was looked up in this index before a line was written:
 | which line is a device | §3 the same `box_departments` membership test the box count uses | the mix is tallied INSIDE that branch, so it cannot drift from `box_count` |
 | which sale is a port / an upgrade / BYOD | §6 `line_class.activation_class` | the unit classification the cell pass already made (`_cls`), never a second call and never a `contract_type` substring |
 | median, band, gap, "this store is behind", the coaching sentence | §59 `with_extra_metric` → `lagging()` → `peer_action_item()` | **borrowed whole**, exactly as §60 does |
-| the carrier's port % | §10 `raw_dlar_store.port_pct` | through the new ONE home `kpi_failing.port_in_rate` (§61.4) |
+| the carrier's port % | §10 `raw_dlar_store.port_pct` | through the new ONE home `kpi_failing.port_in_rate` (§62.4) |
 
 **NEW here and nowhere else:** the customer PRICE BAND of a device line, the device MODEL read out of a
 promo-decorated description, the per-REP roll-up across a month (every existing surface rolls these same
 cells to a store or a day), the two-signal verdict, and the measured correlation.
 
-### 61.2 The shared cell pass, extended the way the house already extends it
+### 62.2 The shared cell pass, extended the way the house already extends it
 
 `_sales_cell_agg` gains `price_cfg=` — the same opt-in shape `exec_cfg=` and `tender_cfg=` (owner 2026-09-02
 #2) already use. `None`, which is every pre-existing caller, leaves the aggregation **byte-identical**;
@@ -21635,7 +21755,7 @@ the two callables `cell_price_cfg()` carries, so there is exactly one answer to 
 New cell fields: `_dev_lines`, `_dev_bands`, `_dev_models`, `_dev_price_sum`, `_dev_unclassified`,
 `_dev_credit`, `_dev_unnamed`.
 
-### 61.3 Which lines the mix is over — and the three it is NOT over
+### 62.3 Which lines the mix is over — and the three it is NOT over
 
 A line enters the mix when it is in a box department **and** the activation predicate classifies it. Both
 halves are load-bearing and both were measured, not assumed:
@@ -21673,7 +21793,7 @@ behaviour.
 A first-separator split would have reported `'moto g play - 2026'` as two different phones; §B3 pins that.
 The harness fixture IS the real live vocabulary, not invented strings.
 
-### 61.4 The carrier's port-in rate — the "logic built but not displayed", and the defect under it
+### 62.4 The carrier's port-in rate — the "logic built but not displayed", and the defect under it
 
 The owner said the low-port logic was already built. It was: `commcalc.raw_dlar_store.port_pct` has been
 ingested since migration **002** — filled from the portal's own `port_ins` by `dlar_sweep.normalize_store`
@@ -21712,7 +21832,7 @@ The report shows the carrier's figure **beside** ours, never merged into it: the
 and different denominators, and a manager comparing them is the point. Live September 2026: all 28 stores
 carry a carrier figure, and it runs well above our own port-per-box (e.g. B-103 carrier 54.5% vs ours 0.28).
 
-### 61.5 The verdict — two signals, two floors, §59's own severity cut
+### 62.5 The verdict — two signals, two floors, §59's own severity cut
 
 The comparison basis is **the median of the ranked reps in view, not a traffic band**: §59 bands STORES by
 footfall because a store's box count depends on how many people walk in, and neither of these numbers does
@@ -21741,7 +21861,7 @@ accessory-per-box median **$51.88** against a p10–p90 spread of **$32.10–$68
 **0.19** over a 0.00–0.58 range. The medians rose against the earlier read because BYOD boxes now reach
 the box count once, through the bucket, instead of twice.
 
-### 61.6 The action plan — §59's verdict, borrowed, never re-decided
+### 62.6 The action plan — §59's verdict, borrowed, never re-decided
 
 `GET /commcalc/product-mix` runs the SAME rows through `_peer_comparison_payload` (so no second feed read),
 hands the store's port share to §59 via `with_extra_metric` (§59 does not compute it), and reads
@@ -21757,7 +21877,7 @@ leave the port half of the plan naming nobody rather than erroring. Verified by 
 If the borrow fails the report still answers its own three questions and says the plan is missing — a
 comparison that did not run is not a finding that nobody is lagging.
 
-### 61.7 Surfaces, registration and posture
+### 62.7 Surfaces, registration and posture
 
 - `GET /commcalc/product-mix?period=&markets=&bands=` → `router._product_mix_payload` → `product_mix.build`.
   RBAC store-scoped exactly like every other sales report.

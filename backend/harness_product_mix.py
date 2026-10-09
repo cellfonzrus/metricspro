@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PROOF — PRODUCT MIX & PORT DISCIPLINE (index §61, owner directive 2026-10-09).
+"""PROOF — PRODUCT MIX & PORT DISCIPLINE (index §62, owner directive 2026-10-09).
 
 What this proves, and why each section exists:
 

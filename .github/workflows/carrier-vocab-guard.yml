@@ -261,6 +261,11 @@ on:
       # must run it.
       - "backend/harness_spiff_impact.py"
       - "backend/app/modules/commcalc/spiff_impact.py"
+      # index §61 — one company accessory goal, split on each store's own accessories-per-box history.
+      # The lock reads the engine, the two endpoints that wire it, and §5's targets row it writes, so a
+      # change to any of them must run it.
+      - "backend/harness_accessory_target_plan.py"
+      - "backend/app/modules/commcalc/accessory_target_plan.py"
       - "backend/app/modules/account/statement_filter.py"
       # index §61 — the device price mix, the two-signal rep verdict, and the ONE home for what the
       # carrier's port-in rate means. The lock reads the pure module, the shared cell pass it extends,
@@ -1053,7 +1058,13 @@ jobs:
       - name: "Spiff impact (index §60): the share is of the P&L line the dollars actually book to; a profit lift is only reported from a profit; the un-wire lock on the four homes it dereferences; and a borrowed metric ranks through the peer bands' OWN median and gap"
         working-directory: backend
         run: python3 harness_spiff_impact.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: "Product mix & ports (index §61): price_cfg=None leaves the shared cell pass byte-identical; an unclassified box line is never banded as a cheap phone; the verdict needs BOTH signals and has two floors; the correlation is measured, not assumed; and the carrier's port-in rate has ONE home that states its direction and its scale"
+      # Runs HERE and not in the dependency-free job because §I reads the router's own source to prove
+      # the two endpoints dereference §5's homes rather than re-deriving them — and the module graph
+      # names this lock, so a lock no workflow runs would fail the module-graph guard.
+      - name: "Accessory target allocation (index §61): a goal nobody entered is not zero; zero attachment is weighted at the company rate and SAID, never given a $0 target; an unselected store's target is reserved out of the goal; the split foots to the dollar; and the un-wire lock on every home it dereferences"
+        working-directory: backend
+        run: python3 harness_accessory_target_plan.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "Product mix & ports (index §62): price_cfg=None leaves the shared cell pass byte-identical; an unclassified box line is never banded as a cheap phone; the verdict needs BOTH signals and has two floors; the correlation is measured, not assumed; and the carrier's port-in rate has ONE home that states its direction and its scale"
         working-directory: backend
         run: python3 harness_product_mix.py | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
