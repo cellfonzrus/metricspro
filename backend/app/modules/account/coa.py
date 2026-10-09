@@ -37,6 +37,9 @@ from app.modules.commcalc import carrier_map
 from app.modules.commcalc import epay_fee_recon as _epay_fee
 from app.modules.account import _period
 from app.modules.account import device_cogs as _device_cogs
+# THE one home for "which store is this string?" (§13a / §59) — this module's `store_resolver` is
+# its I/O wrapper and states no resolution rule of its own.
+from app.modules.account import store_identity as _sid
 # Canonical finance period parser lives in _period; re-exported here so existing
 # `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
 from app.modules.account._period import parse_period  # noqa: F401
@@ -503,19 +506,15 @@ def store_company_map(client, org_id):
 # ── store → company attribution (owner bug 2026-09-02: "when you select the companies the proper
 # information is not being displayed") ────────────────────────────────────────────────────────────
 def _squash_key(v):
-    """UPPER alphanumeric-only spelling key — '4640-A W Diversey Ave' == '4640A  W DIVERSEY AVE'.
-    Same folding idea as core.scope._squash; kept local so this module stays import-light."""
-    return "".join(ch for ch in str(v or "").upper() if ch.isalnum())
+    """UPPER alphanumeric-only spelling key — dereferenced from the one home (store_identity), not
+    a fourth copy of the folding rule."""
+    return _sid.squash_key(v)
 
 
 def _lead_num_key(v):
-    """Leading street number, digits only ('116-36 Springfield Blvd' → '11636'); None for a
-    non-numeric lead ('B-1800') so codes only ever match exactly — mirrors store_resolver's rule."""
-    s = str(v or "").strip()
-    tok = s.split(" ")[0] if s else ""
-    if not tok or not tok[:1].isdigit():
-        return None
-    return "".join(ch for ch in tok if ch.isdigit()) or None
+    """Leading street number, digits only — dereferenced from the one home (store_identity), which
+    also documents why a leading token is never an identity on its own."""
+    return _sid.lead_num_key(v)
 
 
 def build_company_matcher(assign_rows, default_id):
@@ -890,61 +889,22 @@ def store_resolver(client, org_id):
     Every source table carries the store in its own form (raw_sales.store, asset_ledger.store,
     vip_invoices.location, vip_paygo.dealer, raw_comp_report.business_address, a store_code, …).
     Resolution chain (same precedence the rest of the app uses):
-      1. exact store_mapping.store_address (case-insensitive)        — daily_sales_actuals
-      2. store_aliases.alias → store_code → store_address            — migration 023
-      3. raw string IS a store_code                                  — store_expenses path
-      4. leading store-number matches a known store_mapping address  — the DLAR join (calculator)
-      5. unmappable (genuinely unknown store) → the cleaned raw string, kept as-is.
+    I/O ONLY. The CHAIN lives in `account.store_identity.build_store_resolver` (its pure twin, and
+    THE one home for store identity since 2026-10-09): exact address → exact alias → the raw string
+    as a store_code → squashed address → squashed alias → unambiguous leading street number of an
+    address → unambiguous leading street number of an alias → the cleaned raw string. This function
+    reads the two config tables (`store_mapping`, `store_aliases`) and hands them over; it states no
+    resolution rule of its own, so no caller can get a different answer from a second copy.
+
     Only steps that land on an address already in store_mapping merge variants, so this can never
     invent a merge between two distinct stores — it just collapses spellings of a known one."""
-    def _num_key(token):
-        """Leading street number, digits only — collapses hyphenated/punctuated forms so
-        '116-36' and '11636' share a key. None for non-numeric leads ('B-1800') so those only
-        ever match exactly, never by number."""
-        if not token or not token[:1].isdigit():
-            return None
-        return "".join(ch for ch in token if ch.isdigit()) or None
-
-    addr_by_addr, addr_by_code, num_addrs = {}, {}, {}
-    for r in _fetch_all(client, "store_mapping", "store_code,store_address", {"org_id": org_id}):
-        addr = _norm_store(r.get("store_address"))
-        code = _norm_store(r.get("store_code"))
-        if addr:
-            addr_by_addr[addr.lower()] = addr
-            nk = _num_key(addr.split(" ")[0])
-            if nk:
-                num_addrs.setdefault(nk, set()).add(addr)
-        if addr and code:
-            addr_by_code[code.upper()] = addr
-    # only resolve by leading number when it is UNAMBIGUOUS (street numbers aren't unique —
-    # "3 Palisade Ave" and "3 Broadway" would both be number "3"). Ambiguous numbers fall through.
-    addr_by_num = {n: next(iter(a)) for n, a in num_addrs.items() if len(a) == 1}
-    alias_addr = {}
+    mapping_rows = _fetch_all(client, "store_mapping", "store_code,store_address",
+                              {"org_id": org_id})
     try:
-        for r in _fetch_all(client, "store_aliases", "alias,store_code", {"org_id": org_id}):
-            al, code = _norm_store(r.get("alias")), _norm_store(r.get("store_code"))
-            if al and code and code.upper() in addr_by_code:
-                alias_addr[al.lower()] = addr_by_code[code.upper()]
+        alias_rows = _fetch_all(client, "store_aliases", "alias,store_code", {"org_id": org_id})
     except Exception:
-        pass  # store_aliases (migration 023) not yet run → chain still works without it
-
-    def resolve(raw):
-        s = _norm_store(raw)
-        if not s:
-            return None
-        low = s.lower()
-        if low in addr_by_addr:
-            return addr_by_addr[low]
-        if low in alias_addr:
-            return alias_addr[low]
-        if s.upper() in addr_by_code:
-            return addr_by_code[s.upper()]
-        nk = _num_key(s.split(" ")[0])
-        if nk and nk in addr_by_num:
-            return addr_by_num[nk]
-        return s
-
-    return resolve
+        alias_rows = []   # store_aliases (migration 023) not yet run → chain works without it
+    return _sid.build_store_resolver(mapping_rows, alias_rows)
 
 
 def _sales_classifier(client, org_id):

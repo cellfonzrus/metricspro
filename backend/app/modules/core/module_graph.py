@@ -56,6 +56,36 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_drr',),
         },
     },
+    'store_identity': {
+        "question": 'Which STORE is this string? Asked by the GP report, the commission-leg '
+                    'trend/breakout, the residual report, flags 7/8, the closing store-day match, '
+                    'the P&L store grain and the MA account index. The answer is the org\'s own '
+                    'declared spellings; AMBIGUITY RESOLVES TO NOTHING, and money nothing can '
+                    'place is reported on its own row rather than dropped.',
+        "homes": ('app/modules/account/store_identity.py',),
+        "index": ('59',),
+        "locks": ('harness_store_identity_lock.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04).
+        "callers": {
+            # The I/O wrapper: reads store_mapping + store_aliases and hands them to the chain.
+            'app/modules/account/coa.py': ('_sid',),
+            # The GROSS PROFIT engine. It carried a private `street_num()` leading-token join for
+            # every money source, which DROPPED a store's whole carrier income whenever the carrier
+            # and the roster spelled the street number differently (measured $106,400.37 of house
+            # revenue over Jul-Oct 2026) and was last-wins where two codes share one address.
+            'app/modules/commcalc/gp_report.py': ('_sid',),
+            # Flags 7/8 compared the TOKEN sets of the sales side and the payment side, so a store
+            # the two feeds spell differently raised both "no payment" and "no sales" every month.
+            'app/modules/commcalc/flags.py': ('_sid',),
+            # The residual report's rep-pay join key.
+            'app/modules/account/residual_subs.py': ('_sid',),
+            # A closing store-day's match key (§29.12) — a named alias, no second copy.
+            'app/modules/closing/unfinished_day.py': ('_sid',),
+            # `_leg_store_index` + the two commission-leg endpoints' row keys.
+            'app/modules/commcalc/router.py': ('_store_identity',),
+        },
+    },
     'carrier_dollar_component': {
         "question": 'Is this carrier dollar a commission, a spiff, a residual or a reimbursement — '
                     'and is that the ORG\'S OWN declaration or a guess the platform made? Which '
