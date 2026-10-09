@@ -11595,12 +11595,23 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
     configured = bool(_device_components)
     _cache: dict = {}
 
+    # A dollar §58 placed on a category the component vocabulary has NO row for is not evidence of a
+    # device payment, however the keyword ladder then booked it. §58 says so itself — it returns the
+    # fallback component with `basis: declared_category_unmapped` precisely so a caller can decline
+    # it — and this layer declines, because its grain is one row per PHONE. Measured live (house org,
+    # Aug-Oct 2026): 'Ramp Up Subsidy' is declared into MDF, which has no component row, and its 14
+    # monthly per-store lump sums ($91,000.00 in the September window, $287,500.00 across the feed)
+    # are correctly identifier-less — there is no phone for a ramp subsidy to name. Counting them as
+    # device money put $91,000.00 in a bucket a reader would take for unattributable device money.
+    _DECLINED_BASIS = (_cdc.BASIS_DECLARED_UNMAPPED, _cdc.BASIS_UNRESOLVED)
+
     def is_device_dollar(raw_type):
         key = str(raw_type or "")
         hit = _cache.get(key)
         if hit is None:
-            c = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg)
-            hit = _cache[key] = str((c or {}).get("component") or "").upper() in _device_components
+            c = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg) or {}
+            hit = _cache[key] = (str(c.get("component") or "").upper() in _device_components
+                                 and str(c.get("basis") or "") not in _DECLINED_BASIS)
         return hit
 
     # The carrier's PER-LINE feed over the REIMBURSEMENT LAG WINDOW. The lag LENGTH and the month

@@ -555,6 +555,14 @@ ok("K10. control: with no set injected the same two rows read 'paid to another s
    row_of(_k_blind, "K-1")["status"] == R.LINE_PAID_OTHER_STORE
    and row_of(_k_blind, "K-2")["status"] == R.LINE_PAID_OTHER_STORE
    and _k_blind["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 3)
+ok("K12. a dollar §58 placed on a category the component vocabulary has no row for is DECLINED as "
+   "device money — the router reads §58's own `basis`, it does not re-judge the category",
+   "BASIS_DECLARED_UNMAPPED" in _src(ROUTER) and "BASIS_UNRESOLVED" in _src(ROUTER)
+   and "basis" in _src(ROUTER).split("def is_device_dollar")[1].split("return hit")[0])
+ok("K13. …and that decision lives at the CALL SITE, not as a second classifier in the pure layer",
+   not any(t in _code_only(_src(MOD)) for t in ("declared_category_unmapped", "payment_categories",
+                                                "carrier_category_map")))
+
 ok("K11. control: an UNAMBIGUOUS set withholds nothing, so the guard cannot quietly swallow real "
    "findings",
    R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True,

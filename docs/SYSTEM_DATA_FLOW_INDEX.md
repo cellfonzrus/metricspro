@@ -22415,7 +22415,19 @@ where. A line with no rep reports **no** rep and is never filled from the store'
   reddens D2.
 - Module-graph fact `device_reimbursement_paid_vs_claimed` (§50) now carries §19.53 **and** §65 and
   both locks.
-- Lock `backend/harness_device_line_reimbursement.py` (**85 checks**), wired into
+- **A dollar placed on a category the component vocabulary has no row for is DECLINED as device
+  money.** §58 returns the keyword fallback's component with `basis: declared_category_unmapped`
+  precisely so a caller can refuse it, and a report whose grain is one row per PHONE refuses: the
+  house org declares `Ramp Up Subsidy` into **MDF**, which has no component row, and its rows are
+  monthly per-store lump sums (one per store per month, round amounts, no device id and no mobile
+  number) — $91,000.00 inside the September window, $287,500.00 across the feed. They are correctly
+  identifier-less: there is no phone for a ramp subsidy to name. Counting them put $91,000.00 into
+  `carrier_paid_unidentified`, where a reader would take it for unattributable DEVICE money; the
+  predicate now also declines `unresolved`, and that bucket measures **$0.00**. The decision lives at
+  the CALL SITE (`router.is_device_dollar` reads §58's own `basis`), never as a second classifier in
+  the pure layer — §K12/§K13 lock both halves. Found by the commission-audit thread reproducing the
+  figure independently rather than taking it from this report.
+- Lock `backend/harness_device_line_reimbursement.py` (**87 checks**), wired into
   `carrier-vocab-guard.yml`: the owner's own figures as fixtures, the transferred-vs-unpaid guard, the
   coverage guard, the symmetric-window regression, the absence-is-never-a-zero set, RULE TWO and
   purity, the un-wiring locks, and five controls that MUTATE each guard and show it is what produces
