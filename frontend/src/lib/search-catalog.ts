@@ -35,9 +35,44 @@
 // source of truth). A resolved entity is handed to the assistant as the subject of the question
 // instead — `entityOnly` below is what lets the console render it as a fact rather than a link.
 //
-// PERMISSIONS ARE UPSTREAM. Every source is filtered by its own existing gate before it reaches this
-// file: the nav by `canSeeItem`, the reports by `clearedFor`, the roster by the server's own
-// `visible_people_keyset`. Filtering here would be a second gate that can disagree with the first.
+// PERMISSION RULES ARE UPSTREAM. The nav is gated by `canSeeItem`, a path by `canAccessPath`, the
+// roster by the server's own `visible_people_keyset`. None of those rules lives here: `viewerSources`
+// below takes the two predicates as ARGUMENTS, exactly as it takes the registries, so this file asks
+// the questions and `rbac.ts` answers them. Re-deciding either answer here would be a second gate
+// that can disagree with the first.
+//
+// WHAT 2026-10-08 ADDED, and why it belongs in this file. The platform had TWO page-search boxes
+// with TWO indexes, and only one was derived:
+//
+//   • ⌘/  (the question bar, `components/AskBar.tsx`) folded six registries through THIS file —
+//     among them `route-index.ts`, generated from a walk of `src/app` and build-failing on drift
+//     (§54.7). Every page the app has was findable there.
+//   • ⌘K  (the sidebar search, `app/(platform)/layout.tsx`) built its own index from `NAV` alone — a
+//     hand-curated list with no completeness ratchet — and ranked it with its own private
+//     `startsWith / includes / group-includes` ladder.
+//
+// So 27 in-app pages existed, were reachable, were in the generated registry, and could not be found
+// in the box the owner types in: Cash Position, Closing Readiness, Duplicates, the four
+// purchase-order screens, Sales Derive, the HR letter queue, Salary Advances and the rest. §54.7
+// fixed the class for ⌘/ and left its sibling alone — one surface fixed, the other answering the
+// identical question ("which pages exist, and may this viewer open them?") left unfixed. That is the
+// patchwork shape the house rules forbid, and the 27 were it decaying in public.
+//
+// `viewerSources` is the fix: ONE assembly of a viewer's findable world, which both surfaces call,
+// in the file that already owned the fold. The GATE (which registries a viewer sees at all) and the
+// FOLD (one entry per destination) are each decided once, and `search-rank.rank` remains the one
+// answer to "what did they mean" — so the two boxes cannot rank the same words differently or offer
+// different destinations.
+//
+// THREE DIVERGENCES IT COLLAPSES, each measured before it was closed:
+//   1. THE COMPLETENESS GAP — ⌘K indexed NAV only. 27 pages unfindable there, 0 unfindable in ⌘/.
+//   2. THE NOT-ENFORCED BYPASS — the sidebar showed the full nav while login is not enforced
+//      (`open`), the console did not. With an empty permissions payload ⌘K listed 322 destinations
+//      and ⌘/ listed 2. One surface believed the app was open and the other did not.
+//   3. THE TENANT LAYOUT — the sidebar applied `applyNavLayout` (a tenant's `hidden` rows), the
+//      console read raw `TENANT_NAV`, so a page an admin had hidden stayed findable in one box. Zero
+//      rows are hidden in any live tenant today, which is exactly why it had to be closed now: a
+//      divergence nobody can see is the one that ships.
 //
 // PURE and import-free apart from the ranking types, so `frontend/prove_search_catalog.mjs` drives
 // the real function under Node with no React, no network and no build step.
@@ -168,6 +203,75 @@ export function buildCatalog(src: CatalogSources): Searchable[] {
     })
   }
   return out
+}
+
+// ── THE GATE — which registries ONE viewer sees at all, decided once for both surfaces ───────────
+
+/** The shape a nav entry and a report entry share — enough to gate one, nothing more. `NAV` and
+ *  `REPORT_CATEGORIES` rows are passed straight in, so a field added to either cannot break this. */
+export type ItemLike = { href: string; label: string; module: string; scopes?: readonly string[] }
+
+/** The nav the viewer's own sidebar would render: already through RBAC and `applyNavLayout`, so a
+ *  tenant's `hidden` row and its nicknames are honoured. BOTH surfaces pass this same thing now. */
+export type NavReg = { group: string; items: ItemLike[] }[]
+export type ReportReg = { category: string; reports: ItemLike[] }[]
+
+export type Registries = {
+  nav?: NavReg
+  reports?: ReportReg
+  screens?: ScreenSource
+  /** Every page that exists, as `route-index.searchableRoutes()` emits it. */
+  routes?: RouteSource
+}
+
+export type Viewer = {
+  /** TRUE when login is not enforced, i.e. the app is open: the viewer may open everything, so the
+   *  registries pass through ungated. This is what the sidebar has always done and the console never
+   *  did — one place decides it now. */
+  open?: boolean
+  /** "May this viewer see this nav/report item" — `rbac.canSeeItem`, partially applied. */
+  canSee: (it: ItemLike) => boolean
+  /** "May this viewer open this path" — `rbac.canAccessPath`, partially applied. */
+  canAccess: (path: string) => boolean
+}
+
+/** The entities only the console asks for. The sidebar is a destination jumper and passes none — a
+ *  difference in what is SEARCHED, never in how it is gated or ranked. */
+export type Entities = { stores?: StoreSource; people?: PersonSource }
+
+/** Assemble the sources for ONE viewer, each registry through its own existing gate. Hand the result
+ *  to `buildCatalog`, or call `viewerCatalog` to do both. */
+export function viewerSources(reg: Registries, viewer: Viewer, ent: Entities = {}): CatalogSources {
+  const canSee = (it: ItemLike) => !!viewer.open || viewer.canSee(it)
+  const nav = (reg.nav || [])
+    .map(g => ({ group: g.group, items: (g.items || []).filter(canSee) }))
+    .filter(g => g.items.length > 0)
+  const reports = (reg.reports || [])
+    .map(c => ({ category: c.category, reports: (c.reports || []).filter(canSee) }))
+    .filter(c => c.reports.length > 0)
+  // SCREENS is the spellings registry (`ScreenLink`), and every one of its hrefs IS a nav href —
+  // which is what makes it safe: an alias only ever lands on a destination the fold already holds,
+  // or on nothing. A screen whose page the viewer may not open is dropped with it.
+  const openable = new Set(nav.flatMap(g => g.items.map(it => pathOf(it.href))))
+  const screens = (reg.screens || []).filter(sc => openable.has(pathOf(sc.href)))
+  // The routes are gated by the one home for "may this viewer open this path" rather than by
+  // `canSee`, because a page the nav does not list has no nav item to ask about — which is exactly
+  // why the 27 menu-less pages were invisible to a NAV-only index.
+  const routes = (reg.routes || []).filter(r => !!viewer.open || viewer.canAccess(pathOf(r.path)))
+  return { nav, reports, screens, routes, stores: ent.stores, people: ent.people }
+}
+
+/** A viewer's whole findable catalogue — the gate, then the fold. The ONE call both surfaces make,
+ *  so neither can assemble a different world. */
+export function viewerCatalog(reg: Registries, viewer: Viewer, ent: Entities = {}): Searchable[] {
+  return buildCatalog(viewerSources(reg, viewer, ent))
+}
+
+/** Destinations only — everything that can be OPENED, the entities dropped. The sidebar search jumps
+ *  to a page, so it ranks this; it dereferences `entityOnly` rather than re-deciding what counts as
+ *  a place, because "has no href" must mean the same thing in both boxes. */
+export function destinations(items: Searchable[]): Searchable[] {
+  return (items || []).filter(it => !entityOnly(it))
 }
 
 /** How many of each kind the catalogue holds — for the console's own "searching N things" line and
