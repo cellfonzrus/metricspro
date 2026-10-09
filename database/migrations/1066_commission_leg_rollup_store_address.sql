@@ -1,4 +1,4 @@
--- 1065 — THE COMMISSION-LEG ROLLUP STOPS DECIDING STORE IDENTITY (index §63, owner directive
+-- 1066 — THE COMMISSION-LEG ROLLUP STOPS DECIDING STORE IDENTITY (index §64, owner directive
 -- 2026-10-09: "chase trhew street number matching")
 --
 -- WHAT WAS WRONG. `commcalc.commission_leg_label_rollup` (mig 274) returned, as its store column,

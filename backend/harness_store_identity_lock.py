@@ -108,7 +108,7 @@ PINNED = {
     "modules/commcalc/calculator.py": {
         # The DLAR (carrier KPI export) store join that scores a rep's KPIs, i.e. it decides PAY.
         # Measured 2026-10-09: it inherits exactly this defect for any store whose DLAR address and
-        # roster address lead with different tokens. NOT changed in the §63 PR because moving it
+        # roster address lead with different tokens. NOT changed in the §64 PR because moving it
         # moves computed rep payouts, which needs the owner's word (CLAUDE.md: money-touching
         # changes are surfaced for approval).
         "calc_rep_commissions": "REPORTED-DEFECT",

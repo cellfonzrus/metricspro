@@ -327,7 +327,7 @@ import harnesslib                                                               
 # block — the class that made the live P&L read `feeds` after the owner chose the ledger. Same rows,
 # same `derive_wage_cells`, same money: harness_any_columns.py §C pins the wage cells byte-identical
 # with and without the mig-416/417 columns.
-# EXTENDED 2026-10-09 (§63, owner directive "chase trhew street number matching"): the store
+# EXTENDED 2026-10-09 (§64, owner directive "chase trhew street number matching"): the store
 # resolution CHAIN moved out of coa.py into its one home (`account/store_identity.py`), so
 # `store_resolver` / `_squash_key` / `_lead_num_key` changed shape while answering the same
 # question. `harnesslib.COA_STORE_IDENTITY_SANCTION` carries that sanction and the measurement

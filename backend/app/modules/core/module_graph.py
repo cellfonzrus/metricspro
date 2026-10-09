@@ -154,7 +154,7 @@ FACTS: dict[str, dict] = {
                     'declared spellings; AMBIGUITY RESOLVES TO NOTHING, and money nothing can '
                     'place is reported on its own row rather than dropped.',
         "homes": ('app/modules/account/store_identity.py',),
-        "index": ('63',),
+        "index": ('64',),
         "locks": ('harness_store_identity_lock.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04).
@@ -469,6 +469,31 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/sale_installment_engine.py': ('month_leg_of',),
         },
     },
+    'month_focus_declaration': {
+        "question": 'What did management DECLARE for this month — the focus, the pay type driving its '
+                    'spiffs, the temporary spiffs on the table — and what does it still owe this week?',
+        "homes": ('app/modules/commcalc/month_focus.py',),
+        "index": ('64',),
+        "locks": ('harness_month_focus.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04, and on 2026-10-09 it stripped the explanatory comments out of ten
+        # callers dicts, so this package hand-edited the graph instead). The lock verifies it against
+        # the real import graph.
+        #
+        # THE SIBLING THAT ANSWERS A NEIGHBOURING QUESTION: `commcalc.payout_config.custom_spiffs` is
+        # what the engine actually PAYS; this fact is only an INTENT with a status. They are
+        # deliberately two facts, and `month_focus.spiff_reconciliation` is the ONE place that
+        # compares them — so a change to either has to keep that comparison honest rather than
+        # merging the two into one.
+        #
+        # ONE direct caller, deliberately. The login popup's attention item
+        # (`commcalc/import_audit._p_month_focus`) and the platform banner are TWO SURFACES over this
+        # same due list, and both reach it through `router._month_focus_payload` rather than importing
+        # this home again — so there is no second assembly to drift.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_mfocus',),
+        },
+    },
     'people_visibility': {
         # Two dimensions of ONE declared fact, so they are one node: `visible_people_keyset` answers
         # whose rows are mine, `visible_store_codes` answers which stores reach me at all, and
@@ -488,8 +513,14 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_filter.py': ('core_scope',),
             'app/modules/asset/purchase_orders.py': ('_cscope',),
             'app/modules/asset/router.py': ('_cscope',),
+            # 2026-10-09 — `closer_pick` and `month_focus` import `is_market_or_wider` from this
+            # same home: "is this role's reporting scope a market or wider", which moved here when a
+            # FOURTH copy of the scope-tier tuple was about to be written (index §63). They do not
+            # read anybody's shifts; they read the scope tiers this file owns.
+            'app/modules/closing/closer_pick.py': ('PICK_ANY_SCOPES', 'is_market_or_wider'),
             'app/modules/closing/ops_chargebacks.py': ('_cscope',),
             'app/modules/closing/router.py': ('_cscope', '_cscope_opts'),
+            'app/modules/commcalc/month_focus.py': ('is_market_or_wider',),
             'app/modules/commcalc/processor_ledger.py': ('_cscope',),
             'app/modules/commcalc/router.py': ('_core_scope', '_cscope', '_tso_omo', 'sanitize_market_label'),
             'app/modules/core/onboarding.py': ('_cscope',),

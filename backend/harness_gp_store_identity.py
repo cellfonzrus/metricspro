@@ -1,4 +1,4 @@
-"""PROOF: a leading address token is not a store identity (index §63).
+"""PROOF: a leading address token is not a store identity (index §64).
 
 Owner directive 2026-10-09, verbatim: *"chase trhew street number matching"*.
 
@@ -263,17 +263,17 @@ check("H3 nothing is counted twice: the report's expense total equals the fixtur
 check("H4 the fold did not raise a second row to carry them",
       len([k for k in _rx if not _rx[k].get("store_unplaced")]) == 3, sorted(_rx))
 
-head("G. MIGRATION 1065 IS SAFE IN EITHER ORDER — a BARE TOKEN still resolves")
+head("G. MIGRATION 1066 IS SAFE IN EITHER ORDER — a BARE TOKEN still resolves")
 
-# The PR claims mig 1065 may be merged before it is applied. That rests on exactly one fact: the
+# The PR claims mig 1066 may be merged before it is applied. That rests on exactly one fact: the
 # mig-274 rollup, UNAPPLIED, hands the commission-leg endpoints a bare leading token as `store_num`
 # (`'11636'`), and the chain must place that token on the canonical address like any other
 # spelling. Proven here rather than asserted in the PR body.
 _resolve = sid.build_store_resolver(MAPPING, ALIASES)
-check("G1 pre-1065 (SQL still splits): the bare token resolves to the canonical address",
+check("G1 pre-1066 (SQL still splits): the bare token resolves to the canonical address",
       sid.store_key(_resolve, "11636") == "11636 Springfield Blvd",
       sid.store_key(_resolve, "11636"))
-check("G2 post-1065 (SQL returns the raw address): the carrier's own spelling resolves to the "
+check("G2 post-1066 (SQL returns the raw address): the carrier's own spelling resolves to the "
       "SAME key, so the two orders agree",
       sid.store_key(_resolve, "116-36 Springfield Blvd Cambria Heights, NY 11411")
       == sid.store_key(_resolve, "11636"))

@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account._period import parse_period, recent_period_keys
-from app.modules.account import store_identity as _sid   # §63 — THE store-identity home
+from app.modules.account import store_identity as _sid   # §64 — THE store-identity home
 
 
 def _pkey(period):
@@ -623,7 +623,7 @@ def resolve_ma_account_store(account_id, store_by_account, meta_by_address, unas
     `meta_by_address`   {lower store_address -> {"store_code", "market"}} — the org's own vocabulary.
 
     Returns {"store", "store_code", "market", "num", "resolved"}, where `num` is the REP-PAY JOIN
-    KEY — the canonical store address, not a street number (§63: a leading address token is not a
+    KEY — the canonical store address, not a street number (§64: a leading address token is not a
     store identity). An account the index cannot place
     renders "(Unassigned)" — HONESTLY, never dropped from the report and never guessed onto a
     plausible store (the phantom-store lesson); `resolved` False is what the payload's
@@ -881,7 +881,7 @@ def compute(client, org_id, months=6):
                        "market": (str(_m.get("market") or "").strip()
                                   or _rs_resolve_market(sf_addr) or ""),
                        "store_code": str(_m.get("store_code") or "").strip(),
-                       "num": sf_addr}   # canonical address = the rep-pay join key (§63)
+                       "num": sf_addr}   # canonical address = the rep-pay join key (§64)
 
     # mig-314 account→store index — built ONCE, only for the MA/VidaPay source (the Boost path
     # joins on salesforce_id and never touches it).

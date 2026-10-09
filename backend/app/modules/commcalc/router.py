@@ -1,5 +1,5 @@
 """CommCalc API Router — all /api/v1/commcalc/* endpoints"""
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header, Query, Body
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Any
 import pandas as pd
@@ -28,6 +28,7 @@ from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE
 from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
+from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -49,7 +50,7 @@ from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_V
                                              countable_sale_skip_reason as _gp_skip_reason)
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
-from app.modules.account import store_identity as _store_identity  # 2026-10-09 — THE store-identity home (§63): a leading address token is not a store identity
+from app.modules.account import store_identity as _store_identity  # 2026-10-09 — THE store-identity home (§64): a leading address token is not a store identity
 from app.modules.commcalc import flag_registry
 from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a flag's store for DM routing
 from app.modules.commcalc import flag_persist          # mig 287 — ADDITIVE flag writes (DM review survives)
@@ -16560,7 +16561,7 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                 period_month=pm['month'],
                 period_year=pm['year'],
                 asset_by_imei=asset_by_imei,
-                # ONE store identity for both sides of flags 7/8 (§63) — a store the two feeds
+                # ONE store identity for both sides of flags 7/8 (§64) — a store the two feeds
                 # spell differently used to raise "no payment" AND "no sales" every month.
                 resolve_store_canonical=_flag_resolve_store,
             )
@@ -24566,7 +24567,7 @@ def _leg_store_index(client, org_id):
     SAME street-number join gp_report.calc_gp_report uses", which is exactly why it inherited that
     join's defect: a carrier address whose leading token no store row leads with matched NOTHING, so
     the trend's store/market filter could not select those rows and the GP table lost the money
-    outright. Both now dereference the ONE home for store identity (§63,
+    outright. Both now dereference the ONE home for store identity (§64,
     `account.store_identity` via `coa.store_resolver`), so the trend and the table still select the
     same rows — now the right ones."""
     idx = {}
@@ -24697,8 +24698,8 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
                              'category': _payment_category.label_of(cat_map, r.get('payment_type')),
                              'amount': safe_float(r.get('amount')), 'n': 1})
 
-    # ONE STORE IDENTITY, whichever path produced the rows (§63). The mig-274 rollup returns the
-    # store column the DATABASE computed — a leading street-number TOKEN until mig 1065 is applied,
+    # ONE STORE IDENTITY, whichever path produced the rows (§64). The mig-274 rollup returns the
+    # store column the DATABASE computed — a leading street-number TOKEN until mig 1066 is applied,
     # the raw address after — and the per-month fallback returns a raw address. Both are resolved
     # here through the one home, so the keys always meet `store_idx` (built on the same resolver)
     # and the store / market filter selects the right rows in either state. Keying only the
@@ -25216,9 +25217,9 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
                      'no store address, so it is company-wide and is EXCLUDED while a store or market '
                      'filter is active.')
 
-    # ONE STORE IDENTITY, whichever path produced the rows (§63) — see the same normalization in
+    # ONE STORE IDENTITY, whichever path produced the rows (§64) — see the same normalization in
     # /commission-leg-trend. The mig-274 rollup's store column is whatever the DATABASE computed (a
-    # leading-token until mig 1065 is applied, the raw address after); `store_idx` is keyed by
+    # leading-token until mig 1066 is applied, the raw address after); `store_idx` is keyed by
     # canonical identity, so the keys are resolved here before `passes` is asked anything.
     for r in label_rows:
         r['store_num'] = _store_identity.store_key(_leg_resolve, r.get('store_num'))
@@ -26614,6 +26615,7 @@ def spiff_impact(period: str = "", spiff: str = "", bands: str = "", markets: st
     out["org_id"] = org_id
     return out
 
+
 @router.get("/sales-diagnostics")
 def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
     """Why do the Action-Plan / targets tiles show what they show? For a period this reports what the
@@ -26663,6 +26665,382 @@ def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
             'computed_actuals_totals': tot,
             'accessory_config': {'departments': acfg['departments_list'], 'categories': acfg['categories_list']}}
 
+
+
+# NOTE ON PLACEMENT: this block sits AFTER `/sales-diagnostics` on purpose. §60's design lock
+# (`harness_spiff_impact.py` §I6–I13b) inspects the router SLICE from `def _spiff_impact_inputs`
+# to `@router.get("/sales-diagnostics")`, and asserts among other things that nothing in it
+# carries a literal `.limit(` row ceiling (§19.48's paging rule). Landing this package inside
+# that window reddened I12 on code that is not §60's at all — so the package moved out of the
+# slice rather than the lock being widened to tolerate it.
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE MONTH'S DECLARED FOCUS, AND THE WEEKLY CHECK-IN (owner 2026-10-09, index §63)
+#
+# Owner: *"in the beginning of the month Market manager or above when they log in should define the
+# focus for the month -, update which initiative is driving spiffs that month and assign targets to
+# the store< the notification will come every week on Monday on the platform to update any new
+# commisison changes or spiff on any new products, assign targets to stores, offer temparoray spiff,
+# this module needs a creative busines smanager to dessign something out of the box to drive sales
+# offer spiff keeping the current oppprtunities in mind"*
+#
+# THREE ROUTES, ONE DECIDER. Every judgement — is the focus declared, is this week's check-in done,
+# which stores have no target, do the declared spiffs match the pay config, and which plays the
+# month's numbers actually support — belongs to `commcalc/month_focus.py` and is computed there. These
+# endpoints READ and WRITE the row and ASSEMBLE the signals; they decide nothing.
+#
+# NOTHING IS PAID FROM HERE. A temporary spiff on the declaration is an intent with a status; the
+# money is `payout_config.custom_spiffs`, which this subsystem only ever READS (to report the two
+# sides disagreeing, in both directions). The commission engine is untouched.
+#
+# THE SIGNALS ARE BORROWED, NEVER RE-MEASURED. Who is behind comes from §59's `_peer_comparison_payload`
+# + `lagging()` — the same call the peer screen and the action plan make, so the three cannot name
+# different stores. What a pay type is worth and who earned none of it comes from §60's
+# `_spiff_impact_inputs` / `pay_type_options` / `store_money`. Which stores have a target comes from
+# §5's own `targets` rows and `_storeops_roster`. This file measures nothing of its own.
+def _month_focus_cfg(client, org_id):
+    """(declaration_days, checkin_weekday) for this org — its config row, else the house defaults.
+
+    RULE TWO: the knobs are `commcalc.commission_org_config` columns (mig 1065), never code. A column
+    the migration has not added yet, a missing row or any failure falls to the shipped defaults, so
+    this subsystem works before 1065 is applied.
+    """
+    days, wd = _mfocus.DECLARATION_DAYS_DEFAULT, _mfocus.CHECKIN_WEEKDAY_DEFAULT
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("focus_declaration_days,focus_checkin_weekday")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            d, w = rows[0].get("focus_declaration_days"), rows[0].get("focus_checkin_weekday")
+            if d is not None:
+                days = int(d)
+            if w is not None:
+                wd = int(w)
+    except Exception:
+        pass
+    return days, wd
+
+
+def _month_focus_row(client, org_id, period):
+    """The stored declaration for (org, period) — both period spellings, through `_pvariants` (§19.47),
+    so a row written under either is found. ({}, False) when the table is not there yet."""
+    try:
+        rows = (client.schema("commcalc").table(_mfocus.TABLE).select("*")
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(2).execute().data) or []
+    except Exception:
+        return {}, False
+    if not rows:
+        return {}, True
+    return (rows[0].get("declaration") or {}), True
+
+
+def _month_focus_targets(client, org_id, period):
+    """(stores_total, stores_with_saved_target, codes_without). (None, None, []) if either read fails.
+
+    A SAVED row is the test, not what the screen shows. `GET /targets/{period}` SEEDS a store with no
+    row from the prior month (§5), so a store can display a figure nobody assigned — and "carried
+    forward by the system" is not "a manager set a goal". None is never 0: a read that failed must not
+    read as "no store has a target", which is a management failure rather than a missing measurement.
+    """
+    try:
+        roster = _storeops_roster(client, org_id)
+        codes = {str(s.get("store_code") or "").strip().upper() for s in roster}
+        codes.discard("")
+    except Exception:
+        return None, None, []
+    try:
+        rows = (client.schema("commcalc").table("targets").select("store_code")
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(20000).execute().data) or []
+    except Exception:
+        return None, None, []
+    have = {str(r.get("store_code") or "").strip().upper() for r in rows} & codes
+    return len(codes), len(have), sorted(codes - have)
+
+
+def _month_focus_live_spiffs(client, org_id, period):
+    """The names on `payout_config.custom_spiffs` for this period — the MONEY side of the
+    reconciliation. READ ONLY; this subsystem never writes the pay config."""
+    try:
+        rows = (client.schema("commcalc").table("payout_config").select("custom_spiffs")
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(1).execute().data) or []
+    except Exception:
+        return []
+    out = []
+    for cs in ((rows[0].get("custom_spiffs") if rows else None) or []):
+        if isinstance(cs, dict) and str(cs.get("name") or "").strip():
+            out.append(str(cs["name"]).strip())
+    return out
+
+
+def _month_focus_signals(client, org_id, period, authorization):
+    """The MEASURED numbers the plays are made of, each from the home that already owns it.
+
+    Returns (signals, meta). Every leg is exception-isolated and REPORTS its failure in `meta` rather
+    than contributing a silent absence: "no store is behind its peers" and "the comparison did not
+    run" look identical on a screen and only one of them is good news (§59.7's rule, kept here).
+    """
+    signals, meta = {}, {}
+
+    # 1. TARGETS (§5) — and the stores with none, which is the first play.
+    total, have, without = _month_focus_targets(client, org_id, period)
+    signals["stores_total"] = total
+    signals["stores_without_target"] = without
+    meta["targets"] = {"stores_total": total, "with_saved_target": have,
+                       "basis": "a SAVED commcalc.targets row, not a seeded carry-forward"}
+
+    # 2. WHO IS BEHIND (§59) — the same payload and the same `lagging()` the peer screen reads.
+    try:
+        srows = _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS)
+        peer_out, _cells, _unres = _peer_comparison_payload(
+            client, org_id, period, srows,
+            resolve_market=_store_market_resolver(client, org_id)[0],
+            params={"period": period, "metric": _peercmp.DEFAULT_GAP_METRIC, "source": "month-focus"})
+        lag = []
+        for item in (peer_out.get("lagging") or []):
+            lag.append({"store": item.get("store"), "metric": item.get("metric"),
+                        "gap_pct": item.get("gap_pct"), "median": item.get("median"),
+                        "value": item.get("value"), "leader": item.get("leader")})
+        signals["lagging"] = lag
+        meta["peer"] = {"ran": True, "stores_compared": len(peer_out.get("rows") or []),
+                        "bands": len(peer_out.get("bands") or []), "lagging": len(lag)}
+    except Exception as e:
+        signals["lagging"] = []
+        meta["peer"] = {"ran": False, "error": f"{type(e).__name__}: {e}",
+                        "note": "No peer play is offered. That is not the same as no store being behind."}
+
+    # 3. WHAT THE CARRIER IS ALREADY PAYING, AND WHO EARNED NONE OF IT (§60).
+    try:
+        (comp_rows, classify, component_line, month_token, store_of, _pl, _pc, _cl) = \
+            _spiff_impact_inputs(client, org_id, period)
+        options = _spiffimp.pay_type_options(
+            comp_rows, classify, component_line=component_line, month_token=month_token)
+        spiffs = [o for o in options if str(o.get("component") or "").upper() == "SPIFF"]
+        # A pay type the carrier paid on where this tenant booked NO units at all — a focus week
+        # costs nothing but attention, so it is its own play.
+        signals["unearned_pay_types"] = [
+            {"label": o.get("type"), "rate_per_unit": o.get("rate_per_unit")}
+            for o in spiffs if not (o.get("units") or 0)][:8]
+        # The initiative dropdown is DERIVED from the tenant's own statement rows (§60's options,
+        # §58's classification), never from a list in code — RULE TWO. Every pay type is offered, not
+        # just the spiff-component ones, because a month's initiative can be anything the carrier
+        # pays on; the component is shown beside it so the manager can see which it is.
+        signals["pay_type_options"] = [
+            {"type": o.get("type"), "component": o.get("component"),
+             "dollars": o.get("dollars"), "units": o.get("units"),
+             "rate_per_unit": o.get("rate_per_unit")}
+            for o in sorted(options, key=lambda o: -(o.get("dollars") or 0.0))][:60]
+        top = max(spiffs, key=lambda o: o.get("dollars") or 0.0) if spiffs else None
+        if top:
+            money, _line, _unres2 = _spiffimp.store_money(
+                comp_rows, top.get("type"), classify,
+                component_line=component_line, store_of=store_of)
+            units = {k: (v or {}).get("spiff_units") or 0 for k, v in (money or {}).items()}
+            earned = {k: u for k, u in units.items() if u > 0}
+            total_u = sum(units.values())
+            # A store the statement NAMED and paid nothing of this type for is a real zero and is the
+            # owner's finding. A store the statement never named carries no rate at all (§60) and is
+            # absent from `money`, so it is not accused here either.
+            zero = sorted(k for k, u in units.items() if not u)
+            top_store = max(earned, key=lambda k: earned[k]) if earned else ""
+            rate = top.get("rate_per_unit")
+            if rate is None and (top.get("units") or 0):
+                rate = round((top.get("dollars") or 0.0) / float(top["units"]), 2)
+            signals["spiff"] = {
+                "label": top.get("type"), "rate_per_unit": rate,
+                "dollars": top.get("dollars"), "units": top.get("units"),
+                "zero_stores": zero[:40], "earning_stores": len(earned),
+                "top_store": top_store,
+                "top_store_share_pct": (round(100.0 * earned[top_store] / total_u, 1)
+                                        if earned and total_u else None),
+            }
+            # The median units per 100 boxes and the boxes behind it come from §59's own rows, so the
+            # "left on the table" estimate is at the peers' MIDDLE and says so.
+            try:
+                prs = (locals().get("peer_out") or {}).get("rows") or []
+                boxes = {r.get("store"): r.get("boxes") for r in prs}
+                rates = sorted(_spiffimp.units_per_100_boxes(units.get(s, 0), b)
+                               for s, b in boxes.items() if b and s in units)
+                rates = [r for r in rates if r is not None]
+                if rates:
+                    mid = rates[len(rates) // 2] if len(rates) % 2 else \
+                        (rates[len(rates) // 2 - 1] + rates[len(rates) // 2]) / 2.0
+                    signals["spiff"]["median_units_per_100_boxes"] = round(mid, 2)
+                    signals["spiff"]["zero_store_boxes"] = sum(
+                        (boxes.get(s) or 0) for s in zero) or None
+            except Exception:
+                pass
+        meta["spiff"] = {"ran": True, "spiff_pay_types": len(spiffs),
+                         "selected": (top or {}).get("type")}
+    except Exception as e:
+        meta["spiff"] = {"ran": False, "error": f"{type(e).__name__}: {e}",
+                         "note": "No spiff play is offered. That is not the same as there being no "
+                                 "unearned carrier money."}
+    return signals, meta
+
+
+def _month_focus_payload(client, org_id, period, authorization, *, with_plays=True):
+    """The whole §63 answer for one month: the declaration, what is outstanding, the declared-against
+    -live reconciliation and the plays. ONE assembly, so the page, the weekly banner and the login
+    attention item can never disagree about what this month still owes."""
+    # `_month_year`, not `parse_period`: this endpoint may receive either period spelling and
+    # `parse_period` silently returns January for '2026-10' (see its own warning above).
+    _mo, _yr = _month_year(period)
+    decl, table_ready = _month_focus_row(client, org_id, period)
+    days, weekday = _month_focus_cfg(client, org_id)
+    live = _month_focus_live_spiffs(client, org_id, period)
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    total, have, without = _month_focus_targets(client, org_id, period)
+    due = _mfocus.outstanding(
+        decl, today, year=_yr, month=_mo, declaration_days=days,
+        checkin_weekday=weekday, stores_total=total, stores_with_target=have,
+        live_spiff_names=live)
+
+    signals, signal_meta = ({}, {})
+    if with_plays:
+        signals, signal_meta = _month_focus_signals(client, org_id, period, authorization)
+    cur = _mfocus.current_checkin(today, _yr, _mo, weekday)
+    win = _mfocus.declaration_window_end(_yr, _mo, days)
+    return {
+        "period": period, "org_id": org_id, "today": today,
+        "declaration": decl, "declared": _mfocus.is_declared(decl),
+        "outstanding": due,
+        "plays": _mfocus.plays(signals) if with_plays else [],
+        "reconciliation": _mfocus.spiff_reconciliation(decl, live),
+        "live_spiff_names": live,
+        "checkins": {
+            "weekday": weekday,
+            "days": [d.isoformat() for d in _mfocus.checkin_days(_yr, _mo, weekday)],
+            "current": cur.isoformat() if cur else None,
+            "confirmed": sorted(_mfocus.confirmed_checkins(decl)),
+        },
+        "declaration_window_end": win.isoformat() if win else None,
+        "targets": {"stores_total": total, "with_saved_target": have,
+                    "without_saved_target": without[:60]},
+        # The initiative options are the tenant's OWN pay types (§60), so the dropdown cannot offer a
+        # pay type this tenant was never paid on. Empty when the signals were not read (`plays=0`).
+        "initiative_options": signals.get("pay_type_options") or [],
+        "signal_meta": signal_meta,
+        # The row's absence and the TABLE's absence are different facts, and a screen must be able to
+        # tell them apart: one is a month nobody declared, the other is a migration not yet applied.
+        "ready": table_ready,
+        "hint": None if table_ready else
+                "The month-focus declaration is not set up yet — run migration 1065.",
+    }
+
+
+def _month_focus_gate(client, org_id, authorization):
+    """(may_declare, perms). "Market manager or above", decided by `month_focus.may_declare`, which
+    dereferences `app.core.scope.roster_reach` rather than keeping a fourth copy of the scope tiers."""
+    try:
+        from app.modules.core.router import _resolve_caller, _uid_from_token
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(client, uid, org_id) if uid else None
+    except Exception:
+        caller = None
+    if not caller:
+        return False, {}
+    perms = dict((caller.get("perms") or {}))
+    perms["__super_admin"] = bool(caller.get("super_admin"))
+    perms["__name"] = str(caller.get("name") or caller.get("email") or "")
+    return _mfocus.may_declare(perms), perms
+
+
+@router.get("/month-focus/{period}")
+def get_month_focus(period: str, plays: int = 1, authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
+    """THE MONTH'S FOCUS — what was declared, what is still outstanding today, and the plays the
+    month's own numbers support (index §63).
+
+    `plays=0` skips the measured signals, so the in-platform weekly reminder and the login attention
+    item can ask "what is outstanding?" without paying for a sales read.
+
+    Read-only. `may_declare` tells the screen whether to offer the form at all; the WRITE route
+    enforces it, so a client that ignores this flag changes nothing.
+    """
+    require_org(org_id)
+    client = sb()
+    out = _month_focus_payload(client, org_id, period, authorization, with_plays=bool(plays))
+    out["may_declare"], _perms = _month_focus_gate(client, org_id, authorization)
+    return out
+
+
+@router.put("/month-focus/{period}")
+def put_month_focus(period: str, body: dict = Body(...), authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
+    """Declare (or amend) the month's focus. MARKET MANAGER OR ABOVE — enforced here, not on the page.
+
+    PARTIAL SAVES ARE SAFE: `normalise_declaration` fills every field the body omitted from the stored
+    row, so saving the spiff initiative cannot blank the month's headline. Check-ins are NEVER taken
+    from the body — `POST .../checkin` is the only way one is recorded, so a client cannot mark a week
+    confirmed by saving the form.
+
+    Writes `commcalc.month_focus` ONLY. No pay config, no payout, no recompute: a temporary spiff
+    declared here is an intent with a status until somebody wires it in the commission settings, and
+    the payload's `reconciliation` reports it as not live until they do.
+    """
+    require_org(org_id)
+    client = sb()
+    ok, perms = _month_focus_gate(client, org_id, authorization)
+    if not ok:
+        raise HTTPException(403, "Declaring the month's focus is for a market manager or above.")
+    existing, table_ready = _month_focus_row(client, org_id, period)
+    if not table_ready:
+        raise HTTPException(503, "The month-focus declaration is not set up yet — run migration 1065.")
+    now = datetime.now(timezone.utc).isoformat()
+    decl = _mfocus.normalise_declaration(
+        body or {}, actor=perms.get("__name") or "", now_iso=now, existing=existing)
+    try:
+        (client.schema("commcalc").table(_mfocus.TABLE).upsert(
+            {"org_id": org_id, "period": period, "declaration": decl, "updated_at": now},
+            on_conflict="org_id,period").execute())
+    except Exception as e:
+        raise HTTPException(500, f"month-focus save failed: {type(e).__name__}: {e}")
+    out = _month_focus_payload(client, org_id, period, authorization, with_plays=False)
+    out["may_declare"] = True
+    out["saved"] = True
+    return out
+
+
+@router.post("/month-focus/{period}/checkin")
+def post_month_focus_checkin(period: str, body: dict = Body(default={}),
+                             authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Confirm this week's check-in — the owner's Monday reminder, answered in the platform.
+
+    The week is the CURRENT check-in day computed from the tenant's own weekday setting, never a date
+    the client chose, so a confirmation cannot be back-dated or aimed at a week that has not happened.
+    IDEMPOTENT: confirming an already-confirmed week writes nothing and moves no timestamp.
+    """
+    require_org(org_id)
+    client = sb()
+    ok, perms = _month_focus_gate(client, org_id, authorization)
+    if not ok:
+        raise HTTPException(403, "The weekly check-in is for a market manager or above.")
+    existing, table_ready = _month_focus_row(client, org_id, period)
+    if not table_ready:
+        raise HTTPException(503, "The month-focus declaration is not set up yet — run migration 1065.")
+    _mo, _yr = _month_year(period)
+    _days, weekday = _month_focus_cfg(client, org_id)
+    today = datetime.now(timezone.utc).date().isoformat()
+    cur = _mfocus.current_checkin(today, _yr, _mo, weekday)
+    if cur is None:
+        raise HTTPException(400, "There is no check-in due for that month yet.")
+    now = datetime.now(timezone.utc).isoformat()
+    decl, changed = _mfocus.confirm_checkin(
+        existing, cur.isoformat(), actor=perms.get("__name") or "", now_iso=now,
+        changes=(body or {}).get("changes") or [], note=(body or {}).get("note") or "")
+    if changed:
+        try:
+            (client.schema("commcalc").table(_mfocus.TABLE).upsert(
+                {"org_id": org_id, "period": period, "declaration": decl, "updated_at": now},
+                on_conflict="org_id,period").execute())
+        except Exception as e:
+            raise HTTPException(500, f"check-in save failed: {type(e).__name__}: {e}")
+    out = _month_focus_payload(client, org_id, period, authorization, with_plays=False)
+    out["may_declare"] = True
+    out["confirmed_week"] = cur.isoformat()
+    out["already_confirmed"] = not changed
+    return out
 
 @router.get("/upload-trace")
 def upload_trace(period: str = "", upload_type: str = "", source: str = "",

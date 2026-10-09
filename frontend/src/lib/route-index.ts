@@ -235,6 +235,9 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/schematic' },
   { path: '/commcalc/settings' },
   { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
+  // NAV names this page (it is listed under both Management Overview and Targets & Coaching), and
+  // NAV is the label authority — a second label here is the §G drift this registry forbids.
+  { path: '/commcalc/month-focus', aliases: ['month focus', 'monthly focus', 'focus of the month', 'declare the month', 'monthly initiative', 'temporary spiff', 'weekly check-in', 'monday check-in', 'spiff initiative'] },
   { path: '/commcalc/accessory-target-plan', aliases: ['accessory target allocation', 'accessory target plan', 'company accessory goal', 'assign accessory targets', 'accessory goal', 'set accessory targets', 'accessories per box target', 'proportionate target'] },
   { path: '/commcalc/product-mix', aliases: ['product mix', 'cheap phones', 'free phones', 'device mix', 'price band', 'accessory per box', 'port share', 'low ports', 'pushing cheap phones', 'which phone'] },
   { path: '/commcalc/store-match' },
