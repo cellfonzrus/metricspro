@@ -22431,10 +22431,17 @@ where. A line with no rep reports **no** rep and is never filled from the store'
   decline that money — `component_of_declared_category('MDF')` is None, so §58 falls through to the
   keyword ladder and `component_line` routes it to `vip_reimb` against the org's own declaration
   (`mdf_income` exists in the chart of accounts and receives none of it). So this report's paid side
-  is DEVICE money only and can sit BELOW the P&L's reimbursement line for a store that received such
-  a payment, by exactly the declared-category-unmapped amount: `raw_comp_report` (the feed the P&L
-  reads) holds 40 such rows, **$260,500.00**, March–September 2026. Store 652 receives none of them,
-  so the §65.1 figures are unaffected. The fix is a CONFIG row — map the declared category to a
+  is DEVICE money only and, **for as long as that declaration stays unmapped**, can sit BELOW the
+  P&L's reimbursement line for a store that received such a payment, by exactly the
+  declared-category-unmapped amount: `raw_comp_report` (the feed the P&L reads) holds 40 such rows,
+  **$260,500.00**, March–September 2026. A gap of exactly that size is CORRECT behaviour, not a
+  discrepancy — but it is not permanent: give the declared category its own P&L line, or map it to a
+  component, and the gap closes by itself and this paragraph becomes history. Store 652 receives none
+  of these payments, so the §65.1 figures are unaffected. The two feeds themselves agree: compared
+  store-for-store per month (2026-03 → 2026-09, not just on counts), no store-month is in one and
+  absent from the other, so `raw_payment_detail`'s 44 rows / $287,500.00 differ from the comp feed's
+  40 / $260,500.00 by October alone (4 rows, $27,000.00 — the month-end lag of §19.54, not a
+  feed-placement difference). The fix is a CONFIG row — map the declared category to a
   component, or give it a P&L line of its own, so a declaration stops being overridden by a keyword —
   which moves money and is therefore surfaced for the owner, not applied; it is owned by the
   commission-audit thread along with the rest of the classification path.
