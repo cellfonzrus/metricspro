@@ -6,6 +6,7 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import ScreenLink from '@/components/ScreenLink'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 // ACCESSORY TARGET ALLOCATION (index §61, owner ask 2026-10-09) — the company names ONE accessory
 // number at the top of the page; the table says who has to sell what to get there, weighted by each
@@ -74,6 +75,29 @@ const ALLOC_WHY: Record<string, string> = {
   no_goal: '',
 }
 
+// Click-a-header sorting (owner directive 2026-08-10) reads each cell through ONE accessor, so the
+// column a manager clicks sorts on the VALUE and not on the formatted string beside it. `null` stays
+// null rather than becoming 0: `compareValues` sinks an empty cell in both directions, which is the
+// honesty rule this report keeps everywhere else — "could not be computed" is not "zero".
+function cell(r: Row, field: string): unknown {
+  switch (field) {
+    case 'store': return r.address || r.store_code
+    case 'm2_acc': return r.m2_acc
+    case 'm1_acc': return r.m1_acc
+    case 'mtd_acc': return r.mtd_acc
+    case 'projected_acc': return r.projected_acc
+    case 'acc_per_box': return r.acc_per_box
+    case 'expected_boxes': return r.expected_boxes
+    case 'capacity': return r.capacity
+    case 'current_target': return r.current_target
+    case 'suggested_target': return r.suggested_target
+    case 'extension': return r.extension
+    case 'required_acc_per_box': return r.required_acc_per_box
+    case 'share_pct': return r.share_pct
+    default: return undefined
+  }
+}
+
 const money = (v: number | null | undefined) => (v === null || v === undefined ? '—' : fmt(Number(v)))
 const rate = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `$${Number(v).toFixed(2)}`)
 
@@ -109,6 +133,8 @@ export default function AccessoryTargetPlanPage() {
   useEffect(() => { load() }, [load])
 
   const rows = useMemo(() => plan?.rows || [], [plan])
+  // `initial: null` keeps the server's own capacity ranking as the default order.
+  const { sorted, sort, toggle } = useTableSort<Row>(rows, cell)
   const picked = useMemo(() => rows.filter((r) => r.selected), [rows])
   const writable = useMemo(() => picked.filter((r) => r.suggested_target !== null), [picked])
   const goal = plan?.goal
@@ -291,22 +317,22 @@ export default function AccessoryTargetPlanPage() {
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1280 }}>
               <thead><tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
-                <Th left>Store</Th>
-                <Th tip={`Accessory sales (accessory $ + device set-up fee) in ${m2Label}, with the boxes sold.`}>{m2Label}</Th>
-                <Th tip={`Accessory sales in ${m1Label}, with the boxes sold.`}>{m1Label}</Th>
-                <Th tip="Accessory sales so far this month.">MTD</Th>
-                <Th tip="Projected month-end, the same projection Executive MTD and the Accessory Sales Targets tracker show.">Projected</Th>
-                <Th tip="Accessory $ per box over the two history months — the weight this store's share is computed from.">$ / box</Th>
-                <Th tip="The boxes the share is measured against: the projected month-end boxes, or the history average when there is no projection yet.">Boxes used</Th>
-                <Th tip="$ per box x boxes used. What this store is demonstrated to be able to carry; shares are proportional to it.">Capacity</Th>
-                <Th tip="The accessory target in force for this month.">Current target</Th>
-                <Th tip="This store's proportional share of the company goal.">Proportionate target</Th>
-                <Th tip="Proportionate target minus the current target — what the store is being asked for on top of what it already carries.">Extension</Th>
-                <Th tip="The accessory $ per box the suggested target implies. Compare it with the $ / box column: if it is far higher, the ask is attachment, not traffic.">Required $ / box</Th>
-                <Th tip="Share of the amount being split.">Share</Th>
+                <SortableTh field="store" sort={sort} onSort={toggle} style={TH_L}>Store</SortableTh>
+                <SortableTh field="m2_acc" sort={sort} onSort={toggle} style={TH_R} title={`Accessory sales (accessory $ + device set-up fee) in ${m2Label}, with the boxes sold.`}>{m2Label}</SortableTh>
+                <SortableTh field="m1_acc" sort={sort} onSort={toggle} style={TH_R} title={`Accessory sales in ${m1Label}, with the boxes sold.`}>{m1Label}</SortableTh>
+                <SortableTh field="mtd_acc" sort={sort} onSort={toggle} style={TH_R} title="Accessory sales so far this month.">MTD</SortableTh>
+                <SortableTh field="projected_acc" sort={sort} onSort={toggle} style={TH_R} title="Projected month-end, the same projection Executive MTD and the Accessory Sales Targets tracker show.">Projected</SortableTh>
+                <SortableTh field="acc_per_box" sort={sort} onSort={toggle} style={TH_R} title="Accessory $ per box over the two history months — the weight this store's share is computed from.">$ / box</SortableTh>
+                <SortableTh field="expected_boxes" sort={sort} onSort={toggle} style={TH_R} title="The boxes the share is measured against: the projected month-end boxes, or the history average when there is no projection yet.">Boxes used</SortableTh>
+                <SortableTh field="capacity" sort={sort} onSort={toggle} style={TH_R} title="$ per box x boxes used. What this store is demonstrated to be able to carry; shares are proportional to it.">Capacity</SortableTh>
+                <SortableTh field="current_target" sort={sort} onSort={toggle} style={TH_R} title="The accessory target in force for this month.">Current target</SortableTh>
+                <SortableTh field="suggested_target" sort={sort} onSort={toggle} style={TH_R} title="This store's proportional share of the company goal.">Proportionate target</SortableTh>
+                <SortableTh field="extension" sort={sort} onSort={toggle} style={TH_R} title="Proportionate target minus the current target — what the store is being asked for on top of what it already carries.">Extension</SortableTh>
+                <SortableTh field="required_acc_per_box" sort={sort} onSort={toggle} style={TH_R} title="The accessory $ per box the suggested target implies. Compare it with the $ / box column: if it is far higher, the ask is attachment, not traffic.">Required $ / box</SortableTh>
+                <SortableTh field="share_pct" sort={sort} onSort={toggle} style={TH_R} title="Share of the amount being split.">Share</SortableTh>
               </tr></thead>
               <tbody>
-                {rows.map((r) => {
+                {sorted.map((r) => {
                   const dim = !r.selected
                   const basisOdd = r.acc_per_box_basis !== 'own_history'
                   return (
@@ -384,6 +410,11 @@ export default function AccessoryTargetPlanPage() {
   )
 }
 
+// The two header stylings the old private <Th> carried, now handed to the SHARED SortableTh so the
+// column keeps its look and gains the ▲/▼/↕ affordance and aria-sort for free.
+const TH_L: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', whiteSpace: 'nowrap' }
+const TH_R: React.CSSProperties = { textAlign: 'right', padding: '9px 12px', whiteSpace: 'nowrap' }
+
 const SEL: React.CSSProperties = { padding: '7px 9px', fontSize: 13, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text1)' }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -391,10 +422,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 4 }}>{label}</div>
     {children}
   </div>
-}
-
-function Th({ children, left, tip }: { children?: React.ReactNode; left?: boolean; tip?: string }) {
-  return <th title={tip} style={{ textAlign: left ? 'left' : 'right', padding: '9px 12px', whiteSpace: 'nowrap' }}>{children}</th>
 }
 
 function Td({ children, bold, color, title }: { children?: React.ReactNode; bold?: boolean; color?: string; title?: string }) {
