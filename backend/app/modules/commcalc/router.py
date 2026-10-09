@@ -26257,8 +26257,9 @@ def product_mix(period: str = "", markets: str = "", bands: str = "", store: str
         payload always states what "cheap" meant.
       · WHO IS NOT ATTACHING, AND WHO IS NOT PORTING — accessory $ per box (the §59 ratio,
         dereferenced) and port-ins per box, per rep, each against the median of the reps in view. A
-        rep is flagged only when BOTH are low, because measured live the two correlate at just
-        r = +0.30 — a single blended score would hide the rep who ports well and attaches nothing.
+        rep is flagged only when BOTH are low, because measured live the two are INDEPENDENT
+        (r = +0.12) — a single blended score would average two unrelated things and hide the rep who
+        ports well and attaches nothing.
       · WHETHER THE OWNER'S CLAIM HOLDS — the report measures the correlation between the device mix
         and both outcomes every time it runs, with its own n, rather than assuming it.
 

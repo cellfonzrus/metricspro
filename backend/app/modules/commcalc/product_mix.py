@@ -15,16 +15,26 @@ LOW accessory-per-box and a LOW port-in share — and that the two travel togeth
 
 **IT IS A HYPOTHESIS, AND THIS MODULE MEASURES IT RATHER THAN ASSUMING IT.** `correlations()` reports
 the actual Pearson coefficient between the mix and each outcome, with its own n, every time the report
-runs. Measured on live September 2026 (house org, 29 reps with enough volume to rank):
+runs. Measured on live September 2026 (house org, 29 reps with enough volume to rank), RE-MEASURED
+2026-10-09 after the owner took `BYOD` out of `box_departments` — that is the box DENOMINATOR of both
+rates, so every coefficient moved and the first read (-0.33 / -0.28 / +0.28 / +0.30) is superseded:
 
-    cheap-device share   vs accessory $ per box    r = -0.33     the hypothesis, in the stated direction
-    free-device share    vs accessory $ per box    r = -0.28
-    port-in share        vs accessory $ per box    r = +0.28     the two lagging signals co-move
-    cheap-device share   vs port-in share          r = +0.30     …but only weakly, so they are TWO signals
+    cheap-device share   vs accessory $ per box    r = -0.18     the hypothesis, in the stated direction
+    free-device share    vs accessory $ per box    r = -0.10     same direction, weaker still
+    port-in share        vs accessory $ per box    r = +0.12     ~NO relationship: they are INDEPENDENT
+    cheap-device share   vs port-in share          r = +0.50     the two LAGGING behaviours travel together
 
-That last line is why the verdict needs BOTH signals and not one: a rep can port well and still attach
-nothing. A single composite score would have hidden that, and the report would have coached the wrong
-half of the estate.
+These are one run against a feed appended daily, which is the whole reason this is computed on every
+load and not asserted here. Two things follow, and the second is the load-bearing one:
+
+  1. The hypothesis holds in the stated direction but WEAKLY. Cheap-device share explains only a few
+     percent of the variance in accessory dollars, so a low mix share is a reason to LOOK, never a
+     finding by itself — which is why `rep_prompt` words it as something to check.
+  2. Porting and attaching are INDEPENDENT (+0.12). A rep who ports well tells you nothing about
+     whether they attach, so a single composite score would average two unrelated things and hide the
+     rep who ports well and attaches nothing. That is why the verdict takes BOTH signals and never
+     blends them. The +0.50 row says the two LAGGING behaviours share a cause (the rep who hands out
+     the free phone also does not ask for the number), which is what makes `both` a coachable story.
 
 ════════════════════════════════════════════════════════════════════════════════════════════════════
 DUPLICATE CHECK (build gate, CLAUDE.md) — WHAT WAS SEARCHED AND WHAT IS REUSED
@@ -220,7 +230,8 @@ MIN_BOXES_TO_RANK = 10
 # the configured activation BUCKETS (a customer-phone activation is a box with no device line at
 # all), so the live September run produced the sentence "50% of the 2 devices they sold were in the
 # cheap bands" — a mix verdict on two lines. Worse, those reps were in the correlation: including
-# them moved cheap-share vs accessory-per-box from r = -0.33 to r = -0.13, which would have made the
+# them moved cheap-share vs accessory-per-box from r = -0.33 to r = -0.13 (both measured on the
+# then-current box basis, before BYOD left `box_departments`), which would have made the
 # owner's own claim look weak off an artefact of the floor. So the MIX columns have their own floor,
 # and below it they are None with the reason rather than a share of a handful.
 MIN_DEVICE_LINES_FOR_MIX = 10
@@ -340,8 +351,9 @@ def rep_rows(cells, *, store_of=None, cuts=HOUSE_PRICE_CUTS, ports_available=Tru
 # quiet door and a rep at a busy one are already comparable. The basis is therefore the median across
 # every ranked rep in the caller's scope, and the payload says so.
 #
-# BOTH SIGNALS, NEVER A COMPOSITE. Measured live, the two correlate at only r = +0.30, so a single
-# blended score would hide the rep who ports well and attaches nothing. A rep is flagged `both` only
+# BOTH SIGNALS, NEVER A COMPOSITE. Measured live, port share and accessory-per-box are INDEPENDENT
+# (r = +0.12, re-measured 2026-10-09), so a single blended score would average two unrelated things and
+# hide the rep who ports well and attaches nothing. A rep is flagged `both` only
 # when they are below the median on accessory-per-box AND on port share — which is precisely the
 # "co-relate the two" the owner asked for — and `accessory_only` / `port_only` name the one-signal
 # cases rather than burying them.

@@ -6750,7 +6750,7 @@ rendering the resolved name.
 |--------|--------------------|-----------------|
 | **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
 | **What is ONE carrier pay type worth to a store — to its commission payout revenue and to its net profit — and which stores are not earning it on the sales they make?** The share is of the P&L line the dollars actually book to (a “spiff” the org declares a reimbursement is NOT commission revenue, and the report says so); the lift is `spiff ÷ (net_income − spiff)` and is withheld with its reason when no positive base survives; the rate is paid units per 100 boxes, flagged as a different cohort when the pay type names a month rung | `commcalc.raw_comp_report` (`compensation_type`, `payment_amount`, `quantity`) classified through `commcalc/carrier_dollar_class` × the stored `commcalc.account_statements` per-store P&L × `router._sales_cell_agg`’s `box_count` / `_billpay_exec` | ONE home `commcalc/spiff_impact.py` (`pay_type_options` / `default_selection` / `store_money` / `profit_effect` / `units_per_100_boxes` / `caveats` / `build`) → `GET /commcalc/spiff-impact`; reads NO sale line and classifies NO dollar itself (both AST-locked); module-graph fact `spiff_store_impact`; lock `harness_spiff_impact.py` — §60. Live September 2026 (house org): $110,780.14 to `carrier_comm` and $373,211.61 to `vip_reimb`, both tying to the cent to the 31 stored per-store snapshots; **77% of the statement is not commission**, only 3 of 49 pay types carry the SPIFF component, and 13 of 28 stores have no positive profit base for a lift |
-| **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §61. Live September 2026 (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.33**, free share **r = −0.28**, port share vs accessory $ per box **r = +0.28**, and the two lagging signals correlate at only **r = +0.30** — which is why the verdict needs both |
+| **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §61. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
@@ -21574,18 +21574,33 @@ than coaching from it — `product_mix.correlations()` recomputes the Pearson co
 each outcome on every run, with its own n, and the screen prints it. If the claim stops holding on a
 tenant's data, the report says so instead of continuing to accuse people.
 
-**Measured live, September 2026, house org (29 reps clearing both floors):**
+**Measured live, September 2026, house org (29 reps clearing both floors).** RE-MEASURED 2026-10-09
+after the owner removed `BYOD` from `box_departments` (it belongs in `box_count_buckets`, and it was
+the mistaken tick recorded in §59.8). That untick changes the BOX DENOMINATOR of both rates, so every
+figure below moved — the earlier read (−0.33 / −0.28 / +0.28 / +0.30) was measured against a box count
+inflated by BYOD kit-charge lines and must not be quoted again. Every figure here is ONE run against a
+feed that is appended daily, so the report re-measures on every load and these are the magnitudes to
+expect, not constants to assert:
 
 | relationship | r | reading |
 |---|---|---|
-| cheap-device share vs accessory $ per box | **−0.33** | the owner's claim, in the stated direction |
-| free-device share vs accessory $ per box | **−0.28** | |
-| port-in share vs accessory $ per box | **+0.28** | the two lagging signals co-move |
-| cheap-device share vs port-in share | **+0.30** | …but only weakly — so they are **two** signals |
+| cheap-device share vs accessory $ per box | **−0.18** | the owner's claim, in the stated direction, but WEAK |
+| free-device share vs accessory $ per box | **−0.10** | same direction, weaker still |
+| port-in share vs accessory $ per box | **+0.12** | essentially NO relationship — see below |
+| cheap-device share vs port-in share | **+0.50** | cheap-pushing and low porting DO travel together |
 
-That last row is the whole reason the verdict takes BOTH signals and never blends them: a rep can port well
-and attach nothing. A single composite score would have hidden exactly that rep and coached the wrong half
-of the estate.
+**The reading changed with the numbers, and the design survives it for a better reason than before.**
+The owner's hypothesis holds in the direction he stated, but weakly: cheap-device share explains only a
+few percent of the variance in accessory dollars, so a low mix share is a prompt to look, never a
+finding on its own — which is why `rep_prompt` phrases it as something to check and the report publishes
+the correlation on every run instead of asserting the link once here.
+
+The load-bearing row is now the THIRD one, not the fourth. Porting and accessory attachment are
+**independent** (+0.09): a rep who ports well tells you nothing about whether they attach. That is the
+whole reason the verdict takes BOTH signals and never blends them — a composite score would average two
+unrelated things and hide the rep who ports well and attaches nothing. The fourth row (+0.50) says the
+two LAGGING behaviours share a cause (the rep who hands out the free phone also does not ask for the
+number), which is what makes the `both` verdict a coachable story rather than a coincidence.
 
 ### 61.1 Duplicate check (build gate) — what was searched, what is reused
 
@@ -21625,11 +21640,19 @@ New cell fields: `_dev_lines`, `_dev_bands`, `_dev_models`, `_dev_price_sum`, `_
 A line enters the mix when it is in a box department **and** the activation predicate classifies it. Both
 halves are load-bearing and both were measured, not assumed:
 
-- **A box department carries lines that are not a handset.** September 2026, house org: **388 of 1,508**
-  box-department lines classify as NOTHING — 381 of them in the department `BYOD` (median **$30.00**, so a
-  kit charge rather than a free phone), the rest services such as `Data Transfer Services` and a support
-  bundle. Banding those would have put the single biggest block of "cheap devices" in the report on lines
-  where no device was sold. They are counted as `unclassified_lines` and **reported**.
+- **A box department carries lines that are not a handset.** September 2026, house org, as first
+  measured: **388 of 1,508** box-department lines classified as NOTHING — 381 of them in the department
+  `BYOD` (median **$30.00**, so a kit charge rather than a free phone), the rest services such as
+  `Data Transfer Services` and a support bundle. Banding those would have put the single biggest block of
+  "cheap devices" in the report on lines where no device was sold. They are counted as
+  `unclassified_lines` and **reported**.
+  - **Re-measured 2026-10-09, after the owner removed `BYOD` from `box_departments`** (it belongs in
+    `box_count_buckets`, where it already was — the `BYOD` tick was the mistaken one recorded in §59.8):
+    **7 of 1,126**, the 381 kit charges gone. **The gate is not thereby redundant and must not be
+    removed.** It is what made the 381 visible as a counted, reported number instead of 381 phantom free
+    phones, and `box_departments` is a config row any tenant can tick again tomorrow — which is exactly
+    the class of defect this gate exists for. Its value is that it degrades to a caveat, not a wrong
+    answer, whoever ticks what.
 - **A negative `ext_price` is a credit against a device, not a cheap device** → `credit_lines` (1 line live).
 - **A line with no product description** is banded but names no model → `unnamed_lines`.
 
@@ -21639,8 +21662,8 @@ so `device_lines` is smaller than `boxes` by design. §D6 pins that banded + unc
 equals every box-department line, so a future gate cannot be added without a counter.
 
 **The bands are money cuts, never product names (RULE TWO).** House cuts `(0.01, 50, 200)` fall where the
-live distribution sits — of the 1,120 classified device lines of September 2026: free **186**, budget
-**640**, mid **263**, premium **31**, median customer price **$29.99**. Overridable per call (`bands=`), and
+live distribution sits — of the 1,118 classified device lines of September 2026 (re-measured 2026-10-09):
+free **186**, budget **640**, mid **262**, premium **31**, median customer price **$29.99**. Overridable per call (`bands=`), and
 stated on every payload with the money range spelled out, so no reader has to guess what "cheap" meant.
 §J11 strips docstrings and comments and then fails the build if a carrier, tenant or handset name drives
 behaviour.
@@ -21701,7 +21724,8 @@ footfall because a store's box count depends on how many people walk in, and nei
   claim**. The second one was added after driving the report on production: a rep clears the box floor on
   boxes that came from the configured activation buckets, so the first live run printed *"50% of the 2
   devices they sold were in the cheap bands"* — and worse, those reps were in the correlation, moving
-  cheap-share vs accessory-per-box from **r = −0.33 to r = −0.13** and making the owner's own claim look
+  cheap-share vs accessory-per-box from **r = −0.33 to r = −0.13** (both on the then-current box basis,
+  before BYOD left `box_departments`) and making the owner's own claim look
   weak off an artefact of the floor. §G3 is the negative control that reproduces it; §F6/§K3 pin the
   withheld share and the silent sentence.
 - `severity` is `critical` only when both signals are low AND one is more than `CRITICAL_SHORTFALL` below
@@ -21710,9 +21734,12 @@ footfall because a store's box count depends on how many people walk in, and nei
 - **No median → nobody flagged** (§F11), and no `exec_cfg` → the port columns are WITHHELD with the reason,
   never shown as 0.00 (§F12, §E6). The §60 lesson: a rule with no basis must accuse nobody.
 
-Live September 2026: 99 store-rep pairs listed, **42 ranked**, 29 of those with a measurable mix, **16
-flagged low on both**; accessory-per-box median **$44.56** against a p10–p90 spread of **$22.34–$68.13**,
-port-share median **0.16** over a 0.00–0.48 range.
+Live September 2026, re-measured 2026-10-09 on the corrected box basis (BYOD out of `box_departments`):
+99 store-rep pairs listed, **39 ranked**, 29 of those with a measurable mix, **11 flagged low on both**
+(8 on accessory alone, 6 on ports alone, 14 clear, 60 carrying no verdict for want of 10 boxes);
+accessory-per-box median **$51.88** against a p10–p90 spread of **$32.10–$68.32**, port-share median
+**0.19** over a 0.00–0.58 range. The medians rose against the earlier read because BYOD boxes now reach
+the box count once, through the bucket, instead of twice.
 
 ### 61.6 The action plan — §59's verdict, borrowed, never re-decided
 
@@ -21723,7 +21750,10 @@ and the sentence all stay in §59, so this screen, the Peer Sales Comparison and
 the same stores by the same rule. This report's own flagged reps are ATTACHED to each store item, so the
 plan names who as well as where. §J12–J13 lock it.
 
-Live September 2026: **13** stores behind their band median on accessory $ per box and **13** on port share.
+Live September 2026 (re-measured 2026-10-09): **13** of 28 stores behind their band median on
+accessory $ per box and **13** on port share, and all 28 store keys match across the two payloads —
+`with_extra_metric` matches on the store value exactly, so a key that did not match would silently
+leave the port half of the plan naming nobody rather than erroring. Verified by overlap, not assumed.
 If the borrow fails the report still answers its own three questions and says the plan is missing — a
 comparison that did not run is not a finding that nobody is lagging.
 
