@@ -11562,6 +11562,155 @@ def device_reimbursement_recon_sync_flags(period: str = "", org_id: str = ORG_ID
             "flags": len(flags), "configured": res["configured"], "totals": res["totals"]}
 
 
+def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
+    """Everything the PURE device-grain layer needs, read ONCE through existing one homes.
+
+    Nothing here decides anything. The classification is §58 `carrier_dollar_class` bound to this
+    org's own declarations — the SAME verdict `coa.build_inputs` books the P&L's reimbursement line
+    on, which is the whole point: a report that explains that line must not classify independently
+    of it. "Which component IS the device-financing side" is likewise not guessed: it is the org's
+    own `carrier_component_lines` routing, i.e. the component it declared books on a line of its own
+    rather than on the generic carrier-commission line. With no routing declared the report says
+    `configured: false` and calls not one dollar unpaid.
+    """
+    pv = _pvariants(period) if period else None
+    cfg, _carrier_rows, asset_rows, _classify, resolve_store, coverage = \
+        _device_reimb_recon_inputs(client, org_id, period)
+    cols = cfg["columns"]
+
+    # ── §58's one home, bound to this org ────────────────────────────────────────────────────────
+    from app.modules.commcalc import carrier_dollar_class as _cdc
+    cdc_cfg = _cdc.load_config(client, org_id)
+    try:
+        cdc_rules = carrier_map.load_rules(client, org_id)
+    except Exception:
+        cdc_rules = []
+    cdc_decl = _cdc.load_declarations(client, org_id)
+    _lines_map = (cdc_cfg or {}).get("component_lines") or {}
+    # The components this org routed OFF the generic carrier-commission line. That routing is the
+    # org's declaration of "this money is not commission", and the P&L's reimbursement line is
+    # exactly its destination — so dereferencing it cannot disagree with the statement being read.
+    _device_components = {str(k).strip().upper() for k, v in _lines_map.items()
+                          if str(v or "").strip() and str(v).strip() != "carrier_comm"}
+    configured = bool(_device_components)
+    _cache: dict = {}
+
+    # A dollar §58 placed on a category the component vocabulary has NO row for is not evidence of a
+    # device payment, however the keyword ladder then booked it. §58 says so itself — it returns the
+    # fallback component with `basis: declared_category_unmapped` precisely so a caller can decline
+    # it — and this layer declines, because its grain is one row per PHONE. Measured live (house org,
+    # Aug-Oct 2026): 'Ramp Up Subsidy' is declared into MDF, which has no component row, and its 14
+    # monthly per-store lump sums ($91,000.00 in the September window, $287,500.00 across the feed)
+    # are correctly identifier-less — there is no phone for a ramp subsidy to name. Counting them as
+    # device money put $91,000.00 in a bucket a reader would take for unattributable device money.
+    # WHICH BASES THOSE ARE IS NOT DECIDED HERE (§66). "Is a component reached on this basis
+    # evidence about the dollar, or a placement of last resort" has ONE home — the module that owns
+    # `basis` — and this layer asks it (`_cdc.component_is_evidence`) rather than keeping its own
+    # tuple of basis names. The POLICY stays here, because it is this layer's and nobody else's: at
+    # a per-PHONE grain an unreliable component is DECLINED. A statement that must book every dollar
+    # answers the same False differently, by naming a column or a line for it, which is why the home
+    # answers only the question.
+    def is_device_dollar(raw_type):
+        key = str(raw_type or "")
+        hit = _cache.get(key)
+        if hit is None:
+            c = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg) or {}
+            hit = _cache[key] = (str(c.get("component") or "").upper() in _device_components
+                                 and _cdc.component_is_evidence(c.get("basis")))
+        return hit
+
+    # The carrier's PER-LINE feed over the REIMBURSEMENT LAG WINDOW. The lag LENGTH and the month
+    # enumeration are §27's (`imei_rebate_report.period_window`), the ONE home for "how long either
+    # side of the event may this money arrive"; this report states no lag rule of its own.
+    #
+    # THE ANCHOR IS THE ONE THING THAT DIFFERS, and it has to, so it is said rather than assumed.
+    # §27 anchors on the ACTIVATION, which the money can only follow, so its window runs FORWARD.
+    # This layer anchors on the distributor's CLAIM DATE, and a claim is made when the distributor
+    # settles — which is routinely AFTER the carrier paid. Measured live (store 652, September
+    # 2026): two devices were paid in August and claimed in September, so a forward-only window
+    # called them never-paid. The window is therefore SYMMETRIC — the same lag either side, both
+    # months enumerated by §27's own function.
+    from app.modules.commcalc.imei_rebate_report import period_window as _lag_window
+    _lag = int(cfg.get("lag_months") or 0)
+    _anchor = _drr.month_key(period) if period else None
+    if _anchor and _lag:
+        _y, _m = int(_anchor[:4]), int(_anchor[5:7]) - _lag
+        _y, _m = _y + (_m - 1) // 12, (_m - 1) % 12 + 1
+        _pw = _lag_window(f"{_y:04d}-{_m:02d}", _lag * 2)
+    else:
+        _pw = _lag_window(period, 0) if period else None
+    _line_periods = sorted({v for p in (_pw or [period]) for v in (_pvariants(p) or [p])}) \
+        if period else None
+
+    # PAGED through the one home (§19.48) — 245,195 live house rows unnarrowed, 21,943 for one month.
+    def _line_q():
+        q = (client.schema("commcalc").table("raw_payment_detail")
+             .select(",".join(sorted({cols["line_store"], cols["line_amount"],
+                                      cols["line_category"], cols["line_device_id"],
+                                      cols["line_date"], cols["line_rep"]})))
+             .eq("org_id", org_id))
+        return q.in_("period", _line_periods) if _line_periods else q
+    line_rows = _feed_read.read_all(_line_q)
+
+    carrier_lines = _drr.carrier_line_side(line_rows, cfg,
+                                           is_device_dollar if configured else None, resolve_store)
+    # The distributor ledger is a whole-table snapshot with no period column, so the month filter is
+    # the reimbursement DATE's month and the pure layer applies it — never a second period rule here.
+    mk = _drr.month_key(period) if period else None
+    if mk:
+        asset_rows = [r for r in asset_rows
+                      if _drr.month_key(r.get(cols["distributor_date"])) == mk]
+    # WHICH store keys two store records claim — read from the ONE identity home through coa's I/O
+    # twin (§64), never derived here. The pure layer withholds the "a different store was paid"
+    # verdict on those, because the two spellings may be one physical store. Measured live (house
+    # org, September 2026): 23 of 135 such devices, worth $6,164.95, touch one of the three.
+    try:
+        from app.modules.account import coa as _coa_amb
+        _amb = _coa_amb.ambiguous_store_keys(client, org_id, resolve_store)
+    except Exception as _ae:
+        print(f"WARN device-line reimbursement: store ambiguity unresolved ({_ae})")
+        _amb = set()
+    res = _drr.device_lines(asset_rows, carrier_lines, cfg, resolve_store, coverage,
+                            configured=configured, ambiguous_stores=_amb)
+    if store:
+        want = (resolve_store(store) if resolve_store else store) or store
+        res["rows"] = [r for r in res["rows"] if r["store"] == want]
+        res["by_store"] = [t for t in res["by_store"] if t["store"] == want]
+        res["totals"] = _drr._device_totals(res["rows"], carrier_lines)
+        res["store"] = want
+    res["period"] = period
+    res["device_components"] = sorted(_device_components)
+    res["coverage"] = coverage
+    res["lag_months"] = cfg.get("lag_months")
+    res["lag_window"] = list(_pw or ([period] if period else []))
+    return res
+
+
+@router.get("/device-line-reimbursement")
+def device_line_reimbursement(period: str = "", store: str = "", org_id: str = ORG_ID):
+    """EQUIPMENT REIMBURSEMENT, COST AND THE IN-STORE DEVICE PAYMENT — per DEVICE, not per store.
+
+    OWNER 2026-10-09: *"create another report for the equipment reimbursement per line , cost per
+    line, and device payment charged in the store to asses which line items dod not get paid"*.
+
+    One row per device the distributor ledger claims a reimbursement for in the period, carrying
+    side by side and never netted: what the distributor claims, what the device cost, what the store
+    charged for it (`null` when the ledger records no price — never a sale for $0.00), and what the
+    carrier's per-line feed actually paid for that device at THIS store and at any OTHER store.
+
+    A device the carrier paid a DIFFERENT store for is its own status, never "not paid" — the
+    distributor books the claim to the store the device was stocked to and the carrier pays the
+    store it was activated at, and telling a store it was never paid for a handset another store was
+    paid for is a false accusation. A device with nothing paid anywhere in a month whose feed
+    arrived SHORT is `not_measured` with the missing days named, for the same reason (§19.52 §D).
+
+    READ-ONLY. BOOKS NOTHING, PAYS NOBODY, WRITES NO FLAG (index §65).
+    """
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    return _device_line_reimb_run(sb(), org_id, period, store)
+
 
 @router.get("/comp-by-component")
 def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_ID):

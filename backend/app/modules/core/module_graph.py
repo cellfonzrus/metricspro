@@ -136,10 +136,15 @@ FACTS: dict[str, dict] = {
     },
     'device_reimbursement_paid_vs_claimed': {
         "question": 'What did the carrier actually PAY for device financing, what does the '
-                    'distributor CLAIM it reimbursed, and may the two be compared at all?',
+                    'distributor CLAIM it reimbursed, and may the two be compared at all? At '
+                    'STORE-MONTH grain from the statement, and at DEVICE grain from the carrier\'s '
+                    'own per-line feed — including WHICH STORE was paid for a device, because the '
+                    'distributor books the claim to the store it was stocked to and the carrier '
+                    'pays the store it was activated at.',
         "homes": ('app/modules/commcalc/device_reimb_recon.py',),
-        "index": ('19.53',),
-        "locks": ('harness_device_reimb_recon.py',),
+        "index": ('19.53', '65'),
+        "locks": ('harness_device_reimb_recon.py',
+                  'harness_device_line_reimbursement.py'),
         # SNAPSHOT — written BY HAND, multi-line, not blessed. `--bless` silently deleted 11 of 12
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.

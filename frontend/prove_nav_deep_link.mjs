@@ -33,6 +33,10 @@ const ck = (label, cond, extra) => {
 }
 
 const DEEP_HREF = '/hr?tab=employees'
+// Every deep-link NAV entry there is. A door added without a line here reddens D2; a door here that
+// does not answer exactly as its own page reddens §B′. The second pair (index §65) is listed in TWO
+// sidebar groups, which is why §B′ walks them rather than §B naming /hr alone.
+const DECLARED = [DEEP_HREF, '/commcalc/device-line-reimbursement?view=transferred']
 const all = R.NAV.flatMap(g => g.items)
 const deep = all.find(it => it.href === DEEP_HREF)
 const page = all.find(it => it.href === '/hr')
@@ -86,7 +90,10 @@ console.log('D. every page entry is untouched by navPath; carrier / vertical gat
 const nonIdentity = all.filter(it => !R.isDeepLinkItem(it) && R.navPath(it.href) !== it.href).map(it => it.href)
 ck('D1 navPath(href) === href for every non-deep NAV entry', nonIdentity.length === 0, nonIdentity)
 const deeps = all.filter(it => R.isDeepLinkItem(it)).map(it => it.href)
-ck('D2 the only deep-link entries are the declared ones', JSON.stringify(deeps) === JSON.stringify([DEEP_HREF]), deeps)
+const uniqDeeps = [...new Set(deeps)].sort()
+ck('D2 the only deep-link entries are the declared ones', JSON.stringify(uniqDeeps) === JSON.stringify([...DECLARED].sort()), deeps)
+ck('D2b every door, in every menu it is listed in, resolves to a real page entry',
+  deeps.length >= DECLARED.length && deeps.every(h => all.some(it => it.href === R.navPath(h) && !R.isDeepLinkItem(it))), deeps)
 const CAPS = [{}, { 'carrier:/hr': false }, { 'carrier:/hr': true }, { 'vertical:/hr': false }]
 const VERTS = [null, { hidden_modules: ['hr'] }, { nav_hidden: ['/hr$'] }, { nav_hidden: ['/payroll'] }]
 let cd = 0, vd = 0
@@ -97,6 +104,40 @@ for (const caps of CAPS) {
 }
 ck('D3 carrierOK / carrierOKActive answer for the door exactly as for /hr', cd === 0, cd)
 ck('D4 verticalOK answers for the door exactly as for /hr', vd === 0, vd)
+
+console.log(`B\u2032. every declared door answers exactly as its own page (${DECLARED.length} doors)`)
+for (const href of DECLARED) {
+  const d = all.find(it => it.href === href)
+  const pg = d ? R.deepLinkPage(d) : null
+  if (!d || !pg) { ck(`B\u20320 ${href}: the door and its page both exist`, false); continue }
+  const mod = pg.module
+  const rs = []
+  for (const scope of SCOPES) for (const on of [true, false]) for (const ov of PAGE_OV) {
+    const p = { modules: { [mod]: on }, scope }
+    if (ov !== undefined) p.pages = { [pg.href]: ov }
+    rs.push(p)
+  }
+  const dd = rs.filter(p => R.canSeeItem(p, d) !== R.canSeeItem(p, pg))
+  ck(`B\u20321 ${href}: canSeeItem(door) === canSeeItem(page) for every role`, dd.length === 0, dd.slice(0, 2))
+  const rr = rs.filter(p => JSON.stringify(R.navBlockReason(p, d)) !== JSON.stringify(R.navBlockReason(p, pg)))
+  ck(`B\u20322 ${href}: navBlockReason(door) === navBlockReason(page) for every role`, rr.length === 0, rr.slice(0, 2))
+  const sn = rs.filter(p => R.canSeeItem(p, d)).length
+  ck(`B\u20323 ${href}: the matrix has both outcomes (not vacuous)`, sn > 0 && sn < rs.length, { sn, of: rs.length })
+  ck(`B\u20324 ${href}: a per-function key on the DOOR opens nothing (ONE gate)`,
+    R.canSeeItem({ modules: { [mod]: false }, scope: 'all', pages: { [href]: true } }, d) === false)
+  ck(`B\u20325 ${href}: the page denied per function closes the door too`,
+    R.canSeeItem({ modules: { [mod]: true }, scope: 'all', pages: { [pg.href]: false } }, d) === false)
+  let c2 = 0, v2 = 0
+  for (const caps of [{}, { [`carrier:${pg.href}`]: false }, { [`carrier:${pg.href}`]: true }, { [`vertical:${pg.href}`]: false }]) {
+    for (const a of ['boost', 'total', '']) if (R.carrierOKActive(href, a, caps) !== R.carrierOKActive(pg.href, a, caps)) c2++
+    if (R.carrierOK(href, [], caps) !== R.carrierOK(pg.href, [], caps)) c2++
+    for (const v of [null, { hidden_modules: [mod] }, { nav_hidden: [`${pg.href}$`] }]) {
+      if (R.verticalOK(d, v, caps) !== R.verticalOK(pg, v, caps)) v2++
+    }
+  }
+  ck(`B\u20326 ${href}: carrier gates answer as the page`, c2 === 0, c2)
+  ck(`B\u20327 ${href}: vertical gates answer as the page`, v2 === 0, v2)
+}
 
 console.log('E. path-based guards never match the door')
 ck('E1 the /hr route keeps its title', R.navLabelForPath('/hr') === page.label, R.navLabelForPath('/hr'))

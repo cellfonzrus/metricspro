@@ -594,6 +594,13 @@ on:
       - "backend/app/modules/commcalc/flag_registry.py"
       - "backend/app/modules/commcalc/pay_data_quality.py"
       - "database/migrations/1063_device_reimb_recon_config.sql"
+      # index §65 — the DEVICE-GRAIN layer of the same one home: equipment reimbursement per device,
+      # the handset's cost, what the store charged for it, who sold it, and WHICH STORE the carrier
+      # actually paid. The lock reads the pure home, the router's wiring, the module graph, the index
+      # and the three frontend registries, so a change to any of them must run it.
+      - "backend/harness_device_line_reimbursement.py"
+      - "backend/app/modules/commcalc/imei_rebate_report.py"
+      - "frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
       - "backend/harness_statement_crosscheck_earned.py"
       - "backend/app/modules/account/analysis.py"
       - "backend/harness_expense_one_path.py"
@@ -920,6 +927,9 @@ jobs:
       - name: Run the device-reimbursement reconciliation lock (the carrier statement and the distributor's reimbursement ledger are the SAME money, so claimed-above-paid is the exception and paid-above-claim is its own bucket, never netted; an absence is reported with its reason and never as a $0.00 difference; and a shortfall against a month whose statement arrived SHORT is withheld as not-measured rather than flagged against the store — owner 2026-10-08, index §19.53)
         working-directory: backend
         run: python3 harness_device_reimb_recon.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the per-device equipment-reimbursement lock (one row per device the distributor claims — its claim, its cost, what the store charged for it and who sold it — against what the carrier's own per-line feed paid AND WHICH STORE it paid; "the carrier paid a different store" is its own verdict and is never reported as "we were never paid", a device unpaid on a short-statement month is withheld as not-measured with the missing days named, a price the ledger does not record is never a sale for $0.00, and the lag window is SYMMETRIC because a distributor claim follows the payment as often as it precedes it — owner 2026-10-09, index §65)
+        working-directory: backend
+        run: python3 harness_device_line_reimbursement.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the instalment-month anchor lock (which month of a multi-month curve a row is in comes from the ROW'S OWN activation date, never the lookback window's edge; both multi-month engines share one home for the arithmetic; an unanchored month, an unresolved schedule, a raised engine and an incomplete ledger write are all REPORTED rather than read as $0.00 — index §19.51)
         working-directory: backend
         run: python3 harness_installment_month_anchor.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

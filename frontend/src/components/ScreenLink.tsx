@@ -57,6 +57,8 @@ export type ScreenKey =
   | 'commission_structure' | 'incentive_plans'
   // the franchise royalty report and its reconciliation (mig 1022, index §37 — landing_identity.MODULE_PAGES / CONSUMERS)
   | 'royalty_report' | 'royalty_recon'
+  // the per-DEVICE equipment reimbursement report (index §65, owner ask 2026-10-09)
+  | 'device_line_reimbursement'
 
 export type ScreenDest = {
   /** Where the reader is sent. May carry a #anchor; the gate uses the path half. */
@@ -183,6 +185,7 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
   imei_recon: { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', blurb: 'IMEI Reconciliation: sold IMEIs against inventory and the carrier feeds', aliases: ['IMEI Reconciliation'] },
   pl_statement: { href: '/accounts/pl', label: 'P&L Statement', blurb: 'P&L Statement: revenue, COGS and expenses per period', aliases: ['P&L Statement'] },
   device_history: { href: '/commcalc/device-history', label: 'Device History', blurb: 'Device History: each unit\'s timeline', aliases: ['Device History'] },
+  device_line_reimbursement: { href: '/commcalc/device-line-reimbursement', label: 'Reimbursement per Line', blurb: 'Reimbursement per Line: per device, what the carrier reimbursed against what it cost and what the store charged', aliases: ['Reimbursement per Line', 'equipment reimbursement per line', 'reimbursement per device', 'rebate per line', 'cost per line', 'which devices did not get paid', 'device payment charged in the store', 'paid to another store'] },
   inventory_recon: { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', blurb: 'Inventory Recon: on-hand value by store', aliases: ['Inventory Recon'] },
   commission_ledger: { href: '/commcalc/commission-ledger', label: 'Commission Ledger', blurb: 'Commission Ledger: the carrier statement in five buckets', aliases: ['Commission Ledger'] },
   carrier_vs_pay: { href: '/commcalc/carrier-vs-pay', label: 'Carrier Earned vs Employee Paid', blurb: 'Carrier Earned vs Employee Paid: per rep, per month', aliases: ['Carrier Earned vs Employee Paid'] },
