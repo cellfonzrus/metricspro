@@ -20335,6 +20335,21 @@ against a deliberately broken copy.
 nav label, so a nav-only PR could previously stale the generated registry with the ratchet silent —
 the §13e lesson a third time.
 
+**A second reader made an existing lock's arming stale, which is the pattern worth naming.**
+`harness_payout_audience_lock.py` §i2 holds the bargain that lets the derived page registry be
+excused from naming the carrier gate: it may render no link, something must read it, and EVERY
+reader must dereference `canAccessPath`. The RULE already derived the readers; two of its arming
+CONTROLS named `components/AskBar.tsx` as THE reader. The moment the sidebar became a second reader,
+un-importing AskBar left the rule green and the control failed — the lock was still correct, its
+proof of being armed was not. The controls now derive the readers the same way the rule does, mutate
+each reader on its own, and mutate them all together for the "nothing reads it" case. 52 passed, 0
+failed. A hand-typed list inside a proof is the same duplicate defect as one inside the code.
+
+**Run the backend harnesses on Python 3.11, as CI does.** On 3.13 `harness_carrier_vocab_guard.py`
+reports three false failures (an implicitly concatenated `HTTPException` string in
+`commcalc/router.py` plus its own N10 control), and is green on 3.11. `/usr/bin/python3.11` exists in
+the container.
+
 **A lesson worth keeping: strip LINE comments before BLOCK comments.** Doing it the other way makes
 a line comment containing `/*` (a path glob, e.g. `// /commcalc/* page …`) read as a block opener
 and blanks everything to the next `*/` — 110 lines of `layout.tsx`, including the very calls under
