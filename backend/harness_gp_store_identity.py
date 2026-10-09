@@ -234,6 +234,58 @@ check("F2 …and the report SAYS it had no resolver instead of implying a placem
 check("F3 …with the unplaced rows naming each spelling it could not join",
       len(R0["store_identity"]["unplaced"]) >= 2)
 
+head("H. THE FOLD MUST NOT LOSE THE OTHER CODE'S EXPENSES")
+
+# REGRESSION, found by re-measuring live before merging (2026-10-09). Folding two store_mapping
+# codes onto one identity is right, but the expense column looked expenses up under a SINGLE code,
+# so whichever code the fold did not pick had its expenses zeroed. Live house org: `1 S 60th street`
+# is claimed by `B-1` (no expense rows) and `B-60TH` ($12,285.35 in August), `1598 Mount Ephraim
+# Ave` by `B-1598` (none) and `B-2778` (the same) — $24,570.70 of August expenses stopped booking,
+# which is this PR's own defect wearing the expense column's hat. The identity carries every
+# claiming code, so the sum is over all of them, once each.
+EXPENSES = [
+    # filed under the SECONDARY code of the relocation pair — the one the fold does not pick
+    {"store_code": "S-2778", "expense_name": "Rent / Lease", "amount": 4500.0},
+    # and under the PRIMARY code of a single-code store, which must be unaffected
+    {"store_code": "S-9", "expense_name": "Rent / Lease", "amount": 1000.0},
+]
+RX = calc_gp_report(SALES, PAY, MI, REP, EXPENSES, [], MAPPING, PERIOD,
+                    comp_rows=COMP, resolve_store_canonical=RESOLVE)
+_rx = {r["store"]: r for r in RX["store_rows"]}
+check("H1 the folded store books the expenses filed under its OTHER code",
+      round(_rx.get("1598 Mount Ephraim Ave", {}).get("exp_total", 0), 2) == 4500.0,
+      str(_rx.get("1598 Mount Ephraim Ave", {}).get("exp_total")))
+check("H2 a single-code store is untouched",
+      round(_rx.get("9 Elm St", {}).get("exp_total", 0), 2) == 1000.0,
+      str(_rx.get("9 Elm St", {}).get("exp_total")))
+check("H3 nothing is counted twice: the report's expense total equals the fixtures' sum",
+      round(RX["totals"]["exp_total"], 2) == 5500.0, str(RX["totals"]["exp_total"]))
+check("H4 the fold did not raise a second row to carry them",
+      len([k for k in _rx if not _rx[k].get("store_unplaced")]) == 3, sorted(_rx))
+
+head("G. MIGRATION 1065 IS SAFE IN EITHER ORDER — a BARE TOKEN still resolves")
+
+# The PR claims mig 1065 may be merged before it is applied. That rests on exactly one fact: the
+# mig-274 rollup, UNAPPLIED, hands the commission-leg endpoints a bare leading token as `store_num`
+# (`'11636'`), and the chain must place that token on the canonical address like any other
+# spelling. Proven here rather than asserted in the PR body.
+_resolve = sid.build_store_resolver(MAPPING, ALIASES)
+check("G1 pre-1065 (SQL still splits): the bare token resolves to the canonical address",
+      sid.store_key(_resolve, "11636") == "11636 Springfield Blvd",
+      sid.store_key(_resolve, "11636"))
+check("G2 post-1065 (SQL returns the raw address): the carrier's own spelling resolves to the "
+      "SAME key, so the two orders agree",
+      sid.store_key(_resolve, "116-36 Springfield Blvd Cambria Heights, NY 11411")
+      == sid.store_key(_resolve, "11636"))
+check("G3 an AMBIGUOUS bare token resolves to nothing rather than to a winner",
+      sid.store_key(_resolve, "1598") == "1598 Mount Ephraim Ave"
+      and sid.store_key(_resolve, "99999") == "99999",
+      (sid.store_key(_resolve, "1598"), sid.store_key(_resolve, "99999")))
+check("G4 a bare token is never resolved by the ALIAS number ahead of a declared ADDRESS number "
+      "(step 6 keeps precedence over step 7)",
+      sid.store_key(_resolve, "2778") == "1598 Mount Ephraim Ave",
+      sid.store_key(_resolve, "2778"))
+
 print()
 print("=" * 78)
 print(f"RESULT: {P} passed, {F} failed")

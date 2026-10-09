@@ -51,6 +51,12 @@ _MIGRATIONS = os.path.normpath(os.path.join(_HERE, "..", "database", "migrations
 # pinned, because a reviewer cannot tell from the regex and the next edit might make it one.
 _TOKEN_RE = re.compile(
     r"""split\(\s*['"] ['"]\s*\)\s*\[\s*0\s*\]"""      # .split(' ')[0] / .split(" ")[0]
+    # EVERY spelling of "first whitespace-separated token", not just the one the defect happened to
+    # use. `.split()[0]` is the same fact in different clothes, and a future address site written
+    # that way would have walked straight past this guard (2026-10-09, merge review).
+    r"""|split\(\s*\)\s*\[\s*0\s*\]"""                  # .split()[0]
+    r"""|split\(\s*['"] ['"]\s*,\s*1\s*\)\s*\[\s*0\s*\]"""   # .split(' ', 1)[0]
+    r"""|partition\(\s*['"] ['"]\s*\)\s*\[\s*0\s*\]"""         # .partition(' ')[0]
     r"""|def\s+_?street_num\b|def\s+street_number\b|def\s+_?lead_num(?:ber|_key)?\b""")
 
 # {relative path: {enclosing def: classification}}
@@ -77,7 +83,16 @@ PINNED = {
     "modules/commcalc/router.py": {
         "commission_plan_assignment_audit": "DIAGNOSTIC",   # mirrors _store_trace on purpose
         "_norm_report_date": "NOT-AN-ADDRESS",              # drops the time part of a timestamp
+        "_period_ym": "NOT-AN-ADDRESS",                     # "October 2026" -> the month word
+        "_period_bounds": "NOT-AN-ADDRESS",                 # same, for the month's date range
+        "_mi_resolve_numbers": "NOT-AN-ADDRESS",            # first word of a SOURCE label
     },
+    # Person-NAME matching, not a store. Same shape, different fact — pinned so the widened regex
+    # has a reviewed classification for each and a NEW address site cannot hide among them.
+    "modules/hr/letters.py": {"_common_merge": "NOT-AN-ADDRESS"},        # employee first name
+    "modules/closing/router.py": {"_name_match": "NOT-AN-ADDRESS"},
+    "modules/closing/ops_chargebacks.py": {"_name_match": "NOT-AN-ADDRESS"},
+    "modules/closing/closer_resolution.py": {"name_match": "NOT-AN-ADDRESS"},
     "modules/commcalc/pay_simulator.py": {
         "resolve_self": "MARKET-FALLBACK", "_rep_context": "MARKET-FALLBACK",
     },

@@ -6756,7 +6756,7 @@ rendering the resolved name.
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
-| **Which STORE does this money belong to?** — asked by the GP report, the commission-leg trend/breakout, the residual report, flags 7/8, the closing store-day match, the P&L's store grain and the MA account index. Answered by the org's OWN declared spellings; AMBIGUITY RESOLVES TO NOTHING and unplaceable money is reported on its own row, never dropped and never guessed | `commcalc.store_mapping` × `commcalc.store_aliases` (config rows; a new spelling is ONE alias row, never code) | ONE home `account/store_identity.py` (`build_store_resolver` / `store_key` / `store_identity_index` / `ambiguous_identities`) behind the I/O wrapper `coa.store_resolver`; lock `harness_store_identity_lock.py` (502 checks), proof `harness_gp_store_identity.py` (42) — §62. Measured live Jul–Oct 2026: the token join it replaced was dropping **$106,400.37** of house revenue out of the Gross Profit report |
+| **Which STORE does this money belong to?** — asked by the GP report, the commission-leg trend/breakout, the residual report, flags 7/8, the closing store-day match, the P&L's store grain and the MA account index. Answered by the org's OWN declared spellings; AMBIGUITY RESOLVES TO NOTHING and unplaceable money is reported on its own row, never dropped and never guessed | `commcalc.store_mapping` × `commcalc.store_aliases` (config rows; a new spelling is ONE alias row, never code) | ONE home `account/store_identity.py` (`build_store_resolver` / `store_key` / `store_identity_index` / `ambiguous_identities`) behind the I/O wrapper `coa.store_resolver`; lock `harness_store_identity_lock.py` (523 checks), proof `harness_gp_store_identity.py` (50) — §62. Measured live Jul–Oct 2026: the token join it replaced was dropping **$106,400.37** of house revenue out of the Gross Profit report |
 | **Is this carrier dollar a commission, a spiff, a residual or a reimbursement — and is that the ORG'S OWN declaration or a guess the platform made?** The basis is part of every answer: `declared` / `inferred_prior_year_twin` / `keyword_rule` / `declared_category_unmapped` / `unresolved`, each with its reason in words. An inference never passes as a declaration | `commcalc.payment_categories` (the declaration) × `commcalc.carrier_category_map` (the fallback ladder) × `commission_org_config.carrier_class_*` | ONE home `commcalc/carrier_dollar_class.py` (`classify` / `tally` / `component_line` for the P&L line, `gp_column` / `gp_column_of_declared_category` for the GROSS-PROFIT column), dereferenced by `account/coa.py`, `commcalc/gp_report.py` and `commcalc/router.py`; locks `harness_carrier_dollar_class.py` (88 checks, the owner's 103 Fulton figures armed as a negative control) and `harness_gp_carrier_class_dereference.py` (§58.7, the GP dereference); module-graph fact `carrier_dollar_component` — §58. Measured live Mar–Oct 2026: **$2,784,846.76** booked as commission against the org's own declaration, $1,078,862.83 of the reclassification resting on an inference |
 | **Did the carrier actually pay what the distributor claims it paid?** One payment, two sides: the carrier statement is the money, `asset_ledger.reimbursement` is a claim about it. The claim books NO revenue under `device_reimb_source='carrier_paid'` and is HELD, per store, with the difference named | `commcalc.raw_comp_report` (REIMBURSEMENT component) vs `commcalc.asset_ledger.reimbursement` | `account/coa.py` → `L["_distributor_reimb_claim"]` (`claim_total`, `carrier_paid_total`, `difference`, `status`). 103 Fulton Sept 2026: claimed $7,999.93 vs paid $7,583.96, gap $415.97. Reconciling the gap and flagging it is a SEPARATE mechanism — §58.3 |
 | **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |
@@ -21709,7 +21709,7 @@ an identity, in three distinct ways, all three measured live on 2026-10-09 (hous
    the NULL, so that store's residual could not be found: **$8,974.73** (Aug) + **$11,832.01** (Sep)
    of MI/ATU, the figure project memory recorded as D5.
 
-### 59.1 THE ONE HOME
+### 62.1 THE ONE HOME
 
 **`backend/app/modules/account/store_identity.py`** — PURE, import-free, no I/O:
 
@@ -21730,7 +21730,7 @@ string in `raw_sales` / `raw_payment_detail` / `raw_comp_report` / `rep_commissi
 spelling above, which is the reported defect — and **0 divergences in 49 strings** across the other
 three tenants. So nothing else anywhere moved, in any report that keys a store through the resolver.
 
-### 59.2 CALLERS — fixed, and what each one was
+### 62.2 CALLERS — fixed, and what each one was
 
 | Caller | What it did | Now |
 |---|---|---|
@@ -21754,7 +21754,7 @@ canonical resolver owns market, and `harness_market_resolution_guard.py` polices
 SHOW the token and whether it hit). `account/recon._rep_to_store` is a different question (which rep
 belongs to which store, project-memory D4) and is untouched.
 
-### 59.3 MONEY NOTHING CAN PLACE IS STATED, NEVER DROPPED
+### 62.3 MONEY NOTHING CAN PLACE IS STATED, NEVER DROPPED
 
 The chain refuses to guess, so the GP report now emits an explicit row per unresolvable spelling —
 the money, the spelling the feed sent, and `store_unplaced_why` naming the one-config-row cure
@@ -21763,40 +21763,78 @@ the money, the spelling the feed sent, and `store_unplaced_why` naming the one-c
 `unplaced_rep_pay`, and `ambiguous_identities`. Live house org Jul–Oct 2026: **zero** unplaced rows
 — every spelling the four feeds carry now resolves.
 
-### 59.4 THE MONEY THAT MOVED (house org, measured before/after on the real engine + live rows)
+### 62.4 THE MONEY THAT MOVED (house org, measured before/after on the real engine + live rows)
 
 Store rows only; nothing is recomputed, no payout is written, and **no company total changes** — this
 money was already in the feeds, it was being dropped on the way to a store row.
 
-| Month 2026 | Payment detail onto stores | Comp report | MI + ATU (the door) | `total_rev` before → after | Δ |
+RE-MEASURED 2026-10-09 at merge time, BOTH SIDES in the same minute: `_compute_gp` run for the
+house org on an `origin/main` worktree (before) and on this branch (after), same live rows, read
+only. October is an OPEN month, so an earlier measurement's baselines have already grown — the
+DELTAS below are the invariant, and they reproduce the first measurement's to the cent.
+
+| Month 2026 | `comm` | `comp_comm` | MI + ATU (the door) | `total_rev` before → after | Δ |
 |---|---|---|---|---|---|
-| Jul | +17,287.01 | +17,287.01 | +4,210.22 | 901,143.33 → 922,640.56 | **+21,497.23** |
-| Aug | +16,729.12 | +16,729.12 | +8,974.73 | 858,239.35 → 883,943.20 | **+25,703.85** |
-| Sep | +25,169.74 | +25,169.74 | +11,832.01 | 595,492.13 → 632,493.88 | **+37,001.75** |
-| Oct (to 10-09) | +17,154.59 | +9,305.28 | +5,042.95 | 190,294.76 → 212,492.30 | **+22,197.54** |
+| Jul | +2,228.62 | +2,313.62 | +4,210.22 | 924,417.58 → 945,914.81 | **+21,497.23** |
+| Aug | +2,286.70 | +2,384.20 | +8,974.73 | 876,899.92 → 902,603.77 | **+25,703.85** |
+| Sep | +5,557.38 | +5,762.38 | +11,832.01 | 595,492.13 → 632,493.88 | **+37,001.75** |
+| Oct (to 10-09) | +2,177.80 | +1,827.45 | +5,042.95 | 190,294.76 → 212,492.30 | **+22,197.54** |
 
 Four-month total **+$106,400.37** of revenue now attributed to the stores that earned it (Oct also
 moves +$178.75 of rep pay onto a store row). Sep/Oct gain a 31st store row because the token dedupe
-had been hiding a mapped store. The MI/ATU figures for Aug and Sep match project memory's D5 to the
-cent, independently.
+had been hiding a mapped store. `comm` / `comp_comm` move by less than the whole of the recovered
+store's carrier income because §58's classification spreads it across the carrier columns
+(`comp_reimb`, `unmapped`, `mdf`); `total_rev` is the sum that matters and it is the Δ column.
 
-### 59.5 THE LOCK
+**AND THE EXPENSE COLUMN — this PR's own defect, found by re-measuring.** Folding two store codes
+onto one identity is right, but `exp_total` looked expenses up under a SINGLE code, so whichever
+code the fold did not pick had its expenses zeroed. Live: `1 S 60th street` is claimed by `B-1`
+(no expense rows) and `B-60TH`, `1598 Mount Ephraim Ave` by `B-1598` (none) and `B-2778` — August
+would have lost **$24,570.70** of booked expenses. `store_identity_index` already carries every
+claiming code, so the sum is over that set, once each (code sets are disjoint by construction, so
+nothing can double-count). The pairing the commission-suppression plan uses stays on the PRIMARY
+code: widening it would change which commission expense stops booking, which is the owner's call.
 
-**`backend/harness_store_identity_lock.py` — 502 checks.** It fails the build when (A) a NEW
+With that fixed, the expense column moves ONLY where the old token join **double-booked** — it
+raised a second row for the POS spelling, which re-booked the same code:
+
+| Month 2026 | `exp_total` before → after | Δ | why |
+|---|---|---|---|
+| Jul | 306,537.66 → 302,037.66 | **−4,500.00** | `B-2778`'s $4,500 was booked twice |
+| Aug | 382,679.94 → 370,394.59 | **−12,285.35** | `B-2778`'s $12,285.35 was booked twice |
+| Sep | 381,345.94 → 381,345.94 | 0.00 | the duplicate row did not exist this month |
+| Oct | 381,345.94 → 381,345.94 | 0.00 | — |
+
+August and September `exp_total` after the fix equal the org's CONFIGURED `store_expenses` total for
+the month to the cent (370,394.59 / 381,345.94), which is the independent check that nothing is lost
+and nothing is doubled. July does not, and that is a DATA finding, not a code one: July's expenses
+are also filed under six codes no house store row claims (`T-7812`, `T-957`, `T-531`, `T-902`,
+`T21880`, `T3560` — $51,350.00), so they never book. SURFACED for the owner; unchanged by this PR.
+
+### 62.5 THE LOCK
+
+**`backend/harness_store_identity_lock.py` — 523 checks.** It fails the build when (A) a NEW
 leading-token site appears anywhere in `backend/app` — every existing one is pinned with a reviewed
 classification, and a STALE pin fails too so it cannot cover a future site; (B) a money path stops
 dereferencing the home (`gp_report`, `flags`, `router`, `residual_subs`, `unfinished_day`, `coa`,
 `ma_store_pnl`), or `gp_report` grows `street_num` / `store_by_num` again; (C) the GP resolver is
 GATED again; (D) a second copy of the chain appears (`addr_by_num` + `alias_addr` outside the home);
 (E) a migration teaches SQL to decide identity — mig 274 must stay superseded by a definition that
-carries the raw address. Verified RED against the pre-fix tree (10 token sites unpinned, 2 callers
-not dereferencing, the SQL check open). Proof: **`backend/harness_gp_store_identity.py` — 42
-checks**, DB-free, both live regressions as fixtures, the door-survival fold, the unplaced-row
-honesty, and §E as a NEGATIVE CONTROL that reproduces the old join's loss ($26,179.09 of the
-fixtures). Both wired into `.github/workflows/carrier-vocab-guard.yml` (paths filter + two steps;
-**jobs 23 → 23, steps 193 → 195** — nothing was removed). The `store_identity` **module-graph fact**
-(§50) is registered with all six callers, so the graph guard (875 checks) fails if one drops the
-import or keeps a dead one. Three existing coa.py NO-MOVEMENT pins (`harness_device_payable` §I7,
+carries the raw address. It recognises EVERY spelling of "first whitespace token" — `.split(' ')[0]`,
+`.split()[0]`, `.split(' ', 1)[0]`, `.partition(' ')[0]` — because an address site written the second
+way would otherwise have walked past the guard; 30 sites are pinned, the seven person-name / month-
+word ones as NOT-AN-ADDRESS. Verified RED three ways on the merged tree: un-wiring `flags.py` from
+the home, adding one unpinned token site to `gp_report.py`, and widening the regex before the pins
+were written (10 unpinned sites). Proof: **`backend/harness_gp_store_identity.py` — 50 checks**,
+DB-free, both live regressions as fixtures, the door-survival fold, the unplaced-row honesty, §E as a
+NEGATIVE CONTROL that reproduces the old join's loss ($26,179.09 of the fixtures), and §G proving the
+mig-1065 claim — a BARE token (what the UNAPPLIED mig-274 rollup hands the leg endpoints) resolves to
+the same canonical key as the carrier's own spelling, so the two migration orders agree — and §H the
+expense-fold regression of §62.4, verified RED against the single-code lookup it replaced. Both wired
+into `.github/workflows/carrier-vocab-guard.yml` (paths filter + two steps; **jobs 27 → 27, steps
+151 → 153** — nothing was removed). The `store_identity` **module-graph fact** (§50) is registered
+with all six callers, so the graph guard (935 checks) fails if one drops the import or keeps a dead
+one. Three existing coa.py NO-MOVEMENT pins (`harness_device_payable` §I7,
 `harness_device_purchases` §B2, `harness_finance_sync_in_async`) are RE-BASELINED, not weakened:
 they sanction exactly `store_resolver` / `_squash_key` / `_lead_num_key` changing and the two nested
 chain helpers being REMOVED (the only removal that file has ever sanctioned — it is a move, and

@@ -558,12 +558,34 @@ def calc_gp_report(
     # It was derived inline in the row loop below; the commission-suppression pairing needs the SAME
     # key BEFORE the loop (to pair each store's commission expense with its rep pay), so it is
     # derived once here and read in both places rather than computed twice and allowed to drift.
+    #
+    # ONE PHYSICAL STORE COLLECTS EVERY CODE'S EXPENSES, EXACTLY ONCE (§62, measured 2026-10-09).
+    # Folding two store_mapping codes onto one identity made the single-code lookup below LOSE the
+    # expenses filed under the code the fold did not pick — the same defect this PR fixes on the
+    # revenue side, showing up in the expense column: live house org, `1 S 60th street` is claimed
+    # by `B-1` (no expenses) and `B-60TH` ($4,500 July, $12,285.35 August and September), and
+    # `1598 Mount Ephraim Ave` by `B-1598` (none) and `B-2778` (the same amounts). A single-winner
+    # pick zeroed both stores' expenses. `store_identity_index` already carries EVERY claiming code
+    # in `codes`, so the sum is over that set — and because the index assigns each code to exactly
+    # one canonical address, the code sets are disjoint and nothing can be counted twice. The token
+    # join this replaced had the opposite failure: it also raised a SECOND row for the POS spelling,
+    # which re-booked one of those codes, so August's $12,285.35 was booked three times.
+    exp_codes_by_store = {}
     exp_code_by_store = {}
     for store in by_store:
         _sm = store_identity.get(store, {})
-        exp_code_by_store[store] = (
-            str(_sm.get('store_code') or '').strip()
-            or (str(resolve_store_code(store) or '').strip() if resolve_store_code else ''))
+        _codes = [str(c or '').strip() for c in (_sm.get('codes') or [])]
+        _primary = str(_sm.get('store_code') or '').strip()
+        if _primary:
+            _codes.insert(0, _primary)
+        if not any(_codes) and resolve_store_code:
+            # A tenant with no commcalc.store_mapping: the universal resolver is the only key.
+            _codes = [str(resolve_store_code(store) or '').strip()]
+        exp_codes_by_store[store] = tuple(c for c in dict.fromkeys(_codes) if c)
+        # The PRIMARY key, unchanged, and still the only one the commission-suppression pairing
+        # below uses: widening that pairing would change WHICH commission expense stops booking,
+        # i.e. computed money, which is the owner's call and not this PR's subject.
+        exp_code_by_store[store] = (exp_codes_by_store[store] or ('',))[0]
 
     # ── Commission double-book suppression (owner decision 2026-09-08) ────────────────────────────
     # `rep_pay` (commcalc.rep_commissions) is the authoritative route and is NOT touched. A
@@ -697,10 +719,12 @@ def calc_gp_report(
         # string to the storeops store_code so the tenant's configured expenses attach. This changes ONLY
         # exp_total for rows that had no store_code; the row's displayed store_code/market are untouched.
         exp_code   = exp_code_by_store.get(store, '')
+        exp_codes  = exp_codes_by_store.get(store) or ((exp_code,) if exp_code else ())
         # Commission booked on BOTH routes: the expense-side copy stops booking (owner 2026-09-08).
         # Subtracted rather than filtered out of `exp_by_code` so the amount removed stays visible
         # per store in `labour_commission_suppressed` — never rendered as a measured $0.00.
-        exp_total  = exp_by_code.get(exp_code, 0) - _supp_by_key.get(exp_code, 0.0)
+        exp_total  = (sum(exp_by_code.get(_c, 0) for _c in exp_codes)
+                      - _supp_by_key.get(exp_code, 0.0))
         net_phone_cost = phone_sales + reimb  # cash from customer + Boost reimbursement
 
         net_profit     = total_rev - rep_pay - exp_total - net_phone_cost
