@@ -6213,6 +6213,7 @@ rendering the resolved name.
 | `commcalc.commission_org_config.device_reimb_recon_config` (mig `1063`, **applied by the owner 2026-10-08**, `carrier_sources` still EMPTY) — the per-org declaration for the ePay-paid vs distributor-claimed device-reimbursement reconciliation: WHICH classified carrier dollars are the device-financing side (`carrier_sources`, seeded EMPTY on purpose — an undeclared org measures nothing and flags nobody), the distributor category/status spellings, tolerance, severity thresholds, evidence cap and column names. RULE TWO: no carrier, tenant, product or quarter name exists in code | an owner / admin (the migration's own commented UPDATE) | ONE reader `commcalc/router._device_reimb_recon_inputs` → `device_reimb_recon.config_from_rows` (the house row behind the tenant row); degrades to `CODE_DEFAULT` when the column is absent — §19.53 |
 | `commcalc.flags` · `flag_type='DEVICE_REIMB_CLAIMED_NOT_PAID'` / `'DEVICE_REIMB_NOT_MEASURED'` | `commcalc/router.device_reimbursement_recon_sync_flags` → `device_reimb_recon.recon_flags`, written through the ADDITIVE `flag_persist.sync` (mig 287) at **store_period** grain, keyed `source_ref = '<YYYY-MM>|<store>'` so a re-read refreshes the one row instead of accumulating | the existing all-flags board (`GET /commcalc/flags/{period}`, the "All Flags" tile, mig `1002`) and the Management Watchdog areas `distributor` / `feed`. Registered in `flag_registry` — §19.53 |
 | `commcalc.flags` · `flag_type='sales_basis_not_loaded'` | `sales_recon.sync_recon_flags` via `_persist` — **grain `period`** (the first type at that grain), keyed `source_ref = plabel` so re-running replaces the one row instead of accumulating, and retired by the same additive `flag_persist` path the per-transaction findings use | ONE condition for a closed month whose month-end archive never arrived — it REPLACED 11,233 September + 3,001 October per-transaction criticals. Registered in `flag_registry`, severity HIGH — §19.52 |
+| `commcalc.month_focus` (mig `1065`) — **the month's DECLARED focus**: the headline, the pay type named as driving its spiffs, the temporary spiffs on the table (status `proposed`/`approved`/`live`/`ended`) and the weekly check-ins done. One row per (org, period), `declaration jsonb`. A DECLARATION, never a pay table — nothing is paid from it, and `commcalc.payout_config` stays the only money. Plus `commcalc.commission_org_config.focus_declaration_days` / `focus_checkin_weekday` — the two policy knobs, NULL ⇒ the house defaults (7 days, Monday) | `PUT /commcalc/month-focus/{period}` and `POST …/checkin` — the only writers; the shape is `month_focus.normalise_declaration`'s | `router._month_focus_payload` → `month_focus.outstanding` / `spiff_reconciliation` / `plays`, read by the page, the platform banner and the login attention provider `commcalc_month_focus` — §62 |
 | `commcalc.payment_categories` — **the org's OWN declaration** of what each carrier payment type IS. Read through the §57 one home `commcalc/payment_category.load_map`, whose own lock (`harness_payment_category_home_lock.py`) owns the EXACT reader inventory. §58's component ruling dereferences it and keeps no copy of the read or the folding rule | the setup/CRUD screens in `commcalc/router.py` | `carrier_dollar_class.load_declarations` (itself §57's `payment_category.load_map`, dereferenced) ← `account/coa.py` (the P&L carrier block), `commcalc/gp_report.py` + `router._compute_gp` (the GROSS PROFIT columns, §58.7) and `commcalc/router.py::_recon_payment_bucketer`; `pay_data_quality.reconcile_pay_feed` is HANDED the map (§19.48, §57, §58) |
 | `commcalc.carrier_category_map` — the platform's generic keyword LADDER. Since §58 it is the FALLBACK for an undeclared payment type only, never an override of the org's declaration | carrier onboarding (rows, not code) | `carrier_map.load_rules` / `classify`, reached only through `carrier_dollar_class.classify` (§58) |
 | `commcalc.commission_org_config.carrier_class_*` / `carrier_component_lines` / `pl_device_reimb_source` (mig `1062`, APPLIED 2026-10-08) / `carrier_gp_component_columns` + `carrier_gp_category_columns` (mig `1064`, **NOT applied** — which GROSS-PROFIT column each component and each GP-only declared category lands in, §58.7; the house defaults reproduce today's columns, so an unapplied 1064 is byte-identical) — per-org classification and routing: whether the declaration wins, the category→component map, the period-rename pattern and lookback, which P&L line each component books to, and whether the device-financing reimbursement line carries what the carrier PAID or what the distributor CLAIMED | the owner (config rows) | `carrier_dollar_class.load_config`, adaptive — a missing column degrades to the house default and is REPORTED (§58.2) |
@@ -6449,6 +6450,7 @@ rendering the resolved name.
 - `GET /commcalc/peer-comparison?period=&metric=&bands=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7).
 - `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
+- `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§62).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -6750,6 +6752,7 @@ rendering the resolved name.
 | **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
 | **What is ONE carrier pay type worth to a store — to its commission payout revenue and to its net profit — and which stores are not earning it on the sales they make?** The share is of the P&L line the dollars actually book to (a “spiff” the org declares a reimbursement is NOT commission revenue, and the report says so); the lift is `spiff ÷ (net_income − spiff)` and is withheld with its reason when no positive base survives; the rate is paid units per 100 boxes, flagged as a different cohort when the pay type names a month rung | `commcalc.raw_comp_report` (`compensation_type`, `payment_amount`, `quantity`) classified through `commcalc/carrier_dollar_class` × the stored `commcalc.account_statements` per-store P&L × `router._sales_cell_agg`’s `box_count` / `_billpay_exec` | ONE home `commcalc/spiff_impact.py` (`pay_type_options` / `default_selection` / `store_money` / `profit_effect` / `units_per_100_boxes` / `caveats` / `build`) → `GET /commcalc/spiff-impact`; reads NO sale line and classifies NO dollar itself (both AST-locked); module-graph fact `spiff_store_impact`; lock `harness_spiff_impact.py` — §60. Live September 2026 (house org): $110,780.14 to `carrier_comm` and $373,211.61 to `vip_reimb`, both tying to the cent to the 31 stored per-store snapshots; **77% of the statement is not commission**, only 3 of 49 pay types carry the SPIFF component, and 13 of 28 stores have no positive profit base for a lift |
 | **Given ONE company accessory sales goal, what target should each store carry?** Weighted by the store's own accessories-per-box over the last two months x the boxes it is projected to sell; a store that sold boxes and attached nothing is weighted at the COMPANY rate and flagged, never given a $0 target; an unselected store's target is RESERVED out of the goal rather than assumed away; the assignments foot to the goal by largest remainder | `commcalc.daily_sales_feed`/`raw_sales` via `router._fetch_actuals` (`acc_gp` = accessory revenue + device set-up fee; `box_count`) x `router._targets_trending_by_code` (the projection) x `commcalc.targets.accessories_monthly` (mig `006`, the target in force — read AND written) | ONE home `commcalc/accessory_target_plan.py` (`company_goal` / `basis_amounts` / `company_rate` / `capacity_row` / `allocate` / `plan` / `assignment_payload`) → `GET /commcalc/accessory-target-plan/{period}` + its gated `/assign`; reads NO sale line and derives NO projection of its own (both AST-locked); module-graph fact `accessory_target_allocation`; lock `harness_accessory_target_plan.py` — §61. No new table: the suggestion is written into mig `006`'s own column, the row §5's Accessory Sales Targets tracker reads |
+| **What did management declare for this month, and what does it still owe this week?** The focus in a manager's own words, the pay type named as driving the month's spiffs, the temporary spiffs on the table with a status, and the weekly check-ins done; the OUTSTANDING list is COMPUTED from the row + today + live measurements, so an item cannot outlive its cause, and an unmeasured count raises nothing rather than reading as a zero | `commcalc.month_focus` (mig `1065`, the declaration) x `commcalc.targets` (mig `006`, SAVED rows only — a seeded carry-forward is not an assigned target) x `commcalc.payout_config.custom_spiffs` (§6, READ ONLY — the money) x §59's bands / `lagging()` x §60's pay-type options and per-store units | ONE home `commcalc/month_focus.py` (`outstanding` / `spiff_reconciliation` / `plays` / `confirm_checkin` / `may_declare`) → `GET`/`PUT` `/commcalc/month-focus/{period}` + `/checkin`; TWO surfaces over the one due list (the login attention item and the platform banner), neither recomputing it; opens no client, reads no feed and sends on no channel (all AST-locked); module-graph fact `month_focus_declaration`; lock `harness_month_focus.py` — §62. Nothing is paid from the row: a declared spiff is an intent with a status, and the reconciliation reports declared-against-live in BOTH directions |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
@@ -21674,3 +21677,158 @@ so narrowing the dropdown cannot move the company's own goal.
   §I is the un-wire lock: the engine may not read a sale line, re-derive a projection, open a client,
   name a carrier/tenant/product, or open a second home for a store's target; and the endpoint must be
   shown to DEREFERENCE each home rather than re-deriving it.
+
+---
+
+## 62. THIS MONTH'S FOCUS — what management DECLARED, and the Monday reminder that clears itself (owner ask 2026-10-09)
+
+Owner, verbatim: *"in the beginning of the month Market manager or above when they log in should define
+the focus for the month -, update which initiative is driving spiffs that month and assign targets to
+the store< the notification will come every week on Monday on the platform to update any new commisison
+changes or spiff on any new products, assign targets to stores, offer temparoray spiff, this module needs
+a creative busines smanager to dessign something out of the box to drive sales offer spiff keeping the
+current oppprtunities in mind"*
+
+### 62.1 A DECLARATION, NOT A SECOND PAY TABLE
+
+One row per `(org, period)` in `commcalc.month_focus` (mig `1065`) holds what the month is about: the
+focus in a manager's own words, which carrier pay type is meant to be driving its spiffs, the temporary
+spiffs on the table, a note on targets, and the weekly check-ins done.
+
+**NOTHING IS PAID FROM IT.** A temporary spiff here carries a STATUS — `proposed` / `approved` / `live`
+/ `ended` — and is an INTENT. The money is `commcalc.payout_config.custom_spiffs` (§6), which the
+commission engine reads and this subsystem only ever READS. The two sides can disagree, and saying so
+is the point: `month_focus.spiff_reconciliation` reports it **in both directions** —
+
+- `declared_not_live` — an APPROVED spiff the pay config does not carry. **Nobody is being paid it**;
+  the month's incentive exists on this screen only. Severity `error`.
+- `live_not_declared` — a spiff the pay config IS paying that this month's declaration never named.
+  Money moving with no stated reason, and the direction nobody notices.
+- A `proposed` spiff raises **neither**: it is on the table, not in the money. That distinction is why
+  the statuses exist.
+
+### 62.2 THE DUE LIST IS COMPUTED, NEVER STORED — so the reminder cannot outlive its cause
+
+There is **no reminder table, no send log, no mailbox and no pg_cron job** in this subsystem. The owner
+asked for the nudge "on the platform", so `month_focus.outstanding(declaration, today, …)` is a pure
+function of the row, the date and live measurements, and every item disappears the moment its cause is
+fixed. That is the attention-provider contract, taken literally: *"a notification MUST clear when the
+check says everything is OK"* (owner 2026-07-26, §19.20).
+
+The seven items, each landing where it can be fixed:
+
+| item | fires when | clears at |
+|---|---|---|
+| `focus_undeclared` | no headline; `error` past the declaration window | `/commcalc/month-focus` |
+| `initiative_unnamed` | a focus with no pay type named as driving it | `/commcalc/month-focus` |
+| `spiff_unpriced` | a declared spiff with no rate — it cannot be costed | `/commcalc/month-focus` |
+| `checkin_due` | the current check-in day is not confirmed | `/commcalc/month-focus` |
+| `targets_unassigned` | stores with no SAVED target row | `/commcalc/targets` (§5) |
+| `spiff_declared_not_live` | `error` — an approved spiff absent from the pay config | `/commcalc/commission-settings` |
+| `spiff_live_not_declared` | a paid spiff this month never named | `/commcalc/month-focus` |
+
+**A SAVED row is the test for a target, not what the screen displays.** `GET /targets/{period}` SEEDS a
+store with no row from the prior month (§5), so a store can show a figure nobody assigned — and
+"carried forward by the system" is not "a manager set a goal".
+
+**`None` IS NEVER ZERO.** When the target count cannot be read, NO target item is raised at all: "no
+store has a target" and "I could not count the targets" look identical on a screen and only one of them
+is a management failure. Same posture for a measured signal that did not run — it is REPORTED in
+`signal_meta`, because "no store is behind its peers" and "the comparison did not run" are not the same
+news (§59.7's rule, kept).
+
+### 62.3 TWO SURFACES OVER ONE DUE LIST (and why the login popup was not enough)
+
+- **The login popup** — attention provider `commcalc_month_focus` in `commcalc/import_audit.py`
+  (group `config`, `cheap`, `plays=0` so a login never pays for a sales read).
+- **The platform banner** — `MonthFocusBanner` inside `frontend/src/components/PlatformBanners.tsx`,
+  which the platform layout already mounts, so `layout.tsx` is untouched.
+
+The banner exists because `/core/attention`'s popup is gated to **company-wide** logins
+(`rbac.canSeeAttention` → `scope === 'all'`) and the owner asked for **market manager and above**.
+Widening that gate would put import-health items in front of a district manager, so the same list is
+carried by a banner for the market/district tiers instead. Both surfaces read
+`router._month_focus_payload` → `month_focus.outstanding`; **neither recomputes it**, so they cannot
+disagree. Zero items ⇒ both render nothing at all.
+
+### 62.4 "MARKET MANAGER OR ABOVE" — ONE HOME, found by proving it
+
+`app/core/scope.py::is_market_or_wider` (+ `MARKET_OR_WIDER_SCOPES`) is now the ONE home for that scope
+tier. It had three copies before — `closing/closer_pick.PICK_ANY_SCOPES`, `notify/report_registry`'s
+`role_scopes`, and `roster_reach`'s own tiering — and a fourth was about to be written here.
+
+**The defect this caught.** The first draft asked `roster_reach(perms) != ROSTER_OWN_STORE`, on the
+strength of that function's own docstring. `harness_month_focus.py` §H3 showed it answering **yes for a
+sales rep**: `roster_reach` answers a different question (whom may this person SEE on a roster) and
+returns `ROSTER_ALL` for any role that has not opted into `scheduling_reach = 'span'`, scope `store`
+included. So the tier tuple moved to `core.scope`, `closer_pick` was **wired to it** rather than left as
+a second copy (CLAUDE.md: *"writing the registry without wiring the callers to it is not a fix at all"*),
+and §I5b of the lock **fails the build** if either caller stops dereferencing it or a tuple reappears.
+
+`month_focus.may_declare` adds, in this order: a platform super admin always may; an explicit per-role
+page grant (`pages['/commcalc/month-focus']`) is the override either way — config, never code; otherwise
+the scope tier. **No perms at all is a refusal**, never a pass. `rbac.canDeclareMonthFocus` mirrors it
+for presentation only; the server is the authority.
+
+### 62.5 THE PLAYS — "something out of the box", with the number behind it
+
+The owner asked for a creative business manager. What shipped is a **rule table over measured numbers**,
+not generated prose: a play either has a figure behind it or it does not appear, and `plays({})` is `[]`
+— the panel is empty rather than filled with a horoscope. Ranked cheapest-and-surest first: fix the free
+things, then spend.
+
+| rank | play | fires on | the move |
+|---|---|---|---|
+| 1 | `target_first` | stores with no saved target | assign first; a spiff on top of no target pays for sales you would have had anyway (and split the accessory number through §61) |
+| 2 | `free_money` | a pay type with a rate > 0 that some stores earned NONE of | coach it — the carrier already pays; forgone is estimated at the stores' own **peer median**, labelled as an estimate, and withheld entirely when no median was measured |
+| 3 | `unearned_type` | a SPIFF-component pay type with zero units tenant-wide | one focus week, checked the following Monday |
+| 4 | `catch_up_band` | §59 says stores are behind their own traffic band on boxes | a targeted catch-up spiff for THOSE stores, priced per unit of the gap and capped at it — not a company-wide spiff, which pays most to the stores already ahead |
+| 5 | `attach_ladder` | the same comparison on accessory $ per box | pay on the dollars ABOVE the band median, not a flat amount per box |
+| 6 | `concentration` | one store holds > 50% of the month's units AND others earn some | a per-store floor or cap — otherwise the budget rewards a habit one store already had |
+
+**Nothing is measured here.** The signals are assembled by `router._month_focus_signals` from the homes
+that already own each number: §59's `_peer_comparison_payload` + `lagging()` (the same call the peer
+screen and the action plan make, so the three cannot name different stores), §60's
+`_spiff_impact_inputs` / `pay_type_options` / `store_money`, and §5's own `targets` rows. The initiative
+dropdown is likewise DERIVED from the tenant's own statement rows, so it cannot offer a pay type this
+tenant was never paid on (RULE TWO).
+
+### 62.6 Where it lives
+
+- **Engine (pure, DB-free, stdlib + one import):** `backend/app/modules/commcalc/month_focus.py` —
+  `month_bounds` · `checkin_days` · `current_checkin` · `declaration_window_end` ·
+  `normalise_declaration` · `is_declared` · `confirmed_checkins` · `confirm_checkin` ·
+  `spiff_reconciliation` · `outstanding` · `plays` · `cost_at` · `may_declare`.
+- **Endpoints:** `GET /commcalc/month-focus/{period}?plays=` (read-only) ·
+  `PUT /commcalc/month-focus/{period}` (market manager or above) ·
+  `POST /commcalc/month-focus/{period}/checkin` (idempotent; the week is COMPUTED, never client-chosen,
+  so a confirmation cannot be back-dated), plus `_month_focus_payload` · `_month_focus_signals` ·
+  `_month_focus_cfg` · `_month_focus_row` · `_month_focus_targets` · `_month_focus_live_spiffs` ·
+  `_month_focus_gate` in `commcalc/router.py`.
+- **Frontend:** `commcalc/month-focus/page.tsx`. A Management Overview / Targets **tile** (`tileOnly`,
+  the owner's "cleaner look" ruling), registered in `rbac.ts` (NAV ×2, module map, report category,
+  `canDeclareMonthFocus`), `reports.ts`, `route-index.ts`. The banner is `MonthFocusBanner` in
+  `components/PlatformBanners.tsx`.
+- **Table:** `commcalc.month_focus` (mig `1065`), plus `commcalc.commission_org_config`'s two new
+  policy columns `focus_declaration_days` (default 7) and `focus_checkin_weekday` (default 0 = Monday).
+  **No money column, no payout, no recompute.** The two knobs are config rows with house defaults, so
+  an un-configured tenant behaves exactly as shipped (RULE TWO). Mig `1065` un-run ⇒ every surface
+  reports `ready: false` with a hint and the reminder stays silent.
+- **Module graph:** fact `month_focus_declaration` (§50). Its deliberate sibling is `payout_config` —
+  intent and money are two facts, and `spiff_reconciliation` is the one place that compares them.
+- **Lock:** `backend/harness_month_focus.py`, **88 checks**, run by `carrier-vocab-guard`. §I is the
+  un-wire lock: this module may not open a client, read a feed, classify a dollar, send on any channel,
+  or name a pay table or payout column on an executable line; `core.scope` must still be dereferenced
+  by BOTH callers; and every control is ARMED against a planted violation.
+- **Duplicate check (the build gate).** Searched the index for an existing mechanism before building:
+  §5 writes targets (reused, never re-implemented — this module LINKS to it), §61 splits one accessory
+  goal across stores (reused by link), §59 decides who is behind (borrowed through `lagging()`), §60
+  owns what a pay type is worth (borrowed through its own inputs), §6 owns the spiff money
+  (`payout_config` — read only), §15.1/§15.2 own alert sends and the channel ladder (**deliberately not
+  used** — the owner asked for an in-platform reminder, so nothing is sent), and §19.20's attention
+  registry is the login surface (reused, not duplicated). What is NEW is the declaration row and the
+  due list over it; nothing else here derives a number of its own.
+
+**Related:** §5 (targets), §6 (`payout_config` / `custom_spiffs`), §59 (peer bands and `lagging()`),
+§59.7 (the action plan's reporting posture), §60 (spiff impact), §61 (accessory target allocation),
+§19.20 (the attention popup and its contract), §14w/§14x (`core/scope.py`), §16–18.

@@ -339,6 +339,11 @@ def spiff_reconciliation(decl, live_spiff_names):
 PAGE = "/commcalc/month-focus"
 TARGETS_PAGE = "/commcalc/targets"
 PAY_CONFIG_PAGE = "/commcalc/commission-settings"
+#: §61's page. Assigning targets is NOT re-implemented here: that module already splits ONE company
+#: accessory goal across stores on each store's own attachment history, and already writes the target
+#: rows (`POST /commcalc/accessory-target-plan/{period}/assign`). The month's declaration points at it
+#: rather than growing an allocator of its own — one home for "what should this store's number be".
+ACCESSORY_PLAN_PAGE = "/commcalc/accessory-target-plan"
 
 
 def _item(key, severity, label, detail, count, deep_link, link_label):
@@ -463,9 +468,9 @@ PLAY_KEYS = ("target_first", "free_money", "unearned_type", "catch_up_band", "at
              "concentration")
 
 
-def _play(key, rank, title, why, move, evidence, deep_link):
+def _play(key, rank, title, why, move, evidence, deep_link, also=None):
     return {"key": key, "rank": rank, "title": title, "why": why, "move": move,
-            "evidence": evidence, "deep_link": deep_link}
+            "evidence": evidence, "deep_link": deep_link, "also": also or []}
 
 
 def cost_at(units, rate):
@@ -494,9 +499,11 @@ def plays(signals):
             + (f" of {total}" if isinstance(total, int) and total else "")
             + " have no target this month.",
             "Set a target for each of them first. A temporary spiff on top of no target pays for "
-            "sales that were going to happen anyway, and there is nothing to measure it against.",
+            "sales that were going to happen anyway, and there is nothing to measure it against. For "
+            "the accessory number, split one company goal across the stores on their own attachment "
+            "history (§61) rather than giving everybody the same figure.",
             {"stores": no_target[:40], "without_target": len(no_target), "stores_total": total},
-            TARGETS_PAGE))
+            TARGETS_PAGE, also=[ACCESSORY_PLAN_PAGE]))
 
     # 2. FREE MONEY. The carrier is ALREADY paying for something some stores earn nothing of. No new
     #    money is needed, so this outranks every play that spends.

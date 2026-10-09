@@ -266,6 +266,15 @@ on:
       # change to any of them must run it.
       - "backend/harness_accessory_target_plan.py"
       - "backend/app/modules/commcalc/accessory_target_plan.py"
+      # index §62 — the month's declared focus and the weekly check-in. The lock reads the home, the
+      # attention provider that is the login surface, and `core/scope.py` + `closing/closer_pick.py`
+      # (where the "market manager or above" scope tiers now live, dereferenced rather than copied a
+      # fourth time), so a change to any of them must run it.
+      - "backend/harness_month_focus.py"
+      - "backend/app/modules/commcalc/month_focus.py"
+      - "backend/app/modules/commcalc/import_audit.py"
+      - "backend/app/core/scope.py"
+      - "backend/app/modules/closing/closer_pick.py"
       - "backend/app/modules/account/statement_filter.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_bucketing.py"
@@ -1049,6 +1058,9 @@ jobs:
       - name: "Spiff impact (index §60): the share is of the P&L line the dollars actually book to; a profit lift is only reported from a profit; the un-wire lock on the four homes it dereferences; and a borrowed metric ranks through the peer bands' OWN median and gap"
         working-directory: backend
         run: python3 harness_spiff_impact.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "This month's focus (index §62): the due list is computed and clears itself, a blank spiff rate is never $0, the declaration and the pay config are reconciled in BOTH directions, every play carries the number behind it, and 'market manager or above' is dereferenced from core.scope rather than copied a fourth time"
+        working-directory: backend
+        run: python3 harness_month_focus.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       # Runs HERE and not in the dependency-free job because §I reads the router's own source to prove
       # the two endpoints dereference §5's homes rather than re-deriving them — and the module graph
       # names this lock, so a lock no workflow runs would fail the module-graph guard.

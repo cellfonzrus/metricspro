@@ -26508,6 +26508,15 @@ def _month_focus_signals(client, org_id, period, authorization):
         signals["unearned_pay_types"] = [
             {"label": o.get("type"), "rate_per_unit": o.get("rate_per_unit")}
             for o in spiffs if not (o.get("units") or 0)][:8]
+        # The initiative dropdown is DERIVED from the tenant's own statement rows (§60's options,
+        # §58's classification), never from a list in code — RULE TWO. Every pay type is offered, not
+        # just the spiff-component ones, because a month's initiative can be anything the carrier
+        # pays on; the component is shown beside it so the manager can see which it is.
+        signals["pay_type_options"] = [
+            {"type": o.get("type"), "component": o.get("component"),
+             "dollars": o.get("dollars"), "units": o.get("units"),
+             "rate_per_unit": o.get("rate_per_unit")}
+            for o in sorted(options, key=lambda o: -(o.get("dollars") or 0.0))][:60]
         top = max(spiffs, key=lambda o: o.get("dollars") or 0.0) if spiffs else None
         if top:
             money, _line, _unres2 = _spiffimp.store_money(
@@ -26596,6 +26605,9 @@ def _month_focus_payload(client, org_id, period, authorization, *, with_plays=Tr
         "declaration_window_end": win.isoformat() if win else None,
         "targets": {"stores_total": total, "with_saved_target": have,
                     "without_saved_target": without[:60]},
+        # The initiative options are the tenant's OWN pay types (§60), so the dropdown cannot offer a
+        # pay type this tenant was never paid on. Empty when the signals were not read (`plays=0`).
+        "initiative_options": signals.get("pay_type_options") or [],
         "signal_meta": signal_meta,
         # The row's absence and the TABLE's absence are different facts, and a screen must be able to
         # tell them apart: one is a month nobody declared, the other is a migration not yet applied.
