@@ -181,11 +181,17 @@ FACTS: dict[str, dict] = {
         "question": 'Is this carrier dollar a commission, a spiff, a residual or a reimbursement — '
                     'and is that the ORG\'S OWN declaration or a guess the platform made? Which '
                     'P&L LINE and which GROSS-PROFIT COLUMN that component lands on is the same '
-                    'fact, read twice, and lives here too (`component_line` / `gp_column`).',
+                    'fact, read twice, and lives here too (`component_line` / `gp_column`). '
+                    'WHETHER THE COMPONENT IS EVIDENCE AT ALL is part of the same fact and is '
+                    'answered from `basis` alone (`component_is_evidence`): a component reached on '
+                    'a fallback basis is a placement of last resort, so a keyword guess never '
+                    'overrides the org\'s own declaration, and what a caller DOES about an '
+                    'unreliable component is the caller\'s policy, never this home\'s.',
         "homes": ('app/modules/commcalc/carrier_dollar_class.py',),
-        "index": ('58',),
+        "index": ('58', '66'),
         "locks": ('harness_carrier_dollar_class.py',
-                  'harness_gp_carrier_class_dereference.py'),
+                  'harness_gp_carrier_class_dereference.py',
+                  'harness_component_basis_evidence.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed. `--bless` silently deleted 11 of 12
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.

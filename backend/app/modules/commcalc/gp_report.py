@@ -285,7 +285,10 @@ def calc_gp_report(
     payment-type → category map, folded by its ONE rule); `carrier_declarations` / `carrier_rules` /
     `carrier_class_config` are §58's `carrier_dollar_class.load_declarations` /
     `carrier_map.load_rules` / `carrier_dollar_class.load_config`. Every bucket below is decided by
-    `carrier_dollar_class.gp_column`, the same home the P&L's `component_line` sits in, so the GP
+    `carrier_dollar_class.gp_column_of_classification` / `gp_column_of_declared_category` — the
+    whole classification, `basis` included, so a component reached on a last-resort basis cannot
+    override the org's own declared category on either feed (§66) — the same home the P&L's
+    `component_line` sits in, so the GP
     columns and the P&L lines cannot state two different things about one dollar again. Omitted =
     nothing declared and no keyword rule, which honestly reports the money as unclassified rather
     than calling it commission.
@@ -508,7 +511,15 @@ def calc_gp_report(
         _c = _comp_seen.get(ct)
         if _c is None:
             _c = _comp_seen[ct] = _cdc.classify(carrier_declarations, carrier_rules, ct, _cc_cfg)
-            _c['gp_column'] = _cdc.gp_column(_c['component'], _c.get('declared_category'), _cc_cfg)
+            # THE WHOLE CLASSIFICATION DECIDES THE COLUMN, NOT ITS COMPONENT ALONE (index §66).
+            # This used to read `_c['component']` and ignore `_c['basis']`, which is the field that
+            # says HOW the component was reached. A component reached on a last-resort basis is not
+            # evidence about the dollar, and the home refuses to let it override the org's own
+            # declaration — so this path and the payment-detail path above now place one declared
+            # category in ONE column. Measured live (house org, Mar–Sep 2026): $260,500.00 of a
+            # declared category the component map cannot honour was landing in this feed's
+            # reimbursement column and the pay feed's MDF column, for the same payment type.
+            _c['gp_column'] = _cdc.gp_column_of_classification(_c, _cc_cfg)
         comp_by_num[num][_c['gp_column']] += amt
         if _c['gp_column'] == _cdc.GP_COMMISSION_COLUMN:
             # Same vocabulary as the Payment Detail (verified on the real Comprehensive Comp export),

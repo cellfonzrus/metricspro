@@ -24538,7 +24538,10 @@ def _leg_comp_commission_predicate(decl, rules, cfg):
         col = seen.get(s)
         if col is None:
             c = _cdc_leg.classify(decl, rules, s, cfg)
-            col = seen[s] = _cdc_leg.gp_column(c['component'], c.get('declared_category'), cfg)
+            # The whole classification, not its component alone (index §66): a component reached on
+            # a last-resort basis never overrides the org's own declared category, so the trend and
+            # the GP column it explains cannot place one payment type two ways.
+            col = seen[s] = _cdc_leg.gp_column_of_classification(c, cfg)
         return col == _cdc_leg.GP_COMMISSION_COLUMN
     return is_commission
 
