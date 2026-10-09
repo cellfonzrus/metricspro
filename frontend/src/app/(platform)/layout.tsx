@@ -26,6 +26,9 @@ import { apiUrl } from '@/lib/apiBase'
 // rank through `search-rank.rank`.
 import { viewerCatalog, destinations, type NavReg } from '@/lib/search-catalog'
 import { rank as rankSearch } from '@/lib/search-rank'
+// The report CATALOGUE (category + report defs). rbac also exports a REPORT_CATEGORIES, but that one
+// is the {key,label} list of category NAMES — a different fact, so this is aliased rather than shadowed.
+import { REPORT_CATEGORIES as REPORT_DEFS } from '@/lib/reports'
 import { searchableRoutes } from '@/lib/route-index'
 import { SCREENS } from '@/components/ScreenLink'
 
@@ -329,7 +332,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
     () => destinations(viewerCatalog(
       {
         nav: navSearch,
-        reports: REPORT_CATEGORIES.map(c => ({ category: c.category, reports: c.reports })),
+        reports: REPORT_DEFS.map(c => ({ category: c.category, reports: c.reports })),
         screens: Object.values(SCREENS)
           .map(sc => ({ href: sc.href, label: sc.label, blurb: sc.blurb, aliases: sc.aliases })),
         routes: searchableRoutes(),
@@ -556,7 +559,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
           {collapsed
             ? <button className="mp-icon-btn" onClick={() => setCollapsed(false)} title="Expand menu"
                 aria-label="Expand menu">›</button>
-            : <><span>v1.0</span><span>{index.length} pages</span></>}
+            : <><span>v1.0</span><span>{searchCatalog.length} pages</span></>}
         </div>
       </aside>
 
