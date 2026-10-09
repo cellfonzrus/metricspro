@@ -20951,7 +20951,7 @@ three tenants. So nothing else anywhere moved, in any report that keys a store t
 | `commcalc/router._leg_store_index` + `/commission-leg-trend` + the commission-received breakout | keyed by token, by its own docstring "the SAME street-number join gp_report uses" — and so inherited the same loss | canonical identity on both sides; returns `resolve` so the row keys go through `store_key` |
 | `commcalc.commission_leg_label_rollup` (mig `274`) | `split_part(btrim(business_address), ' ', 1)` — SQL deciding store identity | **mig `1065`** returns the RAW address; the backend resolves it. SAFE IN EITHER ORDER: the resolver places a bare token too, so merged-without-applied still works |
 | `account/residual_subs` | `_street_num(addr)` as the rep-pay join key | the canonical address is the key |
-| `commcalc/flags` (flags 7 + 8) | compared the token sets of the sales side and the payment side, so a store the two feeds spell differently raised BOTH "has sales but no carrier payment" AND "paid but no sales" every month, against a store trading normally | one identity for both sides, injected by the caller |
+| `commcalc/flags` (flags 7 + 8) | compared the TOKEN sets of the sales side and the payment side, so a store the two feeds spell differently raised BOTH "has sales but no carrier payment" AND "paid but no sales" every month against a store trading normally. Live house evidence: **8 store-months flagged BOTH ways at once** — provably a spelling artefact, every one the same store (`11636 Springfield Blvd` vs the carrier's `116-36 …`), Mar–Oct 2026 — inside 79 `MISSING_STORE_PAYMENT` + 31 `MISSING_STORE_SALES` rows, all 110 of which name a store the resolver CAN place. The existing rows are NOT deleted (a flag row is a record of what was said); the generator stops producing them | one identity for both sides, injected by the caller |
 | `closing/unfinished_day.store_key` | its own copy of the keying rule (PR #382) | a named alias for `_sid.store_key` — the copy is retired |
 
 **EXCUSED, with the reason** (all pinned in the lock, so none can grow):
@@ -21006,7 +21006,18 @@ not dereferencing, the SQL check open). Proof: **`backend/harness_gp_store_ident
 checks**, DB-free, both live regressions as fixtures, the door-survival fold, the unplaced-row
 honesty, and §E as a NEGATIVE CONTROL that reproduces the old join's loss ($26,179.09 of the
 fixtures). Both wired into `.github/workflows/carrier-vocab-guard.yml` (paths filter + two steps;
-**jobs 23 → 23, steps 193 → 195** — nothing was removed).
+**jobs 23 → 23, steps 193 → 195** — nothing was removed). The `store_identity` **module-graph fact**
+(§50) is registered with all six callers, so the graph guard (875 checks) fails if one drops the
+import or keeps a dead one. Three existing coa.py NO-MOVEMENT pins (`harness_device_payable` §I7,
+`harness_device_purchases` §B2, `harness_finance_sync_in_async`) are RE-BASELINED, not weakened:
+they sanction exactly `store_resolver` / `_squash_key` / `_lead_num_key` changing and the two nested
+chain helpers being REMOVED (the only removal that file has ever sanctioned — it is a move, and
+leaving the chain in coa would have meant two copies), through ONE shared documented sanction
+`harnesslib.COA_STORE_IDENTITY_SANCTION` that carries the divergence measurement; everything else in
+coa.py stays byte-identical. `harness_commission_leg_split.py` (153) and
+`harness_gp_pnl_commission_parity.py` (66) have their ghost-store and negative-control expectations
+RESTATED rather than relaxed: a payment for a store the report cannot place is no longer silently
+discarded from the column and the ladder — it is a row with a reason, and the ladder explains it.
 
 **DUPLICATE CHECK (build gate).** Searched §13 (store-string canonicalization), §13a (the canonical
 store→market contract), §13d (one physical store, ONE canonical key), §4/§4a (GP vs P&L), §7a/§7b

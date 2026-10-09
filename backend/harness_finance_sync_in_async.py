@@ -321,8 +321,25 @@ for rel, allowed in EXPECTED_DELTA.items():
 #   it: the delta check directly below proves no existing function changed, so every P&L and Balance
 #   Sheet number this module produces is byte-identical. Proven by
 #   backend/harness_vip_invoice_filter.py §F and backend/harness_pl_filter_semantics.py (unchanged).
+#   coa.py {store_resolver, _squash_key, _lead_num_key} and −{store_resolver._num_key,
+#   store_resolver.resolve} (2026-10-09, index §59, owner directive "chase trhew street number
+#   matching"). THE ONLY REMOVAL THIS FILE HAS EVER SANCTIONED, and it is a MOVE, not a deletion:
+#   the store resolution CHAIN now lives in its one home, `account/store_identity.py`, so
+#   `store_resolver` is just the I/O wrapper that reads store_mapping + store_aliases and hands them
+#   to `build_store_resolver` (its two nested helpers went with the chain), and `_squash_key` /
+#   `_lead_num_key` dereference the home instead of holding copies. The reason a removal is
+#   sanctioned at all is that leaving the chain here would have meant TWO copies of it, which is the
+#   defect the directive is about. MEASURED before the claim: old chain vs new over every distinct
+#   live store string — house org 1 divergence of 71 (the reported defect), the other three tenants
+#   0 of 49. Proven by backend/harness_gp_store_identity.py; the "no second copy / every caller
+#   dereferences it" property is locked by backend/harness_store_identity_lock.py.
+ALLOWED_REMOVED = {
+    f"{MOD}/account/coa.py": {"store_resolver._num_key", "store_resolver.resolve"},
+}
 MONEY_MODULE_DELTA = {
-    f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store"}, {"_lcov_mod", "build_inputs.add_comm"}),
+    f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store",
+                               "store_resolver", "_squash_key", "_lead_num_key"},
+                              {"_lcov_mod", "build_inputs.add_comm"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
     f"{MOD}/account/statement_filter.py": (set(), {"unbound_spellings"}),
 }
@@ -330,8 +347,10 @@ for rel, (allowed, allowed_new) in MONEY_MODULE_DELTA.items():
     base_f, now_f = funcs(read_base(rel)), funcs(read_now(rel))
     name = os.path.basename(rel)
     added, removed = set(now_f) - set(base_f), set(base_f) - set(now_f)
-    check(f"{name}: no function added or removed", added <= allowed_new and not removed,
-          f"+{sorted(added - allowed_new)} -{sorted(removed)}")
+    allowed_removed = ALLOWED_REMOVED.get(rel, set())
+    check(f"{name}: no function added or removed", added <= allowed_new
+          and removed <= allowed_removed,
+          f"+{sorted(added - allowed_new)} -{sorted(removed - allowed_removed)}")
     changed = {q for q in set(base_f) & set(now_f) if base_f[q] != now_f[q]}
     check(f"{name}: no function outside {sorted(allowed) or 'the empty set'} changed",
           changed <= allowed, f"also changed: {sorted(changed - allowed)}")

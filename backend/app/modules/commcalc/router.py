@@ -24692,6 +24692,15 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
                              'category': _payment_category.label_of(cat_map, r.get('payment_type')),
                              'amount': safe_float(r.get('amount')), 'n': 1})
 
+    # ONE STORE IDENTITY, whichever path produced the rows (§59). The mig-274 rollup returns the
+    # store column the DATABASE computed — a leading street-number TOKEN until mig 1065 is applied,
+    # the raw address after — and the per-month fallback returns a raw address. Both are resolved
+    # here through the one home, so the keys always meet `store_idx` (built on the same resolver)
+    # and the store / market filter selects the right rows in either state. Keying only the
+    # fallback is what made the RPC path's filter select NOTHING.
+    for r in rows:
+        r['store_num'] = _store_identity.store_key(_leg_resolve, r.get('store_num'))
+
     for r in rows:
         lab = pkey.get(str(r.get('period') or '').strip())
         if not lab:
@@ -25201,6 +25210,13 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
         notes.append('VidaPay/master-agent money (commission, airtime margin, residual orders) carries '
                      'no store address, so it is company-wide and is EXCLUDED while a store or market '
                      'filter is active.')
+
+    # ONE STORE IDENTITY, whichever path produced the rows (§59) — see the same normalization in
+    # /commission-leg-trend. The mig-274 rollup's store column is whatever the DATABASE computed (a
+    # leading-token until mig 1065 is applied, the raw address after); `store_idx` is keyed by
+    # canonical identity, so the keys are resolved here before `passes` is asked anything.
+    for r in label_rows:
+        r['store_num'] = _store_identity.store_key(_leg_resolve, r.get('store_num'))
 
     out = _commission_received.build_breakout(
         labels, legcls,

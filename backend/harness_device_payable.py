@@ -704,7 +704,14 @@ check("I6 the report BOOKS nothing and WRITES nothing — no insert, update, ups
 # an expense, which books in `build_inputs`. Rather than delete or weaken the assertion, it now
 # states the real claim and is STRICTER where it counts: every resolver and attribution function
 # must be byte-identical, and only the two functions sanctioned by that ruling may have changed.
-COA_SANCTIONED = ("build_inputs", "_account_config")
+# EXTENDED 2026-10-09 (§59, owner directive "chase trhew street number matching"): the store
+# resolution CHAIN moved out of coa.py into its one home (`account/store_identity.py`), so
+# `store_resolver` / `_squash_key` / `_lead_num_key` changed shape while answering the same
+# question. `harnesslib.COA_STORE_IDENTITY_SANCTION` carries that sanction and the measurement
+# behind it (1 divergence in 71 live house store strings — the reported defect; 0 in 49 across the
+# other tenants). Everything else in coa.py is still pinned byte-identical.
+import harnesslib as _hl                                                        # noqa: E402
+COA_SANCTIONED = ("build_inputs", "_account_config") + _hl.COA_STORE_IDENTITY_SANCTION
 try:
     import harnesslib
     base = subprocess.run(["git", "merge-base", "HEAD", "origin/main"],
