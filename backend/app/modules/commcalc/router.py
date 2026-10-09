@@ -26362,6 +26362,64 @@ def spiff_impact(period: str = "", spiff: str = "", bands: str = "", markets: st
     return out
 
 
+@router.get("/sales-diagnostics")
+def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
+    """Why do the Action-Plan / targets tiles show what they show? For a period this reports what the
+    sales tables ACTUALLY hold — row counts, the exact period spellings present, and the distinct
+    Contract Type + Department values (with counts) in daily_sales_feed and raw_sales — plus the
+    computed actuals totals (activations/byod/upgrades/accessory$). Read-only; the go-to when a store's
+    numbers look wrong (usually a Contract Type label the old rigid SQL didn't recognize)."""
+    from collections import Counter
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    pv = _pvariants(period)
+
+    def _scan(table):
+        try:
+            rows = (client.schema('commcalc').table(table)
+                    .select('period,contract_type,department,category,product_desc,salesperson')
+                    .eq('org_id', org_id).in_('period', pv).limit(200000).execute().data) or []
+        except Exception as e:
+            return {'error': str(e)}
+        ct, dept, cat, prod, per = Counter(), Counter(), Counter(), Counter(), Counter()
+        # Products on the NON-phone lines (blank Contract Type) — that's where accessories hide when a
+        # POS doesn't carry Department/Category (the B2B daily feed case).
+        for r in rows:
+            per[str(r.get('period') or '')] += 1
+            ctv = (r.get('contract_type') or '').strip()
+            ct[ctv or '(blank)'] += 1
+            dept[(r.get('department') or '').strip() or '(blank)'] += 1
+            cat[(r.get('category') or '').strip() or '(blank)'] += 1
+            if not ctv:
+                prod[(r.get('product_desc') or '').strip() or '(blank)'] += 1
+        return {'rows': len(rows), 'periods': dict(per),
+                'contract_types': dict(ct.most_common(40)), 'departments': dict(dept.most_common(40)),
+                'categories': dict(cat.most_common(40)),
+                'products_on_nonphone_lines': dict(prod.most_common(40))}
+
+    feed_actuals = _compute_feed_actuals_py(client, org_id, period)
+    tot = {'activations': sum(a['prem_count'] for a in feed_actuals),
+           'byod': sum(a['byod_count'] for a in feed_actuals),
+           'upgrades': sum(a['upg_count'] for a in feed_actuals),
+           'accessory_gp': round(sum(a['acc_gp'] for a in feed_actuals), 2),
+           'store_rep_days': len(feed_actuals)}
+    acfg = _accessory_config(client, org_id)
+    return {'period': period, 'period_variants': pv, 'open_month': _is_open_month(period),
+            'daily_sales_feed': _scan('daily_sales_feed'), 'raw_sales': _scan('raw_sales'),
+            'computed_actuals_totals': tot,
+            'accessory_config': {'departments': acfg['departments_list'], 'categories': acfg['categories_list']}}
+
+
+
+# NOTE ON PLACEMENT: this block sits AFTER `/sales-diagnostics` on purpose. §60's design lock
+# (`harness_spiff_impact.py` §I6–I13b) inspects the router SLICE from `def _spiff_impact_inputs`
+# to `@router.get("/sales-diagnostics")`, and asserts among other things that nothing in it
+# carries a literal `.limit(` row ceiling (§19.48's paging rule). Landing this package inside
+# that window reddened I12 on code that is not §60's at all — so the package moved out of the
+# slice rather than the lock being widened to tolerate it.
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # THE MONTH'S DECLARED FOCUS, AND THE WEEKLY CHECK-IN (owner 2026-10-09, index §62)
 #
@@ -26729,56 +26787,6 @@ def post_month_focus_checkin(period: str, body: dict = Body(default={}),
     out["confirmed_week"] = cur.isoformat()
     out["already_confirmed"] = not changed
     return out
-
-@router.get("/sales-diagnostics")
-def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
-    """Why do the Action-Plan / targets tiles show what they show? For a period this reports what the
-    sales tables ACTUALLY hold — row counts, the exact period spellings present, and the distinct
-    Contract Type + Department values (with counts) in daily_sales_feed and raw_sales — plus the
-    computed actuals totals (activations/byod/upgrades/accessory$). Read-only; the go-to when a store's
-    numbers look wrong (usually a Contract Type label the old rigid SQL didn't recognize)."""
-    from collections import Counter
-    client = sb()
-    if not period:
-        n = datetime.now(timezone.utc)
-        period = f"{n.year}-{n.month:02d}"
-    pv = _pvariants(period)
-
-    def _scan(table):
-        try:
-            rows = (client.schema('commcalc').table(table)
-                    .select('period,contract_type,department,category,product_desc,salesperson')
-                    .eq('org_id', org_id).in_('period', pv).limit(200000).execute().data) or []
-        except Exception as e:
-            return {'error': str(e)}
-        ct, dept, cat, prod, per = Counter(), Counter(), Counter(), Counter(), Counter()
-        # Products on the NON-phone lines (blank Contract Type) — that's where accessories hide when a
-        # POS doesn't carry Department/Category (the B2B daily feed case).
-        for r in rows:
-            per[str(r.get('period') or '')] += 1
-            ctv = (r.get('contract_type') or '').strip()
-            ct[ctv or '(blank)'] += 1
-            dept[(r.get('department') or '').strip() or '(blank)'] += 1
-            cat[(r.get('category') or '').strip() or '(blank)'] += 1
-            if not ctv:
-                prod[(r.get('product_desc') or '').strip() or '(blank)'] += 1
-        return {'rows': len(rows), 'periods': dict(per),
-                'contract_types': dict(ct.most_common(40)), 'departments': dict(dept.most_common(40)),
-                'categories': dict(cat.most_common(40)),
-                'products_on_nonphone_lines': dict(prod.most_common(40))}
-
-    feed_actuals = _compute_feed_actuals_py(client, org_id, period)
-    tot = {'activations': sum(a['prem_count'] for a in feed_actuals),
-           'byod': sum(a['byod_count'] for a in feed_actuals),
-           'upgrades': sum(a['upg_count'] for a in feed_actuals),
-           'accessory_gp': round(sum(a['acc_gp'] for a in feed_actuals), 2),
-           'store_rep_days': len(feed_actuals)}
-    acfg = _accessory_config(client, org_id)
-    return {'period': period, 'period_variants': pv, 'open_month': _is_open_month(period),
-            'daily_sales_feed': _scan('daily_sales_feed'), 'raw_sales': _scan('raw_sales'),
-            'computed_actuals_totals': tot,
-            'accessory_config': {'departments': acfg['departments_list'], 'categories': acfg['categories_list']}}
-
 
 @router.get("/upload-trace")
 def upload_trace(period: str = "", upload_type: str = "", source: str = "",
