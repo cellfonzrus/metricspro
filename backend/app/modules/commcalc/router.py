@@ -23,6 +23,10 @@ from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — e
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
+from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
+from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
+from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
+from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -44,7 +48,7 @@ from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_V
                                              countable_sale_skip_reason as _gp_skip_reason)
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
-from app.modules.account import store_identity as _store_identity  # 2026-10-09 — THE store-identity home (§59): a leading address token is not a store identity
+from app.modules.account import store_identity as _store_identity  # 2026-10-09 — THE store-identity home (§62): a leading address token is not a store identity
 from app.modules.commcalc import flag_registry
 from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a flag's store for DM routing
 from app.modules.commcalc import flag_persist          # mig 287 — ADDITIVE flag writes (DM review survives)
@@ -16555,7 +16559,7 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                 period_month=pm['month'],
                 period_year=pm['year'],
                 asset_by_imei=asset_by_imei,
-                # ONE store identity for both sides of flags 7/8 (§59) — a store the two feeds
+                # ONE store identity for both sides of flags 7/8 (§62) — a store the two feeds
                 # spell differently used to raise "no payment" AND "no sales" every month.
                 resolve_store_canonical=_flag_resolve_store,
             )
@@ -24561,7 +24565,7 @@ def _leg_store_index(client, org_id):
     SAME street-number join gp_report.calc_gp_report uses", which is exactly why it inherited that
     join's defect: a carrier address whose leading token no store row leads with matched NOTHING, so
     the trend's store/market filter could not select those rows and the GP table lost the money
-    outright. Both now dereference the ONE home for store identity (§59,
+    outright. Both now dereference the ONE home for store identity (§62,
     `account.store_identity` via `coa.store_resolver`), so the trend and the table still select the
     same rows — now the right ones."""
     idx = {}
@@ -24692,7 +24696,7 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
                              'category': _payment_category.label_of(cat_map, r.get('payment_type')),
                              'amount': safe_float(r.get('amount')), 'n': 1})
 
-    # ONE STORE IDENTITY, whichever path produced the rows (§59). The mig-274 rollup returns the
+    # ONE STORE IDENTITY, whichever path produced the rows (§62). The mig-274 rollup returns the
     # store column the DATABASE computed — a leading street-number TOKEN until mig 1065 is applied,
     # the raw address after — and the per-month fallback returns a raw address. Both are resolved
     # here through the one home, so the keys always meet `store_idx` (built on the same resolver)
@@ -25211,7 +25215,7 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
                      'no store address, so it is company-wide and is EXCLUDED while a store or market '
                      'filter is active.')
 
-    # ONE STORE IDENTITY, whichever path produced the rows (§59) — see the same normalization in
+    # ONE STORE IDENTITY, whichever path produced the rows (§62) — see the same normalization in
     # /commission-leg-trend. The mig-274 rollup's store column is whatever the DATABASE computed (a
     # leading-token until mig 1065 is applied, the raw address after); `store_idx` is keyed by
     # canonical identity, so the keys are resolved here before `passes` is asked anything.
@@ -26043,6 +26047,360 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
     out["org_id"] = org_id
     return out
 
+
+def _peer_comparison_payload(client, org_id, period, rows, *, resolve_market=None, bands=None,
+                             metric=None, params=None):
+    """THE Peer Sales Comparison payload (index §59), from sale rows the CALLER already read.
+
+    ONE home for assembling this report, because two callers now need it and they must not disagree
+    about who is lagging: the `/peer-comparison` screen and the Daily Action Plan's peer-gap item
+    (§59.7). The action plan does not re-derive the band, the gap or the verdict — it calls this and
+    reads `lagging()`.
+
+    `rows` is a sale-row list from `_sales_rows_union` (either `_SALES_DISPLAY_COLS` or the strictly
+    wider `_ACTUALS_COLS`; the extra `user_login` is ignored here), already scope- and market-filtered
+    by the caller. Nothing is read from the sales tables in here, so a caller that has the rows in
+    hand — as `get_action_plan` does, via `_fetch_actuals` — pays NO second feed read for this.
+
+    Returns (payload, cells, unresolved_stores).
+    """
+    # THE ONE AGGREGATION. `exec_cfg` is REQUIRED here, not optional: `_billpay_exec` — the peer basis —
+    # is only populated when it is supplied, so without it every store would come back unbanded.
+    acfg = _accessory_config(client, org_id)
+    exec_cfg = _exec_metric_config(client, org_id)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=exec_cfg)
+
+    # THE store resolver (the same one Daily-Targets actuals use) — so the carrier's store-grain KPI can
+    # attach, and so one store spelled two ways in the feed is one row here.
+    resolve_code = _store_code_resolver(client, org_id)
+    unresolved = set()
+
+    def _store_of(cell):
+        raw = str((cell or {}).get("store") or "").strip()
+        code = resolve_code(raw) if raw else ""
+        if raw and not code:
+            unresolved.add(raw)
+        return code or raw
+
+    # FAMILY PLAN / AAL CONVERSION — the CARRIER's own store KPI feed (raw_dlar_store, index §10). The
+    # sales feed carries no family-plan fact at all, so this column is the carrier's or it does not
+    # exist; the values are passed through untouched and a store with no row shows blank, never 0%.
+    store_kpis, kpi_feed = {}, None
+    try:
+        drows = (client.schema("commcalc").table("raw_dlar_store")
+                 .select("store_code,location,address,family_plan_pct,aal_conversion,as_of_date")
+                 .eq("org_id", org_id).in_("period", _pvariants(period)).limit(5000).execute().data) or []
+        for d in drows:
+            key = ""
+            for cand in (d.get("store_code"), d.get("address"), d.get("location")):
+                cand = str(cand or "").strip()
+                if not cand:
+                    continue
+                key = resolve_code(cand) or ""
+                if key:
+                    break
+            if not key:
+                continue
+            store_kpis[key] = {"family_plan_pct": d.get("family_plan_pct"),
+                               "aal_conversion": d.get("aal_conversion")}
+        if drows:
+            _asof = sorted({str(d.get("as_of_date") or "") for d in drows if d.get("as_of_date")})
+            kpi_feed = (f"Family plan % and AAL conversion % come from the carrier's own store report "
+                        f"for {period} ({len(store_kpis)} of {len(drows)} rows matched to a store"
+                        f"{', as of ' + _asof[-1] if _asof else ''}).")
+        else:
+            kpi_feed = (f"The carrier's store report has not landed for {period}, so the family plan % "
+                        f"column is blank for every store. Blank means not reported, never 0%.")
+    except Exception:
+        store_kpis, kpi_feed = {}, ("The carrier's store report could not be read, so the family plan % "
+                                    "column is blank for every store. Blank means not read, never 0%.")
+
+    line_rules = _line_rules_of(acfg)
+    out = _peercmp.build(
+        cells, bands=bands or None,
+        store_kpis=store_kpis, resolve_market=resolve_market, store_of=_store_of,
+        period=period, window_label=f"{period} to date",
+        aal_configured=_lc.add_a_line_configured(line_rules), kpi_feed=kpi_feed,
+        params=params or {"period": period, "metric": (metric or _peercmp.DEFAULT_GAP_METRIC)})
+    out["caveats"] = _peercmp.column_caveats(
+        out, device_dimension=_lc.devices_configured(line_rules),
+        box_count_buckets=(acfg.get("box_count_buckets") if acfg else None),
+        unresolved_stores=unresolved)
+    out["lagging"] = _peercmp.lagging(out, metric=(metric or _peercmp.DEFAULT_GAP_METRIC))
+    for item in out["lagging"]:
+        item["prompt"] = _peercmp.prompt_sentence(item)
+    return out, cells, unresolved
+
+
+@router.get("/peer-comparison")
+def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric: str = "",
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """PEER SALES COMPARISON — stores of comparable foot traffic, ranked on what they do with it.
+
+    Owner directive 2026-10-08: compare stores that have SIMILAR BILL PAYMENTS, because bill payments
+    measure the people walking through the door. Inside a traffic band the comparison is fair, so a gap
+    in boxes sold is a gap in selling rather than in footfall — "if one can do why not the other".
+
+    Columns: total boxes with the new / port / BYOD / upgrade / swap / tablet drill-down beside it, then
+    add-a-line, family plan %, total accessory $ and accessory $ per box. Plus the two ratios the report
+    exists for: boxes per bill payment (the conversion of footfall into a sale) and each store's gap to
+    the BEST and the MEDIAN of its own band.
+
+    NOT A SECOND DERIVATION OF ANYTHING. Every column is a roll-up of `_sales_cell_agg` — THE shared
+    sales aggregation the Sales Report, Executive MTD, Daily Targets and Productivity all read — so these
+    numbers are the same numbers those screens show by construction, and a tenant's box / bill-payment /
+    accessory configuration reaches this report for free. `commcalc/peer_comparison.py` carries the
+    duplicate check in full.
+
+    `bands` = comma-separated bill-payment cut-offs (the lower bound of each band) overriding the house
+    cuts for this call; `markets` filters; `metric` picks which gap the "lagging" list ranks on. The read
+    is RBAC store-scoped exactly like every other sales report.
+    """
+    require_org(org_id)
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+
+    try:
+        rows, meta = _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS)
+    except Exception as e:
+        raise HTTPException(500, f"peer-comparison read failed: {type(e).__name__}: {e}")
+
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        ks, in_keyset = None, None
+    sel_markets = {m.strip() for m in (markets or "").split(",") if m.strip()}
+
+    def _scope_only(store):
+        st = str(store or "").strip()
+        return not (ks is not None and in_keyset is not None and not in_keyset(ks, st))
+
+    opt_stores = sorted({str(r.get("store") or "").strip() for r in rows
+                         if r.get("store") and _scope_only(r.get("store"))})
+    opt_markets = sorted({m for m in ([resolve_market(s) for s in opt_stores] + list(all_markets)) if m})
+
+    def _keep(store):
+        st = str(store or "").strip()
+        if not _scope_only(st):
+            return False
+        if sel_markets and (resolve_market(st) or "") not in sel_markets:
+            return False
+        return True
+
+    rows = [r for r in rows if _keep(r.get("store"))]
+
+    # THE ONE ASSEMBLY — `_peer_comparison_payload` above. It was inlined here until the Daily Action
+    # Plan needed the same verdict (§59.7); two copies of the band, the gap and "who is lagging" is
+    # exactly the drift the index rules forbid, so it moved up into a helper both callers read.
+    try:
+        out, cells, _unres = _peer_comparison_payload(
+            client, org_id, period, rows, resolve_market=resolve_market,
+            bands=[b for b in (bands or "").split(",") if b.strip()] or None,
+            metric=metric,
+            params={"period": period, "markets": sorted(sel_markets),
+                    "metric": (metric or _peercmp.DEFAULT_GAP_METRIC)})
+    except Exception as e:
+        raise HTTPException(500, f"peer-comparison failed: {type(e).__name__}: {e}")
+
+    out["stores"] = opt_stores
+    out["markets"] = opt_markets
+    out["source_meta"] = {"sales": meta, "rows": len(rows), "cells": len(cells)}
+    out["org_id"] = org_id
+    return out
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SPIFF IMPACT (index §60) — owner ask 2026-10-08: *"create a report for management review to assess
+# the affect of a certain spiff on the overall commisison payout revenue for the store and what %
+# does that help to increase the profitablity and then report whoich stores are lakcing those sales
+# in terms of % sales which are contriuting to that profitability"*.
+#
+# NOTHING IS DERIVED HERE. This function fetches and WIRES; every number comes from a home that
+# already owns it — §58 for what a carrier dollar IS and which P&L line it books to, §57 (through
+# §58) for the org's declaration, §4's `analysis.pl_totals` off the stored per-store P&L read through
+# §19.50's deduped `statement_filter.store_snapshots`, §59 for boxes / traffic / band / "behind", and
+# the Daily-Targets store resolver for which store a spelling names. `commcalc/spiff_impact.py`
+# carries the duplicate check in full.
+def _spiff_impact_inputs(client, org_id: str, period: str):
+    """Everything the PURE module needs, read ONCE through the platform's existing one homes."""
+    pv = _pvariants(period)
+
+    # THE CARRIER STATEMENT — paged through the one home, NO literal row ceiling (§19.48's lock
+    # fails the build on one, and this feed is 11,054 rows a month).
+    def _comp_q():
+        return (client.schema("commcalc").table("raw_comp_report")
+                .select("business_address,compensation_type,payment_amount,quantity,period")
+                .eq("org_id", org_id).in_("period", pv))
+    comp_rows = _feed_read.read_all(_comp_q)
+
+    # THE CLASSIFICATION — §58's one home, bound to this org's own declarations and config, so this
+    # report reads the SAME verdict the P&L books with. Never a keyword guess of its own.
+    from app.modules.commcalc import carrier_dollar_class as _cdc
+    cdc_cfg = _cdc.load_config(client, org_id)
+    try:
+        cdc_rules = carrier_map.load_rules(client, org_id)
+    except Exception:
+        cdc_rules = []
+    cdc_decl = _cdc.load_declarations(client, org_id)
+    _cls_cache = {}
+
+    def classify(raw_type):
+        key = str(raw_type or "")
+        c = _cls_cache.get(key)
+        if c is None:
+            c = _cls_cache[key] = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg)
+        return c
+
+    def component_line(component):
+        return _cdc.component_line(component, cdc_cfg.get("component_lines"), "carrier_comm")
+
+    # "Does this pay type's label NAME a month rung" — `commission_ledger.parse_payment_month` is
+    # exactly that question's home and its docstring says so. The report asks only that; the
+    # month-of-life LEG question belongs to `month_leg_of` and is not asked here.
+    from app.modules.commcalc.commission_ledger import parse_payment_month as _month_token
+
+    # THE STORE KEY — the same resolver §59 and the Daily-Targets actuals use, so the carrier money,
+    # the sales rows and the P&L snapshots all land on ONE key per store.
+    resolve_code = _store_code_resolver(client, org_id)
+
+    def store_of(raw):
+        s = str(raw or "").strip()
+        return (resolve_code(s) if s else "") or s
+
+    # THE STORED PER-STORE P&L — `statement_filter.store_snapshots` (§19.50's deduped read, shared
+    # with the filtered statement) and `analysis.pl_totals` (§4's one home for the four totals). A
+    # store with no snapshot is ABSENT from this map, which the pure module reports as not computed.
+    pl_by_store, pl_computed = {}, []
+    try:
+        from app.modules.account import statement_filter as _sf, analysis as _an
+        for r in _sf.store_snapshots(client, org_id, period, "pl"):
+            addr = str(r.get("scope_key") or "")[len("store:"):]
+            key = store_of(addr)
+            if not key:
+                continue
+            pl_by_store[key] = _an.pl_totals(r.get("payload") or {})
+            if r.get("computed_at"):
+                pl_computed.append(str(r["computed_at"]))
+    except Exception as e:
+        print(f"WARN spiff_impact per-store P&L unavailable: {e}")
+    pl_computed_at = (min(pl_computed)[:19].replace("T", " ") + " UTC") if pl_computed else None
+    return (comp_rows, classify, component_line, _month_token, store_of, pl_by_store,
+            pl_computed_at, component_line("COMMISSION"))
+
+
+@router.get("/spiff-impact")
+def spiff_impact(period: str = "", spiff: str = "", bands: str = "", markets: str = "",
+                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """SPIFF IMPACT — what one carrier pay type is worth to a store's commission revenue and profit,
+    and which stores are not earning it on the sales they make.
+
+    OWNER 2026-10-08: *"create a report for management review to assess the affect of a certain spiff
+    on the overall commisison payout revenue for the store and what % does that help to increase the
+    profitablity and then report whoich stores are lakcing those sales in terms of % sales which are
+    contriuting to that profitability"*.
+
+    `spiff` is one of the pay types the payload's `options` list for the period — derived from the
+    org's OWN rows, never from a list in code — and with none given the report opens on the
+    largest-dollar spiff and SAYS it chose (`selection_basis`).
+
+    Three columns, three homes: the share of the P&L line the money actually books to (§58's
+    classification, the same one the P&L uses), the profit with it against without it (the stored
+    per-store P&L via §4's `pl_totals`), and the paid units per 100 boxes ranked inside the store's
+    own traffic band (§59's bands, median, gap and `lagging()` — this report adds its metric THROUGH
+    them so "behind" keeps one definition). READ-ONLY: it books nothing, pays nobody and recomputes
+    no statement.
+    """
+    require_org(org_id)
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+
+    try:
+        (comp_rows, classify, component_line, month_token, store_of, pl_by_store,
+         pl_computed_at, commission_line) = _spiff_impact_inputs(client, org_id, period)
+    except Exception as e:
+        raise HTTPException(500, f"spiff-impact read failed: {type(e).__name__}: {e}")
+
+    # ── RBAC + the market filter, exactly as every other sales report scopes itself ───────────────
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        ks, in_keyset = None, None
+    sel_markets = {m.strip() for m in (markets or "").split(",") if m.strip()}
+
+    def _keep(store_raw):
+        st = store_of(store_raw)
+        if ks is not None and in_keyset is not None and not in_keyset(ks, st)                 and not in_keyset(ks, str(store_raw or "").strip()):
+            return False
+        if sel_markets and (resolve_market(st) or "") not in sel_markets:
+            return False
+        return True
+
+    comp_rows = [r for r in comp_rows if _keep(r.get("business_address"))]
+
+    options = _spiffimp.pay_type_options(
+        comp_rows, classify, component_line=component_line, month_token=month_token)
+    selected, selection_basis = _spiffimp.default_selection(options, requested=spiff)
+    sel_entry = next((o for o in options if o["type"] == selected), None)
+
+    money, pl_line, unresolved = _spiffimp.store_money(
+        comp_rows, selected, classify, component_line=component_line, store_of=store_of)
+
+    # ── THE SALES SIDE, through §59 — the bands, the boxes and the ONE definition of "behind" ─────
+    peer_out, peer_err = None, None
+    try:
+        srows, smeta = _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS)
+        srows = [r for r in srows if _keep(r.get("store"))]
+        peer_out, _cells, _unres = _peer_comparison_payload(
+            client, org_id, period, srows, resolve_market=resolve_market,
+            bands=[b for b in (bands or "").split(",") if b.strip()] or None,
+            params={"period": period, "markets": sorted(sel_markets),
+                    "metric": _spiffimp.SPIFF_METRIC})
+        # The metric is folded in THROUGH §59's own machinery, so the median, the gap, the verdict
+        # and the coaching sentence are the peer screen's, not a second copy of them.
+        # A store the carrier statement never NAMED carries no rate — not a 0.00. Its money is
+        # somewhere else (an unresolved spelling on another row), and ranking it last in its band
+        # would accuse a mapping defect of being a sales result. A store the statement DID name,
+        # paid $0.00 of this type, is a real zero and stays ranked: that IS the owner's finding.
+        _rate = {}
+        for r in (peer_out.get("rows") or []) + (peer_out.get("unbanded") or []):
+            m = money.get(r.get("store")) or {}
+            _rate[r.get("store")] = (_spiffimp.units_per_100_boxes(
+                m.get("spiff_units", 0), r.get("boxes"))
+                if r.get("store") in money else None)
+        peer_out = _peercmp.with_extra_metric(
+            peer_out, _spiffimp.SPIFF_METRIC, _spiffimp.SPIFF_METRIC_LABEL, _rate)
+    except Exception as e:
+        peer_err = f"{type(e).__name__}: {e}"
+        print(f"WARN spiff_impact peer comparison unavailable: {peer_err}")
+
+    out = _spiffimp.build(
+        money, peer_out, pl_by_store,
+        selected=selected, selected_entry=sel_entry, selection_basis=selection_basis,
+        options=options, commission_line=commission_line, period=period,
+        window_label=f"{period} to date", unresolved_stores=unresolved,
+        pl_computed_at=pl_computed_at,
+        params={"period": period, "spiff": selected, "markets": sorted(sel_markets),
+                "metric": _spiffimp.SPIFF_METRIC})
+    # A comparison that did not run is REPORTED, never silently absent — "a comparison that did not
+    # run is not the same as no store being behind" (§59.7's §K6 rule, same posture here).
+    out["peer_meta"] = {"ran": bool(peer_out), "error": peer_err,
+                        "band_cuts": (peer_out or {}).get("band_cuts")}
+    out["markets"] = sorted({m for m in ([resolve_market(store_of(r.get("business_address")))
+                                          for r in comp_rows] + list(all_markets)) if m})
+    out["pl_line"] = pl_line
+    out["source_meta"] = {"comp_rows": len(comp_rows), "pay_types": len(options),
+                          "pl_stores": len(pl_by_store)}
+    out["org_id"] = org_id
+    return out
 
 @router.get("/sales-diagnostics")
 def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
@@ -29192,6 +29550,24 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
                           '_txn': set(), '_prem': set(), '_byod': set(), '_upg': set(),
                           '_port': set(), '_swap': set(), '_newact': set(), '_billpay': set(),
                           '_dev_tablet': set(), '_dev_watch': set(),
+                          # ADD-A-LINE (owner 2026-10-08, index §59) — distinct transactions carrying
+                          # an add-a-line line, through THE one home `line_class.is_add_a_line`. An AAL
+                          # is a MODIFIER on a class, never a class, so this adds a set and moves no
+                          # existing count: `_prem` / `_byod` / `_port` / box_count are untouched.
+                          '_aal': set(),
+                          # BILL-PAYMENT VISITS on the DECLARED predicate (same owner directive). The
+                          # cell already carried two bill-payment facts and NEITHER answers "how many
+                          # people came in to pay a bill": `_billpay` is distinct-transaction but rides
+                          # the Daily-Targets conversion vocabulary (_BILLPAY_DEFAULT_TOKENS, which the
+                          # index records as over-matching), and `bill_qty` rides the right predicate
+                          # (exec_cfg['bill_payment'], mig 962) but counts LINES. This is that predicate
+                          # at TRANSACTION grain — one more fact in the one home, not a third tally
+                          # somewhere else. Populated only when exec_cfg is supplied, exactly like
+                          # bill_qty, so every pre-existing caller is byte-identical.
+                          '_billpay_exec': set(),
+                          # Transactions that ALREADY produced a box line in this cell — the guard the
+                          # activation-bucket addition below dereferences so a sale cannot be a box twice.
+                          '_box_txn': set(),
                           'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'setup_fee_rev': 0.0,
                           'box_count': 0,
                           'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
@@ -29241,6 +29617,13 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         # byte-identical. (Independent tally; changes none of the buckets above.)
         if tid and _lc.exclusion_class(r, line_rules) == 'swap':
             a['_swap'].add(tid)
+        # ADD-A-LINE — distinct-txn, through THE ONE add-a-line vocabulary (`line_class.is_add_a_line`,
+        # owner 2026-10-08). Exactly the shape of the swap tally above and for the same reason: the only
+        # other answer to this question on the platform was a bare contract_type substring in
+        # `asset/router._promo_type`, which now dereferences the same home. INDEPENDENT tally — an AAL
+        # keeps counting in whichever bucket its class puts it, so no existing number moves.
+        if tid and _lc.is_add_a_line(r, line_rules):
+            a['_aal'].add(tid)
         # NEW ACTIVATIONS — the owner's denominator, per cell, from the one derivation above.
         if _uid and _uid in _newact_units:
             a['_newact'].add(_uid)
@@ -29262,6 +29645,10 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         # every surface that shares this aggregation (Sales Report / conversion / Productivity / Review).
         if dept in (acfg.get('box_departments') or _BOX_DEPTS):
             a['box_count'] += 1
+            # …and remember WHICH sale it was, so the bucket addition below can tell a sale that
+            # already has a box from one that has none. See the note on `_bcb`.
+            if tid:
+                a['_box_txn'].add(tid)
         _pl = str(r.get('product_desc') or '').lower()
         # Bill-payment membership is CONFIG-DRIVEN per org (mig 214; acfg['billpay_products']). When the org
         # has a NON-empty configured list, a line is a bill payment iff its product_desc EXACTLY matches
@@ -29288,6 +29675,9 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
             if _exec_line_match(exec_cfg['bill_payment']['rules'], _d, _c, _pl):
                 a['bill_qty'] += 1
                 a['bill_amt'] += ext
+                # the same matched line at TRANSACTION grain — see the '_billpay_exec' note above
+                if tid:
+                    a['_billpay_exec'].add(tid)
                 # Bill-pay TENDER split (owner 2026-09-02 #2, config mig 944): the SAME classified
                 # line, bucketed by the receipt's tender_type — 'card' answers "bill payments
                 # received on credit card from the sales transactions for that day". Multi-tender
@@ -29307,19 +29697,28 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     # customer-phone / BYOD activation as a box). box_count is otherwise a DEVICE-LINE tally; here we add
     # the DISTINCT-transaction count of each configured bucket (byod/upgrade/premium) so the metric tallies
     # to the owner's expectation across EVERY surface that reads box_count (Sales-Report box count, Daily-
-    # Targets conversion + attainment, Productivity / Stack-Ranking / Review). A BYOD transaction carries NO
-    # device-department line, so this never double-counts an existing box. Empty set (house/Boost default,
+    # Targets conversion + attainment, Productivity / Stack-Ranking / Review). A transaction that ALREADY
+    # produced a box line is EXCLUDED here, measured per cell against `_box_txn` — the original note that
+    # "a BYOD transaction carries NO device-department line" was an assumption, not a fact, and it was
+    # already false on two tenants (see the loop below). Empty set (house/Boost default,
     # or pre-231) → no-op → BYTE-IDENTICAL. Exec MTD's "trending box" already = total activations (incl.
     # BYOD) and does not read box_count, so this ALIGNS the box-count surfaces with Exec MTD.
     _bcb = (acfg.get('box_count_buckets') if acfg else None) or set()
     if _bcb:
         for a in agg.values():
-            if 'byod' in _bcb:
-                a['box_count'] += len(a['_byod'])
-            if 'upgrade' in _bcb:
-                a['box_count'] += len(a['_upg'])
-            if 'premium' in _bcb:
-                a['box_count'] += len(a['_prem'])
+            # ONE SALE, AT MOST ONE BOX FROM A BUCKET. A bucket adds a box for the ABSENCE of a device
+            # line, so it may only count a transaction that produced no box line in this cell. The
+            # original code added `len(a['_byod'])` outright, on the assumption — written in the comment
+            # above — that "a BYOD transaction carries NO device-department line". That assumption is
+            # not a property of BYOD, it is a property of the org's `box_departments`, and it stops
+            # holding the moment an org ticks a department that BYOD sales also use. Measured live
+            # 2026-10-08 (September 2026): Luxelink Wireless double-counted 64 transactions and the
+            # house org 39, both silently. So the guard is dereferenced rather than assumed, and the
+            # same rule covers `upgrade` and `premium` — an upgrade almost always HAS a device line, so
+            # that bucket would have been the worse offender had anyone ticked it.
+            for _b, _k in (('byod', '_byod'), ('upgrade', '_upg'), ('premium', '_prem')):
+                if _b in _bcb:
+                    a['box_count'] += len(a[_k] - a['_box_txn'])
     return agg
 
 
@@ -29675,7 +30074,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
     return out
 
 
-def _fetch_actuals(client, org_id, period):
+def _fetch_actuals(client, org_id, period, rows_out=None):
     """MTD 'achieved' actuals for Daily Targets — flowing from the EXACT SAME sales aggregation the Sales
     Report + Executive MTD use (owner directive 2026-07-16: "the Sales Report should flow into the Daily
     Targets"). Reads the SAME union (`_sales_rows_union`, the (day × store) cell-grain feed∪raw_sales the
@@ -29688,8 +30087,16 @@ def _fetch_actuals(client, org_id, period):
     for guaranteed consistency with the Sales Report (the owner's "never disagree again"): the feed still
     wins each store-day cell it holds, every other store fills from raw_sales (so luxelink's re-uploaded
     stores are still present), and in the healthy feed-only state the union is the feed verbatim → Boost
-    unchanged. Display-only (targets), never commission payout."""
+    unchanged. Display-only (targets), never commission payout.
+
+    `rows_out`, when a list is passed, is EXTENDED with the raw union rows this read already paid for,
+    so a caller needing the same sale rows for a second question does not read the feed twice. The
+    Daily Action Plan uses it for the peer-gap item (§59.7): `_ACTUALS_COLS` is strictly wider than the
+    `_SALES_DISPLAY_COLS` the peer comparison needs, so the one read serves both. It is an OUT
+    parameter and never changes what this function returns."""
     rows, _umeta = _sales_rows_union(client, org_id, period, cols=_ACTUALS_COLS)
+    if rows_out is not None:
+        rows_out.extend(rows)
     rows = _compute_feed_actuals_py(client, org_id, period, rows=rows)
     cmap = _rep_canon_map(client, org_id)
     for r in rows:
@@ -30682,6 +31089,328 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     return {'period': period, 'today': today.isoformat(), 'stores': out,
             'filters': filters, 'applied': applied, 'trending': trend_meta,
             'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# ACCESSORY TARGET ALLOCATION  (index §61; engine: commcalc/accessory_target_plan.py)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER ASK 2026-10-09: *"as a company we can decide what is my company target for accesories sales, we
+# need a new report which decides how the tragets should be assigned for the stores based on the historic
+# performance of the stores … the propotionate sales target required to be achived by the store based on
+# thier accessories per box history and the actual total boxes sold … assign this target proportionately
+# to all stores or selected stores"*.
+#
+# THESE TWO ENDPOINTS DERIVE NOTHING OF THEIR OWN. Every figure is read through the home that already
+# owns it — `_fetch_actuals` (§5's processed sales, the accessory-TARGET basis: accessory $ + device
+# set-up fee) for the two history months and the month to date, `_targets_trending_by_code` for the
+# projection Executive MTD already shows, `commcalc.targets` (mig 006) for the target in force — and the
+# arithmetic lives in the pure module so `harness_accessory_target_plan.py` can drive it DB-free.
+#
+# NO NEW TABLE. The suggestion is written into mig 006's own `accessories_monthly`, the row §5's
+# Accessory Sales Targets page reads, through the SAME `_require_target_edit` gate the single-store save
+# uses. A second home for a store's accessory target would drift from the tracker inside a month.
+
+
+def _acc_plan_month_by_code(client, org_id, period):
+    """{STORE_CODE: {'acc': $, 'boxes': n}} for ONE month, off §5's processed sales rows.
+
+    `acc_gp` is the accessory-TARGET basis (accessory revenue + the device set-up fee, owner directive
+    2026-07-17) and `box_count` is the box tally §59.8's `_box_txn` guard already de-duplicates — so
+    this never counts a BYOD sale that also carried a device line twice. Degrades to {} rather than
+    raising: a report must never 500 on a feed read."""
+    try:
+        rows = _fetch_actuals(client, org_id, period) or []
+    except Exception as e:
+        print(f"WARN accessory target plan actuals failed for {period}: {e}")
+        return {}
+    out = {}
+    for r in rows:
+        code = str(r.get('store_code') or '').strip().upper()
+        if not code:
+            continue
+        d = out.setdefault(code, {'acc': 0.0, 'boxes': 0})
+        d['acc'] += safe_float(r.get('acc_gp'))
+        d['boxes'] += int(r.get('box_count') or 0)
+    for d in out.values():
+        d['acc'] = round(d['acc'], 2)
+    return out
+
+
+@router.get("/accessory-target-plan/{period}")
+def get_accessory_target_plan(period: str, today: str = "",
+                              mode: str = "", value: str = "", basis: str = "",
+                              stores: Optional[List[str]] = Query(default=None),
+                              markets: Optional[List[str]] = Query(default=None),
+                              include_inactive: bool = False,
+                              authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE ACCESSORY TARGET ALLOCATION REPORT (index §61). Read-only — writes nothing, ever.
+
+    Per store: accessory sales in each of the last two months (their own columns), month to date, the
+    projected month-end, the target currently in force, the proportionate target this store's own
+    accessories-per-box history implies against the boxes it is actually selling, and the EXTENSION
+    that target represents over the one it has now.
+
+    `mode` / `value` / `basis` are the company goal the user sets at the top of the page: a fixed
+    dollar total, or a % up or down from a NAMED basis (last month's actual by default). Nothing
+    entered → every suggestion is `null` with the reason said, never a planned $0.
+
+    `stores` / `markets` are RULE FIVE's standardized filters. They do TWO distinct jobs here and the
+    response says which: `markets` narrows the window (which stores the report is about), while
+    `stores` is the owner's multi-select — the stores the goal is split across. Every store NOT in that
+    selection keeps the target it has, and its target is RESERVED out of the company goal rather than
+    assumed away, so assigning to three stores makes no silent promise about the rest."""
+    require_org(org_id)
+    client = sb()
+    cperiod = _period_or_400(period)
+    _start, _end, today_d = _period_bounds(cperiod, today)
+    m1_period = _prior_period(cperiod)
+    m2_period = _prior_period(m1_period)
+
+    # The target in force for this month, and the roster that gives a store its name and market.
+    trows = (client.schema('commcalc').table('targets')
+             .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
+    tgt_by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
+    roster = _storeops_roster(client, org_id, include_inactive=include_inactive,
+                              keep_codes=set(tgt_by_code))
+
+    mtd = _acc_plan_month_by_code(client, org_id, cperiod)
+    m1 = _acc_plan_month_by_code(client, org_id, m1_period)
+    m2 = _acc_plan_month_by_code(client, org_id, m2_period)
+    trend_by_code, _trend_meta = _targets_trending_by_code(client, org_id, cperiod, today=today_d)
+
+    # ── Market filter FIRST: it decides which stores the report (and therefore the company goal) is
+    #    about. The store multi-select is applied downstream, as the SELECTION the goal is split over.
+    want_markets = {str(m).strip().lower() for m in (markets or ()) if str(m or '').strip()}
+    src, market_opts = [], set()
+    for s in roster:
+        code = str(s.get('store_code') or '').strip()
+        if not code:
+            continue
+        cu = code.upper()
+        mkt = str(s.get('market') or '').strip()
+        if mkt:
+            market_opts.add(mkt)
+        if want_markets and mkt.lower() not in want_markets:
+            continue
+        tr = trend_by_code.get(cu, {})
+        src.append({
+            'store_code': code,
+            'address': s.get('address') or code,
+            'market': mkt or None,
+            'is_active': _store_active(s),
+            'm2_acc': (m2.get(cu) or {}).get('acc', 0.0),
+            'm2_boxes': (m2.get(cu) or {}).get('boxes', 0),
+            'm1_acc': (m1.get(cu) or {}).get('acc', 0.0),
+            'm1_boxes': (m1.get(cu) or {}).get('boxes', 0),
+            'mtd_acc': (mtd.get(cu) or {}).get('acc', 0.0),
+            'mtd_boxes': (mtd.get(cu) or {}).get('boxes', 0),
+            # The projection Executive MTD and the Accessory Sales Targets tracker already show, on the
+            # SAME basis as the achieved columns beside it (accessory $ + set-up fee).
+            'projected_acc': safe_float(tr.get('trending_acc_plus_setup')
+                                        or tr.get('trending_acc_sales')),
+            'projected_boxes': int(tr.get('trending_box') or 0),
+            'current_target': safe_float((tgt_by_code.get(cu) or {}).get('accessories_monthly')),
+            'has_target_row': cu in tgt_by_code,
+        })
+
+    # RBAC span: a manager plans only their own stores. Applied to the WINDOW, so the goal they see is
+    # the goal over the stores they can act on (the same posture `get_targets` takes).
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        src = [r for r in src if in_keyset(ks, r.get('store_code'), r.get('address'))]
+
+    selected = [str(s).strip() for s in (stores or ()) if str(s or '').strip()]
+    # The multi-select sends either a store_code or an address (RULE FIVE accepts both); resolve each
+    # to the code the allocation keys on so a selection by address is not silently empty.
+    by_addr = {str(r.get('address') or '').strip().lower(): r['store_code'] for r in src}
+    sel_codes = []
+    for s in selected:
+        cu = s.strip().upper()
+        if any(r['store_code'].upper() == cu for r in src):
+            sel_codes.append(cu)
+        elif s.strip().lower() in by_addr:
+            sel_codes.append(by_addr[s.strip().lower()].upper())
+
+    result = _accplan.plan(src, mode=(mode or None), value=(value or None),
+                                        basis=(basis or None), selected=sel_codes or None)
+    can_edit, _caller = _can_edit_targets(authorization, org_id)
+    result.update({
+        'period': cperiod, 'today': today_d.isoformat(),
+        'history_periods': {'m1': m1_period, 'm2': m2_period},
+        'goal_modes': [{'value': k, 'label': _accplan.GOAL_MODE_LABELS[k]}
+                       for k in _accplan.GOAL_MODES],
+        'goal_bases': [{'value': k, 'label': _accplan.GOAL_BASIS_LABELS[k]}
+                       for k in _accplan.GOAL_BASES],
+        'filters': {'stores': [{'value': r['store_code'], 'label': r['address']} for r in src],
+                    'markets': sorted(market_opts)},
+        'applied': {'markets': sorted(want_markets), 'stores': sel_codes},
+        'scope': {'restricted': ks is not None, 'can_edit_targets': bool(can_edit),
+                  'stores_in_scope': len(src)},
+    })
+    return result
+
+
+class AssignAccessoryTargetsIn(LaxModel):
+    mode: Any = None
+    value: Any = None
+    basis: Any = None
+    stores: Any = None            # the multi-select: which stores the goal is split across
+    markets: Any = None           # the window the company goal is measured over
+    include_inactive: Any = None
+    confirm_store_codes: Any = None   # belt-and-braces: only these codes may be written
+
+
+@router.post("/accessory-target-plan/{period}/assign")
+def assign_accessory_target_plan(period: str, body: Optional[AssignAccessoryTargetsIn] = None,
+                                 today: str = "", authorization: str = Header(default=""),
+                                 org_id: str = ORG_ID):
+    """Write the suggested accessory targets into `commcalc.targets` for the selected stores.
+
+    RECOMPUTES the plan server-side from the same goal inputs rather than trusting a client-supplied
+    number — the browser may not name what a store's target is going to be. The write then goes store
+    by store through `_require_target_edit`, the SAME gate `PUT /targets/{period}` uses, so a district
+    manager can only assign inside their own span.
+
+    NOTHING ELSE ON THE ROW MOVES. Only `accessories_monthly` is written; the activation / upgrade /
+    BYOD figures and the note are carried from the existing row, or seeded from `_carry_forward_map`
+    exactly as `GET /targets/{period}` would have displayed them when no row exists yet — so saving an
+    accessory plan cannot zero a target this page does not show. A store whose suggestion could not be
+    computed is OMITTED, never written as 0."""
+    b = body or AssignAccessoryTargetsIn()
+    _require_target_edit(authorization, org_id)      # the permission half, before any read
+    plan_result = get_accessory_target_plan(
+        period, today=today, mode=str(b.mode or ''), value=('' if b.value is None else str(b.value)),
+        basis=str(b.basis or ''), stores=[str(x) for x in (b.stores or [])],
+        markets=[str(x) for x in (b.markets or [])],
+        include_inactive=bool(b.include_inactive), authorization=authorization, org_id=org_id)
+    payload = _accplan.assignment_payload(
+        plan_result, store_codes=[str(x) for x in (b.confirm_store_codes or [])] or None)
+    if not payload:
+        return {'period': plan_result['period'], 'written': 0, 'rows': [],
+                'reason': (plan_result.get('goal') or {}).get('reason')
+                          or (plan_result.get('allocation') or {}).get('reason')
+                          or 'nothing_to_assign',
+                'goal': plan_result.get('goal'), 'allocation': plan_result.get('allocation')}
+
+    client = sb()
+    cperiod = plan_result['period']
+    pm = parse_period(cperiod)
+    existing = {str(r.get('store_code', '')).upper(): r
+                for r in ((client.schema('commcalc').table('targets').select('*')
+                           .eq('org_id', org_id).in_('period', _pvariants(cperiod))
+                           .execute().data) or [])}
+    codes = {p['store_code'].upper() for p in payload}
+    need_seed = [c for c in codes if c not in existing]
+    seed = {}
+    if need_seed:
+        # The SAME carry-forward the targets GET seeds its rows from, so a first-ever save preserves
+        # what that page was showing for the other categories instead of writing them as 0.
+        roster = _storeops_roster(client, org_id, include_inactive=True)
+        try:
+            seed = (_carry_forward_map(client, org_id, cperiod,
+                                       [s for s in roster
+                                        if str(s.get('store_code') or '').strip().upper() in codes])
+                    or {}).get('by_code', {}) or {}
+        except Exception as e:
+            print(f"WARN accessory target assign carry-forward failed: {e}")
+            seed = {}
+    byod_def = _byod_pct_default(client, cperiod, org_id)
+    uid = _caller_uid(authorization)
+    written, out = 0, []
+    for p in payload:
+        code = p['store_code']
+        cu = code.upper()
+        _require_target_edit(authorization, org_id, code)     # the SPAN half, per store
+        prev = existing.get(cu) or {}
+        sd = seed.get(cu, {}) if not prev else {}
+        row = {
+            'org_id': org_id, 'store_code': code, 'period': cperiod,
+            'period_month': pm['month'], 'period_year': pm['year'],
+            'activations_monthly': safe_float(prev.get('activations_monthly')
+                                              if prev else sd.get('activations_monthly')),
+            'upgrades_monthly': safe_float(prev.get('upgrades_monthly')
+                                           if prev else sd.get('upgrades_monthly')),
+            'accessories_monthly': p['accessories_monthly'],
+            'byod_pct': (prev.get('byod_pct') if prev else sd.get('byod_pct')) or byod_def,
+            'notes': prev.get('notes') if prev else None,
+            'updated_by': uid,
+        }
+        (client.schema('commcalc').table('targets')
+         .upsert(row, on_conflict='org_id,store_code,period').execute())
+        written += 1
+        out.append({'store_code': code, 'accessories_monthly': p['accessories_monthly'],
+                    'previous': safe_float(prev.get('accessories_monthly')) if prev else None,
+                    'seeded_other_categories': bool(sd)})
+    return {'period': cperiod, 'written': written, 'rows': out, 'reason': None,
+            'goal': plan_result.get('goal'), 'allocation': plan_result.get('allocation')}
+
+
+@router.get("/targets/{period}/report-cards")
+async def get_manager_report_cards(period: str, today: str = "",
+                                   stores: Optional[List[str]] = Query(default=None),
+                                   markets: Optional[List[str]] = Query(default=None),
+                                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """MANAGER REPORT CARDS (owner 2026-10-08, index §59.9) — what was assigned to each district
+    manager, store by store, with the system's own check-off of whether it was met; and the same card
+    one level up, where the rows are the DMs beneath that manager so they are accountable too.
+
+    THIS ENDPOINT DERIVES NOTHING. Every number on a card comes from a home that already owns it:
+
+      · the per-store targets and achievement, and the roll-up, from `/targets/{period}/summary` —
+        which this handler CALLS rather than reassembling. One code path means a DM's card and the
+        DM's own Targets screen cannot disagree about the same store on the same day, and it also
+        inherits that endpoint's `scope_keyset` filtering for free, so a card never shows a store its
+        reader may not see.
+      · who owns a store, from `storeops/org_chain.dm_by_store` — THE org-tree walk, read in bulk.
+      · who is behind stores of the same footfall, from `_peer_comparison_payload` +
+        `peer_comparison.peer_items_by_store` (§59.4, §59.7) — the same verdict the action plan uses.
+      · the check-off itself and the cards, from pure `commcalc/manager_report_card.py`.
+
+    A store the org tree cannot place is REPORTED in `unassigned` with the reason, never dropped and
+    never given a guessed owner: measured 2026-10-08, the tree names a DM for only 6 of 29 house
+    stores, so most of the org lands there today and the note says what to fix.
+    """
+    summary = await get_targets_summary(period, today=today, stores=stores, markets=markets,
+                                        authorization=authorization, org_id=org_id)
+    rows = summary.get('stores') or []
+    client = sb()
+    cperiod = _period_or_400(period)
+
+    # WHO OWNS WHICH STORE — the one walk, in bulk. A failure here is reported, not swallowed into
+    # "nobody has a DM", because those two look identical on a card and only one is the owner's to fix.
+    chain, chain_error = {}, None
+    try:
+        from app.modules.storeops.router import org_chain_inputs
+        from app.modules.storeops import org_chain as _org_chain
+        chain = _org_chain.dm_by_store(**org_chain_inputs(org_id))
+    except Exception as e:
+        chain_error = f"the org tree could not be read ({e})"
+
+    # THE PEER VERDICT — the same assembly the screen and the action plan read, so all three agree
+    # about who is behind. Degrades to "not compared" with the reason stated; a card that silently
+    # ticked every store as keeping up would be worse than one that says it could not tell.
+    peer_items, peer_compared, peer_error = {}, set(), None
+    try:
+        _rows, _meta = _sales_rows_union(client, org_id, cperiod)
+        _payload, _cells, _unres = _peer_comparison_payload(client, org_id, cperiod, _rows)
+        peer_items = _peercmp.peer_items_by_store(_payload)
+        peer_compared = {str((r or {}).get('store') or '').strip().upper()
+                         for r in (_payload.get('rows') or [])
+                         if (r or {}).get('band') is not None}
+    except Exception as e:
+        peer_error = f"the peer comparison could not be computed ({e})"
+
+    cards = _mrcard.build(rows, chain, peer_items=peer_items,
+                          aggregate=targets_engine.aggregate_stores,
+                          peer_compared=peer_compared)
+    note = _mrcard.coverage_note(cards.get('coverage'))
+    return {'period': summary.get('period', period), 'today': summary.get('today'),
+            **cards,
+            'coverage_note': note,
+            'errors': [e for e in (chain_error, peer_error) if e],
+            'filters': summary.get('filters'), 'applied': summary.get('applied'),
+            'scope': summary.get('scope'), 'setup_hint': summary.get('setup_hint')}
 
 
 # KPI → commission tier inputs. Each is (key, label, payout_config column, default target %).
@@ -34643,8 +35372,47 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     stores = _storeops_roster(client, org_id, include_inactive=include_inactive,
                               keep_codes=set(by_code))
     shifts = _fetch_shifts(client, start, end, org_id)
-    actuals = _fetch_actuals(client, org_id, period)
+    # The peer-gap item (§59.7) needs the SAME sale rows this read already pays for, so it takes them
+    # back out rather than reading the feed a second time — `_ACTUALS_COLS` is strictly wider than what
+    # the peer comparison needs.
+    _sale_rows: list = []
+    actuals = _fetch_actuals(client, org_id, period, rows_out=_sale_rows)
     rank = targets_engine.SEV_RANK
+
+    # ── THE PEER GAP (owner 2026-10-08: "it should trigger in teh action plan for the sales reps their
+    #    managers and dm and market manager to prompt them to increase the sales for those laggin
+    #    stores as if one can do why not the other").
+    #
+    #    NO NEW FAN-OUT, AND THAT IS THE POINT. This plan is ALREADY scoped by `scope_keyset`, so one
+    #    store-level item reaches every audience the owner named: the rep sees it on their own store
+    #    (the self-scope substitution above), and their manager, DM and market manager each see it on
+    #    every store inside their span. Four new notification paths would have been four things to
+    #    drift apart; the existing scoping is the delivery.
+    #
+    #    AND NO SECOND VERDICT. Who is lagging is decided ONLY by `peer_comparison.lagging()`, the same
+    #    call the screen makes, through the same `_peer_comparison_payload`. This plan does not compute
+    #    a band, a median or a gap of its own, so the screen and the plan cannot name different stores.
+    #    A failure here costs the peer item and nothing else — the rest of the plan is unaffected.
+    peer_items, peer_meta = {}, None
+    try:
+        _peer_out, _pcells, _punres = _peer_comparison_payload(
+            client, org_id, period, _sale_rows,
+            resolve_market=_store_market_resolver(client, org_id)[0],
+            params={"period": period, "metric": _peercmp.DEFAULT_GAP_METRIC,
+                    "source": "action-plan"})
+        peer_items = _peercmp.peer_items_by_store(_peer_out)
+        peer_meta = {"stores_compared": len(_peer_out.get("rows") or []),
+                     "bands": len(_peer_out.get("bands") or []),
+                     "lagging": len(_peer_out.get("lagging") or []),
+                     "unbanded": len(_peer_out.get("unbanded") or []),
+                     "gap_metric": _peercmp.DEFAULT_GAP_METRIC,
+                     "caveats": _peer_out.get("caveats") or []}
+    except Exception as _e:
+        # REPORTED, never silently absent: a reader must be able to tell "no store is behind its peers"
+        # from "the comparison did not run", because the two look identical on a screen.
+        peer_meta = {"error": f"{type(_e).__name__}: {_e}",
+                     "note": "The peer comparison could not be computed, so no peer-gap item is shown. "
+                             "That is not the same as no store being behind its peers."}
 
     # ── Commission context: KPI targets + each rep's computed tier ($ at risk = the
     #    payout forfeited below tier 1.0 = subtotal × (1 − tier)). Empty/graceful if
@@ -34757,6 +35525,13 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                                            round_counts=True, month_end=month_end)
         store_conv = targets_engine.scope_conversion(actuals, code, None, today)
         store_items = targets_engine.build_action_items(res, store_conv, include_categories=True)
+        # THE PEER GAP, dereferenced — the item is built in `peer_comparison`, keyed on the store code
+        # this loop is already on. A store the peer report did not band (no bill-payment traffic) or
+        # could not resolve to a code simply is not in the map, so nothing is ever attached to a store
+        # the comparison could not place.
+        peer_item = peer_items.get(code.upper())
+        if peer_item:
+            store_items.append(dict(peer_item))
 
         # Target-vs-achieved metrics per category (what's expected vs what they're doing).
         metrics = []
@@ -34808,7 +35583,15 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             if not store_code:
                 if not rep_plans:
                     continue
-                store_items = []
+                # …EXCEPT the peer gap. This suppression exists because "a store-wide figure is a
+                # cross-rep figure" (see below) — it keeps one rep from reading what the rest of the
+                # shop is leaving on the table. The peer item is not that: it compares this STORE with
+                # other STORES on the same footfall, and its `leader` is a store code, never a person,
+                # so it names no colleague and discloses nobody's tier, payout or at-risk figure. The
+                # owner asked for exactly this prompt to reach "the sales reps" (2026-10-08), so a rep
+                # looking at their own plan keeps it and loses the rest.
+                store_items = [it for it in store_items
+                               if it.get('metric') == _peercmp.PEER_METRIC_LABEL]
         store_at_risk = round(sum((rp['commission'] or {}).get('at_risk', 0)
                                   for rp in rep_plans if rp.get('commission')), 2)
         # A STORE-WIDE FIGURE IS A CROSS-REP FIGURE. "$X across N reps" tells a rep what the rest of
@@ -34847,10 +35630,28 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     # `get_targets_summary` raises for the same cause).
     setup_hint = ("No store is assigned to your login yet, so there is nothing to plan — ask your "
                   "manager to set your store." if no_self_store else "")
+    # HONEST LIMITATION, stated rather than left as a silent omission. This loop skips a store with no
+    # monthly target (`sum(monthly.values()) <= 0` above) and a store outside the caller's span, so a
+    # store that IS behind its peers can be missing from the plan for a reason that has nothing to do
+    # with its selling. Count them and say so; inventing a plan for a store with no target would be the
+    # fabricated denominator the house rules forbid.
+    _shown = {str(r.get('store_code') or '').upper() for r in out}
+    if isinstance(peer_meta, dict) and 'error' not in peer_meta:
+        _missed = sorted(k for k in peer_items if k not in _shown)
+        peer_meta['items_shown'] = sum(1 for r in out for it in r['items']
+                                       if it.get('metric') == _peercmp.PEER_METRIC_LABEL)
+        peer_meta['lagging_not_planned'] = _missed
+        if _missed:
+            peer_meta['note'] = (
+                f"{len(_missed)} store(s) are behind their traffic band but carry no peer item here, "
+                f"because this plan only covers stores with a monthly target set and inside your span: "
+                f"{', '.join(_missed[:6])}{' …' if len(_missed) > 6 else ''}. "
+                f"Set a target for them, or see the full list on Peer Sales Comparison.")
     return {'period': period, 'today': today.isoformat(),
             'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out),
                         'commission_at_risk': round(tot_at_risk, 2)},
             'setup_hint': setup_hint,
+            'peer': peer_meta,
             'stores': out}
 
 

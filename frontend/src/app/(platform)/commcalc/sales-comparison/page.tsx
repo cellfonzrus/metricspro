@@ -215,6 +215,10 @@ export default function SalesComparisonPage() {
           {data?.note || 'No sales in either period for this selection.'}
         </div>
       ) : !data?.error ? (
+        /* OPENS COLLAPSED (owner 2026-10-08). Grouped by Store, every store contributes one row PER
+           ITEM, so expanded this table is hundreds of rows deep before a manager has picked a store.
+           Collapsed, each group header still carries the subtotal for every numeric column, so the
+           comparison reads at a glance and a store is one click away. */
         <ReportShell
           title={`Sales Comparison — ${baseLbl} vs ${cmpLbl}`}
           subtitle={`${data?.window_label || ''}${filtered ? ' · filtered' : ' · all stores'} · % change per item sold`}
@@ -225,6 +229,7 @@ export default function SalesComparisonPage() {
           stickyHeader
           defaultGroupBy="Store"
           collapsibleGroups
+          defaultCollapsed
           groupPersistKey="sales-comparison:groupBy"
         />
       ) : null}

@@ -10,6 +10,17 @@
 //   FACT 1  "what did the person mean by what they typed"  →  src/lib/search-rank.ts
 //   FACT 2  "what can the platform search find"            →  src/lib/search-catalog.ts
 //   FACT 3  "every page this app has"                      →  src/lib/route-index.ts (DERIVED)
+//   FACT 4  "what can THIS viewer find"                     →  src/lib/search-catalog.viewerSources
+//
+// FACT 4 arrived from the owner's third report — *"it is not appearing in the search bar also, which
+// leads us to checking if all modules are searchable or they are hidden"* — and it is the same shape
+// as FACT 3 one level up. There were TWO page-search boxes: ⌘/ folded the derived registry, and the
+// sidebar's ⌘K built its own index from NAV alone and ranked it with its own private
+// `startsWith / includes` ladder. 27 in-app pages were therefore unfindable in the box the owner
+// types in, while 0 were unfindable in the other. A second surface answering the same question with
+// its own index is exactly what FACT 1 and FACT 2 exist to forbid, so the sidebar is now under this
+// lock too — as a JUMPER rather than a console, because it opens destinations and asks the assistant
+// nothing. §D is its section (index §54.12).
 //
 // FACT 3 arrived from the owner's second report — *"this is a design issue not a random left out
 // issue, all the search needs to be run through the index we built"* — and it is locked differently
@@ -40,11 +51,17 @@ const ok = (name, cond, detail) => {
 // Comments and string literals blanked, so a check for CODE never matches prose about the code. The
 // same trap `harness_data_qa_lock.py` hit: a textual check over text that includes its own
 // documentation is vacuous, and here the documentation quotes the very patterns being forbidden.
+// LINE comments are stripped FIRST, then block comments — and the order is load-bearing, not style.
+// This function used to do it the other way round, which was latent until the sidebar came under the
+// lock: `layout.tsx` carries the line comment `// /commcalc/* page, so a first-match …`, and reading
+// block comments first takes that `/*` as an opener and blanks 110 lines of real code, including the
+// very calls §D checks for. §D1 failed on correctly wired code until this was fixed. A glob inside a
+// comment is a comment, not a comment opener. `[^:]` keeps `https://` intact.
 function stripComments(src) {
   return src
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/^[ \t]*\/\/.*$/gm, ' ')
     .replace(/([^:])\/\/.*$/gm, '$1 ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
 }
 
 function codeOnly(src) {
@@ -59,6 +76,11 @@ function codeOnly(src) {
 // THE SURFACES that must dereference the two facts. A new console surface is added here, which is
 // the point: the list is what a reviewer reads to know who is bound by the rule.
 const SURFACES = ['src/components/AskBar.tsx']
+// THE JUMPER SURFACE. It searches the same world and ranks it the same way, but it has no assistant,
+// so the question-door rules (askDoor / submitAction / intent) do not apply to it. What DOES apply is
+// every rule about not keeping a second index or a second ranker — which is the whole reason it is
+// here: its private copies of both were the defect.
+const JUMPERS = ['src/app/(platform)/layout.tsx']
 
 const RANKER = 'src/lib/search-rank.ts'
 const CATALOG = 'src/lib/search-catalog.ts'
@@ -75,8 +97,10 @@ function checkSurface(rel, raw) {
     bad.push(`${rel} does not import rank() from @/lib/search-rank`)
   if (!/import\s*\{[^}]*\bintent\b[^}]*\}\s*from\s*['"]@\/lib\/search-rank['"]/.test(raw))
     bad.push(`${rel} does not import intent() from @/lib/search-rank`)
-  if (!/import\s*\{[^}]*\bbuildCatalog\b[^}]*\}\s*from\s*['"]@\/lib\/search-catalog['"]/.test(raw))
-    bad.push(`${rel} does not import buildCatalog() from @/lib/search-catalog`)
+  // `viewerCatalog` is the gate+fold entry point (FACT 4); it calls `buildCatalog` itself, so a
+  // surface that reaches the catalogue through either one is dereferencing the same home.
+  if (!/import\s*\{[^}]*\b(?:viewerCatalog|buildCatalog)\b[^}]*\}\s*from\s*['"]@\/lib\/search-catalog['"]/.test(raw))
+    bad.push(`${rel} does not import viewerCatalog()/buildCatalog() from @/lib/search-catalog`)
   // FACT 3: the catalogue must be built from the DERIVED page list, not from the curated registries
   // alone — that is the whole difference between complete and complete-by-luck.
   if (!/import\s*\{[^}]*\bsearchableRoutes\b[^}]*\}\s*from\s*['"]@\/lib\/route-index['"]/.test(raw))
@@ -93,9 +117,11 @@ function checkSurface(rel, raw) {
   if (/if\s*\(firstDest\)\s*go\(/.test(code))
     bad.push(`${rel} navigates to its best guess without asking submitAction() — the reported defect`)
   // And they must be CALLED, not merely imported — a dead import is how a rewiring un-wires.
-  for (const fn of ['rank(', 'buildCatalog(', 'searchableRoutes(', 'askDoor(', 'submitAction(']) {
+  for (const fn of ['rank(', 'searchableRoutes(', 'askDoor(', 'submitAction(']) {
     if (!code.includes(fn)) bad.push(`${rel} imports but never calls ${fn})`)
   }
+  if (!/\b(?:viewerCatalog|buildCatalog)\(/.test(code))
+    bad.push(`${rel} imports but never calls viewerCatalog()/buildCatalog()`)
   // `intent` is imported under an alias here (the file already has a local `Intent` type for the
   // metric intents), so the call is matched by either spelling.
   if (!/\b(searchIntent|intent)\s*\(/.test(code)) bad.push(`${rel} never calls intent()`)
@@ -113,6 +139,41 @@ function checkSurface(rel, raw) {
   if (/\.toLowerCase\(\)\s*\.split\(/.test(code))
     bad.push(`${rel} tokenizes the query itself — tokens() belongs in ${RANKER}`)
   // NO SECOND CATALOGUE. A surface may read a registry and pass it in; it may not declare one.
+  if (/\bSTOPWORDS\b/.test(code)) bad.push(`${rel} carries its own stopword list — one home is ${RANKER}`)
+  return bad
+}
+
+// THE JUMPER RULE (FACT 4). A destination-search box must assemble the viewer's world in the one
+// home, read the DERIVED page list, and rank with the one ranker — and keep no private copy of any
+// of the three. It is not held to the assistant rules: it asks nothing, so there is no door to pick
+// and no keystroke verdict to defer. Everything else is identical, deliberately: the defect was a
+// surface that answered "which pages exist" and "what did they mean" by itself.
+function checkJumper(rel, raw) {
+  const code = codeOnly(raw)
+  const bad = []
+  if (!/import\s*\{[^}]*\bviewerCatalog\b[^}]*\}\s*from\s*['"]@\/lib\/search-catalog['"]/.test(raw))
+    bad.push(`${rel} does not import viewerCatalog() from @/lib/search-catalog`)
+  if (!/import\s*\{[^}]*\bsearchableRoutes\b[^}]*\}\s*from\s*['"]@\/lib\/route-index['"]/.test(raw))
+    bad.push(`${rel} does not import searchableRoutes() from @/lib/route-index`)
+  if (!/import\s*\{[^}]*\brank\b[^}]*\}\s*from\s*['"]@\/lib\/search-rank['"]/.test(raw))
+    bad.push(`${rel} does not import rank() from @/lib/search-rank`)
+  // CALLED, not merely imported — a dead import is how a rewiring un-wires. `rank` is imported under
+  // an alias in the shell (the file has no other `rank`, but the alias says where it comes from).
+  if (!/\bviewerCatalog\(/.test(code)) bad.push(`${rel} imports but never calls viewerCatalog()`)
+  if (!/\bsearchableRoutes\(/.test(code)) bad.push(`${rel} imports but never calls searchableRoutes()`)
+  if (!/\b(?:rankSearch|rank)\(/.test(code)) bad.push(`${rel} imports but never calls rank()`)
+  // The derived page list must reach the catalogue as the `routes` source, gated by the one home for
+  // "may this viewer open this path" — a NAV-only index is the 27-page gap this lock exists to stop.
+  if (!/routes:/.test(code)) bad.push(`${rel} never passes a routes source to viewerCatalog()`)
+  if (!/canAccessPath\s*\(/.test(code))
+    bad.push(`${rel} does not gate the derived page list with canAccessPath()`)
+  // And destinations are chosen by the one predicate, not by a second reading of "is this a place".
+  if (!/\bdestinations\(/.test(code))
+    bad.push(`${rel} does not use destinations() to drop entities — entityOnly has one home`)
+  // NO PRIVATE RANKER. These are the exact shapes its own ladder used.
+  if (/localeCompare/.test(code)) bad.push(`${rel} sorts results itself — ordering belongs in ${RANKER}`)
+  if (/\bscore\s*[:=]/.test(code)) bad.push(`${rel} computes a score of its own — scoring belongs in ${RANKER}`)
+  if (/\bhay\b/.test(code)) bad.push(`${rel} builds a haystack string — scoring belongs in ${RANKER}`)
   if (/\bSTOPWORDS\b/.test(code)) bad.push(`${rel} carries its own stopword list — one home is ${RANKER}`)
   return bad
 }
@@ -206,9 +267,9 @@ console.log('§B  ARMED — every rule fails on a broken copy')
       s => s.replace(/import \{ rank, intent as searchIntent[^\n]*\n/, ''))
   arm('B2  importing rank() but never calling it goes red',
       s => s.replace(/\brank\(catalog, q, 8\)/, '[]'))
-  arm('B3  dropping the buildCatalog() import goes red',
-      s => s.replace(/import \{ buildCatalog[^\n]*\n/, ''))
-  arm('B4  never calling buildCatalog() goes red', s => s.replace(/buildCatalog\(\{/, 'noCatalog({'))
+  arm('B3  dropping the viewerCatalog() import goes red',
+      s => s.replace(/import \{ viewerCatalog[^\n]*\n/, ''))
+  arm('B4  never calling viewerCatalog() goes red', s => s.replace(/viewerCatalog\(/g, 'noCatalog('))
   arm('B5  a private haystack goes red', s => `${s}\nconst hay = 1\n`)
   arm('B6  a private score goes red', s => `${s}\nconst score = 1\n`)
   arm('B7  sorting results in the surface goes red', s => `${s}\nconst z = a.localeCompare(b)\n`)
@@ -220,8 +281,9 @@ console.log('§B  ARMED — every rule fails on a broken copy')
       s => s.replace(/import \{ searchableRoutes \}[^\n]*\n/, ''))
   arm('B10b never calling searchableRoutes() goes red',
       s => s.replace(/searchableRoutes\(\)/g, '[]'))
-  arm('B10c not passing the routes source to buildCatalog goes red',
-      s => s.replace(/const routes = /, 'const unused = ').replace(/routes,/g, ''))
+  arm('B10c not passing the routes source to the catalogue goes red',
+      s => s.replace(/routes: searchableRoutes\(\),/, 'noRoutes: searchableRoutes(),')
+             .replace(/\broutes\b/g, 'noRoutes'))
   arm('B10d not gating the page list with canAccessPath goes red',
       s => s.replace(/canAccessPath\(/g, 'alwaysTrue('))
   arm('B10e dropping the askDoor() import goes red',
@@ -284,6 +346,47 @@ console.log('§C  the scan still sees code')
      codeOnly(RAW.routes).includes('export const ROUTES'))
 }
 
+// ── §D — the JUMPER surface is under the same lock, and every rule armed ─────────────────────────
+// The sidebar's ⌘K box. Before §54.12 it indexed NAV alone and ranked with its own ladder, so 27
+// in-app pages existed, were reachable, were in the derived registry, and could not be found in it.
+console.log('§D  the sidebar jumper searches the same world, ranked the same way')
+const JUMPER_RAW = Object.fromEntries(JUMPERS.map(s => [s, read(s)]))
+{
+  for (const j of JUMPERS) {
+    const bad = checkJumper(j, JUMPER_RAW[j])
+    ok(`D1  ${j} dereferences the gate, the page list and the ranker`, bad.length === 0, bad)
+  }
+  ok('D2  there is exactly one jumper surface under the lock', JUMPERS.length === 1, JUMPERS)
+  const jump = JUMPER_RAW[JUMPERS[0]]
+  const armJ = (name, mutate) => ok(name, checkJumper(JUMPERS[0], mutate(jump)).length > 0,
+                                    'the broken copy still passed')
+  armJ('D3  dropping the viewerCatalog() import goes red',
+       s => s.replace(/import \{ viewerCatalog[^\n]*\n/, ''))
+  armJ('D4  never calling viewerCatalog() goes red', s => s.replace(/viewerCatalog\(/g, 'noCatalog('))
+  armJ('D5  dropping the searchableRoutes() import goes red',
+       s => s.replace(/import \{ searchableRoutes \}[^\n]*\n/, ''))
+  armJ('D6  never calling searchableRoutes() goes red', s => s.replace(/searchableRoutes\(\)/g, '[]'))
+  armJ('D7  dropping the rank() import goes red',
+       s => s.replace(/import \{ rank as rankSearch \}[^\n]*\n/, ''))
+  // THE REGRESSION, by name: the private `startsWith / includes / group-includes` ladder.
+  armJ('D8  ranking in the surface again goes red', s => s.replace(/rankSearch\(/g, 'myRank('))
+  armJ('D9  sorting results in the surface goes red', s => `${s}\nconst z = a.localeCompare(b)\n`)
+  armJ('D10 a private score goes red', s => `${s}\nconst score = 1\n`)
+  armJ('D11 a second stopword list goes red', s => `${s}\nconst STOPWORDS = new Set()\n`)
+  // THE 27-PAGE GAP, by name: a NAV-only index again.
+  armJ('D12 not passing the derived page list goes red',
+       s => s.replace(/routes: searchableRoutes\(\),/, '').replace(/\broutes:/g, 'noRoutes:'))
+  armJ('D13 not gating the page list with canAccessPath goes red',
+       s => s.replace(/canAccessPath\(/g, 'alwaysTrue('))
+  armJ('D14 deciding what counts as a place itself goes red',
+       s => s.replace(/destinations\(/g, 'myPlaces('))
+  // Counter-arming: the scan still sees the jumper's code after blanking.
+  const jcode = codeOnly(jump)
+  ok('D15 ARMED — the blanked jumper still holds code', jcode.length > 5000, jcode.length)
+  ok('D16 ARMED — the raw jumper names a forbidden pattern in prose, the blanked code does not',
+     /ladder|startsWith/.test(jump) && !/\bscore\s*[:=]/.test(jcode))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
-if (!fail) console.log('OK — one ranker, one catalogue, one DERIVED page index, dereferenced by the one console surface; every rule armed.')
+if (!fail) console.log('OK — one ranker, one catalogue, one DERIVED page index, one viewer gate, dereferenced by BOTH search surfaces; every rule armed.')
 process.exit(fail ? 1 : 0)

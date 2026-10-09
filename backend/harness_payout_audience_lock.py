@@ -747,12 +747,21 @@ v = planted(fe_all_mut={_DASH: FE_ALL[_DASH].replace("payoutRefused", "canSeeRep
 check("(e) i2 a link to the menu-less carrier diagnostic that does not ask payoutRefused → RED", red(v, "i2", _DASH))
 # The derived page registry names every page, gated ones included, and is excused from naming the
 # gate only because its readers dereference canAccessPath. Both halves of that bargain are armed.
-_READER = "components/AskBar.tsx"
-v = planted(fe_all_mut={_READER: FE_ALL[_READER].replace("canAccessPath(", "alwaysTrue(")})
-check("(e) i2 a reader of the derived page registry dropping canAccessPath → RED", red(v, "i2", _READER))
+# The readers are DERIVED, the same way the rule above derives them — never a literal here. There
+# were two from 2026-10-08 (index 54.12: the question bar AND the sidebar jump box both dereference
+# the one gate), and a control naming AskBar alone went stale the moment the second arrived: it
+# unimported ONE reader and the rule stayed green because the other still read the registry. So
+# every reader is mutated, each on its own and then all together.
+_READERS = sorted(r for r, src in FE_ALL.items()
+                  if r != PAGE_REGISTRY and REGISTRY_IMPORT.search(ts_code(src)))
+check("(e) i2 the derived page registry has at least one reader to arm", bool(_READERS))
+for _r in _READERS:
+    v = planted(fe_all_mut={_r: FE_ALL[_r].replace("canAccessPath(", "alwaysTrue(")})
+    check("(e) i2 %s reads the derived page registry without canAccessPath → RED" % _r, red(v, "i2", _r))
 v = planted(fe_all_mut={PAGE_REGISTRY: FE_ALL[PAGE_REGISTRY] + "\nexport const Link = () => <a href='/commcalc/commission-explain'/>\n"})
 check("(e) i2 the derived page registry growing a rendered link → RED", red(v, "i2", PAGE_REGISTRY))
-v = planted(fe_all_mut={_READER: FE_ALL[_READER].replace("from '@/lib/route-index'", "from '@/lib/nothing'")})
+v = planted(fe_all_mut={r: FE_ALL[r].replace("from '@/lib/route-index'", "from '@/lib/nothing'")
+                        for r in _READERS})
 check("(e) i2 nothing reading the derived page registry at all → RED", red(v, "i2", PAGE_REGISTRY))
 v = planted(be_mut={ROUTER: be[ROUTER].replace('    if carrier:\n        _require_carrier_view(authorization, org_id, "commission_explain_carrier")\n',
                                                '    if carrier:\n        pass\n')})

@@ -84,7 +84,7 @@ def function_sources(src):
     return out
 
 
-# THE §59 SANCTION (owner directive 2026-10-09, "chase trhew street number matching"). The store
+# THE §62 SANCTION (owner directive 2026-10-09, "chase trhew street number matching"). The store
 # RESOLUTION CHAIN moved OUT of coa.py into its one home, `app/modules/account/store_identity.py`:
 # `store_resolver` is now only the I/O wrapper that reads `store_mapping` + `store_aliases` and
 # hands them to `build_store_resolver`, and `_squash_key` / `_lead_num_key` delegate instead of
@@ -106,7 +106,7 @@ def coa_movement(base_src, now_src, sanctioned=()):
     """Compare two revisions of coa.py. Returns (removed, changed_outside_sanction, attribution_moved).
 
     All three must be empty for the no-movement claim to hold. `sanctioned` names the functions a
-    given package is allowed to have edited (or, since the §59 chain move, to have REMOVED when the
+    given package is allowed to have edited (or, since the §62 chain move, to have REMOVED when the
     name is in that package's sanction) — everything else, including every resolver, must be
     identical."""
     base, now = function_sources(base_src), function_sources(now_src)

@@ -108,11 +108,12 @@ function parseRegistry(src) {
     if (path == null) return null                     // unparseable line: refuse rather than guess
     const label = (t.match(/label: '((?:[^'\\]|\\.)*)'/) || [])[1]
     const preauth = (t.match(/preauth: '((?:[^'\\]|\\.)*)'/) || [])[1]
+    const menuless = (t.match(/menuless: '((?:[^'\\]|\\.)*)'/) || [])[1]
     const aliasRaw = (t.match(/aliases: \[([^\]]*)\]/) || [])[1]
     const aliases = aliasRaw
       ? aliasRaw.split(',').map(s => (s.trim().match(/^'((?:[^'\\]|\\.)*)'$/) || [])[1]).filter(Boolean)
       : undefined
-    out.set(path, { path, label, aliases, preauth })
+    out.set(path, { path, label, aliases, preauth, menuless })
   }
   return out
 }
@@ -125,6 +126,7 @@ function render(entries) {
     if (e.label) bits.push(`label: '${esc(e.label)}'`)
     if (e.aliases?.length) bits.push(`aliases: [${e.aliases.map(a => `'${esc(a)}'`).join(', ')}]`)
     if (e.preauth) bits.push(`preauth: '${esc(e.preauth)}'`)
+    if (e.menuless) bits.push(`menuless: '${esc(e.menuless)}'`)
     return `  { ${bits.join(', ')} },`
   })
   return `${HEADER}export const ROUTES: RouteEntry[] = [
@@ -150,7 +152,7 @@ const HEADER = `// GENERATED — do not edit the ROUTES array by hand.
 // page would have left the other 33, so the registry is derived instead (the \`module_graph.py\`
 // pattern, §50).
 //
-// THREE FIELDS ARE HUMAN and are PRESERVED across a re-bless:
+// FOUR FIELDS ARE HUMAN and are PRESERVED across a re-bless:
 //   label    — ONLY for a page the nav does not list, since the nav's own label is what the viewer
 //              sees for every page it does. A derived label reads like a path ("Account → Password");
 //              replace it with what people call the page.
@@ -159,6 +161,15 @@ const HEADER = `// GENERATED — do not edit the ROUTES array by hand.
 //              which is mechanically why a page like \`/account/password\` can only declare them here.
 //   preauth  — the REASON a page is deliberately not searchable (a sign-in screen, a public terms
 //              page). Not a flag: the string is the reason, so an exclusion cannot be silent.
+//   menuless — the REASON a page is deliberately in no menu. Same shape as \`preauth\` and for the
+//              same reason: 27 pages were menu-less by ACCIDENT, and before §54.12 that also made
+//              them unfindable in the sidebar's ⌘K box, which indexed the nav alone. Both boxes now
+//              search this registry, so a menu-less page is findable either way — but being in no
+//              menu is a decision, and §I fails the build when a NEW one is made silently.
+//
+// A COMMENT INSIDE THE ARRAY DOES NOT SURVIVE A BLESS — the renderer emits one line per entry and
+// nothing else, so a note written between entries is dropped the next time anyone runs \`--bless\`.
+// Put the reason in the entry itself (\`preauth\`, \`menuless\`) or in this header, where it lasts.
 //
 // Everything else about a page — may this viewer open it, what module gates it — stays where it
 // already lives (\`rbac.canAccessPath\`, \`canSeeItem\`). This file says only WHAT EXISTS.
@@ -172,6 +183,10 @@ export type RouteEntry = {
   aliases?: string[]
   /** Why this page is deliberately not offered by search. Absent = searchable. */
   preauth?: string
+  /** Why this page is deliberately in no menu. Absent and not on §I's baseline = the build is red,
+   *  so a page cannot fall out of the nav unnoticed. Findability does not depend on it: both search
+   *  boxes read this registry (§54.12). */
+  menuless?: string
 }
 
 `
@@ -191,6 +206,56 @@ const SEED_ALIASES = {
                         'forgot password', 'new password'],
 }
 
+// Pages deliberately in no menu, with the reason. Seeded on first bless and preserved afterwards like
+// any human field, so changing one is a reviewable diff.
+const SEED_MENULESS = {
+  '/account/password':
+    'reached from the account menu under the avatar (layout.tsx) and forced on a must_reset_password '
+    + 'login — personal, not a module, so it belongs in neither the sidebar nor a report category',
+  '/portal':
+    'the employee time-clock portal, outside the (platform) shell entirely — it has no module '
+    + 'sidebar to be listed in, and a rep reaches it as their whole app rather than as a page',
+  '/commcalc/commission-explain':
+    'the menu-less carrier diagnostic — reached from a payout row, never browsed to (§54.7, and '
+    + 'harness_payout_audience_lock §i2 holds its audience)',
+}
+
+// THE BASELINE, and why it is a list rather than 26 invented reasons. 27 in-app pages were in no menu
+// when §54.12 measured it, and only the one above had a recorded reason. Writing a plausible sentence
+// for the other 26 would be a guess dressed as a decision, which is worse than the debt: this file's
+// whole rule is that an exclusion states WHY. So they are frozen here as KNOWN, UNEXPLAINED debt and
+// §I2 lets the list only shrink — give one a menu entry or a real reason and it must leave; nothing
+// may ever join it. The 28th menu-less page turns §I1 red. (Same shape as
+// harness_unrun_pending.txt, whose list may only shrink.)
+const MENULESS_BASELINE = [
+  '/closing/cash-position',
+  '/closing/count-config',
+  '/closing/duplicates',
+  '/closing/readiness',
+  '/closing/store-visit-config',
+  '/commcalc/asset/invoice-due',
+  '/commcalc/asset/oninv-3way-recon',
+  '/commcalc/asset/purchase-orders/aging',
+  '/commcalc/asset/purchase-orders/receiving',
+  '/commcalc/asset/purchase-orders/tally',
+  '/commcalc/asset/purchase-orders/vendors',
+  '/commcalc/commission-ledger/setup',
+  '/commcalc/financing/vendors',
+  '/commcalc/ma-class-wiring',
+  '/commcalc/ma-upload',
+  '/commcalc/plan-assignment-audit',
+  '/commcalc/report-mappings',
+  '/commcalc/sales-derive',
+  '/hr/letters/queue',
+  '/hr/letters/send',
+  '/hr/letters/sent',
+  '/storeops/closing',
+  '/storeops/dm-accessory-attribution',
+  '/storeops/payroll-change-log',
+  '/storeops/salary-advances',
+  '/storeops/visits/new',
+]
+
 function build(existing, nav = navPaths()) {
   return DISK.map(path => {
     const prev = existing?.get(path)
@@ -202,6 +267,9 @@ function build(existing, nav = navPaths()) {
       label,
       aliases: prev?.aliases || SEED_ALIASES[path],
       preauth: prev?.preauth || SEED_PREAUTH[path],
+      // A page the nav lists needs no excuse for being menu-less, and keeping a stale one would let
+      // the reason outlive the fact — the same rule the label follows two lines up.
+      menuless: nav.has(path) ? undefined : (prev?.menuless || SEED_MENULESS[path]),
     }
   })
 }
@@ -229,6 +297,7 @@ if (BLESS) {
     const r = back.get(e.path)
     if (!r || (r.label || undefined) !== (e.label || undefined)
         || (r.preauth || undefined) !== (e.preauth || undefined)
+        || (r.menuless || undefined) !== (e.menuless || undefined)
         || JSON.stringify(r.aliases || null) !== JSON.stringify(e.aliases || null)) {
       console.error(`REFUSED: ${e.path} did not round-trip`)
       process.exit(1)
@@ -385,6 +454,85 @@ console.log('§F  the nav is still the label authority where it has one')
   ok('F2  and the ones that do not are exactly what this registry exists for',
      notInNav.length > 0 && notInNav.includes('/account/password'), notInNav.length)
   console.log(`      ${inNav.length} pages are in NAV; ${notInNav.length} are not and were invisible before this`)
+}
+
+// ── §I — a page cannot stop being searchable in EITHER box, or fall out of the nav silently ──────
+// THE CLASS §54.12 closed. Two page-search surfaces answered the same question with two indexes, and
+// only ⌘/ read the derived registry; the sidebar's ⌘K read the hand-curated nav, so 27 pages that
+// existed, were reachable and were in this registry could not be found in the box the owner types
+// in. Both read this registry now. This section is the lock on that: §I1-§I3 make being menu-less a
+// DECLARED decision with a shrinking baseline, and §I4-§I6 fail the build if either surface stops
+// dereferencing the one home for the gate, the fold and the ranking.
+console.log('§I  menu-less is declared, and both search boxes read THIS registry')
+{
+  const searchable = REG ? [...REG.values()].filter(e => !e.preauth) : []
+  const menuless = searchable.filter(e => !NAV.has(e.path))
+  const baseline = new Set(MENULESS_BASELINE)
+  const undeclared = menuless.filter(e => !e.menuless && !baseline.has(e.path))
+  ok('I1  every menu-less page states why, or is on the frozen baseline — add a `menuless:` reason '
+     + 'or a nav entry if this is red', undeclared.length === 0, undeclared.map(e => e.path))
+  // The baseline may only SHRINK. A path that has since gained a nav entry or a real reason is no
+  // longer debt and must leave the list, so the list cannot quietly become the excuse for everything.
+  const stale = MENULESS_BASELINE.filter(p => NAV.has(p) || REG?.get(p)?.menuless)
+  ok('I2  the baseline holds nothing that is no longer debt — delete these lines',
+     stale.length === 0, stale)
+  ok('I2b and nothing on it has vanished from disk', MENULESS_BASELINE.every(p => DISK.includes(p)),
+     MENULESS_BASELINE.filter(p => !DISK.includes(p)))
+  ok('I3  a declared reason is a sentence, not a flag',
+     menuless.filter(e => e.menuless).every(e => e.menuless.length > 15),
+     menuless.filter(e => e.menuless && e.menuless.length <= 15).map(e => e.path))
+  ok('I3b the one page that already had a recorded reason carries it',
+     !!REG?.get('/commcalc/commission-explain')?.menuless,
+     REG?.get('/commcalc/commission-explain'))
+
+  // Both surfaces must DEREFERENCE the one home rather than keep a private index or ranker. Comments
+  // are stripped and strings KEPT: these files legitimately discuss the defect in prose, and a
+  // check that read the prose would pass on the documentation alone (the §54.3 trap, which this
+  // repo has been bitten by twice).
+  // LINE comments first, THEN block comments — and the order is load-bearing, not style. layout.tsx
+  // carries the line comment `// /commcalc/* page, so a first-match …`; stripping block comments
+  // first reads that `/*` as an opener and swallows 110 lines of real code, including the very call
+  // this section checks for, so I4-I6 failed on correct code. A glob in a comment is a comment, not
+  // a comment opener. `[^:]` keeps `https://` intact.
+  const strip = t => t.replace(/(^|[^:])\/\/.*$/gm, '$1 ').replace(/\/\*[\s\S]*?\*\//g, ' ')
+  const SIDEBAR = strip(readFileSync(join(HERE, 'src/app/(platform)/layout.tsx'), 'utf8'))
+  const CONSOLE = strip(readFileSync(join(HERE, 'src/components/AskBar.tsx'), 'utf8'))
+  for (const [name, src] of [['the sidebar ⌘K box', SIDEBAR], ['the ⌘/ console', CONSOLE]]) {
+    ok(`I4  ${name} builds its catalogue through viewerCatalog`, /viewerCatalog\(/.test(src))
+    ok(`I5  ${name} reads every page that exists`, /searchableRoutes\(\)/.test(src))
+  }
+  // The sidebar ranks with the shared ranker and holds no ladder of its own. The literal shapes named
+  // here are the ones its private ranker actually used, so the check reddens if that code returns.
+  ok('I6  the sidebar ranks through search-rank', /rankSearch\(/.test(SIDEBAR))
+  ok('I6b and keeps no scoring ladder of its own',
+     !/\.toLowerCase\(\)\s*\n?\s*return .*startsWith\(q\)/.test(SIDEBAR)
+     && !/localeCompare/.test(SIDEBAR),
+     (SIDEBAR.match(/localeCompare/g) || []).length)
+  // Counter-arming: the strip must not have blanked the files it is reading.
+  ok('I7  ARMED — the stripped sources are not empty',
+     SIDEBAR.includes('PlatformShell') && CONSOLE.includes('AskBar'))
+  // ARMED: §I1 is measuring something. A page removed from the nav and given no reason goes red.
+  {
+    const navMinus = new Set(NAV); navMinus.delete('/commcalc/sales-report')
+    const after = build(REG, navMinus).filter(e => !e.preauth)
+      .filter(e => !navMinus.has(e.path) && !e.menuless && !baseline.has(e.path))
+    ok('I8  ARMED — a page dropped from the nav with no reason is caught',
+       after.some(e => e.path === '/commcalc/sales-report'), after.map(e => e.path).slice(0, 3))
+  }
+  // ARMED: §I2 is measuring something. A baselined path given a nav entry must be reported as stale.
+  {
+    const navPlus = new Set(NAV); navPlus.add('/closing/duplicates')
+    ok('I9  ARMED — a baselined page that gains a nav entry must leave the list',
+       MENULESS_BASELINE.filter(p => navPlus.has(p) || REG?.get(p)?.menuless)
+         .includes('/closing/duplicates'))
+  }
+  // ARMED: a reason is dropped the moment the page joins the nav, so it cannot outlive the fact.
+  ok('I10 ARMED — a nav page carries no menuless reason through the next bless',
+     !build(new Map([['/commcalc/sales-report',
+                      { path: '/commcalc/sales-report', menuless: 'stale excuse kept too long' }]]),
+            NAV).find(e => e.path === '/commcalc/sales-report')?.menuless)
+  console.log(`      ${menuless.length} pages are in no menu: `
+    + `${menuless.filter(e => e.menuless).length} declared, ${baseline.size} on the frozen baseline`)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

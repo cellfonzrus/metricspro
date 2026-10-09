@@ -84,6 +84,8 @@ Primary code homes:
 | 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
 | 59 | **Store identity — a leading address token is not one** | "Why is the Gross Profit report below the P&L, where did a store's whole carrier income go, why does a relocated store show no commission, why does a store with sales raise 'no payment received' every month, and why did one store's residual vanish when two codes share one address? Which ONE thing answers 'which store is this string'?" |
 | 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, which origins may the API be called from, what does a production build refuse to ship without (§40.10), what was actually measured during the two 2026-10-03 outages (§40.11 the morning one, §40.12 the afternoon one), what proves a LIVE deployment can actually reach its backend (the §40.12 preventive), and why an unreachable backend must never read as "login not enforced" (§40.13)?" |
+| 59 | **Peer sales comparison (traffic bands)** | "Which stores see the same number of people through the door, and which of them sells less on that traffic? Where is the band from, why is a store alone in its band never accused, and how does the same verdict reach the rep, the manager, the DM and the market manager?" |
+| 60 | **Spiff impact (one pay type, per store)** | "What is a certain spiff worth to a store’s commission payout revenue, by what % does it raise net profit, and which stores are not earning it on the sales they make? Why is a “spiff” sometimes not commission at all, why is a store’s lift blank, and why can the units-per-100-boxes rate exceed 100%?" |
 
 ---
 
@@ -6395,7 +6397,7 @@ rendering the resolved name.
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, pay-write gated by `gate_pay_write` like every other pay writer — §19.44; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35; a save counts only what the reply shows stored, `rowSave.notPersisted` reading the PATCH echo + `pay_fields_ignored` — §19.37) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
-| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | **the ONE store-identity answer since 2026-10-09 (§59): `account/store_identity.build_store_resolver` reads BOTH tables (exact address → alias → code → squashed → unambiguous leading number of an address or an ALIAS) behind `coa.store_resolver`, and `store_identity_index` folds two codes on one address onto one key keeping the carrier's door; locked by `harness_store_identity_lock.py`** · attribution joins (salesforce_id: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards**, **store IDENTITY — §13d: one physical store must resolve to ONE canonical key; the invariant's one home is `account/store_identity_audit.py::audit` (placeholder address / roster-without-mapping / split keys), locked by `harness_store_mapping_identity.py` (CI `store-identity-proof`); repair = the owner-run runbook `store_identity_merge_1800_1115.sql` (#346 + the B-60TH step), deliberately NOT a second migration** |
+| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | **the ONE store-identity answer since 2026-10-09 (§62): `account/store_identity.build_store_resolver` reads BOTH tables (exact address → alias → code → squashed → unambiguous leading number of an address or an ALIAS) behind `coa.store_resolver`, and `store_identity_index` folds two codes on one address onto one key keeping the carrier's door; locked by `harness_store_identity_lock.py`** · attribution joins (salesforce_id: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards**, **store IDENTITY — §13d: one physical store must resolve to ONE canonical key; the invariant's one home is `account/store_identity_audit.py::audit` (placeholder address / roster-without-mapping / split keys), locked by `harness_store_mapping_identity.py` (CI `store-identity-proof`); repair = the owner-run runbook `store_identity_merge_1800_1115.sql` (#346 + the B-60TH step), deliberately NOT a second migration** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
 | `storeops.salary_expense_config` (mig `435` — RULE TWO: `line_label`, `expense_type`, `book_scheduled_fallback`, `book_no_data_as_zero`) | one row per org, house defaults seeded; absent row == house defaults | `storeops.router._salary_expense_config` → `salary_expense.resolve_config`. §14s |
@@ -6445,6 +6447,9 @@ rendering the resolved name.
 
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
+- `GET /commcalc/peer-comparison?period=&metric=&bands=` — stores grouped into BILL-PAYMENT traffic bands, then ranked inside their band on boxes / AAL / family plan % / accessories per box, with the band median, the band best and the gap to each; and `GET /commcalc/targets/{period}/action-plan`, which now carries the SAME verdict per store as a `peer_gap` item (`peer_meta` reports a comparison that could not run, and the lagging stores it could not carry). Both callers read ONE assembly, `router._peer_comparison_payload`, so the screen and the plan cannot coach different stores (§59, §59.7).
+- `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
+- `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -6497,9 +6502,9 @@ rendering the resolved name.
 | `GET /commcalc/data-sources` **`sources[].connector_scope`**, `GET /commcalc/connectors` **`[].connector_scope`** (§12a.2) | `router._strip_source_pw(row, prows, scope_ctx)` / `list_connectors` | `commcalc/email-imports` (a login row says "not applicable to this tenant — why"), `commcalc/connectors` (a withheld instance renders without status / Run now) |
 | `GET /commcalc/pl-commission-source` (mig `1013`, §4b — READ-ONLY: `value`, `ready` + `not_ready_note`, `config_columns_missing` / `config_migrations_missing` (§4b.1 — the same reader the P&L uses), `options` in layman words, `suggestion` = `ledger_pnl.suggest_source` over `evidence` = `ledger_pnl.load_source_evidence` (which feed tables hold rows, ledger lines per period), `pl_link` (the P&L lines the buckets book to), `shows_in`) | `router.get_pl_commission_source` → `ledger_pnl.load_source_meta` / `load_source_evidence` / `suggest_source`, `router._ledger_pl_link`, `landing_identity.shows_in(…, pl_link)` | `components/PlCommissionSourcePanel.tsx` (on `/commcalc/commission-ledger` and the intake 3.9 card); the ONE writer is `PUT /commcalc/commission-settings {pl_commission_source}` |
 | `PUT /commcalc/commission-settings` **`pl_commission_source`** (mig `1013`) — 💰 which source books the P&L commission lines: validated against `ma_store_pnl.COMMISSION_SOURCES`, written in its own statement, READ BACK through `ledger_pnl.load_source_meta`; an unknown word → 400, a missing column → 400 naming `1013_pl_commission_source.sql` (never a silent non-save) | `router.put_commission_settings`; `_commission_org_config` returns it | takes effect on the next `/account/compute`; the P&L line's `commission_source` shows both sources' figures |
-| `GET /gp/{period}` — **every money source is joined to its store through the ONE store-identity home** (owner directive 2026-10-09, *"chase trhew street number matching"*): the engine's private `street_num()` leading-token join is GONE, so a carrier address the roster spells differently (`116-36` vs `11636`) or a relocated store's feed spelling no longer drops its money out of the report. Live house Jul–Oct 2026 this moves **+$106,400.37** of revenue onto the stores that earned it (+$178.75 of rep pay in Oct) and no company total; unresolvable money rides on an explicit `store_unplaced` row with its reason, and the payload carries a `store_identity` evidence block (resolver, `stores_resolved`, `unplaced*`, `ambiguous_identities`) | `router._compute_gp` (now builds `coa.store_resolver` ALWAYS — it was gated `if ma_income`, i.e. ePay-less orgs only) → `gp_report.calc_gp_report` via `account/store_identity.store_key` / `store_identity_index` | §59 — lock `harness_store_identity_lock.py`, proof `harness_gp_store_identity.py` |
+| `GET /gp/{period}` — **every money source is joined to its store through the ONE store-identity home** (owner directive 2026-10-09, *"chase trhew street number matching"*): the engine's private `street_num()` leading-token join is GONE, so a carrier address the roster spells differently (`116-36` vs `11636`) or a relocated store's feed spelling no longer drops its money out of the report. Live house Jul–Oct 2026 this moves **+$106,400.37** of revenue onto the stores that earned it (+$178.75 of rep pay in Oct) and no company total; unresolvable money rides on an explicit `store_unplaced` row with its reason, and the payload carries a `store_identity` evidence block (resolver, `stores_resolved`, `unplaced*`, `ambiguous_identities`) | `router._compute_gp` (now builds `coa.store_resolver` ALWAYS — it was gated `if ma_income`, i.e. ePay-less orgs only) → `gp_report.calc_gp_report` via `account/store_identity.store_key` / `store_identity_index` | §62 — lock `harness_store_identity_lock.py`, proof `harness_gp_store_identity.py` |
 | `GET /gp/{period}` — **the carrier COLUMNS classify through §58's one home** (owner report 2026-10-08, *"gross profit is still showing the old data m teh source of information should be the same"*): `comp_comm` / `comp_reimb` / `comp_mdf` and the new `comp_chb` / `comp_unmapped` are the org's own declaration, the same ruling the P&L books on — August 2026 restates Comp Comm 522,190.14 → 118,415.35 and Comp Rebate 802.50 → 404,577.29 on the same rows (the feed classifies 120,799.55 / 418,922.21 — the difference is the pre-existing store join, §58.5); `carrier_class_coverage` (by component, by basis, undeclared named per type, `balances`) rides on the payload. GROSS PROFIT ITSELF DOES NOT MOVE: the comp columns are not terms of `total_rev` or `net_profit` | `router._compute_gp` (resolves `payment_category.load_map` + `carrier_dollar_class.load_config` / `load_declarations` + `carrier_map.load_rules`) → `gp_report.calc_gp_report` → `carrier_dollar_class.gp_column` | §58.7 — lock `harness_gp_carrier_class_dereference.py` |
-| `GET /commcalc/commission-leg-trend` / `GET /commcalc/commission-received-breakout` — **the store index and the row keys are canonical store identity, not a street-number token** (§59). `_leg_store_index` used to be keyed by the leading token "the SAME street-number join gp_report uses" and inherited exactly that loss, so the store/market filter could not select those rows. Both now dereference `account/store_identity`; the primary read, mig 274's `commission_leg_label_rollup`, is superseded by **mig `1065`** so SQL no longer decides identity — and the resolver places a bare token too, so merged-without-applied still works | `router._leg_store_index` (returns `resolve`) + `_store_identity.store_key` on every row | §59 |
+| `GET /commcalc/commission-leg-trend` / `GET /commcalc/commission-received-breakout` — **the store index and the row keys are canonical store identity, not a street-number token** (§62). `_leg_store_index` used to be keyed by the leading token "the SAME street-number join gp_report uses" and inherited exactly that loss, so the store/market filter could not select those rows. Both now dereference `account/store_identity`; the primary read, mig 274's `commission_leg_label_rollup`, is superseded by **mig `1065`** so SQL no longer decides identity — and the resolver places a bare token too, so merged-without-applied still works | `router._leg_store_index` (returns `resolve`) + `_store_identity.store_key` on every row | §62 |
 | `GET /commcalc/commission-leg-trend` and `GET /commcalc/commission-received-breakout` — **the Comprehensive-Comp series is the org's declaration, not a keyword guess**. `router._leg_comp_is_commission` was a self-declared COPY of `gp_report`'s rule (*"IDENTICAL to gp_report's"*, its own docstring); both endpoints now resolve the §58 posture once per request and ask the home, so the trend explains exactly the money the GP column shows. Declared reimbursement leaves the comp commission series — August 2026: $418,922.21 — and the ePay side's `!= 'Commission'` compare is the home's ruling on the declared category | `router._leg_carrier_class` → `_leg_comp_commission_predicate` / `_leg_pay_commission_predicate` → `carrier_dollar_class.gp_column` / `.gp_column_of_declared_category`; the two per-month fallbacks read `payment_categories` through §57 instead of privately | §58.7 |
 | `GET /gp/{period}` — **the month-of-life COLUMNS** (owner report 2026-09-21): every store row carries `comm_ladder` `{rung: $}` plus flat `comm_month_<n>` / `comm_month_unlabelled` companions, `totals.comm_ladder` is summed rung by rung, and `commission_legs` carries `ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` — the COLUMN LIST from the data, never a hardcoded 6 or 12 | `router._compute_gp` → `gp_report.calc_gp_report` → `commission_legs.months_present` / `ladder_to_public` (the one home) | §4a.2 — rendered by the GP page's 📅 Months toggle and its 'Commission by month-of-life' card (EARNED sheet above RECEIVED cash, booked basis marked); both exports follow the visible columns (WYSIWYG) and a 'Commission by month-of-life' sheet always ships. Locked by `harness_ma_month_columns.py` + CHECK 2c |
 | `DELETE /commcalc/commission-plans/{plan_id}/assignments/{assignment_id}` — THE single-assignment remover: ONE `commission_plan_assignment` row of that plan and org, 404 otherwise; gated `'commission_plans'`; drops the config memo | `router.delete_commission_plan_assignment` → `_remove_plan_assignment` (`_require_commission_plans_edit`) | §6n |
@@ -6745,10 +6750,13 @@ rendering the resolved name.
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is this store selling less than stores that see the same number of people — and who proved it could be done?** Bill payments measure footfall (nobody is persuaded to walk in and pay a bill), so stores are banded on bill-payment VISITS and compared only inside their band. `lagging()` is the one definition of behind; `peer_action_item` turns one lagging row into the Daily Action Plan's own item, `critical` only when the shortfall exceeds 25% of the band median AND a real leader beat that median | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`_billpay_exec`, `box_count`, `_aal`, `accessory_rev`) × `commcalc.raw_dlar_store` (`family_plan_pct`, `aal_conversion`) | ONE home `commcalc/peer_comparison.py` (`resolve_bands` / `band_of` / `build` / `lagging` / `prompt_sentence` / `peer_action_item` / `peer_items_by_store`), assembled once by `router._peer_comparison_payload` for both the screen and the plan; reads NO raw sale line (AST-locked); module-graph fact `peer_traffic_band`; lock `harness_peer_comparison.py` — §59, §59.7. Live September 2026 (Cellfonz R Us): 28 stores → 4 bands spanning 83–616 visits, **12 behind their own band median** by 5.3%–42.1%, prompting 5 critical and 7 warning items |
+| **What is ONE carrier pay type worth to a store — to its commission payout revenue and to its net profit — and which stores are not earning it on the sales they make?** The share is of the P&L line the dollars actually book to (a “spiff” the org declares a reimbursement is NOT commission revenue, and the report says so); the lift is `spiff ÷ (net_income − spiff)` and is withheld with its reason when no positive base survives; the rate is paid units per 100 boxes, flagged as a different cohort when the pay type names a month rung | `commcalc.raw_comp_report` (`compensation_type`, `payment_amount`, `quantity`) classified through `commcalc/carrier_dollar_class` × the stored `commcalc.account_statements` per-store P&L × `router._sales_cell_agg`’s `box_count` / `_billpay_exec` | ONE home `commcalc/spiff_impact.py` (`pay_type_options` / `default_selection` / `store_money` / `profit_effect` / `units_per_100_boxes` / `caveats` / `build`) → `GET /commcalc/spiff-impact`; reads NO sale line and classifies NO dollar itself (both AST-locked); module-graph fact `spiff_store_impact`; lock `harness_spiff_impact.py` — §60. Live September 2026 (house org): $110,780.14 to `carrier_comm` and $373,211.61 to `vip_reimb`, both tying to the cent to the 31 stored per-store snapshots; **77% of the statement is not commission**, only 3 of 49 pay types carry the SPIFF component, and 13 of 28 stores have no positive profit base for a lift |
+| **Given ONE company accessory sales goal, what target should each store carry?** Weighted by the store's own accessories-per-box over the last two months x the boxes it is projected to sell; a store that sold boxes and attached nothing is weighted at the COMPANY rate and flagged, never given a $0 target; an unselected store's target is RESERVED out of the goal rather than assumed away; the assignments foot to the goal by largest remainder | `commcalc.daily_sales_feed`/`raw_sales` via `router._fetch_actuals` (`acc_gp` = accessory revenue + device set-up fee; `box_count`) x `router._targets_trending_by_code` (the projection) x `commcalc.targets.accessories_monthly` (mig `006`, the target in force — read AND written) | ONE home `commcalc/accessory_target_plan.py` (`company_goal` / `basis_amounts` / `company_rate` / `capacity_row` / `allocate` / `plan` / `assignment_payload`) → `GET /commcalc/accessory-target-plan/{period}` + its gated `/assign`; reads NO sale line and derives NO projection of its own (both AST-locked); module-graph fact `accessory_target_allocation`; lock `harness_accessory_target_plan.py` — §61. No new table: the suggestion is written into mig `006`'s own column, the row §5's Accessory Sales Targets tracker reads |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
-| **Which STORE does this money belong to?** — asked by the GP report, the commission-leg trend/breakout, the residual report, flags 7/8, the closing store-day match, the P&L's store grain and the MA account index. Answered by the org's OWN declared spellings; AMBIGUITY RESOLVES TO NOTHING and unplaceable money is reported on its own row, never dropped and never guessed | `commcalc.store_mapping` × `commcalc.store_aliases` (config rows; a new spelling is ONE alias row, never code) | ONE home `account/store_identity.py` (`build_store_resolver` / `store_key` / `store_identity_index` / `ambiguous_identities`) behind the I/O wrapper `coa.store_resolver`; lock `harness_store_identity_lock.py` (502 checks), proof `harness_gp_store_identity.py` (42) — §59. Measured live Jul–Oct 2026: the token join it replaced was dropping **$106,400.37** of house revenue out of the Gross Profit report |
+| **Which STORE does this money belong to?** — asked by the GP report, the commission-leg trend/breakout, the residual report, flags 7/8, the closing store-day match, the P&L's store grain and the MA account index. Answered by the org's OWN declared spellings; AMBIGUITY RESOLVES TO NOTHING and unplaceable money is reported on its own row, never dropped and never guessed | `commcalc.store_mapping` × `commcalc.store_aliases` (config rows; a new spelling is ONE alias row, never code) | ONE home `account/store_identity.py` (`build_store_resolver` / `store_key` / `store_identity_index` / `ambiguous_identities`) behind the I/O wrapper `coa.store_resolver`; lock `harness_store_identity_lock.py` (502 checks), proof `harness_gp_store_identity.py` (42) — §62. Measured live Jul–Oct 2026: the token join it replaced was dropping **$106,400.37** of house revenue out of the Gross Profit report |
 | **Is this carrier dollar a commission, a spiff, a residual or a reimbursement — and is that the ORG'S OWN declaration or a guess the platform made?** The basis is part of every answer: `declared` / `inferred_prior_year_twin` / `keyword_rule` / `declared_category_unmapped` / `unresolved`, each with its reason in words. An inference never passes as a declaration | `commcalc.payment_categories` (the declaration) × `commcalc.carrier_category_map` (the fallback ladder) × `commission_org_config.carrier_class_*` | ONE home `commcalc/carrier_dollar_class.py` (`classify` / `tally` / `component_line` for the P&L line, `gp_column` / `gp_column_of_declared_category` for the GROSS-PROFIT column), dereferenced by `account/coa.py`, `commcalc/gp_report.py` and `commcalc/router.py`; locks `harness_carrier_dollar_class.py` (88 checks, the owner's 103 Fulton figures armed as a negative control) and `harness_gp_carrier_class_dereference.py` (§58.7, the GP dereference); module-graph fact `carrier_dollar_component` — §58. Measured live Mar–Oct 2026: **$2,784,846.76** booked as commission against the org's own declaration, $1,078,862.83 of the reclassification resting on an inference |
 | **Did the carrier actually pay what the distributor claims it paid?** One payment, two sides: the carrier statement is the money, `asset_ledger.reimbursement` is a claim about it. The claim books NO revenue under `device_reimb_source='carrier_paid'` and is HELD, per store, with the difference named | `commcalc.raw_comp_report` (REIMBURSEMENT component) vs `commcalc.asset_ledger.reimbursement` | `account/coa.py` → `L["_distributor_reimb_claim"]` (`claim_total`, `carrier_paid_total`, `difference`, `status`). 103 Fulton Sept 2026: claimed $7,999.93 vs paid $7,583.96, gap $415.97. Reconciling the gap and flagging it is a SEPARATE mechanism — §58.3 |
 | **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |
@@ -20057,8 +20065,11 @@ moves.
 
 ### 54.5 What this does NOT do
 
-(Written before §54.7; the first bullet is now narrower — the ⌘K index is still NAV-only, while ⌘/
-reads the derived page list, so ⌘/ finds strictly more than ⌘K does.)
+(Written before §54.7. **SUPERSEDED by §54.12**: the first bullet's claim that ⌘K keeps its own
+NAV-only index and its own ranker is no longer true. Both boxes now dereference ONE viewer gate, ONE
+catalogue and ONE ranker, so they find the same pages; ⌘K still shows only destinations, which is a
+display choice (`destinations()`), not a second index. Read the bullet below for the two boxes'
+different PURPOSE, not for how their page lists are built.)
 
 - **⌘K stays the nav destination search** and ⌘/ stays the question-and-entity console. The two were
   left distinct rather than merged: `layout.tsx`'s ⌘K index is already built from the post-RBAC,
@@ -20277,16 +20288,94 @@ Coverage after this change: **58 of 58 reports answerable, 69 questions** (13 ha
 derived entries fold into hand questions that already answer the same endpoint). The catalogue shown
 to the model is ~7.5k tokens, which is the one cost worth watching as reports are added.
 
+### 54.12 ONE page index for BOTH search boxes — a page in no menu was unfindable in the sidebar (owner 2026-10-08, fifth report)
+
+Owner: *"it is not appearing in the search bar also, which leads us to checking if all modules are
+searchable or they are hidden."* He had just shipped Spiff Impact (§60) and could not find it by
+typing. Nothing was broken for that page — but the question uncovered a real class.
+
+**The class.** Two surfaces answered "which pages exist?" with two different indexes, and only one
+of them was derived:
+
+| | ⌘K sidebar jump box (`app/(platform)/layout.tsx`) | ⌘/ question bar (`components/AskBar.tsx`) |
+|---|---|---|
+| page source | the rendered NAV groups only | `buildCatalog` over nav + reports + screens + the DERIVED `route-index.ts` |
+| ranker | a private 3-tier `localeCompare` scorer | `rank` from `search-rank.ts` (§54.1) |
+| pages unfindable | **27** | 0 |
+| destinations with an empty query | 322 | 2 |
+
+So a page reachable only from a row, a button or the account menu — 27 of them — could not be typed
+for in the box most people reach for, and nothing failed the build when a new page joined them.
+This is the duplicate defect the index rules forbid, in the one place a user notices it first.
+
+**The fix — one gate, one fold, one ranker, dereferenced by both.** `search-catalog.ts` was already
+the ONE home for the FOLD (what can be found). It is now also the ONE home for the GATE (what can
+THIS viewer find), as **FACT 4**:
+
+- `viewerSources(registries, viewer, entities)` takes the four registries plus the two permission
+  predicates as ARGUMENTS and returns the filtered sources: nav rows and report rows the viewer may
+  see, screen aliases whose page survived, routes `canAccessPath` admits, with `viewer.open` as the
+  not-enforced bypass. `viewerCatalog` folds that through `buildCatalog`; `destinations` drops the
+  entity-only rows for a surface that only jumps.
+- Both surfaces now call `viewerCatalog` with the same four registries and `rank` from §54.1. The
+  sidebar's private memo and private scorer are DELETED — not deprecated, deleted, which is the only
+  form of "one home" that cannot un-wire.
+
+**The menu-less page is now a DECLARED fact, not an accident.** `route-index.ts` gained a fourth
+human field, `menuless`, holding WHY a page is in no menu. Three are declared
+(`/account/password`, `/portal`, `/commcalc/commission-explain`); the other 26 sit on a FROZEN
+baseline in `prove_route_index.mjs` that **may only shrink** — the same pattern as
+`harness_unrun_pending.txt` (§50). Inventing 26 plausible reasons for pages whose history I do not
+know would be a guess dressed as a decision, which the registry's own rule (an exclusion states
+WHY) already forbids. A NEW page in no menu and on no baseline fails the build.
+
+**The locks.** `prove_search_console_lock.mjs` now separates SURFACES (the question bar) from
+JUMPERS (the sidebar) and requires of a jumper that it import AND CALL `viewerCatalog`,
+`searchableRoutes`, `rank` and `destinations`, pass `routes:`, call `canAccessPath`, and contain no
+private scorer (`score =`, `localeCompare`, `hay`, `STOPWORDS`). §D1–D16 and §I1–I10 are each armed
+against a deliberately broken copy.
+
+**The trigger allowlist now names its own subject.** `frontend/src/lib/rbac.ts` and
+`frontend/src/app/(platform)/layout.tsx` are added to the `search-console` `paths:` in
+`data-qa-guard.yml`. `prove_route_index.mjs` READS `rbac.ts` to know which routes must drop their
+nav label, so a nav-only PR could previously stale the generated registry with the ratchet silent —
+the §13e lesson a third time.
+
+**A second reader made an existing lock's arming stale, which is the pattern worth naming.**
+`harness_payout_audience_lock.py` §i2 holds the bargain that lets the derived page registry be
+excused from naming the carrier gate: it may render no link, something must read it, and EVERY
+reader must dereference `canAccessPath`. The RULE already derived the readers; two of its arming
+CONTROLS named `components/AskBar.tsx` as THE reader. The moment the sidebar became a second reader,
+un-importing AskBar left the rule green and the control failed — the lock was still correct, its
+proof of being armed was not. The controls now derive the readers the same way the rule does, mutate
+each reader on its own, and mutate them all together for the "nothing reads it" case. 52 passed, 0
+failed. A hand-typed list inside a proof is the same duplicate defect as one inside the code.
+
+**Run the backend harnesses on Python 3.11, as CI does.** On 3.13 `harness_carrier_vocab_guard.py`
+reports three false failures (an implicitly concatenated `HTTPException` string in
+`commcalc/router.py` plus its own N10 control), and is green on 3.11. `/usr/bin/python3.11` exists in
+the container.
+
+**A lesson worth keeping: strip LINE comments before BLOCK comments.** Doing it the other way makes
+a line comment containing `/*` (a path glob, e.g. `// /commcalc/* page …`) read as a block opener
+and blanks everything to the next `*/` — 110 lines of `layout.tsx`, including the very calls under
+check. It cost two false failures on correctly wired code. Both provers now strip line comments
+first, with `[^:]` so `https://` survives, and say why.
+
+**Not touched here:** `prove_role_access_state.mjs` is 30 passed / 1 failed on `main` already
+(verified by stashing this branch); it is unrelated to the search console.
+
 ### 54.9 Status
 
-Code complete and proved: **275 checks** across four Node, dependency-free proofs
-(`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 73, `prove_route_index.mjs` 44,
-`prove_search_console_lock.mjs` 44), run by the `search-console` job in
+Code complete and proved: **327 checks** across four Node, dependency-free proofs
+(`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 94, `prove_route_index.mjs` 59,
+`prove_search_console_lock.mjs` 60), run by the `search-console` job in
 `.github/workflows/data-qa-guard.yml`. No migration. The entity half of the catalogue appears as soon
 as the two endpoints answer; the assistant half is live wherever `GET /core/data-qa/status` returns
 `allowed && configured` (§52.6).
 
-**The lock covers three facts, not two**: the ranker, the catalogue, and the derived page index. A
+**The lock covers four facts, not two** (§54.12 added the viewer gate): the ranker, the catalogue,
+the derived page index, and what THIS viewer can find. A
 console surface that stops reading the derived index, stops gating it with `canAccessPath`, or stops
 deciding the assistant's door fails the build (B10a–B10f), and so does a route index that stops
 declaring itself generated, drops an export, grows a permission rule or turns `preauth` into a bare
@@ -20890,9 +20979,708 @@ callers `app/modules/account/coa.py`, `app/modules/commcalc/gp_report.py` (§58.
 `harness_gp_carrier_class_dereference.py`. Written **by hand, multi-line** (never `--bless`, which silently
 deleted 11 of 12 facts on 2026-10-04 — §50).
 
+## 59. PEER SALES COMPARISON — stores of comparable FOOT TRAFFIC, ranked on what they do with it (owner directive 2026-10-08)
+
+Owner, verbatim: *"need to create another module for sales comparison between the performance of store
+who have similar bill payments, since bill payments define the number of people coming in, the
+comparison should include the total boxes with a drill down into new / port / byod / swap / upgrade /
+tablet etc of whatever that number is made of, then the next columns will be aal and then family plans
+and total acc and Accessory per box, this should be under management review and tARGETS AND COACHING,
+also it should trigger in teh action plan for the sales reps their managers and dm and market manager
+to prompt them to increase the sales for those laggin stores as if one can do why not the other and
+then create a report card for the Dm … the same report card will be made for the market manager."*
+
+**THE IDEA.** A store's sales are not comparable with another's in the raw — a high-street door sees
+ten times the people a side street does. The owner's insight is that BILL PAYMENTS measure the people
+through the door: nobody walks in to pay a bill because a salesperson persuaded them to. Group stores
+into TRAFFIC BANDS by bill-payment count and the comparison inside a band is fair — the same number of
+people walked in, so a gap in boxes sold is a gap in SELLING, not in footfall.
+
+**Shipped in stages, as stated to the owner.** §59.1–59.6 (the comparison screen, and the two facts it
+needed in the one home) shipped first. §59.7 — the action-plan prompt for rep / manager / DM / market
+manager — is the second stage, and §59.9 — the DM and market-manager report cards — is the third.
+Every stage reads §59.4's `lagging()` rather than re-deciding who is behind.
+
+### 59.1 THE DUPLICATE CHECK (build gate) — and what it CHANGED about the build
+
+The first draft of `peer_comparison.py` counted boxes, the activation split, swaps, tablets, accessory
+dollars and bill payments **for itself** out of the sale lines. Searching the index for each one showed
+that EVERY ONE of them is already computed, per (store × rep × day) cell, by `router._sales_cell_agg` —
+THE shared sales aggregation behind the Sales Report, Executive MTD, Daily Targets, Productivity, Stack
+Ranking, Review and zero-sales (§2 / §18 / §9). A second derivation would have been exactly the defect
+these rules forbid: two paths answering one question, certain to drift the first time a tenant edited
+its `box_departments`.
+
+**So the module was rewritten to touch no sale line at all.** It is handed the cells and does only the
+genuinely new work. Every column is therefore the SAME number the Sales Report shows *by construction*,
+and a tenant's box / bill-payment / accessory configuration reaches this report for free.
+
+| Column | The ONE home it dereferences |
+|--------|------------------------------|
+| total boxes | `cell['box_count']` — config `box_departments` (mig `218`) + the `box_count_buckets` opt-in (mig `231`) |
+| new / port / byod / upgrade | `_prem` / `_port` / `_byod` / `_upg` — `line_class.activation_class` (§6, THE activation predicate). 'new' is the owner's word for the platform's `premium` class, mapped once in `BOX_PARTS` and never renamed in the home every money surface reads |
+| swap | `cell['_swap']` — `line_class.exclusion_class` (THE one home, owner ruling 2026-09-27) |
+| tablet | `cell['_dev_tablet']` — the device dimension (owner 2026-09-28, §6n) |
+| aal | `cell['_aal']` — `line_class.is_add_a_line`, **new one home, §59.2** |
+| bill payments | `cell['_billpay_exec']` — the Exec-MTD `bill_payment` predicate (mig `962`, `exec_metric_defs.line_match`) at TRANSACTION grain, **added to the one home, §59.3** |
+| total acc | `cell['accessory_rev']` — THE shared `_is_accessory` classifier |
+| family plan % | `commcalc.raw_dlar_store.family_plan_pct` (+ `aal_conversion`) — the CARRIER's own store KPI feed, already the one home for a store KPI (§10). The sales feed carries **no** family-plan fact, so this column is the carrier's or it does not exist |
+| store identity | `router._store_code_resolver` (the resolver Daily-Targets actuals use) — so one store spelled two ways in the feed is one row, and the carrier's store-grain KPI can attach |
+| market | `core.scope.market_by_code` via `_store_market_resolver` |
+
+**NEW here and nowhere else:** the traffic band, `boxes_per_billpay`, `accessory_per_box`, the peer gap,
+and `lagging()` / `prompt_sentence()` — THE one definition of "this store is behind", so the screen, the
+action plan and both report cards cannot disagree about who is being coached.
+
+**Not a sibling of §6f Sales Comparison**, and the distinction is worth keeping straight: that report is
+ONE store across TWO times (period-over-period % change per item). This one is MANY stores at ONE time,
+grouped by traffic. They answer different questions and now share their counting through `_sales_cell_agg`
+rather than through two tallies that happen to agree.
+
+### 59.2 THE ADD-A-LINE ONE HOME — `line_class.is_add_a_line`
+
+An add-a-line is **NOT a sixth class**: it is a MODIFIER on one. Every measured AAL value already names
+its class too ('Activation AAL' is an activation, 'BYOD Port AAL' a byod, 'Eligible Port-In Add A Line' a
+port), which is why the house `activation` tokens have carried `' aal'` / `'add a line'` since the
+beginning — an AAL has always counted as the activation it is. This adds the SECOND question ("…and was
+it an add-a-line?") without moving a single class, so **no count anywhere changes**.
+
+- **The copy it replaces.** `asset/router._promo_type` carried the ONLY other answer to this question —
+  `"add a line" in ct or ct == "aal" or ct.endswith(" aal")`, a bare `contract_type` substring, invisible
+  to a tenant whose POS carries the fact in the category path. Same class `exclusion_class` fixed for
+  'swap', in the same file, fixed the same way: CONTAINS over the SAME configured `fields` the class
+  predicate reads, vocabulary as config (RULE TWO) under `activation_details_rules.add_a_line`.
+- **The equivalence pin.** `harness_peer_comparison.py` §C5 proves the new home is byte-identical to the
+  retired expression over all 34 live `contract_type` values, so **no promo column and no expected
+  reimbursement moved** when the asset router started dereferencing it.
+- **Precision of the house words**, measured 2026-10-08 over ALL 34 non-blank `contract_type` values on
+  the platform (`daily_sales_feed` + `raw_sales`): `'aal'` names exactly the 8 values ending in AAL and
+  NOTHING else; `'add a line'` / `'add-a-line'` name the other 8 (the three 'Add a Line' spellings
+  included). 16 of 34 are an add-a-line and the predicate finds all 16 with no false positive. Pinned as
+  the harness fixture, so the predicate is proved against the real vocabulary.
+- An explicitly EMPTY vocabulary is honoured ("our POS does not say" is a real answer) and reported
+  through `add_a_line_configured`, so the column shows blank rather than a false 0. **A bug the harness
+  caught:** the first draft used `r.get("add_a_line") or HOUSE_ADD_A_LINE`, and `or` silently restored
+  the house words on an empty list — the one case the feature exists to respect.
+
+**KNOWN SECOND COPY, DELIBERATELY LEFT.** `_promo_type`'s **upgrade** and **port** tests are the same
+kind of bare substring. `line_class.activation_class` would answer them but NOT identically — its
+precedence is byod > upgrade > port, so 'BYOD Upgrade' and 'BYOD Port' would move from `promo_upgrade` /
+`promo_port_in` to `promo_non_port`. That report compares an EXPECTED reimbursement against a received
+one, so this is a money change and is surfaced for the owner's decision rather than ridden in on an
+unrelated PR.
+
+### 59.3 THE BILL-PAYMENT VISIT — the cell had two bill-payment facts and NEITHER answered the question
+
+| fact | predicate | grain | what it is for |
+|------|-----------|-------|----------------|
+| `_billpay` | `_BILLPAY_DEFAULT_TOKENS` / mig-`214` `billpay_products` | transaction | the Daily-Targets conversion denominator. The index already records this vocabulary as **over-matching** (§19) |
+| `bill_qty` | `exec_cfg['bill_payment']` (mig `962`) — the declared predicate | **LINE** | Exec MTD's Bill Payment Qty |
+| **`_billpay_exec`** (new) | the SAME declared predicate | **transaction** | "how many people came in to pay a bill" — the peer basis |
+
+One more fact in the one home, populated inside the existing `if exec_cfg:` block beside `bill_qty`, so
+every pre-existing caller is byte-identical and a caller that omits `exec_cfg` gets every store
+**unbanded with the reason said** rather than a silent zero.
+
+### 59.4 THE BANDS, THE GAP, AND THE ONE DEFINITION OF "BEHIND"
+
+- **Bands are CONFIG (RULE TWO).** `HOUSE_BANDS = (150, 250, 400)` — the lower bound of each band, taken
+  from the live distribution measured 2026-10-08 over September 2026 (28 banded stores, 83 to 616
+  bill-payment transactions), so the cuts fall where the stores actually cluster. `?bands=` overrides per
+  call; an explicitly EMPTY list means one band holding the whole estate.
+- **A band is named by its TRAFFIC, never by a judgement** — "250–399 bill payments", never "mid-tier".
+  The report rests on the bands being a measurement, and a store cannot argue with its own count.
+  Pinned (§A5).
+- **The median INCLUDES the store itself**, or a band of two has no median and a band of three measures
+  each store against one other store while calling it a median.
+- **`BAND_MIN_PEERS = 2`** — a band of ONE carries no gap at all, and the band says so. Being alone in a
+  band is not under-performance, and a gap invented from a single store is the false accusation this
+  report must never make.
+- **Direction is DECLARED, not assumed** (`GAP_METRICS`' `higher_is_better`), so a future metric where
+  less is better (a port-out rate) cannot silently invert every gap.
+- **`lagging(payload, metric)`** is THE definition of behind — behind the store's OWN band median — and
+  `prompt_sentence` is THE sentence, carrying the store's number, the median, the band and the peer who
+  did better on the same traffic. Both live in the module, not the screen, so §59's stage 2 and 3 cannot
+  drift from stage 1. Default metric `boxes_per_billpay`: the conversion of footfall into a sale, which
+  is the owner's actual question.
+
+### 59.5 THE HONESTY RULES, and the three configuration facts that read as performance
+
+A zero on this screen accuses a person, so nothing is allowed to look like a result when it is a setting.
+
+- A store with NO bill-payment transactions is **not banded and not compared** — it lands in `unbanded`
+  with the reason, naming Exec Metric Definitions as the thing to check, because a zero there usually
+  means the tenant's bill-payment vocabulary is not the one Exec MTD counts.
+- A column that cannot be answered is `None`, **never 0** — family plan with no carrier feed, AAL with
+  the vocabulary emptied, a ratio with no denominator.
+- **The drill-down is reported BESIDE the total, never as a partition of it**, and the payload says so in
+  words. `box_count` has its own rule (device departments + configured buckets) and a receipt naming two
+  activation types counts in both parts. Pinned (§E13/§E14).
+- **`column_caveats`** states what the table cannot answer for this tenant, rendered ABOVE the numbers.
+  Measured on the house org 2026-10-08, two fire:
+  - **tablet** — `cannot_answer`. The device dimension is off, so `_dev_tablet` is empty by design and
+    the Tablet column reads 0 for every store. That is a setting, not a sales result. **A tablet has
+    always counted as a BOX**, because `'TABLET - XP'` is one of the org's `box_departments` (mig 218)
+    and `box_count` is counted off those lines — 48 such lines live in September 2026. So what the
+    device dimension withholds is the **split**, never a box. The caveat says so in those words and
+    §H2b pins it, because "Tablet: 0" beside a device-dimension caveat otherwise reads as "tablets are
+    missing from the total", which is the opposite of the owner's ruling.
+    **Turning the dimension on is not a display-only flip**: `line_class.resolve_devices` leaves
+    `applies_to` defaulting to EVERY activation-type class, so a declared device re-prices what it
+    applies to. To light the column without touching pay it needs `applies_to: []` (counted, never
+    paid) alongside the device rules — a money-adjacent decision, so it is surfaced, not flipped.
+  - **boxes** — `understated`. **The same question is answered two ways across tenants today**
+    (measured 2026-10-08, `commcalc.accessory_config`): `box_count_buckets` is `['byod']` on Luxelink
+    Wireless and Vzone, and **EMPTY on Cellfonz R Us** — which is also the house-default row
+    `00000000-…-0001`, so NY LOGISTICS (no row of its own) inherits the empty answer. A BYOD sale
+    carries no device-department line, so on Cellfonz it adds no box — **on every box surface on the
+    platform, not just this one** (Sales Report box count, Daily-Targets conversion and attainment,
+    Productivity, Stack Ranking, Review).
+    The owner has ruled it twice — 2026-07-24 ("customer phone = BYOD must count toward total boxes")
+    and again **2026-10-08** ("byod and tablets count towards the total boxes") — so the empty row is
+    not a tenant preference, it is the ruling not applied.
+    **Scale, measured on September 2026 for Cellfonz:** 601 distinct BYOD transactions against 1,159
+    device-department box lines, so boxes go **1,159 → 1,760 (+52%)** and the Daily-Targets conversion
+    rate (boxes ÷ bill payments) rises with them. **No payout moves**: `targets_engine.achieved_for_cat`
+    pays on `prem` / `byod` / `upg` / `acc`, never on `box`, and BYOD is already its own pay category —
+    the tick adds BYOD to the box TOTAL, it does not pay anything twice.
+    **The control already ships and the owner can press it himself**: the tick *"Count BYOD /
+    customer-phone toward total boxes sold"* in the Sales Report's Classification settings
+    (`PUT /commcalc/accessory-config`, `box_count_buckets`). No migration, no SQL. The caveat names
+    that tick rather than the column, and §H5b pins it — a caveat that names a defect but not its
+    control is a complaint, not a fix.
+    **Why no house default in code can fix this.** `box_count_buckets` is `TEXT[] NOT NULL DEFAULT '{}'`
+    (mig 231), so the schema cannot tell "never declared" from "declared empty"; every reader sees `{}`
+    and must take it as an answer. A code-side house default of `['byod']` would therefore override a
+    tenant that genuinely means empty. The per-org row IS the mechanism here (RULE TWO: a per-tenant
+    config ROW is not a patch), and because Cellfonz's row doubles as the house-default row, setting it
+    is what fixes the inheriting tenant too. Making the distinction expressible would take a migration
+    and is not in this PR.
+    **WHAT THE OWNER'S FIRST ATTEMPT EXPOSED (2026-10-08, §59.8).** He ticked `BYOD` in the **"Box
+    (device-unit) departments"** list instead — a different control on the same panel, writing
+    `box_departments`, not `box_count_buckets`. Measured on September 2026: that counts 391 BYOD-DEPARTMENT
+    lines across only **286 receipts** (so one sale can count twice), of which **256 are not BYOD
+    activations at all**, while only **30 of the 601** BYOD activations have a line in that department.
+    The department is a product department, not the activation. Two lessons, both recorded rather than
+    re-derived: when telling anyone to set this, name the **heading** (the two controls sit inches
+    apart), and the attempt broke the bucket's own assumption — see §59.8.
+  - **family_plan_pct** — `partial`, naming each store that did not resolve to a code. Blank means
+    unmatched, never 0%. (It fires on no house store today: all 28 DLAR rows matched, keyed on
+    `address` — `raw_dlar_store.store_code` is blank on every row, which is why the resolver is used.)
+
+### 59.6 Surfaces, and the lock
+
+- **Endpoint** `GET /commcalc/peer-comparison?period&bands&markets&metric` — `router.peer_comparison`,
+  RBAC store-scoped through `scope_keyset` / `in_keyset` like every other sales report.
+- **Page** `frontend/src/app/(platform)/commcalc/peer-comparison/page.tsx`. Registered in
+  **BOTH** NAV groups the owner named, as ONE href so RBAC and ⌘K see one report: *Management Overview*
+  (`module: 'commissions'`, beside Sales Comparison — the management-review surface) and *Targets &
+  Coaching* (`module: 'targets'`, beside the Action Plan it will prompt into). Plus `REPORT_DIRECTORY`
+  `'sales'`, `reports.ts` and `route-index.ts`. The page renders and never computes — in particular it
+  never fills a blank with a 0.
+- **Proof / lock** `backend/harness_peer_comparison.py` — DB-free, stdlib, ~130 checks. §A bands ·
+  §B config · §C THE ADD-A-LINE ONE HOME over the whole measured vocabulary + the equivalence pin ·
+  §D the roll-up and **the distinct-transaction defect it avoids** (a receipt shared by two reps counts
+  ONCE; summing the cell counts would have said 3 — reproduced as a negative control) · §E the honesty
+  rules · §F the gap · §G one definition of lagging · §H the caveats · **§I the un-wire lock**: every
+  cell field this module reads must still be initialised in `_sales_cell_agg`, `_aal` must still be
+  populated from `_lc.is_add_a_line`, `asset/router._promo_type` must still dereference the home, and
+  `peer_comparison.py` must read **no raw sale-line field and import no classifier**.
+  **§I is an AST check, and that is not a style choice** — a textual one cannot work here: prose must be
+  allowed to discuss a field (the caveat sentences name `box_departments`), and blanking the string
+  literals to let prose through also blanks `r.get("contract_type")`, which made the first draft vacuous
+  and pass a planted violation. Arming it is what exposed that (the §19.28 trap, in the other direction).
+  Every lock check was armed and proven to fail.
+
+Module-graph fact: `peer_traffic_band` — home `app/modules/commcalc/peer_comparison.py`, callers
+`app/modules/commcalc/router.py`, index `59`, lock `harness_peer_comparison.py`. Written **by hand,
+multi-line** (never `--bless` — §50).
+
+**Two derived registries this report had to enter, both of which failed the build until it did — and
+that is the design working.** Neither is a hand list, so neither could be "remembered":
+
+- **The data-assistant catalogue** (§54.11) — `app/modules/core/data_qa_derived.py` is DERIVED from
+  `reports.ts` + the page's own fetched endpoint + the live OpenAPI parameters, and
+  `harness_data_qa_catalog.py` reddens when it and the reports disagree. The entry
+  `commcalc_peer_comparison` reads `/api/v1/commcalc/peer-comparison` with `period` as its one
+  pattern-matched parameter, so the assistant can be asked about this report rather than answering
+  from the nearest thing it knows. Generated, then diffed before it was applied: exactly one entry
+  added, none changed, none removed.
+- **The derived page index** (§54.7) — `route-index.ts`. Its §G rule is that **NAV is the label
+  authority**, so a page NAV names carries NO label of its own here; this report is in NAV twice, and
+  the label it shipped with was a second spelling of its name. Removed; the entry keeps only the
+  aliases someone would actually type. `prove_route_index.mjs` §E2 (every label survives a re-bless)
+  and §G1 caught it together, which is the point of a round-trip proof: a field the generator would
+  drop is drift already.
+
+### 59.7 THE ACTION-PLAN PROMPT — the same verdict, carried to the people who can act on it (stage 2)
+
+Owner: *"it should trigger in teh action plan for the sales reps their managers and dm and market
+manager to prompt them to increase the sales for those laggin stores as if one can do why not the
+other."* Shipped as **no new endpoint, no new notification path and no second feed read** — three
+findings made that possible, and all three are duplicate-check results, not luck:
+
+1. **The audience fan-out already exists.** `get_action_plan` keys its items by store and resolves the
+   viewer's reach through `scope_keyset`, so ONE store item is already seen by the rep, the store
+   manager, the DM and the market manager. The owner named four audiences; the plan needed none of
+   them added. A separate "peer alert" would have been a fifth notification path answering a question
+   the plan already answers.
+2. **The sale rows are already in hand.** `_fetch_actuals` reads the union for the plan's own actuals;
+   it now takes `rows_out=` and hands the raw rows back, so the peer comparison is computed off rows
+   already paid for. `harness_peer_comparison.py` §K4 locks that (`rows_out=_sale_rows` present, and
+   no `_sales_rows_union(` call of the plan's own).
+3. **"Behind" is already defined, once.** The plan calls `_peer_comparison_payload` (the shared
+   assembly, extracted from the `/peer-comparison` endpoint in this PR so BOTH callers read it) and
+   then `peer_comparison.peer_items_by_store`. It computes no band, no median and no gap of its own —
+   §K3 reddens on the mere mention of one. The screen and the plan cannot coach different stores.
+
+**The item.** `peer_comparison.peer_action_item(row)` turns ONE `lagging()` row into the plan's own
+`{severity, metric, title, detail}` shape, with `metric = "peer_gap"`, `detail` **being**
+`prompt_sentence(row)` (never a second wording, §J4) and the band numbers under `peer` so a surface —
+and stage 3's report cards — can render or tick off without re-deriving the verdict.
+
+**SEVERITY, AND THE BUG THAT A VACUOUS CHECK LET THROUGH.** Recorded because it is the third instance
+of the same trap (§19.28, §I5, §K8) and the only one that reached live numbers. The first rule was
+"`critical` when the store is further from the band's BEST than from its median". That is arithmetic,
+not a measurement: if `mine < median <= best` then `(best - mine) >= (median - mine)` **always**. Every
+lagging store came back `critical` — all 12 on live September 2026 data — and §J6, the check written to
+prove the rule, **passed because it asserted the tautology**. The rule now measures the shortfall as a
+SHARE of the band median (`CRITICAL_SHORTFALL = 0.25`), chosen from the measured spread: the 12 live
+stores ran 5.3%–42.1% below their own band median, and the cut splits them **5 critical / 7 warning** —
+B-2509 at 42% below is a gap to coach, the 5.3% store is noise and must not shout. A store with no
+leader to point at (a band of one, or a band whose best IS its median) is never `critical` whatever its
+shortfall: nothing proves anybody did better on that traffic. §J6 now plants a row either side of the
+cut and requires the severity to CHANGE, so restoring the tautology reddens it; §J7b plants a 90%
+shortfall with no leader. Both were armed.
+
+**Honesty, same as the screen.** A comparison that could not run is REPORTED in `peer_meta.error`, not
+silently absent ("a comparison that did not run is not the same as no store being behind" — §K6), and
+lagging stores the plan could not carry are counted and named in `peer_meta.lagging_not_planned` (§K7).
+The plan's cross-store rep view filters store items but must KEEP the peer item, because the owner
+asked reps be prompted — §K8, rewritten after its first draft proved vacuous.
+
+Surfaces: `GET /api/v1/commcalc/targets/{period}/action-plan` (existing), rendered by
+`frontend/src/app/(platform)/commcalc/targets/action-plan/page.tsx`, which gained an "About the peer
+comparison" panel and now renders the `setup_hint` the backend was already raising and nothing showed.
+Lock: `harness_peer_comparison.py` §J (11 checks, the item) and §K (10 checks, the un-wire).
+
+**Stage 3 — the DM and market-manager report cards — is §59.9.** It reads `lagging()` and these items
+and re-decides nothing. The measured constraint it had to live with: the org tree resolves a DM for
+only **6 of 29** Cellfonz stores and **0 of 20** Luxelink stores, so most stores are on nobody's card
+today — surfaced with the fix named, never a guessed owner.
+
+### 59.8 ONE SALE, AT MOST ONE BOX — the assumption the box-count bucket rested on, and the guard that replaces it
+
+**The class, not the instance.** `box_count_buckets` (mig 231) adds a box for a sale that has **no**
+device line — a BYOD activation, where the customer brought the phone. The code added the whole bucket
+outright, `box_count += len(cell['_byod'])`, and its own comment stated the licence: *"A BYOD
+transaction carries NO device-department line, so this never double-counts an existing box."*
+
+That is not a fact about BYOD. It is a fact about the org's `box_departments`, which is **config**, so
+any tenant can falsify it by ticking a department its BYOD sales also use. The general fact that was
+wrong: *a count derived from the absence of something may not be added without checking the thing is
+actually absent.*
+
+**The siblings, found before shipping.** Measured live 2026-10-08 against September 2026
+(`commcalc.accessory_config` + the sales union, read-only):
+
+| org | buckets | device-line boxes | bucket added, unguarded | guarded | phantom boxes removed |
+|---|---|---|---|---|---|
+| `00000000-…-0001` Cellfonz R Us | `['byod']` | 1,509 | 2,083 | **2,044** | 39 |
+| `854f6d7b-…` Luxelink Wireless | `['byod']` | 999 | 1,233 | **1,172** | 61 |
+| `f4f1c16e-…` Vzone | `['byod']` | — | — | — | no September rows |
+
+So this was **already live on a tenant nobody was looking at**: Luxelink has had the bucket on for
+months and was over-reporting 61 boxes in one month. The Cellfonz instance only surfaced because the
+owner ticked `BYOD` into `box_departments` (§59.5) — the instance, not the defect.
+
+**The fix, in the one home.** `router._sales_cell_agg` now records `cell['_box_txn']` — the
+transactions that already produced a box LINE in that cell — beside the existing `box_count` tally, and
+the bucket addition counts `len(cell[bucket] - cell['_box_txn'])`. The guard is **dereferenced, not
+assumed**, and it covers `byod`, `upgrade` and `premium` by the same rule rather than only the bucket
+that happened to be on: an upgrade almost always HAS a device line, so an `upgrade` tick under the old
+code would have double-counted nearly every upgrade. `_box_txn` is on the cell, so no caller re-derives
+"did this sale already have a box".
+
+**What does NOT change.** No bucket ticked → `_bcb` is empty → the addition never runs → byte-identical
+for every org that has not opted in. No money moves: `targets_engine.achieved_for_cat` pays on
+`prem` / `byod` / `upg` / `acc` and never on `box` (box feeds the Daily-Targets conversion display,
+Productivity, Stack Ranking and Review). The figures above are display corrections, downward.
+
+**The lock.** `harness_line_class.py` §H (8 checks), in the harness that already exercises this
+aggregation rather than a new sibling file. Armed three ways, each proven to redden: removing the guard
+(the original bug), recording `_box_txn` but not reading it (the §19.18 *registry written, callers not
+wired* trap), and guarding `byod` while leaving `upgrade` / `premium` unguarded (the *fixed the instance,
+not the class* trap). §H8 pins that a line with no `trans_id` cannot be guarded and is still counted
+once, never dropped.
+
+**Adjacent defect, NOT fixed here and not to be assumed away.** `box_departments` matching is
+case-SENSITIVE (`_accessory_config` builds `{b.strip()}` and `_sales_cell_agg` compares the raw
+department), so a feed that spells a department in another case silently contributes no boxes. Same
+class as the `b-1115` phantom-store defect that §29.12 closed for store codes. Recorded, not repaired, because repairing it
+changes which lines count as boxes on every tenant and wants its own measurement.
+
+### 59.9 THE REPORT CARDS — what was assigned to a manager, and the system's own check-off (stage 3)
+
+Owner: *"create a report card for the Dm based on all the items assigned to them per store and a check
+off by the system if those targets were met or not, the same report card will be made for the market
+manager for all the goals assigned to the Dm but a higher level reporting so they are also accoutable."*
+
+**THE CARDS DERIVE NOTHING.** Every number on them comes from a home that already owns it, and the
+lock (`harness_manager_report_card.py` §D) fails the build if that stops being true:
+
+| the question | the one home | how the card gets it |
+|---|---|---|
+| was this target met | `commcalc.targets` vs the actuals, through `targets_engine` | `GET /targets/{period}/summary`, **called** by the endpoint, never reassembled |
+| what is the manager's total | `targets_engine.aggregate_stores` — the same area roll-up the Targets page shows | injected into `build(aggregate=…)` |
+| did the store make its conversion | the summary row's own `meets_target` | dereferenced, never re-compared |
+| is the store behind comparable stores | `peer_comparison.lagging` / `peer_action_item` (§59.4, §59.7) | the same payload the screen and the action plan read |
+| who owns this store | `storeops/org_chain.dm_by_store` — THE org-tree walk | read once, in bulk, via `org_chain_inputs(org_id)` |
+
+Calling `get_targets_summary` rather than extracting its ~270-line assembly is deliberate and is the
+cheaper correctness: one code path means a DM's card and that DM's own Targets screen cannot disagree
+about the same store on the same day, and the card inherits the summary's `scope_keyset` filtering for
+free, so it can never show a store its reader may not see. The cost is one extra pass for this screen,
+which is a page a manager opens, not a sweep.
+
+**THE CHECK-OFF IS THREE-STATE: `met` / `missed` / `no_target`.** An item nobody set a target for is
+not an item the store failed, and `score_pct` is met ÷ *checked* — so a manager whose stores carry no
+targets scores **None**, never 0% and never 100%. This is `attainment_pct`'s own doctrine (§18) applied
+to a card, and it is the difference between a report that measures performance and one that accuses
+people over configuration. The peer item is the one exception to "needs a target": the comparison IS
+the target, so a store that was compared and is not behind reads `met`, a store named by `lagging()`
+reads `missed` with `peer_comparison`'s own sentence as its detail, and a store that could **not** be
+compared reads `no_target` with the reason — never a pass mark it did not earn.
+
+**THE ITEMS ARE ONE REGISTRY** (`manager_report_card.ITEMS`): the four target categories, conversion,
+and keeping up with stores of the same footfall. A seventh item is added there and every card, tally
+and roll-up picks it up; §C5 proves the registry is wired rather than decorative (the §19.18 trap).
+
+**THE LEVEL ABOVE.** One card per manager *above* a district, with a row per DM beneath them carrying
+that DM's own totals — not the store list repeated one level up (§B12). Every manager above the
+district gets one, so a regional or the owner is covered with no further mechanism.
+
+**MEASURED LIVE, September 2026** (house org, read-only through the real endpoint): 19 stores in the
+summary's universe, **6 with a district manager and 13 with none**; 3 DM cards and 2 manager cards
+above them. All three DMs are recorded against the SAME district, so the same 6 stores appear on three
+cards — `coverage.store_card_placements` (18) says so plainly rather than leaving three cards that do
+not add up to the org. Score 27.8% met across 36 checked items per DM, which is the Targets screen's
+own picture of September, not a second opinion.
+
+**A STORE THE TREE CANNOT PLACE IS REPORTED, NEVER DROPPED AND NEVER GIVEN A GUESSED OWNER.** It lands
+in `unassigned` with its own check-off kept and a reason that distinguishes *this district has no
+manager recorded* from *this store is not under a district at all* — different facts, and only one of
+them is fixed in the same place. `coverage_note` says it in one sentence above the cards and names the
+fix (the org chart). This is most of the org today — 6 of 29 house stores
+and 0 of 20 Luxelink stores resolve a DM — which is exactly why the gap is surfaced rather than hidden
+behind cards that look complete.
+
+Surfaces: `GET /api/v1/commcalc/targets/{period}/report-cards`, screen
+`frontend/src/app/(platform)/commcalc/targets/report-cards/page.tsx`, listed in NAV under **both**
+Management Overview and Targets & Coaching (one href, so RBAC and ⌘K see one report).
+Module-graph fact `manager_report_card`, written by hand (§50). Lock
+`harness_manager_report_card.py` (56 checks), every §D check armed against a planted violation —
+including the one that would matter most, a card computing its own attainment percentage.
+
+**A FIXTURE THAT ENCODES A SHAPE NOBODY SENDS IS A TEST OF A FICTION.** Recorded because it happened
+here: the first draft read `conversion.store` off the summary row. The live row carries `conversion`
+**flat**, so every store's conversion silently read as `no_target` and the harness agreed, because its
+fixture had been written from the same assumption. Caught by running the real endpoint against
+production, not by reading the code. §A14–A16 now pin the flat shape, prove the state dereferences
+`meets_target`, and prove the nested shape is not quietly accepted.
+## 60. SPIFF IMPACT — what ONE pay type is worth to a store's commission revenue and its profit, and who is not earning it (owner ask 2026-10-08)
+
+Owner, verbatim: *"create a report for management review to assess the affect of a certain spiff on the
+overall commisison payout revenue for the store and what % does that help to increase the profitablity
+and then report whoich stores are lakcing those sales in terms of % sales which are contriuting to that
+profitability"*.
+
+**THE IDEA.** A spiff is a lever management can pull, and nobody could see what pulling it was worth.
+The carrier ships 49 distinct pay types in a month (measured, house org, September 2026) and the only
+surfaces that held them were the statement itself and the P&L's rolled-up carrier lines — so "is this
+spiff carrying a store, and which stores are not earning it" could not be asked at all. Three
+questions, in the owner's order, each answered with ONE number plus the reason it can or cannot be
+answered:
+
+1. **What is it worth to the commission payout revenue?** Its dollars as a share of every carrier
+   dollar that books to the **same P&L line**.
+2. **By how much does it raise profitability?** Net profit WITH it against net profit WITHOUT it —
+   `spiff ÷ (net_income − spiff)` — because the carrier pays it on sales the store already made: take
+   it away and the revenue goes while every cost stays.
+3. **Who is not earning it?** The spiff's **paid units per 100 boxes sold**, ranked inside the store's
+   own §59 traffic band, so the finding is "same door, same boxes, less of this spiff" rather than
+   "this store is small".
+
+### 60.1 THE DUPLICATE CHECK (build gate) — every number here is somebody else's already
+
+Searched before a line was written: §57 (pay category), §58 (the carrier dollar's classification), §59
+(peer traffic bands), §4 / §4b / §4e (the P&L and its per-scope totals), §4c (`pl_range`), §6 (rep
+commission and its spiff rates), **§6a (`GET /commcalc/setup-fee/impact` — the nearest-named thing on
+the platform)**, §19.50 (one month, one stored spelling), §19.52 (`device_reimb_recon`, the other
+reader of this feed), and the report lists in §17/§18.
+
+| the fact the report needs | the ONE home it DEREFERENCES |
+|---|---|
+| is this carrier dollar commission / spiff / residual / reimbursement, and on whose authority | `carrier_dollar_class.classify` (§58) — injected; the module never looks at the string |
+| which P&L line a component books to | `carrier_dollar_class.component_line` (§58) — config, never a branch |
+| which category the org DECLARED for a pay type | `payment_category` (§57), reached **through** §58 — no tenth reader |
+| the ONE folding rule for a pay-type key | `payment_category._fold` (§57) — the option list and the per-store tally must agree about whether two spellings are one type |
+| does the label NAME a month rung | `commission_ledger.parse_payment_month` (§4a) — exactly that function's own question; the month-of-life LEG question stays with `month_leg_of` |
+| boxes sold, and people through the door | `router._sales_cell_agg` via §59 — **not one sale line is read here** |
+| the traffic band, the median, the gap, "behind", and the sentence | `peer_comparison.band_of` / `_gaps` / `lagging` / `prompt_sentence` (§59.4) |
+| revenue / net income for a store | `account/analysis.pl_totals` (§4) off the STORED per-store snapshot, read through `statement_filter.store_snapshots` (§19.50's deduped read, **extracted in this PR** so both callers share it) |
+| which store is this, spelled any way | `router._store_code_resolver` (§59's and Daily-Targets' resolver) |
+
+**NEW here and nowhere else:** the share of the line, the profit-with-against-without arithmetic, the
+paid-units-per-100-boxes measure, and the honesty rules in §60.4.
+
+**NOT a sibling of §6a.** `setup-fee/impact` asks *"what would REP pay be at a percentage nobody has
+set yet"* — forward-looking, per rep, on an unset rate. This asks *"what did the CARRIER already pay
+for one of its own pay types, and what is that worth to the store's books"* — backward-looking,
+measured, per store. Different money, different grain, different question.
+
+### 60.2 ONE DEFINITION OF "BEHIND", BORROWED RATHER THAN COPIED — `peer_comparison.with_extra_metric`
+
+This report's third question is §59's question asked about a number §59 does not compute. Both
+alternatives were the defect the index rules forbid: re-implement the median, the gap, `lagging()` and
+`prompt_sentence()` over here (two definitions of behind, certain to drift the first time
+`BAND_MIN_PEERS` or the median rule changes), or teach §59 to read the carrier statement (a second
+derivation of money §58 owns).
+
+So `_gaps` gained a `metrics=` **parameter** (defaulting to §59's own declared set, so every existing
+caller is byte-identical) and §59 gained `with_extra_metric(payload, key, label, values,
+higher_is_better=True)`: the caller hands in its number per store, and the band, the median, the gap,
+the verdict and the sentence all stay in §59. A report using it **cannot** disagree with the peer
+screen or the action plan about who is behind, because it is the same code deciding. `higher_is_better`
+is declared, not assumed, so a future lower-is-better metric cannot silently invert every gap.
+
+### 60.3 THE SURFACES
+
+- **Endpoint** `GET /commcalc/spiff-impact?period&spiff&bands&markets` — `router.spiff_impact`, RBAC
+  store-scoped through `scope_keyset` / `in_keyset` like every other sales report. The carrier feed is
+  read PAGED through `feed_read.read_all` with **no literal row ceiling** (§19.48's rule; 11,054 rows a
+  month). READ-ONLY: books nothing, pays nobody, recomputes no statement.
+- **Page** `frontend/src/app/(platform)/commcalc/spiff-impact/page.tsx`, registered in **BOTH** NAV
+  groups as ONE href (*Management Overview* `module: 'commissions'`, beside Peer Sales Comparison, and
+  *Targets & Coaching* `module: 'targets'`), plus `REPORT_DIRECTORY` `'comm'`, `reports.ts`,
+  `route-index.ts` and the derived data-assistant catalogue (§54.11, `commcalc_spiff_impact`,
+  regenerated and diffed: exactly one entry added, none changed, none removed). The page renders and
+  never computes — in particular it never fills a blank with a 0.
+- **The dropdown is the tenant's own rows**, never a list in code (RULE TWO, the §13c enumeration
+  doctrine §57.2 follows for its category filter): every pay type on the month's statement, biggest
+  money first, each labelled with §58's component and whether the org declared it. With nothing picked
+  the report opens on the largest SPIFF-component type **and says it chose** (`selection_basis`), and a
+  pick the window cannot honour is `requested_not_found` rather than a silent substitution.
+
+### 60.4 THE HONESTY RULES, because this report ranks stores and names them to their managers
+
+- **A spiff that does not book to the commission line says so, loudly.** On the live house org MOST
+  carrier promo money classifies as REIMBURSEMENT (§58's ruling), so those dollars are not commission
+  revenue at all. The report names the line the selected type books to and reports its share of THAT
+  line. Showing a reimbursement as commission would restate the very money §58 just moved.
+- **A profit LIFT is only reported from a profit.** `net_income − spiff` at or below zero carries no
+  percentage — **13 of 28** house stores were at a loss in September 2026 — so the lift is `None` with
+  the reason said and the DOLLARS are the answer. A base of exactly zero likewise: a lift of infinity
+  is not a number.
+- **A paid unit is not a sale when the pay type names a month rung.** The carrier pays its bounties in
+  six monthly instalments, so a "Month 3" type pays on activations made three months ago; its units
+  against THIS month's boxes compare two cohorts and the rate can exceed 100%. The report still
+  computes it (every store's numerator is the same kind of thing, so the RANKING is sound) and the
+  caveat says plainly what the numerator counts. This is the same trap §19.48 recorded from the other
+  side: comp-report **quantity** summed across instalment rungs reads ~6× the activations.
+- **Zero is a measurement; missing is not.** A store the carrier paid nothing for this type shows
+  **$0.00 and 0 units** — that IS the finding the owner asked for. A store with no P&L snapshot shows
+  `None` and says "not computed, never zero". The two never render the same.
+- **The profit columns say WHEN they were computed**, because a stored snapshot does not recompute when
+  a screen loads and a report that does not say so invites a reader to take a stale number for a
+  current one.
+
+### 60.5 MEASURED LIVE, and the defect REPORTED rather than coded around
+
+House org, read-only, **September 2026** (`raw_comp_report`, 9,846 rows, 49 distinct pay types,
+28 stores; 22,914 sale rows; 31 stored per-store P&L snapshots):
+
+| | amount |
+|---|---|
+| classified to `carrier_comm` (COMMISSION $105,340.19 + SPIFF $5,295.00 + unresolved $144.95) | **$110,780.14** |
+| classified to `vip_reimb` (REIMBURSEMENT) | **$373,211.61** |
+
+**Both tie to the cent to the sum of the 31 stored per-store P&L snapshots** — which is the whole claim
+this report makes: it reads the same dollars the P&L books. Pinned as the oracle (§H).
+
+- **77% of the live statement books to the reimbursement line, not the commission line.** Only three
+  types carry the SPIFF component at all (`$2,632.50` / `$2,037.50` / `$625.00`), and the largest is
+  **2.38%** of the commission line. A manager asking "what is my spiff worth" was, before this,
+  looking at a number that mostly was not commission.
+- **Jun / Jul / Aug / Sep / Oct 2026 are all recomputed on §58's new basis** (verified by reading the
+  snapshots back, computed 2026-10-08 19:16–20:18 UTC). **May 2026 is not** — it still carries the
+  pre-§58 posture, and the report names its snapshot time rather than branching on a label.
+- **A store-identity defect, REPORTED.** One house store's carrier statement spells an address that
+  resolves to no store code, while `account_statements` holds P&L snapshots under **three** spellings of
+  it plus a bare `<2022>` key — so its profit is split and its carrier money is unjoinable. The report
+  puts it on its own row with the reason and raises the `unresolved_identity` caveat naming the
+  mapping as the thing to fix. It is **not** merged, guessed at, or dropped. Same class as §23b and
+  the `store_identity_merge` runbook.
+- **$144.95 resolves to no component at all** (two undeclared types with no twin and no keyword rule).
+  It rides onto the commission line on §58's own fallback and is reported there, never folded silently.
+
+### 60.6 THE LOCK
+
+`backend/harness_spiff_impact.py` — DB-free, network-free, stdlib only, wired into
+`.github/workflows/carrier-vocab-guard.yml` in both the paths filter and as a step. Sections: **§A** the
+option list is derived from the tenant's rows and carries §58's verdict · **§B** the report never
+silently chooses its own subject · **§C** the share is of the line the dollars actually book to, and
+the per-line buckets sum to the carrier total · **§D** the profit effect, and the percentage a loss
+cannot carry · **§E** the rate, and the denominator that is not a zero · **§F** the payload, the
+estate tying to its own rows, and the identity `net_income − spiff == net_income_ex_spiff` on every
+row · **§G** the caveats, each firing on its condition **and not otherwise** (a clean tenant raises
+none — the panel is not decorative) · **§H** THE REGRESSION, the live September figures above ·
+**§I** THE UN-WIRE LOCK: this module may read no raw sale field, import no classifier, keep no median
+or gap of its own, and must keep dereferencing §58 / §57 / §4 / §59 — plus RULE TWO over every code
+literal and a purity check that it does no IO · **§J** `with_extra_metric`, including that absence is
+never ranked as a zero, a store alone in its band still carries no gap, and `GAP_METRICS` is unchanged
+by this PR.
+
+**One existing check was re-aimed, and it is worth recording.** `harness_expense_one_path.py` §D10
+asserted "no second freshest-wins loop" as *"the word `computed_at` does not appear above
+`filtered_statement`"*. That was a PROXY: extracting the per-store snapshot read into
+`store_snapshots` (whose `select` legitimately names the column, so a report can say when the figures
+were computed) reddened it, while a hand-rolled `max(...)` written **below** the split point would have
+passed. It now measures the rule itself — exactly one dereference of `dedupe_latest`, and no private
+newest-wins pick — and was armed: planting a `sorted(rows, key=lambda r: r["computed_at"])` reddens it.
+Same §19.28 class, in both directions at once.
+
+Module-graph fact: `spiff_store_impact` — home `app/modules/commcalc/spiff_impact.py`, callers
+`app/modules/commcalc/router.py`, index `60`, lock `harness_spiff_impact.py`. Written **by hand,
+multi-line** (never `--bless`, which silently deleted 11 of 12 facts on 2026-10-04 — §50). Three
+existing facts gained an edge the same way: `payment_category_map` and `peer_traffic_band` ←
+`spiff_impact.py`, and `statement_crosscheck_verdict` ← `commcalc/router.py`.
+
+**Money posture: books nothing, maps nothing, re-declares nothing.** The module is read-only, writes no
+column, and no payout path reads anything it produces. No migration.
+
 ---
 
-## 59. A LEADING ADDRESS TOKEN IS NOT A STORE IDENTITY — one home, every money path on it (owner directive 2026-10-09)
+## 61. ACCESSORY TARGET ALLOCATION — one company accessory goal, split on what each store's own accessories-per-box history says it can carry (owner ask 2026-10-09)
+
+Owner, verbatim: *"as a company we can decide what is my company target for accesories sales, we need a
+new report which decides how the tragets should be assigned for the stores based on the historic
+performance of the stores, the report will have he columns for last 2 months of sales in separate
+columns, projected sale this month, current target and extended target to meet the company goal, the
+next column will calculate the propotionate sales target required to be achived by the store based on
+thier accessories per box history and the actual total boxes sold, the targets could be a fixed number
+or a % increase from last month or even a % decrease from last month, the report should have all this as
+user defined ont opt of the page and , the suer should jave the option to assign this target
+proportionately to all stores or selected stores from the from the dropdown multi select menu"*.
+
+**THE IDEA.** The company names ONE accessory number; the report says who has to sell what to get
+there. Every accessory target on the platform until now was typed by hand or carried forward ±10% by
+`_carry_forward_map` — so a company goal could be *stated* and never *distributed*, and the per-store
+numbers were nobody's arithmetic. The weight is each store's own **accessories per box**, because that
+is the part of accessory performance a store controls; the multiplier is the **boxes it is actually
+selling this month**, because that is the part it does not.
+
+### 61.1 THE DUPLICATE CHECK (build gate) — nothing here is a second derivation
+
+Searched before a line was written: §5 (Daily Targets & actuals — the Accessory Sales Targets page,
+`_carry_forward_map`, `_fetch_actuals`, `_targets_trending_by_code`), §3 (the sales report and the
+shared `_sales_cell_agg`), §59 / §59.8 (the other reports keyed on boxes, and the box-count bucket
+guard), §60 (the other report that ranks stores on boxes), §19.28 (KPI targets), §16–18.
+
+| the fact the report needs | the ONE home it DEREFERENCES |
+|---|---|
+| accessory $ a store sold in a month, on the accessory-TARGET basis (accessory revenue + the device set-up fee, owner 2026-07-17) | `router._fetch_actuals` → `_compute_feed_actuals_py` → `_sales_cell_agg` (§5 / §3) — **not one sale line is read** in the engine, and the lock proves it |
+| boxes sold | the same `box_count` off the same pass, already de-duplicated by §59.8's `_box_txn` guard |
+| the projected month-end accessory $ and boxes | `router._targets_trending_by_code` → `_exec_mtd` (§5) — the projection Executive MTD and the Accessory Sales Targets tracker already show, so three surfaces cannot disagree |
+| the accessory target in force | `commcalc.targets.accessories_monthly` (mig `006`) — the row §5's tracker reads and `PUT /targets/{period}` writes |
+| which store is this, spelled any way | `router._storeops_roster` + `_store_code_resolver` (§5's and §59's) |
+| may this caller set this store's target | `router._require_target_edit` (§5) — the same permission + store-span gate as the single-store save |
+| what the other target categories are, when a store has no row yet | `router._carry_forward_map` (§5) — so a first-ever accessory save cannot zero the activation / upgrade / BYOD figures the targets page was displaying |
+
+**NEW here and nowhere else:** the accessories-per-box capacity measure, the company-goal vocabulary,
+the proportional split with its fallback ladder, and the largest-remainder rounding that makes the
+column foot to the goal.
+
+**NO NEW TABLE, NO MIGRATION.** A second home for a store's accessory target is exactly the "two paths
+answering one question" the index rules forbid, and it would drift from the tracker inside a month. The
+suggestion is computed on every load and only ever written into mig `006`'s own column.
+
+**NOT a sibling of §5's Accessory Sales Targets page.** That page TRACKS a target somebody already set
+(target vs achieved vs pace vs today). This one DERIVES the target from a company figure. One is the
+scoreboard, the other is the draft; they share the row, which is the point.
+
+### 61.2 THE ARITHMETIC, stated so it can be argued with
+
+```
+rate     = (acc$ last month + acc$ month before) / (boxes last month + boxes month before)
+boxes    = projected boxes this month            (fallback: average of the two history months)
+CAPACITY = rate x boxes
+target   = goal_to_split x capacity / Σ capacity
+extend   = target − current_target                ← the owner's "extended target"
+```
+
+Two months and not one, because a single month of attachment is noisy and the rate is the whole weight.
+The rate is history and the box count is the future **on purpose**: attachment is a property of how a
+store sells, traffic is a property of this month — so a store whose boxes are up carries more of the
+goal at the same attachment rate. The report also states the **implied** rate (`required_acc_per_box`),
+so a manager can see whether the ask is "sell more boxes" or "attach more per box" before arguing about
+the dollars.
+
+### 61.3 THE GOAL IS USER-DEFINED, AND THE BASIS IS NAMED
+
+`GOAL_MODES` = `fixed` | `pct_increase` | `pct_decrease`; `GOAL_BASES` = `last_month_actual` (default) |
+`two_month_average` | `projected_this_month` | `current_targets`. Both are declared data the UI picks
+from (pick-don't-type, §3b's posture), and the basis is NAMED on the payload with its measured dollars —
+"+10%" over a projection and over last month's actual are different goals, and a report that does not
+say which is unauditable. The basis is summed over **every** store in the window, never the selection,
+so narrowing the dropdown cannot move the company's own goal.
+
+### 61.4 THE HONESTY RULES — each one is a check in `harness_accessory_target_plan.py`
+
+- **A goal nobody entered is not zero.** No figure typed → `goal: null`, every suggestion `null`, the
+  reason said (`no_goal_entered`). A report that silently plans to $0 is worse than one that plans
+  nothing. A *deliberate* 0, though, IS a goal — blank and zero are told apart (`_blank`).
+- **A % of nothing is not a number.** `no_basis`, never `goal: 0` — §59's and §60's rule, kept here.
+- **ZERO ATTACHMENT IS A FINDING, NOT A WEIGHT OF ZERO.** A store that sold boxes and attached no
+  accessories is precisely the store a target is for; weighting it at zero would hand it a $0 target
+  and call that planning. It is weighted at the COMPANY's own measured rate and the row SAYS SO
+  (`company_rate_zero_attach`), so a suggestion is never mistaken for a measurement.
+- **No history is not no capacity** (`company_rate_no_history`), and a window with nothing measurable
+  anywhere is `no_basis` — a store with no capacity is dropped from the SPLIT and NAMED in
+  `unweighted`, not given a share of zero, because a zero in the assignments would be written over a
+  target this report could not compute.
+- **An unselected store is never silently re-planned.** Its current target is RESERVED out of the goal
+  and only the remainder is split, so assigning to three stores makes no silent promise about the other
+  twenty-five. When the unselected targets already exceed the whole goal, nothing is suggested and the
+  overage is NAMED (`goal_already_committed` + `shortfall`).
+- **The assignments SUM to the goal.** Independently rounded proportional shares miss by up to a dollar
+  per store; the largest-remainder pass puts the residue on the largest fractions, so the column foots.
+- **The write moves ONE column.** Only `accessories_monthly`; the other categories are carried from the
+  existing row or seeded through `_carry_forward_map`. The POST recomputes the plan server-side rather
+  than trusting a client-supplied dollar figure, and goes store by store through `_require_target_edit`.
+- **NOT MONEY.** `targets_engine.achieved_for_cat` pays on prem/byod/upg/acc **actuals** and never reads
+  a target, so no suggestion on this page can move a payout.
+
+### 61.5 Where it lives
+
+- **Engine (pure, DB-free):** `backend/app/modules/commcalc/accessory_target_plan.py` —
+  `company_goal` · `basis_amounts` · `company_rate` · `capacity_row` · `allocate` ·
+  `_largest_remainder` · `plan` · `assignment_payload`.
+- **Endpoints:** `GET /commcalc/accessory-target-plan/{period}` (read-only) ·
+  `POST /commcalc/accessory-target-plan/{period}/assign` (gated), plus `_acc_plan_month_by_code`,
+  both in `commcalc/router.py`.
+- **Frontend:** `commcalc/accessory-target-plan/page.tsx`. A Management Overview / Targets **tile**
+  (`tileOnly`, the owner's "cleaner look" ruling), registered in `rbac.ts` (NAV ×2, module map, report
+  category), `reports.ts`, `route-index.ts`.
+- **Table:** `commcalc.targets` (mig `006`) — read and written; **no new table, no migration**.
+- **Module graph:** fact `accessory_target_allocation` (§50).
+- **Lock:** `backend/harness_accessory_target_plan.py`, **107 checks**, run by `carrier-vocab-guard`.
+  §I is the un-wire lock: the engine may not read a sale line, re-derive a projection, open a client,
+  name a carrier/tenant/product, or open a second home for a store's target; and the endpoint must be
+  shown to DEREFERENCE each home rather than re-deriving it.
+---
+
+## 62. A LEADING ADDRESS TOKEN IS NOT A STORE IDENTITY — one home, every money path on it (owner directive 2026-10-09)
 
 Owner, verbatim: *"chase trhew street number matching"*.
 
@@ -21033,5 +21821,5 @@ no second resolution path.
 Module-graph fact: `store_identity` — home `app/modules/account/store_identity.py`, callers
 `app/modules/account/coa.py`, `app/modules/account/residual_subs.py`,
 `app/modules/commcalc/gp_report.py`, `app/modules/commcalc/flags.py`,
-`app/modules/commcalc/router.py`, `app/modules/closing/unfinished_day.py`, index `59`, lock
+`app/modules/commcalc/router.py`, `app/modules/closing/unfinished_day.py`, index `62`, lock
 `harness_store_identity_lock.py`. Written by hand, multi-line (never `--bless` — §50).

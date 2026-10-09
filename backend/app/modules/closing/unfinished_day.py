@@ -45,7 +45,7 @@ PURE: no I/O, no framework import. The caller does the read and hands the rows i
 """
 from __future__ import annotations
 
-from app.modules.account import store_identity as _sid   # §59 — THE store-identity home (pure, import-free)
+from app.modules.account import store_identity as _sid   # §62 — THE store-identity home (pure, import-free)
 
 # ── The vocabulary. Four states, and nothing may invent a fifth. ─────────────────────────────────
 #: No closing, and nobody tried. The honest "nobody submitted" — the only one the nag is for.

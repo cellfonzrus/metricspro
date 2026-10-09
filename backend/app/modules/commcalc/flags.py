@@ -29,7 +29,7 @@ from app.modules.commcalc import flag_registry as _reg
 # ($7,123.39 taken back, measured live 2026-10-06). The test now dereferences the shared one, which
 # recognises a clawback by the DIRECTION the processor moved the money. See clawback.py for the class.
 from app.modules.commcalc import clawback as _clawback
-from app.modules.account import store_identity as _sid   # §59 — THE store-identity home (pure)
+from app.modules.account import store_identity as _sid   # §62 — THE store-identity home (pure)
 
 def safe_float(v) -> float:
     try: return float(v or 0)
@@ -42,7 +42,7 @@ def safe_float(v) -> float:
 # against the carrier's "116-36 Springfield Blvd …") that store appeared in BOTH sets and raised BOTH
 # flags, every month, against a store that was selling and being paid normally. A flag that fires on
 # a spelling is noise that teaches managers to ignore flags. Identity now comes from the one home
-# (§59, `account.store_identity` via `coa.store_resolver`), injected by the caller.
+# (§62, `account.store_identity` via `coa.store_resolver`), injected by the caller.
 
 def _days_since(date_str):
     """Whole days from an activation/acquired date string to today (None if unparseable)."""
@@ -71,7 +71,7 @@ def calc_flags(
 ) -> list[dict]:
     """Returns list of flag dicts ready to insert into commcalc.flags. asset_by_imei maps an IMEI
     (upper, no '.0') → its asset_ledger row, used to show a chargeback's REBATE LOST + device + age.
-    resolve_store_canonical: the ONE store-identity resolver (`coa.store_resolver`, §59), used to key
+    resolve_store_canonical: the ONE store-identity resolver (`coa.store_resolver`, §62), used to key
     the sales side and the payment side of flags 7/8 on the same identity. None = each raw spelling
     keys on itself, which can only make those two flags MORE conservative, never invent one."""
 

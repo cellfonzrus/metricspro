@@ -307,6 +307,116 @@ console.log('§H  every page that exists is findable, and the nav keeps its labe
      C.buildCatalog({ routes: [{ path: '/nobody/knows', aliases: ['x'] }] }).length, 0)
 }
 
+// ── §I — ONE viewer gate, so the two search boxes cannot see different worlds ────────────────────
+// WHAT THIS REPLACED. Each surface gated its own sources: the sidebar applied the not-enforced
+// bypass and `applyNavLayout` and indexed NAV ALONE; the console applied neither bypass nor layout
+// but did read the derived page list. 27 in-app pages were findable in one box and not the other,
+// and with an empty permissions payload the counts were 322 against 2. `viewerSources` is the one
+// gate both call, and these are the three divergences it closes, each asserted rather than assumed.
+console.log('§I  one viewer gate: completeness, the open bypass, and the tenant layout')
+{
+  const NAV_G = [{ group: 'Commissions', items: [
+    { href: '/commcalc/sales-report', label: 'Sales Report', module: 'commissions' },
+    { href: '/commcalc/secret', label: 'Secret', module: 'admin' },
+  ] }]
+  const REP_G = [{ category: 'Reports · Commissions', reports: [
+    { href: '/commcalc/sales-report', label: 'Sales Report', module: 'commissions', desc: 'what sold' },
+  ] }]
+  const SCR_G = [{ href: '/commcalc/sales-report', label: 'Sales', aliases: ['what sold'] },
+                 { href: '/commcalc/secret', label: 'Secret', aliases: ['hidden'] }]
+  // The page in NO menu — the 27's shape. It exists, it is in the derived registry, and nothing in
+  // the nav names it.
+  const ROU_G = [{ path: '/commcalc/sales-report' },
+                 { path: '/closing/duplicates', label: 'Closing → Duplicates', aliases: ['duplicates'] },
+                 { path: '/commcalc/secret', label: 'Commcalc → Secret' }]
+  const REG_G = { nav: NAV_G, reports: REP_G, screens: SCR_G, routes: ROU_G }
+  // A viewer who may see commissions and open anything but the admin page.
+  const seer = {
+    canSee: it => it.module !== 'admin',
+    canAccess: path => path !== '/commcalc/secret',
+  }
+  const paths = out => out.map(e => e.href).sort()
+
+  const cat = C.viewerCatalog(REG_G, seer)
+  ok('I1  the menu-less page IS in the catalogue — the 27-page gap, by name',
+     paths(cat).includes('/closing/duplicates'), paths(cat))
+  ok('I2  and it is findable by the words someone would type',
+     R.rank(cat, 'duplicates', 8)[0]?.item.href === '/closing/duplicates',
+     R.rank(cat, 'duplicates', 8).map(h => h.item.href))
+  ok('I3  a page the viewer may not see is in NEITHER source', !paths(cat).includes('/commcalc/secret'),
+     paths(cat))
+  ok('I4  and the screen alias for it is dropped with it',
+     !cat.some(e => (e.aliases || []).includes('hidden')), cat.map(e => e.aliases))
+  ok('I5  the nav page keeps the nav label and the report description',
+     cat.find(e => e.href === '/commcalc/sales-report')?.label === 'Sales Report'
+     && cat.find(e => e.href === '/commcalc/sales-report')?.desc === 'what sold',
+     cat.find(e => e.href === '/commcalc/sales-report'))
+
+  // DIVERGENCE 2 — the not-enforced bypass. One flag, honoured identically by both surfaces.
+  const openCat = C.viewerCatalog(REG_G, { open: true, canSee: () => false, canAccess: () => false })
+  ok('I6  with the app open, everything is findable even though both predicates refuse',
+     paths(openCat).length === 3, paths(openCat))
+  ok('I7  and with it closed and the same refusing predicates, nothing is',
+     C.viewerCatalog(REG_G, { canSee: () => false, canAccess: () => false }).length === 0)
+
+  // DIVERGENCE 3 — the tenant layout. The gate applies none of it: it searches the nav it is GIVEN,
+  // and both surfaces now give it the post-`applyNavLayout` groups, so a row a tenant admin hid is
+  // hidden in BOTH boxes instead of one. What follows from that is worth pinning, because it is not
+  // obvious and it is load-bearing: a hidden nav page becomes entirely unfindable, and the reason is
+  // the §G rule one layer down — `route-index.ts` gives a NAV page no label of its own, because the
+  // nav's wording is the wording on the viewer's screen and a second copy could only disagree with
+  // it. `upsert` needs a label to CREATE an entry. So when the nav row goes, the page has no wording
+  // left anywhere and no entry is made. That is the right answer for a row RBAC removed, and it is
+  // the admin's own intent for a row they hid.
+  //
+  // It is also exactly why the 27 menu-less pages ARE findable: §G strips the label only from pages
+  // the nav names, so a page in no menu keeps its derived label here — which is the one thing that
+  // makes the route source able to stand alone.
+  const hiddenCat = C.viewerCatalog({ ...REG_G, nav: [{ group: 'Commissions', items: [] }], reports: [] },
+                                    seer)
+  ok('I8  a hidden nav row is unfindable, in both boxes, because the nav held its only wording',
+     !hiddenCat.some(e => e.href === '/commcalc/sales-report'), hiddenCat.map(e => e.href))
+  ok('I8b and the prose aliases that belong to that nav destination go with it',
+     !hiddenCat.some(e => (e.aliases || []).includes('what sold')), hiddenCat)
+  ok('I8c while the menu-less page beside it is unaffected — it carries its own label',
+     hiddenCat.some(e => e.href === '/closing/duplicates'), hiddenCat.map(e => e.href))
+  // ARMED: that asymmetry is the LABEL, not the href. Give the hidden nav page a label in the route
+  // registry and it comes back — which is the mechanism, measured.
+  ok('I8d ARMED — the same page comes back if the route registry gives it a label',
+     C.viewerCatalog({ ...REG_G, nav: [{ group: 'Commissions', items: [] }], reports: [],
+                       routes: [{ path: '/commcalc/sales-report', label: 'Sales Report' }] }, seer)
+       .some(e => e.href === '/commcalc/sales-report'))
+
+  // `destinations` dereferences `entityOnly` rather than re-deciding what a place is.
+  const withEnt = C.viewerCatalog(REG_G, seer,
+    { stores: [{ store: 'B-1115' }], people: [{ name: 'Abid' }] })
+  ok('I9  the console searches entities too', withEnt.length === cat.length + 2, withEnt.length)
+  ok('I10 the jumper drops exactly the entities', C.destinations(withEnt).length === cat.length,
+     C.destinations(withEnt).map(e => e.key))
+  ok('I10b and every one it keeps has somewhere to go',
+     C.destinations(withEnt).every(e => !!e.href))
+  ok('I10c it agrees with entityOnly on every row',
+     withEnt.filter(e => !C.entityOnly(e)).length === C.destinations(withEnt).length)
+
+  // PURITY and blanks, the same rules the fold keeps.
+  const before = JSON.stringify(REG_G)
+  C.viewerSources(REG_G, seer)
+  ok('I11 the registries are not mutated', JSON.stringify(REG_G) === before)
+  ok('I12 no sources at all is empty, never a throw', C.viewerCatalog({}, seer).length === 0)
+  ok('I13 an empty group is dropped rather than carried',
+     (C.viewerSources({ nav: [{ group: 'X', items: [] }] }, seer).nav || []).length === 0)
+  ok('I14 determinism — same input, same output',
+     JSON.stringify(C.viewerCatalog(REG_G, seer)) === JSON.stringify(C.viewerCatalog(REG_G, seer)))
+  // ARMED: I1 measures something. Drop the route source and the menu-less page vanishes — which is
+  // exactly the state the sidebar was in.
+  ok('I15 ARMED — without the route source the menu-less page is unfindable',
+     !paths(C.viewerCatalog({ ...REG_G, routes: [] }, seer)).includes('/closing/duplicates'))
+  // ARMED: I3 measures something. A permissive gate lets the admin page through.
+  ok('I16 ARMED — a permissive gate admits the page I3 excludes',
+     paths(C.viewerCatalog(REG_G, { canSee: () => true, canAccess: () => true }))
+       .includes('/commcalc/secret'))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
-if (!fail) console.log('OK — the catalogue is assembled from the registries that already exist, folded to one entry per thing.')
+if (!fail) console.log('OK — one viewer gate, one fold: the registries that already exist, narrowed once and folded to one entry per thing.')
 process.exit(fail ? 1 : 0)

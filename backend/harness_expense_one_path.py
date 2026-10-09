@@ -308,8 +308,18 @@ ok("D8 no single-spelling period filter is left in the module",
    '.eq("period", period)' not in _sf and ".eq('period', period)" not in _sf)
 ok("D9 the line-skeleton read widens too, and takes the newest",
    'eq("scope_key", "consolidated")' in _sf and 'order("computed_at", desc=True)' in _sf)
+# D10 — the module must keep NO second "freshest wins" rule of its own. This used to be asserted as
+# "the word `computed_at` does not appear above `filtered_statement`", which was a PROXY and stopped
+# measuring the rule the moment the per-store snapshot read was extracted into `store_snapshots` (its
+# `select` legitimately names the column so a report can say WHEN the figures were computed — index
+# §60). A proxy that reddens on a correct change and would also pass a hand-rolled `max(...)` written
+# below the split point is the §19.28 trap in both directions, so it now measures the rule itself:
+# exactly one dereference of the ONE dedupe, and no private newest-wins picking anywhere.
 ok("D10 the module defines no second 'freshest wins' loop of its own",
-   "computed_at" not in _sf.split("def filtered_statement")[0])
+   _sf.count("dedupe_latest(") == 1
+   and not any(t in _sf.replace(" ", "") for t in
+               ("max(", "computed_at\"]>", "computed_at\")>", "key=lambdar:r[\"computed_at\"]",
+                "key=lambdar:r.get(\"computed_at\")")))
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 print("\n§E THE UN-WIRING LOCKS — no caller may go back to a second path or a defaulted verdict")

@@ -43,6 +43,57 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    'peer_traffic_band': {
+        "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), and how far is '
+                    'each one behind the best and the median of its own band?',
+        "homes": ('app/modules/commcalc/peer_comparison.py',),
+        "index": ('59',),
+        "locks": ('harness_peer_comparison.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_peercmp',),
+            # §60 — the spiff-impact report ranks its own metric THROUGH this home
+            # (`with_extra_metric` / `lagging` / `prompt_sentence`) so "behind" keeps one definition.
+            'app/modules/commcalc/spiff_impact.py': ('_pc',),
+        },
+    },
+    'spiff_store_impact': {
+        "question": 'What is ONE carrier pay type worth to a store\'s commission payout revenue and '
+                    'to its net profit, and which stores are not earning it on the sales they make?',
+        "homes": ('app/modules/commcalc/spiff_impact.py',),
+        "index": ('60',),
+        "locks": ('harness_spiff_impact.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_spiffimp',),
+        },
+    },
+    'accessory_target_allocation': {
+        "question": 'Given ONE company accessory sales goal, what target should each store carry, '
+                    'derived from its own accessories-per-box history against the boxes it sells?',
+        "homes": ('app/modules/commcalc/accessory_target_plan.py',),
+        "index": ('61',),
+        "locks": ('harness_accessory_target_plan.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_accplan',),
+        },
+    },
+    'manager_report_card': {
+        "question": 'What was assigned to this district manager for each of their stores, did the '
+                    'system record it as met, and who is accountable one level above them?',
+        "homes": ('app/modules/commcalc/manager_report_card.py',),
+        "index": ('59.9',),
+        "locks": ('harness_manager_report_card.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_mrcard',),
+        },
+    },
     'device_reimbursement_paid_vs_claimed': {
         "question": 'What did the carrier actually PAY for device financing, what does the '
                     'distributor CLAIM it reimbursed, and may the two be compared at all?',
@@ -63,7 +114,7 @@ FACTS: dict[str, dict] = {
                     'declared spellings; AMBIGUITY RESOLVES TO NOTHING, and money nothing can '
                     'place is reported on its own row rather than dropped.',
         "homes": ('app/modules/account/store_identity.py',),
-        "index": ('59',),
+        "index": ('62',),
         "locks": ('harness_store_identity_lock.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04).
@@ -329,6 +380,7 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_line_class_lock.py', 'harness_activation_event_lock.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
+            'app/modules/asset/router.py': ('_lc',),
             'app/modules/closing/router.py': ('_lcls',),
             'app/modules/commcalc/calculator.py': ('_lc',),
             'app/modules/commcalc/commission_engine.py': ('_lc',),
@@ -370,7 +422,10 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/ledger_batch.py': ('CL',),
             'app/modules/commcalc/ledger_ma_sync.py': ('commission_ledger',),
             'app/modules/commcalc/onboarding_intake.py': ('CL',),
-            'app/modules/commcalc/router.py': ('commission_ledger',),
+            # `_month_token` is §60's binding of `parse_payment_month` — "does this label SAY a
+            # month", which is exactly that function's own question (its docstring is explicit that
+            # the month-of-life LEG question belongs to `month_leg_of` instead).
+            'app/modules/commcalc/router.py': ('_month_token', 'commission_ledger'),
             'app/modules/commcalc/sale_installment_engine.py': ('month_leg_of',),
         },
     },
@@ -542,6 +597,9 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_engine.py': ('_analysis',),
             'app/modules/account/statement_filter.py': ('_analysis',),
             'app/modules/account/valuation.py': ('analysis',),
+            # §60 — the spiff-impact endpoint reads each store's revenue / net income off the STORED
+            # per-store P&L through `analysis.pl_totals`, this module's one home for those totals.
+            'app/modules/commcalc/router.py': ('_an',),
         },
     },
     'complete_feed_read': {
@@ -574,6 +632,11 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/gp_report.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
             'app/modules/commcalc/router.py': ('_payment_category', '_pcat'),
+            # §60 — the spiff-impact report folds a PAY-TYPE KEY (its option list and its per-store
+            # tally must agree about whether two spellings are one type) and dereferences §57's one
+            # folding rule rather than keeping a second. It reads the TABLE through §58, never here,
+            # so §57's reader inventory is unchanged.
+            'app/modules/commcalc/spiff_impact.py': ('_pc_fold',),
         },
     },
     'clawback_direction': {

@@ -166,6 +166,10 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/exec', 'commissions'], ['/commcalc/activations', 'commissions'], ['/commcalc/schematic', 'commissions'], ['/commcalc/onboarding', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
   ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
   ['/commcalc/sales-comparison', 'commissions'],
+  ['/commcalc/peer-comparison', 'commissions'],
+  ['/commcalc/targets/report-cards', 'commissions'],
+  ['/commcalc/spiff-impact', 'commissions'],
+  ['/commcalc/accessory-target-plan', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
   ['/commcalc/dlar-vs-platform', 'commissions'],
@@ -519,6 +523,22 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions', tileOnly: true },
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/sales-comparison', label: 'Sales Comparison', icon: '📈', module: 'commissions', tileOnly: true },
+    // PEER SALES COMPARISON (owner directive 2026-10-08) — stores of comparable bill-payment traffic
+    // ranked on what they do with it. Listed in BOTH management review and Targets & Coaching, as the
+    // owner asked: it is a review surface and a coaching surface, and one page serves both.
+    { href: '/commcalc/peer-comparison', label: 'Peer Sales Comparison', icon: '🏁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // MANAGER REPORT CARDS (owner directive 2026-10-08) — what each DM was assigned per store and
+    // whether the system says it was met, then the same roll-up one level up. Listed in BOTH
+    // Management Overview and Targets & Coaching, like the comparison it reads: one href, one report.
+    { href: '/commcalc/targets/report-cards', label: 'Manager Report Cards', icon: '🗂️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // SPIFF IMPACT (owner ask 2026-10-08) — one carrier pay type against a store's commission revenue
+    // and its net profit, and which stores are not earning it on the sales they make. A management
+    // review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
+    { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // ACCESSORY TARGET ALLOCATION (owner ask 2026-10-09, index §61) — one company accessory goal,
+    // split across stores on each store's own accessories-per-box history against the boxes it sells.
+    // A planning surface for management and for targets, so it is listed in BOTH groups as ONE href.
+    { href: '/commcalc/accessory-target-plan', label: 'Accessory Target Allocation', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -726,6 +746,14 @@ export const NAV: NavGroup[] = [
     // revenue NOT collected and is a thing a rep is COACHED to fix, not a payout anyone is owed.
     { href: '/commcalc/atu-opportunity', label: 'Autopay Opportunity', icon: '🔁', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/commcalc/targets/action-plan', label: 'Action Plan', icon: '✅', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
+    // The same page as the Management Overview row above (owner directive 2026-10-08: "this should be
+    // under management review and targets and coaching"). One href, so RBAC and ⌘K see one report.
+    { href: '/commcalc/peer-comparison', label: 'Peer Sales Comparison', icon: '🏁', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/targets/report-cards', label: 'Manager Report Cards', icon: '🗂️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
+    { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
+    { href: '/commcalc/accessory-target-plan', label: 'Accessory Target Allocation', icon: '🎯', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'], tileOnly: true },
@@ -1238,6 +1266,10 @@ export const REPORT_DIRECTORY: [string, string][] = [
   // Sales
   ['/commcalc/sales-report', 'sales'], ['/commcalc/custom-report', 'sales'],
   ['/commcalc/sales-comparison', 'sales'], ['/commcalc/zero-sales', 'sales'],
+  ['/commcalc/peer-comparison', 'sales'],
+  ['/commcalc/targets/report-cards', 'sales'],
+  ['/commcalc/spiff-impact', 'comm'],
+  ['/commcalc/accessory-target-plan', 'targets'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],

@@ -37,7 +37,7 @@ from app.modules.commcalc import carrier_map
 from app.modules.commcalc import epay_fee_recon as _epay_fee
 from app.modules.account import _period
 from app.modules.account import device_cogs as _device_cogs
-# THE one home for "which store is this string?" (§13a / §59) — this module's `store_resolver` is
+# THE one home for "which store is this string?" (§13a / §62) — this module's `store_resolver` is
 # its I/O wrapper and states no resolution rule of its own.
 from app.modules.account import store_identity as _sid
 # Canonical finance period parser lives in _period; re-exported here so existing
