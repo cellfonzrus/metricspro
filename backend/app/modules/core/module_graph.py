@@ -56,6 +56,46 @@ FACTS: dict[str, dict] = {
             # §60 — the spiff-impact report ranks its own metric THROUGH this home
             # (`with_extra_metric` / `lagging` / `prompt_sentence`) so "behind" keeps one definition.
             'app/modules/commcalc/spiff_impact.py': ('_pc',),
+            # §61 — the product-mix report dereferences the ratio, the median and the severity cut, and
+            # its endpoint borrows `with_extra_metric` / `peer_items_by_store` for the store plan, so a
+            # rep and their store are judged behind by one rule.
+            'app/modules/commcalc/product_mix.py': ('_pc',),
+        },
+    },
+    'device_price_band': {
+        "question": 'What price band did the CUSTOMER pay for this device, which model was it, and is '
+                    'this rep low on accessory $ per box AND on port-ins at the same time?',
+        "homes": ('app/modules/commcalc/product_mix.py',),
+        "index": ('61',),
+        "locks": ('harness_product_mix.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            # `_sales_cell_agg` asks price_cfg for the band and the model rather than deciding either,
+            # and the endpoint wires the report. §61.
+            'app/modules/commcalc/router.py': ('_pmix',),
+        },
+    },
+    'kpi_column_meaning': {
+        "question": 'Which column carries which KPI actual at each grain, and what does the carrier\'s '
+                    'port-in rate MEAN \u2014 which direction is good and what scale is it on?',
+        "homes": ('app/modules/commcalc/kpi_failing.py',),
+        "index": ('19.28', '61'),
+        "locks": ('harness_kpi_registry_lock.py', 'harness_product_mix.py'),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        #
+        # The port-in half was added in §61 after the only reader of `raw_dlar_store.port_pct` on the
+        # platform was found to have BOTH its direction and its scale wrong — it called the carrier's
+        # port-INS a port-out rate and multiplied an already-percent value by 100, so the flag fired on
+        # every store with a single port-in. `harness_product_mix.py` §J1 fails the build if any module
+        # but this home reads that column again.
+        "callers": {
+            'app/modules/commcalc/calculator.py': ('_kpi_failing',),
+            'app/modules/commcalc/dlar_vs_platform.py': ('_kf',),
+            'app/modules/commcalc/flags.py': ('_kpi',),
+            'app/modules/commcalc/payout_structure.py': ('_kpi',),
+            'app/modules/commcalc/router.py': ('_kpi_failing', '_kpif'),
         },
     },
     'spiff_store_impact': {

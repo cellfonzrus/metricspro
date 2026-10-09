@@ -977,12 +977,12 @@ _all_routes = _flatten_routes(real_app.routes)
 # index §59.9). Same verification, same rule: `git diff origin/main -- backend/ | grep '^[+-]@router\.'`
 # printed exactly one added line and zero removed. This pin WILL redden the next PR that adds an
 # endpoint; re-measure and re-pin it then, never widen or delete it.
-# Re-pinned 1747 -> 1748 on 2026-10-08, measured against origin/main 547dd49 (the tree that had
-# just re-pinned to 1747 for #420) after merging it into this branch. The delta is ONE route and it
-# is named: GET /commcalc/spiff-impact (the Spiff Impact report, index §60). Verified the same way:
+# Re-pinned 1747 -> 1748 on 2026-10-08 for #421's GET /commcalc/spiff-impact (index §60).
+# Re-pinned 1748 -> 1749 on 2026-10-09, measured against origin/main 0c84784. The delta is ONE route
+# and it is named: GET /commcalc/product-mix (Product Mix & Ports, index §61). Verified the same way:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1748"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1749"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

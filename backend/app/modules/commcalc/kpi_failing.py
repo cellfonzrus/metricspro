@@ -110,6 +110,68 @@ STORE_KPI_COLUMNS = {
 REP_KPI_KEYS = tuple(k for (k, _l, _c, _d) in BUILTIN_KPI_DEFS)
 
 
+# ── THE CARRIER'S PORT-IN RATE — ONE HOME, because its meaning was wrong at the only place that
+# ── read it (owner directive 2026-10-09, index §61; defect found 2026-10-09) ──────────────────────
+#
+# `commcalc.raw_dlar_store.port_pct` has existed since migration 002 and NOTHING on the platform
+# displays it. The one consumer, `commcalc/flags.py`, read it as a port-OUT rate, multiplied it by
+# 100 and flagged any store above 15. Both halves are wrong, and both were assumptions about a column
+# nobody had written down:
+#
+#   DIRECTION. The value is PORT-INS. `dlar_sweep.normalize_store` fills it from the portal's own
+#   `port_ins` field and the manual upload from the column headed 'Port %' — the share of this
+#   store's activations that came in from another carrier. There is no port-OUT figure anywhere on
+#   this feed. So a HIGH value is the carrier's best news about a store, and the flag was accusing
+#   the estate's best porting doors.
+#
+#   SCALE. It is already a PERCENT, 0–100. Measured live 2026-10-09 over June 2026: values 0.0,
+#   66.67, 7.69, 30.77, 53.33 … The consumer's `* 100` turned 66.67% into 6667, so EVERY store with
+#   a single port-in cleared a threshold of 15 and the flag fired on all of them, every month.
+#
+# The fix is this function, and callers DEREFERENCE it rather than reading the column. The direction
+# and the scale are stated once, here, next to the column map the rest of this module already owns —
+# so the next reader of `port_pct` cannot repeat either mistake. `harness_product_mix.py` fails the
+# build if a second reader of the raw column appears.
+PORT_IN_RATE_COLUMN = "port_pct"
+PORT_IN_RATE_MEANING = (
+    "The carrier's own port-in rate for the store: the share of its activations that came in from "
+    "another carrier, as a percent (0-100). HIGHER IS BETTER. The feed carries no port-out figure at "
+    "all, so this number can never answer a churn question.")
+# Below this the carrier's own feed says the store is not winning numbers from other carriers. House
+# default; a tenant's own threshold is a config row (`watchdog_rule`, mig 1056), never a code branch.
+LOW_PORT_IN_PCT = 15.0
+
+
+def port_in_rate(store_row):
+    """One `raw_dlar_store` row → the carrier's port-in rate as a PERCENT (0-100), or None when the
+    feed did not report one. PURE.
+
+    None, not 0.0, for a missing or unparseable value: a store the carrier did not report on has no
+    rate, and a 0.0 standing in for that would read as "won no numbers" and get somebody coached."""
+    if not isinstance(store_row, dict):
+        return None
+    raw = store_row.get(PORT_IN_RATE_COLUMN)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    try:
+        return round(float(str(raw).replace("%", "").replace(",", "").strip()), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def low_port_in(store_row, threshold=LOW_PORT_IN_PCT):
+    """Is the carrier reporting a LOW port-in rate for this store? (rate, is_low) — `is_low` is False
+    whenever the rate is None, because absence of a figure is never a finding. PURE."""
+    rate = port_in_rate(store_row)
+    if rate is None:
+        return None, False
+    try:
+        t = float(threshold)
+    except (TypeError, ValueError):
+        t = LOW_PORT_IN_PCT
+    return rate, bool(rate < t)
+
+
 def auto_fed(metric_key):
     """Does this metric arrive on its own, or must somebody type it in?
 

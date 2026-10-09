@@ -169,6 +169,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/peer-comparison', 'commissions'],
   ['/commcalc/targets/report-cards', 'commissions'],
   ['/commcalc/spiff-impact', 'commissions'],
+  ['/commcalc/product-mix', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
   ['/commcalc/dlar-vs-platform', 'commissions'],
@@ -534,6 +535,10 @@ export const NAV: NavGroup[] = [
     // and its net profit, and which stores are not earning it on the sales they make. A management
     // review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // PRODUCT MIX & PORTS (owner directive 2026-10-09) — what each store and rep sold, at what price to
+    // the customer, against accessory $ per box and port share, with the lagging-store action plan. A
+    // management review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
+    { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -747,6 +752,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/targets/report-cards', label: 'Manager Report Cards', icon: '🗂️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
     { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'], tileOnly: true },
@@ -1262,6 +1268,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/peer-comparison', 'sales'],
   ['/commcalc/targets/report-cards', 'sales'],
   ['/commcalc/spiff-impact', 'comm'],
+  ['/commcalc/product-mix', 'sales'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],

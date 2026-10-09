@@ -235,6 +235,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/schematic' },
   { path: '/commcalc/settings' },
   { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
+  { path: '/commcalc/product-mix', aliases: ['product mix', 'cheap phones', 'free phones', 'device mix', 'price band', 'accessory per box', 'port share', 'low ports', 'pushing cheap phones', 'which phone'] },
   { path: '/commcalc/store-match' },
   { path: '/commcalc/target-fields' },
   { path: '/commcalc/targets' },
