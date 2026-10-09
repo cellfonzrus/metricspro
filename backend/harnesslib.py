@@ -93,8 +93,11 @@ def function_sources(src):
 # A caller that includes this sanction is saying: "the chain moving to its home does not move MY
 # number." That claim was MEASURED before it was made — old chain vs new, over every distinct live
 # store string in raw_sales / raw_payment_detail / raw_comp_report / rep_commissions /
-# store_mapping / store_aliases: house org 1 divergence of 71 (the reported relocation defect),
-# the other three tenants 0 of 49. What the chain now IS, and that coa keeps no second copy of it,
+# store_mapping / store_aliases / store_expenses: RE-MEASURED live 2026-10-09 at merge time, house
+# org 1 divergence of 92 — the reported relocation defect, `'2778 Mt Ephraim Ave Camden, NJ 08104'`
+# resolving to `'1598 Mount Ephraim Ave'` instead of to itself — and the other three tenants 0 of 43.
+# (An earlier run read 1 of 71 and 0 of 49: the feeds carry more spellings now, the divergence set is
+# the same single string.) What the chain now IS, and that coa keeps no second copy of it,
 # is locked by `harness_store_identity_lock.py`.
 COA_STORE_IDENTITY_SANCTION = (
     "store_resolver", "_squash_key", "_lead_num_key",

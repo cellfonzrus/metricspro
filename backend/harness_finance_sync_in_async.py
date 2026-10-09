@@ -329,9 +329,11 @@ for rel, allowed in EXPECTED_DELTA.items():
 #   to `build_store_resolver` (its two nested helpers went with the chain), and `_squash_key` /
 #   `_lead_num_key` dereference the home instead of holding copies. The reason a removal is
 #   sanctioned at all is that leaving the chain here would have meant TWO copies of it, which is the
-#   defect the directive is about. MEASURED before the claim: old chain vs new over every distinct
-#   live store string — house org 1 divergence of 71 (the reported defect), the other three tenants
-#   0 of 49. Proven by backend/harness_gp_store_identity.py; the "no second copy / every caller
+#   defect the directive is about. MEASURED before the claim and RE-MEASURED at merge time: old
+#   chain vs new over every distinct live store string — house org 1 divergence of 92 (the reported
+#   relocation defect, the one string), the other three tenants 0 of 43 (an earlier run: 1 of 71 and
+#   0 of 49; the feeds carry more spellings now). Proven by backend/harness_gp_store_identity.py;
+#   the "no second copy / every caller
 #   dereferences it" property is locked by backend/harness_store_identity_lock.py.
 ALLOWED_REMOVED = {
     f"{MOD}/account/coa.py": {"store_resolver._num_key", "store_resolver.resolve"},

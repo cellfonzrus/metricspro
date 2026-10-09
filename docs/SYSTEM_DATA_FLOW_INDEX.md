@@ -22100,11 +22100,14 @@ an identity, in three distinct ways, all three measured live on 2026-10-09 (hous
 hand them over) and states no rule of its own; `coa._squash_key` / `coa._lead_num_key` dereference
 the home instead of holding a third and fourth copy of the folding rules.
 
-**Resolver divergence, measured before merging** (old chain vs new, over EVERY distinct live store
-string in `raw_sales` / `raw_payment_detail` / `raw_comp_report` / `rep_commissions` /
-`store_mapping` / `store_aliases`): house org **1 divergence in 71 strings** — the relocation
-spelling above, which is the reported defect — and **0 divergences in 49 strings** across the other
-three tenants. So nothing else anywhere moved, in any report that keys a store through the resolver.
+**Resolver divergence, RE-MEASURED live at merge time** (old chain vs new, over EVERY distinct live
+store string in `raw_sales` / `raw_payment_detail` / `raw_comp_report` / `store_expenses` /
+`store_mapping` / `store_aliases`): house org **1 divergence in 92 strings** — exactly one,
+`'2778 Mt Ephraim Ave Camden, NJ 08104'`, which the old chain resolved to itself and the new one
+resolves to `'1598 Mount Ephraim Ave'`: the reported defect and nothing else — and **0 divergences in
+43 strings** across the other three tenants. (An earlier run read 1 of 71 and 0 of 49; the feeds
+carry more spellings now, the divergence set is the same single string.) So nothing else anywhere
+moved, in any report that keys a store through the resolver.
 
 ### 64.2 CALLERS — fixed, and what each one was
 
