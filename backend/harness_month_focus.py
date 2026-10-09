@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PROOF — the month's declared focus and the weekly check-in (owner ask 2026-10-09, index §62).
+"""PROOF — the month's declared focus and the weekly check-in (owner ask 2026-10-09, index §63).
 
 DB-FREE, stdlib only, network-free. Drives the REAL pure functions with fixtures, so what is proved
 here is what runs in production.

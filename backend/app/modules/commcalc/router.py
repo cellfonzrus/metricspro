@@ -24,10 +24,11 @@ from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, 
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
+from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
 from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
-from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §62)
+from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
@@ -26172,6 +26173,217 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
     return out
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# PRODUCT MIX & PORT DISCIPLINE (index §62) — owner directive 2026-10-09: *"sales by each store as per
+# the product sold, if the store is selling more of a particular phone at a cheaper price or free it
+# could be that the sales person is just pushing cheaper phones or free phones and not trying to sell
+# higher end devices which bring more accessory sales , the report should highlight the sales reps whose
+# accessory per box is low and also who are porting in less numbers - the logic is built but not
+# displayed that the ports are low. the system should co-relate the two and provide an action plan for
+# the store whoa re lagging."*
+#
+# NOTHING IS DERIVED HERE. This function READS and WIRES. Boxes, accessory dollars, ports and the
+# device-line membership test all come from `_sales_cell_agg` (§3) in ONE pass; the price band, the
+# model, the per-rep roll-up, the two-signal verdict and the measured correlation are
+# `commcalc/product_mix.py` (which carries the duplicate check in full); the store action plan is
+# §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` on the SAME
+# rows — so this report and the Peer Sales Comparison can never coach different stores. The carrier's
+# port-in rate is `kpi_failing.port_in_rate` (§62), the one home for what that column means.
+def _product_mix_payload(client, org_id, period, rows, *, resolve_market=None, cuts=None,
+                         params=None):
+    """THE Product Mix payload, from sale rows the CALLER already read. Returns (payload, cells).
+
+    ONE assembly, for the same reason §59 has one: the screen and (next) the action plan must not
+    disagree about which rep is behind. `rows` is a `_sales_rows_union` list already scope- and
+    market-filtered by the caller; nothing is read from the sales tables in here.
+    """
+    acfg = _accessory_config(client, org_id)
+    # BOTH extras are required for a complete report, and for different reasons stated on the module:
+    # exec_cfg fills `_port` (no exec_cfg → every port share would read 0.00) and price_cfg fills the
+    # device mix. Passing them is what makes the report possible; omitting either is a withheld
+    # column with its reason, never a zero.
+    exec_cfg = _exec_metric_config(client, org_id)
+    price_cfg = _pmix.cell_price_cfg(cuts)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=exec_cfg, price_cfg=price_cfg)
+
+    resolve_code = _store_code_resolver(client, org_id)
+
+    def _store_of(cell):
+        raw = str((cell or {}).get("store") or "").strip()
+        return (resolve_code(raw) if raw else "") or raw
+
+    # THE CARRIER'S OWN PORT-IN RATE — ingested since migration 002 and displayed nowhere until now,
+    # which is the owner's "the logic is built but not displayed that the ports are low". Read through
+    # the one home so this report cannot repeat the direction/scale mistake `flags.py` made on it.
+    carrier_port = {}
+    try:
+        drows = (client.schema("commcalc").table("raw_dlar_store")
+                 .select("store_code,location,address," + _kpi_failing.PORT_IN_RATE_COLUMN)
+                 .eq("org_id", org_id).in_("period", _pvariants(period)).limit(5000).execute().data) or []
+        for d in drows:
+            key = ""
+            for cand in (d.get("store_code"), d.get("address"), d.get("location")):
+                cand = str(cand or "").strip()
+                if not cand:
+                    continue
+                key = resolve_code(cand) or ""
+                if key:
+                    break
+            rate = _kpi_failing.port_in_rate(d)
+            if key and rate is not None:
+                carrier_port[key] = rate
+    except Exception:
+        carrier_port = {}
+
+    _dept = sorted(acfg.get("box_departments") or _BOX_DEPTS) if acfg else []
+    out = _pmix.build(
+        cells, store_of=_store_of, cuts=cuts, ports_available=True,
+        period=period, window_label=f"{period} to date", carrier_port=carrier_port,
+        params=params or {"period": period},
+        unclassified_note=(f"Box departments on this tenant: {', '.join(_dept)}." if _dept else None))
+    out["carrier_port_meaning"] = _kpi_failing.PORT_IN_RATE_MEANING
+    return out, cells
+
+
+@router.get("/product-mix")
+def product_mix(period: str = "", markets: str = "", bands: str = "", store: str = "",
+                authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """PRODUCT MIX & PORT DISCIPLINE — who is selling, and who is handing out the cheap phone.
+
+    Owner directive 2026-10-09. Three questions in one screen, and each of them is a question a home
+    on this platform already owns the numbers for:
+
+      · WHAT IS BEING SOLD — every device model, what the customer actually paid on average, and how
+        much of it went out free, per store and per rep. The price BAND is the one new fact and it is
+        money cuts, never product names (RULE TWO): `bands` overrides them for this call and the
+        payload always states what "cheap" meant.
+      · WHO IS NOT ATTACHING, AND WHO IS NOT PORTING — accessory $ per box (the §59 ratio,
+        dereferenced) and port-ins per box, per rep, each against the median of the reps in view. A
+        rep is flagged only when BOTH are low, because measured live the two are INDEPENDENT
+        (r = +0.12) — a single blended score would average two unrelated things and hide the rep who
+        ports well and attaches nothing.
+      · WHETHER THE OWNER'S CLAIM HOLDS — the report measures the correlation between the device mix
+        and both outcomes every time it runs, with its own n, rather than assuming it.
+
+    The ACTION PLAN for lagging stores is §59's verdict, not a second one: the same rows are run
+    through `_peer_comparison_payload`, the store's port share is handed to §59 via
+    `with_equal_metric`-style `with_extra_metric`, and `peer_action_item` writes the item. So a store
+    told it is behind here is the same store the Peer Sales Comparison and the Daily Action Plan say
+    is behind, by the same rule.
+
+    The read is RBAC store-scoped exactly like every other sales report.
+    """
+    require_org(org_id)
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+
+    try:
+        rows, meta = _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS)
+    except Exception as e:
+        raise HTTPException(500, f"product-mix read failed: {type(e).__name__}: {e}")
+
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        ks, in_keyset = None, None
+    sel_markets = {m.strip() for m in (markets or "").split(",") if m.strip()}
+    sel_store = (store or "").strip()
+
+    def _scope_only(s):
+        st = str(s or "").strip()
+        return not (ks is not None and in_keyset is not None and not in_keyset(ks, st))
+
+    opt_stores = sorted({str(r.get("store") or "").strip() for r in rows
+                         if r.get("store") and _scope_only(r.get("store"))})
+    opt_markets = sorted({m for m in ([resolve_market(s) for s in opt_stores] + list(all_markets)) if m})
+
+    def _keep(s):
+        st = str(s or "").strip()
+        if not _scope_only(st):
+            return False
+        if sel_markets and (resolve_market(st) or "") not in sel_markets:
+            return False
+        # ONE STORE, asked for by its code or by any spelling of its address — resolved through the
+        # same store resolver every other sales report uses, so the in-app assistant can ask "product
+        # mix for B-117" and get the same store the rest of the platform means by that.
+        if sel_store and not _store_matches(st):
+            return False
+        return True
+
+    _resolve_code = _store_code_resolver(client, org_id)
+    _want_code = (_resolve_code(sel_store) or sel_store).strip().upper() if sel_store else ""
+
+    def _store_matches(raw):
+        return ((_resolve_code(raw) or raw).strip().upper() == _want_code or
+                raw.strip().upper() == _want_code)
+
+    rows = [r for r in rows if _keep(r.get("store"))]
+    cut_list = [b for b in (bands or "").split(",") if b.strip()] or None
+
+    try:
+        out, cells = _product_mix_payload(
+            client, org_id, period, rows, resolve_market=resolve_market, cuts=cut_list,
+            params={"period": period, "markets": sorted(sel_markets), "store": sel_store,
+                    "bands": cut_list})
+    except Exception as e:
+        raise HTTPException(500, f"product-mix failed: {type(e).__name__}: {e}")
+
+    # ── THE ACTION PLAN FOR LAGGING STORES — §59's verdict, borrowed, never re-decided ────────────
+    # Two metrics, both the owner's: accessory $ per box (already one of §59's own ranked metrics)
+    # and the store's port share (which §59 does not compute, so it is handed in through
+    # `with_extra_metric` — the same mechanism §60 uses). The band, the median, the gap, "behind" and
+    # the sentence all stay in §59, so this screen and the Peer Sales Comparison cannot name
+    # different stores. The SAME rows are reused, so this costs no second feed read.
+    out["action_plan"] = []
+    out["action_plan_note"] = (
+        "Which stores are behind is decided by the Peer Sales Comparison (index \u00a759) \u2014 the same "
+        "band, median, gap and sentence that screen and the Daily Action Plan use, ranked here on "
+        "accessory $ per box and on port-ins per box. The reps named under each store are this "
+        "report\u2019s own two-signal verdict, attached to the store item rather than re-deciding it.")
+    try:
+        peer_out, _pcells, _unres = _peer_comparison_payload(
+            client, org_id, period, rows, resolve_market=resolve_market,
+            params={"period": period, "source": "product-mix"})
+        _pmix_port = {s["store"]: s.get("port_share") for s in out.get("stores") or ()}
+        _peercmp.with_extra_metric(peer_out, "port_share", "Port-ins per box", _pmix_port)
+        _seen = set()
+        for _metric in ("accessory_per_box", "port_share"):
+            for _store, _item in _peercmp.peer_items_by_store(peer_out, metric=_metric).items():
+                _key = (_store, _metric)
+                if _key in _seen:
+                    continue
+                _seen.add(_key)
+                _item = dict(_item)
+                _item["store"] = _store
+                _item["gap_metric"] = _metric
+                # The reps behind the store's own gap, so the plan names WHO as well as WHERE. The
+                # verdict is `product_mix`'s, unchanged — this only attaches it to the store item.
+                _item["reps"] = [{"rep": r.get("rep"), "verdict": r.get("verdict"),
+                                  "severity": r.get("severity"),
+                                  "accessory_per_box": r.get("accessory_per_box"),
+                                  "port_share": r.get("port_share"),
+                                  "cheap_share": r.get("cheap_share"),
+                                  "prompt": r.get("prompt")}
+                                 for r in (out.get("flagged") or ())
+                                 if str(r.get("store") or "").strip().upper() == _store]
+                out["action_plan"].append(_item)
+        out["action_plan"].sort(key=lambda i: -(i.get("shortfall_pct") or 0))
+        out["peer_bands"] = peer_out.get("bands")
+    except Exception as e:
+        # The plan is a borrowed verdict; if the borrow fails the report still answers its own three
+        # questions and says why the plan is missing, rather than inventing a second verdict here.
+        out["action_plan_error"] = f"{type(e).__name__}: {e}"
+
+    out["store_options"] = opt_stores
+    out["markets"] = opt_markets
+    out["source_meta"] = {"sales": meta, "rows": len(rows), "cells": len(cells)}
+    out["org_id"] = org_id
+    return out
+
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # SPIFF IMPACT (index §60) — owner ask 2026-10-08: *"create a report for management review to assess
@@ -26421,7 +26633,7 @@ def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
 # slice rather than the lock being widened to tolerate it.
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# THE MONTH'S DECLARED FOCUS, AND THE WEEKLY CHECK-IN (owner 2026-10-09, index §62)
+# THE MONTH'S DECLARED FOCUS, AND THE WEEKLY CHECK-IN (owner 2026-10-09, index §63)
 #
 # Owner: *"in the beginning of the month Market manager or above when they log in should define the
 # focus for the month -, update which initiative is driving spiffs that month and assign targets to
@@ -26625,7 +26837,7 @@ def _month_focus_signals(client, org_id, period, authorization):
 
 
 def _month_focus_payload(client, org_id, period, authorization, *, with_plays=True):
-    """The whole §62 answer for one month: the declaration, what is outstanding, the declared-against
+    """The whole §63 answer for one month: the declaration, what is outstanding, the declared-against
     -live reconciliation and the plays. ONE assembly, so the page, the weekly banner and the login
     attention item can never disagree about what this month still owes."""
     # `_month_year`, not `parse_period`: this endpoint may receive either period spelling and
@@ -26696,7 +26908,7 @@ def _month_focus_gate(client, org_id, authorization):
 def get_month_focus(period: str, plays: int = 1, authorization: str = Header(default=""),
                     org_id: str = ORG_ID):
     """THE MONTH'S FOCUS — what was declared, what is still outstanding today, and the plays the
-    month's own numbers support (index §62).
+    month's own numbers support (index §63).
 
     `plays=0` skips the measured signals, so the in-platform weekly reminder and the login attention
     item can ask "what is outstanding?" without paying for a sales read.
@@ -29818,14 +30030,18 @@ def _canonical_store_key_fn(client, org_id):
     return _key
 
 
-def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
+def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None, price_cfg=None):
     """Aggregate raw sales lines → {(store, rep, day): cell}. `acfg` = _accessory_config(...) (the ONE
     accessory classifier). `exec_cfg` (optional _exec_metric_config result) turns ON the Executive-MTD
     extension line-metrics + the configurable Port sub-split; when None those are skipped (Sales Report /
     Targets). `tender_cfg` (optional, from _billpay_tender_tokens — owner directive 2026-09-02 #2)
     additionally splits the bill-payment dollars by POS tender (card / cash / mixed / other) via
     metric_recon.classify_tender when the rows carry tender_type; None (every pre-existing caller) →
-    the split accumulators stay 0.0 and the aggregation is byte-identical. See the block comment above."""
+    the split accumulators stay 0.0 and the aggregation is byte-identical. `price_cfg` (optional, from
+    `product_mix.cell_price_cfg` — owner directive 2026-10-09, index §62) additionally tallies the
+    CUSTOMER PRICE BAND and the MODEL of every classified device line, which is the one fact the shared
+    cell did not carry and the Product Mix report needs; None (every pre-existing caller) → the mix
+    accumulators stay empty and the aggregation is byte-identical. See the block comment above."""
     # THE activation-type predicate's rules (line_class, 2026-09-21): which FIELDS carry the fact and
     # which TOKENS name each class, per org — the mig-213 map absorbed as its exact layer, the Port
     # sub-split its 'port' class. None (no acfg) → house defaults → byte-identical to the retired chain.
@@ -29911,7 +30127,15 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
                           # bill-pay tender split (owner 2026-09-02 #2) — populated only when the
                           # caller passes tender_cfg AND the rows carry tender_type; otherwise 0.0.
                           'bill_amt_card': 0.0, 'bill_amt_cash': 0.0, 'bill_amt_mixed': 0.0,
-                          'bill_amt_other': 0.0, 'bill_amt_tendered': 0.0}
+                          'bill_amt_other': 0.0, 'bill_amt_tendered': 0.0,
+                          # DEVICE PRICE MIX (owner 2026-10-09, index §62) — populated only when the
+                          # caller passes price_cfg, exactly like the tender split above, so every
+                          # pre-existing caller is byte-identical. The cell only ACCUMULATES: what a
+                          # price band is and what a model is are decided in `product_mix`, the one
+                          # home, and handed in as the two callables price_cfg carries.
+                          '_dev_lines': 0, '_dev_unclassified': 0, '_dev_credit': 0,
+                          '_dev_unnamed': 0, '_dev_price_sum': 0.0, '_dev_bands': {},
+                          '_dev_models': {}}
         if a['login'] is None and r.get('user_login'):
             a['login'] = r.get('user_login')
         if tid:
@@ -29985,6 +30209,42 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
             # already has a box from one that has none. See the note on `_bcb`.
             if tid:
                 a['_box_txn'].add(tid)
+            # THE DEVICE PRICE MIX (owner 2026-10-09, index §62) — over the SAME lines the box count
+            # is tallied from, so the mix and the denominator of accessory-per-box cannot drift apart.
+            # Two gates, both measured rather than assumed (see `product_mix`'s header):
+            #   · the line must CLASSIFY as an activation type (`_cls`, the unit classification this
+            #     pass already made). A box department carries lines that are not a handset — live
+            #     September 2026, 388 of 1,508 such lines classify as nothing (a kit charge, a data
+            #     transfer, a support bundle). They are COUNTED as `_dev_unclassified` and reported,
+            #     never banded as cheap phones.
+            #   · a NEGATIVE price is a credit against a device, not a cheap device → `_dev_credit`.
+            if price_cfg is not None:
+                if not _cls:
+                    a['_dev_unclassified'] += 1
+                elif ext < 0:
+                    a['_dev_credit'] += 1
+                else:
+                    _bandk = price_cfg['band'](ext)
+                    a['_dev_lines'] += 1
+                    a['_dev_price_sum'] += ext
+                    if _bandk:
+                        a['_dev_bands'][_bandk] = a['_dev_bands'].get(_bandk, 0) + 1
+                    _mdl = price_cfg['model'](r.get('product_desc'))
+                    if not _mdl:
+                        # A device line whose product description is blank: it is banded (the price is
+                        # real) but it can name no model, so the estate's model list would be short of
+                        # it with no trace. Counted, and reported as `unnamed_lines` — 9 such lines on
+                        # the live September house feed.
+                        a['_dev_unnamed'] += 1
+                    else:
+                        _m = a['_dev_models'].setdefault(_mdl, {'lines': 0, 'price_sum': 0.0,
+                                                                'free_lines': 0, 'cheap_lines': 0})
+                        _m['lines'] += 1
+                        _m['price_sum'] += ext
+                        if _bandk == 'free':
+                            _m['free_lines'] += 1
+                        if _bandk in _pmix.CHEAP_BANDS:
+                            _m['cheap_lines'] += 1
         _pl = str(r.get('product_desc') or '').lower()
         # Bill-payment membership is CONFIG-DRIVEN per org (mig 214; acfg['billpay_products']). When the org
         # has a NON-empty configured list, a line is a bill payment iff its product_desc EXACTLY matches
@@ -32667,7 +32927,10 @@ def _blank_sales_cell(store, rep, date):
             "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
             "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0,
             "act_tablet": 0, "act_home_internet": 0, "act_edge": 0, "act_watch": 0,
-            "act_new_activation": 0, "act_swap_excluded": 0, "act_cross_bucket": 0}
+            "act_new_activation": 0, "act_swap_excluded": 0, "act_cross_bucket": 0,
+            # the §62 device-mix accumulators, so an Activation-Details-only cell has the same shape
+            "_dev_lines": 0, "_dev_unclassified": 0, "_dev_credit": 0, "_dev_unnamed": 0,
+            "_dev_price_sum": 0.0, "_dev_bands": {}, "_dev_models": {}}
 
 
 def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None,

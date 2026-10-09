@@ -977,9 +977,9 @@ _all_routes = _flatten_routes(real_app.routes)
 # index §59.9). Same verification, same rule: `git diff origin/main -- backend/ | grep '^[+-]@router\.'`
 # printed exactly one added line and zero removed. This pin WILL redden the next PR that adds an
 # endpoint; re-measure and re-pin it then, never widen or delete it.
-# Re-pinned 1747 -> 1748 on 2026-10-08, measured against origin/main 547dd49 (the tree that had
-# just re-pinned to 1747 for #420) after merging it into this branch. The delta is ONE route and it
-# is named: GET /commcalc/spiff-impact (the Spiff Impact report, index §60). Verified the same way:
+# Re-pinned 1747 -> 1748 on 2026-10-08 for #421's GET /commcalc/spiff-impact (index §60).
+# Re-pinned 1748 -> 1749 on 2026-10-09, measured against origin/main 0c84784. The delta is ONE route
+# and it is named: GET /commcalc/product-mix (Product Mix & Ports, index §61). Verified the same way:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
 # Re-pinned 1748 -> 1750 on 2026-10-09, measured against origin/main 0c84784 (the tree that had
@@ -991,14 +991,20 @@ _all_routes = _flatten_routes(real_app.routes)
 # describe. Verified the same way: `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 2 and
 # `'^-@router\.'` = 0 — two added, NONE removed — so the pin was re-taken on a known addition, never
 # relaxed to make CI green.
-# Re-pinned 1750 -> 1753 on 2026-10-09, measured against origin/main 8e11f3d (the tree that had just
-# re-pinned to 1750 for #423) after merging it into this branch. The delta is THREE routes and each is
+#
+# Re-pinned 1750 -> 1751 on 2026-10-09, measured against origin/main 8e11f3d (the tree above, after
+# #423 merged). The delta is ONE route and it is named: GET /commcalc/product-mix (the Product Mix &
+# Ports report, index §62 — READ-ONLY, no writer, no new table). Verified the same way against the
+# merged base: `^+@router\.` = 1 and `^-@router\.` = 0 — one added, NONE removed.
+#
+# Re-pinned 1751 -> 1754 on 2026-10-09, measured against origin/main f0e5e03 (the tree that had just
+# re-pinned to 1751 for #424) after merging it into this branch. The delta is THREE routes and each is
 # named: GET /commcalc/month-focus/{period}, PUT /commcalc/month-focus/{period} and
 # POST /commcalc/month-focus/{period}/checkin (the month's declared focus and the weekly check-in,
-# index §62). Verified the same way: `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 3
+# index §63). Verified the same way: `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 3
 # and `'^-@router\.'` = 0 — three added, NONE removed — so the pin was re-taken on a known addition,
 # never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1753"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1754"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

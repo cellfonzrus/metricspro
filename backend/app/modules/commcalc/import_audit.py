@@ -853,7 +853,7 @@ def p_portal_sessions(client, org_id, ctx):
     return out
 
 
-# ── THE MONTH'S FOCUS / THE WEEKLY CHECK-IN (owner 2026-10-09, index §62) ─────────────────────────
+# ── THE MONTH'S FOCUS / THE WEEKLY CHECK-IN (owner 2026-10-09, index §63) ─────────────────────────
 #
 # The owner asked for the nudge to arrive "on the platform", "every week on Monday". So there is NO
 # cron job, NO mailbox and NO send record in that subsystem at all: it is an attention provider, and

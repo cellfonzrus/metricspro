@@ -48,7 +48,7 @@ are the tenant's own target categories, and every play below is a rule over MEAS
 sentence about a named product.
 
 PURE: stdlib only, no I/O, no client, never raises on bad input. The caller reads and writes the row;
-this module decides. Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §62.
+this module decides. Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §63.
 """
 from __future__ import annotations
 

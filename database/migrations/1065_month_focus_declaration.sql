@@ -1,5 +1,5 @@
 -- 1065_month_focus_declaration.sql
--- THE MONTH'S DECLARED FOCUS, AND THE WEEKLY CHECK-IN (owner 2026-10-09, index §62)
+-- THE MONTH'S DECLARED FOCUS, AND THE WEEKLY CHECK-IN (owner 2026-10-09, index §63)
 --
 -- Owner, verbatim: "in the beginning of the month Market manager or above when they log in should
 -- define the focus for the month -, update which initiative is driving spiffs that month and assign
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS commcalc.month_focus (
 );
 
 COMMENT ON TABLE commcalc.month_focus IS
-  'index §62 — the month''s declared focus, the pay type driving its spiffs, the temporary spiffs on '
+  'index §63 — the month''s declared focus, the pay type driving its spiffs, the temporary spiffs on '
   'the table and the weekly check-ins done. A DECLARATION, never a pay table: nothing is paid from '
   'this row, and commcalc.payout_config remains the only money. Written only through '
   'PUT /api/v1/commcalc/month-focus/{period}; decided by commcalc/month_focus.py.';
@@ -97,10 +97,10 @@ ALTER TABLE commcalc.commission_org_config
     ADD COLUMN IF NOT EXISTS focus_checkin_weekday   integer;
 
 COMMENT ON COLUMN commcalc.commission_org_config.focus_declaration_days IS
-  'index §62 — how many days into the month the focus declaration is still ''due'' rather than '
+  'index §63 — how many days into the month the focus declaration is still ''due'' rather than '
   '''overdue''. NULL = the house default (7). Read by commcalc/month_focus.outstanding.';
 COMMENT ON COLUMN commcalc.commission_org_config.focus_checkin_weekday IS
-  'index §62 — which weekday the in-platform check-in reminder falls on, as date.weekday(): '
+  'index §63 — which weekday the in-platform check-in reminder falls on, as date.weekday(): '
   '0 = Monday … 6 = Sunday. NULL = the house default (0 = Monday, as the owner asked). Read by '
   'commcalc/month_focus.checkin_days.';
 

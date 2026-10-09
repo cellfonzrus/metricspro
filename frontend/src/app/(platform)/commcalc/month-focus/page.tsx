@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-context'
 import { canDeclareMonthFocus } from '@/lib/rbac'
 import Link from 'next/link'
 
-// THIS MONTH'S FOCUS (index §62, owner ask 2026-10-09) — "in the beginning of the month Market manager
+// THIS MONTH'S FOCUS (index §63, owner ask 2026-10-09) — "in the beginning of the month Market manager
 // or above when they log in should define the focus for the month … the notification will come every
 // week on Monday on the platform".
 //

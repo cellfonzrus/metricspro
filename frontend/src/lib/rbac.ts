@@ -171,6 +171,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/spiff-impact', 'commissions'],
   ['/commcalc/month-focus', 'commissions'],
   ['/commcalc/accessory-target-plan', 'commissions'],
+  ['/commcalc/product-mix', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
   ['/commcalc/dlar-vs-platform', 'commissions'],
@@ -536,7 +537,7 @@ export const NAV: NavGroup[] = [
     // and its net profit, and which stores are not earning it on the sales they make. A management
     // review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
-    // THIS MONTH'S FOCUS (owner ask 2026-10-09, index §62) — what the month is about, which pay type
+    // THIS MONTH'S FOCUS (owner ask 2026-10-09, index §63) — what the month is about, which pay type
     // is driving its spiffs, which stores have a target, the temporary spiffs on the table, and the
     // weekly check-in. Scoped ['all','market'] because the owner asked for "market manager or above";
     // the backend enforces the same tier through `core.scope.is_market_or_wider`, so this row decides
@@ -547,6 +548,10 @@ export const NAV: NavGroup[] = [
     // split across stores on each store's own accessories-per-box history against the boxes it sells.
     // A planning surface for management and for targets, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/accessory-target-plan', label: 'Accessory Target Allocation', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // PRODUCT MIX & PORTS (owner directive 2026-10-09) — what each store and rep sold, at what price to
+    // the customer, against accessory $ per box and port share, with the lagging-store action plan. A
+    // management review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
+    { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -764,6 +769,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/month-focus', label: "This Month's Focus", icon: '🧭', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
     { href: '/commcalc/accessory-target-plan', label: 'Accessory Target Allocation', icon: '🎯', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'], tileOnly: true },
@@ -1281,6 +1287,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/spiff-impact', 'comm'],
   ['/commcalc/month-focus', 'comm'],
   ['/commcalc/accessory-target-plan', 'targets'],
+  ['/commcalc/product-mix', 'sales'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],
@@ -1506,7 +1513,7 @@ export function canEditSettingArea(perms: Permissions, area: string, role?: stri
 // It reuses the EXISTING admin-ish concept (no parallel gate is invented): an explicit per-page override
 // for /admin/import-health wins, then the `admin` module, then company-wide scope. A non-admin gets
 // `false` here and the component renders nothing; the backend 403s them independently.
-// MAY THIS LOGIN DECLARE THE MONTH'S FOCUS (index §62)? "Market manager or above", which in this
+// MAY THIS LOGIN DECLARE THE MONTH'S FOCUS (index §63)? "Market manager or above", which in this
 // codebase is a reporting SCOPE of market / region / regional / company-wide.
 //
 // PRESENTATION ONLY. The authority is the server (`PUT /commcalc/month-focus/{period}` →
