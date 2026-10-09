@@ -22427,6 +22427,17 @@ where. A line with no rep reports **no** rep and is never filled from the store'
   the CALL SITE (`router.is_device_dollar` reads §58's own `basis`), never as a second classifier in
   the pure layer — §K12/§K13 lock both halves. Found by the commission-audit thread reproducing the
   figure independently rather than taking it from this report.
+- **CONSEQUENCE, stated so nobody reads the report as wrong:** the P&L's `vip_reimb` line does NOT
+  decline that money — `component_of_declared_category('MDF')` is None, so §58 falls through to the
+  keyword ladder and `component_line` routes it to `vip_reimb` against the org's own declaration
+  (`mdf_income` exists in the chart of accounts and receives none of it). So this report's paid side
+  is DEVICE money only and can sit BELOW the P&L's reimbursement line for a store that received such
+  a payment, by exactly the declared-category-unmapped amount: `raw_comp_report` (the feed the P&L
+  reads) holds 40 such rows, **$260,500.00**, March–September 2026. Store 652 receives none of them,
+  so the §65.1 figures are unaffected. The fix is a CONFIG row — map the declared category to a
+  component, or give it a P&L line of its own, so a declaration stops being overridden by a keyword —
+  which moves money and is therefore surfaced for the owner, not applied; it is owned by the
+  commission-audit thread along with the rest of the classification path.
 - Lock `backend/harness_device_line_reimbursement.py` (**87 checks**), wired into
   `carrier-vocab-guard.yml`: the owner's own figures as fixtures, the transferred-vs-unpaid guard, the
   coverage guard, the symmetric-window regression, the absence-is-never-a-zero set, RULE TWO and
