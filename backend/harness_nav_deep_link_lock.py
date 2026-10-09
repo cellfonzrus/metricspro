@@ -224,14 +224,27 @@ def link_problem(routes, href):
 NAV_ITEM_RE = re.compile(r"\{ href: '([^']+)', label: '([^']+)', icon: '[^']*', module: '([^']+)'(.*?)\}")
 
 
+NAV_GROUP_RE = re.compile(r"\{ group: '([^']+)'")
+
+
 def nav_items(src):
     body = src.split("export const NAV: NavGroup[] = [", 1)[1]
+    # Which sidebar GROUP each entry sits in: the last `{ group: '…'` opened before it. Needed because a
+    # report listed in two groups legitimately carries each group's own module (index §19.40; five paths
+    # already do, e.g. /commcalc/spiff-impact as commissions and as targets).
+    bounds = [(m.start(), m.group(1)) for m in NAV_GROUP_RE.finditer(body)]
     items = []
     for m in NAV_ITEM_RE.finditer(body):
         rest = m.group(4)
         sc = re.search(r"scopes: \[([^\]]*)\]", rest)
+        grp = ""
+        for pos, name in bounds:
+            if pos < m.start():
+                grp = name
+            else:
+                break
         items.append({
-            "href": m.group(1), "label": m.group(2), "module": m.group(3),
+            "href": m.group(1), "label": m.group(2), "module": m.group(3), "group": grp,
             "scopes": tuple(re.findall(r"'([^']+)'", sc.group(1))) if sc else None,
             "tileOnly": "tileOnly: true" in rest, "platformOnly": "platformOnly: true" in rest,
         })
@@ -239,21 +252,44 @@ def nav_items(src):
 
 
 def deep_link_problems(items):
-    """Every deep-link NAV entry must open a page that has its own entry, and repeat its module + scopes."""
+    """A deep-link NAV entry is a DOOR into a page, never a second gate.
+
+    RESTATED 2026-10-09 for a door listed in TWO sidebar groups (`Reimbursement per Line` /
+    `Activated at Another Store`, index §65). The promise is unchanged — a door may never advertise a
+    wider access tier than the page it opens — but "the page" is now named exactly, because a path
+    listed in two groups carries each group's own module (five paths already did before this door):
+
+      1. the path must have a page entry of its own (nothing is reached through a guessed page);
+      2. `scopes` must equal the GATING page entry's — the FIRST entry for that path, which is the one
+         `deepLinkPage()` returns and `canSeeItem()` delegates to, so the tier can never widen;
+      3. `module` must equal the module of a page entry for that path IN THE DOOR'S OWN GROUP, so a door
+         never appears in a menu whose page is not listed there. The door's own module grants nothing —
+         `canSeeItem` reads the page entry, which `prove_nav_deep_link.mjs` §B′ proves for every door.
+    """
     probs = []
-    by_href = {}
+    gating = {}
+    in_group = set()
     for it in items:
-        by_href.setdefault(it["href"], it)
+        gating.setdefault(it["href"], it)
+        in_group.add((it["group"], it["href"]))
     for it in items:
         path = it["href"].split("#")[0].split("?")[0]
         if path == it["href"]:
             continue
-        page = by_href.get(path)
+        page = gating.get(path)
         if not page:
             probs.append("%s opens %s, which has no NAV entry of its own" % (it["href"], path))
-        elif (page["module"], page["scopes"]) != (it["module"], it["scopes"]):
-            probs.append("%s declares module=%s scopes=%s but its page %s is module=%s scopes=%s" % (
-                it["href"], it["module"], it["scopes"], path, page["module"], page["scopes"]))
+            continue
+        if page["scopes"] != it["scopes"]:
+            probs.append("%s declares scopes=%s but its page %s is gated at scopes=%s" % (
+                it["href"], it["scopes"], path, page["scopes"]))
+        same = [p for p in items if p["href"] == path and p["group"] == it["group"]]
+        if not same:
+            probs.append("%s sits in the %s menu, but %s is not listed there" % (
+                it["href"], it["group"], path))
+        elif it["module"] not in {p["module"] for p in same}:
+            probs.append("%s declares module=%s but %s in the %s menu is module=%s" % (
+                it["href"], it["module"], path, it["group"], same[0]["module"]))
     return probs
 
 
@@ -513,7 +549,24 @@ for it in WIDER:
 check("C8 control: a door with WIDER scopes than its page → RED", bool(deep_link_problems(WIDER)))
 check("C9 control: a door to a page with no entry → RED",
       bool(deep_link_problems(ITEMS + [{"href": "/nowhere?tab=a", "label": "N", "module": "hr", "scopes": None,
-                                        "tileOnly": False, "platformOnly": False}])))
+                                        "group": "Payroll & HR", "tileOnly": False, "platformOnly": False}])))
+# The two controls that arm the RESTATED rules (a door listed in a second sidebar group, index §65).
+DOOR = "/commcalc/device-line-reimbursement?view=transferred"
+check("C9a the second-group door is real, so the restatement is not vacuous",
+      len([it for it in ITEMS if it["href"] == DOOR]) == 2
+      and len({it["group"] for it in ITEMS if it["href"] == DOOR}) == 2,
+      sorted(it["group"] for it in ITEMS if it["href"] == DOOR))
+ORPHAN = [dict(it) for it in ITEMS]
+for it in ORPHAN:
+    if it["href"] == DOOR and it["group"] == "Assets":
+        it["group"] = "Distributors"       # a door in a menu where its page is NOT listed
+check("C9b control: a door in a menu that does not list its page → RED", bool(deep_link_problems(ORPHAN)))
+STRAYMOD = [dict(it) for it in ITEMS]
+for it in STRAYMOD:
+    if it["href"] == DOOR and it["group"] == "Assets":
+        it["module"] = "vip"               # a module its page does not carry in that menu
+check("C9c control: a door whose module its own menu's page does not carry → RED",
+      bool(deep_link_problems(STRAYMOD)))
 check("C10 the Payroll hub carries an Employees & Pay tile to the tab",
       "href: '/hr?tab=employees'" in read(PAYROLL_HUB) and "title: 'Employees & Pay'" in read(PAYROLL_HUB))
 check("C11 ScreenLink registers the destination (so copy naming it links)",

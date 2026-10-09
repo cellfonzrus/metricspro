@@ -172,6 +172,8 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/month-focus', 'commissions'],
   ['/commcalc/accessory-target-plan', 'commissions'],
   ['/commcalc/product-mix', 'commissions'],
+  ['/commcalc/device-line-reimbursement', 'commissions'],
+  ['/commcalc/device-line-reimbursement?view=transferred', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
   ['/commcalc/dlar-vs-platform', 'commissions'],
@@ -712,6 +714,11 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/epay-fee-recon', label: 'ePay Fee Recon', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', icon: '📲', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // The per-DEVICE side of the same reconciliation (index §65) — listed here beside the carrier
+    // reconciliations as well as under Assets, because the claim is an inventory unit and the paid
+    // side is the carrier statement, and the owner asked for it in both places.
+    { href: '/commcalc/device-line-reimbursement', label: 'Reimbursement per Line', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/device-line-reimbursement?view=transferred', label: 'Activated at Another Store', icon: '⇄', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/carrier-recon', label: 'Carrier Reconciliation', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
     // agency-phase1). Intentionally NOT in REPORT_DIRECTORY: it is a config+invoicing surface, not a report.
@@ -831,6 +838,15 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/missing-phones', label: 'Missing Phones', icon: '📵', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/aging-rebate', label: 'Aging · Rebate Received', icon: '💵', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    // Per-DEVICE equipment reimbursement vs cost vs what the store charged (index §65, owner ask
+    // 2026-10-09). Sits in Assets because the row IS an inventory unit, and is listed again under
+    // Incentives beside the carrier reconciliations because the paid side is the carrier statement.
+    { href: '/commcalc/device-line-reimbursement', label: 'Reimbursement per Line', icon: '📱', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    // The owner asked for the transferred phones as a report of their own (2026-10-09). A DEEP LINK
+    // into the view above, not a second page: the derivation is one home, and two pages reading
+    // the same two feeds would disagree the first time a verdict or the lag window changed (the
+    // `/hr?tab=employees` precedent).
+    { href: '/commcalc/device-line-reimbursement?view=transferred', label: 'Activated at Another Store', icon: '⇄', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/payables', label: 'Forecasting & Vendor Payables', icon: '📱', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     // Processor Debits & Credits (owner directive 2026-09-04): the day × transaction-type ledger of
@@ -1288,6 +1304,8 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/month-focus', 'comm'],
   ['/commcalc/accessory-target-plan', 'targets'],
   ['/commcalc/product-mix', 'sales'],
+  ['/commcalc/device-line-reimbursement', 'assets'],
+  ['/commcalc/device-line-reimbursement?view=transferred', 'assets'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],

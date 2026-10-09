@@ -1004,7 +1004,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # index §63). Verified the same way: `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 3
 # and `'^-@router\.'` = 0 — three added, NONE removed — so the pin was re-taken on a known addition,
 # never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1754"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1755"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
