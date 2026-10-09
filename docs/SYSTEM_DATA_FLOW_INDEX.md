@@ -22384,6 +22384,18 @@ where. A line with no rep reports **no** rep and is never filled from the store'
   places he named — the **Assets (Inventory)** group and beside the carrier reconciliations under
   **Incentives** — but it is a DEEP LINK into one derivation, not a second page that could disagree
   (the `/hr?tab=employees` precedent).
+- The deep-link locks were **RESTATED, not relaxed**, for the first door listed in TWO sidebar groups
+  (§19.40). `harness_nav_deep_link_lock.py` C5 used to compare a door against "the page entry", and a
+  path listed in two groups carries each group's own module (five paths already did before this one).
+  It now names the page exactly: `scopes` must equal the **gating** entry's (the first entry for that
+  path — the one `deepLinkPage()` returns and `canSeeItem()` delegates to, so the tier can never
+  widen), and `module` must equal a page entry's module **in the door's own group**, so a door never
+  appears in a menu that does not list its page. Three new controls arm it (C9a the second-group door
+  is real, C9b a door in a menu without its page → RED, C9c a stray module → RED). `prove_nav_deep_link.mjs`
+  gained §B′, which walks **every** declared door (not `/hr` alone) and proves `canSeeItem`,
+  `navBlockReason`, the carrier gate and the vertical gate answer exactly as its own page over a role
+  matrix, plus that a per-function key on the door opens nothing. Adding a door without declaring it
+  reddens D2.
 - Module-graph fact `device_reimbursement_paid_vs_claimed` (§50) now carries §19.53 **and** §65 and
   both locks.
 - Lock `backend/harness_device_line_reimbursement.py` (**74 checks**), wired into
