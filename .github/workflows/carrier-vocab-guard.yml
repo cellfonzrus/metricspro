@@ -267,6 +267,15 @@ on:
       - "backend/harness_accessory_target_plan.py"
       - "backend/app/modules/commcalc/accessory_target_plan.py"
       - "backend/app/modules/account/statement_filter.py"
+      # index §61 — the device price mix, the two-signal rep verdict, and the ONE home for what the
+      # carrier's port-in rate means. The lock reads the pure module, the shared cell pass it extends,
+      # §59's machinery it borrows, and both sides of the port-rate one home (its home and the flag
+      # detector that misread the column for four years), so a change to any of them must run it.
+      - "backend/harness_product_mix.py"
+      - "backend/app/modules/commcalc/product_mix.py"
+      - "backend/app/modules/commcalc/kpi_failing.py"
+      - "backend/app/modules/commcalc/flags.py"
+      - "backend/app/modules/commcalc/flag_registry.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_bucketing.py"
       - "backend/harness_sweep_failures_visible.py"
@@ -1055,6 +1064,9 @@ jobs:
       - name: "Accessory target allocation (index §61): a goal nobody entered is not zero; zero attachment is weighted at the company rate and SAID, never given a $0 target; an unselected store's target is reserved out of the goal; the split foots to the dollar; and the un-wire lock on every home it dereferences"
         working-directory: backend
         run: python3 harness_accessory_target_plan.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "Product mix & ports (index §62): price_cfg=None leaves the shared cell pass byte-identical; an unclassified box line is never banded as a cheap phone; the verdict needs BOTH signals and has two floors; the correlation is measured, not assumed; and the carrier's port-in rate has ONE home that states its direction and its scale"
+        working-directory: backend
+        run: python3 harness_product_mix.py | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
         working-directory: backend
         run: python3 harness_activation_event.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
