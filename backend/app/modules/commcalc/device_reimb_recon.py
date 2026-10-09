@@ -188,10 +188,44 @@ CODE_DEFAULT = {
         "distributor_device_id": "esn_imei",
         "distributor_device_model": "device_model",
         "distributor_acquired": "acquired_date",
+        # ── THE DEVICE GRAIN (owner report 2026-10-09, store 652). The statement total has no
+        #    device on it; the carrier's PER-LINE payment feed does (`imei` is populated on 99.7%
+        #    of the house org's lines), and the distributor ledger carries the device's COST and
+        #    the price the store sold it at on the SAME row as the claim. These names are SCHEMA,
+        #    re-pointable per org exactly like the eight above (mig 095 `payable_source_map`).
+        "line_store": "business_address",
+        "line_amount": "amount",
+        "line_category": "payment_type",
+        "line_device_id": "imei",
+        "line_date": "payment_date",
+        # WHO SOLD THE PHONE (owner ask 2026-10-09: *"add who sold the phone to the report"*). The
+        # carrier's own per-line feed names the rep it paid the line against, which is the only
+        # authority this report has for "who sold it" — the distributor ledger carries no person at
+        # all. A line with no rep on it reports NO rep, never a guess from the store's roster.
+        "line_rep": "rep_username",
+        "distributor_cost": "owed_to_vip",
+        "distributor_sale": "selling_price",
+        "distributor_sold": "date_sold",
     },
     # A finding's severity by the dollars at stake. A manager's queue order is a tuning decision.
     "severity_high_at": 500.0,
     "severity_critical_at": 2500.0,
+    # THE REIMBURSEMENT LAG (device grain only). A device-financing payment rarely lands in the
+    # month the distributor claims it: the claim is made when the distributor settles, the carrier
+    # pays on its own statement cycle. §27 `imei_rebate_report` already owns "how long either side
+    # of the event may this money arrive" (`period_window`) and the device layer DEREFERENCES that
+    # enumeration rather than holding a second lag rule — the caller reads it SYMMETRICALLY, because
+    # this layer anchors on the CLAIM date and a claim routinely follows the payment, where §27
+    # anchors on the activation, which the money can only follow.
+    #
+    # WHY 1 AND NOT §27's 6, MEASURED RATHER THAN ASSUMED. House org, September 2026, the same live
+    # rows read at four widths: +-0 leaves 139 devices ($40,119.62) looking unpaid; **+-1 resolves
+    # every one of them** and finds 140 devices ($43,568.83) paid to a store other than the one
+    # carrying the cost; +-2 and +-3 return those figures UNCHANGED to the cent. The answer
+    # saturates at one month either side, so a wider window costs three to eight times the feed
+    # read (53,762 lines vs 162,600) and buys nothing. A tenant whose distributor settles on a
+    # longer cycle widens it with ONE config row.
+    "lag_months": 1,
     # How many devices travel with one finding as its evidence. The COUNT and the TOTAL are always
     # complete; this caps only the listed sample so a flag description stays readable.
     "max_devices_in_evidence": 20,
@@ -329,6 +363,11 @@ def normalize_config(raw, base=None) -> dict:
             v = _f(raw.get(num))
             if v > 0:
                 cfg[num] = v
+    if "lag_months" in raw:
+        try:
+            cfg["lag_months"] = max(0, min(24, int(raw.get("lag_months"))))
+        except Exception:
+            pass
     if "max_devices_in_evidence" in raw:
         try:
             cfg["max_devices_in_evidence"] = max(0, min(500, int(raw.get("max_devices_in_evidence"))))
@@ -692,3 +731,305 @@ def config_from_rows(tenant_blob, house_blob=None) -> dict:
     two reads; keeping the MERGE here means one statement of precedence that a lock can pin.
     """
     return normalize_config(tenant_blob, base=normalize_config(house_blob))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# THE DEVICE GRAIN — one row per DEVICE, not per store-month
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER REPORT 2026-10-09, verbatim: *"i was checking the p&l for 652 , the equipment rebate is
+# almost 5000 less than the equipment reimbursement, we need to check what is going on and also
+# create another report for the equipment reimbursement per line , cost per line, and device payment
+# charged in the store to asses which line items dod not get paid"*.
+#
+# WHY THIS LIVES HERE AND NOT IN A NEW MODULE. "ePay paid vs the distributor claimed" already has
+# ONE home — this file — with one verdict vocabulary, one set of reasons, one coverage rule and one
+# config row. A sibling module for the same question at a finer grain is exactly the duplicate
+# defect CLAUDE.md forbids: the two would drift the first time a reason or a tolerance changed. So
+# the grain is ADDED to the existing home and everything above is reused unchanged.
+#
+# WHAT MAKES THE DEVICE GRAIN POSSIBLE AT ALL, stated because the store-month layer says it is not.
+# `carrier_side` reads the STATEMENT (one total per store-month, no device on it) and therefore sets
+# `carrier_has_device_grain` False — correctly. The carrier's PER-LINE payment feed is a different
+# read of the same money and DOES carry the device identifier on every line. So the device grain is
+# not a re-derivation of the statement total; it is the other, finer read, and the caller injects it.
+#
+# THE FINDING THE OWNER IS LOOKING AT, and the class behind it. Measured live, read-only, house org,
+# store '652 Communipaw Avenue', September 2026: the distributor ledger claims $15,274.91 across 47
+# devices; the carrier's per-line feed pays $4,999.98 of that, on 15 of those devices, TO A
+# DIFFERENT STORE (four of them), and $0.00 of it is unpaid anywhere. The instance is 15 iPhones and
+# Motorolas. The class is:
+#
+#     **"which store does a device-financing dollar belong to?" is answered by two authorities that
+#       nothing reconciles per device — the distributor ledger books the claim to the store the
+#       device was STOCKED to, the carrier statement pays the store it was ACTIVATED at.**
+#
+# At store-month grain the two are just two totals and the difference is unexplained. At device
+# grain it is a list of transferred handsets, which is a thing a human can act on. That is the whole
+# reason this layer exists, and it is why `paid_to_other_store` is its own status and never folded
+# into "not paid": telling a store it was never paid for a device another store was paid for is the
+# same false accusation §D of the lock exists to prevent.
+#
+# 💰 MOVES NO MONEY. Reads three feeds, books nothing, pays nobody, writes nothing.
+
+#: The carrier's per-line feed pays this device, at THIS store.
+LINE_PAID = "paid"
+#: The carrier paid this device — to a DIFFERENT store than the one the ledger claims it for.
+LINE_PAID_OTHER_STORE = "paid_to_other_store"
+#: The carrier's per-line feed carries no device-financing dollar for this device, anywhere, and the
+#: month's feed is COMPLETE — so the absence is a fact.
+LINE_NOT_PAID = "not_paid"
+#: Nothing could be said. `reason` names the absence. NEVER rendered as "not paid".
+LINE_NOT_MEASURED = "not_measured"
+LINE_STATUSES = (LINE_PAID, LINE_PAID_OTHER_STORE, LINE_NOT_PAID, LINE_NOT_MEASURED)
+
+#: What a human reads for each status. No table, column or hosting name reaches a screen (§19.38).
+LINE_STATUS_LABELS = {
+    LINE_PAID: "Paid to this store.",
+    LINE_PAID_OTHER_STORE: ("The carrier paid this device's reimbursement to a different store. "
+                            "This store carries the cost; the other store received the money."),
+    LINE_NOT_PAID: ("No device-financing reimbursement was paid for this device at any store, and "
+                    "the month's feed is complete — so this one really was not paid."),
+    LINE_NOT_MEASURED: "Not measured. The reason says what is missing.",
+}
+
+#: The device-level absence the per-line feed can have of its own: the device carries no identifier
+#: on the distributor's row, so there is nothing to look it up by. Reported, never guessed.
+REASON_DEVICE_UNIDENTIFIED = "device_not_identified_on_claim"
+
+
+def carrier_line_side(rows, cfg, is_device_dollar, resolve_store=None):
+    """PURE. The carrier's PER-LINE feed, indexed by device: who was paid for it, and how much.
+
+    `is_device_dollar(raw_category) -> bool` is INJECTED and is the only thing that decides whether a
+    line is device-financing money. It is built by the caller from the org's OWN declaration (the
+    §58 classification home read through the org's `carrier_component_lines` routing — the same fact
+    the P&L's reimbursement line is booked on), so this module adds no second classifier and cannot
+    disagree with the statement the owner is reading. When the org has declared no routing the
+    caller passes None and every row reports `no_device_financing_rule_configured`.
+
+    `resolve_store` is the platform's ONE store canonicalization (`account/coa.store_resolver`),
+    injected for the same reason.
+
+    Returns {"devices": {device_id: {"total", "by_store": {store: amount}, "lines": n}},
+             "unidentified": {"rows", "amount"}}  — a device-financing line with no device
+    identifier on it is COUNTED, not dropped, so the report can say how much of the paid side it
+    could not place on a device.
+    """
+    cols = cfg["columns"]
+    rs = resolve_store or (lambda v: _s(v) or None)
+    out = {}
+    unidentified = {"rows": 0, "amount": 0.0}
+    for r in rows or ():
+        if is_device_dollar is None:
+            break
+        if not is_device_dollar((r or {}).get(cols["line_category"])):
+            continue
+        amt = _f((r or {}).get(cols["line_amount"]))
+        dev = _s((r or {}).get(cols["line_device_id"]))
+        if not dev:
+            unidentified["rows"] += 1
+            unidentified["amount"] = round(unidentified["amount"] + amt, 2)
+            continue
+        st = rs((r or {}).get(cols["line_store"])) or ""
+        cell = out.setdefault(dev, {"total": 0.0, "by_store": {}, "by_store_month": {},
+                                    "lines": 0, "reps": {}})
+        cell["total"] = round(cell["total"] + amt, 2)
+        cell["lines"] += 1
+        cell["by_store"][st] = round(cell["by_store"].get(st, 0.0) + amt, 2)
+        # WHEN it arrived, per store, so the device row can say "paid, two months later" instead of
+        # folding a lagged payment into a bare "paid" and losing the one fact a chaser needs.
+        bm = cell["by_store_month"].setdefault(st, {})
+        _lmk = month_key((r or {}).get(cols["line_date"])) or ""
+        bm[_lmk] = round(bm.get(_lmk, 0.0) + amt, 2)
+        # The rep the carrier paid this line against, with the store it was paid at, so a device the
+        # carrier paid ANOTHER store for names the person who actually sold it there.
+        _rep = _s((r or {}).get(cols["line_rep"]))
+        if _rep:
+            cell["reps"].setdefault((_rep, st), 0.0)
+            cell["reps"][(_rep, st)] = round(cell["reps"][(_rep, st)] + amt, 2)
+    return {"devices": out, "unidentified": unidentified}
+
+
+def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=None,
+                 configured=True):
+    """PURE. One row per DEVICE the distributor ledger claims a reimbursement for.
+
+    Each row carries, side by side and never netted:
+
+      · what the distributor CLAIMS was reimbursed for this device,
+      · what the device COST (the distributor's charge on the same ledger row),
+      · what the store CHARGED for it — and `null` with `store_payment_recorded: False` when the
+        ledger carries no sale price, because a missing price is not a sale for $0.00,
+      · what the carrier's per-line feed paid for it at THIS store, and at any OTHER store, with
+        those other stores named.
+
+    `coverage` maps 'YYYY-MM' → the ONE coverage home's verdict (`pay_data_quality
+    .statement_month_coverage`, §19.54), consulted for exactly one purpose: a month whose feed
+    arrived short cannot support "this device was never paid", so such a row is NOT_MEASURED with
+    the coverage reason instead. Same direction-asymmetric guard as `reconcile` — a floor only ever
+    proves the direction it points, and "you were never paid for this handset" is a theft-shaped
+    claim about a real person's store.
+
+    `configured` is False when the org has declared no device-financing routing at all; then every
+    row is NOT_MEASURED with `no_device_financing_rule_configured` and no dollar is called unpaid.
+    """
+    cols = cfg["columns"]
+    claims = distributor_claim_matcher(cfg)
+    rs = resolve_store or (lambda v: _s(v) or None)
+    devices = (carrier_lines or {}).get("devices") or {}
+    rows, unplaced = [], {"rows": 0, "amount": 0.0}
+    for r in asset_rows or ():
+        if not claims(r):
+            continue
+        claimed = _f((r or {}).get(cols["distributor_amount"]))
+        mk = month_key((r or {}).get(cols["distributor_date"]))
+        st = rs((r or {}).get(cols["distributor_store"]))
+        if not mk or not st:
+            unplaced["rows"] += 1
+            unplaced["amount"] = round(unplaced["amount"] + claimed, 2)
+            continue
+        dev = _s((r or {}).get(cols["distributor_device_id"]))
+        paid = devices.get(dev) or {}
+        by_store = dict(paid.get("by_store") or {})
+        here = round(by_store.pop(st, 0.0), 2)
+        other = [{"store": k, "amount": v} for k, v in sorted(by_store.items(), key=lambda kv: -kv[1])]
+        other_total = round(float(sum(o["amount"] for o in other)), 2)
+        # WHEN this store was paid. The caller reads the per-line feed over the lag WINDOW, so a
+        # payment can legitimately sit in a later month than the claim; saying so is the difference
+        # between "paid late" and the bare "paid" that hides the lag.
+        _here_months = sorted(m for m, v in ((paid.get("by_store_month") or {}).get(st) or {}).items()
+                              if v and m)
+        paid_month = _here_months[0] if _here_months else None
+        # WHO SOLD IT, from the carrier's own line. Biggest-paid first, each with the store the
+        # carrier paid it at, so a transferred device names the rep AND where they were selling.
+        # Empty when no line carried a rep — reported as unknown, never filled from a roster.
+        _reps = [{"rep": k[0], "store": k[1], "amount": v}
+                 for k, v in sorted((paid.get("reps") or {}).items(), key=lambda kv: -kv[1])]
+        _sold_by = [x for x in _reps if x["store"] == st] or _reps
+        cov_complete, cov_missing, cov_missing_amount = \
+            coverage_verdict((coverage or {}).get(mk))
+
+        if not configured:
+            status, reason = LINE_NOT_MEASURED, REASON_NO_RULE
+        elif not dev:
+            status, reason = LINE_NOT_MEASURED, REASON_DEVICE_UNIDENTIFIED
+        elif here:
+            status, reason = LINE_PAID, None
+        elif other_total:
+            # PROVEN whatever the month's coverage is: money that DID arrive, at a named store, can
+            # only be added to by the days that did not. This is the one finding a short month
+            # cannot withhold, and the asymmetry is deliberate (same rule as VERDICT_MEASURED_FLOOR).
+            status, reason = LINE_PAID_OTHER_STORE, None
+        elif not cov_complete:
+            status, reason = LINE_NOT_MEASURED, REASON_COVERAGE_INCOMPLETE
+        else:
+            status, reason = LINE_NOT_PAID, None
+
+        sale_raw = (r or {}).get(cols["distributor_sale"])
+        sale_present = _s(sale_raw) != ""
+        rows.append({
+            "store": st,
+            "month": mk,
+            "month_label": month_label(mk),
+            "device_id": dev,
+            "model": _s((r or {}).get(cols["distributor_device_model"])),
+            "acquired": _s((r or {}).get(cols["distributor_acquired"]))[:10],
+            "sold": _s((r or {}).get(cols["distributor_sold"]))[:10],
+            "reimbursement_date": _s((r or {}).get(cols["distributor_date"]))[:10],
+            "distributor_claimed": claimed,
+            "device_cost": _f((r or {}).get(cols["distributor_cost"])),
+            # An absence is never a zero: no recorded sale price reads as "not recorded".
+            "store_device_payment": _f(sale_raw) if sale_present else None,
+            "store_payment_recorded": sale_present,
+            # The rep the carrier paid for this device, and every rep on it when more than one line
+            # was paid. `sold_by` prefers a rep paid AT this store and otherwise names whoever the
+            # carrier paid elsewhere — which is the person who actually sold a transferred phone.
+            "sold_by": _sold_by[0]["rep"] if _sold_by else None,
+            "sold_by_store": _sold_by[0]["store"] if _sold_by else None,
+            "reps": _reps,
+            "carrier_paid_here": here,
+            "carrier_paid_here_month": paid_month,
+            "carrier_paid_here_month_label": month_label(paid_month) if paid_month else None,
+            # True only when the money arrived in a LATER month than the claim — the lag made
+            # visible rather than averaged away. Never True for an unpaid device.
+            "carrier_paid_after_claim_month": bool(paid_month and paid_month > mk),
+            "carrier_paid_other_stores": other,
+            "carrier_paid_other_total": other_total,
+            "carrier_paid_lines": int(paid.get("lines") or 0),
+            "status": status,
+            "status_label": LINE_STATUS_LABELS[status],
+            "reason": reason,
+            "reason_label": REASON_LABELS.get(reason) if reason else None,
+            # The evidence behind a withheld "never paid": WHICH days of this month's feed never
+            # arrived, and what they were worth. Carried only on the row the coverage rule decided,
+            # so no other row invites a reader to discount it.
+            "coverage_missing_days": (cov_missing if reason == REASON_COVERAGE_INCOMPLETE else []),
+            "coverage_missing_amount": (cov_missing_amount
+                                        if reason == REASON_COVERAGE_INCOMPLETE else None),
+        })
+
+    rows.sort(key=lambda r: (r["store"], -r["distributor_claimed"], r["device_id"]))
+    return {
+        "rows": rows,
+        "by_store": _device_store_totals(rows),
+        "totals": _device_totals(rows, carrier_lines),
+        "configured": bool(configured),
+        "unplaced": unplaced,
+        # Stated on the payload rather than assumed by a reader: this layer's paid side IS device-
+        # keyed, unlike `reconcile`'s, whose `carrier_has_device_grain` is False on every row.
+        "carrier_has_device_grain": True,
+    }
+
+
+def _device_blank_totals() -> dict:
+    return {
+        "devices": 0,
+        "distributor_claimed": 0.0,
+        "device_cost": 0.0,
+        "store_device_payment": 0.0,
+        "store_payment_not_recorded": 0,
+        "carrier_paid_here": 0.0,
+        "carrier_paid_other_total": 0.0,
+        "not_paid_total": 0.0,
+        "not_measured_total": 0.0,
+        "by_status": {s: 0 for s in LINE_STATUSES},
+    }
+
+
+def _device_accumulate(t: dict, r: dict) -> None:
+    t["devices"] += 1
+    t["by_status"][r["status"]] += 1
+    for k in ("distributor_claimed", "device_cost", "carrier_paid_here", "carrier_paid_other_total"):
+        t[k] = round(t[k] + r[k], 2)
+    if r["store_payment_recorded"]:
+        t["store_device_payment"] = round(t["store_device_payment"] + (r["store_device_payment"] or 0.0), 2)
+    else:
+        t["store_payment_not_recorded"] += 1
+    # The two unpaid buckets are kept APART and never netted against what was paid — the same rule
+    # `reconcile`'s totals hold for the store-month layer.
+    if r["status"] == LINE_NOT_PAID:
+        t["not_paid_total"] = round(t["not_paid_total"] + r["distributor_claimed"], 2)
+    elif r["status"] == LINE_NOT_MEASURED:
+        t["not_measured_total"] = round(t["not_measured_total"] + r["distributor_claimed"], 2)
+
+
+def _device_store_totals(rows) -> list:
+    """PURE. Per store, the same buckets as the report total, so a store row and the header can
+    never state different numbers (one accumulation, applied twice)."""
+    out = {}
+    for r in rows or ():
+        t = out.setdefault(r["store"], dict(_device_blank_totals(), store=r["store"]))
+        _device_accumulate(t, r)
+    return sorted(out.values(), key=lambda t: -t["carrier_paid_other_total"])
+
+
+def _device_totals(rows, carrier_lines=None) -> dict:
+    t = _device_blank_totals()
+    for r in rows or ():
+        _device_accumulate(t, r)
+    u = (carrier_lines or {}).get("unidentified") or {}
+    # Device-financing money the carrier paid that carries NO device identifier. Reported on the
+    # total so the paid side is never quietly understated by what could not be placed on a device.
+    t["carrier_paid_unidentified"] = round(_f(u.get("amount")), 2)
+    t["carrier_paid_unidentified_rows"] = int(u.get("rows") or 0)
+    return t

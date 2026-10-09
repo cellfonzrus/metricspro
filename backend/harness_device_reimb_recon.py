@@ -503,9 +503,25 @@ ok("H2 the store key comes from the ONE store canonicalization the P&L books und
 ok("H3 the coverage verdict comes from the ONE coverage home — the month-complete one (§19.54), "
    "not the bare two-feed gap, so a CLOSED month is judged against its whole calendar",
    "_pdq.statement_month_coverage" in _inp and "_pdq.day_coverage_gap" not in _inp)
-ok("H3b ... and this module reads that answer in ONE place, which honours `ok is None` as NOT complete",
-   _code_only(_src(MOD)).count("coverage_verdict(") == 2          # the definition + the one use
-   and '"ok" in e' in _fn_src(MOD, "coverage_verdict"))
+# RESTATED 2026-10-09 (index §65), not relaxed. This check counted CALL SITES — the definition plus
+# one use — which made a second legitimate CALLER of the shared reader fail it. The claim it exists to
+# hold is that there is one READING RULE, so it is now pinned the way that is actually true: exactly
+# one function interprets the coverage entry, every other site calls it, and no site anywhere reads
+# `ok` / `missing_days` out of the entry itself. The device-grain layer (§65) is the second caller and
+# is named here so a THIRD one still has to be a deliberate edit of this line.
+_mod_code = _code_only(_src(MOD))
+_cov_callers = ("reconcile", "device_lines")
+ok("H3b ... and ONE function interprets that answer — every other site calls it, and nothing else "
+   f"reads the entry's own keys ({len(_cov_callers)} callers, named)",
+   _mod_code.count("coverage_verdict(") == 1 + len(_cov_callers)
+   and all("coverage_verdict(" in _fn_src(MOD, f) for f in _cov_callers)
+   and '"ok" in e' in _fn_src(MOD, "coverage_verdict")
+   # A caller may NAME the days it was handed back (both do, on the row that reports them); what it
+   # may not do is reach into the coverage ENTRY itself, which is the thing that would become a
+   # second reading rule.
+   and all(not any(t in _fn_src(MOD, f) for t in ('.get("ok")', '"ok" in', '.get("missing_days")',
+                                                  '.get("complete")', '.get("missing_amount")'))
+           for f in _cov_callers))
 ok("H4 every feed read goes through the ONE complete paged read — no literal row ceiling (§19.48)",
    # the local `_read` helper IS that read, and the one read that cannot use it (the distributor
    # snapshot has no period column) calls it directly. Both are counted, so a fourth read added by
