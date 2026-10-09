@@ -185,6 +185,38 @@ ROSTER_OWN_STORE = "own_store"     # the store(s) this person actually works at
 ROSTER_SPAN = "span"               # the market(s)/unit(s) this person manages
 
 
+# ── "MARKET MANAGER OR ABOVE", AS A SCOPE TIER — ONE HOME (2026-10-09, index §62) ────────────────
+#
+# This fact had THREE copies before this comment: `closing/closer_pick.PICK_ANY_SCOPES` ("DM and
+# above as scope tiers — the same tiers core.scope.roster_reach treats as market-or-wider", which is
+# an admission that the tuple belongs here), `notify/report_registry`'s `role_scopes`, and
+# `roster_reach` below. A fourth was about to be written for the month-focus declaration, so the fact
+# moved here instead and the callers were wired to it (CLAUDE.md: "writing the registry without
+# wiring the callers to it is not a fix at all").
+#
+# NOT a synonym for `roster_reach(...) != ROSTER_OWN_STORE`. `roster_reach` answers a DIFFERENT
+# question — whom may this person SEE on a roster — and it returns ROSTER_ALL for any role that has
+# not opted into `scheduling_reach = 'span'`, scope 'store' included. Asking it "is this person a
+# market manager or above" therefore answers yes for a sales rep. That mistake was made and caught by
+# `harness_month_focus.py` §H3 on 2026-10-09; this function exists so it cannot be made again.
+MARKET_OR_WIDER_SCOPES = ("market", "region", "regional", "all")
+
+
+def is_market_or_wider(role_perms, *, default="all") -> bool:
+    """Is this role's REPORTING scope a market, a region or the whole company? PURE; never raises.
+
+    `default` is what a role with no scope recorded is treated as, and it is the CALLER'S decision
+    because the two live conventions differ: a closing may be submitted for somebody else by a role
+    whose scope is unset (it is read as company-wide), while a surface that is deliberately narrow
+    would pass `default=""` and get False.
+    """
+    try:
+        scope = str((role_perms or {}).get("scope") or default).strip().lower()
+    except Exception:
+        return False
+    return scope in MARKET_OR_WIDER_SCOPES
+
+
 def roster_reach(role_perms) -> str:
     """Which of the three roster reaches a role gets. Pure; never raises.
 
