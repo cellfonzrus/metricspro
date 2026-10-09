@@ -851,3 +851,42 @@ def p_portal_sessions(client, org_id, ctx):
              f"closing card tally has no figure to check the declared amount against."),
             1, "/commcalc/email-imports", "Open the live login"))
     return out
+
+
+# ── THE MONTH'S FOCUS / THE WEEKLY CHECK-IN (owner 2026-10-09, index §63) ─────────────────────────
+#
+# The owner asked for the nudge to arrive "on the platform", "every week on Monday". So there is NO
+# cron job, NO mailbox and NO send record in that subsystem at all: it is an attention provider, and
+# `core/import_health` already runs every registered provider on login and renders nothing when every
+# provider returns zero items. Its contract is exactly the guarantee this reminder needs — "a
+# notification MUST clear when the check says everything is OK" (owner 2026-07-26) — so the item
+# exists only while the thing is genuinely undone, and declaring the month makes it disappear on the
+# next read rather than being marked read.
+#
+# THIS IS ONE OF TWO SURFACES OVER THE SAME DUE LIST, NOT A SECOND REMINDER. The popup is gated to
+# company-wide ('all') logins (`rbac.canSeeAttention`) and the owner asked for market manager and
+# above, so `MonthFocusReminder` in the platform layout carries it for the market/district tiers.
+# Both read `commcalc/router._month_focus_payload`, which reads `commcalc/month_focus.outstanding`,
+# so the two surfaces cannot disagree about what this month still owes.
+#
+# `with_plays=False` — the login path must never pay for a sales read. The plays are on the page.
+# The router is imported INSIDE the function, like `import_health._route_policy_rows` does: this
+# module is itself imported from the bottom of router.py, so a top-level import would be a cycle.
+@register_provider("commcalc_month_focus", label="This month's focus / weekly check-in",
+                   group="config", cost="cheap")
+def _p_month_focus(client, org_id, ctx):
+    from datetime import datetime, timezone
+    now = ctx.get("now") or datetime.now(timezone.utc)
+    try:
+        from app.modules.commcalc.router import _month_focus_payload
+        out = _month_focus_payload(client, org_id, f"{now.year}-{now.month:02d}", "",
+                                   with_plays=False)
+    except Exception:
+        return []
+    # Migration 1065 un-run ⇒ the popup stays silent rather than nagging about a table that is not
+    # there. `ready` is the TABLE, not the row: a month nobody declared is a real item.
+    if not out.get("ready"):
+        return []
+    return [_item("config", f"month_focus:{out.get('period')}:{it['key']}", it["severity"],
+                  it["label"], it["detail"], it["count"], it["deep_link"], it["deep_link_label"])
+            for it in (out.get("outstanding") or [])]

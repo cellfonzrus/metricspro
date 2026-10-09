@@ -18,8 +18,10 @@ PURE: no I/O. The router resolves the caller's permissions and own names, then a
 
 GRANT_KEY = "closing_pick_any_employee"
 
-# "DM and above" as scope tiers — the same tiers core.scope.roster_reach treats as market-or-wider.
-PICK_ANY_SCOPES = ("market", "region", "regional", "all")
+# "DM and above" as scope tiers. DEREFERENCED, not copied: the tuple moved to `app.core.scope` on
+# 2026-10-09 when a fourth copy was about to be written for the month-focus declaration (index §62),
+# and this name stays as the re-export so every existing reader of it is byte-identical.
+from app.core.scope import MARKET_OR_WIDER_SCOPES as PICK_ANY_SCOPES, is_market_or_wider
 
 
 def _fold(v) -> str:
@@ -35,7 +37,9 @@ def may_pick_any(perms) -> bool:
     explicit = (p.get("data") or {}).get(GRANT_KEY)
     if isinstance(explicit, bool):
         return explicit
-    return str(p.get("scope") or "all").strip().lower() in PICK_ANY_SCOPES
+    # `default="all"` keeps this byte-identical: a role with no scope recorded has always been read
+    # here as company-wide.
+    return is_market_or_wider(p, default="all")
 
 
 def own_names(*names) -> set:

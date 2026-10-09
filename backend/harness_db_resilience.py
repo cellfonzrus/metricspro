@@ -996,7 +996,15 @@ _all_routes = _flatten_routes(real_app.routes)
 # #423 merged). The delta is ONE route and it is named: GET /commcalc/product-mix (the Product Mix &
 # Ports report, index §62 — READ-ONLY, no writer, no new table). Verified the same way against the
 # merged base: `^+@router\.` = 1 and `^-@router\.` = 0 — one added, NONE removed.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1751"))
+#
+# Re-pinned 1751 -> 1754 on 2026-10-09, measured against origin/main f0e5e03 (the tree that had just
+# re-pinned to 1751 for #424) after merging it into this branch. The delta is THREE routes and each is
+# named: GET /commcalc/month-focus/{period}, PUT /commcalc/month-focus/{period} and
+# POST /commcalc/month-focus/{period}/checkin (the month's declared focus and the weekly check-in,
+# index §63). Verified the same way: `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 3
+# and `'^-@router\.'` = 0 — three added, NONE removed — so the pin was re-taken on a known addition,
+# never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1754"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

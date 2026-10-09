@@ -169,6 +169,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/peer-comparison', 'commissions'],
   ['/commcalc/targets/report-cards', 'commissions'],
   ['/commcalc/spiff-impact', 'commissions'],
+  ['/commcalc/month-focus', 'commissions'],
   ['/commcalc/accessory-target-plan', 'commissions'],
   ['/commcalc/product-mix', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
@@ -536,6 +537,13 @@ export const NAV: NavGroup[] = [
     // and its net profit, and which stores are not earning it on the sales they make. A management
     // review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // THIS MONTH'S FOCUS (owner ask 2026-10-09, index §63) — what the month is about, which pay type
+    // is driving its spiffs, which stores have a target, the temporary spiffs on the table, and the
+    // weekly check-in. Scoped ['all','market'] because the owner asked for "market manager or above";
+    // the backend enforces the same tier through `core.scope.is_market_or_wider`, so this row decides
+    // what is SHOWN and never what is allowed. Listed in Management Overview and in Targets &
+    // Coaching as ONE href, like the two reports it reads.
+    { href: '/commcalc/month-focus', label: "This Month's Focus", icon: '🧭', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // ACCESSORY TARGET ALLOCATION (owner ask 2026-10-09, index §61) — one company accessory goal,
     // split across stores on each store's own accessories-per-box history against the boxes it sells.
     // A planning surface for management and for targets, so it is listed in BOTH groups as ONE href.
@@ -757,6 +765,8 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/targets/report-cards', label: 'Manager Report Cards', icon: '🗂️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
     { href: '/commcalc/spiff-impact', label: 'Spiff Impact', icon: '🎁', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
+    { href: '/commcalc/month-focus', label: "This Month's Focus", icon: '🧭', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
     { href: '/commcalc/accessory-target-plan', label: 'Accessory Target Allocation', icon: '🎯', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
@@ -1275,6 +1285,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/peer-comparison', 'sales'],
   ['/commcalc/targets/report-cards', 'sales'],
   ['/commcalc/spiff-impact', 'comm'],
+  ['/commcalc/month-focus', 'comm'],
   ['/commcalc/accessory-target-plan', 'targets'],
   ['/commcalc/product-mix', 'sales'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
@@ -1502,6 +1513,23 @@ export function canEditSettingArea(perms: Permissions, area: string, role?: stri
 // It reuses the EXISTING admin-ish concept (no parallel gate is invented): an explicit per-page override
 // for /admin/import-health wins, then the `admin` module, then company-wide scope. A non-admin gets
 // `false` here and the component renders nothing; the backend 403s them independently.
+// MAY THIS LOGIN DECLARE THE MONTH'S FOCUS (index §63)? "Market manager or above", which in this
+// codebase is a reporting SCOPE of market / region / regional / company-wide.
+//
+// PRESENTATION ONLY. The authority is the server (`PUT /commcalc/month-focus/{period}` →
+// `commcalc/month_focus.may_declare` → `app/core/scope.is_market_or_wider`), so a client that ignores
+// this flag changes nothing. This mirrors it so the page can render read-only rather than offering a
+// form that will be refused, and so the Monday banner only nags the people who can act on it.
+//
+// Deliberately NOT `canSeeAttention` below: that gate is company-wide only, which is why the reminder
+// needs its own banner for the market and district tiers at all.
+export function canDeclareMonthFocus(perms: Permissions): boolean {
+  const ov = perms?.pages?.['/commcalc/month-focus']
+  if (typeof ov === 'boolean') return ov
+  if (isSuperAdmin(perms)) return true
+  return ['market', 'region', 'regional', 'all'].includes(perms?.scope || 'all')
+}
+
 export function canSeeAttention(perms: Permissions): boolean {
   const ov = perms?.pages?.['/admin/import-health']
   if (typeof ov === 'boolean') return ov
