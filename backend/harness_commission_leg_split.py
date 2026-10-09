@@ -371,7 +371,7 @@ rowA = next(x for x in r["store_rows"] if x["store"] == STORE_A)
 rowB = next(x for x in r["store_rows"] if x["store"] == STORE_B)
 
 # ── ② pre-existing money columns, hand-computed ──
-# THE GHOST STORE IS NO LONGER EXCLUDED (§62, owner directive 2026-10-09 "chase trhew street
+# THE GHOST STORE IS NO LONGER EXCLUDED (§63, owner directive 2026-10-09 "chase trhew street
 # number matching"). Until then a carrier payment for a store the report could not place was
 # DISCARDED from the column and the ladder with nothing said — which is exactly how the house org
 # lost $17,287.01 a month of one store's commission to a street-number spelling. It now rides on an
@@ -437,7 +437,7 @@ check("store A's own commission split is A's money only", eq2(rowA["comm_m1"], 1
 # ── ⑥ the ladder explains exactly the column ──
 lad = r["commission_legs"]["ladder"]
 check("ladder(comm) sums to the Commission column — the unplaced money is in BOTH or neither, "
-      "never in one (§62)", eq2(sum(lad["comm"].values()), 720.0), lad["comm"])
+      "never in one (§63)", eq2(sum(lad["comm"].values()), 720.0), lad["comm"])
 check("ladder(mi) sums to the MI column — the ghost salesforce_id is in NEITHER",
       eq2(sum(lad["mi"].values()), 46.0), lad["mi"])
 check("ladder rungs are the real month-of-life values",

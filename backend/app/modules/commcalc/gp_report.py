@@ -25,7 +25,7 @@ from app.modules.commcalc import payment_category as _pc
 # the calculator stays dependency-free. The DECISION lives there, not here: this file only asks it
 # which rows stop booking, so the P&L (account/coa) and this report can never suppress differently.
 from app.modules.commcalc import labour_coverage as _lcov
-# THE one home for "which store is this string?" (§62, owner directive 2026-10-09 "chase trhew
+# THE one home for "which store is this string?" (§63, owner directive 2026-10-09 "chase trhew
 # street number matching"). PURE and import-free, so this file stays the DB-free calculator it has
 # always been: the resolver's I/O happens in the caller (`router._compute_gp` -> `coa.store_resolver`)
 # and arrives as `resolve_store_canonical`. This engine states NO store-matching rule of its own —
@@ -445,7 +445,7 @@ def calc_gp_report(
 
     store_identity = _sid.store_identity_index(store_mapping, resolve_store_canonical)
 
-    # ── Payment detail bucketed by STORE IDENTITY (§62) ───────────
+    # ── Payment detail bucketed by STORE IDENTITY (§63) ───────────
     # WHICH COLUMN A DOLLAR LANDS IN IS NOT DECIDED HERE (owner report 2026-10-08). It used to be,
     # with four exact string compares — `cat == 'Commission'`, `== 'Re-imbursement'`, `== 'MDF'`,
     # `== 'Chargeback'` — which hard-coded the house org's own spellings and folded the lookup key
@@ -481,7 +481,7 @@ def calc_gp_report(
             pay_by_num[num]['comm_legs'][_b] += amt
             _leg_ladder_add(pay_by_num[num]['comm_ladder'], 'l', _leg, amt)
 
-    # ── Comp report bucketed by STORE IDENTITY (§62) ──────────────
+    # ── Comp report bucketed by STORE IDENTITY (§63) ──────────────
     # THE DEFECT THE OWNER REPORTED, AND WHERE IT LIVED (2026-10-08: *"gross profit is still showing
     # the old data m teh source of information should be the same"*). This block used to guess the
     # classification from keywords in the compensation type — `'reimbursement' in ct or 'rebate' in
@@ -559,7 +559,7 @@ def calc_gp_report(
     # key BEFORE the loop (to pair each store's commission expense with its rep pay), so it is
     # derived once here and read in both places rather than computed twice and allowed to drift.
     #
-    # ONE PHYSICAL STORE COLLECTS EVERY CODE'S EXPENSES, EXACTLY ONCE (§62, measured 2026-10-09).
+    # ONE PHYSICAL STORE COLLECTS EVERY CODE'S EXPENSES, EXACTLY ONCE (§63, measured 2026-10-09).
     # Folding two store_mapping codes onto one identity made the single-code lookup below LOSE the
     # expenses filed under the code the fold did not pick — the same defect this PR fixes on the
     # revenue side, showing up in the expense column: live house org, `1 S 60th street` is claimed

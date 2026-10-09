@@ -322,7 +322,7 @@ for rel, allowed in EXPECTED_DELTA.items():
 #   Sheet number this module produces is byte-identical. Proven by
 #   backend/harness_vip_invoice_filter.py §F and backend/harness_pl_filter_semantics.py (unchanged).
 #   coa.py {store_resolver, _squash_key, _lead_num_key} and −{store_resolver._num_key,
-#   store_resolver.resolve} (2026-10-09, index §62, owner directive "chase trhew street number
+#   store_resolver.resolve} (2026-10-09, index §63, owner directive "chase trhew street number
 #   matching"). THE ONLY REMOVAL THIS FILE HAS EVER SANCTIONED, and it is a MOVE, not a deletion:
 #   the store resolution CHAIN now lives in its one home, `account/store_identity.py`, so
 #   `store_resolver` is just the I/O wrapper that reads store_mapping + store_aliases and hands them

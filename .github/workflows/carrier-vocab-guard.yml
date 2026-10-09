@@ -267,6 +267,15 @@ on:
       - "backend/harness_accessory_target_plan.py"
       - "backend/app/modules/commcalc/accessory_target_plan.py"
       - "backend/app/modules/account/statement_filter.py"
+      # index §61 — the device price mix, the two-signal rep verdict, and the ONE home for what the
+      # carrier's port-in rate means. The lock reads the pure module, the shared cell pass it extends,
+      # §59's machinery it borrows, and both sides of the port-rate one home (its home and the flag
+      # detector that misread the column for four years), so a change to any of them must run it.
+      - "backend/harness_product_mix.py"
+      - "backend/app/modules/commcalc/product_mix.py"
+      - "backend/app/modules/commcalc/kpi_failing.py"
+      - "backend/app/modules/commcalc/flags.py"
+      - "backend/app/modules/commcalc/flag_registry.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_bucketing.py"
       - "backend/harness_sweep_failures_visible.py"
@@ -621,7 +630,7 @@ on:
       # §13e lesson as the three above).
       - "backend/harness_dm_visit_plan.py"
       - "database/migrations/1050_dm_visit_quota_and_assignment.sql"
-      # index §62 — the store-identity lock + proof sit at the backend ROOT, outside the
+      # index §63 — the store-identity lock + proof sit at the backend ROOT, outside the
       # backend/app glob they guard, and the lock also reads the migrations that define the
       # commission-leg rollup. A change to any of them must run them.
       - "backend/harness_store_identity_lock.py"
@@ -747,16 +756,16 @@ jobs:
       - name: Run the residual store-grain proof (one door→store home; consolidated total unmoved; the $0-per-store regression)
         working-directory: backend
         run: python3 harness_mi_residual_store_grain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
-      # index §62 — STORE IDENTITY. The engine used to join every money source to a store on the
+      # index §63 — STORE IDENTITY. The engine used to join every money source to a store on the
       # FIRST TOKEN of the address, which dropped a store's whole carrier income whenever the
       # carrier and the roster spelled the number differently, and picked last-wins where two store
       # rows shared a token. The lock fails the build if a caller stops dereferencing the one home,
       # if a new leading-token site appears, if the GP resolver is gated again, or if a migration
       # teaches SQL to decide identity. The proof carries both live regressions as fixtures.
-      - name: Run the store-identity lock (a leading address token is not a store identity; one home, every money path on it; no second chain; SQL decides nothing — index §62)
+      - name: Run the store-identity lock (a leading address token is not a store identity; one home, every money path on it; no second chain; SQL decides nothing — index §63)
         working-directory: backend
         run: python3 harness_store_identity_lock.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the store-identity proof (both live regressions as fixtures; the door survives a two-code store; unplaceable money is stated, never dropped — index §62)
+      - name: Run the store-identity proof (both live regressions as fixtures; the door survives a two-code store; unplaceable money is stated, never dropped — index §63)
         working-directory: backend
         run: python3 harness_gp_store_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the any-subset-columns lock (no column-block ladder anywhere; one reading rule; every named reader on it; credential rows projected)
@@ -1074,6 +1083,9 @@ jobs:
       - name: "Accessory target allocation (index §61): a goal nobody entered is not zero; zero attachment is weighted at the company rate and SAID, never given a $0 target; an unselected store's target is reserved out of the goal; the split foots to the dollar; and the un-wire lock on every home it dereferences"
         working-directory: backend
         run: python3 harness_accessory_target_plan.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "Product mix & ports (index §62): price_cfg=None leaves the shared cell pass byte-identical; an unclassified box line is never banded as a cheap phone; the verdict needs BOTH signals and has two floors; the correlation is measured, not assumed; and the carrier's port-in rate has ONE home that states its direction and its scale"
+        working-directory: backend
+        run: python3 harness_product_mix.py | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
         working-directory: backend
         run: python3 harness_activation_event.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"

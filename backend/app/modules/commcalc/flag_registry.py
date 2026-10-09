@@ -120,6 +120,12 @@ AREAS: tuple[tuple[str, str, str], ...] = (
     ("fraud", "Fraud & Identity",
      "One device or identity used where it should appear once, and activation patterns that do not "
      "look like retail selling."),
+    # ADDED 2026-10-09 (index §61). The low-port-in finding below used to sit under `churn`, which it
+    # was never evidence about: it reads the carrier's PORT-IN share, so it says a store is not
+    # WINNING numbers, not that it is losing them. It needed a heading about selling, and this is it.
+    ("sales", "Sales & Sell-through",
+     "Stores and reps whose own sell-through is behind what the same traffic produced elsewhere — "
+     "numbers not ported in, and accessories not attached to the boxes that were sold."),
     ("churn", "Port-outs & Churn",
      "Subscribers that left, were transferred out, or were suspended, by how soon after the sale."),
     ("inventory", "Inventory & Assets",
@@ -289,9 +295,21 @@ TYPES: dict[str, dict] = {
         "area": "churn", "sev": MEDIUM, "writer": "commcalc/portout_flags.py",
         "grain": "transaction",
     },
-    "HIGH_PORT_OUT_RATE": {
-        "label": "Store port-out rate above the allowed share",
-        "area": "churn", "sev": HIGH, "writer": "commcalc/flags.py", "grain": "store_period",
+    # RE-KEYED 2026-10-09 (index §61). This was registered as `HIGH_PORT_OUT_RATE`, "store port-out
+    # rate above the allowed share" — and the detector behind it never measured a port-out. It read
+    # `raw_dlar_store.port_pct`, which the feed fills from the carrier's `port_ins` (the share of a
+    # store's activations WON from another carrier), multiplied an already-percent value by 100, and
+    # flagged everything above 15 — so it fired on every store with a single port-in, and called the
+    # estate's best porting doors a churn risk. There is no port-out figure on that feed at all.
+    # The finding that column CAN support is the opposite one, and it is what the owner asked to see
+    # on 2026-10-09 ("who are porting in less numbers — the logic is built but not displayed"). The
+    # old spelling stays declared as `legacy` so the stored history still canonicalises and no
+    # manager's past ruling is orphaned (flag_persist.py's rule), and the area moves from `churn`,
+    # which it was never evidence about, to `sales`.
+    "LOW_PORT_IN_RATE": {
+        "label": "Carrier reports few numbers ported in to this store",
+        "area": "sales", "sev": MEDIUM, "writer": "commcalc/flags.py", "grain": "store_period",
+        "legacy": ("HIGH_PORT_OUT_RATE",),
     },
 
     # ── Inventory & Assets ──────────────────────────────────────────────────────────────────────

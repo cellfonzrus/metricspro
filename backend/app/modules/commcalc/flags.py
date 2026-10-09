@@ -1,7 +1,7 @@
 """
 Flags Calculator — the EIGHT flag types this module actually emits:
 CHARGEBACK, UNMAPPED_PAYMENT_TYPE, DUPLICATE_IMEI, SETUP_FEE_MISSING,
-RSK_ACTIVATIONS, HIGH_PORT_OUT_RATE, MISSING_STORE_PAYMENT, MISSING_STORE_SALES
+RSK_ACTIVATIONS, LOW_PORT_IN_RATE, MISSING_STORE_PAYMENT, MISSING_STORE_SALES
 
 CORRECTED 2026-10-05. This header used to claim "all 13 flag types" and list
 MRC_IMEI_MISMATCH, ACCESSORY_LOSS, IMEI_FRAUD, IMEI_MULTI_MDN, RSK_NON_PAYMENT and
@@ -29,7 +29,7 @@ from app.modules.commcalc import flag_registry as _reg
 # ($7,123.39 taken back, measured live 2026-10-06). The test now dereferences the shared one, which
 # recognises a clawback by the DIRECTION the processor moved the money. See clawback.py for the class.
 from app.modules.commcalc import clawback as _clawback
-from app.modules.account import store_identity as _sid   # §62 — THE store-identity home (pure)
+from app.modules.account import store_identity as _sid   # §63 — THE store-identity home (pure)
 
 def safe_float(v) -> float:
     try: return float(v or 0)
@@ -42,7 +42,7 @@ def safe_float(v) -> float:
 # against the carrier's "116-36 Springfield Blvd …") that store appeared in BOTH sets and raised BOTH
 # flags, every month, against a store that was selling and being paid normally. A flag that fires on
 # a spelling is noise that teaches managers to ignore flags. Identity now comes from the one home
-# (§62, `account.store_identity` via `coa.store_resolver`), injected by the caller.
+# (§63, `account.store_identity` via `coa.store_resolver`), injected by the caller.
 
 def _days_since(date_str):
     """Whole days from an activation/acquired date string to today (None if unparseable)."""
@@ -71,7 +71,7 @@ def calc_flags(
 ) -> list[dict]:
     """Returns list of flag dicts ready to insert into commcalc.flags. asset_by_imei maps an IMEI
     (upper, no '.0') → its asset_ledger row, used to show a chargeback's REBATE LOST + device + age.
-    resolve_store_canonical: the ONE store-identity resolver (`coa.store_resolver`, §62), used to key
+    resolve_store_canonical: the ONE store-identity resolver (`coa.store_resolver`, §63), used to key
     the sales side and the payment side of flags 7/8 on the same identity. None = each raw spelling
     keys on itself, which can only make those two flags MORE conservative, never invent one."""
 
@@ -258,17 +258,34 @@ def calc_flags(
                     'coaching_note': 'RSK activations require monitoring per Carrier policy. Verify each activation is legitimate.',
                 })
 
-    # ── 6. HIGH PORT-OUT RATE (from DLAR store) ───────────────────
+    # ── 6. LOW PORT-IN RATE (from DLAR store) ─────────────────────
+    # CORRECTED 2026-10-09 (index §62). This detector read the same column and got both its DIRECTION
+    # and its SCALE wrong: `raw_dlar_store.port_pct` is the carrier's PORT-IN share (filled from the
+    # portal's `port_ins` / the upload's 'Port %' column) and it is already a percent, 0-100. The old
+    # test `safe_float(port_pct) * 100 > 15` therefore turned 66.67% into 6667 and fired on EVERY
+    # store that had so much as one port-in, under the name HIGH_PORT_OUT_RATE — accusing the best
+    # porting doors in the estate of churn, off a feed that carries no port-out figure at all.
+    #
+    # Neither the meaning nor the threshold lives here any more: `kpi_failing.port_in_rate` /
+    # `low_port_in` is the ONE home for what that column says (the index's "one fact, one home,
+    # dereferenced" rule), and `harness_product_mix.py` fails the build if a second reader of the raw
+    # column appears. The finding this column CAN support is the one the owner asked for on
+    # 2026-10-09: which stores are porting in LESS.
+    from app.modules.commcalc import kpi_failing as _kpi
     for r in dlar_store:
-        port_pct = safe_float(r.get('port_pct')) * 100
-        if port_pct > 15:  # > 15% port-out rate = flag
+        rate, is_low = _kpi.low_port_in(r)
+        if is_low:
             flags.append({**base,
-                'flag_type': 'HIGH_PORT_OUT_RATE', 'source': 'dlar_store',
+                'flag_type': 'LOW_PORT_IN_RATE', 'source': 'dlar_store',
                 'severity': 'MEDIUM',
                 'store_address': r.get('address', ''),
-                'amount': port_pct,
-                'description': f"Store {r.get('address','')} port-out rate {port_pct:.1f}% (threshold: 15%)",
-                'coaching_note': 'High port-out may indicate poor activation quality or customer satisfaction issues.',
+                'amount': rate,
+                'description': (f"Store {r.get('address','')} ported in {rate:.1f}% of its "
+                                f"activations (threshold: {_kpi.LOW_PORT_IN_PCT:.0f}%)"),
+                'coaching_note': ('A low port-in share means few customers are bringing their number '
+                                  'across. Ports are the activations the carrier pays most for and '
+                                  'the ones that attach the most accessories, so this is a selling '
+                                  'conversation, not a churn one.'),
             })
 
     # ── 7. MISSING STORE PAYMENT (sales but no payment) ──────────

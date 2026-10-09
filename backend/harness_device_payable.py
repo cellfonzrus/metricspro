@@ -704,7 +704,7 @@ check("I6 the report BOOKS nothing and WRITES nothing — no insert, update, ups
 # an expense, which books in `build_inputs`. Rather than delete or weaken the assertion, it now
 # states the real claim and is STRICTER where it counts: every resolver and attribution function
 # must be byte-identical, and only the two functions sanctioned by that ruling may have changed.
-# EXTENDED 2026-10-09 (§62, owner directive "chase trhew street number matching"): the store
+# EXTENDED 2026-10-09 (§63, owner directive "chase trhew street number matching"): the store
 # resolution CHAIN moved out of coa.py into its one home (`account/store_identity.py`), so
 # `store_resolver` / `_squash_key` / `_lead_num_key` changed shape while answering the same
 # question. `harnesslib.COA_STORE_IDENTITY_SANCTION` carries that sanction and the measurement

@@ -1,4 +1,4 @@
-"""PROOF: a leading address token is not a store identity (index §62).
+"""PROOF: a leading address token is not a store identity (index §63).
 
 Owner directive 2026-10-09, verbatim: *"chase trhew street number matching"*.
 

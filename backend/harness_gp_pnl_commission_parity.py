@@ -269,7 +269,7 @@ def run():
                          ma_income=gp_income(msp.BASIS_RECEIVED),
                          resolve_store_canonical=first_token)
     rows_bad = {r["store"]: r for r in bad["store_rows"]}
-    # Since §62 (2026-10-09) the engine keys its SALES rows through the resolver it is handed too,
+    # Since §63 (2026-10-09) the engine keys its SALES rows through the resolver it is handed too,
     # so a token-shaped resolver names the store's own row after the token — the money is still
     # split off that row, which is the class this control arms. The shape of the wrongness moved;
     # the wrongness is identical, and E5 still proves nothing is destroyed.
