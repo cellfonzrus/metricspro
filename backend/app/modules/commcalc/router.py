@@ -11644,8 +11644,18 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
     if mk:
         asset_rows = [r for r in asset_rows
                       if _drr.month_key(r.get(cols["distributor_date"])) == mk]
+    # WHICH store keys two store records claim — read from the ONE identity home through coa's I/O
+    # twin (§64), never derived here. The pure layer withholds the "a different store was paid"
+    # verdict on those, because the two spellings may be one physical store. Measured live (house
+    # org, September 2026): 23 of 135 such devices, worth $6,164.95, touch one of the three.
+    try:
+        from app.modules.account import coa as _coa_amb
+        _amb = _coa_amb.ambiguous_store_keys(client, org_id, resolve_store)
+    except Exception as _ae:
+        print(f"WARN device-line reimbursement: store ambiguity unresolved ({_ae})")
+        _amb = set()
     res = _drr.device_lines(asset_rows, carrier_lines, cfg, resolve_store, coverage,
-                            configured=configured)
+                            configured=configured, ambiguous_stores=_amb)
     if store:
         want = (resolve_store(store) if resolve_store else store) or store
         res["rows"] = [r for r in res["rows"] if r["store"] == want]

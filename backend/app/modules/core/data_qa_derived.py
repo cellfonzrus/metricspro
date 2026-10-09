@@ -697,7 +697,7 @@ DERIVED = [
         'path_params': [],
         'bound': {},
         'also': [],
-        'hand': False,
+        'hand': True,
     },
     {
         'key': 'watchdog_inventory',

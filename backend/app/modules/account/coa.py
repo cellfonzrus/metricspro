@@ -907,6 +907,34 @@ def store_resolver(client, org_id):
     return _sid.build_store_resolver(mapping_rows, alias_rows)
 
 
+def ambiguous_store_keys(client, org_id, resolve=None):
+    """Return the set of canonical store keys that TWO `store_mapping` records claim.
+
+    I/O ONLY, the twin of `store_resolver` above: it reads the one config table and hands the rows to
+    the ONE identity home (`account.store_identity.store_identity_index` → `.ambiguous_identities`,
+    §64 / §13d), which decides what "ambiguous" means. No caller gets a different answer from a
+    second copy, and nothing here derives a store key.
+
+    A report dereferences this to WITHHOLD a verdict that only holds if the two spellings are two
+    different stores — e.g. "the carrier paid a different store for this device" (§65). Never raises:
+    an unreadable config degrades to the empty set, which withholds nothing (the report then states
+    what it measured, as it did before this existed)."""
+    try:
+        mapping_rows = _fetch_all(client, "store_mapping",
+                                  "store_code,store_address,salesforce_id,is_active",
+                                  {"org_id": org_id})
+    except Exception as e:
+        _warn("store identity ambiguity unresolved — no identity is treated as ambiguous", e)
+        return set()
+    try:
+        index = _sid.store_identity_index(mapping_rows, resolve)
+        return {str(e["store"]).strip() for e in _sid.ambiguous_identities(index)
+                if str(e.get("store") or "").strip()}
+    except Exception as e:
+        _warn("store identity ambiguity unresolved — no identity is treated as ambiguous", e)
+        return set()
+
+
 def _sales_classifier(client, org_id):
     """Device-vs-accessory classification for the P&L sales lines, resolved from the SAME per-tenant
     config the commission side uses — converging the classifiers instead of adding a divergent one

@@ -56,6 +56,7 @@ from app.modules.commcalc import imei_rebate_report as IRR
 
 MOD = "app/modules/commcalc/device_reimb_recon.py"
 ROUTER = "app/modules/commcalc/router.py"
+COA_MOD = "app/modules/account/coa.py"
 GRAPH = "app/modules/core/module_graph.py"
 INDEX = "../docs/SYSTEM_DATA_FLOW_INDEX.md"
 PAGE = "../frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
@@ -492,6 +493,74 @@ ok("J4. control: the same rows WITH a declaration are measured, so §D4's not-me
    "the missing declaration and not by there being nothing there",
    _B["configured"] is True and _r5["configured"] is False
    and _B["totals"]["by_status"][R.LINE_NOT_MEASURED] == 0)
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§K  AN AMBIGUOUS STORE IDENTITY WITHHOLDS THE TRANSFER VERDICT, IT DOES NOT GUESS")
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Measured live (house org, September 2026) BEFORE this guard existed: 135 devices worth $41,548.83
+# read as "the carrier paid a different store", and 23 of them, worth $6,164.95, had one of the three
+# addresses §13d reports as claimed by TWO store records on one side of the pair. Calling those a
+# transfer would move real cost between two records of ONE physical store. With the guard: 112
+# devices / $35,383.88 proven, 23 reported not measured, and store 652 untouched (15 / $5,004.98 —
+# none of its four counterpart stores is ambiguous).
+_AMB = "AN ADDRESS TWO STORE RECORDS CLAIM"
+_k_lines = [line(_AMB, "K-1", 525.00, "2026-09-10"), line(OTHER_A, "K-2", 450.00, "2026-09-11"),
+            line(OTHER_A, "K-3", 240.00, "2026-09-12")]
+_k_devs = [dev(HOME, "K-1", 525.00, "2026-09-15", cost=599.99),      # paid at the ambiguous address
+           dev(_AMB, "K-2", 450.00, "2026-09-15", cost=599.99),      # claimed BY the ambiguous one
+           dev(OTHER_B, "K-3", 240.00, "2026-09-15", cost=149.99)]   # neither side ambiguous
+_k_cl = R.carrier_line_side(_k_lines, CFG, lambda t: "REIMBURSEMENT" in str(t or "").upper())
+_k_blind = R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True)
+_k_seen = R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True,
+                         ambiguous_stores={_AMB})
+ok("K1. the ambiguous SET is injected, not derived — the signature takes it and the module states no "
+   "identity rule of its own",
+   "ambiguous_stores" in _fn_src(MOD, "device_lines").split(")")[0]
+   and "store_mapping" not in _code_only(_fn_src(MOD, "device_lines")))
+ok("K2. with the set injected, a device the carrier paid at an ambiguous address is NOT MEASURED — "
+   "never 'paid to another store'",
+   row_of(_k_seen, "K-1")["status"] == R.LINE_NOT_MEASURED
+   and row_of(_k_seen, "K-1")["reason"] == R.REASON_STORE_AMBIGUOUS)
+ok("K3. …and so is a device CLAIMED by the ambiguous address and paid elsewhere (both sides, not "
+   "just the paying one)",
+   row_of(_k_seen, "K-2")["status"] == R.LINE_NOT_MEASURED
+   and row_of(_k_seen, "K-2")["reason"] == R.REASON_STORE_AMBIGUOUS)
+ok("K4. the money is still ON the withheld row, named — only the VERDICT is withheld, so nothing is "
+   "hidden from the reader",
+   row_of(_k_seen, "K-1")["carrier_paid_other_total"] == 525.00
+   and [o["store"] for o in row_of(_k_seen, "K-1")["carrier_paid_other_stores"]] == [_AMB])
+ok("K5. a transfer with NEITHER side ambiguous is still proven — the guard withholds the three "
+   "addresses, not the finding",
+   row_of(_k_seen, "K-3")["status"] == R.LINE_PAID_OTHER_STORE)
+ok("K6. the withheld dollars are counted apart and never netted into 'not paid'",
+   _k_seen["totals"]["not_paid_total"] == 0.0
+   and _k_seen["totals"]["by_status"][R.LINE_NOT_MEASURED] == 2
+   and _k_seen["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 1)
+ok("K7. the reason carries a human sentence, and no table or column name reaches it",
+   isinstance(R.LINE_REASON_LABELS.get(R.REASON_STORE_AMBIGUOUS), str)
+   and row_of(_k_seen, "K-1")["reason_label"] == R.LINE_REASON_LABELS[R.REASON_STORE_AMBIGUOUS]
+   and not any(t in R.LINE_REASON_LABELS[R.REASON_STORE_AMBIGUOUS].lower()
+               for t in ("store_mapping", "asset_ledger", "raw_payment_detail", "column", "table")))
+ok("K8. the ambiguity fact is read from the ONE identity home through coa's I/O twin, and coa "
+   "derives nothing itself",
+   "ambiguous_identities" in _src(COA_MOD) and "store_identity_index" in _src(COA_MOD)
+   and "_sid.ambiguous_identities" in _fn_src(COA_MOD, "ambiguous_store_keys"))
+ok("K9. the router passes it in — the guard is wired, not merely available (the §19.18 failure mode)",
+   "ambiguous_store_keys" in _src(ROUTER)
+   and "ambiguous_stores=" in _src(ROUTER))
+# The control that arms §K: without the set the SAME rows DO accuse, so the withholding is the
+# guard's doing and not an absence of data.
+ok("K10. control: with no set injected the same two rows read 'paid to another store' — so §K2/§K3 "
+   "are the guard withholding and not a tautology",
+   row_of(_k_blind, "K-1")["status"] == R.LINE_PAID_OTHER_STORE
+   and row_of(_k_blind, "K-2")["status"] == R.LINE_PAID_OTHER_STORE
+   and _k_blind["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 3)
+ok("K11. control: an UNAMBIGUOUS set withholds nothing, so the guard cannot quietly swallow real "
+   "findings",
+   R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True,
+                  ambiguous_stores={"A STORE NOBODY WAS PAID AT"}
+                  )["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 3)
+
 # 5. The banned-name check really rejects something.
 ok("J5. control: the RULE TWO scan really does reject a carrier name, so §H1 is a test",
    "boost" in _code_only("x = 'boost'").lower())

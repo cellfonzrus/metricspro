@@ -22286,8 +22286,13 @@ neither side is ever derived from the other. Where it went: `559 Broadway` $3,90
 units), `4712 White Plains Rd` $432.49, `5135 Bergenline` $377.50, `117 E Burnside Ave` $294.99.
 Every one of the 15 is on **652's** ledger and no other store's.
 
-Estate-wide, the same month: **140 devices, $43,568.83** paid to a store other than the one carrying
-the cost, and **$0.00** genuinely unpaid. It is not one store's problem.
+Estate-wide, the same month: **112 devices, $35,383.88** paid to a store other than the one carrying
+the cost, and **$0.00** genuinely unpaid. It is not one store's problem. A further **23 devices worth
+$6,164.95** read as transfers until §65.4's third guard landed and are now reported **not measured**:
+one of the two addresses in each pair is claimed by two `store_mapping` records, so "a different
+store" cannot be told from "the same store spelled twice" (§65.4). The first measurement of this
+report said 140 / $43,568.83 — that figure counted those 23 as proven transfers and is superseded.
+None of 652's four counterpart stores is ambiguous, so its own $5,004.98 is unaffected.
 
 ### 65.2 The class, named — not "652's rebate is short"
 
@@ -22335,7 +22340,7 @@ payload says `configured: false` and **not one dollar is called unpaid**.
 **The store key is §64's.** Both sides resolve through `account/coa.store_resolver`; the device layer
 contains no split, fold, lower-casing or street-number step of its own, and the lock asserts that.
 
-### 65.4 The two guards, both direction-asymmetric
+### 65.4 The three guards, all direction-asymmetric
 
 - **"Paid to another store" is never "not paid."** Money that DID arrive, at a named store, can only
   be added to by days that have not arrived, so the transfer is PROVEN whatever the month's coverage
@@ -22346,6 +22351,18 @@ contains no split, fold, lower-casing or street-number step of its own, and the 
 - **Nothing paid anywhere, on a short month, is `not_measured`** with `carrier_coverage_incomplete`,
   carrying the missing days and what they were worth (`pay_data_quality.statement_month_coverage`,
   §19.54 — read, never re-derived). Unknown coverage is treated exactly like incomplete.
+- **An AMBIGUOUS store identity withholds the transfer verdict** — `store_identity_ambiguous`. Three
+  house addresses are claimed by TWO `store_mapping` records each (§13d / §64: `1 S 60th street`,
+  `1598 Mount Ephraim Ave`, `1800 Great Neck Rd`), so where one of them is on either side of a pair,
+  "the carrier paid a DIFFERENT store" and "the same store under its second spelling" are
+  indistinguishable — and a transfer called on that evidence would move real cost between two records
+  of one physical store. Measured live: 23 of the 135 devices, **$6,164.95**. The money stays on the
+  row and the other store is still named; only the VERDICT is withheld, and the withheld dollars are
+  counted apart from `not_paid`, never netted into it. The ambiguous SET is **injected** from the one
+  identity home through `account/coa.ambiguous_store_keys` (an I/O twin of `store_resolver`, reading
+  `store_identity.store_identity_index` → `.ambiguous_identities`); this module states no identity
+  rule of its own, and §K10 is the control that the withholding is the guard's doing — with no set
+  injected the same rows DO read as transfers.
 
 ### 65.5 The lag window is SYMMETRIC, and that is measured
 
@@ -22398,7 +22415,7 @@ where. A line with no rep reports **no** rep and is never filled from the store'
   reddens D2.
 - Module-graph fact `device_reimbursement_paid_vs_claimed` (§50) now carries §19.53 **and** §65 and
   both locks.
-- Lock `backend/harness_device_line_reimbursement.py` (**74 checks**), wired into
+- Lock `backend/harness_device_line_reimbursement.py` (**85 checks**), wired into
   `carrier-vocab-guard.yml`: the owner's own figures as fixtures, the transferred-vs-unpaid guard, the
   coverage guard, the symmetric-window regression, the absence-is-never-a-zero set, RULE TWO and
   purity, the un-wiring locks, and five controls that MUTATE each guard and show it is what produces

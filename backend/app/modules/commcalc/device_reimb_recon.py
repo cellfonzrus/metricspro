@@ -792,9 +792,25 @@ LINE_STATUS_LABELS = {
     LINE_NOT_MEASURED: "Not measured. The reason says what is missing.",
 }
 
+
 #: The device-level absence the per-line feed can have of its own: the device carries no identifier
 #: on the distributor's row, so there is nothing to look it up by. Reported, never guessed.
 REASON_DEVICE_UNIDENTIFIED = "device_not_identified_on_claim"
+#: Two store records claim one of the two addresses, so "a DIFFERENT store was paid" cannot be told
+#: from "the same store spelled twice". Measured live (house org, September 2026): 23 of the 135
+#: devices the carrier paid elsewhere, worth $6,164.95, touch one of the three addresses §13d reports
+#: as claimed by two codes — and calling those a transfer would move cost between two records of one
+#: physical store. The ambiguous SET is injected from the one home (`account/store_identity
+#: .store_identity_index` → `.ambiguous_identities`, §64) so this module states no identity rule.
+REASON_STORE_AMBIGUOUS = "store_identity_ambiguous"
+#: What a human reads for the two device-level absences, in the same voice as REASON_LABELS.
+LINE_REASON_LABELS = {
+    REASON_DEVICE_UNIDENTIFIED: ("The distributor's claim carries no device identifier, so there is "
+                                 "nothing to look this device up by on the carrier's feed."),
+    REASON_STORE_AMBIGUOUS: ("Two store records claim one of these two addresses, so whether the "
+                             "carrier paid a DIFFERENT store or the same store under its second "
+                             "spelling cannot be told. Reported rather than called a transfer."),
+}
 
 
 def carrier_line_side(rows, cfg, is_device_dollar, resolve_store=None):
@@ -851,7 +867,7 @@ def carrier_line_side(rows, cfg, is_device_dollar, resolve_store=None):
 
 
 def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=None,
-                 configured=True):
+                 configured=True, ambiguous_stores=None):
     """PURE. One row per DEVICE the distributor ledger claims a reimbursement for.
 
     Each row carries, side by side and never netted:
@@ -872,12 +888,19 @@ def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=No
 
     `configured` is False when the org has declared no device-financing routing at all; then every
     row is NOT_MEASURED with `no_device_financing_rule_configured` and no dollar is called unpaid.
+
+    `ambiguous_stores` is the set of canonical store keys that TWO `store_mapping` records claim,
+    read from the ONE identity home (§64, `account/store_identity.ambiguous_identities`) and never
+    derived here. A device the carrier paid at another store is NOT_MEASURED when either side is one
+    of those keys: the two keys may be one physical store spelled twice, and a transfer called on
+    that evidence would move real cost between two records of the same store.
     """
     cols = cfg["columns"]
     claims = distributor_claim_matcher(cfg)
     rs = resolve_store or (lambda v: _s(v) or None)
     devices = (carrier_lines or {}).get("devices") or {}
     rows, unplaced = [], {"rows": 0, "amount": 0.0}
+    amb = {str(k).strip() for k in (ambiguous_stores or ()) if str(k).strip()}
     for r in asset_rows or ():
         if not claims(r):
             continue
@@ -915,6 +938,12 @@ def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=No
             status, reason = LINE_NOT_MEASURED, REASON_DEVICE_UNIDENTIFIED
         elif here:
             status, reason = LINE_PAID, None
+        elif other_total and (st in amb or any(o["store"] in amb for o in other)):
+            # One of the two addresses is claimed by TWO store records (§13d / §64), so "a different
+            # store was paid" and "the same store under its second spelling" are indistinguishable.
+            # The money stays on the row, named; only the VERDICT is withheld. A transfer called here
+            # would move real cost between two records of one physical store.
+            status, reason = LINE_NOT_MEASURED, REASON_STORE_AMBIGUOUS
         elif other_total:
             # PROVEN whatever the month's coverage is: money that DID arrive, at a named store, can
             # only be added to by the days that did not. This is the one finding a short month
@@ -959,7 +988,7 @@ def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=No
             "status": status,
             "status_label": LINE_STATUS_LABELS[status],
             "reason": reason,
-            "reason_label": REASON_LABELS.get(reason) if reason else None,
+            "reason_label": (LINE_REASON_LABELS.get(reason) or REASON_LABELS.get(reason)) if reason else None,
             # The evidence behind a withheld "never paid": WHICH days of this month's feed never
             # arrived, and what they were worth. Carried only on the row the coverage rule decided,
             # so no other row invites a reader to discount it.
