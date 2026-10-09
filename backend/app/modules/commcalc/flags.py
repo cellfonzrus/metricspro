@@ -29,13 +29,20 @@ from app.modules.commcalc import flag_registry as _reg
 # ($7,123.39 taken back, measured live 2026-10-06). The test now dereferences the shared one, which
 # recognises a clawback by the DIRECTION the processor moved the money. See clawback.py for the class.
 from app.modules.commcalc import clawback as _clawback
+from app.modules.account import store_identity as _sid   # §64 — THE store-identity home (pure)
 
 def safe_float(v) -> float:
     try: return float(v or 0)
     except: return 0.0
 
-def street_num(addr: str) -> str:
-    return str(addr or '').strip().split(' ')[0]
+# `street_num()` USED TO LIVE HERE (and must not come back — harness_store_identity_lock.py fails
+# the build if it does). Flags 7 and 8 — "has sales but no carrier payment" / "paid but no sales" —
+# compared the FIRST TOKEN of the POS store string against the first token of the carrier's address.
+# Where the two feeds spell one store differently (live: the roster's "11636 Springfield Blvd"
+# against the carrier's "116-36 Springfield Blvd …") that store appeared in BOTH sets and raised BOTH
+# flags, every month, against a store that was selling and being paid normally. A flag that fires on
+# a spelling is noise that teaches managers to ignore flags. Identity now comes from the one home
+# (§64, `account.store_identity` via `coa.store_resolver`), injected by the caller.
 
 def _days_since(date_str):
     """Whole days from an activation/acquired date string to today (None if unparseable)."""
@@ -60,9 +67,13 @@ def calc_flags(
     period_month: int,
     period_year: int,
     asset_by_imei: dict | None = None,
+    resolve_store_canonical=None,
 ) -> list[dict]:
     """Returns list of flag dicts ready to insert into commcalc.flags. asset_by_imei maps an IMEI
-    (upper, no '.0') → its asset_ledger row, used to show a chargeback's REBATE LOST + device + age."""
+    (upper, no '.0') → its asset_ledger row, used to show a chargeback's REBATE LOST + device + age.
+    resolve_store_canonical: the ONE store-identity resolver (`coa.store_resolver`, §64), used to key
+    the sales side and the payment side of flags 7/8 on the same identity. None = each raw spelling
+    keys on itself, which can only make those two flags MORE conservative, never invent one."""
 
     flags = []
     asset_by_imei = asset_by_imei or {}
@@ -278,11 +289,14 @@ def calc_flags(
             })
 
     # ── 7. MISSING STORE PAYMENT (sales but no payment) ──────────
-    stores_with_sales: set[str] = set(street_num(r.get('store', '')) for r in valid_sales if r.get('store'))
-    stores_with_payment: set[str] = set(street_num(r.get('business_address', '')) for r in pay_detail if r.get('business_address'))
+    def _skey(raw):
+        return _sid.store_key(resolve_store_canonical, raw)
+
+    stores_with_sales: set[str] = set(_skey(r.get('store', '')) for r in valid_sales if r.get('store'))
+    stores_with_payment: set[str] = set(_skey(r.get('business_address', '')) for r in pay_detail if r.get('business_address'))
     for num in stores_with_sales - stores_with_payment:
         if num:
-            store_addr = next((r.get('store','') for r in valid_sales if street_num(r.get('store','')) == num), '')
+            store_addr = next((r.get('store','') for r in valid_sales if _skey(r.get('store','')) == num), '')
             flags.append({**base,
                 'flag_type': 'MISSING_STORE_PAYMENT', 'source': 'payment_detail',
                 'severity': 'MEDIUM',
@@ -294,7 +308,7 @@ def calc_flags(
     # ── 8. MISSING STORE SALES (payment but no sales) ─────────────
     for num in stores_with_payment - stores_with_sales:
         if num:
-            store_addr = next((r.get('business_address','') for r in pay_detail if street_num(r.get('business_address','')) == num), '')
+            store_addr = next((r.get('business_address','') for r in pay_detail if _skey(r.get('business_address','')) == num), '')
             flags.append({**base,
                 'flag_type': 'MISSING_STORE_SALES', 'source': 'sales',
                 'severity': 'LOW',

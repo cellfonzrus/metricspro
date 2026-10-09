@@ -639,6 +639,13 @@ on:
       # §13e lesson as the three above).
       - "backend/harness_dm_visit_plan.py"
       - "database/migrations/1050_dm_visit_quota_and_assignment.sql"
+      # index §64 — the store-identity lock + proof sit at the backend ROOT, outside the
+      # backend/app glob they guard, and the lock also reads the migrations that define the
+      # commission-leg rollup. A change to any of them must run them.
+      - "backend/harness_store_identity_lock.py"
+      - "backend/harness_gp_store_identity.py"
+      - "backend/app/modules/account/store_identity.py"
+      - "database/migrations/1066_commission_leg_rollup_store_address.sql"
   push:
     branches: [main]
     paths:
@@ -758,6 +765,18 @@ jobs:
       - name: Run the residual store-grain proof (one door→store home; consolidated total unmoved; the $0-per-store regression)
         working-directory: backend
         run: python3 harness_mi_residual_store_grain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §64 — STORE IDENTITY. The engine used to join every money source to a store on the
+      # FIRST TOKEN of the address, which dropped a store's whole carrier income whenever the
+      # carrier and the roster spelled the number differently, and picked last-wins where two store
+      # rows shared a token. The lock fails the build if a caller stops dereferencing the one home,
+      # if a new leading-token site appears, if the GP resolver is gated again, or if a migration
+      # teaches SQL to decide identity. The proof carries both live regressions as fixtures.
+      - name: Run the store-identity lock (a leading address token is not a store identity; one home, every money path on it; no second chain; SQL decides nothing — index §64)
+        working-directory: backend
+        run: python3 harness_store_identity_lock.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the store-identity proof (both live regressions as fixtures; the door survives a two-code store; unplaceable money is stated, never dropped — index §64)
+        working-directory: backend
+        run: python3 harness_gp_store_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the any-subset-columns lock (no column-block ladder anywhere; one reading rule; every named reader on it; credential rows projected)
         working-directory: backend
         run: python3 harness_any_columns_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

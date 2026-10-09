@@ -25,6 +25,13 @@ from app.modules.commcalc import payment_category as _pc
 # the calculator stays dependency-free. The DECISION lives there, not here: this file only asks it
 # which rows stop booking, so the P&L (account/coa) and this report can never suppress differently.
 from app.modules.commcalc import labour_coverage as _lcov
+# THE one home for "which store is this string?" (§64, owner directive 2026-10-09 "chase trhew
+# street number matching"). PURE and import-free, so this file stays the DB-free calculator it has
+# always been: the resolver's I/O happens in the caller (`router._compute_gp` -> `coa.store_resolver`)
+# and arrives as `resolve_store_canonical`. This engine states NO store-matching rule of its own —
+# it used to hold a private `street_num()` leading-token join, which dropped every carrier dollar
+# whose leading token no store row happened to lead with.
+from app.modules.account import store_identity as _sid
 
 DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 ONDIGO_DEPT = 'Ondigo'
@@ -173,9 +180,20 @@ def countable_sale_skip_reason(row) -> str:
         return 'unattributed'
     return ''
 
-def street_num(addr: str) -> str:
-    """Extract street number from address for matching."""
-    return str(addr or '').strip().split(' ')[0]
+# `street_num()` USED TO LIVE HERE and must never come back (locked by
+# harness_store_identity_lock.py). It returned the first space-separated token of an address and
+# every money source in this engine was joined to a store on it. Measured live on 2026-10-09 (house
+# org, Jul-Oct 2026): the carrier writes "116-36 Springfield Blvd …" where the roster writes "11636
+# Springfield Blvd", so that store's ENTIRE carrier income was bucketed under a token no store row
+# leads with and silently dropped from the report's totals; a relocated store's feed spelling ("2778
+# …", roster "1598 …") was lost the same way the month the POS feed stopped using the old spelling.
+# Identity now comes from `_sid.store_key(resolve, raw)` — one home, dereferenced, ambiguity refused.
+
+# The sentence an unplaced row carries. ONE spelling of the reason, read by the row and the report
+# block, so the page and the API can never word it differently.
+_UNPLACED_WHY = ('no store matched this spelling — the org has no store address, alias or code that '
+                 'resolves it, and an ambiguous street number is never guessed onto a store. Add it '
+                 'on the Store-Matching screen (one alias row) and this money joins its store.')
 
 def _leg_ladder_add(ladder, prefix, leg_month, amt):
     """Tally one dollar amount into the month-of-life LADDER (M1, M2, M3 … / 'unknown') for a source.
@@ -414,14 +432,20 @@ def calc_gp_report(
             _leg_ladder_add(mi_by_sfid[sfid]['mi_ladder'], 'l', _leg, _mi)
             _leg_ladder_add(mi_by_sfid[sfid]['atu_ladder'], 'l', _leg, _atu)
 
-    # ── Store mapping: street_num → {sfid, market, code} ─────────
-    store_by_num: dict[str, dict] = {}
-    for s in store_mapping:
-        num = street_num(s.get('store_address', ''))
-        if num:
-            store_by_num[num] = s
+    # ── THE store identity: CANONICAL store address → {sfid, market, code} ───────────────────────
+    # One physical store, one key, from the one home (`_sid.store_identity_index` over the injected
+    # resolver). This replaced a `{leading token: row}` map that (a) could not match "116-36" to
+    # "11636" and (b) was LAST-WINS where two store_mapping rows claim one key — live, three house
+    # addresses are claimed twice and in each pair one row's `salesforce_id` is NULL, so a coin-flip
+    # decided whether that store's residual (which joins on that door) could be found at all. The
+    # index folds first-NON-EMPTY with the carrier-known row first, and REPORTS the collision.
+    def _skey(raw):
+        """This row's store identity. Never a token of the address."""
+        return _sid.store_key(resolve_store_canonical, raw)
 
-    # ── Payment detail bucketed by store street_num ───────────────
+    store_identity = _sid.store_identity_index(store_mapping, resolve_store_canonical)
+
+    # ── Payment detail bucketed by STORE IDENTITY (§64) ───────────
     # WHICH COLUMN A DOLLAR LANDS IN IS NOT DECIDED HERE (owner report 2026-10-08). It used to be,
     # with four exact string compares — `cat == 'Commission'`, `== 'Re-imbursement'`, `== 'MDF'`,
     # `== 'Chargeback'` — which hard-coded the house org's own spellings and folded the lookup key
@@ -432,7 +456,7 @@ def calc_gp_report(
     pay_by_num: dict[str, dict] = {}
     _pay_col_seen: dict[str, str] = {}
     for r in pay_detail:
-        num = street_num(r.get('business_address', ''))
+        num = _skey(r.get('business_address', ''))
         if not num: continue
         if num not in pay_by_num:
             pay_by_num[num] = {k: 0 for k in _cdc.GP_COLUMNS}
@@ -457,7 +481,7 @@ def calc_gp_report(
             pay_by_num[num]['comm_legs'][_b] += amt
             _leg_ladder_add(pay_by_num[num]['comm_ladder'], 'l', _leg, amt)
 
-    # ── Comp report bucketed by store street_num ──────────────────
+    # ── Comp report bucketed by STORE IDENTITY (§64) ──────────────
     # THE DEFECT THE OWNER REPORTED, AND WHERE IT LIVED (2026-10-08: *"gross profit is still showing
     # the old data m teh source of information should be the same"*). This block used to guess the
     # classification from keywords in the compensation type — `'reimbursement' in ct or 'rebate' in
@@ -474,7 +498,7 @@ def calc_gp_report(
     comp_by_num: dict[str, dict] = {}
     _comp_seen: dict[str, dict] = {}
     for r in (comp_rows or []):
-        num = street_num(r.get('business_address', ''))
+        num = _skey(r.get('business_address', ''))
         if not num: continue
         if num not in comp_by_num:
             comp_by_num[num] = {k: 0 for k in _cdc.GP_COLUMNS}
@@ -497,7 +521,7 @@ def calc_gp_report(
     rep_pay_by_store: dict[str, float] = {}
     for r in rep_commissions:
         store = str(r.get('store') or '').strip()
-        num = street_num(store)
+        num = _skey(store)
         if num:
             rep_pay_by_store[num] = rep_pay_by_store.get(num, 0) + safe_float(r.get('total_payout'))
 
@@ -511,27 +535,22 @@ def calc_gp_report(
     # ── Sales grouped by store ────────────────────────────────────
     by_store: dict[str, list] = {}
     for r in sales:
-        store = str(r.get('store') or '').strip()
+        # The POS spelling is canonicalized here too, so a store the POS spells one way and the
+        # carrier another is ONE row instead of two half-rows (live: "2778 Ephraim Ave" / "1598
+        # Mount Ephraim Ave", "11636 Springfield Blvd" / "116-36 Springfield Blvd …").
+        store = _skey(r.get('store'))
         if not store: continue
         if store not in by_store:
             by_store[store] = []
         by_store[store].append(r)
 
     # ── Include ALL mapped stores even with no sales ─────────────
-    for s in store_mapping:
-        # NULL-SAFE (owner-approved 2026-08-06). `store_mapping.is_active` is a NULLABLE column:
-        # `.get('is_active', True)` returns the default ONLY when the KEY is ABSENT, so a row whose
-        # column exists but is NULL evaluated falsy and the store was WRONGLY dropped from the GP
-        # report. Same predicate as commcalc's `_store_active` and storeops' `_inactive_ids_from`:
-        # only an EXPLICIT false is inactive. **No-op against today's live data** — store_mapping
-        # is_active is true on 31/31 house rows and 39/39 luxelink rows, so every GP number is
-        # byte-identical; this closes the latent trap, it does not move money.
-        if s.get('is_active') is False: continue
-        addr = str(s.get('store_address') or '').strip()
-        if not addr: continue
-        num = street_num(addr)
-        if num and not any(street_num(k) == num for k in by_store.keys()):
-            by_store[addr] = []
+    # Keyed by the SAME identity as every money bucket, so a store with no POS rows still gets its
+    # row and a store the POS spells differently does not get a SECOND one. The NULL-safe
+    # `is_active` predicate (owner-approved 2026-08-06: only an EXPLICIT false is inactive, the same
+    # rule as commcalc's `_store_active`) lives in `_sid.store_identity_index`.
+    for _addr in store_identity:
+        by_store.setdefault(_addr, [])
 
     # ── Expense-key per store (ONE derivation, used twice) ────────────────────────────────────────
     # `exp_code` is the key the tenant's store_expenses are filed under: the store_mapping join's
@@ -539,12 +558,34 @@ def calc_gp_report(
     # It was derived inline in the row loop below; the commission-suppression pairing needs the SAME
     # key BEFORE the loop (to pair each store's commission expense with its rep pay), so it is
     # derived once here and read in both places rather than computed twice and allowed to drift.
+    #
+    # ONE PHYSICAL STORE COLLECTS EVERY CODE'S EXPENSES, EXACTLY ONCE (§64, measured 2026-10-09).
+    # Folding two store_mapping codes onto one identity made the single-code lookup below LOSE the
+    # expenses filed under the code the fold did not pick — the same defect this PR fixes on the
+    # revenue side, showing up in the expense column: live house org, `1 S 60th street` is claimed
+    # by `B-1` (no expenses) and `B-60TH` ($4,500 July, $12,285.35 August and September), and
+    # `1598 Mount Ephraim Ave` by `B-1598` (none) and `B-2778` (the same amounts). A single-winner
+    # pick zeroed both stores' expenses. `store_identity_index` already carries EVERY claiming code
+    # in `codes`, so the sum is over that set — and because the index assigns each code to exactly
+    # one canonical address, the code sets are disjoint and nothing can be counted twice. The token
+    # join this replaced had the opposite failure: it also raised a SECOND row for the POS spelling,
+    # which re-booked one of those codes, so August's $12,285.35 was booked three times.
+    exp_codes_by_store = {}
     exp_code_by_store = {}
     for store in by_store:
-        _sm = store_by_num.get(street_num(store), {})
-        exp_code_by_store[store] = (
-            str(_sm.get('store_code') or '').strip()
-            or (str(resolve_store_code(store) or '').strip() if resolve_store_code else ''))
+        _sm = store_identity.get(store, {})
+        _codes = [str(c or '').strip() for c in (_sm.get('codes') or [])]
+        _primary = str(_sm.get('store_code') or '').strip()
+        if _primary:
+            _codes.insert(0, _primary)
+        if not any(_codes) and resolve_store_code:
+            # A tenant with no commcalc.store_mapping: the universal resolver is the only key.
+            _codes = [str(resolve_store_code(store) or '').strip()]
+        exp_codes_by_store[store] = tuple(c for c in dict.fromkeys(_codes) if c)
+        # The PRIMARY key, unchanged, and still the only one the commission-suppression pairing
+        # below uses: widening that pairing would change WHICH commission expense stops booking,
+        # i.e. computed money, which is the owner's call and not this PR's subject.
+        exp_code_by_store[store] = (exp_codes_by_store[store] or ('',))[0]
 
     # ── Commission double-book suppression (owner decision 2026-09-08) ────────────────────────────
     # `rep_pay` (commcalc.rep_commissions) is the authoritative route and is NOT touched. A
@@ -556,7 +597,7 @@ def calc_gp_report(
     for store, _ec in exp_code_by_store.items():
         if _ec:
             _supp_rep_by_key[_ec] = round(
-                _supp_rep_by_key.get(_ec, 0.0) + rep_pay_by_store.get(street_num(store), 0), 2)
+                _supp_rep_by_key.get(_ec, 0.0) + rep_pay_by_store.get(store, 0), 2)
     commission_suppressed = _lcov.suppression_plan(
         expenses, _supp_rep_by_key, commission_suppression_names)
     _supp_by_key = {s['store_code']: s['expense']
@@ -588,8 +629,8 @@ def calc_gp_report(
     # ── Build store rows ──────────────────────────────────────────
     store_rows = []
     for store, rows in by_store.items():
-        num = street_num(store)
-        sm = store_by_num.get(num, {})
+        num = store                      # the identity IS the key — no token derivation here
+        sm = store_identity.get(store, {})
         sfid = str(sm.get('salesforce_id') or '').strip()
         market = str(sm.get('market') or '').strip()
         store_code = str(sm.get('store_code') or '').strip()
@@ -678,10 +719,12 @@ def calc_gp_report(
         # string to the storeops store_code so the tenant's configured expenses attach. This changes ONLY
         # exp_total for rows that had no store_code; the row's displayed store_code/market are untouched.
         exp_code   = exp_code_by_store.get(store, '')
+        exp_codes  = exp_codes_by_store.get(store) or ((exp_code,) if exp_code else ())
         # Commission booked on BOTH routes: the expense-side copy stops booking (owner 2026-09-08).
         # Subtracted rather than filtered out of `exp_by_code` so the amount removed stays visible
         # per store in `labour_commission_suppressed` — never rendered as a measured $0.00.
-        exp_total  = exp_by_code.get(exp_code, 0) - _supp_by_key.get(exp_code, 0.0)
+        exp_total  = (sum(exp_by_code.get(_c, 0) for _c in exp_codes)
+                      - _supp_by_key.get(exp_code, 0.0))
         net_phone_cost = phone_sales + reimb  # cash from customer + Boost reimbursement
 
         net_profit     = total_rev - rep_pay - exp_total - net_phone_cost
@@ -709,6 +752,59 @@ def calc_gp_report(
             'exp_total': exp_total, 'net_phone_cost': net_phone_cost,
             'net_profit': net_profit, 'net_excl_mdf': net_excl_mdf,
         })
+
+    # ── MONEY NO STORE CLAIMED — stated, never dropped (owner directive 2026-10-09) ──────────────
+    # The leading-token join this engine used to run DISCARDED every bucket whose token no store row
+    # led with: the money left the report's totals with nothing said, which is why this report sat
+    # below the P&L. The identity chain above refuses to guess (an ambiguous street number resolves
+    # to NOTHING), so anything it cannot place must appear — as its own row, under the spelling the
+    # feed actually sent, with the reason. A row here is a FINDING for the Store-Matching screen (an
+    # alias is one config row), never a defect to be papered over.
+    unplaced = []
+    for _key in sorted(set(pay_by_num) | set(comp_by_num) | set(rep_pay_by_store)):
+        if _key in by_store:
+            continue
+        _p = pay_by_num.get(_key, {})
+        _c = comp_by_num.get(_key, {})
+        _rp = round(safe_float(rep_pay_by_store.get(_key, 0)), 2)
+        # The two carrier views stay in their OWN columns here exactly as they do on a store row —
+        # the ePay/payment-detail money in the money columns (which `total_rev` is made of) and the
+        # comp report's in the `comp_*` companions (which it is not). Folding them together would
+        # make an unplaced row's revenue mean something no other row means.
+        _pm = {k: round(safe_float(_p.get(k)), 2) for k in _cdc.GP_COLUMNS}
+        _cm = {k: round(safe_float(_c.get(k)), 2) for k in _cdc.GP_COLUMNS}
+        if not any(_pm.values()) and not any(_cm.values()) and not _rp:
+            continue
+        _rev = round(sum(_pm.values()), 2)
+        unplaced.append({'store': _key, 'rep_pay': _rp, 'why': _UNPLACED_WHY,
+                         'total_rev': _rev,
+                         'comp_total': round(sum(_cm.values()), 2), **_pm})
+        store_rows.append({
+            'store': _key, 'store_code': '', 'market': '',
+            'acc_gp': 0.0, 'setup_gp': 0.0, 'phone_sales': 0.0, 'plan_gp': 0.0, 'other_gp': 0.0,
+            'comm': _pm.get('comm', 0.0), 'reimb': _pm.get('reimb', 0.0),
+            'mdf': _pm.get('mdf', 0.0), 'chargeback': _pm.get('chb', 0.0),
+            'unmapped': _pm.get('unmapped', 0.0),
+            'comp_comm': _cm.get('comm', 0.0), 'comp_reimb': _cm.get('reimb', 0.0),
+            'comp_mdf': _cm.get('mdf', 0.0), 'comp_chb': _cm.get('chb', 0.0),
+            'comp_unmapped': _cm.get('unmapped', 0.0),
+            'mi': 0.0, 'atu': 0.0,
+            'comm_ladder': {k: round(safe_float(v), 2)
+                            for k, v in ((_p.get('comm_ladder') or {}).get('l') or {}).items()},
+            **_legs.to_public('comm', (_p.get('comm_legs') or _legs.empty_split())),
+            **_legs.to_public('comp_comm', (_c.get('comm_legs') or _legs.empty_split())),
+            **_legs.to_public('mi', _legs.empty_split()),
+            **_legs.to_public('atu', _legs.empty_split()),
+            'total_rev': _rev, 'rep_pay': _rp, 'exp_total': 0.0,
+            'net_phone_cost': 0.0,
+            'net_profit': round(_rev - _rp, 2),
+            'net_excl_mdf': round(_rev - _rp - _pm.get('mdf', 0.0), 2),
+            'store_unplaced': True, 'store_unplaced_why': _UNPLACED_WHY,
+        })
+        # The leg ladder must track the money that actually lands in a column, so an unplaced row's
+        # commission rungs are merged here exactly as a store row's are.
+        _leg_ladder_merge(leg_ladder, 'comm', (_p.get('comm_ladder') or {}).get('l'))
+        _leg_ladder_merge(leg_ladder, 'comp_comm', (_c.get('comm_ladder') or {}).get('l'))
 
     # ── VidaPay/MA carrier income — what the account→store index could NOT place ─────────────────
     # Owner bug report 2026-09-21: "the gross profit shows company level commission it shoudl show
@@ -1005,6 +1101,25 @@ def calc_gp_report(
                   'Unsplit = money whose source states no month-of-life (map it on Commission Legs).'),
     }
 
+    # ── STORE IDENTITY, as evidence (owner directive 2026-10-09) ─────────────────────────────────
+    # What the one home resolved, what it could not, and where one physical store is still spelled
+    # by two codes — so this report never presents a placement it cannot account for.
+    store_identity_report = {
+        'resolver': ('account.store_identity.build_store_resolver via account.coa.store_resolver — '
+                     'exact address, exact alias, the raw string as a store_code, squashed address, '
+                     'squashed alias, then an UNAMBIGUOUS leading street number of an address or an '
+                     'alias; an ambiguous number resolves to nothing'),
+        'resolver_present': resolve_store_canonical is not None,
+        'stores_resolved': len(store_identity),
+        'unplaced': unplaced,
+        # What the report would have DROPPED before this fix, split by the two carrier views so
+        # the figure can be reconciled against each feed on its own.
+        'unplaced_total': round(sum(safe_float(u.get('total_rev')) for u in unplaced), 2),
+        'unplaced_comp_total': round(sum(safe_float(u.get('comp_total')) for u in unplaced), 2),
+        'unplaced_rep_pay': round(sum(safe_float(u.get('rep_pay')) for u in unplaced), 2),
+        'ambiguous_identities': _sid.ambiguous_identities(store_identity),
+    }
+
     return {'store_rows': store_rows, 'rep_rows': rep_rows, 'totals': totals, 'period': period,
             # Which basis the accessory column carries + its display label — config-driven (mig 932),
             # so no surface hardcodes 'Acc GP' vs 'Acc Sales'.
@@ -1014,6 +1129,7 @@ def calc_gp_report(
             # rep_commissions had nothing to replace it with. Inert ({'active': False}) for every
             # org that has configured no commission expense name.
             'labour_commission_suppressed': commission_suppressed,
+            'store_identity': store_identity_report,
             'commission_legs': commission_legs_block,
             # EVIDENCE FOR THE CARRIER COLUMNS (owner report 2026-10-08). The SAME coverage report
             # the P&L carries, from the SAME pure function on the SAME rows — by component, by

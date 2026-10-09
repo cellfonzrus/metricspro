@@ -371,31 +371,55 @@ rowA = next(x for x in r["store_rows"] if x["store"] == STORE_A)
 rowB = next(x for x in r["store_rows"] if x["store"] == STORE_B)
 
 # ── ② pre-existing money columns, hand-computed ──
-check("[unchanged] Commission = 100 + 60 + 25 − 10 + 45 (ghost store excluded)", eq2(T["comm"], 220.0), T["comm"])
+# THE GHOST STORE IS NO LONGER EXCLUDED (§64, owner directive 2026-10-09 "chase trhew street
+# number matching"). Until then a carrier payment for a store the report could not place was
+# DISCARDED from the column and the ladder with nothing said — which is exactly how the house org
+# lost $17,287.01 a month of one store's commission to a street-number spelling. It now rides on an
+# explicit `store_unplaced` row carrying its reason, so the column equals the FEED and the report
+# can be reconciled against it. Hand-computed: the four placed legs (100 + 60 + 25 − 10 + 45 = 220)
+# PLUS the ghost's 500.
+check("Commission = 220 placed + 500 the report cannot place, and SAYS it cannot",
+      eq2(T["comm"], 720.0), T["comm"])
+ghost_row = next((x for x in r["store_rows"] if x.get("store_unplaced")), None)
+check("the ghost payment is on a row of its own, under the spelling the feed sent",
+      bool(ghost_row) and ghost_row["store"] == GHOST and eq2(ghost_row["comm"], 500.0),
+      ghost_row)
+check("…and that row carries the reason, so the cure is one alias row and not a code change",
+      bool(ghost_row) and "Store-Matching" in str(ghost_row.get("store_unplaced_why")))
+check("…and the payload's evidence block names it with the money",
+      [u["store"] for u in r["store_identity"]["unplaced"]] == [GHOST]
+      and eq2(r["store_identity"]["unplaced_total"], 500.0), r["store_identity"])
+check("the placed stores' own rows are untouched by it (A: 100 + 25 + 60 − 10, B: 45)",
+      eq2(rowA["comm"], 175.0) and eq2(rowB["comm"], 45.0), (rowA["comm"], rowB["comm"]))
 check("[unchanged] Re-imb = 12", eq2(T["reimb"], 12.0), T["reimb"])
 check("[unchanged] MDF = 7", eq2(T["mdf"], 7.0), T["mdf"])
 check("[unchanged] Chargebacks = −3", eq2(T["chargeback"], -3.0), T["chargeback"])
 check("[unchanged] Comp Comm = 70 + 30 (the SIM reimbursement is comp REIMB)", eq2(T["comp_comm"], 100.0), T["comp_comm"])
 check("[unchanged] Comp Rebate = 9", eq2(T["comp_reimb"], 9.0), T["comp_reimb"])
 check("[unchanged] Comp MDF = 4", eq2(T["comp_mdf"], 4.0), T["comp_mdf"])
-check("[unchanged] MI = 20 + 15 + 11 (ghost sfid excluded)", eq2(T["mi"], 46.0), T["mi"])
+# A residual row whose salesforce_id no store carries is STILL excluded, and that is deliberate:
+# the door→store question has its own home (§7b, `residual_subs.salesforce_store_map`, ambiguity
+# refused) and is not this fix's subject. Live house org Jul-Oct 2026 it costs nothing — every
+# salesforce_id in raw_mi maps to a store row. Named here so nobody reads it as an oversight.
+check("MI = 20 + 15 + 11 (a residual for an unknown salesforce_id is the §7b door question)",
+      eq2(T["mi"], 46.0), T["mi"])
 check("[unchanged] ATU = 6 + 4 + 2", eq2(T["atu"], 12.0), T["atu"])
 check("[unchanged] Acc GP = 30", eq2(T["acc_gp"], 30.0), T["acc_gp"])
 check("[unchanged] Phone Sales = 800", eq2(T["phone_sales"], 800.0), T["phone_sales"])
-check("[unchanged] Total Rev is the same sum it always was",
-      eq2(T["total_rev"], 30 + 0 + 800 + 40 + 0 + 220 + 12 + 7 - 3 + 1 + 46 + 12), T["total_rev"])
+check("Total Rev is the same sum it always was, plus the 500 that used to vanish",
+      eq2(T["total_rev"], 30 + 0 + 800 + 40 + 0 + 720 + 12 + 7 - 3 + 1 + 46 + 12), T["total_rev"])
 check("[unchanged] Net Profit unchanged by the split",
       eq2(T["net_profit"], T["total_rev"] - 0 - 0 - (800 + 12)), T["net_profit"])
 
 # ── ① the identity, per source ──
-for src, tot in (("comm", 220.0), ("comp_comm", 100.0), ("mi", 46.0), ("atu", 12.0)):
+for src, tot in (("comm", 720.0), ("comp_comm", 100.0), ("mi", 46.0), ("atu", 12.0)):
     k1, k2, ku = CL.public_keys(src)
     check(f"IDENTITY {src}: m1 + m2_12 + unsplit == {src} ({tot})",
           eq2(T[k1] + T[k2] + T[ku], tot), (T[k1], T[k2], T[ku], tot))
 
 check("Commission 1st month = 100 (Month-1 bounty)", eq2(T["comm_m1"], 100.0), T["comm_m1"])
-check("Commission M2–M12 = 60 − 10 + 45 (the clawback reduces its own leg)",
-      eq2(T["comm_m2_12"], 95.0), T["comm_m2_12"])
+check("Commission M2–M12 = 60 − 10 + 45 placed + the ghost's M5 500 (the clawback reduces its "
+      "own leg)", eq2(T["comm_m2_12"], 595.0), T["comm_m2_12"])
 check("Commission unsplit = 25 (Boost Auto Top-Up states no month)", eq2(T["comm_unsplit"], 25.0), T["comm_unsplit"])
 check("Comp Comm 1st month = 70 / M2–M12 = 30",
       eq2(T["comp_comm_m1"], 70.0) and eq2(T["comp_comm_m2_12"], 30.0))
@@ -412,15 +436,16 @@ check("store A's own commission split is A's money only", eq2(rowA["comm_m1"], 1
 
 # ── ⑥ the ladder explains exactly the column ──
 lad = r["commission_legs"]["ladder"]
-check("ladder(comm) sums to the Commission column — the ghost store is in NEITHER",
-      eq2(sum(lad["comm"].values()), 220.0), lad["comm"])
+check("ladder(comm) sums to the Commission column — the unplaced money is in BOTH or neither, "
+      "never in one (§64)", eq2(sum(lad["comm"].values()), 720.0), lad["comm"])
 check("ladder(mi) sums to the MI column — the ghost salesforce_id is in NEITHER",
       eq2(sum(lad["mi"].values()), 46.0), lad["mi"])
 check("ladder rungs are the real month-of-life values",
       lad["comm"].get("1") == 100.0 and lad["comm"].get("2") == -10.0
       and lad["comm"].get("3") == 60.0 and lad["comm"].get("4") == 45.0
       and lad["comm"].get("unknown") == 25.0, lad["comm"])
-check("the M5 leg of the ghost store appears NOWHERE in the ladder", "5" not in lad["comm"])
+check("the M5 leg of the ghost store is IN the ladder, because it is in the column it explains",
+      lad["comm"].get("5") == 500.0, lad["comm"])
 check("residual ladder carries the date-derived legs (M1 and M6)",
       lad["mi"].get("1") == 20.0 and lad["mi"].get("6") == 15.0 and lad["mi"].get("unknown") == 11.0,
       lad["mi"])

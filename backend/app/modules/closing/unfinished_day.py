@@ -45,6 +45,8 @@ PURE: no I/O, no framework import. The caller does the read and hands the rows i
 """
 from __future__ import annotations
 
+from app.modules.account import store_identity as _sid   # §64 — THE store-identity home (pure, import-free)
+
 # ── The vocabulary. Four states, and nothing may invent a fifth. ─────────────────────────────────
 #: No closing, and nobody tried. The honest "nobody submitted" — the only one the nag is for.
 NOT_STARTED = "not_started"
@@ -188,16 +190,14 @@ def store_key(resolve, store_code) -> str:
 
     `resolve` None, or a store the resolver cannot place, falls back to the stripped raw code — the
     pre-existing behaviour, so an unknown store still groups with itself and never with another.
+
+    ONE FACT, ONE HOME (2026-10-09): the rule itself now lives in
+    `account.store_identity.store_key` — the same keying the GP report, the commission-leg trend and
+    the residual report dereference — and this function is a named alias for the closing side, not a
+    second copy. A copy is a future divergence, and `harness_store_identity_lock.py` fails the build
+    if one reappears.
     """
-    raw = str(store_code or "").strip()
-    if not raw:
-        return ""
-    if resolve is None:
-        return raw
-    try:
-        return str(resolve(raw) or raw).strip() or raw
-    except Exception:
-        return raw
+    return _sid.store_key(resolve, store_code)
 
 
 def state_for(closing_row, attempt_rows) -> str:

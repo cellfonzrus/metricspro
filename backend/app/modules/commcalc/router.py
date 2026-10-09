@@ -50,6 +50,7 @@ from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_V
                                              countable_sale_skip_reason as _gp_skip_reason)
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
+from app.modules.account import store_identity as _store_identity  # 2026-10-09 — THE store-identity home (§64): a leading address token is not a store identity
 from app.modules.commcalc import flag_registry
 from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a flag's store for DM routing
 from app.modules.commcalc import flag_persist          # mig 287 — ADDITIVE flag writes (DM review survives)
@@ -16544,6 +16545,12 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                         asset_by_imei[k] = a
             except Exception:
                 pass
+            try:
+                from app.modules.account import coa as _coa_flags
+                _flag_resolve_store = _coa_flags.store_resolver(client, org_id)
+            except Exception as _fre:
+                print(f'WARN flags canonical store resolver unavailable: {_fre}')
+                _flag_resolve_store = None
             flag_list = calc_flags(
                 sales=valid,
                 pay_detail=pay_detail,
@@ -16554,6 +16561,9 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                 period_month=pm['month'],
                 period_year=pm['year'],
                 asset_by_imei=asset_by_imei,
+                # ONE store identity for both sides of flags 7/8 (§64) — a store the two feeds
+                # spell differently used to raise "no payment" AND "no sales" every month.
+                resolve_store_canonical=_flag_resolve_store,
             )
             # Add port-out / transfer-out / suspended flags from MI report
             try:
@@ -23868,13 +23878,18 @@ def _compute_gp(client, org_id, period, market=""):
     # Avenue", and a leading-street-number join would send $9,040.90 to a phantom store. Only used
     # when there is MA income to place; never raises (no resolver -> match on the raw string, which
     # simply places less, and says so by leaving the money on the honest unplaced row).
-    _resolve_canonical = None
-    if ma_income:
-        try:
-            from app.modules.account import coa as _coa_gp
-            _resolve_canonical = _coa_gp.store_resolver(client, org_id)
-        except Exception as _rce:
-            print(f'WARN gp canonical store resolver unavailable: {_rce}')
+    # ALWAYS built (owner directive 2026-10-09 "chase trhew street number matching"). It used to be
+    # gated on `if ma_income`, i.e. only ePay-LESS orgs got it — so the ePay path (the house org) ran
+    # the engine's own leading-token join and dropped every carrier dollar whose leading token no
+    # store row led with: measured live Jul-Oct 2026, one store's entire carrier income every month
+    # ("116-36 …" against the roster's "11636 …") plus a relocated store's once the POS stopped
+    # spelling it the old way. The resolver is the ONE home for store identity; the gate was the bug.
+    try:
+        from app.modules.account import coa as _coa_gp
+        _resolve_canonical = _coa_gp.store_resolver(client, org_id)
+    except Exception as _rce:
+        print(f'WARN gp canonical store resolver unavailable: {_rce}')
+        _resolve_canonical = None
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
                             comp_rows=comp_rows, gp_category_map=gp_cat_map,
                             item_gp_map=gp_item_map, gp_categories=gp_cats,
@@ -24545,16 +24560,29 @@ def _leg_pay_commission_predicate(cfg):
 
 
 def _leg_store_index(client, org_id):
-    """{street number: {'store','store_code','market'}} for attributing carrier money to a store — the
-    SAME street-number join gp_report.calc_gp_report uses, so the trend's store/market filter selects
-    exactly the rows the GP table would."""
+    """{CANONICAL store address: {'store','store_code','market'}} + {salesforce_id: same} for
+    attributing carrier money to a store, plus the `resolve` used to key a row.
+
+    Returns `(idx, by_sfid, resolve)`. It used to be keyed by the leading street-number token — "the
+    SAME street-number join gp_report.calc_gp_report uses", which is exactly why it inherited that
+    join's defect: a carrier address whose leading token no store row leads with matched NOTHING, so
+    the trend's store/market filter could not select those rows and the GP table lost the money
+    outright. Both now dereference the ONE home for store identity (§64,
+    `account.store_identity` via `coa.store_resolver`), so the trend and the table still select the
+    same rows — now the right ones."""
     idx = {}
     try:
         rows = (client.schema('commcalc').table('store_mapping')
-                .select('store_address,store_code,market,salesforce_id')
+                .select('store_address,store_code,market,salesforce_id,is_active')
                 .eq('org_id', org_id).execute().data) or []
     except Exception:
         rows = []
+    try:
+        from app.modules.account import coa as _coa_leg
+        _leg_resolve = _coa_leg.store_resolver(client, org_id)
+    except Exception as _lre:
+        print(f'WARN leg-trend canonical store resolver unavailable: {_lre}')
+        _leg_resolve = None
     # Blank-market rows inherit from THE canonical union resolver (2026-09-03 LI class) so the
     # trend's market filter matches a store whose market is spelled only in storeops.stores.
     try:
@@ -24562,18 +24590,16 @@ def _leg_store_index(client, org_id):
     except Exception:
         _leg_resolve_market = lambda s: ''
     by_sfid = {}
-    for s in rows:
-        addr = str(s.get('store_address') or '').strip()
-        num = addr.split(' ')[0] if addr else ''
-        ent = {'store': addr, 'store_code': str(s.get('store_code') or '').strip(),
-               'market': (str(s.get('market') or '').strip()
-                          or _leg_resolve_market(addr or s.get('store_code')))}
-        if num:
-            idx.setdefault(num, ent)
-        sf = str(s.get('salesforce_id') or '').strip()
+    _identity = _store_identity.store_identity_index(rows, _leg_resolve)
+    for addr, _ident in _identity.items():
+        ent = {'store': addr, 'store_code': str(_ident.get('store_code') or '').strip(),
+               'market': (str(_ident.get('market') or '').strip()
+                          or _leg_resolve_market(addr or _ident.get('store_code')))}
+        idx[addr] = ent
+        sf = str(_ident.get('salesforce_id') or '').strip()
         if sf:
             by_sfid.setdefault(sf, ent)
-    return idx, by_sfid
+    return idx, by_sfid, _leg_resolve
 
 
 def _leg_passes(ent, markets, stores):
@@ -24630,7 +24656,7 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
                 sc.table('carrier').select('*').eq('org_id', org_id).execute().data or []))
     except Exception:
         legcls = _commission_legs.default_classifier()
-    store_idx, sfid_idx = _leg_store_index(client, org_id)
+    store_idx, sfid_idx, _leg_resolve = _leg_store_index(client, org_id)
     # The carrier classification is the ONE HOME's, resolved once per request and shared by both
     # sides of this trend (§58). The trend used to carry its own keyword copy of gp_report's rule.
     _cc_decl, _cc_rules, _cc_cfg = _leg_carrier_class(client, org_id)
@@ -24666,11 +24692,20 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
                 pd = []
             for r in pd:
                 rows.append({'source': 'payment_detail', 'period': lab,
-                             'store_num': str(r.get('business_address') or '').strip().split(' ')[0],
+                             'store_num': _store_identity.store_key(_leg_resolve, r.get('business_address')),
                              'label': str(r.get('payment_type') or '').strip(),
                              # §57 owns the folding rule for the key AND the "never mapped" word
                              'category': _payment_category.label_of(cat_map, r.get('payment_type')),
                              'amount': safe_float(r.get('amount')), 'n': 1})
+
+    # ONE STORE IDENTITY, whichever path produced the rows (§64). The mig-274 rollup returns the
+    # store column the DATABASE computed — a leading street-number TOKEN until mig 1066 is applied,
+    # the raw address after — and the per-month fallback returns a raw address. Both are resolved
+    # here through the one home, so the keys always meet `store_idx` (built on the same resolver)
+    # and the store / market filter selects the right rows in either state. Keying only the
+    # fallback is what made the RPC path's filter select NOTHING.
+    for r in rows:
+        r['store_num'] = _store_identity.store_key(_leg_resolve, r.get('store_num'))
 
     for r in rows:
         lab = pkey.get(str(r.get('period') or '').strip())
@@ -25075,7 +25110,7 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
         legcls = _commission_legs.for_org(client, org_id, carrier_mode=mode)
     except Exception:
         legcls = _commission_legs.default_classifier()
-    store_idx, sfid_idx = _leg_store_index(client, org_id)
+    store_idx, sfid_idx, _leg_resolve = _leg_store_index(client, org_id)
     # Same one-home classification as /commission-leg-trend, resolved once (§58).
     _cc_decl, _cc_rules, _cc_cfg = _leg_carrier_class(client, org_id)
     _leg_comp_is_commission = _leg_comp_commission_predicate(_cc_decl, _cc_rules, _cc_cfg)
@@ -25105,7 +25140,7 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
             for r in pd:
                 pt = str(r.get('payment_type') or '').strip()
                 label_rows.append({'source': 'payment_detail', 'period': lab,
-                                   'store_num': str(r.get('business_address') or '').strip().split(' ')[0],
+                                   'store_num': _store_identity.store_key(_leg_resolve, r.get('business_address')),
                                    'label': pt,
                                    'category': _payment_category.label_of(cat_map, pt),
                                    'amount': safe_float(r.get('amount')), 'n': 1})
@@ -25181,6 +25216,13 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
         notes.append('VidaPay/master-agent money (commission, airtime margin, residual orders) carries '
                      'no store address, so it is company-wide and is EXCLUDED while a store or market '
                      'filter is active.')
+
+    # ONE STORE IDENTITY, whichever path produced the rows (§64) — see the same normalization in
+    # /commission-leg-trend. The mig-274 rollup's store column is whatever the DATABASE computed (a
+    # leading-token until mig 1066 is applied, the raw address after); `store_idx` is keyed by
+    # canonical identity, so the keys are resolved here before `passes` is asked anything.
+    for r in label_rows:
+        r['store_num'] = _store_identity.store_key(_leg_resolve, r.get('store_num'))
 
     out = _commission_received.build_breakout(
         labels, legcls,

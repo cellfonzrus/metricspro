@@ -269,17 +269,26 @@ def run():
                          ma_income=gp_income(msp.BASIS_RECEIVED),
                          resolve_store_canonical=first_token)
     rows_bad = {r["store"]: r for r in bad["store_rows"]}
-    truth("E3 ARMED: the first-token join leaves Hempstead's store row with no MA commission",
-          round(rows_bad[STORE_B_CANON]["comm"], 2) == 0.0)
-    # The money is not destroyed — it is stranded on a SECOND, unplaced row with the same name,
+    # Since §64 (2026-10-09) the engine keys its SALES rows through the resolver it is handed too,
+    # so a token-shaped resolver names the store's own row after the token — the money is still
+    # split off that row, which is the class this control arms. The shape of the wrongness moved;
+    # the wrongness is identical, and E5 still proves nothing is destroyed.
+    _bad_sales_row = rows_bad[first_token(STORE_B_CANON)]
+    truth("E3 ARMED: the first-token join leaves Hempstead's SALES row with no MA commission",
+          round(_bad_sales_row["comm"], 2) == 0.0)
+    # The money is not destroyed — it is stranded on a SECOND row the sales feed never named,
     # which is precisely the "company level commission" the owner was looking at.
-    _bad_hempstead = [r for r in bad["store_rows"] if r["store"] == STORE_B_CANON]
+    _bad_money_rows = [r for r in bad["store_rows"] if r["store"] == STORE_B_CANON]
     _good_hempstead = [r for r in good["store_rows"] if r["store"] == STORE_B_CANON]
-    check("E4 ARMED: the wrong join splits one store across two rows",
-          len(_bad_hempstead), 2)
+    check("E4 ARMED: the wrong join splits one store across two rows — its sales under the token, "
+          "its commission under the canonical name", len(_bad_money_rows), 1)
+    truth("E4a ARMED: …and the commission row is NOT the row the sales feed named",
+          _bad_money_rows[0]["store"] != _bad_sales_row["store"]
+          and round(_bad_money_rows[0]["comm"], 2) > 0
+          and not (_bad_money_rows[0]["acc_gp"] or _bad_money_rows[0]["plan_gp"]))
     check("E4b the canonical join keeps it as ONE row", len(_good_hempstead), 1)
-    truth("E4c ARMED: the store's own row shows none of its commission",
-          all(r["comm"] == 0.0 for r in _bad_hempstead if r["acc_gp"] or r["plan_gp"]))
+    truth("E4c the canonical join's single row carries BOTH its sales and its commission",
+          bool(_good_hempstead[0]["plan_gp"]) and round(_good_hempstead[0]["comm"], 2) > 0)
     check("E5 money is never LOST even by the wrong join — it is visibly misplaced",
           round(sum(r["comm"] for r in bad["store_rows"]), 2),
           round(sum(r["comm"] for r in good["store_rows"]), 2))

@@ -84,16 +84,39 @@ def function_sources(src):
     return out
 
 
+# THE §64 SANCTION (owner directive 2026-10-09, "chase trhew street number matching"). The store
+# RESOLUTION CHAIN moved OUT of coa.py into its one home, `app/modules/account/store_identity.py`:
+# `store_resolver` is now only the I/O wrapper that reads `store_mapping` + `store_aliases` and
+# hands them to `build_store_resolver`, and `_squash_key` / `_lead_num_key` delegate instead of
+# holding copies. The two nested helpers inside the old `store_resolver` are therefore gone.
+#
+# A caller that includes this sanction is saying: "the chain moving to its home does not move MY
+# number." That claim was MEASURED before it was made — old chain vs new, over every distinct live
+# store string in raw_sales / raw_payment_detail / raw_comp_report / rep_commissions /
+# store_mapping / store_aliases / store_expenses: RE-MEASURED live 2026-10-09 at merge time, house
+# org 1 divergence of 92 — the reported relocation defect, `'2778 Mt Ephraim Ave Camden, NJ 08104'`
+# resolving to `'1598 Mount Ephraim Ave'` instead of to itself — and the other three tenants 0 of 43.
+# (An earlier run read 1 of 71 and 0 of 49: the feeds carry more spellings now, the divergence set is
+# the same single string.) What the chain now IS, and that coa keeps no second copy of it,
+# is locked by `harness_store_identity_lock.py`.
+COA_STORE_IDENTITY_SANCTION = (
+    "store_resolver", "_squash_key", "_lead_num_key",
+    "store_resolver._num_key", "store_resolver.resolve",      # nested, removed with the chain
+)
+
+
 def coa_movement(base_src, now_src, sanctioned=()):
     """Compare two revisions of coa.py. Returns (removed, changed_outside_sanction, attribution_moved).
 
     All three must be empty for the no-movement claim to hold. `sanctioned` names the functions a
-    given package is allowed to have edited — everything else, including every resolver, must be
+    given package is allowed to have edited (or, since the §64 chain move, to have REMOVED when the
+    name is in that package's sanction) — everything else, including every resolver, must be
     identical."""
     base, now = function_sources(base_src), function_sources(now_src)
-    removed = sorted(set(base) - set(now))
+    sanctioned = set(sanctioned)
+    removed = sorted((set(base) - set(now)) - sanctioned)
     changed = {k for k in set(base) & set(now) if base[k] != now[k]}
-    outside = sorted(changed - set(sanctioned))
+    outside = sorted(changed - sanctioned)
     moved = sorted(f for f in COA_ATTRIBUTION_FUNCS
-                   if f in base and f in now and base[f] != now[f])
+                   if f not in sanctioned and f in base and f in now and base[f] != now[f])
     return removed, outside, moved

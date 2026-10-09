@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account._period import parse_period, recent_period_keys
+from app.modules.account import store_identity as _sid   # §64 — THE store-identity home
 
 
 def _pkey(period):
@@ -33,9 +34,15 @@ def _pkey(period):
     return (yr, mo)
 
 
-def _street_num(addr):
-    m = re.match(r"\s*(\d+)", str(addr or ""))
-    return m.group(1) if m else ""
+# The rep-pay join key (owner directive 2026-10-09 "chase trhew street number matching").
+# This module used to join `rep_commissions` pay to a store on `_street_num(addr)` — the leading
+# digits of the address. A leading address token is not a store identity: it cannot match the
+# carrier's "116-36 …" to the roster's "11636 …", and where two stores lead with one number it
+# picked a winner. The key is now the CANONICAL store address from the one home
+# (`account.store_identity` via `coa.store_resolver`, already built in `compute` for the door map),
+# and a POS spelling nothing can place keys on itself instead of on a plausible neighbour.
+def _join_key(resolve, raw):
+    return _sid.store_key(resolve, raw)
 
 
 def _recent_labels(latest_y, latest_m, n):
@@ -615,7 +622,9 @@ def resolve_ma_account_store(account_id, store_by_account, meta_by_address, unas
     `store_by_account`  {account id -> canonical store_address} (mig-314 index, already canonical).
     `meta_by_address`   {lower store_address -> {"store_code", "market"}} — the org's own vocabulary.
 
-    Returns {"store", "store_code", "market", "num", "resolved"}. An account the index cannot place
+    Returns {"store", "store_code", "market", "num", "resolved"}, where `num` is the REP-PAY JOIN
+    KEY — the canonical store address, not a street number (§64: a leading address token is not a
+    store identity). An account the index cannot place
     renders "(Unassigned)" — HONESTLY, never dropped from the report and never guessed onto a
     plausible store (the phantom-store lesson); `resolved` False is what the payload's
     `unresolved_accounts` diagnostic names so the owner can pin it in `ma_account_store_map`.
@@ -630,7 +639,9 @@ def resolve_ma_account_store(account_id, store_by_account, meta_by_address, unas
     return {"store": addr,
             "store_code": str(m.get("store_code") or "").strip(),
             "market": str(m.get("market") or "").strip() or unassigned,
-            "num": _street_num(addr),
+            # The rep-pay join key. `store_by_account` is ALREADY canonical (mig-314 index ∘
+            # store_resolver), so the canonical address IS the key — no token derivation here.
+            "num": addr,
             "resolved": True}
 
 
@@ -870,7 +881,7 @@ def compute(client, org_id, months=6):
                        "market": (str(_m.get("market") or "").strip()
                                   or _rs_resolve_market(sf_addr) or ""),
                        "store_code": str(_m.get("store_code") or "").strip(),
-                       "num": _street_num(sf_addr)}
+                       "num": sf_addr}   # canonical address = the rep-pay join key (§64)
 
     # mig-314 account→store index — built ONCE, only for the MA/VidaPay source (the Boost path
     # joins on salesforce_id and never touches it).
@@ -899,7 +910,7 @@ def compute(client, org_id, months=6):
                 continue
             pay = safe_float(r.get("total_payout"))
             comm_company[per] = comm_company.get(per, 0.0) + pay
-            num = _street_num(r.get("store"))
+            num = _join_key(_rs_resolve_store, r.get("store"))
             if num:
                 comm_by_num.setdefault(num, {})
                 comm_by_num[num][per] = comm_by_num[num].get(per, 0.0) + pay
