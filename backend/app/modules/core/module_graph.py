@@ -70,6 +70,18 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_spiffimp',),
         },
     },
+    'accessory_target_allocation': {
+        "question": 'Given ONE company accessory sales goal, what target should each store carry, '
+                    'derived from its own accessories-per-box history against the boxes it sells?',
+        "homes": ('app/modules/commcalc/accessory_target_plan.py',),
+        "index": ('61',),
+        "locks": ('harness_accessory_target_plan.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_accplan',),
+        },
+    },
     'manager_report_card': {
         "question": 'What was assigned to this district manager for each of their stores, did the '
                     'system record it as met, and who is accountable one level above them?',
