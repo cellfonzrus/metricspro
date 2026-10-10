@@ -306,6 +306,17 @@ FACTS: dict[str, dict] = {
             'app/modules/payables/engine.py': ('_reg',),
         },
     },
+    'cash_count_comparability': {
+        "question": 'May a count of the whole envelope be scored against this expected figure?',
+        "homes": ('app/modules/closing/billpay_netting.py',),
+        "index": ('74.2', '74.3'),
+        "locks": ('harness_envelope_count_basis.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/closing/pickup_actual.py': ('_bn',),
+            'app/modules/closing/router.py': ('billpay_netting',),
+        },
+    },
     'cash_count_correction_trail': {
         "question": 'Was this management cash figure changed, from what, and by whom?',
         "homes": ('app/modules/closing/count_revision.py',),

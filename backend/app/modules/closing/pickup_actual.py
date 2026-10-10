@@ -72,13 +72,68 @@ def variance_fields(declared, actual):
             "variance": cf["variance"], "status": cf["status"]}
 
 
+#: WHAT THE DM'S COUNT IS ON. `actual_picked_amount` is the cash physically in the bag — never a
+#: netted figure, because nobody nets a bag they are counting. So the comparison is only sound when
+#: the EXPECTED figure is on that same footing, which is what `billpay_netting.count_comparable`
+#: rules from the row's stored `amount_basis` (mig 1039). One home for that judgement; this module
+#: dereferences it and holds no basis opinion of its own.
+COUNT_IS_WHOLE_ENVELOPE = True
+
+
 def row_variance(row):
-    """PURE: variance_fields for a pickup ROW (declared = its mig-034 `amount` snapshot,
-    actual = mig-949 `actual_picked_amount`), or None when no actual is recorded."""
+    """PURE: variance_fields for a pickup ROW (expected = its mig-034 `amount` snapshot, actual =
+    mig-949 `actual_picked_amount`), or None when no actual is recorded.
+
+    REFUSES ACROSS BASES (owner question 2026-10-10). `amount` is netted when the tenant nets by the
+    POS figure, while the bag was netted by the rep's OWN declared figure — so subtracting them
+    produces the POS-versus-declared gap wearing a shortage's clothes. 105 of 135 live 'pos'-basis
+    rows read short or over for exactly that reason. Where the basis is not comparable this returns
+    the same shape with `status='not_comparable'`, `variance=None` and a `reason` sentence, so a
+    caller that renders the status gets the honest answer instead of a number — and a caller that
+    reads `variance` arithmetically gets None rather than a misleading float.
+
+    The basis vocabulary and the rule both live in `billpay_netting`; nothing is decided here.
+    """
     r = row or {}
     if not has_actual(r):
         return None
-    return variance_fields(r.get("amount"), r.get("actual_picked_amount"))
+    return gate_on_basis(variance_fields(r.get("amount"), r.get("actual_picked_amount")),
+                         r.get("amount_basis"))
+
+
+#: The status a refused comparison carries. A VALUE, so no caller spells it.
+NOT_COMPARABLE = "not_comparable"
+
+
+def gate_on_basis(vf, basis):
+    """PURE: the variance triple, gated on whether the expected figure's basis may be compared with
+    a count of the whole envelope. THE ONE PLACE that gate is applied, dereferenced by both the READ
+    path (`row_variance`, the board and the pickup list) and the WRITE path (`count_patch`, the
+    open-and-count save) — so a figure cannot be refused on one surface and scored on the other.
+
+    `vf` is `variance_fields`' output (or None, passed straight through).
+
+    On a comparable basis the triple is returned with `comparable=True` and `reason=None` — the
+    pre-existing shape plus two keys, so an older reader is byte-identical. On any other basis the
+    STATUS becomes `not_comparable` and `variance` becomes None: not 'match' and not 0.00, either of
+    which would read as "it tied out". The expected and actual figures are KEPT, so a screen can
+    still show what was expected and say why it cannot be scored.
+
+    The rule itself lives in `billpay_netting.count_comparable` — nothing is decided here.
+    """
+    if vf is None:
+        return None
+    from . import billpay_netting as _bn
+    out = dict(vf)
+    out["amount_basis"] = str(basis).strip().lower() if str(basis or "").strip() else None
+    out["comparable"] = _bn.count_comparable(basis)
+    if out["comparable"]:
+        out["reason"] = None
+        return out
+    out["variance"] = None
+    out["status"] = NOT_COMPARABLE
+    out["reason"] = _bn.count_incomparable_reason(basis)
+    return out
 
 
 # ── THE OPENED-ENVELOPE GATE (owner directive 2026-09-08; mig 990) ─────────────────────────────
@@ -218,7 +273,7 @@ def actual_relieves_cash(client, org_id):
 COUNT_COLUMNS = ("envelope_opened", "actual_picked_amount", "actual_counted_by", "actual_counted_at")
 
 
-def count_patch(item, declared=None, counted_at=None):
+def count_patch(item, declared=None, counted_at=None, basis=None):
     """PURE — THE ONE HOME for the stored shape of an open-and-count statement.
 
     `item` is either wire shape the pickup surfaces send (`actual_amount` from a page,
@@ -248,7 +303,11 @@ def count_patch(item, declared=None, counted_at=None):
     vf = None
     if "actual_amount" in it or "actual_picked_amount" in it:
         act = it.get("actual_amount", it.get("actual_picked_amount"))
-        vf = variance_fields(declared, act)
+        # GATED ON THE SAME BASIS RULE as the read path (owner question 2026-10-10): the reply this
+        # builds is what the screen prints after a save, so scoring a pos-basis row here would
+        # announce a shortage the board then refuses to show. `basis` absent -> the gate's own
+        # "unknown" answer, never a score.
+        vf = gate_on_basis(variance_fields(declared, act), basis)
         row["actual_picked_amount"] = vf["actual"] if vf else None
     who = str(it.get("counted_by") or "").strip()
     if who:
