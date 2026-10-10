@@ -1016,10 +1016,19 @@ _all_routes = _flatten_routes(real_app.routes)
 # forked from). The delta is ONE route and it is named: GET /commcalc/mdf-entitlement-coverage — the
 # entitlement-month completeness report (index §68). It is READ-ONLY, writes nothing, adds no table
 # and no writer. Verified the same way as every pin above:
+# Re-pinned 1758 -> 1759 on 2026-10-10, when origin/main 1c73ba0 (the §68 route above) was merged
+# INTO this branch. Both additions are real and independent, so the merged tree carries both and the
+# two records above stay — a pin's history is the reason it may be re-taken. This branch's own delta
+# is ONE route and it is named: GET /closing/cash-variance — the shortage/overage assessment after
+# management recon (index §72.6). It is READ-ONLY, adds no writer, reads only tables that already
+# exist, and re-derives nothing (the POS figure comes from stored `closing_attempt.b2b_cash`, not a
+# feed replay). Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-# Re-pinned 1758 -> 1765 on 2026-10-10, measured against origin/main e5f33e6 (merged into this
-# branch, so the tree measured IS the tree that ships). The delta is SEVEN routes and each is named:
+# Re-pinned 1759 -> 1766 on 2026-10-10, after origin/main dd47887 (the §72.6 route above) was
+# merged INTO this branch. Both additions are real and independent, so the merged tree carries
+# both and every record above stays: main's one route took 1758 to 1759, this branch's seven take
+# it to 1766. Measured on the merged tree, which IS the tree that ships. The delta is SEVEN routes and each is named:
 # GET /closing/metric-catalog, GET /closing/declared/{close_date}, PUT /closing/metric-lines,
 # GET /commcalc/incentive-rules, PUT /commcalc/incentive-rules,
 # DELETE /commcalc/incentive-rules/{rule_id} and GET /commcalc/daily-incentive/{close_date} — the
@@ -1028,7 +1037,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # anybody. Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 7 and `'^-@router\.'` = 0 — seven
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1765"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1766"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

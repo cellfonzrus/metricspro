@@ -1027,6 +1027,12 @@ export const NAV: NavGroup[] = [
     // locks those two as adjacent, and the two reconciliations belong together.
     // Same `module: 'closing'` key and scope tiers as the recons below it, so no role re-seeding
     // is needed: any role that already has the closing module sees it.
+    // Cash Variance (owner ask 2026-10-10) — the assessment AFTER management recon, so it sits with
+    // the recons rather than with the collection steps. Placed ABOVE Bank Deposit for the same reason
+    // Bank Deposit is placed here: prove_deposit_recon_nav.mjs locks ePay Recon and Cash Deposit Recon
+    // as adjacent, so nothing may be inserted between them.
+    // Same `module: 'closing'` key and scope tiers as its siblings, so no role re-seeding is needed.
+    { href: '/closing/cash-variance', label: 'Cash Variance', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/bank-deposit', label: 'Bank Deposit', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Cash Deposit Recon + Deposit Categories (mig 509) — nav entries per mod-retail-ops NEEDS CORE

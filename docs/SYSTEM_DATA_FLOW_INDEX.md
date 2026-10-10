@@ -94,6 +94,7 @@ Primary code homes:
 | 67 | **Bank deposit is a step, not a form on a report** | "Where does a bank deposit get recorded, and can a sealed envelope be opened at the store that found it?" |
 | 68 | **An entitlement is a count of months PER STORE** | "The ramp-up subsidy is only 12 months per store and the carrier is winding it down — which store-month inside a store's own entitlement never arrived? Why is a store with no declared start month reported NOT MEASURED instead of missing its whole term, why is a month no payment reached us for at all kept apart from the gaps, and why is a month that has not finished never missing?" |
 | 69 | **A declaration must be HONOURABLE — the vocabulary has to be able to express it** | "My own declaration says this carrier money is MDF, so why is it booking on the device reimbursement line? When the platform cannot express the category I declared, who decides where the dollar goes — me or a keyword rule? And which months need a P&L recompute once it is fixed?" |
+| 72 | **A cash variance is meaningless unless both figures count the same cash** | "After management recon, who is short and who is over — management's count against the cash envelope and against the B2B cash? Why does nothing ever match, which differences are a definition rather than a shortage, and which store or employee is out the same way every week?" |
 | 73 | **A cash figure a human typed is evidence — a correction keeps the old one** | "Management typed the wrong cash amount at recon — can they fix it, and will anyone be able to tell it was changed, by whom, from what? Why is an edit button without a trail the same defect migration 935 already fixed once?" |
 | 74 | **A category you declare is a category you can be paid on** | "I added a category to the daily closing — why can no incentive rule point at it? Where is it declared that a category carries dollars, or that each employee declares their own? Which employee generated the most revenue today, and how is a daily pool split when nobody's hours were recorded?" |
 
@@ -3654,6 +3655,11 @@ the owner wants it).
 
 **Purpose.** Reconcile cash collected at close vs cash actually deposited in the bank, per store per day.
 
+> **The SHORTAGE/OVERAGE ASSESSMENT is §72.** `/closing/cash-variance` compares what
+> management RECEIVED against the cash envelope and against the POS cash, at a per-org $5 band
+> (mig `1070`), and highlights the store/employee trends. It carries each figure WITH its basis
+> and refuses to subtract across bases — the naive subtraction read 141 of 275 live counted
+> store-days as short, every one of them by the bill-payment cash to the cent.
 > **A COUNT MAY BE CORRECTED, AND EVERY CORRECTION IS ON THE RECORD — see §73.** A counted
 > envelope carries `✏️ edit` on the board, and all three writers of a management cash count
 > append to ONE trail (`commcalc.cash_count_revision`, mig `1071`). A re-save of the same
@@ -6253,6 +6259,7 @@ rendering the resolved name.
 
 - `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§70).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
+- `commcalc.cash_pickup_config.cash_variance_band` / `.cash_variance_min_days` (mig `1070`) — the dollar band below which a cash difference is counting noise, and how many out-of-band days make a trend. Owner 2026-10-10, "we ignore upto $5 of variance". NULL ⇒ the house $5 / 3 days, NEVER zero. Written by an owner; read in ONE place, `closing/cash_variance.band` / `.min_days`, dereferenced by `GET /closing/cash-variance` and by nothing else (§72).
 - `commcalc.cash_count_revision` (mig `1071`) — APPEND-ONLY trail of every correction to a management cash count, one row per FIELD whose stored value changed, across `cash_pickup` / `billpay_pickup` / `envelope_count` (`subject_table` is a VALUE, not a branch). Written in ONE place, `closing/router._write_count_revisions`, from `closing/count_revision.revision_rows`; read by `GET /closing/deposit-accountability`. Nothing updates or deletes a row here — that is what makes it evidence; `harness_cash_count_revision.py` §D fails the build on a writer that stops appending (§73).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
@@ -6509,6 +6516,7 @@ rendering the resolved name.
 - `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65).
 - `GET /commcalc/mdf-entitlement-coverage?store=` — one row per store-month inside a store's DECLARED entitlement window (`commission_org_config.mdf_entitlement_config`, mig `1068`): `received` · **`missing`** (the month's payment run demonstrably arrived for other stores and this store is not in it) · **`unconfirmed_missing`** (no payment of this kind reached us for ANY store that month — OUR feed, counted apart and never netted into the gaps) · `not_due` (the month has not finished) · `not_measured` (`entitlement_window_not_declared` / `no_entitlement_configured` / `store_identity_ambiguous`). Takes NO period: the question is the whole window. Declares nothing itself — the payment types are the org's own `payment_categories` through §57, the store key is §64's `coa.store_resolver` (+ `ambiguous_store_keys`), the calendar is `feed_period.month_state`, the verdict vocabulary is `pay_data_quality`'s. READ-ONLY, no writer, no flag (§68).
 - `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§70) — one reconciliation, two readers, never two derivations.
+- `GET /closing/cash-variance?date_from=&date_to=&markets=&stores=&reps=&verdict=` — shortage and overage AFTER management recon: what management received (`envelope_count` first, else `cash_pickup.actual_picked_amount`), the cash envelope the rep declared (`daily_closing.t_cash`) and the POS cash the close gate recorded (`closing_attempt.b2b_cash`), per store-day-rep — each figure carried WITH its basis, and a pair whose bases differ reported as NOT MEASURABLE rather than subtracted. Plus `by_store` / `by_employee` rollups off ONE summariser, the four trend kinds, and `blockers` naming what cannot be measured and why. Band + trend threshold are per-org config (mig `1070`); the verdict is `deposit_recon.status_for`; the POS figure is read, never re-derived from the feed. READ-ONLY, no writer (§72).
 - `POST /closing/pickup/open-count` · `POST /closing/billpay-pickup/open-count` — open a SEALED envelope and record the count, **or CORRECT a count already entered** (owner 2026-10-10). Optional `note` for why. Every changed field appends to `commcalc.cash_count_revision` through the one writer, and the reply carries `corrections` / `history_recorded` / `history_detail` so a trail that could not be written is stated rather than implied (§73.5). `POST /closing/pickup` and `POST /closing/envelope-count` return the same two keys.
 - `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1069): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§70).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
@@ -23003,7 +23011,7 @@ incentive for the employees is based on how much total sales ahve been done duri
 employee geenrates the most revenue during the day … but i dont wnat them to be hard coded it should
 be a design effect"*.
 
-### 72.1 THE CLASS, NOT THE INSTANCE
+### 74.1 THE CLASS, NOT THE INSTANCE
 
 The instance is "NY Logistics has no drop-off category". The class is that **what a business counts
 and sells had three disconnected homes**, each carrying its own copy of the vocabulary:
@@ -23020,7 +23028,7 @@ ONE `employee_name`, whoever submitted the sheet, so "which employee generated t
 was not merely unanswered — answering it from the stored row would have **fabricated an attribution**,
 crediting the submitter with everyone's work.
 
-### 72.2 THE ONE HOME
+### 74.2 THE ONE HOME
 
 **`backend/app/modules/closing/metric_catalog.py`** — "what does this business declare at the end of a
 day, and what is a unit worth". PURE (no DB, no network, no imports). Built from the count-field
@@ -23036,7 +23044,7 @@ Each entry: `key`, `label`, `value_kind` (`count`|`amount`|`both`), `declared_by
 - **`by_employee` refuses to invent.** A store-level metric is never attributed to a person, and the
   `closing_row` argument is accepted and deliberately unused — crediting the submitter is the bug.
 
-### 72.3 TWO PHYSICAL STORES, ONE READER (the `envelope_report.is_modern_row` precedent, §29.7)
+### 74.3 TWO PHYSICAL STORES, ONE READER (the `envelope_report.is_modern_row` precedent, §29.7)
 
 `storage_for(metric)` is THE rule, and every catalog entry carries its answer so no caller works it out:
 
@@ -23050,7 +23058,7 @@ returns an entry for EVERY catalog metric — a metric nobody declared comes bac
 `declared: False`, so "declared nothing" is distinguishable from "has no such category", which a
 sparse dict cannot express.
 
-### 72.4 THE INCENTIVE ENGINE KNOWS SHAPES, NOT RULES
+### 74.4 THE INCENTIVE ENGINE KNOWS SHAPES, NOT RULES
 
 **`backend/app/modules/commcalc/daily_incentive.py`** — PURE. Three shapes, and nothing else:
 
@@ -23087,7 +23095,7 @@ scheduled). Measured 2026-10-10: NY Logistics store `7710` has scheduled hours a
 hours, so a by-hours pool there would run on scheduled hours until people actually clock in — which
 is part of why the owner moved the default off hours and onto who ran the sale.
 
-### 72.5 LOCKED SO IT CANNOT UN-WIRE
+### 74.5 LOCKED SO IT CANNOT UN-WIRE
 
 `backend/harness_metric_catalog_lock.py` (38 checks, stdlib, in `carrier-vocab-guard.yml`): §A the
 vocabulary has one copy (`STANDARD_KEYS` mirrors `count_config.STANDARD_DEFS`; no module re-declares
@@ -23103,7 +23111,7 @@ owner's screenshot of the six live rules, each reconstructed as a **config row**
 category and no tenant rate appears in either module's executable text (docstrings stripped — doctrine
 may quote the owner's examples; code may not).
 
-### 72.6 DUPLICATE CHECK (build gate)
+### 74.6 DUPLICATE CHECK (build gate)
 
 | Checked | Verdict |
 |---|---|
@@ -23114,7 +23122,7 @@ may quote the owner's examples; code may not).
 | `commcalc/target_registry.py` (mig `070`) | not it — maps UPLOAD columns |
 | `commcalc/targets` (`CATS`, `targets.*_monthly`) | **the next sibling, stated not hidden** — see §74.7 |
 
-### 72.7 WHAT IS NOT DONE, STATED
+### 74.7 WHAT IS NOT DONE, STATED
 
 - **Targets over the declared categories** (day / week / month gross revenue, and the backward "what is
   needed to reach X"). The engine already computes the backward figure — `GET /targets/{period}/calendar`
@@ -23684,6 +23692,125 @@ index-section-number race in §62.
 
 ---
 
+## 72. A VARIANCE BETWEEN TWO CASH FIGURES IS MEANINGLESS UNLESS BOTH COUNT THE SAME CASH (owner ask 2026-10-10)
+
+Owner, verbatim: *"need to create a report after management recon to assess the shortage and overage
+based on what the management received compared with the b2b data and the cash envelope, the data will
+never match so we ignore upto $5 of variance, the system should then be smart to find the trends of a
+particular store / employee and highlight the same- ti shoudl be all dynamic with all filters"*.
+
+### 72.1 The owner is right that the data never matches, and the reason is not shortage
+
+Measured on live house-org data 2026-09-01 → 2026-10-10, **before** any of this was written:
+
+| Comparison | Inside $5 | Over | Short |
+|---|---|---|---|
+| management count vs the figure stored on the pickup row | 113 | 21 | **141** |
+| management count vs the NET store cash (drawer − declared bill-pay) | **194** | 70 | 11 |
+| rep's declared drawer vs `closing_attempt.b2b_cash` | 36 | 114 | 16 |
+| rep's declared drawer NET vs `b2b_cash` | 1 | 3 | **162** |
+
+Six of the "shortages" were checked by hand and were the bill-payment cash **to the cent**:
+574−324=250, 866−585=281, 240−200=40, 335−260=75, 1699−929=770, 1378−1083=295. The money had left
+the store in the OTHER envelope (`billpay_pickup`). A report built on naive subtraction would have
+accused nine named employees of about **$20,000** they never took.
+
+### 72.2 The class, not the instance
+
+The instance is "the management count reads short by the bill-pay cash". The class is that
+**subtraction does not care what its operands mean**, so any reader holding two bare floats can
+manufacture a shortage out of a definition. The platform already RECORDED the basis of each figure
+and had nowhere to use it: `cash_pickup.amount_basis` (mig `1039`), `envelope_count.basis`
+(mig `1036`), `deposit_recon.cash_for_basis` (mig `509`).
+
+So in `closing/cash_variance.py` **a cash figure is never a float**. It is `leg(amount, basis,
+source)`, and `compare()` returns `measured: False` with a reason — `leg_absent` / `basis_unknown` /
+`basis_mismatch` — instead of a number. There is no overload taking two bare floats, so a caller
+cannot opt out. `harness_cash_variance.py` §B/§C fail the build if it ever subtracts across bases,
+replaying all six live store-days above as a regression.
+
+**Absence is never zero.** `billpay_pickup` holds 50 rows of which exactly ONE is counted, so the
+whole-drawer management figure is NOT MEASURABLE on 264 of 275 counted store-days. The report says so
+(`blockers`) rather than reconstructing the uncounted envelope as $0.00 and billing the rep for it.
+
+### 72.3 The three legs, each from the ONE table that records it
+
+| Leg | Source | Basis, and how it is known |
+|---|---|---|
+| management received | `envelope_count.counted_amount` (mig `936`) first, else `cash_pickup.actual_picked_amount` (mig `949`) | `envelope_count.basis` (mig `1036`), else `PICKUP_BASIS_TO_CASH[cash_pickup.amount_basis]` (mig `1039`: `off`/`none` ⇒ whole drawer, `pos`/`declared` ⇒ store cash). NULL ⇒ **unknown**, never inferred — 181 of 275 live rows, 126 of which would "tie" on the net basis |
+| the cash envelope | `daily_closing.t_cash` (fallback `store_cash`) | `total_cash` **by definition** — owner 2026-09-02, *"Total cash in store including Bill Payments"*. It does NOT net: 81 live store-days declare more bill-pay cash than total cash, so netting would produce negative cash |
+| B2B cash | `closing_attempt.b2b_cash` (mig `103`) | `total_cash`, PROVEN not assumed: the gate compares it against `entered_cash`, which equals `t_cash` on all 166 live store-days |
+
+Where BOTH envelopes were counted the two are added and the leg is promoted to the whole drawer,
+which is the only thing that makes the end-to-end POS check possible at all.
+
+**NO SECOND DERIVATION.** `router._b2b_day` is deliberately NOT replayed: the POS cash for a
+(store, day, rep) is already stored at exactly this grain, and it is the figure the rep was judged
+against. The verdict is `deposit_recon.status_for` — the platform's existing truth table — so
+negative is short here like everywhere else.
+
+### 72.4 The $5 band is config, never code (RULE TWO)
+
+`HOUSE_BAND = 5.00` is the ONE literal in the subsystem; the per-org override is
+`commcalc.cash_pickup_config.cash_variance_band` / `.cash_variance_min_days` (mig `1070`, on the
+EXISTING per-org config table for this chain — a new table for two numbers would be the sibling the
+index rules forbid). NULL / blank / negative / unparseable resolve to the house default, **never to
+zero**: zero would make every rounding difference a shortage against a named employee.
+`harness_cash_variance.py` §F fails the build if a second non-zero dollar literal appears in the
+module or if the endpoint spells a band of its own.
+
+**NOT CHANGED, ON THE RECORD.** Six existing readers each carry their own band as a default argument
+— `deposit_recon.status_for` ($1), `envelope_report.count_fields` ($0), `deposit_accountability.
+pos_next_to` ($1) / `.dm_shortage_rows` ($0), `billpay_pickup.billpay_pos_mismatch` ($1),
+`external_credit_recon.recon_row` ($0). Widening them to $5 would SILENTLY STOP SURFACING variances
+those screens report today, which is a money-visibility change nobody asked for. They are excused
+here deliberately, not overlooked: the one home now exists and migrating each screen is its own
+reviewable change.
+
+### 72.5 The trends
+
+`cash_variance.trends()` runs over the rollups `by_store` / `by_employee` already produced, so a
+highlight can never disagree with the table under it. Four kinds, declared as data:
+`repeat_short` · `repeat_over` · `one_direction` (a run that is only ever one way — random counting
+error lands on both sides) · `nothing_measurable` (every day unmeasurable, so the subject is invisible
+to the control rather than clean). The threshold is `min_days` (house 3), which deliberately matches
+`flag_registry.DEFAULT_PARAMS['CASH_REPEAT_VARIANCE']['min_days']` — the same question already had an
+answer on the findings side and two answers would be the divergence.
+
+This is a REPORT, not a watchdog. `cash_watchdog` (§53) owns cash FINDINGS off the submit trail; this
+module compares the RECEIPT side, writes nothing, and assigns no chargeback — `envelope_report.
+chargeback_parent_row` stays the one home for turning a counted shortage into money off a rep's pay,
+from a screen where a human ticks the box.
+
+### 72.6 Surfaces
+
+- `GET /closing/cash-variance?date_from=&date_to=&markets=&market=&stores=&reps=&verdict=` — RULE FIVE
+  standard filters (bucket-aware markets, manager-span keyset at admission) + `verdict`
+  (`short|over|ok|not_measured|discrepancy`). Serves `rows`, `totals`, `by_store`, `by_employee`,
+  `trends`, `blockers`, and the `pairs` / `bases` vocabularies so the screen spells no pair key, no
+  basis word and no label. READ-ONLY.
+- `/closing/cash-variance` — Cash Variance. Nav: Daily Closing group, `tileOnly` (so it is a dashboard
+  tile, not a sidebar row — the owner's 2026-09-01 "cleaner look" ruling); ⌘K via `route-index.ts`.
+  Placed ABOVE Bank Deposit because `prove_deposit_recon_nav.mjs` locks ePay Recon and Cash Deposit
+  Recon as adjacent.
+- Migration `1070` (additive, nullable, no backfill; 💰 moves no money).
+
+### 72.7 Seams, reported not hidden
+
+- **The bill-pay envelope is essentially never counted** (1 of 50 rows), so the end-to-end check is
+  unmeasurable almost everywhere. No report code can fix that; somebody has to count the envelope.
+- **181 of 275 counted pickups predate mig `1039`** and carry no basis, so they are unmeasurable here
+  by design. They become measurable as new pickups are recorded, with no backfill and no guess.
+- **81 store-days declare more bill-payment cash than total cash** — a subset exceeding its whole, the
+  same defect `billpay_netting` documents as the reason the declared figure cannot be netted by. Left
+  visible as a blocker rather than absorbed into arithmetic.
+- **`envelope_count` holds 1 row**, so the preferred leg of the ladder is almost unused and the
+  pickup side carries this report today — which is exactly why its basis had to be honoured rather
+  than assumed.
+- Identity is `employee_name`, the only identity `daily_closing` carries, so same-named people merge
+  and a rename splits a history. The `stores` column makes a merge visible.
+- **Section number**: §68 was claimed in flight by an open PR and §69–71 are taken, so this is §72;
+  migration `1070` is NOT renumbered to match (uniqueness is the only property
 ## 73. A CASH FIGURE A HUMAN TYPED IS A STATEMENT BY THAT HUMAN — replacing it without keeping the old one destroys evidence (owner ask 2026-10-10)
 
 Owner, verbatim: *"also need to edit the cash entered by the management during cash recon"*.
