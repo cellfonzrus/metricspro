@@ -897,6 +897,9 @@ jobs:
       - name: Run the cash-count correction lock (every writer of a management cash count appends to ONE append-only trail; nothing updates or deletes a revision — index §73)
         working-directory: backend
         run: python3 harness_cash_count_revision.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the cash-variance lock (a cash figure carries its basis; compare REFUSES across bases — replays the six live store-days whose "shortage" was the bill-pay cash to the cent; the $5 band is config, never code — index §72)
+        working-directory: backend
+        run: python3 harness_cash_variance.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
         working-directory: backend
         run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

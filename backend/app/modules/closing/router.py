@@ -30,6 +30,7 @@ from . import envelope_report as envelope_report_mod
 from . import entry_quality
 from . import pickup_actual as _pickup_actual
 from . import count_revision as _count_revision
+from . import cash_variance as _cash_variance
 from . import closer_resolution
 from . import billpay_netting
 from . import submit_refusal as _refusal
@@ -4945,6 +4946,207 @@ def envelope_report(date_from: str = None, date_to: str = None,
                 _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
             "market_filter_skipped": market_filter_skipped,
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
+
+
+# ── Cash variance after management recon (owner ask 2026-10-10, mig 1070) ───────────────────────
+# "assess the shortage and overage based on what the management received compared with the b2b data
+# and the cash envelope, the data will never match so we ignore upto $5 of variance, the system
+# should then be smart to find the trends of a particular store / employee and highlight the same".
+#
+# WHAT THIS DOES NOT DO, because the index says somebody else already does it:
+#   · it computes no variance math — `cash_variance.compare` scores through `deposit_recon.status_for`;
+#   · it re-reads no B2B feed — the POS cash for a (store, day, rep) is ALREADY STORED on
+#     `commcalc.closing_attempt.b2b_cash` (mig 103) at exactly this grain, which is the figure the
+#     close gate judged the rep against. Replaying `_b2b_day` per date would be a second derivation
+#     of a number the platform already recorded, and 45x slower;
+#   · it writes nothing and assigns no chargeback — `envelope_report` owns turning a counted shortage
+#     into money off a rep's pay, from a screen where a human ticks the box.
+#
+# THE DESIGN POINT (see closing/cash_variance.py for the measured numbers): each leg is carried WITH
+# its basis, and a pair whose bases differ is reported as not measurable instead of subtracted. On
+# live data the naive subtraction read 141 of 275 counted store-days as SHORT, every one of them by
+# the bill-payment cash to the cent, which would have accused nine named employees of ~$20,000.
+@router.get("/cash-variance")
+def cash_variance_report(date_from: str = None, date_to: str = None,
+                         market: str = None, markets: str = None, stores: str = None,
+                         reps: str = None, verdict: str = "",
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Shortage/overage after management recon: what management RECEIVED against the cash envelope
+    the rep declared and against the POS cash the till rang, per store-day-rep.
+
+    RULE FIVE standard filters (date range + markets/stores/reps, bucket-aware market matching,
+    manager-span keyset at admission) + `verdict`
+    (short|over|ok|not_measured|discrepancy). The $5 band and the trend threshold are per-org config
+    (mig 1070) resolved through the pure module — never spelled here."""
+    require_org(org_id)
+    client = sb()
+    today = _biz_today_iso()
+    if not date_from and not date_to:
+        date_from, date_to = today[:8] + "01", today
+    else:
+        date_to = date_to or today
+        date_from = date_from or (date_to[:8] + "01")
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select(envelope_report_mod.CLOSING_SELECT)
+            .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+            .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
+
+    store_set = _resolve_store_filter(stores)
+    rep_set = _resolve_rep_filter(reps)
+    market_set = _resolve_market_filter(market, markets)
+    if store_set is not None:
+        rows = [r for r in rows if not r.get("store_code") or (r.get("store_code") or "").upper() in store_set]
+    if rep_set is not None:
+        rows = [r for r in rows if (r.get("employee_name") or "").strip().casefold() in rep_set]
+
+    market_by_code, market_filter_skipped = {}, False
+    try:
+        _srows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,market")
+                  .eq("org_id", org_id).execute().data) or [])
+        market_by_code = {s.get("store_code"): _market_bucket(s.get("market"))
+                          for s in _srows if s.get("store_code")}
+    except Exception:
+        if market_set is not None:
+            market_filter_skipped = True   # NIT-4b posture: never mis-drop on a degraded roster read
+            market_set = None
+    if market_set is not None:
+        rows = [r for r in rows
+                if market_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
+
+    # The per-org band and trend threshold (mig 1070). SELECT * and resolve whatever comes back, so an
+    # un-migrated database reads the house $5 / 3 days instead of erroring — the mig-201 precedent
+    # every writer in this module follows.
+    cfg_row = {}
+    try:
+        _cfgs = (client.schema("commcalc").table("cash_pickup_config").select("*")
+                 .eq("org_id", org_id).limit(1).execute().data) or []
+        cfg_row = _cfgs[0] if _cfgs else {}
+    except Exception as e:
+        print(f"WARN cash_pickup_config unavailable, house cash-variance band used: {e}")
+    dollar_band = _cash_variance.band(cfg_row)
+    trend_days = _cash_variance.min_days(cfg_row)
+
+    def _key(r):
+        return ((r.get("store_code") or "").strip().upper(),
+                str(r.get("close_date") or "")[:10],
+                (r.get("employee_name") or "").strip().casefold())
+
+    # ── The three legs, each read from the ONE table that records it. ──────────────────────────
+    # 1. What management RECEIVED. Two writers can record a count and the report honours both:
+    #    `envelope_count` (mig 936, the Management Envelope Receipt, which also records WHICH cash it
+    #    counted, mig 1036) and `cash_pickup.actual_picked_amount` (mig 949, the count at pickup,
+    #    which records its basis as mig-1039 `amount_basis`). The envelope count wins where both
+    #    exist: it is management's own later count, and the pickup figure is the DM's.
+    #    Live 2026-10-10: envelope_count holds 1 row and cash_pickup 619, so the pickup side carries
+    #    this report today — which is exactly why its basis has to be honoured rather than assumed.
+    pickups, billpays, counts, attempts = {}, {}, {}, {}
+    try:
+        for p in (client.schema("commcalc").table("cash_pickup")
+                  .select("store_code,close_date,employee_name,amount,actual_picked_amount,"
+                          "amount_basis,envelope_opened,actual_counted_by,picked_up_by")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []:
+            pickups[_key(p)] = p
+    except Exception as e:
+        print(f"WARN cash_pickup read failed for cash-variance: {e}")
+    try:
+        for p in (client.schema("commcalc").table("billpay_pickup")
+                  .select("store_code,close_date,employee_name,amount,actual_picked_amount")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []:
+            billpays[_key(p)] = p
+    except Exception as e:
+        print(f"WARN billpay_pickup read failed for cash-variance: {e}")
+    try:
+        for c in (client.schema("commcalc").table("envelope_count").select("*")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []:
+            if c.get("closing_row_id"):
+                counts[c["closing_row_id"]] = c
+    except Exception as e:
+        print(f"WARN envelope_count read failed (run migration 936?): {e}")
+    # 3. The POS cash the till rang, as the close gate recorded it. The LAST attempt for a store-day-
+    #    rep is the one that stands: earlier attempts are the rep's corrected tries, and scoring
+    #    against a superseded figure would report a variance the rep already fixed.
+    try:
+        for a in (client.schema("commcalc").table("closing_attempt")
+                  .select("store_code,close_date,employee_name,attempt_no,b2b_cash")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS * 2).execute().data) or []:
+            k = _key(a)
+            prev = attempts.get(k)
+            if prev is None or _f(a.get("attempt_no")) >= _f(prev.get("attempt_no")):
+                attempts[k] = a
+    except Exception as e:
+        print(f"WARN closing_attempt read failed for cash-variance: {e}")
+
+    out = []
+    for r in rows:
+        k = _key(r)
+        p, bp = pickups.get(k) or {}, billpays.get(k) or {}
+        cnt = counts.get(r.get("id")) or {}
+        att = attempts.get(k) or {}
+        out.append(_cash_variance.day_row(
+            {
+                "closing_row_id": r.get("id"),
+                "close_date": str(r.get("close_date") or "")[:10],
+                "store_code": r.get("store_code"),
+                "store_address": r.get("store_address") or r.get("store_name") or r.get("store_code"),
+                "market": market_by_code.get(r.get("store_code")) or "(no market)",
+                "employee_name": r.get("employee_name"),
+                "envelope_opened": bool(p.get("envelope_opened")),
+                "picked_up_by": p.get("picked_up_by"),
+                "counted_by": cnt.get("counted_by") or p.get("actual_counted_by"),
+                "billpay_counted": bp.get("actual_picked_amount") is not None,
+            },
+            received=_cash_variance.received_leg(cnt, p, bp),
+            declared=_cash_variance.declared_leg(r),
+            pos=_cash_variance.pos_leg(att),
+            dollar_band=dollar_band))
+    out = _cash_variance.verdict_filter(out, verdict)
+
+    stores_roll = _cash_variance.by_store(out)
+    emps_roll = _cash_variance.by_employee(out)
+    return {
+        "rows": out,
+        "totals": _cash_variance.totals(out),
+        "by_store": stores_roll,
+        "by_employee": emps_roll,
+        # "be smart to find the trends of a particular store / employee and highlight the same" —
+        # derived off the rollups above, so a highlight can never disagree with its own table.
+        "trends": (_cash_variance.trends(stores_roll, "store_code", trend_days)
+                   + _cash_variance.trends(emps_roll, "employee_name", trend_days)),
+        # Why the report cannot answer more than it does, counted. REPORTED, never hidden behind a
+        # shorter table: live, the bill-payment envelope is counted on 1 store-day of 50, so the
+        # end-to-end check is unmeasurable almost everywhere and no report code can change that.
+        "blockers": _cash_variance.measurement_blockers(out, _pos_term(client, org_id)),
+        # The screen spells no pair key, no basis word and no verdict label — all three vocabularies
+        # are served from the pure module, so a new pair gets its column and cannot get a stale header.
+        # The pair labels carry the TENANT'S OWN POS word (RULE TWO — no vendor is spelled on a
+        # screen or in a payload; harness_carrier_vocab_guard's POS axis fails the build on one).
+        "pairs": _cash_variance.pair_catalog(_pos_term(client, org_id)),
+        "bases": _cash_variance.basis_catalog(
+            _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
+        "band": dollar_band,
+        "trend_min_days": trend_days,
+        "band_is_house_default": not bool((cfg_row or {}).get("cash_variance_band")),
+        "date_from": date_from, "date_to": date_to,
+        "market_filter_skipped": market_filter_skipped,
+    }
 
 
 class EnvelopeCountIn(LaxModel):
