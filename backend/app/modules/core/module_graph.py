@@ -207,7 +207,7 @@ FACTS: dict[str, dict] = {
                     '(daily_closing.counts and closing_metric_line) are folded by one reader, and a '
                     'store-level figure is never attributed to a person.',
         "homes": ('app/modules/closing/metric_catalog.py',),
-        "index": ('74',),
+        "index": ('76',),
         "locks": ('harness_metric_catalog_lock.py', 'harness_daily_incentive.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04, and on 2026-10-10 it stripped the hand-written caller comments
@@ -231,7 +231,7 @@ FACTS: dict[str, dict] = {
                     'cannot be verified fails closed, and a pool whose split cannot be measured is '
                     'returned unallocated rather than split evenly.',
         "homes": ('app/modules/commcalc/daily_incentive.py',),
-        "index": ('74',),
+        "index": ('76',),
         "locks": ('harness_daily_incentive.py', 'harness_metric_catalog_lock.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (see the note above).
         "callers": {
@@ -344,6 +344,17 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/void_watchdog.py': ('_reg',),
             'app/modules/commcalc/watchdog_router.py': ('_reg',),
             'app/modules/payables/engine.py': ('_reg',),
+        },
+    },
+    'cash_count_comparability': {
+        "question": 'May a count of the whole envelope be scored against this expected figure?',
+        "homes": ('app/modules/closing/billpay_netting.py',),
+        "index": ('74.2', '74.3'),
+        "locks": ('harness_envelope_count_basis.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/closing/pickup_actual.py': ('_bn',),
+            'app/modules/closing/router.py': ('billpay_netting',),
         },
     },
     'cash_count_correction_trail': {

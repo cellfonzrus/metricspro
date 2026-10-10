@@ -138,7 +138,7 @@ export default function CashPickupPage() {
           { header: 'Recorded basis (collected)', get: (r: CashFigures) => r.amount_basis ? (r.amount_basis.recorded ? r.amount_basis.label : 'not recorded') : '' },
           { header: 'Envelope opened', get: (r: any) => (r.picked_up ? (r.envelope_opened ? 'opened' : 'sealed') : '') },
           { header: 'Actual picked', get: (r: any) => r.actual_picked_amount ?? '', money: true },
-          { header: 'Pickup variance', get: (r: any) => r.pickup_variance_status ? `${r.pickup_variance} (${r.pickup_variance_status})` : '' },
+          { header: 'Pickup variance', get: (r: any) => !r.pickup_variance_status ? '' : r.pickup_variance == null ? r.pickup_variance_status : `${r.pickup_variance} (${r.pickup_variance_status})` },
           { header: 'POS cash (store-day)', get: (r: any) => r.pos_cash ?? 'no POS data', money: true },
           { header: 'POS status', get: (r: any) => r.pos_status || '' },
           { header: 'Picked up', get: (r: any) => (r.picked_up ? 'Yes' : 'No') },
@@ -615,6 +615,12 @@ export default function CashPickupPage() {
                                 {e.pickup_variance_status === 'short' && <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {fmt(e.pickup_variance)} short</span>}
                                 {e.pickup_variance_status === 'over' && <span style={{ color: '#b45309', fontWeight: 700 }}> +{fmt(e.pickup_variance)} over</span>}
                                 {e.pickup_variance_status === 'match' && <span style={{ color: '#166534' }}> ✓</span>}
+                                {/* COUNTED BUT NOT SCOREABLE — shown, never silent (owner question
+                                    2026-10-10). The expected figure nets bill-payment cash by the
+                                    POS while the envelope was netted by the rep's own declared
+                                    figure, so a short/over verdict here would be the gap between
+                                    two declarations wearing a shortage's clothes. */}
+                                {e.pickup_variance_status === 'not_comparable' && <span style={{ color: 'var(--text3)' }} title={e.pickup_variance_reason || undefined}> · not comparable</span>}
                                 {/* mig 1039 — a pickup recorded on a DIFFERENT basis than the one
                                     this screen now works on. Its variance is what happened at the
                                     time and is never re-scored; what the reader is owed is the
