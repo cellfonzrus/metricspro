@@ -22728,6 +22728,17 @@ cost by an account→store index and its rows carry **no device identifier**, so
 verdict cannot reach it. Excused — and PINNED: §H6 asserts that path is identifier-free, so the day it
 gains one the check goes red and the sibling must be fixed too.
 
+### 67.4a THE OWNER STATEMENT, VERSIONED
+
+The column is migration `1067`; declaring `activating` is a separate owner-approved statement, and it
+lives at **`database/runbooks/device_cost_store_activating.sql`** — the column and the declaration in
+one paste, printing the declarations before and after, as ONE Supabase SQL Editor Run that commits
+itself (a BEGIN in one Run and a COMMIT in another is silently discarded). It is versioned in the
+repo rather than left in a chat share, because an owner statement that exists only in a share cannot
+be audited later. **A recompute follows** for each month to be restated (Jun–Oct 2026); a month that
+is not recomputed keeps its stored per-store figures. Undo is `SET device_cost_store_basis = NULL`
+plus the same recomputes.
+
 ### 67.5 THE LOCK
 
 `harness_device_inventory_cogs.py` **§H** (the harness that already owns the device-cost basis; 70 →

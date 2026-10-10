@@ -607,6 +607,7 @@ on:
       - "backend/harness_device_inventory_cogs.py"
       - "backend/app/modules/account/device_cogs.py"
       - "database/migrations/1067_device_cost_store_basis.sql"
+      - "database/runbooks/device_cost_store_activating.sql"
       - "frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
       - "backend/harness_statement_crosscheck_earned.py"
       - "backend/app/modules/account/analysis.py"
