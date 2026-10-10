@@ -180,7 +180,6 @@ harness_ma_tx_pnl.py
 harness_management_incentive.py
 harness_management_incentive_chicago.py
 harness_market_enumeration_guard.py
-harness_market_resolution_guard.py
 harness_market_vocabulary_truth.py
 harness_marketing_event.py
 harness_marketing_event_sales.py
