@@ -59,6 +59,7 @@ export type ScreenKey =
   | 'royalty_report' | 'royalty_recon'
   // the per-DEVICE equipment reimbursement report (index §65, owner ask 2026-10-09)
   | 'device_line_reimbursement'
+  | 'mdf_entitlement_coverage'
 
 export type ScreenDest = {
   /** Where the reader is sent. May carry a #anchor; the gate uses the path half. */
