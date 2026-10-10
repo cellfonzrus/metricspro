@@ -41,6 +41,12 @@ Classifications (the pinned inventory — docs/SYSTEM_DATA_FLOW_INDEX.md §13 ca
 To add a new site: use core.scope (preferred — then pin it CANONICAL/OVERLAY), or justify one of
 the classifications above IN THE CODE COMMENT and pin it here in the same PR.
 
+WHERE IT RUNS (2026-10-10): a step of `.github/workflows/carrier-vocab-guard.yml` — the lock-harness
+job, beside the org-tree walk lock (§48.7) whose refactor this guard failed to follow. Before that it
+ran in NO workflow at all and had drifted red for weeks: a guard nobody runs is not a gate. The
+harness is named in that workflow's `pull_request.paths` too, because a lock behind an allowlist that
+does not name its own subject skips silently (the §13e lesson).
+
 No DB, no network, no app imports.  Run:  cd backend && python3 harness_market_resolution_guard.py
 """
 import os
