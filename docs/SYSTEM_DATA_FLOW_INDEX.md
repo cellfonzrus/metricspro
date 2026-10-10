@@ -93,6 +93,7 @@ Primary code homes:
 | 66 | **A fallback-basis component is a placement of last resort** | "Why does the Gross Profit report show one declared pay type in the Comp Rebate column on one feed and the Comp MDF column on the other? When may a keyword guess override the org’s own declaration (never), and what should a report do with a dollar whose component was a guess — decline it, or name a column for it?" |
 | 67 | **Bank deposit is a step, not a form on a report** | "Where does a bank deposit get recorded, and can a sealed envelope be opened at the store that found it?" |
 | 69 | **A declaration must be HONOURABLE — the vocabulary has to be able to express it** | "My own declaration says this carrier money is MDF, so why is it booking on the device reimbursement line? When the platform cannot express the category I declared, who decides where the dollar goes — me or a keyword rule? And which months need a P&L recompute once it is fixed?" |
+| 72 | **A cash variance is meaningless unless both figures count the same cash** | "After management recon, who is short and who is over — management's count against the cash envelope and against the B2B cash? Why does nothing ever match, which differences are a definition rather than a shortage, and which store or employee is out the same way every week?" |
 
 ---
 
@@ -3651,6 +3652,12 @@ the owner wants it).
 
 **Purpose.** Reconcile cash collected at close vs cash actually deposited in the bank, per store per day.
 
+> **The SHORTAGE/OVERAGE ASSESSMENT is §72.** `/closing/cash-variance` compares what
+> management RECEIVED against the cash envelope and against the POS cash, at a per-org $5 band
+> (mig `1070`), and highlights the store/employee trends. It carries each figure WITH its basis
+> and refuses to subtract across bases — the naive subtraction read 141 of 275 live counted
+> store-days as short, every one of them by the bill-payment cash to the cent.
+>
 > **The BANKING STEP is now its own screen — see §67.** `/closing/bank-deposit` sits between the two
 > pickups and this reconciliation, with Store Cash and bill-payment cash in their own sections
 > (declared by the category's mig-509 `basis`, never a new column). It derives nothing: the figures
@@ -6244,6 +6251,7 @@ rendering the resolved name.
 
 - `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§70).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
+- `commcalc.cash_pickup_config.cash_variance_band` / `.cash_variance_min_days` (mig `1070`) — the dollar band below which a cash difference is counting noise, and how many out-of-band days make a trend. Owner 2026-10-10, "we ignore upto $5 of variance". NULL ⇒ the house $5 / 3 days, NEVER zero. Written by an owner; read in ONE place, `closing/cash_variance.band` / `.min_days`, dereferenced by `GET /closing/cash-variance` and by nothing else (§72).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
 
@@ -6493,6 +6501,7 @@ rendering the resolved name.
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
 - `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§70) — one reconciliation, two readers, never two derivations.
+- `GET /closing/cash-variance?date_from=&date_to=&markets=&stores=&reps=&verdict=` — shortage and overage AFTER management recon: what management received (`envelope_count` first, else `cash_pickup.actual_picked_amount`), the cash envelope the rep declared (`daily_closing.t_cash`) and the POS cash the close gate recorded (`closing_attempt.b2b_cash`), per store-day-rep — each figure carried WITH its basis, and a pair whose bases differ reported as NOT MEASURABLE rather than subtracted. Plus `by_store` / `by_employee` rollups off ONE summariser, the four trend kinds, and `blockers` naming what cannot be measured and why. Band + trend threshold are per-org config (mig `1070`); the verdict is `deposit_recon.status_for`; the POS figure is read, never re-derived from the feed. READ-ONLY, no writer (§72).
 - `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1069): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§70).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
@@ -23353,3 +23362,126 @@ number `1069` is NOT renumbered — it is unique on disk and uniqueness is the o
 numbering lock asserts (`harness_unique_numbers_lock.py`); a migration number does not have to match
 its index section, and renaming an applied-or-pending file is the riskier change. See the
 index-section-number race in §62.
+
+---
+
+## 72. A VARIANCE BETWEEN TWO CASH FIGURES IS MEANINGLESS UNLESS BOTH COUNT THE SAME CASH (owner ask 2026-10-10)
+
+Owner, verbatim: *"need to create a report after management recon to assess the shortage and overage
+based on what the management received compared with the b2b data and the cash envelope, the data will
+never match so we ignore upto $5 of variance, the system should then be smart to find the trends of a
+particular store / employee and highlight the same- ti shoudl be all dynamic with all filters"*.
+
+### 72.1 The owner is right that the data never matches, and the reason is not shortage
+
+Measured on live house-org data 2026-09-01 → 2026-10-10, **before** any of this was written:
+
+| Comparison | Inside $5 | Over | Short |
+|---|---|---|---|
+| management count vs the figure stored on the pickup row | 113 | 21 | **141** |
+| management count vs the NET store cash (drawer − declared bill-pay) | **194** | 70 | 11 |
+| rep's declared drawer vs `closing_attempt.b2b_cash` | 36 | 114 | 16 |
+| rep's declared drawer NET vs `b2b_cash` | 1 | 3 | **162** |
+
+Six of the "shortages" were checked by hand and were the bill-payment cash **to the cent**:
+574−324=250, 866−585=281, 240−200=40, 335−260=75, 1699−929=770, 1378−1083=295. The money had left
+the store in the OTHER envelope (`billpay_pickup`). A report built on naive subtraction would have
+accused nine named employees of about **$20,000** they never took.
+
+### 72.2 The class, not the instance
+
+The instance is "the management count reads short by the bill-pay cash". The class is that
+**subtraction does not care what its operands mean**, so any reader holding two bare floats can
+manufacture a shortage out of a definition. The platform already RECORDED the basis of each figure
+and had nowhere to use it: `cash_pickup.amount_basis` (mig `1039`), `envelope_count.basis`
+(mig `1036`), `deposit_recon.cash_for_basis` (mig `509`).
+
+So in `closing/cash_variance.py` **a cash figure is never a float**. It is `leg(amount, basis,
+source)`, and `compare()` returns `measured: False` with a reason — `leg_absent` / `basis_unknown` /
+`basis_mismatch` — instead of a number. There is no overload taking two bare floats, so a caller
+cannot opt out. `harness_cash_variance.py` §B/§C fail the build if it ever subtracts across bases,
+replaying all six live store-days above as a regression.
+
+**Absence is never zero.** `billpay_pickup` holds 50 rows of which exactly ONE is counted, so the
+whole-drawer management figure is NOT MEASURABLE on 264 of 275 counted store-days. The report says so
+(`blockers`) rather than reconstructing the uncounted envelope as $0.00 and billing the rep for it.
+
+### 72.3 The three legs, each from the ONE table that records it
+
+| Leg | Source | Basis, and how it is known |
+|---|---|---|
+| management received | `envelope_count.counted_amount` (mig `936`) first, else `cash_pickup.actual_picked_amount` (mig `949`) | `envelope_count.basis` (mig `1036`), else `PICKUP_BASIS_TO_CASH[cash_pickup.amount_basis]` (mig `1039`: `off`/`none` ⇒ whole drawer, `pos`/`declared` ⇒ store cash). NULL ⇒ **unknown**, never inferred — 181 of 275 live rows, 126 of which would "tie" on the net basis |
+| the cash envelope | `daily_closing.t_cash` (fallback `store_cash`) | `total_cash` **by definition** — owner 2026-09-02, *"Total cash in store including Bill Payments"*. It does NOT net: 81 live store-days declare more bill-pay cash than total cash, so netting would produce negative cash |
+| B2B cash | `closing_attempt.b2b_cash` (mig `103`) | `total_cash`, PROVEN not assumed: the gate compares it against `entered_cash`, which equals `t_cash` on all 166 live store-days |
+
+Where BOTH envelopes were counted the two are added and the leg is promoted to the whole drawer,
+which is the only thing that makes the end-to-end POS check possible at all.
+
+**NO SECOND DERIVATION.** `router._b2b_day` is deliberately NOT replayed: the POS cash for a
+(store, day, rep) is already stored at exactly this grain, and it is the figure the rep was judged
+against. The verdict is `deposit_recon.status_for` — the platform's existing truth table — so
+negative is short here like everywhere else.
+
+### 72.4 The $5 band is config, never code (RULE TWO)
+
+`HOUSE_BAND = 5.00` is the ONE literal in the subsystem; the per-org override is
+`commcalc.cash_pickup_config.cash_variance_band` / `.cash_variance_min_days` (mig `1070`, on the
+EXISTING per-org config table for this chain — a new table for two numbers would be the sibling the
+index rules forbid). NULL / blank / negative / unparseable resolve to the house default, **never to
+zero**: zero would make every rounding difference a shortage against a named employee.
+`harness_cash_variance.py` §F fails the build if a second non-zero dollar literal appears in the
+module or if the endpoint spells a band of its own.
+
+**NOT CHANGED, ON THE RECORD.** Six existing readers each carry their own band as a default argument
+— `deposit_recon.status_for` ($1), `envelope_report.count_fields` ($0), `deposit_accountability.
+pos_next_to` ($1) / `.dm_shortage_rows` ($0), `billpay_pickup.billpay_pos_mismatch` ($1),
+`external_credit_recon.recon_row` ($0). Widening them to $5 would SILENTLY STOP SURFACING variances
+those screens report today, which is a money-visibility change nobody asked for. They are excused
+here deliberately, not overlooked: the one home now exists and migrating each screen is its own
+reviewable change.
+
+### 72.5 The trends
+
+`cash_variance.trends()` runs over the rollups `by_store` / `by_employee` already produced, so a
+highlight can never disagree with the table under it. Four kinds, declared as data:
+`repeat_short` · `repeat_over` · `one_direction` (a run that is only ever one way — random counting
+error lands on both sides) · `nothing_measurable` (every day unmeasurable, so the subject is invisible
+to the control rather than clean). The threshold is `min_days` (house 3), which deliberately matches
+`flag_registry.DEFAULT_PARAMS['CASH_REPEAT_VARIANCE']['min_days']` — the same question already had an
+answer on the findings side and two answers would be the divergence.
+
+This is a REPORT, not a watchdog. `cash_watchdog` (§53) owns cash FINDINGS off the submit trail; this
+module compares the RECEIPT side, writes nothing, and assigns no chargeback — `envelope_report.
+chargeback_parent_row` stays the one home for turning a counted shortage into money off a rep's pay,
+from a screen where a human ticks the box.
+
+### 72.6 Surfaces
+
+- `GET /closing/cash-variance?date_from=&date_to=&markets=&market=&stores=&reps=&verdict=` — RULE FIVE
+  standard filters (bucket-aware markets, manager-span keyset at admission) + `verdict`
+  (`short|over|ok|not_measured|discrepancy`). Serves `rows`, `totals`, `by_store`, `by_employee`,
+  `trends`, `blockers`, and the `pairs` / `bases` vocabularies so the screen spells no pair key, no
+  basis word and no label. READ-ONLY.
+- `/closing/cash-variance` — Cash Variance. Nav: Daily Closing group, `tileOnly` (so it is a dashboard
+  tile, not a sidebar row — the owner's 2026-09-01 "cleaner look" ruling); ⌘K via `route-index.ts`.
+  Placed ABOVE Bank Deposit because `prove_deposit_recon_nav.mjs` locks ePay Recon and Cash Deposit
+  Recon as adjacent.
+- Migration `1070` (additive, nullable, no backfill; 💰 moves no money).
+
+### 72.7 Seams, reported not hidden
+
+- **The bill-pay envelope is essentially never counted** (1 of 50 rows), so the end-to-end check is
+  unmeasurable almost everywhere. No report code can fix that; somebody has to count the envelope.
+- **181 of 275 counted pickups predate mig `1039`** and carry no basis, so they are unmeasurable here
+  by design. They become measurable as new pickups are recorded, with no backfill and no guess.
+- **81 store-days declare more bill-payment cash than total cash** — a subset exceeding its whole, the
+  same defect `billpay_netting` documents as the reason the declared figure cannot be netted by. Left
+  visible as a blocker rather than absorbed into arithmetic.
+- **`envelope_count` holds 1 row**, so the preferred leg of the ladder is almost unused and the
+  pickup side carries this report today — which is exactly why its basis had to be honoured rather
+  than assumed.
+- Identity is `employee_name`, the only identity `daily_closing` carries, so same-named people merge
+  and a rename splits a history. The `stores` column makes a merge visible.
+- **Section number**: §68 was claimed in flight by an open PR and §69–71 are taken, so this is §72;
+  migration `1070` is NOT renumbered to match (uniqueness is the only property
+  `harness_unique_numbers_lock.py` asserts). See the index-section-number race in §62.

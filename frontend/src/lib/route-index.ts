@@ -105,6 +105,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/closing/count-config', label: 'Cash Count Setup', aliases: ['count config', 'denomination count'] },
   { path: '/closing/deposit-categories' },
   { path: '/closing/deposit-recon' },
+  { path: '/closing/cash-variance' },
   { path: '/closing/duplicates', label: 'Duplicate Closings', aliases: ['duplicate closing', 'double closing'] },
   { path: '/closing/envelope-config' },
   { path: '/closing/envelope-payout' },
