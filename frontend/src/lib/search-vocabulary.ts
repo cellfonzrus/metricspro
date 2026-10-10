@@ -196,7 +196,7 @@ export const VOCABULARY: readonly VocabGroup[] = [
     note: 'Retention Analysis, Watchdog port-outs and churn.' },
   { terms: ['financing', 'finance plan', 'instalment', 'instalments', 'installment',
             'installments', 'credit', 'lease', 'leasing'],
-    note: 'Financing, Multi-Month Installments, Insurance & Leases, device lending.' },
+    note: 'Financing, instalment payouts, Insurance & Leases, device lending.' },
 
   // ── keeping the place honest ───────────────────────────────────────────────────────────────────
   { terms: ['flag', 'flags', 'alert', 'alerts', 'exception', 'exceptions', 'finding', 'findings',

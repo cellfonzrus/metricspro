@@ -289,6 +289,16 @@ const VOCABPROSE = rd('src/lib/search-vocabulary.ts').toLowerCase()
 ck('G5b RULE TWO reaches the group NOTES too, not just the terms (the gap that shipped red CI)',
    !FORBIDDEN.some(f => f.includes(' ') && VOCABPROSE.includes(f)),
    FORBIDDEN.filter(f => f.includes(' ') && VOCABPROSE.includes(f)))
+// The multi-month OFFER lock (harness_multimonth_offer_lock.py) allowlists every frontend file that
+// may NAME multi-month without asking the pay-offer predicate. A word list offers nothing — what a
+// search can reach is still decided by the §54.12 viewer gate — so the right answer is to keep the
+// phrase out of the notes rather than to grow that allowlist by one. G5d pins that, because the slip
+// is easy: the group's TERMS ('instalment', 'installments') do not match the lock's pattern and
+// still find the page, so only decorative prose was ever at stake.
+ck('G5d no note NAMES multi-month — the offer lock allowlists surfaces, and a word list is not one',
+   !/multi[-\u2011 ]?month|multimonth/i.test(rd('src/lib/search-vocabulary.ts')))
+ck('G6c ARMED — G5d would catch the phrase put back into a note',
+   /multi[-\u2011 ]?month|multimonth/i.test(`note: 'Financing, Multi-Month Installments.'`))
 ck('G5c the DERIVED guard reaches this file — it scans frontend/src/**/*.ts, so it owns the verdict',
    (() => {
      // Read defensively and REPORT, never throw: if the derived guard is moved or renamed, that is a
