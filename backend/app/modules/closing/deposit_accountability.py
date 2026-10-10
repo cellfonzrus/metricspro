@@ -137,14 +137,23 @@ def day_accountability(pickup_rows):
         # `picked_total` stays the declared movement figure (the money posture lives solely in
         # _cash_position_core's knob — one gate, not two).
         pickup_short_rows, pickup_over_rows, pickup_variance_total = 0, 0, 0.0
+        # NOT-COMPARABLE IS ITS OWN COUNT, never folded into the other two and never added to the
+        # total (owner question 2026-10-10). `row_variance` refuses a comparison whose expected
+        # figure nets bill-payment cash by the POS while the envelope was netted by the rep's own
+        # declared figure; its `variance` is then None by design. Counting such a row as short
+        # would be the defect; counting it as a match would hide it; so it is counted as itself and
+        # REPORTED, which is the §72 posture for a figure that cannot be measured.
+        pickup_not_comparable_rows = 0
         for r in rs:
             st = envelope_state(r)
             amt = _f(r.get("amount"))
             vf = _row_variance(r) if st != "unpicked" else None
-            if vf:
+            if vf and vf.get("variance") is not None:
                 pickup_variance_total = round(pickup_variance_total + vf["variance"], 2)
                 pickup_short_rows += 1 if vf["status"] == "short" else 0
                 pickup_over_rows += 1 if vf["status"] == "over" else 0
+            elif vf:
+                pickup_not_comparable_rows += 1
             if st != "unpicked":
                 picked_total += amt
                 picked_n += 1
@@ -189,6 +198,11 @@ def day_accountability(pickup_rows):
                 "pickup_row_id": r.get("id"),
                 "pickup_variance": vf["variance"] if vf else None,
                 "pickup_variance_status": vf["status"] if vf else None,
+                # WHICH CASH the expected figure counted, and — when it cannot be scored — the one
+                # sentence saying why. Both from the one home; this module decides neither.
+                "pickup_amount_basis": vf.get("amount_basis") if vf else None,
+                "pickup_variance_comparable": vf.get("comparable") if vf else None,
+                "pickup_variance_reason": vf.get("reason") if vf else None,
                 "disposition": r.get("disposition"), "handed_to": r.get("handed_to"),
                 "deposit_amount": r.get("deposit_amount"),
                 "deposit_flagged": bool(r.get("deposit_flagged")),
@@ -222,6 +236,9 @@ def day_accountability(pickup_rows):
             "pickup_short_rows": pickup_short_rows,
             "pickup_over_rows": pickup_over_rows,
             "pickup_variance_total": round(pickup_variance_total, 2),
+            # The day's count of envelopes whose variance cannot be measured — reported beside the
+            # total so a clean-looking total is never mistaken for a day with nothing outstanding.
+            "pickup_not_comparable_rows": pickup_not_comparable_rows,
             "green": green,
             "envelopes": envs,
         })
@@ -289,6 +306,11 @@ def dm_shortage_rows(day_rows, tolerance=0.0):
             b = by_dm.setdefault(dm, {
                 "dm": dm, "envelopes": 0, "counted_rows": 0, "uncounted_rows": 0,
                 "opened_rows": 0, "short_rows": 0, "over_rows": 0, "match_rows": 0,
+                # COUNTED, BUT NOT SCOREABLE — its own bucket, because this rollup is what names a
+                # DM as short. Folding it into `uncounted_rows` would say nobody counted the
+                # envelope (untrue, and it hides a DM who did their job); folding it into
+                # `match_rows` would say it tied out (untrue, and it hides the real finding).
+                "not_comparable_rows": 0,
                 "declared_total": 0.0, "actual_total": 0.0,
                 "short_amount": 0.0, "over_amount": 0.0, "net_variance": 0.0,
                 "stores": set(), "days": set(), "shorts": [],
@@ -300,6 +322,16 @@ def dm_shortage_rows(day_rows, tolerance=0.0):
             b["stores"].add(r.get("store_code") or "?")
             b["days"].add(r.get("day") or "")
             var = env.get("pickup_variance")
+            cmp_ = env.get("pickup_variance_comparable")
+            if cmp_ is False:
+                # A count EXISTS (so the DM is not "uncounted") but its expected figure is on a
+                # basis that cannot be scored against a whole-envelope count — see
+                # `billpay_netting.count_comparable`. Counted, and deliberately not judged.
+                b["counted_rows"] += 1
+                b["not_comparable_rows"] += 1
+                b["actual_total"] = round(b["actual_total"]
+                                          + _f(env.get("actual_picked_amount")), 2)
+                continue
             if var is None:
                 b["uncounted_rows"] += 1
                 continue

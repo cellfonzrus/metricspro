@@ -472,6 +472,12 @@ on:
       # silently (the §13e lesson), so the harness itself is listed; its subjects (core/scope.py,
       # the closing / storeops / commcalc routers) are already named above and by the push globs.
       - "backend/harness_market_resolution_guard.py"
+      # index §74 — the envelope-count basis gate. The lock names its OWN subjects, because a job
+      # behind an allowlist that does not name them skips silently (the §13e lesson). The two
+      # routers and deposit_accountability.py are already named here and below.
+      - "backend/harness_envelope_count_basis.py"
+      - "backend/app/modules/closing/pickup_actual.py"
+      - "backend/app/modules/closing/billpay_netting.py"
       - "backend/app/modules/storeops/org_chain.py"
       - "backend/app/modules/closing/deposit_accountability.py"
       - "backend/app/core/actors.py"
@@ -900,6 +906,9 @@ jobs:
       - name: Run the cash-variance lock (a cash figure carries its basis; compare REFUSES across bases — replays the six live store-days whose "shortage" was the bill-pay cash to the cent; the $5 band is config, never code — index §72)
         working-directory: backend
         run: python3 harness_cash_variance.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
+        working-directory: backend
+        run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
         working-directory: backend
         run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

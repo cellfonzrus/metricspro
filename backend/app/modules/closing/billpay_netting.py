@@ -243,3 +243,138 @@ def envelope_note(res, row_key):
                   "store-day than anyone declared holding.")
         return s
     return None
+
+
+# ── MAY A COUNT OF THE WHOLE ENVELOPE BE COMPARED WITH AN AMOUNT ON THIS BASIS? ─────────────────
+# THE ONE HOME for that judgement (owner question 2026-10-10, B-3PL / 2026-10-02: "declared on
+# envelope is 552 but written on envelope 671, actual cash is 671 — where is the 552 coming from").
+#
+# WHAT WAS WRONG, MEASURED. `pickup_actual.row_variance` subtracted the envelope's stored `amount`
+# from `actual_picked_amount` and called the difference short or over. That was sound when it was
+# written: `amount` was the WHOLE drawer (its own docstring says "store_cash + epay_cash") and the
+# bag held the whole drawer. Then this module's netting was switched on, which made `amount` *the
+# drawer minus the POS bill-payment cash* — while the bag still holds whatever the rep physically
+# left in it, and A REP NETS BY HIS OWN DECLARED FIGURE, NOT THE POS ONE. Two different
+# subtractions, compared with each other, every day since.
+#
+# Live evidence (house org, 2026-10-10): of 998 cash pickups, 660 carry a DM count; 135 of those are
+# on the 'pos' basis and 105 of them read short or over — 59 short ($1,365.50) and 46 over
+# ($3,682.30). Each of those differences is the POS-versus-declared gap on bill-payment cash, which
+# is a real fact about a rep's declaration and is NOT cash missing from a bag. B-3PL / 2026-10-02 is
+# one of the 46: expected $552.50 (the $2,646.00 drawer less $2,093.50 of POS bill-payment cash),
+# counted $671.00 (the drawer less the rep's own declared $1,975.00), "over" by exactly the
+# $118.50 the rep under-declared.
+#
+# THE CLASS, NOT THE INSTANCE. §72 already says a variance between two cash figures is meaningless
+# unless both count the same cash. This is the same class one level down, and the distinction §72's
+# vocabulary CANNOT express: here both figures count the same cash (store cash), and they still
+# disagree because they were netted FROM DIFFERENT SOURCES. §72's bases name WHICH CASH; a pickup
+# basis names WHOSE FIGURE was taken out. So this judgement belongs beside the basis words it reads,
+# not folded into §72's cash bases, which would make 'pos' and 'declared' look identical.
+#
+# THE RULE, derived from what each basis means rather than from which rows look wrong:
+#   'off'      nothing was netted      → both figures are the whole drawer          → COMPARABLE
+#   'none'     no POS figure existed   → nothing was netted, same as above          → COMPARABLE
+#   'declared' netted by the REP's own figure → the bag was netted the same way     → COMPARABLE
+#   'pos'      netted by the POS figure → the bag was netted by the rep's figure    → NOT COMPARABLE
+#   a basis NOT RECORDED (NULL, '': 456 live rows predate mig 1039) → resolves to 'off' → COMPARABLE
+#   a word that is not in PICKUP_BASES at all                       → resolves to 'off' → COMPARABLE
+#
+# WHY AN UNRECORDED BASIS IS NOT "UNKNOWN" HERE, AND WHY THAT IS NOT MY CALL TO MAKE. The platform
+# ALREADY ruled on a missing pickup basis, in `router.pickup_basis_label`: unrecorded resolves to
+# `off` — total cash — worded honestly as "total cash (not recorded — collected before the basis was
+# stored)". That is correct on the facts: netting did not exist before mig 1038/1039, so an amount
+# written before the column was added IS the whole drawer. Inventing a second answer here would be
+# the copied-fact defect CLAUDE.md forbids, and it would also be WRONG IN PRACTICE: it would refuse
+# 226 live shortage findings worth $59,321.53 that are perfectly sound. So the resolution is MOVED
+# into this module (`resolved_basis`) and `pickup_basis_label` dereferences it — one fact, one home,
+# both callers reading it.
+#
+# THE ALLOWLIST IS ON THE RESOLVED BASIS, not the raw one — the
+# `carrier_dollar_class.component_is_evidence` posture (§66) applied where it belongs. A basis word
+# a future migration adds therefore resolves to `off` exactly as `pickup_basis_label` already words
+# it, instead of the two surfaces disagreeing about the same row.
+COUNT_COMPARABLE_BASES = ("off", "none", "declared")
+
+#: What an unrecorded or unrecognised pickup basis resolves to. The pre-netting reality: before the
+#: column existed, a pickup amount was the whole drawer.
+BASIS_WHEN_UNRECORDED = "off"
+
+#: Why a basis is not comparable, in the words a person reading the screen needs. One sentence,
+#: because "not comparable" on its own invites somebody to go looking for missing cash.
+COUNT_INCOMPARABLE_REASON = {
+    "pos": ("the expected figure nets bill-payment cash by the POS, but the envelope was netted by "
+            "the rep's own declared figure — the difference is the POS-versus-declared gap, not "
+            "cash missing from the bag"),
+}
+
+
+def basis_recorded(basis):
+    """PURE: did this row actually RECORD a basis (mig 1039), or is it absent/unrecognised?"""
+    return str(basis or "").strip().lower() in PICKUP_BASES
+
+
+def resolved_basis(basis):
+    """PURE: the basis to reason with — the recorded one, else `BASIS_WHEN_UNRECORDED`.
+
+    THE ONE HOME for "what does a missing pickup basis mean", dereferenced by
+    `router.pickup_basis_label` (which words it for a screen) and by `count_comparable` (which
+    decides whether a count may be scored against it). Whether it was RECORDED stays separately
+    answerable via `basis_recorded`, so a screen can say "as far as can be told" rather than
+    claiming somebody declared it.
+    """
+    b = str(basis or "").strip().lower()
+    return b if b in PICKUP_BASES else BASIS_WHEN_UNRECORDED
+
+
+def count_comparable(basis):
+    """PURE: may a count of the WHOLE envelope be scored against an amount stored on `basis`?
+
+    Decided on the RESOLVED basis, so this and `pickup_basis_label` can never disagree about the
+    same row. See the note above for the derivation of each case.
+    """
+    return resolved_basis(basis) in COUNT_COMPARABLE_BASES
+
+
+def count_incomparable_reason(basis):
+    """PURE: the one-sentence WHY for a basis `count_comparable` rejects, or None when it accepts."""
+    b = resolved_basis(basis)
+    if count_comparable(b):
+        return None
+    return COUNT_INCOMPARABLE_REASON.get(b) or (
+        f"the expected figure is on the '{b}' basis, which has not been ruled comparable with a "
+        "count of the whole envelope")
+
+
+# ── WHICH PICKUP ENVELOPE IS EVER NETTED (the sibling half of the fix) ──────────────────────────
+# `amount_basis` exists on `commcalc.cash_pickup` ONLY (mig 1039). The bill-payment envelope has no
+# such column, and adding one would be a migration for a fact that is already settled by
+# construction: netting moves bill-pay cash OUT of the cash envelope and INTO the bill-payment one,
+# so the bill-payment envelope's amount is never reduced by anything. Its basis is knowable without
+# storing it — and a knowable fact read from ONE home beats a column nobody writes.
+#
+# Without this, the basis gate would read the bill-pay envelope's missing column as "unknown" and
+# refuse every one of its counts — a guard breaking the sibling it was supposed to protect, which is
+# precisely the failure "find the siblings before you ship" exists to catch.
+BASIS_NOT_NETTED = "off"
+
+#: The one pickup table whose amount netting can reduce. A VALUE, not a branch in a caller.
+NETTED_PICKUP_TABLE = "cash_pickup"
+
+
+def pickup_amount_basis_for(table, stored_basis=None):
+    """PURE: the basis of a pickup row's `amount`, for the basis gate.
+
+    The CASH envelope carries its own stored basis (mig 1039; None where the row predates it). Any
+    other pickup envelope is by construction never netted, so its amount is on the un-netted basis
+    whatever column its table lacks. ONE home, so neither the confirm path nor the late open decides
+    this for itself.
+    """
+    t = str(table or "").strip()
+    if not t:
+        # FAIL CLOSED: a caller that cannot name its own table has not established that its amount
+        # was never netted, and "probably un-netted" is how a shortage gets scored against somebody.
+        return stored_basis
+    if t == NETTED_PICKUP_TABLE:
+        return stored_basis
+    return BASIS_NOT_NETTED
