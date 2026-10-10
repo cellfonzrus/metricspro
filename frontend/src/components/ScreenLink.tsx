@@ -54,7 +54,7 @@ export type ScreenKey =
   // the POS inventory page — its Integrity flags tab reads the sales lines and the commission report (index §11b, 2026-09-24)
   | 'pos_inventory'
   // the two surfaces that present THE TWO WAYS to calculate employee commission (commcalc/_lib/commissionWays.ts, 2026-09-20)
-  | 'commission_structure' | 'incentive_plans'
+  | 'commission_structure' | 'incentive_plans' | 'daily_incentive_rules'
   // the franchise royalty report and its reconciliation (mig 1022, index §37 — landing_identity.MODULE_PAGES / CONSUMERS)
   | 'royalty_report' | 'royalty_recon'
   // the per-DEVICE equipment reimbursement report (index §65, owner ask 2026-10-09)
@@ -203,6 +203,7 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
   // ── the two ways to calculate employee commission are presented on these two screens; each links the other ──
   commission_structure: { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', blurb: 'Employee Commission Structure: the two ways to calculate employee commission, set up step by step', aliases: ['Employee Commission Structure', 'Commission Structure'] },
   incentive_plans: { href: '/commcalc/commission-plans', label: 'Incentive Plans', blurb: 'Incentive Plans: the plan editor — rules, tiers, assignments, and each plan\'s commission basis', aliases: ['Incentive Plans', 'plan editor'] },
+  daily_incentive_rules: { href: '/commcalc/incentive-rules', label: 'Daily Incentive Rules', blurb: 'Daily Incentive Rules: what a day\'s declared categories pay each employee — per unit, a percentage of their own sales, or a pool over a store threshold', aliases: ['daily incentive', 'incentive rules', 'daily payout', 'per unit commission', 'cash pool', 'daily bonus', 'service commission'] },
   // ── the franchise royalty report (mig 1022, index §37) — its own module page + its reconciliation ──
   royalty_report: { href: '/accounts/royalty', label: 'Franchise Royalty Report', blurb: 'Franchise Royalty Report: the monthly royalty statement per center, checked against its own totals and the fee rule', aliases: ['Franchise Royalty Report', 'Royalty Report'] },
   royalty_recon: { href: '/accounts/royalty/recon', label: 'Royalty vs Daily Sales', blurb: 'Royalty vs Daily Sales: each royalty sales line against the daily report(s) summed over the month', aliases: ['Royalty vs Daily Sales'] },
