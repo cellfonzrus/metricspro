@@ -208,12 +208,21 @@ FACTS: dict[str, dict] = {
                     'answered from `basis` alone (`component_is_evidence`): a component reached on '
                     'a fallback basis is a placement of last resort, so a keyword guess never '
                     'overrides the org\'s own declaration, and what a caller DOES about an '
-                    'unreliable component is the caller\'s policy, never this home\'s.',
+                    'unreliable component is the caller\'s policy, never this home\'s. AND A '
+                    'DECLARATION MUST BE HONOURABLE: the component vocabulary '
+                    '(`carrier_map.COMPONENTS`, dereferenced) covers every category the platform '
+                    'can place, because a category it cannot express leaves a keyword guess '
+                    'standing where the org\'s own word already exists — which booked $260,500.00 '
+                    'of declared market-development money on the device-financing reimbursement '
+                    'line. Which components ARE the device-financing side is the same fact too '
+                    '(`device_reimb_line` / `device_reimb_components`), and so is what a component '
+                    'is CALLED for a human (`component_label`).',
         "homes": ('app/modules/commcalc/carrier_dollar_class.py',),
-        "index": ('58', '66'),
+        "index": ('58', '66', '69'),
         "locks": ('harness_carrier_dollar_class.py',
                   'harness_gp_carrier_class_dereference.py',
-                  'harness_component_basis_evidence.py'),
+                  'harness_component_basis_evidence.py',
+                  'harness_declared_category_honourable.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed. `--bless` silently deleted 11 of 12
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.

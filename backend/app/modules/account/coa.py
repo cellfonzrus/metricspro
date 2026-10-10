@@ -1423,8 +1423,6 @@ def build_inputs(client, org_id, period):
         except Exception:
             _cc_rules = []
         _cc_decl = _cdc.load_declarations(client, org_id)
-        _CC_LABEL = {"COMMISSION": "Commission (promo)", "SPIFF": "SPIFF / bounty",
-                     "REIMBURSEMENT": "Reimbursement", "RESIDUAL": "Residual"}
         _cc_rows = _fetch_all(client, "raw_comp_report",
                               "business_address,payment_amount,period,compensation_type",
                               {"org_id": org_id, "period": period_keys})
@@ -1436,8 +1434,12 @@ def build_inputs(client, org_id, period):
                 _c = _cc_seen[_ct_raw] = _cdc.classify(_cc_decl, _cc_rules, _ct_raw, _cdc_cfg)
             _line = _cdc.component_line(_c["component"], _cdc_cfg.get("component_lines"),
                                         "carrier_comm")
+            # The drill label is the component vocabulary's own word, DEREFERENCED (§69). This
+            # block kept a four-entry dict and called anything else "Undeclared", so the first
+            # component added to the vocabulary rendered the org's DECLARED money under the word
+            # for money nobody declared.
             add_comm(_line, _norm_store(r.get("business_address")), r.get("payment_amount"),
-                     detail_label=_CC_LABEL.get(_c["component"], "Undeclared"))
+                     detail_label=_cdc.component_label(_c["component"]))
         _cc_tally = _cdc.tally(_cc_rows, _cc_decl, _cc_rules, _cdc_cfg)
     except Exception as e:
         _warn("raw_comp_report carrier classification failed", e)
@@ -2231,14 +2233,16 @@ def build_inputs(client, org_id, period):
         _carrier_paid = 0.0
         _carrier_paid_by_store = {}
         if _cc_tally is not None:
+            # WHICH component is the device-financing side, and where it books, are §58's own
+            # facts — asked, never spelled here (§69).
             _reimb_line = None
             try:
-                _reimb_line = _cdc.component_line(
-                    "REIMBURSEMENT", (_cdc_cfg or {}).get("component_lines"), "carrier_comm")
+                _reimb_line = _cdc.device_reimb_line(
+                    (_cdc_cfg or {}).get("component_lines"), "carrier_comm")
             except Exception:
                 _reimb_line = None
             for _c in _cc_tally.get("by_component") or ():
-                if _c.get("component") == "REIMBURSEMENT":
+                if _c.get("component") == _cdc.DEVICE_FINANCING_COMPONENT:
                     _carrier_paid = _c.get("amount") or 0.0
             if _reimb_line and _reimb_line != "carrier_comm" and _reimb_line in L:
                 _carrier_paid_by_store = dict(L[_reimb_line].get("by_store") or {})
@@ -2270,8 +2274,8 @@ def build_inputs(client, org_id, period):
     try:
         _reimb_dest = None
         if _cdc is not None:
-            _reimb_dest = _cdc.component_line("REIMBURSEMENT",
-                                              (_cdc_cfg or {}).get("component_lines"), "carrier_comm")
+            _reimb_dest = _cdc.device_reimb_line(
+                (_cdc_cfg or {}).get("component_lines"), "carrier_comm")
         if (_reimb_dest and _reimb_dest != "carrier_comm" and _reimb_dest in L
                 and not _dist_claim["books_revenue"]):
             L[_reimb_dest]["label"] = "Device-financing reimbursements (carrier-paid)"
