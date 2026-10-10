@@ -4391,12 +4391,33 @@ second silent victim: `"2778 Ephraim Ave"` (8 rows, $1,709.77 payout) market-inv
 way. Both now resolve (LI / PA) — verified live against all 31 distinct rep_commissions store
 spellings for the org (every one resolves a market).
 
-**ENFORCED BY CI:** `backend/harness_market_resolution_guard.py` scans the backend for any query
+**ENFORCED BY CI — and it genuinely RUNS since 2026-10-10:** `backend/harness_market_resolution_guard.py`
+is a step of `.github/workflows/carrier-vocab-guard.yml` (the lock-harness home, alongside the
+org-tree walk lock §48.7 and the closing locks), with the harness named in that workflow's
+`pull_request.paths` so a change to the guard runs the guard (the §13e lesson: a lock behind an
+allowlist that does not name its own subject skips silently). **Until then it ran in NO workflow at
+all** and had drifted red — a guard nobody runs is not a gate. It scans the backend for any query
 reading a market column off `stores`/`store_mapping` and FAILS the build unless the site is
 canonical or pinned there with a reviewed classification (CANONICAL / OVERLAY — blank-fill from the
 canonical map, set values never overwritten / EDITOR / AUDITOR / GRANT / ROSTER / PAY-ENGINE /
 ATTRIBUTION / STORED — asset's persisted conflict-audited backfill). The pin table in that harness
-IS the per-module inventory; changing it is a reviewed act in the same PR. Resolver truth table
+IS the per-module inventory; changing it is a reviewed act in the same PR.
+
+**TWO SCAN AXES (2026-10-10).** Axis 1 is the inline chain `.table("stores"|"store_mapping")` +
+a literal `.select("…market…")`. Axis 2 is the **read through a local helper** — a module that wraps
+its reads (`def _read(table, cols): …c.table(table).select(cols)…`) passes table AND columns as
+VARIABLES, so the chain carries no literal select list and axis 1 cannot see it. That blindness was
+live: when the org-tree walk was factored into `storeops.org_chain` (§48.7) the market read MOVED
+out of `_dm_for_store` / `_managers_above_dm` and into `storeops.router.org_chain_inputs`, whose
+`_read("stores", "store_code,org_unit_id,market")` shape was invisible — the two old pins then read
+as merely "stale" while the live read stood unguarded (it was, and is, correctly overlaid through
+`core.scope.market_by_code`, so no market answer was wrong; the GUARD was wrong). Axis 2 matches a
+call whose first argument is a vocabulary-table literal and whose second is a column list naming
+market, under the same pinning rule. The guard also carries **negative controls** (C1-C8) proving
+each axis and the stale-pin prune can go red — a scan that cannot fail reports an empty inventory
+forever and reads exactly like a clean codebase.
+
+Resolver truth table
 (incl. the 1115-Liberty shape, the mirror-image mapping-only shape, aliases, ambiguity fail-closed,
 code_groups inheritance): `backend/harness_store_market_resolution.py`.
 
@@ -4410,7 +4431,8 @@ the mirror-image storeops-only gap), commission-plan roster, accessory-flags opt
 + expenses/commission/gp trends (`_trend_market_by_code`) + `_leg_store_index`; closing module
 (`_overlay_canonical_market` on rollup/summary/recon/DM-verify/envelope/pickups/positions/
 accountability — replaces the pickup pages' private stores+store_mapping inline union), closing
-DM routing (`ops_chargebacks._dm_for_stores_batch`, storeops `_dm_for_store`/`_managers_above_dm`);
+DM routing (`ops_chargebacks._dm_for_stores_batch`, storeops `org_chain_inputs` — the one set of
+org-tree walk inputs, where `_dm_for_store`/`_managers_above_dm`'s market read now lives);
 payables (`_market_by_store` + filter-options); pos tax-code resolve/markets/store-grid; storevisit
 `/stores`; storeops hours-budgets; core `/filter-options` overlay; core onboarding tax coverage;
 asset `_store_mapping_market_index` (storeops rows join the conflict-audited candidate pool),

@@ -467,6 +467,11 @@ on:
       - "database/migrations/1046_billpay_fee_charged.sql"
       - "backend/harness_accountability_chain.py"
       - "backend/harness_org_chain.py"
+      # index §13a — the canonical store→market resolution guard. It had never run in ANY workflow
+      # (wired 2026-10-10), and a lock behind an allowlist that does not name its own subject skips
+      # silently (the §13e lesson), so the harness itself is listed; its subjects (core/scope.py,
+      # the closing / storeops / commcalc routers) are already named above and by the push globs.
+      - "backend/harness_market_resolution_guard.py"
       - "backend/app/modules/storeops/org_chain.py"
       - "backend/app/modules/closing/deposit_accountability.py"
       - "backend/app/core/actors.py"
@@ -867,6 +872,9 @@ jobs:
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
         working-directory: backend
         run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the canonical store→market resolution guard (ONE resolver; every vocabulary read canonical, overlaid or pinned with a reviewed classification; a read that moves behind a helper stays visible — index §13a)
+        working-directory: backend
+        run: python3 harness_market_resolution_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
