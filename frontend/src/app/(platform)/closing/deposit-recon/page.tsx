@@ -523,11 +523,18 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
           store_code: o.store_code, close_date: o.day, employee_name: o.employee_name,
           envelope_opened: true, actual_amount: o.amount,
           counted_by: (o.counted_by || '').trim() || user?.full_name || undefined,
+          // WHY it was changed, when this is a correction rather than a first count (mig 1071).
+          note: (o.note || '').trim() || undefined,
         }),
       })
       const verdict = res?.status === 'short' ? `⚠ SHORT ${fmt(res.variance)}`
         : res?.status === 'over' ? `+${fmt(res.variance)} over` : 'matches the declared amount'
-      setMsg(`📂 Opened and counted ${fmt(res?.actual_picked_amount)} against ${fmt(res?.declared_amount)} declared — ${verdict}.`)
+      // A CORRECTION SAYS SO, and so does a trail that could not be written — "saved but its
+      // history was not recorded" is a real state and hiding it is the silent-degradation defect.
+      const corr = res?.corrections ? ` ${res.corrections} figure(s) changed and recorded.` : ''
+      const nohist = res?.history_recorded === false
+        ? ` ⚠ ${res?.history_detail || 'the correction history could not be recorded'}.` : ''
+      setMsg(`📂 ${o.editing ? 'Corrected to' : 'Opened and counted'} ${fmt(res?.actual_picked_amount)} against ${fmt(res?.declared_amount)} declared — ${verdict}.${corr}${nohist}`)
       setOpenEnv(null)
       load()
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
@@ -569,14 +576,40 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
     const sealed = picked.filter(e => !(e.actual_picked_amount !== null && e.actual_picked_amount !== undefined))
     return (
       <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 3 }}>
-        {counted.length ? (
-          <span style={{ color: '#166534' }}>
-            {counted.length} counted
-            {counted.some(e => e.actual_counted_by)
-              ? <span style={{ color: 'var(--text3)' }}> · by {counted.find(e => e.actual_counted_by)?.actual_counted_by}</span>
-              : null}
+        {/* A COUNTED ENVELOPE IS EDITABLE (owner 2026-10-10: "also need to edit the cash entered by
+            the management during cash recon"). It was read-only text, so a typo could not be fixed
+            from the screen it was typed on. Every change is recorded (mig 1071) and shown under the
+            figure, because replacing a cash figure a human typed without keeping the old one
+            destroys evidence — and this figure can become a chargeback against the rep. */}
+        {counted.map(e => (
+          <span key={envKey(r, e) + ':c'} style={{ display: 'inline-flex', flexDirection: 'column', gap: 1 }}>
+            <span style={{ color: '#166534' }}>
+              {fmt(e.actual_picked_amount)} counted
+              {e.actual_counted_by ? <span style={{ color: 'var(--text3)' }}> · by {e.actual_counted_by}</span> : null}
+              {e.employee_name ? <span style={{ color: 'var(--text3)' }}> · {e.employee_name}</span> : null}
+              {e.kind === 'billpay' ? <span style={{ color: 'var(--text3)' }}> (bill-pay)</span> : null}
+              {' '}
+              <button className="btn btn-secondary" style={{ fontSize: 10.5, padding: '1px 6px' }}
+                disabled={busyKey === k}
+                title={`Correct this figure — declared ${fmt(e.amount)}. Every change is recorded with who made it.`}
+                onClick={() => setOpenEnv({
+                  rowK: k, kind: e.kind, store_code: r.store_code, day: r.day,
+                  employee_name: e.employee_name, store_name: r.store_name || r.store_code,
+                  declared: e.amount, amount: String(e.actual_picked_amount ?? ''),
+                  counted_by: e.actual_counted_by || user?.full_name || '', note: '',
+                  editing: true, history: e.correction_history || [],
+                })}>
+                ✏️ edit
+              </button>
+            </span>
+            {(e.corrections || 0) > 0 && (
+              <span style={{ fontSize: 10.5, color: '#b45309' }}
+                title={(e.correction_history || []).join('\n')}>
+                ✎ corrected {e.corrections} time{e.corrections === 1 ? '' : 's'}
+              </span>
+            )}
           </span>
-        ) : null}
+        ))}
         {sealed.map(e => (
           <button key={envKey(r, e)} className="btn btn-secondary"
             style={{ fontSize: 11, padding: '2px 7px' }}
@@ -691,7 +724,9 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
       {openEnv && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
           <div className="card" style={{ padding: 20, maxWidth: 430, width: '90%' }}>
-            <h3 style={{ margin: 0, fontSize: 16 }}>📂 Open and count this envelope</h3>
+            <h3 style={{ margin: 0, fontSize: 16 }}>
+              {openEnv.editing ? '✏️ Correct the counted cash' : '📂 Open and count this envelope'}
+            </h3>
             <p style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>
               {openEnv.store_name} · {openEnv.day}{openEnv.employee_name ? ` · ${openEnv.employee_name}` : ''}
               {openEnv.kind === 'billpay' ? ' · bill-payment envelope' : ''}
@@ -702,15 +737,29 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
                 value={openEnv.amount} onChange={e => setOpenEnv((o: any) => ({ ...o, amount: e.target.value }))} />
               <input className="select" placeholder="Counted by"
                 value={openEnv.counted_by} onChange={e => setOpenEnv((o: any) => ({ ...o, counted_by: e.target.value }))} />
+              {openEnv.editing && (
+                <input className="select" placeholder="Why it is being changed (optional)"
+                  value={openEnv.note || ''}
+                  onChange={e => setOpenEnv((o: any) => ({ ...o, note: e.target.value }))} />
+              )}
             </div>
+            {openEnv.editing && (openEnv.history || []).length > 0 && (
+              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--text2)' }}>
+                <b>Already corrected:</b>
+                {(openEnv.history || []).map((h: string, i: number) => (
+                  <div key={i} style={{ color: 'var(--text3)' }}>· {h}</div>
+                ))}
+              </div>
+            )}
             <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '8px 0 0' }}>
               An opened envelope must carry its count — a count of $0.00 is recorded as a real finding,
               but a blank is refused. Management&rsquo;s own later count stays on the Management Envelope Receipt.
+              {openEnv.editing ? ' Changing this figure keeps the previous one on the record, with your name against the change.' : ''}
             </p>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button className="btn" style={{ background: 'var(--accent)', color: '#fff' }}
                 disabled={!!busyKey || String(openEnv.amount).trim() === ''} onClick={saveOpenCount}>
-                {busyKey ? 'Saving…' : 'Record the count'}
+                {busyKey ? 'Saving…' : (openEnv.editing ? 'Save the correction' : 'Record the count')}
               </button>
               <button className="btn btn-secondary" onClick={() => setOpenEnv(null)}>Cancel</button>
             </div>
