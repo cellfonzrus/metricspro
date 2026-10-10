@@ -22,11 +22,17 @@
 //   H. determinism and purity — stable order regardless of input order, nothing mutated
 //
 // Run:  node frontend/prove_search_rank.mjs      (no network, no DB, no React, no npm install)
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+import { loadLibs } from './prove_load_ts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const S = await import(pathToFileURL(join(HERE, 'src/lib/search-rank.ts')).href)
+
+// search-rank.ts dereferences the search VOCABULARY (§71), so it can no longer be imported straight
+// off disk: bare Node cannot resolve the `@/lib/...` alias Next uses. The shared loader emits both
+// pure modules with that alias rewritten to the sibling file, so this proof still drives the REAL
+// functions and no stub or copy exists.
+const [S] = await loadLibs(HERE, ['search-rank'])
 
 let pass = 0, fail = 0
 const ck = (label, cond, extra) => {

@@ -20,10 +20,12 @@
 // Run:  node frontend/prove_search_catalog.mjs      (no network, no DB, no React, no npm install)
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
+import { loadLibs } from './prove_load_ts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const C = await import(pathToFileURL(join(HERE, 'src/lib/search-catalog.ts')).href)
-const R = await import(pathToFileURL(join(HERE, 'src/lib/search-rank.ts')).href)
+// search-rank.ts now dereferences the search vocabulary (§71) through Next's `@/lib/...` alias,
+// which bare Node cannot resolve, so both go through the shared loader. Still the real files.
+const [C, R] = await loadLibs(HERE, ['search-catalog', 'search-rank'])
 
 let pass = 0, fail = 0
 const ok = (name, cond, detail) => {
