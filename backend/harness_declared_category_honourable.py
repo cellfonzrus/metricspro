@@ -524,6 +524,25 @@ ok("G11 the carrier recon's last-mile map is keyed by COMPONENT, and a component
    and not (_RB_KEYS & {"MDF", "CHARGEBACK"})
    and '_RECON_COMPONENT_BUCKET.get(comp or "")' in ROUTER, sorted(_RB_KEYS))
 
+# THE FRONTEND MIRROR, INVENTORIED AND BOUNDED. The Carrier Mapping setup screen keeps its own
+# array of the components its dropdowns offer. It is a KEYWORD-LADDER editor — the fallback path, not
+# the declaration — so the owner's ruling does not depend on it, and wiring it up is a visible UI
+# change that waits for his eyeball under the house merge policy. What this lock does NOW is make the
+# copy bounded and visible: the API serves the vocabulary (`carrier-category-options`), and the
+# mirror may never offer a component the platform does not know. A value it invents fails the build.
+FE = os.path.join(HERE, "..", "frontend", "src", "app", "(platform)", "commcalc",
+                  "carrier-mapping", "page.tsx")
+_fe = open(FE, encoding="utf-8", errors="replace").read() if os.path.exists(FE) else ""
+_fe_comps = set()
+_m2 = re.search(r"const\s+COMPONENTS\s*=\s*\[([^\]]*)\]", _fe)
+if _m2:
+    _fe_comps = {x for x in re.findall(r"['\"]([A-Z_]+)['\"]", _m2.group(1))}
+ok("G12 the server SERVES the component vocabulary to the setup screen, so the page has a source to "
+   "read instead of an array to maintain", '"components": list(carrier_map.COMPONENTS)' in ROUTER)
+ok("G13 …and the screen's own array can never offer a component the platform does not know — it is "
+   "a strict subset, pending the UI change that reads the served list",
+   bool(_fe_comps) and _fe_comps <= set(cdc.COMPONENTS), sorted(_fe_comps - set(cdc.COMPONENTS)))
+
 ok("G10 CONTROL: the vocabulary scan really does bite — a second tuple of three members is found",
    len({"RESIDUAL", "COMMISSION", "SPIFF"} & set(cdc.COMPONENTS)) >= 3)
 

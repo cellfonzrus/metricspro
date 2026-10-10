@@ -11773,7 +11773,12 @@ def carrier_category_options(period: str = "", org_id: str = ORG_ID):
         {(r.get("subtype") or "").strip() for r in srows
          if (r.get("subtype") or "").strip()},
         key=lambda s: s.lower())
-    return {"categories": cats, "subtypes": subs}
+    # THE COMPONENT VOCABULARY IS SERVED, not re-spelled on the page (index §69). The page kept its
+    # own array of the four components it knew; a vocabulary that can grow needs ONE source, and a
+    # setup screen that cannot offer a kind of money the platform understands is a hole the owner
+    # has to work around. Additive — an existing caller that ignores the key is unaffected.
+    return {"categories": cats, "subtypes": subs,
+            "components": list(carrier_map.COMPONENTS)}
 
 
 # ── Unified connector model (SaaS framework Phase 2: registry + live status + run-now dispatch) ──
