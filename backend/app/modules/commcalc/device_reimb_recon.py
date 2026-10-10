@@ -796,20 +796,27 @@ LINE_STATUS_LABELS = {
 #: The device-level absence the per-line feed can have of its own: the device carries no identifier
 #: on the distributor's row, so there is nothing to look it up by. Reported, never guessed.
 REASON_DEVICE_UNIDENTIFIED = "device_not_identified_on_claim"
-#: Two store records claim one of the two addresses, so "a DIFFERENT store was paid" cannot be told
-#: from "the same store spelled twice". Measured live (house org, September 2026): 23 of the 135
-#: devices the carrier paid elsewhere, worth $6,164.95, touch one of the three addresses §13d reports
-#: as claimed by two codes — and calling those a transfer would move cost between two records of one
-#: physical store. The ambiguous SET is injected from the one home (`account/store_identity
-#: .store_identity_index` → `.ambiguous_identities`, §64) so this module states no identity rule.
+#: The two addresses MAY BE ONE PHYSICAL STORE, so "a DIFFERENT store was paid" cannot be told from
+#: "the same store under its other name". The pair relation is injected from the one identity home
+#: (`account/store_identity.shared_identity_pairs`, §64) so this module states no identity rule.
+#:
+#: RESTATED 2026-10-10, AND IT WITHHOLDS LESS. This reason first read a per-address ambiguity set —
+#: any address §13d reports as claimed by TWO store codes — and that tested the wrong fact: the
+#: resolver places both codes of such an address on the SAME canonical key, so a payment under either
+#: is already counted at that store and never reaches this branch. What the set actually caught was
+#: pairs of two plainly different addresses, so all of its withholdings were false (measured live,
+#: house org, September 2026: 23 devices, $6,164.95 of payments, $9,769.77 of cost). The fact that
+#: makes two addresses one store is the RELOCATION shape — one store code or one carrier door at two
+#: addresses — and the house org has zero of those, which is why those 23 are now reported as the
+#: transfers they are. The guard stays, armed, for the day a relocation appears.
 REASON_STORE_AMBIGUOUS = "store_identity_ambiguous"
 #: What a human reads for the two device-level absences, in the same voice as REASON_LABELS.
 LINE_REASON_LABELS = {
     REASON_DEVICE_UNIDENTIFIED: ("The distributor's claim carries no device identifier, so there is "
                                  "nothing to look this device up by on the carrier's feed."),
-    REASON_STORE_AMBIGUOUS: ("Two store records claim one of these two addresses, so whether the "
-                             "carrier paid a DIFFERENT store or the same store under its second "
-                             "spelling cannot be told. Reported rather than called a transfer."),
+    REASON_STORE_AMBIGUOUS: ("One store name is on record at both of these addresses, so whether the "
+                             "carrier paid a DIFFERENT store or the same store under its other name "
+                             "cannot be told. Reported rather than called a transfer."),
 }
 
 
@@ -867,7 +874,7 @@ def carrier_line_side(rows, cfg, is_device_dollar, resolve_store=None):
 
 
 def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=None,
-                 configured=True, ambiguous_stores=None):
+                 configured=True, same_store=None):
     """PURE. One row per DEVICE the distributor ledger claims a reimbursement for.
 
     Each row carries, side by side and never netted:
@@ -889,18 +896,22 @@ def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=No
     `configured` is False when the org has declared no device-financing routing at all; then every
     row is NOT_MEASURED with `no_device_financing_rule_configured` and no dollar is called unpaid.
 
-    `ambiguous_stores` is the set of canonical store keys that TWO `store_mapping` records claim,
-    read from the ONE identity home (§64, `account/store_identity.ambiguous_identities`) and never
-    derived here. A device the carrier paid at another store is NOT_MEASURED when either side is one
-    of those keys: the two keys may be one physical store spelled twice, and a transfer called on
-    that evidence would move real cost between two records of the same store.
+    `same_store` is a CALLABLE `(address_a, address_b) -> bool` — "may these two addresses be one
+    physical store?" — bound by the caller to the ONE identity home (§64,
+    `account/store_identity.may_be_one_store` over `.shared_identity_pairs`). An injected predicate,
+    for the same reason `classify` and `resolve_store` are: the rule stays in its own home and this
+    module keeps no copy of it, not even a set-membership test. None means no two addresses are one
+    store, which withholds nothing. A device the carrier paid at another address is NOT_MEASURED when
+    the predicate says EVERY paid address may be this same store — one store on record under two
+    addresses, where a "transfer" would move real cost between two records of it. A PAIR relation,
+    never a per-address flag: see REASON_STORE_AMBIGUOUS for the measured defect that fixed.
     """
     cols = cfg["columns"]
     claims = distributor_claim_matcher(cfg)
     rs = resolve_store or (lambda v: _s(v) or None)
     devices = (carrier_lines or {}).get("devices") or {}
     rows, unplaced = [], {"rows": 0, "amount": 0.0}
-    amb = {str(k).strip() for k in (ambiguous_stores or ()) if str(k).strip()}
+    same = same_store if callable(same_store) else (lambda _a, _b: False)
     for r in asset_rows or ():
         if not claims(r):
             continue
@@ -938,11 +949,12 @@ def device_lines(asset_rows, carrier_lines, cfg, resolve_store=None, coverage=No
             status, reason = LINE_NOT_MEASURED, REASON_DEVICE_UNIDENTIFIED
         elif here:
             status, reason = LINE_PAID, None
-        elif other_total and (st in amb or any(o["store"] in amb for o in other)):
-            # One of the two addresses is claimed by TWO store records (§13d / §64), so "a different
-            # store was paid" and "the same store under its second spelling" are indistinguishable.
-            # The money stays on the row, named; only the VERDICT is withheld. A transfer called here
-            # would move real cost between two records of one physical store.
+        elif other_total and all(same(st, o["store"]) for o in other):
+            # EVERY address the carrier paid is on record as possibly the SAME STORE as this one
+            # (§64), so "a different store was paid" and "the same store under its other name" are
+            # indistinguishable. The money stays on the row, named; only the VERDICT is withheld.
+            # ALL, not ANY: one payment at an address that cannot be this store proves the transfer,
+            # and a floor only ever proves the direction it points.
             status, reason = LINE_NOT_MEASURED, REASON_STORE_AMBIGUOUS
         elif other_total:
             # PROVEN whatever the month's coverage is: money that DID arrive, at a named store, can
@@ -1062,3 +1074,69 @@ def _device_totals(rows, carrier_lines=None) -> dict:
     t["carrier_paid_unidentified"] = round(_f(u.get("amount")), 2)
     t["carrier_paid_unidentified_rows"] = int(u.get("rows") or 0)
     return t
+
+
+# ── WHERE THE CARRIER ACTIVATED EACH DEVICE (owner directive 2026-10-10) ─────────────────────────
+# OWNER, on the decision card: *"Move the cost"* — move device cost to the store the carrier paid,
+# for the proven transfers.
+#
+# THE CLASS. "Which store does this handset's cost belong to?" had TWO authorities and nothing
+# reconciled them per device: the distributor ledger books the cost to the STOCKING store (the row's
+# own `store`), and the carrier statement pays the ACTIVATING store. §65 already reconciles them per
+# device and says which it is — so the cost side must DEREFERENCE that verdict rather than form a
+# second opinion about where a phone was sold. This function is the one place that verdict becomes a
+# move, and `account/device_cogs.cost_store` is the one place a caller may read it.
+#
+# PROVEN ONLY. A move is derived from LINE_PAID_OTHER_STORE and from nothing else: money that
+# arrived, at a named store, for an identified device. A row the report could not measure — no device
+# identifier, a short month, two addresses that may be one store — moves NOTHING and is carried in
+# `withheld` with its own reason, because an unmeasured row is not evidence that the cost is already
+# in the right place either. The caller STATES that set; it never nets it away.
+def activation_store_moves(device_rows) -> dict:
+    """PURE. `device_lines(...)["rows"]` -> where each device's COST should sit, and what is withheld.
+
+      {"move_to":  {device_id: {"to", "from", "paid", "cost", "claimed", "month"}},
+       "withheld": {device_id: {"store", "cost", "reason"}},
+       "totals":   {"devices", "cost", "withheld_devices", "withheld_cost", "pairs"}}
+
+    `to` is the address the carrier paid MOST for that device — the largest named payment, not a
+    split — and `from` is the address the ledger books the cost to. A device with no identifier can
+    carry no move: it is keyed by the identifier, so `device_lines`' own unidentified rows cannot
+    reach this at all, and they are withheld like any other unmeasured row.
+
+    The two dollar columns are never netted into one: `cost` is what moves, `paid` is the evidence it
+    moves on, and they differ on almost every device (live, house org, September 2026: $35,383.88
+    paid against $47,188.88 of cost on the same 112 devices)."""
+    moves, withheld, pairs = {}, {}, set()
+    for r in device_rows or ():
+        dev = _s((r or {}).get("device_id"))
+        cost = _f((r or {}).get("device_cost"))
+        status = (r or {}).get("status")
+        if status == LINE_PAID_OTHER_STORE:
+            other = list((r or {}).get("carrier_paid_other_stores") or ())
+            if not dev or not other:
+                continue
+            best = max(other, key=lambda o: _f(o.get("amount")))
+            frm = _s((r or {}).get("store"))
+            to = _s(best.get("store"))
+            if not to or to == frm:
+                continue
+            moves[dev] = {"to": to, "from": frm, "paid": _f(best.get("amount")), "cost": cost,
+                          "claimed": _f((r or {}).get("distributor_claimed")),
+                          "month": (r or {}).get("month")}
+            pairs.add((frm, to))
+        elif status == LINE_NOT_MEASURED and dev:
+            withheld[dev] = {"store": _s((r or {}).get("store")), "cost": cost,
+                             "reason": (r or {}).get("reason")}
+    return {
+        "move_to": moves,
+        "withheld": withheld,
+        "totals": {
+            "devices": len(moves),
+            "cost": round(sum(m["cost"] for m in moves.values()), 2),
+            "paid": round(sum(m["paid"] for m in moves.values()), 2),
+            "withheld_devices": len(withheld),
+            "withheld_cost": round(sum(w["cost"] for w in withheld.values()), 2),
+            "pairs": len(pairs),
+        },
+    }

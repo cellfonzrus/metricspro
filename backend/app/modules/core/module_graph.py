@@ -140,7 +140,8 @@ FACTS: dict[str, dict] = {
                     'STORE-MONTH grain from the statement, and at DEVICE grain from the carrier\'s '
                     'own per-line feed — including WHICH STORE was paid for a device, because the '
                     'distributor books the claim to the store it was stocked to and the carrier '
-                    'pays the store it was activated at.',
+                    'pays the store it was activated at. The COST side dereferences that same '
+                    'device verdict (fact `device_cost_store`, SS69) rather than deriving its own.',
         "homes": ('app/modules/commcalc/device_reimb_recon.py',),
         "index": ('19.53', '65'),
         "locks": ('harness_device_reimb_recon.py',
@@ -150,6 +151,36 @@ FACTS: dict[str, dict] = {
         # real import graph rather than regenerating it.
         "callers": {
             'app/modules/commcalc/router.py': ('_drr',),
+            # The COST side (§69) reads this fact's own verdict reader to place a handset's cost on
+            # the activating store. One reconciliation, two readers, never two derivations.
+            'app/modules/account/device_cogs.py': ('_drr',),
+        },
+    },
+    'device_cost_store': {
+        "question": 'WHICH STORE carries a handset\'s cost? The distributor ledger books it to the '
+                    'store the unit was STOCKED to; the carrier pays the store it was ACTIVATED at. '
+                    'Declared per org, and when the activating basis is declared the cost follows '
+                    'the per-device verdict that already reconciles those two authorities — never a '
+                    'second opinion formed on the cost side.',
+        "homes": ('app/modules/account/device_cogs.py',),
+        "index": ('70', '42.5'),
+        "locks": ('harness_device_inventory_cogs.py',
+                  'harness_device_line_reimbursement.py'),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04).
+        "callers": {
+            # The P&L input builder: it hands the PERIOD down so the activation index is reachable
+            # at all. Without that argument the switch could be declared and still never fire —
+            # the §19.18 un-wiring failure mode, pinned by §H5b.
+            'app/modules/account/coa.py': ('_device_cogs',),
+            # The finance-config screen: it READS the resolved basis and writes the declaration,
+            # and has no opinion of its own.
+            'app/modules/account/router.py': ('_dc', '_dccfg', '_dcscfg'),
+            # The BALANCE SHEET and the statement engine import this module for the mig-1041 basis
+            # (§42.5), not for the placement — but the import graph connects them, so they are named
+            # here rather than left to look like an unexplained edge.
+            'app/modules/account/balance_sheet.py': ('FEE_CATEGORIES',),
+            'app/modules/account/statement_engine.py': ('device_cogs',),
         },
     },
     'store_identity': {

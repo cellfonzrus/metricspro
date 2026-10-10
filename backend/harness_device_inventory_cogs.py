@@ -704,5 +704,154 @@ check("G11 the basis declaration is a per-org CONFIG value, never a tenant or ca
       and not [w for w in BANNED if w in " | ".join(_deciding_strings(SRCS[BASIS_HOME])).lower()])
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§H  WHICH STORE CARRIES THE COST — ONE HOME, AND NO CALLER DECIDES FOR ITSELF (§70)")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER, decision card 2026-10-10: *"Move the cost"*. THE CLASS: the distributor ledger books a
+# handset's cost to the STOCKING store and the carrier pays the ACTIVATING store, and nothing
+# reconciled the two per device — so a phone stocked at one door and sold at another charged one
+# store a cost whose reimbursement another store received. Measured live (house org, Jun-Oct 2026):
+# 468 devices, $195,155.32 of cost, netting to $0.00 company-wide and restating per-store profit.
+#
+# The verdict is NOT computed here: §65's `device_reimb_recon.activation_store_moves` owns "where was
+# this device activated", and this module's `cost_store` is the ONE place that answers become a
+# store. These checks fail the build if a second opinion appears, if a caller stops dereferencing, or
+# if the switch stops defaulting to today's behaviour.
+def _fn_source(source, name):
+    """The source text of one top-level function, by name — so a check can scope itself to the code
+    that decides rather than to the whole module. Empty string when the function is absent, which
+    fails the check that asked for it rather than passing vacuously."""
+    import ast as _ast
+    tree = _ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == name:
+            return _ast.get_source_segment(source, node) or ""
+    return ""
+
+
+# §65's per-device verdict, driven here on a synthetic fixture so the cost side's reading of it is
+# proved against the real function rather than a hand-written dict.
+from app.modules.commcalc import device_reimb_recon as _DRR
+_MOVES = _DRR.activation_store_moves([
+    {"device_id": "M-1", "device_cost": 599.99, "status": _DRR.LINE_PAID_OTHER_STORE,
+     "store": "ORIGIN", "distributor_claimed": 450.00, "month": "2026-09",
+     "carrier_paid_other_stores": [{"store": "DESTINATION", "amount": 450.00},
+                                   {"store": "A THIRD STORE", "amount": 5.00}]},
+    {"device_id": "M-2", "device_cost": 199.99, "status": _DRR.LINE_PAID, "store": "ORIGIN",
+     "carrier_paid_other_stores": []},
+    {"device_id": "M-3", "device_cost": 149.99, "status": _DRR.LINE_NOT_MEASURED, "store": "ORIGIN",
+     "reason": _DRR.REASON_COVERAGE_INCOMPLETE},
+])
+
+STORE_FNS = ("resolve_device_cost_store_basis", "load_device_cost_store_basis", "cost_store",
+             "load_activation_index")
+check("H1  the one home exists and the decision itself is PURE (values in, placement out)",
+      all(hasattr(device_cogs, f) for f in STORE_FNS)
+      and device_cogs.cost_store("A STORE", "IMEI-1", {"move": True,
+                                                       "move_to": {"IMEI-1": {"to": "ANOTHER"}}}
+                                 )["store"] == "ANOTHER")
+
+# H2 — OFF UNTIL DECLARED, exhaustively. Nothing but the declared word moves a cost, so a typo, a
+# NULL or a pre-migration database all keep every figure this module produced before today.
+_SB_INPUTS = list(device_cogs.DEVICE_COST_STORE_BASES) + ["", None, "ACTIVATING", "move", "nonsense",
+                                                          0, False, "stocking "]
+_moving = sorted({str(v).strip().lower() for v in _SB_INPUTS
+                  if device_cogs.resolve_device_cost_store_basis(v)["move"]})
+# Case and surrounding space are folded, exactly as `resolve_device_cost_basis` folds them — one
+# spelling rule for both declarations, so a config screen cannot write a value one reads and the
+# other does not. What is NOT folded is the word itself: nothing but 'activating' moves a cost.
+check("H2  only the declared word 'activating' moves a cost — every other value, NULL included, "
+      "keeps the distributor ledger's store", _moving == ["activating"], repr(_moving))
+check("H2c …and the word is folded the same way the sibling basis folds its own",
+      device_cogs.resolve_device_cost_store_basis(" ACTIVATING ")["move"] is True
+      and device_cogs.resolve_device_cost_basis(" ASSET_LEDGER ")["accrual"] is True)
+check("H2b and the basis travels WITH the boolean, so no caller recomputes 'should I move?'",
+      all(device_cogs.resolve_device_cost_store_basis(v)["move"]
+          == (device_cogs.resolve_device_cost_store_basis(v)["basis"]
+              == device_cogs.STORE_BASIS_ACTIVATING) for v in _SB_INPUTS))
+
+# H3 — THE PLACEMENT LADDER, and the direction it fails in. Every unknown answer books where it books
+# today; a cost is never left unplaced and never moved on a verdict nobody proved.
+_ACT = {"move": True, "move_to": {"D-MOVE": {"to": "DESTINATION"}, "D-SAME": {"to": "ORIGIN"}},
+        "withheld": {"D-HELD": {"store": "ORIGIN", "cost": 1.0}}}
+_placements = {d: device_cogs.cost_store("ORIGIN", d, _ACT)
+               for d in ("D-MOVE", "D-SAME", "D-HELD", "D-UNKNOWN", "", None)}
+check("H3  a PROVEN activation elsewhere moves the cost and names where it came from",
+      _placements["D-MOVE"]["store"] == "DESTINATION"
+      and _placements["D-MOVE"]["basis"] == device_cogs.PLACED_ACTIVATION
+      and _placements["D-MOVE"]["moved_from"] == "ORIGIN")
+check("H3b a device §65 could not measure STAYS PUT and says so — an absence is never evidence that "
+      "the cost is already right either",
+      _placements["D-HELD"]["store"] == "ORIGIN"
+      and _placements["D-HELD"]["basis"] == device_cogs.PLACED_WITHHELD
+      and _placements["D-HELD"]["withheld"] is True)
+check("H3c a device with no verdict, no identifier, or a verdict naming its own store books exactly "
+      "where it books today",
+      all(_placements[d]["store"] == "ORIGIN"
+          and _placements[d]["basis"] == device_cogs.PLACED_LEDGER
+          for d in ("D-SAME", "D-UNKNOWN", "", None)))
+check("H3d with the basis undeclared the SAME proven verdict moves nothing — the control that arms "
+      "H3, so the move is the declaration's doing and not the data's",
+      device_cogs.cost_store("ORIGIN", "D-MOVE", {"move": False, "move_to": _ACT["move_to"]}
+                             )["store"] == "ORIGIN")
+check("H3e an unreadable index can never move a cost (None, a list, a string all book as today)",
+      all(device_cogs.cost_store("ORIGIN", "D-MOVE", junk)["store"] == "ORIGIN"
+          for junk in (None, [], "", 0, {"move": True})))
+
+# H4 — THE MOVE IS §65's VERDICT, NOT A SECOND OPINION. `activation_store_moves` is derived from the
+# proven status alone, and this module must not reach for a feed, a join or a store string of its own.
+_dc_store_src = "".join(_fn_source(SRCS[BASIS_HOME], f) for f in STORE_FNS)
+check("H4  the cost side reads §65's own verdict reader and assembles nothing itself",
+      "activation_store_moves" in SRCS[BASIS_HOME]
+      and "_device_line_reimb_run" in SRCS[BASIS_HOME]
+      and not any(t in _dc_store_src for t in ("raw_payment_detail", "carrier_line_side",
+                                               "device_lines(", "squash", "split(")))
+check("H4b and only PROVEN transfers become moves — an unmeasured row never does",
+      _MOVES["totals"]["devices"] == 1 and list(_MOVES["move_to"]) == ["M-1"]
+      and sorted(_MOVES["withheld"]) == ["M-3"])
+check("H4c the dollars are never netted: what moves (cost) and the evidence it moves on (paid) are "
+      "carried apart",
+      _MOVES["move_to"]["M-1"]["cost"] == 599.99 and _MOVES["move_to"]["M-1"]["paid"] == 450.00)
+
+# H5 — EVERY CALLER DEREFERENCES. The cost loop may not place a store itself, and `coa` must hand the
+# period down or the index can never be read — the §19.18 un-wiring failure mode.
+_vip_src = _fn_source(SRCS[BASIS_HOME], "_vip_sold_cost")
+check("H5  the cost loop places every unit through cost_store and keeps no placement rule",
+      "cost_store(" in _vip_src
+      and 'by_store[key]' in _vip_src
+      and 'key = placed["store"]' in _vip_src)
+check("H5b coa hands the period down, so the index is actually reachable (wired, not just available)",
+      "period=period" in SRCS["coa.py"])
+check("H5c the restatement is REPORTED on the line's meta — a moved store figure is never silent",
+      "moved_to_activating_store" in _vip_src and "unmeasured_stayed_put" in _vip_src)
+# The §K3(b) lesson, applied to a RESTATEMENT: `meta` alone never reaches a reader, so a store whose
+# device cost moved would show a different figure with nothing on the statement saying why.
+_coa_bi = _fn_source(SRCS["coa.py"], "build_inputs")
+check("H5e the move is stated ON the statement line, not only in meta — the §K3(b) lesson applied "
+      "to a restatement, and the honest zero still wins where both could apply",
+      "moved_to_activating_store" in _coa_bi
+      and 'L["device_cost"]["note"]' in _coa_bi
+      and 'not (_dev.get("meta") or {}).get("honest_zero")' in _coa_bi
+      and "unmeasured_stayed_put" in _coa_bi)
+_other_deciders = sorted(fn for fn, src in SRCS.items()
+                         if fn != BASIS_HOME and "activation_store_moves" in src)
+check("H5d no OTHER module in the account package reads the activation verdict — one home, one "
+      "reader", not _other_deciders, repr(_other_deciders))
+
+# H6 — THE SIBLING, EXCUSED EXPLICITLY (CLAUDE.md: find the siblings before you ship). The MA/VidaPay
+# cost path places cost by an account→store index and its rows carry no device identifier, so §65's
+# per-device verdict cannot reach it. Excused, and PINNED so the excuse cannot rot silently: the day
+# that path gains a device identifier this check goes red and the sibling must be fixed too.
+_ma_src = _fn_source(SRCS[BASIS_HOME], "_ma_sold_cost")
+check("H6  the MA cost path is device-identifier-free, which is WHY it is excused from the move",
+      "esn_imei" not in _ma_src and "cost_store(" not in _ma_src)
+
+# H7 — RULE TWO on the new surface.
+check("H7  the store basis is a per-org CONFIG value, never a tenant or carrier branch",
+      "device_cost_store_basis" in SRCS[BASIS_HOME]
+      and not [w for w in BANNED
+               if w in " | ".join(_deciding_strings(SRCS[BASIS_HOME])).lower()])
+
+
 print("\n%s\n%d passed, %d failed" % ("=" * 78, P, F))
 sys.exit(1 if F else 0)

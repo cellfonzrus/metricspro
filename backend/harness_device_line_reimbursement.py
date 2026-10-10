@@ -51,6 +51,7 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
+from app.modules.account import store_identity as _sid
 from app.modules.commcalc import device_reimb_recon as R
 from app.modules.commcalc import imei_rebate_report as IRR
 
@@ -187,8 +188,18 @@ ok("A9. the store key is §64's ONE store-identity home, reached through `coa.st
    and "resolve_store" in _fn_src(MOD, "device_lines")
    and not any(t in _dev_fns for t in ("split(", ".lower()", "partition(", "store_mapping",
                                         "store_alias", "street")))
-ok("A9b. and the ROUTER hands it §64's resolver rather than a spelling of its own",
-   "resolve_store" in _rt and "store_identity" not in _rt and "split(" not in _rt)
+# RESTATED 2026-10-10, NOT RELAXED (§70). This used to forbid the name `store_identity` anywhere in
+# the run function, as shorthand for "the router derives no identity". The run function now binds
+# §64's OWN pair predicate (`may_be_one_store` over `shared_identity_pairs`) to hand to the pure
+# layer, which is a dereference of the home, not a derivation beside it — so the rule is stated as
+# what it always meant: the router may NAME the home's answers and must never build a key itself.
+_SID_DERIVERS = ("store_identity_index", "build_store_resolver", "squash_key", "lead_num_key",
+                 "store_key(", "ambiguous_identities")
+ok("A9b. and the ROUTER hands it §64's resolver and §64's own predicate rather than a spelling or a "
+   "key of its own",
+   "resolve_store" in _rt and "split(" not in _rt
+   and not any(t in _rt for t in _SID_DERIVERS)
+   and "may_be_one_store" in _rt)
 ok("A10. the LAG WINDOW is §27's own enumeration, dereferenced — no second lag rule in the router",
    "imei_rebate_report import period_window" in _rt and callable(IRR.period_window))
 ok("A11. the module graph carries the device grain on the EXISTING fact, not a 45th one",
@@ -495,66 +506,100 @@ ok("J4. control: the same rows WITH a declaration are measured, so §D4's not-me
    and _B["totals"]["by_status"][R.LINE_NOT_MEASURED] == 0)
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-print("\n§K  AN AMBIGUOUS STORE IDENTITY WITHHOLDS THE TRANSFER VERDICT, IT DOES NOT GUESS")
+print("\n§K  TWO ADDRESSES THAT MAY BE ONE STORE WITHHOLD THE TRANSFER VERDICT — AND ONLY THOSE")
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# Measured live (house org, September 2026) BEFORE this guard existed: 135 devices worth $41,548.83
-# read as "the carrier paid a different store", and 23 of them, worth $6,164.95, had one of the three
-# addresses §13d reports as claimed by TWO store records on one side of the pair. Calling those a
-# transfer would move real cost between two records of ONE physical store. With the guard: 112
-# devices / $35,383.88 proven, 23 reported not measured, and store 652 untouched (15 / $5,004.98 —
-# none of its four counterpart stores is ambiguous).
-_AMB = "AN ADDRESS TWO STORE RECORDS CLAIM"
-_k_lines = [line(_AMB, "K-1", 525.00, "2026-09-10"), line(OTHER_A, "K-2", 450.00, "2026-09-11"),
-            line(OTHER_A, "K-3", 240.00, "2026-09-12")]
-_k_devs = [dev(HOME, "K-1", 525.00, "2026-09-15", cost=599.99),      # paid at the ambiguous address
-           dev(_AMB, "K-2", 450.00, "2026-09-15", cost=599.99),      # claimed BY the ambiguous one
-           dev(OTHER_B, "K-3", 240.00, "2026-09-15", cost=149.99)]   # neither side ambiguous
+# RESTATED 2026-10-10, AND IT WITHHOLDS LESS (§70). This guard first read a per-ADDRESS ambiguity
+# set — any address §13d reports as claimed by two store codes — and withheld a transfer whenever
+# EITHER side was in it. That tested the wrong fact. `build_store_resolver` step 3 places both codes
+# of such an address on the SAME canonical key, so a payment under either code is already counted at
+# that store and can never reach the "different store" branch: the guard could not fire for its own
+# stated reason, and what it actually caught was pairs of two plainly different addresses. Measured
+# live (house org, September 2026): 23 devices, $6,164.95 of payments and $9,769.77 of cost withheld
+# from a verdict the evidence supported, and the owner asked what they were.
+#
+# The fact that makes two addresses ONE store is the RELOCATION shape — one store code or one carrier
+# door on record at two addresses — which is a PAIR relation and cannot be expressed as a flag on one
+# address. It is injected as the identity home's own PREDICATE, so no copy of the rule travels here.
+# Live the same day: zero such pairs across the house org's 34 records, hence 135 proven transfers.
+_PAIR_A, _PAIR_B = "ONE STORE UNDER ITS FIRST ADDRESS", "ONE STORE UNDER ITS SECOND ADDRESS"
+_k_lines = [line(_PAIR_B, "K-1", 525.00, "2026-09-10"), line(OTHER_A, "K-2", 450.00, "2026-09-11"),
+            line(OTHER_A, "K-3", 240.00, "2026-09-12"),
+            line(_PAIR_B, "K-4", 300.00, "2026-09-13"), line(OTHER_B, "K-4", 125.00, "2026-09-13")]
+_k_devs = [dev(_PAIR_A, "K-1", 525.00, "2026-09-15", cost=599.99),   # the two may be ONE store
+           dev(_PAIR_A, "K-2", 450.00, "2026-09-15", cost=599.99),   # paid somewhere else entirely
+           dev(OTHER_B, "K-3", 240.00, "2026-09-15", cost=149.99),   # no pair involved at all
+           dev(_PAIR_A, "K-4", 425.00, "2026-09-15", cost=649.99)]   # paid at BOTH: pair and other
 _k_cl = R.carrier_line_side(_k_lines, CFG, lambda t: "REIMBURSEMENT" in str(t or "").upper())
+# The predicate, bound exactly as the router binds it: the ONE home over the ONE pair set.
+_K_PAIRS = _sid.shared_identity_pairs(
+    [{"store_code": "ONE-CODE", "store_address": _PAIR_A},
+     {"store_code": "ONE-CODE", "store_address": _PAIR_B},
+     {"store_code": "OTHER-CODE", "store_address": OTHER_A}])
+_K_PAIRS_FLAT = {a for pair in _K_PAIRS for a in pair}
+_k_same = lambda a, b: _sid.may_be_one_store(a, b, _K_PAIRS)
 _k_blind = R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True)
 _k_seen = R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True,
-                         ambiguous_stores={_AMB})
-ok("K1. the ambiguous SET is injected, not derived — the signature takes it and the module states no "
-   "identity rule of its own",
-   "ambiguous_stores" in _fn_src(MOD, "device_lines").split(")")[0]
-   and "store_mapping" not in _code_only(_fn_src(MOD, "device_lines")))
-ok("K2. with the set injected, a device the carrier paid at an ambiguous address is NOT MEASURED — "
-   "never 'paid to another store'",
+                         same_store=_k_same)
+ok("K1. the rule is injected as the identity home's PREDICATE — the signature takes a callable and "
+   "this module keeps no copy, not even a set-membership test",
+   "same_store" in _fn_src(MOD, "device_lines").split(")")[0]
+   and not any(t in _code_only(_fn_src(MOD, "device_lines"))
+               for t in ("store_mapping", "store_code", "salesforce", "frozenset")))
+ok("K2. a device whose two addresses MAY BE ONE STORE is NOT MEASURED — never 'paid to another "
+   "store', because that would move real cost between two records of one store",
    row_of(_k_seen, "K-1")["status"] == R.LINE_NOT_MEASURED
    and row_of(_k_seen, "K-1")["reason"] == R.REASON_STORE_AMBIGUOUS)
-ok("K3. …and so is a device CLAIMED by the ambiguous address and paid elsewhere (both sides, not "
-   "just the paying one)",
-   row_of(_k_seen, "K-2")["status"] == R.LINE_NOT_MEASURED
-   and row_of(_k_seen, "K-2")["reason"] == R.REASON_STORE_AMBIGUOUS)
+ok("K3. THE DEFECT THAT NAMED THIS: a device claimed at an address with two records but PAID at an "
+   "unrelated one is a PROVEN transfer — the pair relation withholds, a per-address flag would not",
+   row_of(_k_seen, "K-2")["status"] == R.LINE_PAID_OTHER_STORE
+   and _PAIR_A in _K_PAIRS_FLAT)
 ok("K4. the money is still ON the withheld row, named — only the VERDICT is withheld, so nothing is "
    "hidden from the reader",
    row_of(_k_seen, "K-1")["carrier_paid_other_total"] == 525.00
-   and [o["store"] for o in row_of(_k_seen, "K-1")["carrier_paid_other_stores"]] == [_AMB])
-ok("K5. a transfer with NEITHER side ambiguous is still proven — the guard withholds the three "
-   "addresses, not the finding",
+   and [o["store"] for o in row_of(_k_seen, "K-1")["carrier_paid_other_stores"]] == [_PAIR_B])
+ok("K5. a transfer between two addresses nothing links is proven — the guard withholds the pair, "
+   "not the finding",
    row_of(_k_seen, "K-3")["status"] == R.LINE_PAID_OTHER_STORE)
-ok("K6. the withheld dollars are counted apart and never netted into 'not paid'",
+ok("K6. ALL, NOT ANY: one payment at an address that CANNOT be this store proves the transfer, even "
+   "when another payment sits at the possibly-same one — a floor proves only its own direction",
+   row_of(_k_seen, "K-4")["status"] == R.LINE_PAID_OTHER_STORE)
+ok("K7. the withheld dollars are counted apart and never netted into 'not paid'",
    _k_seen["totals"]["not_paid_total"] == 0.0
-   and _k_seen["totals"]["by_status"][R.LINE_NOT_MEASURED] == 2
-   and _k_seen["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 1)
-ok("K7. the reason carries a human sentence, and no table or column name reaches it",
+   and _k_seen["totals"]["by_status"][R.LINE_NOT_MEASURED] == 1
+   and _k_seen["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 3)
+ok("K8. the reason carries a human sentence, and no table or column name reaches it",
    isinstance(R.LINE_REASON_LABELS.get(R.REASON_STORE_AMBIGUOUS), str)
    and row_of(_k_seen, "K-1")["reason_label"] == R.LINE_REASON_LABELS[R.REASON_STORE_AMBIGUOUS]
    and not any(t in R.LINE_REASON_LABELS[R.REASON_STORE_AMBIGUOUS].lower()
                for t in ("store_mapping", "asset_ledger", "raw_payment_detail", "column", "table")))
-ok("K8. the ambiguity fact is read from the ONE identity home through coa's I/O twin, and coa "
-   "derives nothing itself",
-   "ambiguous_identities" in _src(COA_MOD) and "store_identity_index" in _src(COA_MOD)
-   and "_sid.ambiguous_identities" in _fn_src(COA_MOD, "ambiguous_store_keys"))
-ok("K9. the router passes it in — the guard is wired, not merely available (the §19.18 failure mode)",
-   "ambiguous_store_keys" in _src(ROUTER)
-   and "ambiguous_stores=" in _src(ROUTER))
-# The control that arms §K: without the set the SAME rows DO accuse, so the withholding is the
+ok("K9. the pair fact is read from the ONE identity home through coa's I/O twin, and coa derives "
+   "nothing itself",
+   "shared_identity_pairs" in _src(COA_MOD)
+   and "_sid.shared_identity_pairs" in _fn_src(COA_MOD, "shared_store_identity_pairs")
+   and not any(t in _code_only(_fn_src(COA_MOD, "shared_store_identity_pairs"))
+               for t in ("frozenset", "salesforce_id\"]", "store_code\"]")))
+ok("K10. the router binds the home's own predicate and passes it in — wired, not merely available "
+   "(the §19.18 failure mode)",
+   "shared_store_identity_pairs" in _src(ROUTER)
+   and "may_be_one_store" in _src(ROUTER)
+   and "same_store=" in _src(ROUTER))
+ok("K11. the superseded per-address read is GONE from every caller — the false-withholding defect "
+   "cannot come back by someone reaching for the old name",
+   "ambiguous_store_keys" not in _src(COA_MOD)
+   and "ambiguous_store_keys" not in _src(ROUTER)
+   and "ambiguous_stores" not in _src(MOD))
+# The control that arms §K: without the predicate the SAME row DOES accuse, so the withholding is the
 # guard's doing and not an absence of data.
-ok("K10. control: with no set injected the same two rows read 'paid to another store' — so §K2/§K3 "
-   "are the guard withholding and not a tautology",
+ok("K12. control: with no predicate injected the same row reads 'paid to another store' — so §K2 is "
+   "the guard withholding and not a tautology",
    row_of(_k_blind, "K-1")["status"] == R.LINE_PAID_OTHER_STORE
-   and row_of(_k_blind, "K-2")["status"] == R.LINE_PAID_OTHER_STORE
-   and _k_blind["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 3)
+   and _k_blind["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 4
+   and _k_blind["totals"]["by_status"][R.LINE_NOT_MEASURED] == 0)
+ok("K13. control: a predicate that links NO pair withholds nothing, so the guard cannot quietly "
+   "swallow real findings when the config is clean — which is the live state today",
+   R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True,
+                  same_store=lambda a, b: False
+                  )["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 4)
 # RESTATED, NOT RELAXED (§66). This used to require the router to SPELL the two basis names
 # itself. That was a second copy of the rule "which bases make a component unreliable", and the GP
 # report was reading the same `basis` field a different way at the same time — so the question now
@@ -563,21 +608,16 @@ ok("K10. control: with no set injected the same two rows read 'paid to another s
 # at one row per phone an unreliable component is DECLINED. §66's own lock fails the build if the
 # copy comes back, in this module or any other.
 _IDD = _src(ROUTER).split("def is_device_dollar")[1].split("return hit")[0]
-ok("K12. a dollar §58 placed on a category the component vocabulary has no row for is DECLINED as "
+ok("K14. a dollar §58 placed on a category the component vocabulary has no row for is DECLINED as "
    "device money — the router asks §58's own home whether the component is evidence, and keeps no "
    "copy of which bases those are",
    "component_is_evidence(" in _IDD
    and "BASIS_DECLARED_UNMAPPED" not in _src(ROUTER)
    and "BASIS_UNRESOLVED" not in _src(ROUTER))
-ok("K13. …and that decision lives at the CALL SITE, not as a second classifier in the pure layer",
+ok("K15. …and that decision lives at the CALL SITE, not as a second classifier in the pure layer",
    not any(t in _code_only(_src(MOD)) for t in ("declared_category_unmapped", "payment_categories",
                                                 "carrier_category_map")))
 
-ok("K11. control: an UNAMBIGUOUS set withholds nothing, so the guard cannot quietly swallow real "
-   "findings",
-   R.device_lines(_k_devs, _k_cl, CFG, None, {"2026-09": COMPLETE}, configured=True,
-                  ambiguous_stores={"A STORE NOBODY WAS PAID AT"}
-                  )["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 3)
 
 # 5. The banned-name check really rejects something.
 ok("J5. control: the RULE TWO scan really does reject a carrier name, so §H1 is a test",
