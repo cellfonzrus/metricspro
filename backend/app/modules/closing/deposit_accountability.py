@@ -182,6 +182,11 @@ def day_accountability(pickup_rows):
                 # and a late counter is not the DM who collected it. None = not recorded.
                 "actual_counted_by": r.get("actual_counted_by"),
                 "actual_counted_at": r.get("actual_counted_at"),
+                # The pickup row's own id, so a CORRECTION to this count can be shown beside it
+                # (mig 1071 — `cash_count_revision.subject_row_id`). Carried rather than re-read:
+                # the board already holds the row the trail is about, and re-walking the pickup
+                # tables to key a history is the sibling read the index rules forbid.
+                "pickup_row_id": r.get("id"),
                 "pickup_variance": vf["variance"] if vf else None,
                 "pickup_variance_status": vf["status"] if vf else None,
                 "disposition": r.get("disposition"), "handed_to": r.get("handed_to"),
