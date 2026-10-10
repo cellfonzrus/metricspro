@@ -3649,6 +3649,14 @@ the owner wants it).
 
 **Purpose.** Reconcile cash collected at close vs cash actually deposited in the bank, per store per day.
 
+> **The BANKING STEP is now its own screen — see §67.** `/closing/bank-deposit` sits between the two
+> pickups and this reconciliation, with Store Cash and bill-payment cash in their own sections
+> (declared by the category's mig-509 `basis`, never a new column). It derives nothing: the figures
+> are this report's, and deposits are written through the same `POST /closing/bank-deposit`. §67 also
+> adds the standard filters to the deposit-accountability board below, lets a SEALED envelope be
+> opened and counted from it (`POST /closing/pickup/open-count`, one home `pickup_actual.count_patch`,
+> mig `1067` records WHO counted), and makes a HAND-OVER record an amount like a deposit does.
+
 - **Module:** `backend/app/modules/closing/deposit_recon.py`. Helpers:
   `closing_cash_raw_by_store_day(client, org_id, date_from, date_to, store_codes)` `:147`;
   `bank_deposits_by_store_day(...)` `:179`; `cash_for_basis(t_cash, epay_cash, basis)` `:196`;
@@ -6369,6 +6377,8 @@ rendering the resolved name.
 | `commcalc.billpay_pickup_config` (mig `942`) | `PUT /closing/billpay-pickup-config` | `_notify_pickup` (billpay kind; falls back to `cash_pickup_config` recipient when unset) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `mgmt_confirmed(+by/at)` (mig `943`) | `POST /closing/deposit-mgmt-confirm` (management-gated confirm/revoke) | `GET /closing/deposit-accountability` (green-day rule), `GET /closing/deposit-recon` `pickup_deposit` line item (§12 deposit accountability) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_picked_amount` (mig `949`) + `cash_pickup_config.pickup_actual_relieves_cash` knob | `POST /closing/pickup` / `/billpay-pickup` (item `actual_amount`, shared `_confirm_pickup_impl`; NULL = not recorded) | `GET /closing/pickups` + `/billpay-pickups` variance fields, `GET /closing/deposit-accountability` short-pickup chips (pure `closing/pickup_actual.py`, reusing `envelope_report.count_fields`); outflow swap in `_cash_position_core` ONLY under the knob (default false = declared, byte-identical; §12 actual cash picked) |
+| `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_counted_by` / `actual_counted_at` (mig `1067`) | `POST /closing/pickup/open-count` + `/closing/billpay-pickup/open-count` (the late open from the accountability board) AND `POST /closing/pickup` — BOTH through the ONE home `closing/pickup_actual.count_patch` (`COUNT_COLUMNS`); written only when a counter is supplied, and the write retries without them on a pre-1067 schema | `GET /closing/deposit-accountability` envelopes (`actual_counted_by`/`_at`) → the board's "Opened & counted" column. Never summed, never relieves cash. Lock: `harness_deposit_accountability.py` §J (incl. the no-second-copy ratchet over `row`/`upd` writes). §67.2 |
+| THE BANK-DEPOSIT SECTION a deposit category belongs to (`cash` \| `billpay` \| `other`) — DERIVED from the mig-509 `closing_deposit_category.basis`, never stored twice and never matched on the category NAME | `closing/deposit_recon.section_for_basis` / `section_catalog(processor_term)` (ONE home; the bill-pay label is the tenant's own processor term, RULE TWO) | `GET /closing/deposit-categories` (`section` per row + `sections`), `GET /closing/deposit-recon` (`sections` + `section` on every `assemble_category_block`), screen `/closing/bank-deposit`. Lock: `harness_deposit_accountability.py` §K. §67.4 |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `envelope_opened` (mig **`990`**, WRITTEN NOT APPLIED) | `POST /closing/pickup` / `/billpay-pickup` (item `envelope_opened`, shared `_confirm_pickup_impl`; written only when sent, and the upsert retries WITHOUT it on a pre-990 schema — mig-201 precedent) | THE CONFIRM GATE: opened ⇒ `actual_amount` REQUIRED (pure `pickup_actual.opened_without_count`/`gate_items`, batch checked before any write). Surfaced on `GET /closing/pickups` + `/billpay-pickups` and on the deposit-accountability envelopes. NULL and FALSE are ONE state ('collected sealed'); never relieves cash, never summed (§23p) |
 | `commcalc.cash_pickup_config.pickup_billpay_net_source` (mig **`1038`**, WRITTEN NOT APPLIED; CHECK-tied to `billpay_netting.NET_SOURCES`, default `pos` = byte-identical to mig `989`) | chosen per org in SQL; read by `closing/router.billpay_net_source` (never raises — a database without the column reads `pos`) | `GET /closing/pickups` (`billpay_net_source`, and `billpay_pos_disagrees`/`billpay_pos_gap` when the declared source is in force and a POS figure also exists) — §47.11 |
 | `commcalc.cash_pickup.amount_basis` (mig **`1039`**, WRITTEN NOT APPLIED; nullable, CHECK-tied to `billpay_netting.PICKUP_BASES`, never backfilled) | `POST /closing/pickup` via `pickup_amount_basis` — from the config in force, server-side, never from the client; the upsert retries WITHOUT it on a pre-1039 schema | `GET /closing/pickups` `amount_basis` (worded by `pickup_basis_label`, which reports `recorded: false` for a pre-`1039` row and `stale` when the basis in force differs — the stored amount and its variance are never re-scored) — §47.11 |
@@ -22627,3 +22637,128 @@ it.
 Module-graph fact: `carrier_dollar_component` — the same fact (one dollar, one classification); its
 `question` now names the basis rule, its `index` carries `66`, and this lock joins its locks.
 Written by hand, multi-line (never `--bless` — §50).
+
+---
+
+## 67. BANK DEPOSIT IS A STEP, NOT A FORM ON A REPORT — and a sealed envelope can be opened where it is found (owner directive 2026-10-10)
+
+Owner, verbatim, in two parts:
+
+> *"Need filter standard in deposit accountability section, if the cash is not opened in cash pickup
+> or epay pick up it should the option to open on this module and it should also give the field to
+> enter the cash pickle by the managment or handed over to the managment"*
+
+> *"Bank deposit should be a separate module for broth cash and epay in one link on top and bottom
+> but recorded separately as right now it is confusing and not traceable by employees easily add
+> another step in the workflow after cash pick up epay pick then add bank deposit and the cash recon"*
+
+**Duplicate check (the build gate), stated.** Searched §12 / §23p / §48 for an existing mechanism for
+each of the four things built here, and EXTENDED rather than added in all four cases:
+
+| Asked for | Already existed | What shipped |
+|---|---|---|
+| Filters on the accountability board | `_resolve_market_filter` / `_resolve_store_filter` / `_resolve_employee_filter` (§29.10) | `GET /closing/deposit-accountability` now declares and applies all three. No new resolver. |
+| Open a sealed envelope, record the count | `envelope_opened` (mig `990`) + `actual_picked_amount` (mig `949`), written inline by `_confirm_pickup_impl` | the column set became `pickup_actual.count_patch`, ONE home dereferenced by both writers. No new count column. |
+| Who counted it | nothing (mig 949/990 recorded a count with no counter) | mig `1067` `actual_counted_by` / `actual_counted_at`. |
+| Cash vs ePay as separate deposit sections | `closing_deposit_category.basis` (mig `509`, presets "Store Cash Deposit" / "Bill Payment Cash Deposit") | the section is DERIVED from the basis. **No `deposit_kind` column, no new table, no new endpoint, no second writer.** |
+
+### 67.1 The standard filters reach the board
+
+`GET /closing/deposit-accountability` took a date range and nothing else, so on a page whose header
+carries market and store pickers the accountability section below ignored both — the one closing
+surface that could not answer "this market". It now takes `markets` / `stores` / `employees` (plus
+the singular `market=` alias `/accountability-chain` already accepted) through the same three
+resolvers, and `harness_closing_filter_contract.py` covers it by construction. The payload carries
+`filters` — what was actually applied — and the screen states it.
+
+**Employees filter the PICKUP ROWS, before the fold.** A day row's totals, the GREEN rule, the by-DM
+shortage report and the summary are all folds over its envelopes, so narrowing after the fold would
+show one rep's name beside another rep's money. Market and store are day-grain and are applied to
+the rows beside the keyset, exactly as the chain endpoint applies them. The keyset is unchanged: a
+filter can never widen a viewer's span.
+
+### 67.2 Opening a sealed envelope, late — ONE home for the statement
+
+150 envelopes in the live September range were collected **sealed** (no count at all), and the only
+place that could ever record an opening was the pickup screen, at confirm time, by the DM.
+
+- `closing/pickup_actual.count_patch(item, declared, counted_at)` is **THE one home** for the stored
+  shape of an open-and-count statement (`COUNT_COLUMNS` = `envelope_opened`, `actual_picked_amount`,
+  `actual_counted_by`, `actual_counted_at`). Two writers dereference it:
+  `router._confirm_pickup_impl` (the DM at pickup) and `router._open_count_impl` (the late open).
+- NEW `POST /closing/pickup/open-count` + `POST /closing/billpay-pickup/open-count` — one impl, the
+  mig-942 sibling pattern. **404** when no pickup row exists and **409** when it is not picked up:
+  this records a count on a collection that happened, it never creates one. The SAME gate
+  (`pickup_actual.gate_items`) refuses "opened" with no count; a counted `0.00` is a real finding.
+- **Deliberately NOT `POST /pickup`**: that endpoint upserts `picked_up_by` / `picked_up_at` and
+  re-notifies, so a late count through it would overwrite who collected the cash and send a second
+  pickup notification.
+- **Deliberately NOT `envelope_count`** (mig `936`): that is MANAGEMENT'S own later count in the
+  Management Envelope Receipt — a different key (`daily_closing.id`), scored against the whole
+  declared drawer, and wired to the `envelope_short` chargeback machinery that moves a rep's pay.
+  This is the pickup-step count performed late, so it lands where that count already lives and the
+  board's existing short/over chips read it with no new derivation.
+- Mig `1067` — `actual_counted_by` / `actual_counted_at` on `cash_pickup` + `billpay_pickup`. A
+  timestamp is never written without a person. Both writers retry WITHOUT these columns when the
+  error names them (the mig-201 precedent), so the money figure always lands.
+
+### 67.3 A hand-over now records an amount
+
+`_record_deposit_impl` recorded an amount for a DEPOSIT and **nothing at all** for a HAND-OVER, so an
+envelope handed to management carried only the rep's declared snapshot: management ticked "received"
+and no figure ever stated what they actually got. A hand-over short by $200 looked exactly like one
+that tied. The amount, the `declared_amount` comparison and the `deposit_flagged` mismatch flag are
+ONE mechanism and both dispositions now run it; the slip + OCR stay particular to a deposit, because
+only a deposit has a slip. `pickup_deposit_line` still reads `disposition == 'deposited'` only, so a
+handed amount can never be counted as money that reached the bank.
+
+### 67.4 Bank Deposit — the module
+
+NEW screen `/closing/bank-deposit`, nav **Daily Closing** group (above both recons), route index
+registered. Two (three) sections from the SERVED catalog, section links at the top AND the bottom.
+
+- **The section is declared, not guessed.** `deposit_recon.section_for_basis(basis)` is the one home:
+  `store_cash` / `total_cash` → `cash`, `bill_payment_cash` → `billpay`, `manual` and anything
+  unknown → `other` (its own group, counted in neither pile — guessing would silently mis-bank
+  money). `section_catalog(processor_term)` names the bill-pay section with the tenant's OWN
+  processor term, so no carrier word is spelled in code or page copy (RULE TWO, the `stage_catalog`
+  precedent). Served on `GET /closing/deposit-categories` and `GET /closing/deposit-recon`; carried
+  on every `assemble_category_block`.
+- **It derives nothing and stores nothing new.** Every figure comes from `GET /closing/deposit-recon`
+  (same expected/deposited/variance math, same keyset); every deposit is written through
+  `POST /closing/bank-deposit`, the one writer every other deposit-recording surface already uses.
+  Recording separately is enforced by the form: each section offers only its own categories.
+
+### 67.5 The workflow order — one array, not three
+
+`frontend/src/lib/flowcharts.tsx` carried the store-cash stage list **three times**, once per runbook
+over the same chain (Store Cash, Daily Closing, DM Verify). It is now one `storeCashStages` array the
+three reference, with Bank Deposit inserted after both pickups and before the reconciliation — the
+order the money actually moves. `WorkflowNext` and the runbooks ask the same array, as designed.
+
+### 67.6 Where it is locked
+
+`backend/harness_deposit_accountability.py` — **now RUN BY CI** (`carrier-vocab-guard.yml`, closing
+job; removed from `harness_unrun_pending.txt`, `PINNED_MAX` 324 → 323). 106 checks, of which the new
+ratchets are: **§I** the three filters are accepted AND applied, employees before the fold, keyset
+intact; **§J** `count_patch` is the one home, both writers dereference it, and **no writer puts
+`COUNT_COLUMNS` into a stored `row`/`upd` dict itself**; **§J-b** both dispositions run one amount
+mechanism; **§K** every declared basis has a section, an unknown basis never reads as cash, the
+catalog is served and the frontend spells no section key; **§L** one stage array, Bank Deposit
+between the pickups and the recon, the screen registered.
+
+### 67.7 Cross-references
+
+| Thing | Home | Readers |
+|---|---|---|
+| An open-and-count statement's stored columns | `closing/pickup_actual.count_patch` (`COUNT_COLUMNS`) | `router._confirm_pickup_impl`, `router._open_count_impl` |
+| `commcalc.cash_pickup` / `billpay_pickup` `actual_counted_by`+`_at` (mig `1067`) | `POST /closing/pickup/open-count` + billpay sibling, and `POST /closing/pickup` — both via `count_patch` | `GET /closing/deposit-accountability` envelopes (`actual_counted_by`), the board's "Opened & counted" column |
+| Which Bank Deposit section a deposit category belongs to | `closing/deposit_recon.section_for_basis` / `section_catalog` | `GET /closing/deposit-categories` (`section`, `sections`), `GET /closing/deposit-recon` (`sections`, per-block `section`), `/closing/bank-deposit` |
+| The store-cash workflow ORDER | `frontend/src/lib/flowcharts.tsx` `storeCashStages` | the three runbooks, `WorkflowNext`, `stagesAfter` |
+| The amount management RECEIVED on a hand-over | `cash_pickup.deposit_amount` vs `declared_amount` (mig `089`), via `router._record_deposit_impl` | `GET /closing/deposit-accountability` (`flagged_rows`), §12 deposit accountability |
+
+**Endpoints added:** `POST /closing/pickup/open-count`, `POST /closing/billpay-pickup/open-count`.
+**Endpoints changed:** `GET /closing/deposit-accountability` (+`markets`/`stores`/`employees`/`market`,
+`filters`), `GET /closing/deposit-categories` (+`section`, `sections`), `GET /closing/deposit-recon`
+(+`sections`, +`section` per block), `POST /closing/pickup/deposit` + billpay sibling (amount on a
+hand-over). **Screen added:** `/closing/bank-deposit`. **Migration:** `1067`.

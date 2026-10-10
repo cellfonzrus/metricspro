@@ -3732,10 +3732,22 @@ async def bank_deposit(body: BankDepositIn, org_id: str = ORG_ID, authorization:
 @router.get("/deposit-categories")
 def get_deposit_categories(org_id: str = ORG_ID):
     """The org's deposit/reconciliation categories (lazy-seeded 2 presets on first call). Consumed by
-    the bank-deposit recording form's category picker, the deposit-recon report, and the admin page."""
+    the bank-deposit recording form's category picker, the deposit-recon report, and the admin page.
+
+    EACH CATEGORY NOW CARRIES ITS SECTION (owner 2026-10-10) — which half of the Bank Deposit
+    module it is recorded under, DERIVED from the basis it already declares
+    (`deposit_recon.section_for_basis`, the one home), never stored twice and never matched on the
+    category's NAME. The `sections` catalog beside it is the screen's whole vocabulary: the
+    bill-payment section is named with the tenant's own processor term, so no carrier word is
+    spelled in page copy (RULE TWO)."""
     require_org(org_id)
-    rows = deposit_recon.load_categories(sb(), org_id, active_only=False)
-    return {"categories": rows, "basis_values": list(deposit_recon.BASIS_VALUES)}
+    client = sb()
+    rows = deposit_recon.load_categories(client, org_id, active_only=False)
+    for r in rows:
+        r["section"] = deposit_recon.section_for_basis(r.get("basis"))
+    return {"categories": rows, "basis_values": list(deposit_recon.BASIS_VALUES),
+            "sections": deposit_recon.section_catalog(
+                _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY))}
 
 
 class PutDepositCategoriesIn(LaxModel):
@@ -4010,6 +4022,9 @@ def deposit_recon_report(date: str = "", date_from: str = "", date_to: str = "",
         if uncategorized_rows:
             grp = deposit_recon.build_deposit_group(uncategorized_rows)
             uncategorized = {"category_id": None, "category_name": "Uncategorized", "basis": None,
+                             # no declared basis ⇒ no section can be derived; shown in its own
+                             # group, counted in neither cash nor bill-pay (never guessed).
+                             "section": deposit_recon.SECTION_OTHER,
                              "total_deposited": grp["total_deposited"], "deposits": grp["deposits"]}
 
         day_total_deposited = round(sum(b["total_deposited"] for b in cat_blocks) +
@@ -4037,7 +4052,13 @@ def deposit_recon_report(date: str = "", date_from: str = "", date_to: str = "",
                          "variance": day_variance, "status": deposit_recon.status_for(day_variance, tolerance)},
         })
     out_days.sort(key=lambda r: (r["close_date"], r["store_address"] or ""), reverse=True)
+    for _c in cats_all:
+        _c["section"] = deposit_recon.section_for_basis(_c.get("basis"))
     return {"date_from": str(d_from), "date_to": str(d_to), "days": out_days, "categories": cats_all,
+            # The Bank Deposit module's section vocabulary, served so the screen spells no basis
+            # word and no processor name of its own (the stage_catalog precedent, §48).
+            "sections": deposit_recon.section_catalog(
+                _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
             "tender_basis": tender_basis_info(client, org_id),
             "toggles": {"include_expenses": inc_exp, "include_bill_payments": inc_bill, "include_other_adj": inc_other},
             "tolerance": tolerance}
@@ -6638,34 +6659,44 @@ def _record_deposit_impl(payload: RecordDepositIn, org_id: str, table: str, decl
     upd = {"org_id": org_id, "close_date": cdate, "store_code": store, "employee_name": emp,
            "disposition": disp, "deposit_note": payload.note, "deposited_at": _now()}
     ocr = None
+    # THE AMOUNT IS RECORDED FOR EITHER DISPOSITION (owner directive 2026-10-10) ─────────────────
+    # Owner: *"it should also give the field to enter the cash pick[ed] by the manag[e]ment or
+    # handed over to the manag[e]ment"*. THE CLASS, not the instance: this writer used to record an
+    # amount for a DEPOSIT and nothing at all for a HAND-OVER, so an envelope handed to management
+    # carried only the rep's declared snapshot — management confirmed receipt with a checkbox and
+    # never stated a figure, and a hand-over that was short by $200 was indistinguishable from one
+    # that tied. The amount, the declared comparison and the mismatch flag are ONE mechanism and
+    # both dispositions now run it; the slip + OCR stay particular to a deposit, because only a
+    # deposit has a slip. `deposit_amount` on a handed row means "what management actually
+    # received", which is exactly what the column already means on a deposited one: the counted
+    # money, against `declared_amount`, the system's figure.
     if disp == "handed_to_mgmt":
         upd["handed_to"] = payload.handed_to
+    # declared = the system's figure for this envelope (kind-specific: full cash vs ePay-on-cash)
+    declared = payload.declared_amount
+    if declared is None:
+        declared = declared_fn(client, org_id, cdate, store, emp)
+    amount = payload.deposit_amount
+    slip = payload.deposit_slip if disp == "deposited" else None
+    if slip and "," in str(slip):
+        path = _upload_envelope(org_id, slip)   # reuse the private closing-envelopes bucket
+        upd["deposit_slip_path"] = path
+        if amount in (None, ""):
+            try:
+                header, b64 = str(slip).split(",", 1)
+                amount, ocr = _ocr_deposit_amount(base64.b64decode(b64), "png" if "png" in header else "jpg")
+            except Exception:
+                amount = None
+    upd["deposit_amount"] = (float(amount) if amount not in (None, "") else None)
+    upd["declared_amount"] = (round(_f(declared), 2) if declared is not None else None)
+    upd["deposit_ocr"] = ocr
+    if upd["deposit_amount"] is not None and upd["declared_amount"] is not None:
+        matched = abs(upd["deposit_amount"] - upd["declared_amount"]) <= 1.0
+        upd["deposit_matched"] = matched
+        upd["deposit_flagged"] = not matched
     else:
-        # declared = the system's figure for this envelope (kind-specific: full cash vs ePay-on-cash)
-        declared = payload.declared_amount
-        if declared is None:
-            declared = declared_fn(client, org_id, cdate, store, emp)
-        slip = payload.deposit_slip
-        amount = payload.deposit_amount
-        if slip and "," in str(slip):
-            path = _upload_envelope(org_id, slip)   # reuse the private closing-envelopes bucket
-            upd["deposit_slip_path"] = path
-            if amount in (None, ""):
-                try:
-                    header, b64 = str(slip).split(",", 1)
-                    amount, ocr = _ocr_deposit_amount(base64.b64decode(b64), "png" if "png" in header else "jpg")
-                except Exception:
-                    amount = None
-        upd["deposit_amount"] = (float(amount) if amount not in (None, "") else None)
-        upd["declared_amount"] = (round(_f(declared), 2) if declared is not None else None)
-        upd["deposit_ocr"] = ocr
-        if upd["deposit_amount"] is not None and upd["declared_amount"] is not None:
-            matched = abs(upd["deposit_amount"] - upd["declared_amount"]) <= 1.0
-            upd["deposit_matched"] = matched
-            upd["deposit_flagged"] = not matched
-        else:
-            upd["deposit_matched"] = None
-            upd["deposit_flagged"] = False
+        upd["deposit_matched"] = None
+        upd["deposit_flagged"] = False
     client.schema("commcalc").table(table).upsert(
         upd, on_conflict="org_id,close_date,store_code,employee_name").execute()
     return {"ok": True, "disposition": disp, "deposit_amount": upd.get("deposit_amount"),
@@ -6687,6 +6718,123 @@ def billpay_record_deposit(payload: RecordDepositIn, org_id: str = ORG_ID):
     """Bill Payment Pickup sibling of POST /pickup/deposit (mig 942 — same machinery): the
     disposition of picked-up BILL-PAY cash, matched against the declared ePay-on-cash figure."""
     return _record_deposit_impl(payload, org_id, "billpay_pickup", _billpay_declared_for_envelope)
+
+
+# ── OPEN A SEALED ENVELOPE LATER (owner directive 2026-10-10) ──────────────────────────────────
+# Owner, verbatim: *"if the cash is not opened in cash pickup or epay pick up it should [have] the
+# option to open on this module and it should also give the field to enter the cash pick[ed] by the
+# manag[e]ment or handed over to the manag[e]ment"*.
+#
+# An envelope collected SEALED reaches the deposit-accountability board with no count at all —
+# 150 of them in the live September range — and until now the only place that could record the
+# opening was the pickup screen, at confirm time, by the DM. Management opening the envelope
+# afterwards had nowhere to put what they found.
+#
+# NOT A SECOND WRITE PATH. This updates the SAME pickup row the confirm writer owns, through the
+# SAME one home for the stored columns (`pickup_actual.count_patch`) and the SAME confirm gate
+# (`gate_items` — opened means a count is required, here as there). What it deliberately does NOT
+# do is reuse `POST /pickup`: that endpoint UPSERTS `picked_up_by` / `picked_up_at` to the caller
+# and re-notifies, so routing a late count through it would overwrite who collected the cash and
+# when, and would send a second pickup notification for a pickup that already happened.
+#
+# IT IS NOT `envelope_count` EITHER (the duplicate check, restated for this directive). mig 936 is
+# MANAGEMENT'S OWN later count in the Management Envelope Receipt report: a different key
+# (daily_closing.id), scored against the whole declared drawer, and wired to the envelope_short
+# chargeback machinery that moves a rep's pay. This is the pickup-step count — the same action the
+# pickup modules perform, performed late — so it lands where that count already lives,
+# `actual_picked_amount`, and the board's existing short/over chips read it with no new derivation.
+class OpenCountIn(LaxModel):
+    store_code: Any = None
+    close_date: Any = None
+    date: Any = None
+    employee_name: Any = None
+    envelope_opened: Any = True
+    actual_amount: Any = None
+    counted_by: Any = None
+
+
+def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
+    """Shared late open-and-count writer — see open_count_pickup's docstring for the flow."""
+    if isinstance(payload, dict):    # direct/harness callers pass plain dicts — coerce, same keys
+        payload = OpenCountIn(**payload)
+    client = sb()
+    store = (payload.store_code or "").strip()
+    cdate = _date(payload.close_date or payload.date)
+    emp = (payload.employee_name or "").strip()
+    if not (store and cdate):
+        raise HTTPException(400, "store_code and close_date required")
+    rows = (client.schema("commcalc").table(table).select("*").eq("org_id", org_id)
+            .eq("close_date", cdate).eq("store_code", store)
+            .eq("employee_name", emp).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "No pickup recorded for this envelope — confirm the pickup first.")
+    row = rows[0]
+    if not row.get("picked_up"):
+        raise HTTPException(409, "This envelope has not been picked up yet — open it at pickup, "
+                                 "or confirm the pickup first.")
+    item = {"store_code": store, "close_date": cdate, "employee_name": emp,
+            "store_name": row.get("store_name")}
+    if payload.model_fields_set and "envelope_opened" in payload.model_fields_set:
+        item["envelope_opened"] = payload.envelope_opened
+    else:
+        item["envelope_opened"] = True       # the action IS "open this envelope"
+    if "actual_amount" in (payload.model_fields_set or set()):
+        item["actual_amount"] = payload.actual_amount
+    if (payload.counted_by or "").strip():
+        item["counted_by"] = payload.counted_by
+    # THE SAME GATE AS THE CONFIRM SCREEN: an envelope asserted opened must carry its count,
+    # checked before anything is written.
+    offenders = _pickup_actual.gate_items([item])
+    if offenders:
+        raise HTTPException(400, _pickup_actual.gate_message(offenders))
+    # The declared snapshot THIS envelope's variance is scored against is the pickup row's own
+    # `amount` — the same figure `pickup_actual.row_variance` uses on the board and on the pickup
+    # list, so a count entered here and the chip that renders it can never disagree.
+    declared = _f(row.get("amount"))
+    patch = _pickup_actual.count_patch(item, declared=declared, counted_at=_now())
+    if not patch["row"]:
+        raise HTTPException(400, "Nothing to record — send the count, or the opened flag.")
+    upd = dict(patch["row"])
+    try:
+        client.schema("commcalc").table(table).update(upd).eq("id", row["id"]).eq("org_id", org_id).execute()
+    except Exception as _e:
+        # pre-990 / pre-1067 schema: drop only the statement columns the error names, so the
+        # COUNT itself still lands (the mig-201 precedent the confirm writer already follows).
+        _drop = [k for k in ("envelope_opened", "actual_counted_by", "actual_counted_at")
+                 if k in upd and k in str(_e)]
+        if not _drop:
+            raise
+        for _k in _drop:
+            upd.pop(_k, None)
+        if not upd:
+            raise HTTPException(400, "run migration 990/1067 first — nothing recordable on this schema")
+        client.schema("commcalc").table(table).update(upd).eq("id", row["id"]).eq("org_id", org_id).execute()
+    vf = patch["variance"]
+    return {"ok": True, "store_code": store, "close_date": cdate, "employee_name": emp,
+            "opened": patch["opened"], "declared_amount": round(declared, 2),
+            "actual_picked_amount": (vf["actual"] if vf else None),
+            "variance": (vf["variance"] if vf else None),
+            "status": (vf["status"] if vf else None),
+            "counted_by": upd.get("actual_counted_by")}
+
+
+@router.post("/pickup/open-count")
+def open_count_pickup(payload: OpenCountIn, org_id: str = ORG_ID):
+    """Open a cash envelope that was collected SEALED, and record what was counted in it (owner
+    2026-10-10). Body: {store_code, close_date, employee_name, envelope_opened?(default true),
+    actual_amount, counted_by}. Refuses (404) an envelope with no pickup row and (409) one not yet
+    picked up — this records a count on an existing collection, it never creates one. `opened` with
+    no count is refused by the same gate the pickup screen uses. The response carries the
+    short/over verdict against the declared snapshot, from the one truth table
+    (`envelope_report.count_fields` via `pickup_actual`)."""
+    return _open_count_impl(payload, org_id, "cash_pickup")
+
+
+@router.post("/billpay-pickup/open-count")
+def billpay_open_count_pickup(payload: OpenCountIn, org_id: str = ORG_ID):
+    """Bill Payment Pickup sibling of POST /pickup/open-count (mig 942 — same machinery, sibling
+    table): open and count a bill-payment envelope that was collected sealed."""
+    return _open_count_impl(payload, org_id, "billpay_pickup")
 
 
 class ConfirmPickupIn(LaxModel):
@@ -6748,20 +6896,22 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
         # when the client sends it (blank/None clears to NULL — "not recorded", never a fake 0),
         # so an old frontend / pre-949 database stays byte-identical. Variance semantics =
         # pickup_actual.variance_fields (reusing the envelope report's count_fields truth table).
-        if "actual_amount" in it or "actual_picked_amount" in it:
-            _act = it.get("actual_amount", it.get("actual_picked_amount"))
-            _vf = _pickup_actual.variance_fields(amt, _act)
-            row["actual_picked_amount"] = _vf["actual"] if _vf else None
-            if _vf:
-                actual_total = round((actual_total or 0.0) + _vf["actual"], 2)
-                variance_short += 1 if _vf["status"] == "short" else 0
-                variance_over += 1 if _vf["status"] == "over" else 0
         # mig 990 — the DM's own statement that they opened this envelope, stored beside the count
         # it required. Written ONLY when the client sends the key, so an older frontend is
         # byte-identical; the upsert below retries WITHOUT it on a pre-990 schema.
-        if "envelope_opened" in it:
-            row["envelope_opened"] = _pickup_actual.envelope_opened(it)
-            opened_count += 1 if row["envelope_opened"] else 0
+        # ONE HOME (owner 2026-10-10): the stored shape of an open-and-count statement is
+        # `pickup_actual.count_patch`, dereferenced here and by `_open_count_impl` (the
+        # deposit-accountability board's late open). Spelling the columns inline here is what
+        # would let the two surfaces drift — harness_deposit_accountability.py §J fails the build
+        # on a second copy.
+        _cp = _pickup_actual.count_patch(it, declared=amt, counted_at=_now())
+        row.update(_cp["row"])
+        _vf = _cp["variance"]
+        if _vf:
+            actual_total = round((actual_total or 0.0) + _vf["actual"], 2)
+            variance_short += 1 if _vf["status"] == "short" else 0
+            variance_over += 1 if _vf["status"] == "over" else 0
+        opened_count += 1 if _cp["row"].get("envelope_opened") else 0
         try:
             client.schema("commcalc").table(table).upsert(
                 row, on_conflict="org_id,close_date,store_code,employee_name").execute()
@@ -6774,7 +6924,11 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
             #   envelope_opened  pre-990 schema
             #   amount_basis     pre-1039 schema (the basis then reads as NULL, which
             #                    `pickup_amount_basis` words as "not recorded" — never as a guess)
-            _drop = [k for k in ("envelope_opened", "amount_basis") if k in row and k in str(_e)]
+            #   actual_counted_by / actual_counted_at   pre-1067 schema (the count still lands;
+            #                    only the counter's name and time are lost, never the money figure)
+            _drop = [k for k in ("envelope_opened", "amount_basis",
+                                 "actual_counted_by", "actual_counted_at")
+                     if k in row and k in str(_e)]
             if not _drop:
                 raise
             for _k in _drop:
@@ -7705,6 +7859,8 @@ def _accountability_pickup_rows(client, org_id, start, end):
 
 @router.get("/deposit-accountability")
 def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
+                                 stores: str = "", markets: str = "", market: str = "",
+                                 employees: str = "",
                                  authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The deposit-accountability board (owner directive 2026-09-02): per (store, day), every
     picked-up envelope's disposition state — deposited (slip on file / MISSING SLIP), handed to
@@ -7718,7 +7874,24 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
     the pickups); the CONFIRM ACTION (POST /deposit-mgmt-confirm) is management-gated. The
     payload carries `can_confirm` so the UI renders the confirm checkbox read-only for
     non-management. Pure state math: closing/deposit_accountability.day_accountability
-    (proof harness_deposit_accountability.py)."""
+    (proof harness_deposit_accountability.py).
+
+    THE STANDARD FILTERS (owner 2026-10-10: *"Need filter standard in deposit accountability
+    section"*). The board shipped with a date range and nothing else, so on a screen whose own
+    header carries market and store pickers the accountability section below ignored both — the
+    one surface in this module that could not answer "this market" or "this store". It now takes
+    `markets` / `stores` / `employees` through the SAME three resolvers every other closing
+    endpoint dereferences (`harness_closing_filter_contract.py` fails the build on an endpoint
+    that accepts a standard filter and does not apply it, or that rebuilds one inline). `market=`
+    is kept as the singular alias `/accountability-chain` already takes, so no existing link
+    breaks.
+
+    EMPLOYEES FILTER THE PICKUP ROWS, NOT THE OUTPUT, and that is deliberate: a day row's totals
+    are a fold over its envelopes, so narrowing to one rep AFTER the fold would show that rep's
+    name beside somebody else's money. Filtering the raw rows first means every total, the GREEN
+    rule, the by-DM shortage report and the summary all describe exactly the envelopes on screen,
+    by construction. Market and store are day-grain facts and are applied to the rows, beside the
+    keyset, exactly as `/accountability-chain` applies them."""
     from . import billpay_pickup as _bp
     from . import deposit_accountability as _da
     require_org(org_id)
@@ -7743,13 +7916,27 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
                   .eq("org_id", org_id).execute().data) or [])
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
 
+    # The THREE STANDARD FILTERS, each through its ONE resolver (never rebuilt inline).
+    store_set = _resolve_store_filter(stores)
+    market_set = _resolve_market_filter(market, markets)
+    employee_set = _resolve_employee_filter(employees)
+
     prows = _accountability_pickup_rows(client, org_id, start, end)
+    if employee_set:
+        prows = [p for p in prows
+                 if (str((p or {}).get("employee_name") or "").strip().casefold()) in employee_set]
     rows, summary = _da.day_accountability(prows)
     out = []
     for r in rows:
         meta = smeta.get(r["store_code"], {})
         if ks is not None and not in_keyset(ks, r["store_code"], meta.get("address")):
             continue
+        if store_set and (r["store_code"] or "").upper() not in store_set:
+            continue
+        if market_set:
+            _mk = (meta.get("market") or "").strip()
+            if _mk and _mk.casefold() not in market_set:
+                continue
         r["store_name"] = meta.get("address") or r["store_code"]
         r["market"] = meta.get("market")
         for env in r["envelopes"]:
@@ -7779,6 +7966,11 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
     dm_rows, dm_summary = _da.dm_shortage_rows(out)
     return {"start": start, "end": end, "rows": out, "summary": summary,
             "by_dm": dm_rows, "dm_summary": dm_summary,
+            # What was actually applied, so the section can state its own filters rather than the
+            # page's — a filter the viewer cannot see is a filter they will mis-read.
+            "filters": {"stores": sorted(store_set) if store_set else [],
+                        "markets": sorted(market_set) if market_set else [],
+                        "employees": sorted(employee_set) if employee_set else []},
             "can_confirm": _bp.can_see_cash_recon(authorization or "", org_id, client)}
 
 

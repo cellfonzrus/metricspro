@@ -861,6 +861,9 @@ jobs:
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the deposit-accountability lock (the green rule, the cash-short-by-DM fold, the standard filters, the ONE home for an open-and-count statement, and the declared bank-deposit sections — index §12, §23p, §67)
+        working-directory: backend
+        run: python3 harness_deposit_accountability.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
         working-directory: backend
         run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
