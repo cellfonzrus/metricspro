@@ -151,8 +151,11 @@ def split_pool(pool, employees, *, basis, hours_by_employee=None, revenue_by_emp
         weights = {n: _num((hours_by_employee or {}).get(n)) for n in names}
         note_empty = "no hours recorded for the qualifying employees, so the pool cannot be split by hours"
     elif b == "individual_sales":
+        # "Who ran the sale." The caller supplies the weights, because WHICH sales count depends on
+        # what the pool is built from — see compute_day. Nobody declared any, nobody gets a share:
+        # dividing it evenly would pay people for sales nobody recorded them making.
         weights = {n: _num((revenue_by_employee or {}).get(n)) for n in names}
-        note_empty = "no individual sales declared for the qualifying employees, so the pool cannot be split by sales"
+        note_empty = "nobody is recorded as having run these sales, so the pool cannot be split by who ran them"
     else:
         weights = {n: 1.0 for n in names}
         note_empty = ""
@@ -244,9 +247,21 @@ def compute_day(catalog, rules, *, declared_map, per_employee, hours_by_employee
                     if not ok:
                         continue
                 eligible.append(who)
+            # "Who ran the sale" (owner 2026-10-10) weights by each person's own figure in the
+            # POOL'S OWN categories, not by their whole day. A pool built on printing should be
+            # divided by printing; weighting it by total revenue would hand a share to somebody who
+            # sold none of what made the pool. A pool on the whole day falls back to the whole day,
+            # which is the same number — so there is no second setting to get wrong.
+            if _key(payout.get("split")).lower() == "individual_sales" and pkeys:
+                weights = {}
+                for who in roster:
+                    v, _m = measure(catalog, (per_employee or {}).get(who) or {}, pbasis, pkeys)
+                    weights[who] = v
+            else:
+                weights = emp_rev
             shares, un, note = split_pool(
                 pool, eligible, basis=payout.get("split"),
-                hours_by_employee=hours_by_employee, revenue_by_employee=emp_rev)
+                hours_by_employee=hours_by_employee, revenue_by_employee=weights)
             unallocated = _round(unallocated + un)
             for who, amt in sorted(shares.items()):
                 lines.append({"employee": who, "rule": label, "rule_kind": kind, "amount": amt,

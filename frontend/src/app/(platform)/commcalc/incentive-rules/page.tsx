@@ -43,10 +43,20 @@ const KIND_HELP: Record<string, string> = {
   threshold_pool: 'Makes a pool out of the store’s figure and divides it among the employees who qualify.',
 }
 const SPLIT_LABEL: Record<string, string> = {
+  individual_sales: 'by who ran the sale',
   hours: 'by hours worked',
-  individual_sales: 'by individual sales',
-  equal: 'evenly',
+  equal: 'evenly between everyone',
 }
+// What each choice actually does, in the words somebody configuring it would use. Owner 2026-10-10:
+// "we will change the logic by who ran the sale … make it easy to confgure".
+const SPLIT_HELP: Record<string, string> = {
+  individual_sales: 'Each person gets the share of the pool that matches how much of it they sold. Somebody who sold none of it gets none of it.',
+  hours: 'Divided by hours worked — clocked hours where they exist, otherwise the scheduled ones. A day with no hours recorded leaves the pool unpaid rather than split evenly.',
+  equal: 'The same amount to everyone who qualified, however much each of them sold.',
+}
+// The order they are offered in. "Who ran the sale" leads because it is the house default; anything
+// the server adds that is not named here still appears, after these.
+const SPLIT_ORDER = ['individual_sales', 'hours', 'equal']
 const SCOPE_LABEL: Record<string, string> = {
   none: 'No qualifier — always pays',
   store: 'The store must reach it',
@@ -65,8 +75,48 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const blankRule = (kind: string): Rule => ({
   label: '', description: '', rule_kind: kind, is_active: true,
   qualifier: { scope: 'none' },
-  payout: { basis: kind === 'per_unit' ? 'units' : 'amount', metric_keys: [], rate: 0, ...(kind === 'threshold_pool' ? { split: 'equal' } : {}) },
+  // A new pool defaults to "who ran the sale" — the owner's rule, so the common case needs no
+  // thinking and the other two are a dropdown away.
+  payout: { basis: kind === 'per_unit' ? 'units' : 'amount', metric_keys: [], rate: 0, ...(kind === 'threshold_pool' ? { split: 'individual_sales' } : {}) },
 })
+
+// The server's split list, house order first. Nothing is filtered out — a basis this screen has no
+// word for still appears, named by its key, rather than silently vanishing from the editor.
+function orderedSplits(bases: string[]): string[] {
+  return [...SPLIT_ORDER.filter(s => bases.includes(s)), ...bases.filter(s => !SPLIT_ORDER.includes(s))]
+}
+
+// The rule, as a sentence. Built from the rule itself and the catalog's own labels — so a category
+// renamed on Count Fields renames itself here too, and a shape the server adds degrades to its key
+// rather than to a wrong sentence.
+function plainWords(r: Rule, metrics: Metric[]): string {
+  const name = (k: string) => metrics.find(m => m.key === k)?.label || k
+  const names = (ks?: string[]) => (ks || []).map(name).join(' and ')
+  const pct = (n?: number) => `${((n || 0) * 100).toFixed(2).replace(/\.?0+$/, '')}%`
+  const q = r.qualifier || {}, p = r.payout || {}
+
+  let when = 'Every day, '
+  if (q.scope === 'store' || q.scope === 'employee') {
+    const who = q.scope === 'store' ? 'the store' : 'an employee'
+    const what = (q.metric_keys || []).length ? names(q.metric_keys)
+      : (q.basis === 'revenue' ? 'the day’s sales' : 'the figure')
+    const amount = q.basis === 'units' ? `${q.threshold ?? 0}` : fmt(q.threshold || 0)
+    when = `When ${who} reaches ${OP_LABEL[q.op || 'gte'] || q.op} ${amount} of ${what}, `
+  }
+
+  const on = (p.metric_keys || []).length ? names(p.metric_keys) : 'the day’s sales'
+  if (r.rule_kind === 'per_unit') {
+    return `${when}each person is paid ${fmt(p.rate || 0)} for every ${on} they did themselves.`
+  }
+  if (r.rule_kind === 'percent_of_amount') {
+    return `${when}each person is paid ${pct(p.rate)} of their own ${on}.`
+  }
+  if (r.rule_kind === 'threshold_pool') {
+    const split = SPLIT_LABEL[p.split || 'individual_sales'] || p.split
+    return `${when}${pct(p.rate)} of ${on} becomes a pool, shared out ${split}.`
+  }
+  return `${when}this rule pays on ${on}.`
+}
 
 function MetricPicker({ metrics, value, onChange, hint }:
   { metrics: Metric[]; value: string[]; onChange: (v: string[]) => void; hint: string }) {
@@ -232,7 +282,16 @@ export default function IncentiveRulesPage() {
           <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 2px' }}>
             {edit.id ? 'Edit rule' : `New ${KIND_LABEL[edit.rule_kind] || edit.rule_kind} rule`}
           </h2>
-          <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 12px' }}>{KIND_HELP[edit.rule_kind]}</p>
+          <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>{KIND_HELP[edit.rule_kind]}</p>
+          {/* The rule read back as a sentence while it is being built, so nobody has to hold the
+              four dropdowns in their head to know what they just configured. */}
+          <div style={{
+            fontSize: 13, background: 'var(--surface2)', borderRadius: 8, padding: '8px 11px',
+            margin: '0 0 14px', lineHeight: 1.5,
+          }}>
+            <strong style={{ fontSize: 11, color: 'var(--text2)' }}>IN PLAIN WORDS</strong>
+            <div style={{ marginTop: 3 }}>{plainWords(edit, metrics)}</div>
+          </div>
 
           <div style={{ display: 'grid', gap: 12, maxWidth: 720 }}>
             <label style={{ fontSize: 12 }}>Name
@@ -297,12 +356,18 @@ export default function IncentiveRulesPage() {
                   }} />
                 {edit.rule_kind !== 'per_unit' && <span style={{ fontSize: 12 }}>%</span>}
                 {edit.rule_kind === 'threshold_pool' && (
-                  <select style={sel} value={edit.payout?.split || 'equal'}
+                  <select style={sel} value={edit.payout?.split || 'individual_sales'}
                     onChange={e => setEdit({ ...edit, payout: { ...edit.payout, split: e.target.value } })}>
-                    {(d?.split_bases || []).map(v => <option key={v} value={v}>Split {SPLIT_LABEL[v] || v}</option>)}
+                    {orderedSplits(d?.split_bases || []).map(v =>
+                      <option key={v} value={v}>Split {SPLIT_LABEL[v] || v}</option>)}
                   </select>
                 )}
               </div>
+              {edit.rule_kind === 'threshold_pool' && (
+                <div style={{ fontSize: 11.5, color: 'var(--text2)', marginTop: 6 }}>
+                  {SPLIT_HELP[edit.payout?.split || 'individual_sales'] || ''}
+                </div>
+              )}
               <div style={{ marginTop: 10 }}>
                 {edit.rule_kind === 'threshold_pool' && !(edit.payout?.metric_keys || []).length ? (
                   <div style={{ fontSize: 11, color: 'var(--text3)' }}>
@@ -317,11 +382,11 @@ export default function IncentiveRulesPage() {
                     ? "Leave all unticked to pool a percentage of the whole day."
                     : "Each employee is paid on their own figure in these categories."} />
               </div>
-              {edit.rule_kind === 'threshold_pool' && edit.payout?.split === 'hours' && (
+              {edit.rule_kind === 'threshold_pool' && edit.payout?.split === 'individual_sales'
+                && !!(edit.payout?.metric_keys || []).length && (
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
-                  Hours come from the schedule. On a day with no hours recorded, the pool is reported
-                  unallocated rather than split evenly — nobody is paid a share of something that was
-                  never measured.
+                  Shares are worked out from the categories ticked above — the ones that made the
+                  pool — not from everything a person sold that day.
                 </div>
               )}
             </fieldset>

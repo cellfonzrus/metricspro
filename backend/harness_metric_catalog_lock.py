@@ -192,6 +192,21 @@ for p in fe_files(FE):
 eq(fe_kind, [], "D1 no screen hard-codes the set of rule shapes")
 eq(fe_split, [], "D2 no screen hard-codes the set of split bases")
 
+# D3 — a screen MAY prefer an order (the house default first); it may NOT drop what the server
+# offers. A list that filters silently is the same defect as a hard-coded one: a basis added on the
+# server would simply vanish from the editor, with nothing red to say so.
+rules_page = os.path.join(FE, "app", "(platform)", "commcalc", "incentive-rules", "page.tsx")
+if os.path.exists(rules_page):
+    rp_src = open(rules_page, encoding="utf-8").read()
+    declares_order = "SPLIT_ORDER" in rp_src
+    passes_through = bool(re.search(r"!\s*SPLIT_ORDER\s*\.\s*includes", rp_src))
+    ok(not declares_order or passes_through,
+       "D3 the rules screen prefers an order but passes through every basis the server offers")
+    ok("d?.split_bases" in rp_src or "split_bases" in rp_src,
+       "D4 ...and the list it orders is the SERVER's, not one of its own")
+else:
+    ok(False, "D3 the rules screen is where it is expected to be", rules_page)
+
 
 print("\n§E  the daily_closing.counts readers are pinned and may only shrink")
 # mig 501's jsonb is the OTHER physical store. It has legitimate pre-existing readers, named here so

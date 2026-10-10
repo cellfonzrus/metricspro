@@ -208,6 +208,34 @@ ok(R3["by_employee"]["Ana"] > R3["by_employee"]["Ben"],
 eq(sorted(set(l["rule_kind"] for l in R["lines"])), ["per_unit", "percent_of_amount"],
    "E21 only the shapes the engine knows reach a line")
 
+# ── "Who ran the sale" (owner 2026-10-10): a pool split by individual sales weights by each
+#    person's own figure in the POOL'S OWN categories, not by their whole day. ──────────────────
+PRINT_POOL = [{"key": "print_pool", "label": "Printing Pool", "rule_kind": "threshold_pool",
+               "qualifier": {"scope": "none"},
+               "payout": {"basis": "amount", "metric_keys": ["printing"], "rate": 0.10,
+                          "split": "individual_sales"}}]
+RP = di.compute_day(CAT, PRINT_POOL, declared_map=DECLARED, per_employee=PER_EMP,
+                    hours_by_employee=HOURS, employees=["Ana", "Ben"])
+# printing: Ana $200, Ben $100 -> pool 10% of $300 = $30.00, split 200:100
+eq(RP["total"], 30.00, "E22 a pool on one category is 10% of that category")
+eq(RP["by_employee"], {"Ana": 20.00, "Ben": 10.00},
+   "E23 ...split by who ran THOSE sales (200:100), not by the whole day (650:375)")
+# The whole-day pool still weights by the whole day — one setting, no second knob.
+R3b = di.compute_day(CAT, [dict(RULES[0], payout=dict(RULES[0]["payout"], split="individual_sales"))],
+                     declared_map=BIG, per_employee=PER_EMP, employees=["Ana", "Ben"])
+eq(round(sum(R3b["by_employee"].values()), 2), 30.00,
+   "E24 a pool on the whole day still divides the whole day")
+# A category nobody is recorded as having sold cannot be divided by who sold it.
+NOBODY = [{"key": "mb_pool", "label": "Mailbox Pool", "rule_kind": "threshold_pool",
+           "qualifier": {"scope": "none"},
+           "payout": {"basis": "amount", "metric_keys": ["mailbox_short"], "rate": 0.50,
+                      "split": "individual_sales"}}]
+RNB = di.compute_day(CAT, NOBODY, declared_map=DECLARED, per_employee={"Ana": {}},
+                     employees=["Ana"])
+eq(RNB["by_employee"], {}, "E25 nobody recorded as running those sales -> nobody is paid")
+ok(RNB["unallocated"] > 0 and "ran" in RNB["rules"][0]["note"],
+   "E26 ...the pool is reported unallocated, with a reason in the owner's own words")
+
 
 print("\n§F  gates fail closed")
 _ghost = [dict(RULES[1], qualifier={"scope": "store", "basis": "units",
