@@ -70,6 +70,7 @@ Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §14z.
 from __future__ import annotations
 
 from app.modules.storeops import payroll_hours_basis as _basis
+from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 
 # ── THE VARIANCE VOCABULARY ──────────────────────────────────────────────────────────────────────
 MISSING_PUNCH = "missing_punch"
@@ -335,9 +336,13 @@ def compare(feed_hours, evidence, basis_cfg, cfg, employee_rows=None, store_of=N
     for (eid, day), cell in (evidence or {}).items():
         if not isinstance(cell, dict):
             continue
-        h, basis, _detail = _basis.resolve_day(cell, basis_cfg, emp_by_id.get(eid))
+        h, basis, detail = _basis.resolve_day(cell, basis_cfg, emp_by_id.get(eid))
         measured = _basis.basis_is_measurement(basis)
-        ours[(eid, _s(store_of.get((eid, day))), day)] = (h, basis, measured)
+        # THE FACT, read from the one home, NOT re-derived here: how many of this day's punches the
+        # kiosk closed by itself. It is carried separately from `measured` because an org that pays
+        # auto-closed punches (today's default) still has to see them.
+        auto = int(detail.get("auto_closed_punches") or 0)
+        ours[(eid, _s(store_of.get((eid, day))), day)] = (h, basis, measured, auto)
 
     # Fold our rows onto the feed's store when we could not place ours — the variance is about the
     # employee's DAY, and an unplaced store must not fork one day into two rows.
@@ -355,16 +360,24 @@ def compare(feed_hours, evidence, basis_cfg, cfg, employee_rows=None, store_of=N
         our_seen = False
         our_basis = None
         store_code = ""
+        auto_closed = 0
+        feed_stores = set()
+        our_stores = set()
         for st in sorted(stores):
             if (eid, st, day) in feed_keys:
                 feed_total += float(feed_hours[(eid, st, day)])
                 feed_seen = True
+                if st:
+                    feed_stores.add(st)
                 store_code = store_code or st
             if (eid, st, day) in our_keys:
-                h, basis, measured = ours[(eid, st, day)]
+                h, basis, measured, auto = ours[(eid, st, day)]
                 our_total += float(h)
                 our_basis = our_basis or basis
                 our_seen = our_seen or measured
+                auto_closed += auto
+                if st:
+                    our_stores.add(st)
                 store_code = store_code or st
         kind = None
         if feed_seen and not our_seen:
@@ -373,6 +386,20 @@ def compare(feed_hours, evidence, basis_cfg, cfg, employee_rows=None, store_of=N
             kind = EXTRA_PUNCH
         elif feed_seen and our_seen and abs(feed_total - our_total) > tol:
             kind = HOURS_DIFFER
+        # TWO KINDS THAT ARE NOT A DISAGREEMENT ABOUT A NUMBER, and so would never be reached by the
+        # three tests above. Both were in the vocabulary and emitted by nobody until 2026-10-10 —
+        # a declared kind no caller raises is the un-wiring failure this house has had three times.
+        #
+        # STORE MISMATCH. The two records place the same person on the same day at DIFFERENT stores.
+        # The hours may tie exactly, and the labour cost still lands on the wrong store's P&L.
+        elif feed_stores and our_stores and not (feed_stores & our_stores):
+            kind = STORE_MISMATCH
+        # AUTO-CLOCKOUT. The kiosk closed our punch by itself, so its clock-out time is a sweep's
+        # timestamp and not a measurement of anything. It is raised EVEN WHEN THE NUMBERS AGREE,
+        # because today's default PAYS these punches: an org where it matters most is precisely the
+        # org where an unraised flag would be invisible.
+        elif auto_closed > 0:
+            kind = AUTO_CLOCKOUT
         if kind is None:
             continue
         key = (eid, store_code, day)
@@ -386,6 +413,9 @@ def compare(feed_hours, evidence, basis_cfg, cfg, employee_rows=None, store_of=N
             "our_basis_reason": _basis.basis_reason(our_basis) if our_basis else None,
             "delta_hours": round(feed_total - our_total, 2),
             "tolerance_hours": tol,
+            "auto_closed_punches": auto_closed,
+            "feed_stores": sorted(feed_stores),
+            "our_stores": sorted(our_stores),
             "resolved": is_resolved,
             "blocks": bool(kind_blocks(kind)) and not is_resolved,
         })
@@ -602,7 +632,13 @@ def gate_decision(*, weekday, role, login, blocking_count, cfg, business_date=No
     cfg = resolve_config(cfg if isinstance(cfg, dict) else None)
     plan = {"ask": cfg["ask_weekday"], "gate": cfg["gate_weekday"], "run": cfg["run_weekday"]}
     n = int(blocking_count or 0)
-    role_key = "".join(ch for ch in str(role or "").strip().lower().replace(" ", "_") if ch.isalnum() or ch == "_")
+    # THE ONE ACCENT FOLD (`account/store_identity.fold_accents`, 2026-10-10) — dereferenced,
+    # never re-spelled: `str.isalnum()` is TRUE for an accented letter, so this fold kept the
+    # accent and an accented spelling was a different key from its own plain twin. ASCII input
+    # is byte-identical, so no existing match moves; the fold only gains the ones it should
+    # always have had.
+    role_key = "".join(ch for ch in _sid_fold(role).strip().lower().replace(" ", "_")
+                       if ch.isalnum() or ch == "_")
     login_key = str(login or "").strip().lower()
     base = {"weekday_plan": plan, "blocking_count": n, "allowed_paths": list(ALLOWED_PATH_PREFIXES),
             "correction_path": CORRECTION_PATH, "business_date": business_date}

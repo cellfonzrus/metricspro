@@ -29,6 +29,7 @@ label/placeholder/name/id text, across frames) and every failure returns a DIAGN
 hard-coded — credentials always come from the data_source row (UI config).
 """
 from datetime import datetime, timezone, timedelta
+from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 
 # Portal rate-limit / temporary-block detection + the shared cooldown state (migration 244). A pure
 # leaf module (it imports nothing from commcalc), so a top-level import here cannot create a cycle.
@@ -2226,7 +2227,12 @@ def _norm_label(s):
 def _squash_label(s):
     """_norm_label with every non-alphanumeric character dropped - the punctuation-insensitive tier
     ("MA - Commission Details" == "MA Commission Details" == "MA_Commission_Details"). PURE."""
-    return "".join(ch for ch in _norm_label(s) if ch.isalnum())
+    # THE ONE ACCENT FOLD (`account/store_identity.fold_accents`, 2026-10-10) — dereferenced,
+    # never re-spelled: `str.isalnum()` is TRUE for an accented letter, so this fold kept the
+    # accent and an accented spelling was a different key from its own plain twin. ASCII input
+    # is byte-identical, so no existing match moves; the fold only gains the ones it should
+    # always have had.
+    return "".join(ch for ch in _sid_fold(_norm_label(s)) if ch.isalnum())
 
 
 def _is_placeholder_option(s):

@@ -45,6 +45,7 @@ PURE: `analyze()` takes already-loaded rows and returns the report. No DB, no cl
 inspected by eye.
 """
 from datetime import date, timedelta
+from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 
 # The failure_log categories that mean "a clock-in was attempted and the SERVER refused it".
 # Anything the device never sent is, by construction, absent — see the module docstring.
@@ -93,7 +94,12 @@ def _store_key(v):
     'nobody at this store clocked in', i.e. it FABRICATED corroboration. Lower-cased and stripped to
     alphanumerics, the common variants collapse; a spelling that still differs is handled honestly by
     `store_variants` in the report rather than by guessing."""
-    return "".join(c for c in _s(v).lower() if c.isalnum())
+    # THE ONE ACCENT FOLD (`account/store_identity.fold_accents`, 2026-10-10) — dereferenced,
+    # never re-spelled: `str.isalnum()` is TRUE for an accented letter, so this fold kept the
+    # accent and an accented spelling was a different key from its own plain twin. ASCII input
+    # is byte-identical, so no existing match moves; the fold only gains the ones it should
+    # always have had.
+    return "".join(c for c in _sid_fold(_s(v)).lower() if c.isalnum())
 
 
 def _is_override(punch):

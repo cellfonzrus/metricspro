@@ -472,6 +472,27 @@ on:
       # silently (the §13e lesson), so the harness itself is listed; its subjects (core/scope.py,
       # the closing / storeops / commcalc routers) are already named above and by the push globs.
       - "backend/harness_market_resolution_guard.py"
+      # index §14y/§14z — THE ONE HOME for paid hours and the clock-report variance / ask / gate
+      # (mig 1070). The harness NAMES ITSELF for the same §13e reason as the line above: a lock behind
+      # an allowlist that does not list its own file skips silently on the PR that edits it. Its
+      # subjects are listed too, because the whole point of the lock is that a change to ANY of them
+      # must re-run it — the pay path, the feed, the two vocabularies and the one accent fold.
+      - "backend/harness_payroll_hours_basis_lock.py"
+      - "backend/harness_payroll_hours_basis.py"
+      - "backend/harness_clock_feed.py"
+      - "backend/harness_clock_variance.py"
+      - "backend/app/modules/storeops/payroll_hours_basis.py"
+      - "backend/app/modules/storeops/clock_feed.py"
+      - "backend/app/modules/storeops/clock_variance.py"
+      - "backend/app/modules/storeops/payroll_identity.py"
+      - "backend/app/modules/storeops/salary_owed.py"
+      - "backend/app/modules/storeops/salary_expense.py"
+      - "backend/app/modules/storeops/pto_accrual.py"
+      - "backend/app/modules/commcalc/labour_coverage.py"
+      - "backend/app/modules/account/store_identity.py"
+      - "backend/app/modules/account/coa.py"
+      - "backend/app/modules/hr/router.py"
+      - "database/migrations/1070_payroll_clocked_hours_basis.sql"
       - "backend/app/modules/storeops/org_chain.py"
       - "backend/app/modules/closing/deposit_accountability.py"
       - "backend/app/core/actors.py"
@@ -893,6 +914,18 @@ jobs:
       - name: Run the canonical store→market resolution guard (ONE resolver; every vocabulary read canonical, overlaid or pinned with a reviewed classification; a read that moves behind a helper stays visible — index §13a)
         working-directory: backend
         run: python3 harness_market_resolution_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the paid-hours one-home lock (no module falls back from one hours column to the other; every pay-path caller still dereferences the one home; the basis allowlist stays derived; the one accent fold stays wired; every declared variance kind is emitted or excused — index §14y, §14z)
+        working-directory: backend
+        run: python3 harness_payroll_hours_basis_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the paid-hours basis proof (the shipped default IS today, the owner ruling's three readings pinned to the measured day, and the regression that reproduces payroll computed from the schedule — index §14y)
+        working-directory: backend
+        run: python3 harness_payroll_hours_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the clock-report feed proof (the eleven measured shape traps, the trailer checksum, and a file that does not tie to its own total is rejected rather than landed short — index §14z)
+        working-directory: backend
+        run: python3 harness_clock_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the clock-variance / ask / gate proof (an unruled kind blocks, the recipient ladder the measured DM coverage demands, ★ NO LOCKOUT ★, and a payroll run that refuses and names what blocks it — index §14z, §22)
+        working-directory: backend
+        run: python3 harness_clock_variance.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"

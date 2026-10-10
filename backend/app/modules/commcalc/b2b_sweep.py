@@ -19,6 +19,7 @@ BACKEND-ONLY table commcalc.b2b_sweep_config; the password is never returned to 
 from datetime import datetime, timezone
 
 import requests
+from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 
 
 def _bounded_session(_timeout=60):
@@ -151,7 +152,12 @@ _GROUP_STORE_PREFIXES = ("store:", "store name:", "location:", "location name:",
 
 def _norm_key(s):
     """Case/space/punctuation-insensitive column-name key: 'Store Name'→'storename'."""
-    return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
+    # THE ONE ACCENT FOLD (`account/store_identity.fold_accents`, 2026-10-10) — dereferenced,
+    # never re-spelled: `str.isalnum()` is TRUE for an accented letter, so this fold kept the
+    # accent and an accented spelling was a different key from its own plain twin. ASCII input
+    # is byte-identical, so no existing match moves; the fold only gains the ones it should
+    # always have had.
+    return "".join(ch for ch in _sid_fold(s).strip().lower() if ch.isalnum())
 
 
 def _first_field(row, candidates):

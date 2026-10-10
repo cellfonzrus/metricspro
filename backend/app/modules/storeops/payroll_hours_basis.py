@@ -447,6 +447,23 @@ def _apply_punch_policy(cell, cfg):
     return hours, rows, unusable
 
 
+def auto_closed_punches(cell):
+    """PURE: how many of this day's punches the KIOSK closed by itself, regardless of policy.
+
+    DISTINCT FROM `punch_usability`, and that is the whole point. Whether an auto-closed punch is
+    PAID is a policy question (`count_auto_clockout_punches`, and today's answer is yes — 290 live
+    punches). Whether one EXISTS is a fact about the day, and the clock-variance board needs the
+    fact even when the policy is paying it: *"an auto-closed kiosk punch is not evidence of
+    anything ... it must ALSO be flagged for the DM rather than quietly trimmed"* (owner ruling
+    2026-10-10). Reading it off `unusable` would have hidden it on exactly the orgs where it is
+    being paid, which is the only place it matters.
+    """
+    cell = cell if isinstance(cell, dict) else {}
+    return sum(1 for t in (cell.get("_raw_punches") or ())
+               if str((t or {}).get("auto_clocked_out") or "").strip().lower()
+               in ("1", "true", "t", "yes", "y") or (t or {}).get("auto_clocked_out") is True)
+
+
 # ── WHICH OF TWO COMPETING CLOCK RECORDS IS PAID (owner ruling 2026-10-10) ───────────────────────
 def _iso_dt(v):
     """PURE: an aware datetime from an ISO string / datetime, or None. Both records are stored UTC
@@ -584,6 +601,8 @@ def resolve_day(cell, cfg, employee_row=None):
     feed_rows = list(cell.get("_feed_punches") or ())
     feed_h = round(sum(_f(r.get("hours")) for r in feed_rows), 4) if feed_rows else None
     detail = {"scheduled_hours": round(scheduled, 2),
+              # The FACT, not the policy: see `auto_closed_punches`. The variance board reads this.
+              "auto_closed_punches": auto_closed_punches(cell),
               "feed_hours": feed_h, "feed_rows": len(feed_rows),
               "punch_hours": round(punch_h, 2), "punch_rows": punch_rows,
               "unusable_punches": list(unusable),

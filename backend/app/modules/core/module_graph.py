@@ -228,6 +228,15 @@ FACTS: dict[str, dict] = {
             # one rule (mig 1070, §14z).
             'app/modules/storeops/clock_feed.py': ('_sid',),
             'app/modules/storeops/payroll_identity.py': ('fold_accents',),
+            # The remaining five identity folds, found by the lock's second axis and wired in the
+            # same PR rather than left as "the ones we did not get to". Each folds a KEY nothing
+            # ever shows a human — a store code, a carrier label, a clock-in evidence key, a role
+            # name — so routing it through the one fold gains matches and moves none.
+            'app/modules/closing/router.py': ('_sid_fold',),
+            'app/modules/commcalc/b2b_sweep.py': ('_sid_fold',),
+            'app/modules/commcalc/vidapay_sweep.py': ('_sid_fold',),
+            'app/modules/storeops/clockin_evidence.py': ('_sid_fold',),
+            'app/modules/storeops/clock_variance.py': ('_sid_fold',),
         },
     },
     'carrier_dollar_component': {
