@@ -306,6 +306,16 @@ FACTS: dict[str, dict] = {
             'app/modules/payables/engine.py': ('_reg',),
         },
     },
+    'cash_count_correction_trail': {
+        "question": 'Was this management cash figure changed, from what, and by whom?',
+        "homes": ('app/modules/closing/count_revision.py',),
+        "index": ('73.2', '73.3'),
+        "locks": ('harness_cash_count_revision.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/closing/router.py': ('_count_revision',),
+        },
+    },
     'cash_drawer_variance_owner': {
         "question": 'Which store-day carries a drawer variance nobody has ruled on?',
         "homes": ('app/modules/closing/cash_watchdog.py',),
