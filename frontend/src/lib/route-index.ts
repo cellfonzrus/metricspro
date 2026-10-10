@@ -180,6 +180,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/device-cost-recon' },
   { path: '/commcalc/device-history' },
   { path: '/commcalc/device-line-reimbursement' },
+  { path: '/commcalc/mdf-entitlement-coverage' },
   { path: '/commcalc/discrepancy' },
   { path: '/commcalc/distributors' },
   { path: '/commcalc/dlar-vs-platform' },

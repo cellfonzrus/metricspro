@@ -11719,6 +11719,141 @@ def device_line_reimbursement(period: str = "", store: str = "", org_id: str = O
     return _device_line_reimb_run(sb(), org_id, period, store)
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# AN ENTITLEMENT IS A COUNT OF MONTHS PER STORE — did every one of them arrive? (index §68)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER 2026-10-10, verbatim: *"mdf / ramp up subsidy is being finsihed it is inly for 12 months, if
+# we did not get for 12 months for each store it should be flagged and the missing month and store to
+# be poimted out , make it into management overview"*.
+#
+# EVERY DECISION IS SOMEBODY ELSE'S. This function only READS, and hands the pure home what it needs:
+#   · which payment types are the entitlement — §57 `payment_category.load_map` / `.category_of`
+#     (the org's OWN declaration; this report lists no payment type and names no carrier),
+#   · which store a row belongs to — §64 `coa.store_resolver`, and §64's PAIRWISE identity predicate
+#     (§70 `coa.shared_store_identity_pairs` + `store_identity.may_be_one_store`) so a store-month
+#     whose money may have landed under this same store's OTHER spelling withholds its verdict,
+#   · the calendar and the verdict vocabulary — `feed_period` / `pay_data_quality`, through the pure
+#     home (`commcalc/entitlement_coverage.py`),
+#   · the window itself — the owner's declaration in config (mig 1068). UNDECLARED STAYS UNDECLARED.
+#
+# WHY BOTH FEEDS ARE READ AND UNIONED. `raw_payment_detail` (per line) and `raw_comp_report` (the
+# statement) are two reads of the SAME carrier money and they agree on this payment store-for-store
+# and dollar-for-dollar in every month both carry (measured live 2026-10-10, house org: Mar-Jul 6
+# stores / $39,300 each, Aug and Sep 5 / $32,000; the whole difference is October's 4 rows /
+# $27,000.00 not yet in the statement — the month-end lag, not a gap). So money that arrived in
+# EITHER is money that arrived: the union can only ever withhold a finding, never invent one, which
+# is the same direction-asymmetric floor §65 uses. Reading one feed alone would have reported four
+# October store-months as absent purely because the statement had not landed yet.
+#
+# 💰 MOVES NO MONEY. READ-ONLY: books nothing, pays nobody, writes no flag, recomputes no payout.
+
+
+def _mdf_entitlement_run(client, org_id: str, store: str = ""):
+    from app.modules.commcalc import entitlement_coverage as _ec
+    from app.modules.commcalc import payment_category as _pc
+
+    # ── config: house defaults ← house org row ← this tenant's row (RULE TWO, mig 1068) ──────────
+    def _cfg_blob(oid):
+        try:
+            rows = (client.schema("commcalc").table("commission_org_config")
+                    .select(_ec.CONFIG_COLUMN).eq("org_id", oid).limit(1).execute().data) or []
+        except Exception as e:             # column/table absent → house defaults (contract §5)
+            print(f"WARN entitlement coverage config unavailable "
+                  f"(run migration {_ec.CONFIG_MIGRATION}?): {e}")
+            return None
+        return (rows[0] if rows else {}).get(_ec.CONFIG_COLUMN)
+
+    cfg = _ec.config_from_rows(_cfg_blob(org_id), _cfg_blob(ORG_ID) if org_id != ORG_ID else None)
+    cols = cfg["columns"]
+
+    # ── WHICH PAYMENTS ARE THE ENTITLEMENT — the org's own declaration (§57), never a list here ──
+    declarations = _pc.load_map(client, org_id)
+    is_entitlement = _ec.entitlement_type_matcher(cfg, declarations, _pc.category_of)
+
+    # ── the ONE store identity (§64): no leading-token split, no second resolution rule ───────────
+    try:
+        from app.modules.account import coa as _coa
+        resolve_store = _coa.store_resolver(client, org_id)
+    except Exception as e:
+        print(f"WARN entitlement coverage: store resolver unavailable ({e})")
+        resolve_store = lambda v: (str(v or "").strip() or None)          # noqa: E731
+    # MAY THESE TWO ADDRESSES BE ONE PHYSICAL STORE? §64's own PAIRWISE predicate (§70), injected —
+    # never the superseded per-address ambiguity read, which asked whether an address had a twin
+    # instead of whether the two keys in hand may be one store, and withheld 23 true findings for it.
+    # Asked per STORE-MONTH inside the pure home: only a month in which a possible twin WAS paid is
+    # unjudgeable, and that twin is named on the row.
+    try:
+        from app.modules.account import coa as _coa_pairs
+        from app.modules.account import store_identity as _sid_pairs
+        _pairs = _coa_pairs.shared_store_identity_pairs(client, org_id, resolve_store)
+        same_store = lambda a, b: _sid_pairs.may_be_one_store(a, b, _pairs)      # noqa: E731
+    except Exception as e:
+        print(f"WARN entitlement coverage: shared store identity unresolved ({e})")
+        same_store = None
+
+    # ── the two feeds, PAGED through the one home (§19.48). No period filter: the question is the
+    #    whole entitlement window, not one month, and the declared categories narrow the read.
+    received, feed_rows = {}, {"line": 0, "statement": 0}
+
+    def _collect(table, kind, store_col, type_col, amount_col, date_col):
+        def _q():
+            return (client.schema("commcalc").table(table)
+                    .select(",".join(sorted({store_col, type_col, amount_col, date_col})))
+                    .eq("org_id", org_id))
+        for r in _feed_read.read_all(_q):
+            if not is_entitlement(r.get(type_col)):
+                continue
+            st = resolve_store(r.get(store_col)) if resolve_store else r.get(store_col)
+            m = _ec.month_key(r.get(date_col))
+            if not st or not m:
+                continue
+            feed_rows[kind] += 1
+            # The UNION is a max, not a sum: the two feeds are two reads of ONE payment, so adding
+            # them would double every store-month both carry.
+            received[(st, m)] = max(received.get((st, m), 0.0), safe_float(r.get(amount_col)))
+
+    _collect("raw_payment_detail", "line", cols["line_store"], cols["line_type"],
+             cols["line_amount"], cols["line_date"])
+    _collect("raw_comp_report", "statement", cols["statement_store"], cols["statement_type"],
+             cols["statement_amount"], cols["statement_date"])
+
+    # NO ROSTER READ. A store the owner has DECLARED a window for is judged whether it received
+    # anything or not (the pure home takes those keys from the config itself), and a store with
+    # neither a payment nor a declared window is not in this report's scope at all — listing the
+    # whole estate as "not measured" would bury the store-months that are actually findings.
+    res = _ec.entitlement_store_months(received, cfg, today=None, same_store=same_store)
+    if store:
+        want = (resolve_store(store) if resolve_store else store) or store
+        res["rows"] = [r for r in res["rows"] if r["store"] == want]
+        res["by_store"] = [t for t in res["by_store"] if t["store"] == want]
+        res["store"] = want
+    res["feed_rows"] = feed_rows
+    res["config"] = {k: v for k, v in cfg.items() if k != "columns"}
+    return res
+
+
+@router.get("/mdf-entitlement-coverage")
+def mdf_entitlement_coverage(store: str = "", org_id: str = ORG_ID):
+    """DID EVERY MONTH OF A STORE'S ENTITLEMENT ARRIVE — and which store-month did not?
+
+    OWNER 2026-10-10: *"mdf / ramp up subsidy is being finsihed it is inly for 12 months, if we did
+    not get for 12 months for each store it should be flagged and the missing month and store to be
+    poimted out , make it into management overview"*.
+
+    One row per store-month inside a store's DECLARED entitlement window. A month the store did not
+    receive while other stores WERE paid that month is `missing` and is named, store and month. A
+    month nothing of this kind reached us for ANY store is `unconfirmed_missing` — our ingest, not
+    the carrier — and is counted apart, never netted into the gaps. A month that has not finished is
+    `not_due`. And a store whose FIRST entitled month has not been declared is `not_measured` with
+    that reason named: a gap and the entitlement simply running out cannot be told apart without it,
+    and reporting twelve absences against an invented window would be a fabricated accusation.
+
+    READ-ONLY. BOOKS NOTHING, PAYS NOBODY, WRITES NO FLAG (index §68).
+    """
+    require_org(org_id)
+    return _mdf_entitlement_run(sb(), org_id, store)
+
+
 @router.get("/comp-by-component")
 def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_ID):
     """Apply the category map to raw_comp_report → $ per canonical component (the payoff)."""
