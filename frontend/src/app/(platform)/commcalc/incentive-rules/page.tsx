@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, fmt } from '@/lib/client'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 // DAILY INCENTIVE RULES (mig 1072). Owner 2026-10-10: "when you add a category it should be
 // available in teh cincentive payout plan to be assesed to be paid out … i dont wnat them to be hard
@@ -14,6 +15,7 @@ import { api, fmt } from '@/lib/client'
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px', borderTop: '1px solid var(--border)', fontSize: 13, verticalAlign: 'top' }
+const th: React.CSSProperties = { textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }
 
 type Metric = {
   key: string; label: string; value_kind: string; declared_by: string
@@ -202,6 +204,19 @@ export default function IncentiveRulesPage() {
     return `${((p.rate || 0) * 100).toFixed(2).replace(/\.?0+$/, '')}% pool · ${SPLIT_LABEL[p.split || 'equal'] || p.split}`
   }
 
+  // Click-a-header sorting through the one comparison home. The cells compared are the ones the
+  // reader can SEE (the rendered sentence, not the raw jsonb), so the order always matches the
+  // column. Seeded null, so the server's own sort_order is what the table opens on.
+  const getCell = useCallback((r: Rule, field: string) => {
+    if (field === 'label') return r.label || r.rule_key
+    if (field === 'rule_kind') return KIND_LABEL[r.rule_kind] || r.rule_kind
+    if (field === 'qualifier') return describeQualifier(r.qualifier || {})
+    if (field === 'payout') return describePayout(r)
+    if (field === 'active') return r.is_active === false ? 'Off' : 'Active'
+    return ''
+  }, [metrics])
+  const rulesSort = useTableSort<Rule>(d?.rules || [], getCell)
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
@@ -231,11 +246,13 @@ export default function IncentiveRulesPage() {
       <div className="card table-wrapper" style={{ marginTop: 16, padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['Rule', 'Type', 'Qualifier', 'Payout', 'Active', ''].map(h =>
-              <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+            {[['label', 'Rule'], ['rule_kind', 'Type'], ['qualifier', 'Qualifier'],
+              ['payout', 'Payout'], ['active', 'Active'], ['', '']].map(([f, h]) =>
+              <SortableTh key={f || 'actions'} field={f} sort={rulesSort.sort} onSort={rulesSort.toggle}
+                disabled={!f} style={th}>{h}</SortableTh>)}
           </tr></thead>
           <tbody>
-            {(d?.rules || []).map(r => (
+            {rulesSort.sorted.map(r => (
               <tr key={r.id || r.rule_key} style={{ opacity: r.is_active === false ? 0.5 : 1 }}>
                 <td style={cell}>
                   <div style={{ fontWeight: 600 }}>{r.label}</div>
