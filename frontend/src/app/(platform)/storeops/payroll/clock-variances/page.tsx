@@ -27,6 +27,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { ReportExportBar, type ExportColumn } from '@/components/ReportExportBar'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import { sourceLabel } from '@/lib/sourceLabels'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 type Row = {
   store_code?: string; employee_id?: string; employee_name?: string; employee_raw?: string
@@ -119,7 +120,7 @@ export default function ClockVariancesPage() {
 
   // RULE FOUR: the export renders EXACTLY these rows and columns — including the basis and its
   // sentence, because the ruling asked for the reason to be ON THE REPORT, not only on the screen.
-  const cols: ExportColumn[] = [
+  const cols: ExportColumn[] = useMemo(() => ([
     { header: 'Store', field: 'store_code', role: 'store', get: (r: Row) => r.store_code || '' },
     { header: 'Employee', field: 'employee_name', role: 'rep', get: (r: Row) => r.employee_name || r.employee_raw || r.employee_id || '' },
     { header: 'Day', field: 'date', get: (r: Row) => r.date || '' },
@@ -130,6 +131,28 @@ export default function ClockVariancesPage() {
     { header: 'Our basis', field: 'our_basis', get: (r: Row) => r.our_basis || '' },
     { header: 'Why', field: 'our_basis_reason', get: (r: Row) => r.our_basis_reason || r.reason || '' },
     { header: 'Blocks payroll', field: 'blocks', get: (r: Row) => r.blocks ? 'Yes' : 'No' },
+  ]), [d])
+
+  // Click-a-header sorting through the ONE comparison home (`lib/table-sort.ts`, owner directive
+  // 2026-08-10). The accessor dereferences the SAME `cols` the export renders, so the order a
+  // manager sorts into and the order the export writes cannot drift apart — and a new column is
+  // sortable the moment it is added to `cols`, with nothing here to update.
+  const sortGet = useCallback(
+    (r: Row, field: string) => cols.find(c => c.field === field)?.get(r), [cols])
+  const { sort, toggle, sorted } = useTableSort<Row>(rows, sortGet)
+
+  // The visible columns, in order, each naming the `cols` field it sorts on. The actions column has
+  // nothing to compare, so it opts out rather than offering a header that does nothing.
+  const headers: { label: string; field?: string }[] = [
+    { label: 'Store', field: 'store_code' },
+    { label: 'Employee', field: 'employee_name' },
+    { label: 'Day', field: 'date' },
+    { label: 'What differs', field: 'kind' },
+    { label: 'Elevate hrs', field: 'feed_hours' },
+    { label: 'Our hrs', field: 'our_hours' },
+    { label: 'Diff', field: 'delta_hours' },
+    { label: 'Our basis — and why', field: 'our_basis' },
+    { label: 'Record a correction' },
   ]
 
   if (err && !d) return (
@@ -243,11 +266,13 @@ export default function ClockVariancesPage() {
       <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['Store', 'Employee', 'Day', 'What differs', 'Elevate hrs', 'Our hrs', 'Diff',
-              'Our basis — and why', 'Record a correction'].map(x => <th key={x} style={th}>{x}</th>)}
+            {headers.map(c => (
+              <SortableTh key={c.label} field={c.field || c.label} sort={sort} onSort={toggle}
+                disabled={!c.field} style={th}>{c.label}</SortableTh>
+            ))}
           </tr></thead>
           <tbody>
-            {rows.map(r => {
+            {sorted.map(r => {
               const k = keyOf(r)
               const e = edits[k] ?? EMPTY
               const needsReason = !String(e.reason || '').trim()
@@ -308,7 +333,7 @@ export default function ClockVariancesPage() {
                 </tr>
               )
             })}
-            {rows.length === 0 && (
+            {sorted.length === 0 && (
               <tr><td style={{ ...td, color: 'var(--text3)' }} colSpan={9}>
                 {d?.enabled
                   ? (onlyBlocking
