@@ -214,6 +214,10 @@ def compare(got, expected, dollar_band):
 #: The pairs this report puts side by side, and WHY each one is worth a column. Declared as data so
 #: the endpoint and the screen iterate it instead of each spelling the pair names — a new pair gets
 #: its column, its rollup and its trend detection for free and cannot get a stale header.
+#:
+#: RULE TWO: `{pos}` is the TENANT'S OWN NAME for its point of sale, substituted by `pair_catalog`
+#: from `report_labels.pos_term` (the registry's neutral noun when none is declared). No POS vendor
+#: is spelled here or on the screen — `harness_carrier_vocab_guard` fails the build on one.
 PAIRS = (
     {
         "key": "received_vs_envelope",
@@ -223,17 +227,31 @@ PAIRS = (
     },
     {
         "key": "declared_vs_pos",
-        "label": "Cash envelope vs B2B",
-        "note": "What the rep declared as cash in the drawer against the cash the point of sale "
-                "rang. A gap here is a counting or a ringing problem before anyone collected it.",
+        "label": "Cash envelope vs {pos}",
+        "note": "What the rep declared as cash in the drawer against the cash the {pos} rang. A gap "
+                "here is a counting or a ringing problem before anyone collected it.",
     },
     {
         "key": "received_vs_pos",
-        "label": "Management received vs B2B",
+        "label": "Management received vs {pos}",
         "note": "The end-to-end check. Measurable only when BOTH envelopes were counted, because "
-                "the POS figure is the whole drawer and the cash envelope is only part of it.",
+                "the {pos} figure is the whole drawer and the cash envelope is only part of it.",
     },
 )
+#: The registry's neutral noun, used when a caller has no declared term to pass.
+POS_TERM_FALLBACK = "POS"
+
+
+def pair_catalog(pos_term=None):
+    """PURE: `PAIRS` with the tenant's own POS word substituted into every label and note, so no
+    surface spells a POS vendor. A blank term degrades to the registry's neutral noun, never to a
+    brand (`harness_carrier_vocab_guard`'s POS axis fails the build on a vendor in copy)."""
+    term = str(pos_term or "").strip() or POS_TERM_FALLBACK
+    return [{"key": p["key"],
+             "label": p["label"].format(pos=term),
+             "note": p["note"].format(pos=term)} for p in PAIRS]
+
+
 PAIR_KEYS = tuple(p["key"] for p in PAIRS)
 
 
@@ -449,7 +467,7 @@ def _money(n):
     return f"${_f(n):,.2f}"
 
 
-def measurement_blockers(rows):
+def measurement_blockers(rows, pos_term=None):
     """PURE: why the report cannot answer more than it does, counted — so the gap is REPORTED rather
     than hidden behind a shorter table (CLAUDE.md: "a defect found in live data is REPORTED, never
     'fixed' by writing code that hides it").
@@ -459,7 +477,7 @@ def measurement_blockers(rows):
     can change that — somebody has to count the envelope.
     """
     out = []
-    for pair in PAIRS:
+    for pair in pair_catalog(pos_term):
         key = pair["key"]
         reasons = {}
         unmeasured = 0

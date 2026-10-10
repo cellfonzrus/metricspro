@@ -5132,10 +5132,12 @@ def cash_variance_report(date_from: str = None, date_to: str = None,
         # Why the report cannot answer more than it does, counted. REPORTED, never hidden behind a
         # shorter table: live, the bill-payment envelope is counted on 1 store-day of 50, so the
         # end-to-end check is unmeasurable almost everywhere and no report code can change that.
-        "blockers": _cash_variance.measurement_blockers(out),
+        "blockers": _cash_variance.measurement_blockers(out, _pos_term(client, org_id)),
         # The screen spells no pair key, no basis word and no verdict label — all three vocabularies
         # are served from the pure module, so a new pair gets its column and cannot get a stale header.
-        "pairs": list(_cash_variance.PAIRS),
+        # The pair labels carry the TENANT'S OWN POS word (RULE TWO — no vendor is spelled on a
+        # screen or in a payload; harness_carrier_vocab_guard's POS axis fails the build on one).
+        "pairs": _cash_variance.pair_catalog(_pos_term(client, org_id)),
         "bases": _cash_variance.basis_catalog(
             _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
         "band": dollar_band,

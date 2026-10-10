@@ -7,6 +7,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
+import { usePosTerm } from '@/lib/report-labels'
 
 // CASH VARIANCE AFTER MANAGEMENT RECON — owner ask 2026-10-10, verbatim: "need to create a report
 // after management recon to assess the shortage and overage based on what the management received
@@ -64,6 +65,9 @@ const groupCell = (g: any, f: string) =>
 
 export default function CashVariancePage() {
   const today = localToday()
+  // RULE TWO: the tenant's OWN name for its point of sale, never a vendor spelled here
+  // (lib/report-labels.ts; harness_carrier_vocab_guard's POS axis fails the build on one).
+  const { pos } = usePosTerm()
   const [filt, setFilt] = useState<StandardFilterValue>({
     period: today.slice(0, 8) + '01', periodTo: today, stores: [], markets: [], reps: [],
   })
@@ -124,10 +128,10 @@ export default function CashVariancePage() {
   // Columns: the fixed identity block, then ONE column per server-declared pair.
   const dayCols: [string, string][] = useMemo(() => ([
     ['Date', 'close_date'], ['Store', 'store_address'], ['Employee', 'employee_name'],
-    ['Management received', 'l_received'], ['Cash envelope', 'l_declared'], ['B2B cash', 'l_pos'],
+    ['Management received', 'l_received'], ['Cash envelope', 'l_declared'], [`${pos} cash`, 'l_pos'],
     ...pairs.map(p => [p.label, `p:${p.key}`] as [string, string]),
     ['Verdict', 'verdict'],
-  ]), [pairs])
+  ]), [pairs, pos])
   const groupCols = (label: string, idField: string): [string, string][] => ([
     [label, idField], ['Days', 'days'], ['Measured', 'h:measured'], ['Not measured', 'h:not_measured'],
     ['Short', 'h:short'], ['$ Short', 'h:short_total'], ['Over', 'h:over'], ['$ Over', 'h:over_total'],
@@ -148,7 +152,7 @@ export default function CashVariancePage() {
     { header: 'Management received $', field: 'l_received', money: true, get: (r: Row) => r.legs?.received?.amount },
     { header: 'Management received — which cash', field: 'l_received_basis', get: (r: Row) => basisLabel(r.legs?.received?.basis) },
     { header: 'Cash envelope $', field: 'l_declared', money: true, get: (r: Row) => r.legs?.declared?.amount },
-    { header: 'B2B cash $', field: 'l_pos', money: true, get: (r: Row) => r.legs?.pos?.amount },
+    { header: `${pos} cash $`, field: 'l_pos', money: true, get: (r: Row) => r.legs?.pos?.amount },
     // One pair of columns per server-declared pair — what-you-see-is-what-exports (RULE FOUR §3c),
     // and the REASON rides beside the number so a spreadsheet cannot collapse "not measured" to blank.
     ...pairs.flatMap(p => ([
@@ -162,7 +166,7 @@ export default function CashVariancePage() {
     { header: 'Envelope opened', field: 'envelope_opened', get: (r: Row) => (r.envelope_opened ? 'Yes' : 'No') },
     { header: 'Bill-pay envelope counted', field: 'billpay_counted', get: (r: Row) => (r.billpay_counted ? 'Yes' : 'No') },
     { header: 'Picked up by', field: 'picked_up_by', get: (r: Row) => r.picked_up_by || '' },
-  ]), [pairs])
+  ]), [pairs, pos])
 
   const groupColumns = (label: string, idField: string): ExportColumn[] => ([
     { header: label, field: idField, get: (g: any) => g[idField] },
@@ -205,7 +209,7 @@ export default function CashVariancePage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💵 Cash Variance</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820 }}>
             Shortage and overage after management recon: what <b>management received</b>, against the
-            <b> cash envelope</b> the rep declared at closing, against the <b>B2B cash</b> the till rang.
+            <b> cash envelope</b> the rep declared at closing, against the <b>{pos} cash</b> the till rang.
             Differences up to <b>{money(band)}</b> are treated as counting noise{data?.band_is_house_default ? ' (the house default)' : ' (set for this company)'}.
           </p>
           <p style={{ color: 'var(--text3)', fontSize: 12.5, margin: '6px 0 0', maxWidth: 820 }}>

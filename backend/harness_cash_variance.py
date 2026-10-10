@@ -322,7 +322,16 @@ check("G4 registered in the index (the mandatory owner directive 2026-09-01)",
       "closing/cash_variance.py" in _IDX and "/closing/cash-variance" in _IDX)
 check("G5 the pair, basis and verdict vocabularies are served from the pure module, so the screen "
       "spells no key and cannot carry a stale header",
-      "pairs" in cv.PAIRS[0] or all(p.get("key") and p.get("label") for p in cv.PAIRS))
+      all(p.get("key") and p.get("label") for p in cv.pair_catalog()))
+check("G5b RULE TWO — a pair label carries the TENANT'S OWN POS word, and a blank term degrades to "
+      "the registry's neutral noun, never to a vendor brand",
+      any("RQ" in p["label"] for p in cv.pair_catalog("RQ"))
+      and any("RQ" in p["note"] for p in cv.pair_catalog("RQ"))
+      and all("{pos}" not in p["label"] and "{pos}" not in p["note"] for p in cv.pair_catalog(""))
+      and any(cv.POS_TERM_FALLBACK in p["label"] for p in cv.pair_catalog(None)))
+check("G5c BUILD LOCK — the endpoint serves the RESOLVED catalogue, never the raw templates",
+      "_cash_variance.pair_catalog(_pos_term(client, org_id))" in _EP
+      and "_cash_variance.PAIRS" not in _EP)
 check("G6 the page reads those served vocabularies instead of hardcoding a pair key",
       all(k not in open("../frontend/src/app/(platform)/closing/cash-variance/page.tsx",
                         encoding="utf-8").read().replace("received_vs_envelope", "")
