@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PROOF — the declared-metric catalog and the daily incentive engine (mig 1071). DB-free, stdlib.
+"""PROOF — the declared-metric catalog and the daily incentive engine (mig 1072). DB-free, stdlib.
 
 The oracle is the owner's own screenshot (NY Logistics / UPS Store, 2026-10-10): six live rules with
 their types, qualifiers and payouts. Every one of them is reconstructed here as CONFIG — no rule name,

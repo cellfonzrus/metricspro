@@ -1,6 +1,6 @@
 """THE ONE HOME for "what does this business declare at the end of a day, and what is a unit worth".
 
-Migration 1071. PURE — dicts in, dicts out, no DB, no network.
+Migration 1072. PURE — dicts in, dicts out, no DB, no network.
 
 THE CLASS THIS FIXES (owner 2026-10-10, NY Logistics / UPS Store). A tenant's declarable categories
 were expressed in three disconnected places that each carried their own copy of the vocabulary:
@@ -178,7 +178,7 @@ def is_employee_declared(catalog, key):
 
 def storage_for(metric):
     """WHERE a declared value lives. 'counts_jsonb' = mig 501's `daily_closing.counts` (and, for the
-    built-in three, their physical columns); 'metric_line' = `commcalc.closing_metric_line` (mig 1071).
+    built-in three, their physical columns); 'metric_line' = `commcalc.closing_metric_line` (mig 1072).
 
     This is the ONE rule for the two physical stores. A caller that decides for itself has reproduced
     the fold, which is the defect this module exists to prevent."""

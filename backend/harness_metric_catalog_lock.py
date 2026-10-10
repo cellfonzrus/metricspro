@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BUILD LOCK — the declared-metric catalog stays ONE home, and its callers stay wired (mig 1071).
+"""BUILD LOCK — the declared-metric catalog stays ONE home, and its callers stay wired (mig 1072).
 
 CLAUDE.md: *"A design fix ships with a check that FAILS THE BUILD if a caller stops dereferencing the
 shared fact, or if a second copy appears. Without that, the next change quietly restores the

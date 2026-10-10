@@ -19,7 +19,7 @@ const reconClasses = (pos: string) => [
 
 // is_active (index §29.9): a switched-off count stays listed here (so it can come back) but is gone from the
 // closing form, the DM verify view and every recon.
-// mig 1071: a category also declares HOW it is measured, WHO declares it and what a unit is worth.
+// mig 1072: a category also declares HOW it is measured, WHO declares it and what a unit is worth.
 // Those three facts are what let it be paid on — the incentive-rule editor reads this same registry
 // through /closing/metric-catalog rather than carrying a category list of its own.
 type Def = {

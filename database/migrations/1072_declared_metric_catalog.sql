@@ -1,4 +1,4 @@
--- 1071_declared_metric_catalog.sql
+-- 1072_declared_metric_catalog.sql
 -- WHAT THIS BUSINESS DECLARES AT THE END OF A DAY, AND WHAT A UNIT IS WORTH — one registry, read by
 -- the closing form, the incentive rules and (next) the targets editor.
 --
@@ -186,5 +186,5 @@ grant all on commcalc.incentive_rule_assignment to anon, authenticated, service_
 -- point of the change — a tenant's rules are data, never a migration.
 
 notify pgrst, 'reload schema';
-select '1071 complete — declared-metric catalog, per-employee declarations and incentive rules ready'
+select '1072 complete — declared-metric catalog, per-employee declarations and incentive rules ready'
        as status;
