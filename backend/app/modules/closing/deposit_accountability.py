@@ -176,6 +176,12 @@ def day_accountability(pickup_rows):
                 "envelope_opened": _envelope_opened(r),
                 # mig 949 — the DM's actual count at pickup (None = not recorded, never fake 0)
                 "actual_picked_amount": vf["actual"] if vf else None,
+                # mig 1067 — WHO made that count and when. Until now the row recorded a count with
+                # no counter, which was tolerable only while the DM confirming the pickup was the
+                # only person who could make one; the board can now open a sealed envelope later,
+                # and a late counter is not the DM who collected it. None = not recorded.
+                "actual_counted_by": r.get("actual_counted_by"),
+                "actual_counted_at": r.get("actual_counted_at"),
                 "pickup_variance": vf["variance"] if vf else None,
                 "pickup_variance_status": vf["status"] if vf else None,
                 "disposition": r.get("disposition"), "handed_to": r.get("handed_to"),

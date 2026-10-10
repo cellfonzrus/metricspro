@@ -43,6 +43,71 @@ PRESET_CATEGORY_DEFS = [
 ]
 
 
+# ── THE BANK-DEPOSIT SECTIONS — ONE HOME (owner directive 2026-10-10) ─────────────────────────
+#
+# Owner, verbatim: *"Bank deposit should be a separate module for both cash and epay in one link on
+# top and bottom but recorded separately as right now it is confusing and not traceable by employees
+# easily"*.
+#
+# THE DUPLICATE CHECK, AND WHY NOTHING NEW IS STORED. "Cash" and "ePay" are already DECLARED, per
+# org, on the deposit category's `basis` — the mig-509 column whose two lazy-seeded presets are
+# literally "Bill Payment Cash Deposit" (bill_payment_cash) and "Store Cash Deposit" (store_cash).
+# A `deposit_kind` column on `commcalc.bank_deposit`, or a section picked by matching a category
+# NAME, would be a second answer to a question the basis already answers — and the name match would
+# break RULE TWO the first time a tenant renamed a bucket. So the section is DERIVED from the basis,
+# here, once, and every surface dereferences it.
+#
+# `total_cash` is deliberately NOT a section of its own: a tenant that banks the whole drawer in one
+# deposit is doing the cash deposit, with bill-pay money inside it, which is exactly what the index
+# already says `total_cash` means. `manual` is the tenant's own bucket with no computed expected
+# figure, so it sorts to 'other' and is shown as its own group rather than folded into either —
+# never silently counted as cash.
+#
+# The catalog is SERVED to the frontend (GET /closing/deposit-categories) so the Bank Deposit page
+# spells no basis word and no section label of its own — the stage_catalog precedent (§48).
+SECTION_CASH = "cash"
+SECTION_BILLPAY = "billpay"
+SECTION_OTHER = "other"
+
+_SECTION_BY_BASIS = {
+    "store_cash": SECTION_CASH,
+    "total_cash": SECTION_CASH,
+    "bill_payment_cash": SECTION_BILLPAY,
+    "manual": SECTION_OTHER,
+}
+
+# Labels: the CASH section is named in house vocabulary; the BILL-PAY one is named by the tenant's
+# own processor term where the caller supplies one (the `processor` report label — 'ePay' on the
+# Boost side, 'VidaPay' on the Total side), never a carrier word spelled in code (RULE TWO).
+_SECTION_LABELS = {
+    SECTION_CASH: "Store Cash",
+    SECTION_BILLPAY: "Bill Payment Cash",
+    SECTION_OTHER: "Other Deposits",
+}
+SECTION_ORDER = (SECTION_CASH, SECTION_BILLPAY, SECTION_OTHER)
+
+
+def section_for_basis(basis) -> str:
+    """PURE: a deposit category's `basis` -> which Bank Deposit section it is recorded under.
+    An unknown / blank / future basis resolves to 'other' — it is shown as its own group and
+    counted in neither cash nor bill-pay, because guessing would silently mis-bank money."""
+    return _SECTION_BY_BASIS.get(_normalize_basis(basis), SECTION_OTHER)
+
+
+def section_catalog(processor_term=None):
+    """PURE: [{key, label}] in display order — the Bank Deposit module's section vocabulary,
+    served by the API so no screen hardcodes a section key or a processor name. `processor_term`
+    (the tenant's own word for bill payments) names the bill-pay section when supplied."""
+    term = str(processor_term or "").strip()
+    out = []
+    for key in SECTION_ORDER:
+        label = _SECTION_LABELS[key]
+        if key == SECTION_BILLPAY and term:
+            label = f"{term} Cash"
+        out.append({"key": key, "label": label})
+    return out
+
+
 def _normalize_basis(b) -> str:
     b = str(b or "").strip().lower()
     return b if b in BASIS_VALUES else "manual"
@@ -320,6 +385,10 @@ def assemble_category_block(cat: dict, t_cash: float, epay_cash: float,
     variance = round(grp["total_deposited"] - expected, 2)
     return {
         "category_id": cat.get("id"), "category_name": cat.get("name"), "basis": _normalize_basis(cat.get("basis")),
+        # Which half of the Bank Deposit module this block belongs to (owner 2026-10-10) — derived
+        # from the basis through the one home, so the module's Cash and bill-pay sections and this
+        # report can never disagree about where a category's money was banked.
+        "section": section_for_basis(cat.get("basis")),
         "cash_collected": gross, "adjustments_applied": adj_applied,
         "expenses_amount": round(_f(expenses_amt), 2), "bill_payments_amount": round(_f(bill_amt), 2),
         "other_amount": round(_f(other_amt), 2),

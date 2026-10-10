@@ -298,7 +298,15 @@ export default function DepositReconPage() {
         </>
       )}
 
-      <AccountabilityBoard dateFrom={dateFrom} dateTo={dateTo} />
+      {/* THE SCREEN'S FILTERS REACH THIS SECTION TOO (owner 2026-10-10: "Need filter standard in
+          deposit accountability section"). The board shipped reading only the date range, so on a
+          page whose header carries market and store pickers the accountability table below ignored
+          both — the one surface in this module that could not answer "this market". The same
+          selections now go to `/closing/deposit-accountability`, which applies them through the
+          same three resolvers as every other closing endpoint. ONE filter bar, everything on the
+          page obeying it: a second set of pickers inside the card would be a second answer to
+          "what am I looking at". */}
+      <AccountabilityBoard dateFrom={dateFrom} dateTo={dateTo} markets={fMarkets} stores={fStores} />
 
       {shortModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
@@ -429,24 +437,33 @@ function CashShortByDm({ rows, summary }: { rows: any[]; summary: any }) {
   )
 }
 
-function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: string }) {
+function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
+  dateFrom: string; dateTo: string; markets: string[]; stores: string[]
+}) {
   const { user } = useAuth()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [busyKey, setBusyKey] = useState('')
   const [msg, setMsg] = useState('')
+  const [openEnv, setOpenEnv] = useState<any>(null)   // the envelope being opened and counted
+  const [handModal, setHandModal] = useState<any>(null)   // the day whose envelopes are being handed over
 
+  const mKey = markets.join(','), sKey = stores.join(',')
   const load = useCallback(() => {
     if (!dateFrom || !dateTo) return
     setLoading(true)
-    api(`/api/v1/closing/deposit-accountability?start=${dateFrom}&end=${dateTo}`)
+    const qs = new URLSearchParams({ start: dateFrom, end: dateTo })
+    if (sKey) qs.set('stores', sKey)
+    if (mKey) qs.set('markets', mKey)
+    api(`/api/v1/closing/deposit-accountability?${qs.toString()}`)
       .then(setData).catch(() => setData(null)).finally(() => setLoading(false))
-  }, [dateFrom, dateTo])
+  }, [dateFrom, dateTo, mKey, sKey])
   useEffect(() => { load() }, [load])
 
   const rows: any[] = data?.rows || []
   const s = data?.summary || {}
   const rowKey = (r: any) => `${r.day}|${r.store_code}`
+  const envKey = (r: any, e: any) => `${r.day}|${r.store_code}|${e.employee_name || ''}|${e.kind || 'cash'}`
 
   async function confirmDay(r: any, checked: boolean) {
     setBusyKey(rowKey(r)); setMsg('')
@@ -460,20 +477,58 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
     finally { setBusyKey('') }
   }
 
-  async function markHanded(r: any) {
+  // HAND-OVER NOW RECORDS AN AMOUNT (owner 2026-10-10: "the field to enter the cash pick[ed] by
+  // the manag[e]ment or handed over to the manag[e]ment"). A hand-over used to record only WHO and
+  // WHEN, so management confirmed receipt with a checkbox and no figure ever stated what they
+  // actually received — a hand-over short by $200 looked exactly like one that tied. The amount
+  // goes to the SAME `deposit_amount` / `declared_amount` pair a deposit already records, through
+  // the same endpoint, so the mismatch flag works identically on both dispositions. Per envelope,
+  // because that is the grain the money is at; left blank it behaves exactly as before.
+  async function markHanded(r: any, amounts?: Record<string, string>) {
     const undisposed = (r.envelopes || []).filter((e: any) => e.state === 'undisposed')
     if (!undisposed.length) return
     setBusyKey(rowKey(r)); setMsg('')
     try {
       for (const e of undisposed) {
+        const raw = amounts?.[envKey(r, e)]
+        const amt = raw !== undefined && String(raw).trim() !== '' ? Number(raw) : undefined
         await api(e.kind === 'billpay' ? '/api/v1/closing/billpay-pickup/deposit' : '/api/v1/closing/pickup/deposit', {
           method: 'POST', body: JSON.stringify({
             store_code: r.store_code, close_date: r.day, employee_name: e.employee_name,
             disposition: 'handed_to_mgmt', handed_to: user?.full_name || undefined,
+            ...(Number.isFinite(amt as number) ? { deposit_amount: amt } : {}),
           }),
         })
       }
       setMsg(`🤝 ${undisposed.length} envelope(s) marked handed to management for ${r.store_name || r.store_code} · ${r.day} — awaiting management confirmation.`)
+      load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setBusyKey('') }
+  }
+
+  // OPEN A SEALED ENVELOPE HERE (owner 2026-10-10: "if the cash is not opened in cash pickup or
+  // epay pick up it should [have] the option to open on this module"). It posts the SAME
+  // open-and-count statement the pickup screens post — `envelope_opened` plus the count — to the
+  // same pickup row, through `/pickup/open-count` (the billpay sibling for a bill-pay envelope).
+  // The server runs the same gate: opened means the count is required. Nothing here re-derives
+  // short/over; the board's existing chips read the stored count back.
+  async function saveOpenCount() {
+    const o = openEnv
+    if (!o) return
+    setBusyKey(o.rowK); setMsg('')
+    try {
+      const res: any = await api(o.kind === 'billpay'
+        ? '/api/v1/closing/billpay-pickup/open-count' : '/api/v1/closing/pickup/open-count', {
+        method: 'POST', body: JSON.stringify({
+          store_code: o.store_code, close_date: o.day, employee_name: o.employee_name,
+          envelope_opened: true, actual_amount: o.amount,
+          counted_by: (o.counted_by || '').trim() || user?.full_name || undefined,
+        }),
+      })
+      const verdict = res?.status === 'short' ? `⚠ SHORT ${fmt(res.variance)}`
+        : res?.status === 'over' ? `+${fmt(res.variance)} over` : 'matches the declared amount'
+      setMsg(`📂 Opened and counted ${fmt(res?.actual_picked_amount)} against ${fmt(res?.declared_amount)} declared — ${verdict}.`)
+      setOpenEnv(null)
       load()
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusyKey('') }
@@ -502,12 +557,55 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
     )
   }
 
+  // SEALED IS NOT SHORT, AND IT IS NOT COUNTED EITHER. An envelope with no recorded count is
+  // reported as uncounted — never as a zero, never as a shortage — which is the same posture the
+  // by-DM report and the pickup list already take. The button is the ONLY thing new here: it lets
+  // the count be recorded now, by whoever has the envelope in their hands.
+  function openedCell(r: any, k: string) {
+    const envs: any[] = r.envelopes || []
+    const picked = envs.filter(e => e.state !== 'unpicked')
+    if (!picked.length) return <span style={{ color: 'var(--text3)' }}>—</span>
+    const counted = picked.filter(e => e.actual_picked_amount !== null && e.actual_picked_amount !== undefined)
+    const sealed = picked.filter(e => !(e.actual_picked_amount !== null && e.actual_picked_amount !== undefined))
+    return (
+      <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 3 }}>
+        {counted.length ? (
+          <span style={{ color: '#166534' }}>
+            {counted.length} counted
+            {counted.some(e => e.actual_counted_by)
+              ? <span style={{ color: 'var(--text3)' }}> · by {counted.find(e => e.actual_counted_by)?.actual_counted_by}</span>
+              : null}
+          </span>
+        ) : null}
+        {sealed.map(e => (
+          <button key={envKey(r, e)} className="btn btn-secondary"
+            style={{ fontSize: 11, padding: '2px 7px' }}
+            disabled={busyKey === k}
+            title={`Collected sealed — open it and record what was counted (declared ${fmt(e.amount)})`}
+            onClick={() => setOpenEnv({
+              rowK: k, kind: e.kind, store_code: r.store_code, day: r.day,
+              employee_name: e.employee_name, store_name: r.store_name || r.store_code,
+              declared: e.amount, amount: '', counted_by: user?.full_name || '',
+            })}>
+            📂 open &amp; count{e.employee_name ? ` · ${e.employee_name}` : ''}{e.kind === 'billpay' ? ' (bill-pay)' : ''}
+          </button>
+        ))}
+      </span>
+    )
+  }
+
   const bcell: React.CSSProperties = { padding: '7px 10px', borderTop: '1px solid var(--border)', fontSize: 12.5, verticalAlign: 'middle' }
   return (
     <div className="card" style={{ padding: 14, marginTop: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>🟩 Deposit Accountability <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>{dateFrom} → {dateTo}</span></div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>🟩 Deposit Accountability <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>
+            {dateFrom} → {dateTo}
+            {/* The filters the SERVER actually applied, stated here rather than inferred from the
+                pickers: a filter the viewer cannot see is a filter they will mis-read. */}
+            {data?.filters?.markets?.length ? ` · markets: ${data.filters.markets.join(', ')}` : ''}
+            {data?.filters?.stores?.length ? ` · ${data.filters.stores.length} store(s)` : ''}
+          </span></div>
           <div style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 780 }}>
             Every picked-up envelope must end accounted: <b>deposited with the bank deposit slip</b>, or <b>handed to
             management and confirmed received in the system</b>. Green days are fully accounted; management confirms
@@ -533,7 +631,7 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
         <div className="table-wrapper" style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              {['Day', 'Store', 'Picked up', 'Deposited', 'Handed over', 'Mgmt confirmed', 'Status'].map((h, i) =>
+              {['Day', 'Store', 'Picked up', 'Opened & counted', 'Deposited', 'Handed over', 'Mgmt confirmed', 'Status'].map((h, i) =>
                 <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
             </tr></thead>
             <tbody>
@@ -545,6 +643,11 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
                     <td style={{ ...bcell, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{r.green ? '🟢 ' : ''}{r.day}</td>
                     <td style={bcell}>{r.store_name || r.store_code}{r.market ? <span style={{ color: 'var(--text3)' }}> · {r.market}</span> : null}</td>
                     <td style={{ ...bcell, fontWeight: 600 }}>{fmt(r.picked_total)} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({r.picked_envelopes})</span>{pickupVarianceChip(r)}</td>
+                    {/* OPEN A SEALED ENVELOPE HERE (owner 2026-10-10). An envelope collected sealed
+                        reaches this board with no count at all, and until now the only place that
+                        could record one was the pickup screen at confirm time. Each sealed envelope
+                        gets its own button because the count belongs to the envelope, not the day. */}
+                    <td style={bcell}>{openedCell(r, k)}</td>
                     <td style={bcell}>
                       {r.deposited_rows
                         ? <span>{fmt(r.deposited_total)}{r.missing_slip_rows
@@ -559,7 +662,7 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
                                : undisposed.length ? 'Mark the remaining picked-up envelope(s) of this day as handed to management'
                                : 'No picked-up envelopes without a disposition'}>
                         <input type="checkbox" checked={!!r.handed} disabled={busy || r.handed || !undisposed.length}
-                               onChange={() => markHanded(r)} />
+                               onChange={() => setHandModal({ row: r, amounts: {} })} />
                         {r.handed ? <span>{fmt(r.handed_total)}</span> : <span style={{ color: 'var(--text3)' }}>{undisposed.length ? 'mark handed' : '—'}</span>}
                       </label>
                     </td>
@@ -582,6 +685,69 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {openEnv && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div className="card" style={{ padding: 20, maxWidth: 430, width: '90%' }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>📂 Open and count this envelope</h3>
+            <p style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>
+              {openEnv.store_name} · {openEnv.day}{openEnv.employee_name ? ` · ${openEnv.employee_name}` : ''}
+              {openEnv.kind === 'billpay' ? ' · bill-payment envelope' : ''}
+              <br />Declared on the envelope: <b>{fmt(openEnv.declared)}</b>.
+            </p>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <input autoFocus className="select" inputMode="decimal" placeholder="Cash actually counted $"
+                value={openEnv.amount} onChange={e => setOpenEnv((o: any) => ({ ...o, amount: e.target.value }))} />
+              <input className="select" placeholder="Counted by"
+                value={openEnv.counted_by} onChange={e => setOpenEnv((o: any) => ({ ...o, counted_by: e.target.value }))} />
+            </div>
+            <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '8px 0 0' }}>
+              An opened envelope must carry its count — a count of $0.00 is recorded as a real finding,
+              but a blank is refused. Management&rsquo;s own later count stays on the Management Envelope Receipt.
+            </p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button className="btn" style={{ background: 'var(--accent)', color: '#fff' }}
+                disabled={!!busyKey || String(openEnv.amount).trim() === ''} onClick={saveOpenCount}>
+                {busyKey ? 'Saving…' : 'Record the count'}
+              </button>
+              <button className="btn btn-secondary" onClick={() => setOpenEnv(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {handModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div className="card" style={{ padding: 20, maxWidth: 470, width: '90%' }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>🤝 Hand over to management</h3>
+            <p style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>
+              {handModal.row.store_name || handModal.row.store_code} · {handModal.row.day}. Enter what
+              management actually received for each envelope. Leave one blank to record the hand-over
+              without a figure, exactly as before.
+            </p>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {(handModal.row.envelopes || []).filter((e: any) => e.state === 'undisposed').map((e: any) => (
+                <label key={envKey(handModal.row, e)} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}>
+                  <span style={{ flex: 1 }}>
+                    {e.employee_name || '—'}{e.kind === 'billpay' ? ' · bill-pay' : ''}
+                    <span style={{ color: 'var(--text3)' }}> · declared {fmt(e.amount)}</span>
+                  </span>
+                  <input className="select" style={{ width: 120 }} inputMode="decimal" placeholder="Received $"
+                    value={handModal.amounts[envKey(handModal.row, e)] ?? ''}
+                    onChange={ev => setHandModal((m: any) => ({ ...m, amounts: { ...m.amounts, [envKey(m.row, e)]: ev.target.value } }))} />
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button className="btn" style={{ background: 'var(--accent)', color: '#fff' }} disabled={!!busyKey}
+                onClick={async () => { const m = handModal; setHandModal(null); await markHanded(m.row, m.amounts) }}>
+                {busyKey ? 'Saving…' : 'Mark handed over'}
+              </button>
+              <button className="btn btn-secondary" onClick={() => setHandModal(null)}>Cancel</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
