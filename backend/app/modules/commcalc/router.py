@@ -22,6 +22,7 @@ from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
+from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1070); every rule is a config row (index §72)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
 from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
@@ -47152,3 +47153,246 @@ async def zero_sales_alerts_run_now(send: bool = False, authorization: str = Hea
     org_id = mgr.get("org_id") or org_id
     return await _run_zero_sales_alerts(org_id_filter=org_id, respect_enabled=False,
                                         dry_run=(not send))
+
+
+# ══ DAILY INCENTIVE — what a day's declared categories pay (mig 1070) ══════════════════════════════
+# Owner 2026-10-10: "when you add a category it should be available in teh cincentive payout plan to
+# be assesed to be paid out … i dont wnat them to be hard coded it should be a design effect".
+#
+# Every rule, category, rate and threshold is a ROW. The code knows three payout SHAPES and nothing
+# else; which categories exist is dereferenced from `closing/metric_catalog.py`, the one home, so a
+# category typed on the Count Fields screen is payable the same afternoon. The rules a person is
+# measured by are resolved by `management_incentive.resolve_plan` — the same precedence ladder the
+# employee commission plan and the management incentive use, never a second one.
+
+_INCENTIVE_RULE_TABLE = "incentive_rule"
+_INCENTIVE_ASSIGN_TABLE = "incentive_rule_assignment"
+
+
+def _incentive_rules(client, org_id, *, active_only=True):
+    """The tenant's rules with their assignments nested. [] before mig 1070, so every caller degrades
+    to "this tenant pays no daily incentive" instead of failing."""
+    try:
+        q = (client.schema("commcalc").table(_INCENTIVE_RULE_TABLE).select("*")
+             .eq("org_id", org_id))
+        if active_only:
+            q = q.eq("is_active", True)
+        rules = q.order("sort_order").execute().data or []
+    except Exception:
+        return []
+    if not rules:
+        return []
+    try:
+        assigns = (client.schema("commcalc").table(_INCENTIVE_ASSIGN_TABLE).select("*")
+                   .eq("org_id", org_id).in_("rule_id", [r["id"] for r in rules])
+                   .execute().data) or []
+    except Exception:
+        assigns = []
+    by_rule = {}
+    for a in assigns:
+        by_rule.setdefault(a.get("rule_id"), []).append(a)
+    for r in rules:
+        r["assignments"] = by_rule.get(r["id"], [])
+        r["key"] = r.get("rule_key")
+    return rules
+
+
+def _can_edit_incentive_rules(authorization, org_id):
+    """A rule change moves money, so it takes the module's money-posture gate — the same one the MA
+    class wiring uses. Reported on the GET so the editor can render read-only."""
+    try:
+        _require_commission_admin(authorization, org_id)
+        return True
+    except HTTPException:
+        return False
+    except Exception:
+        return True
+
+
+@router.get("/incentive-rules")
+def list_incentive_rules(include_inactive: bool = True, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    """The tenant's daily-incentive rules, plus the catalog of categories they may point at — the
+    editor never builds that list itself."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.closing.router import _metric_catalog
+    from app.modules.closing import metric_catalog as _mc
+    cat = _metric_catalog(client, org_id)
+    return {
+        "rules": _incentive_rules(client, org_id, active_only=not include_inactive),
+        "metrics": cat,
+        "revenue_keys": _mc.revenue_keys(cat),
+        "rule_kinds": list(_daily_incentive.RULE_KINDS),
+        "split_bases": list(_daily_incentive.SPLIT_BASES),
+        "qualifier_scopes": list(_daily_incentive.QUALIFIER_SCOPES),
+        "measure_bases": list(_daily_incentive.MEASURE_BASES),
+        "ops": sorted(_daily_incentive.OPS),
+        "can_edit": _can_edit_incentive_rules(authorization, org_id),
+    }
+
+
+class SaveIncentiveRuleIn(LaxModel):
+    id: Any = None
+    rule_key: Any = None
+    label: Any = ""
+    description: Any = None
+    rule_kind: Any = None
+    qualifier: Any = None
+    payout: Any = None
+    is_active: Any = True
+    sort_order: Any = 0
+    assignments: Any = None
+
+
+@router.put("/incentive-rules")
+def save_incentive_rule(body: SaveIncentiveRuleIn, org_id: str = ORG_ID,
+                        authorization: str = Header(default="")):
+    """Create or update one rule. REFUSES a rule whose qualifier or payout names a category this
+    business does not declare — a rule that cannot be explained is a rule that should not pay."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    from app.modules.closing.router import _metric_catalog
+    from app.modules.closing import metric_catalog as _mc
+    kind = str(body.rule_kind or "").strip().lower()
+    if kind not in _daily_incentive.RULE_KINDS:
+        raise HTTPException(400, f"rule_kind must be one of {', '.join(_daily_incentive.RULE_KINDS)}")
+    label = str(body.label or "").strip()
+    if not label:
+        raise HTTPException(400, "label required")
+    qualifier = body.qualifier if isinstance(body.qualifier, dict) else {"scope": "none"}
+    payout = body.payout if isinstance(body.payout, dict) else {}
+    known = set(_mc.keys(_metric_catalog(client, org_id)))
+    named = [str(k).strip() for k in (list(qualifier.get("metric_keys") or [])
+                                      + list(payout.get("metric_keys") or [])) if str(k).strip()]
+    unknown = sorted({k for k in named if k not in known})
+    if unknown:
+        raise HTTPException(400, "This rule names categories this business does not declare: "
+                                 + ", ".join(unknown)
+                                 + ". Add them on Daily Closing -> Count Fields first.")
+    scope = str(qualifier.get("scope") or "none").strip().lower()
+    if scope not in _daily_incentive.QUALIFIER_SCOPES:
+        raise HTTPException(400, "qualifier scope must be store, employee or none")
+    if kind == "threshold_pool":
+        split = str(payout.get("split") or "").strip().lower()
+        if split not in _daily_incentive.SPLIT_BASES:
+            raise HTTPException(400, "a pool must declare how it is split: "
+                                     + ", ".join(_daily_incentive.SPLIT_BASES))
+    key = (str(body.rule_key or "").strip()
+           or re.sub(r"[^a-z0-9_]+", "_", label.lower()).strip("_")[:60] or "rule")
+    row = {"org_id": org_id, "rule_key": key, "label": label,
+           "description": body.description, "rule_kind": kind,
+           "qualifier": qualifier, "payout": payout,
+           "is_active": body.is_active is not False,
+           "sort_order": _int_or(body.sort_order, 0),
+           "updated_at": datetime.now(timezone.utc).isoformat(),
+           "updated_by": _caller_uid(authorization)}
+    try:
+        r = (client.schema("commcalc").table(_INCENTIVE_RULE_TABLE)
+             .upsert(row, on_conflict="org_id,rule_key").execute())
+        saved = r.data[0] if r.data else row
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration "
+                                 f"1070_declared_metric_catalog.sql first. [{e}]")
+    if body.assignments is not None and saved.get("id"):
+        try:
+            (client.schema("commcalc").table(_INCENTIVE_ASSIGN_TABLE).delete()
+             .eq("org_id", org_id).eq("rule_id", saved["id"]).execute())
+            arows = [{"org_id": org_id, "rule_id": saved["id"],
+                      "scope": str(a.get("scope") or "default").strip().lower(),
+                      "scope_value": a.get("scope_value"),
+                      "priority": _int_or(a.get("priority"), 0)}
+                     for a in (body.assignments or []) if isinstance(a, dict)]
+            if arows:
+                client.schema("commcalc").table(_INCENTIVE_ASSIGN_TABLE).insert(arows).execute()
+        except Exception:
+            pass
+    return saved
+
+
+@router.delete("/incentive-rules/{rule_id}")
+def delete_incentive_rule(rule_id: str, org_id: str = ORG_ID,
+                          authorization: str = Header(default="")):
+    """Switch a rule OFF rather than destroying it — a deleted rule takes its audit trail with it."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    (client.schema("commcalc").table(_INCENTIVE_RULE_TABLE)
+     .update({"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat(),
+              "updated_by": _caller_uid(authorization)})
+     .eq("org_id", org_id).eq("id", rule_id).execute())
+    return {"ok": True}
+
+
+@router.get("/daily-incentive/{close_date}")
+def get_daily_incentive(close_date: str, store_code: str = "", org_id: str = ORG_ID,
+                        authorization: str = Header(default="")):
+    """What one store-day's declared categories pay each employee, with the full why-trail.
+
+    COMPUTES ONLY — nothing is persisted and nobody is paid by calling this (the same posture as the
+    management incentive). Hours for a by-hours pool come from the schedule through the one home the
+    workforce module already uses; a day with no hours leaves the pool UNALLOCATED and says so rather
+    than inventing an even split."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.closing.router import _metric_catalog, _metric_lines
+    from app.modules.closing import metric_catalog as _mc
+    cat = _metric_catalog(client, org_id)
+    row = None
+    try:
+        q = (client.schema("commcalc").table("daily_closing").select("*")
+             .eq("org_id", org_id).eq("close_date", str(close_date)))
+        if store_code:
+            q = q.eq("store_code", str(store_code))
+        rows = q.execute().data or []
+        row = rows[0] if rows else None
+    except Exception:
+        row = None
+    lines = _metric_lines(client, org_id, store_code, close_date)
+    declared = _mc.declared(cat, row, lines)
+    per_emp = _mc.by_employee(cat, lines)
+    hours, roster = _incentive_hours_for_day(client, org_id, store_code, close_date)
+    people = sorted(set(list(per_emp) + list(roster)))
+    rules = _incentive_rules(client, org_id, active_only=True)
+    result = _daily_incentive.compute_day(cat, rules, declared_map=declared,
+                                          per_employee=per_emp, hours_by_employee=hours,
+                                          employees=people)
+    result["close_date"] = str(close_date)
+    result["store_code"] = store_code
+    result["hours"] = hours
+    result["declared"] = declared
+    result["metrics"] = cat
+    result["migration_pending"] = not rules and not lines
+    return result
+
+
+def _incentive_hours_for_day(client, org_id, store_code, close_date):
+    """(hours_by_employee, roster) for a store-day, from the schedule the workforce module already
+    keeps. Actual clocked hours win where they exist; otherwise the scheduled hours, which is what the
+    tenants here actually record. Absent is ABSENT — this returns {} rather than a guess, and
+    `daily_incentive.split_pool` reports the pool unallocated."""
+    hours, roster = {}, []
+    try:
+        q = (client.schema("storeops").table("shifts").select("*")
+             .eq("org_id", org_id).eq("shift_date", str(close_date))
+             .neq("is_deleted", True))
+        if store_code:
+            q = q.eq("store_code", str(store_code))
+        for sh in (q.execute().data or []):
+            who = str(sh.get("employee_name") or "").strip()
+            if not who:
+                continue
+            roster.append(who)
+            h = sh.get("actual_hours")
+            if h in (None, "", 0):
+                h = sh.get("scheduled_hours")
+            try:
+                h = float(h or 0)
+            except (TypeError, ValueError):
+                h = 0.0
+            if h:
+                hours[who] = round(hours.get(who, 0.0) + h, 2)
+    except Exception:
+        return {}, []
+    return hours, sorted(set(roster))
