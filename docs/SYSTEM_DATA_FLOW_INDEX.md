@@ -22893,6 +22893,10 @@ payments **when they agree**; a store whose payments disagree prices nothing and
 
 ### 68.6 The lock
 
+Module-graph fact **`entitlement_month_coverage`**, with the two edges it dereferences recorded
+beside it (`month_archive_due` for the calendar, `pay_feed_balance` for the shipped verdict strings),
+so a caller that stops dereferencing either fails `harness_module_graph_guard.py`.
+
 `backend/harness_mdf_entitlement_coverage.py` — **92 checks, DB-free, stdlib only**, verified RED
 against the pre-change tree (without the module every §A–§G check fails BY NAME through the
 `_Missing` shims rather than dying with a traceback). §A the ask · §B the undeclared window, with the
