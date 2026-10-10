@@ -29,8 +29,13 @@
 // item that reaches this file is one the viewer may already open. Ranking an item the viewer cannot
 // see would leak its existence, which is why the filter is upstream and not a flag here.
 //
-// PURE and import-free, so `frontend/prove_search_rank.mjs` can drive the real functions under Node
-// with no React, no network and no build step.
+// PURE, so `frontend/prove_search_rank.mjs` can drive the real functions under Node with no React,
+// no network and no build step. It imports exactly ONE thing: the search VOCABULARY (§68), which is
+// equally pure. That import is deliberate rather than an injected argument — a vocabulary passed in
+// by each caller is a vocabulary one caller forgets to pass, and "wrote the registry without wiring
+// the callers" is the failure the house rules name three times over (§19.18). Importing it cannot
+// un-wire, and `prove_search_vocabulary.mjs` fails the build if this dereference disappears.
+import { synonymsOf, phraseHits } from '@/lib/search-vocabulary'
 
 /** What kind of thing was found. The console groups by this, and `looksLikeQuestion` never changes it. */
 export type SearchKind = 'page' | 'report' | 'setting' | 'store' | 'person' | 'customer'
@@ -64,8 +69,13 @@ export type Hit = {
   item: Searchable
   score: number
   /** Which CONTENT tokens this hit actually accounted for — shown to the person so a surprising
-   *  result explains itself instead of looking arbitrary. */
+   *  result explains itself instead of looking arbitrary. Includes tokens reached through the
+   *  vocabulary (§68): "wages" counts as accounted for by a page that says "payroll". */
   matched: string[]
+  /** The subset of `matched` the item answered with THE WORD THE PERSON TYPED, no vocabulary in
+   *  between. This is what `fullyCovered` reads, and the distinction is load-bearing — see the
+   *  comment on `fullyCovered`. */
+  literal: string[]
 }
 
 // Words that carry no information about WHICH thing is meant. They are not noise to be stripped from
@@ -134,6 +144,11 @@ const W_DESC = 6
 /** Every content token accounted for is worth more than any single field, so a hit that explains the
  *  whole query always outranks one that explains a word of it loudly. */
 const W_COVERAGE = 200
+/** What a token costs when it only matched through the VOCABULARY — "wages" finding a page that
+ *  says "payroll". The word the person actually typed must always win, so the penalty is bigger
+ *  than the gap between any two adjacent field weights; a synonym hit is a real hit that ranks
+ *  below every literal one. Same posture as the shared-stem discounts above. */
+const W_SYNONYM_PENALTY = 25
 
 const norm = (s?: string) => String(s || '').toLowerCase().trim()
 const words = (s?: string) => new Set(tokens(s || ''))
@@ -146,6 +161,12 @@ const words = (s?: string) => new Set(tokens(s || ''))
 function sharedStem(a: string, b: string): boolean {
   if (a === b) return false
   if (/\d/.test(a) || /\d/.test(b)) return false
+  // A PHRASE IS NOT A STEM OF A WORD. Vocabulary candidates (§68) may be multi-word, and without
+  // this line 'gross sales' read as a longer form of 'gross' and 'sales volume' as a longer form of
+  // 'sales' — so "turnover" matched every page whose text contained either word, and Connectors
+  // ranked level with Gross Profit. The rule above says one WORD must be a prefix of the other;
+  // this makes the code say it too.
+  if (a.includes(' ') || b.includes(' ')) return false
   const [short, long] = a.length <= b.length ? [a, b] : [b, a]
   return short.length >= 4 && long.startsWith(short)
 }
@@ -156,6 +177,7 @@ function sharedStem(a: string, b: string): boolean {
  *  A prefix is what a person typing half a name actually means — "pay" finds Payroll, "nostr" finds
  *  Nostrand Ave — while "509" stays away from 1509. */
 function wordPrefix(text: string | undefined, t: string): boolean {
+  if (t.includes(' ')) return false   // same reason as `sharedStem`: a phrase is not a word's prefix
   for (const w of words(text)) if (w !== t && w.startsWith(t)) return true
   return false
 }
@@ -164,6 +186,35 @@ function wordPrefix(text: string | undefined, t: string): boolean {
 function stemHit(text: string | undefined, t: string): boolean {
   for (const w of words(text)) if (sharedStem(w, t)) return true
   return false
+}
+
+/**
+ * The best score `item` can get for ONE typed token, the typed word first and its vocabulary
+ * equivalents second (§68).
+ *
+ * The literal word is always tried on its own first and returned if it hits, so adding a vocabulary
+ * can never REORDER two items that both match what was typed — it can only find items that matched
+ * nothing before. A synonym hit is then scored as its own field hit less `W_SYNONYM_PENALTY`, so
+ * "payroll" typed exactly still beats "payroll" reached through "wages".
+ *
+ * `extra` carries the words contributed by multi-word spellings found anywhere in the query, which
+ * belong to the query as a whole rather than to this token; they are tried for every token so a
+ * two-word phrase can satisfy the token it was tokenized into.
+ */
+function tokenScore(item: Searchable, t: string, extra: readonly string[]): number {
+  const direct = fieldScore(item, t)
+  if (direct > 0) return direct
+  let best = 0
+  for (const syn of synonymsOf(t)) {
+    const s = fieldScore(item, syn)
+    if (s > best) best = s
+  }
+  for (const syn of extra) {
+    if (syn === t) continue
+    const s = fieldScore(item, syn)
+    if (s > best) best = s
+  }
+  return best > 0 ? Math.max(1, best - W_SYNONYM_PENALTY) : 0
 }
 
 function fieldScore(item: Searchable, t: string): number {
@@ -200,20 +251,31 @@ function fieldScore(item: Searchable, t: string): number {
 export function rank(items: Searchable[], q: string, limit = 8): Hit[] {
   const ct = contentTokens(q)
   if (!ct.length) return []
+  // The words every multi-word spelling in the query contributes — computed ONCE for the query,
+  // not per item, because a phrase is a property of what was typed.
+  const extra = phraseHits(q)
   const out: Hit[] = []
   for (const item of items || []) {
     let score = 0
     const matched: string[] = []
+    const literal: string[] = []
     for (const t of ct) {
-      const s = fieldScore(item, t)
-      if (s > 0) { score += s; matched.push(t) }
+      const direct = fieldScore(item, t)
+      const s = direct > 0 ? direct : tokenScore(item, t, extra)
+      if (s > 0) { score += s; matched.push(t); if (direct > 0) literal.push(t) }
     }
     if (!matched.length) continue
     score += W_COVERAGE * (matched.length / ct.length)
-    out.push({ item, score: Math.round(score * 10) / 10, matched })
+    out.push({ item, score: Math.round(score * 10) / 10, matched, literal })
   }
   out.sort((a, b) =>
     b.matched.length - a.matched.length ||
+    // THE TYPED WORD WINS A TIE. A hit on the person's own word and a hit reached through the
+    // vocabulary (§68) can land on the same score — "statement" matches the title "P&L Statement"
+    // as a label word (45) exactly as "billing" reaches "Bill Payments" as a label prefix less the
+    // synonym penalty (70 - 25). Without this line the tie broke alphabetically and the page the
+    // person had literally named lost to one the vocabulary suggested.
+    b.literal.length - a.literal.length ||
     b.score - a.score ||
     a.item.label.localeCompare(b.item.label) ||
     a.item.key.localeCompare(b.item.key))
@@ -221,10 +283,21 @@ export function rank(items: Searchable[], q: string, limit = 8): Hit[] {
 }
 
 /** Does any hit explain the WHOLE query? The console uses this to decide whether to lead with a
- *  destination or with the assistant: a question nothing covers is a question, not a bad search. */
+ *  destination or with the assistant: a question nothing covers is a question, not a bad search.
+ *
+ *  IT READS `literal`, NOT `matched`, AND THAT IS THE WHOLE POINT. The search vocabulary (§68) makes
+ *  far more things matchable — which is what it is for — and coverage is also the signal that
+ *  decides whether a sentence gets NAVIGATED instead of ASKED. Counting vocabulary hits here let
+ *  *"which sales rep worked in 509 today"* become "fully explained" (rep, sales and worked all
+ *  reached a group) and navigate to the closest-looking page: precisely the defect §54.10 shipped to
+ *  end, re-entering through the vocabulary's side door. Caught by §J of `prove_search_rank.mjs` on
+ *  the day the vocabulary was wired, which is why that regression is pinned there.
+ *
+ *  So the rule is: A VOCABULARY HELPS YOU FIND SOMETHING, IT DOES NOT LET THE CONSOLE CLAIM IT
+ *  UNDERSTOOD YOUR SENTENCE. Only the words the person actually typed can do that. */
 export function fullyCovered(hits: Hit[], q: string): boolean {
   const n = contentTokens(q).length
-  return n > 0 && hits.some(h => h.matched.length === n)
+  return n > 0 && hits.some(h => h.literal.length === n)
 }
 
 /** WHICH assistant door an unexplained question belongs to (owner 2026-10-05: *"the assistant

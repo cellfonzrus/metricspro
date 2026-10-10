@@ -20389,9 +20389,10 @@ first, with `[^:]` so `https://` survives, and say why.
 
 ### 54.9 Status
 
-Code complete and proved: **327 checks** across four Node, dependency-free proofs
+Code complete and proved: **389 checks** across five Node, dependency-free proofs
 (`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 94, `prove_route_index.mjs` 59,
-`prove_search_console_lock.mjs` 60), run by the `search-console` job in
+`prove_search_console_lock.mjs` 61, `prove_search_vocabulary.mjs` 61 — **§68** added the fifth and
+the ranker's one allowed import), run by the `search-console` job in
 `.github/workflows/data-qa-guard.yml`. No migration. The entity half of the catalogue appears as soon
 as the two endpoints answer; the assistant half is live wherever `GET /core/data-qa/status` returns
 `allowed && configured` (§52.6).
@@ -22762,3 +22763,152 @@ between the pickups and the recon, the screen registered.
 `filters`), `GET /closing/deposit-categories` (+`section`, `sections`), `GET /closing/deposit-recon`
 (+`sections`, +`section` per block), `POST /closing/pickup/deposit` + billpay sibling (amount on a
 hand-over). **Screen added:** `/closing/bank-deposit`. **Migration:** `1067`.
+
+---
+
+## 68. SIMILAR WORDS — a module nobody can name is a module nobody can find (owner directive 2026-10-10)
+
+**The report.** The owner had just been offered a dashboard tile for a new report, and declined the
+remedy rather than the problem: *"having too many tilles will also cluter the space, leave it like
+this but all modules should be searcable, index and found by susing similar wordslike a search
+engine"*. Placing 24 more tiles answers the instance (this report is hard to find). Making every
+module findable by the words a manager would actually type answers the class.
+
+### 68.1 THE CLASS, NOT THE INSTANCE
+
+> **The catalogue carries the words on the MENU, and a person types the words in their HEAD. A
+> search that only matches menu wording cannot find a module whose menu wording nobody guessed.**
+
+§54 built the console: one ranker, one catalogue assembled from the registries that already exist,
+one derived page index, one viewer gate (§54.12). It made every page *reachable*. It did not make
+every page *nameable* — and that is a different fault, because 251 of the 354 catalogue entries are
+**label only**: no alias, no description, nothing but the words somebody chose for the nav.
+
+**Measured before anything was changed**, against the real registries (nav 376, reports 34, screens
+47, routes 328 → 354 folded entries), with a 30-query corpus of what a manager plausibly types:
+
+```
+catalog: 354 entries | with aliases: 80 | with desc: 33 | label only: 251
+11 of 30 queries return NOTHING
+missing: headcount, wages, holiday, sick leave, rota, margin, turnover, clawback, trade in, …
+```
+
+"wages" finds nothing because the module is called **Payroll**. "rota" finds nothing because it is
+called **Schedule**. "margin" finds nothing because it is **Gross Profit**. The module is right
+there; the word is not.
+
+### 68.2 Why a VOCABULARY, and not an alias on each page
+
+The obvious fix is to add aliases to the 251 label-only entries. That is the patchwork the house
+rules forbid, for three separate reasons:
+
+- It is **O(pages)**, and it must be redone for every page added — exactly the thing that goes stale.
+- It is a **second copy of the nav wording**, in a second place, which §19.18 has already caught
+  three times.
+- It would be **wrong twice over**: "wages" does not belong to Payroll alone, and whoever adds the
+  next payroll page will not think to repeat it.
+
+A vocabulary is **O(vocabulary)**: *"wages, payroll, salary, pay, compensation, earnings"* is one
+fact, stated once, and it reaches the page added next year with no edit. One fact, one home,
+dereferenced — never copied.
+
+### 68.3 The one home
+
+**`frontend/src/lib/search-vocabulary.ts`** — the ONE home for *"which words mean the same thing in
+this platform"*. 60 groups, 535 terms, each group carrying a `note` saying what the group is for.
+
+```ts
+export const VOCABULARY: readonly VocabGroup[]           // { terms, note }
+export const UNMAPPED: Readonly<Record<string, string>>  // word -> why it finds nothing
+export function synonymsOf(t: string): string[]          // [] for digit runs and unknown words
+export function phraseHits(q: string): string[]          // word-boundary multi-word matches
+export function unmappedReason(q: string): string | undefined
+```
+
+Groups are **symmetric** (every term in a group expands to every other, phrases included) and
+contain no carrier, tenant or product name — **RULE TWO**, enforced by §G's `FORBIDDEN` scan.
+
+**`frontend/src/lib/search-rank.ts`** dereferences it. The import is deliberate and not an injected
+argument, because *"wrote the registry without wiring the callers"* is the failure §19.18 names
+three times over.
+
+### 68.4 A synonym helps you FIND something; it does not let the console claim it UNDERSTOOD you
+
+§54.10 settled a rule that a vocabulary could quietly undo: *a search that always returns its best
+guess cannot tell a bad match from no match*, so an unexplained question goes to the assistant rather
+than to the closest-looking page. If a synonym counted as coverage, *"which sales rep worked in 509
+today"* would become "fully covered" and navigate again — the §54.10 defect, reintroduced by the fix
+for a different one. It did, in testing, before this was added:
+
+- `Hit` now carries **`literal`** (the words actually typed that matched) alongside `matched`.
+- `fullyCovered` reads **`literal`**, never `matched`. §B5 of the proof replays the defect by
+  rewriting `literal` → `matched` in the real source and asserts it goes red.
+- `tokenScore` tries the **literal word first** and returns on a hit, and the sort breaks a tie on
+  `literal.length`, so a vocabulary can never REORDER two pages that both match what was typed.
+- Coverage counts **typed words only** — a synonym can surface a page, never certify a sentence.
+
+**`UNMAPPED` is the honest register**: 8 words that still find nothing, each with the reason
+(`trade in` → no trade-in module exists). §G asserts every reason is a real sentence and that a word
+listed there genuinely finds nothing — one entry was removed during the build because it turned out
+to find something, which is exactly what the check is for.
+
+### 68.5 Locked so it cannot un-wire
+
+- **§H** (the vocabulary proof): the ranker's import exists, BOTH halves are used, there is no second
+  `VOCABULARY`, the vocabulary itself imports nothing, only one module declares it, and
+  `fullyCovered` reads `literal`.
+- **§A2 / §B11b** (`prove_search_console_lock.mjs`): the ranker's imports are an **ALLOWLIST** of
+  exactly one — a second import is red, and *dropping* the vocabulary import is also red. The old
+  rule there was "imports nothing", which was a proxy for the two things actually at stake (the
+  ranker holds no registry; the proof can drive it under bare Node). It now names them.
+- **§E, the RATCHET**: a frozen `FINDS_NOTHING_BASELINE` of everyday words that still find nothing.
+  It is **1 word** and **may only shrink** — raising it means changing the number on purpose.
+
+### 68.6 One shared loader, because three proofs needed the same dance
+
+`search-rank.ts` now imports through Next's `@/lib/...` alias, which bare Node cannot resolve, and
+**three** proofs drive the ranker. Rather than copy the transpile-and-rewrite into three files,
+`frontend/prove_load_ts.mjs` is the one home: `loadLibs(root, names, mutate)` recursively emits every
+alias-imported lib into one temp dir rewriting the alias to a relative path, and its `mutate` hook
+lets an ARMED control edit the real source **in flight** rather than keeping a deliberately wrong
+copy on disk.
+
+### 68.7 Duplicate check (build gate)
+
+Searched the index for an existing mechanism answering "which words mean this" before building.
+Found and **extended, not duplicated**: §54.1's ranker (`search-rank.ts` — the one home for *"what
+did the person mean"*, now dereferencing the vocabulary rather than growing a second scorer), §54.2's
+catalogue fold, §54.7's derived page index, §54.12's viewer gate, and §54.10's never-guess rule
+(tightened, not bypassed). Nothing new answers a question an existing path already answered; the
+`menuless` baseline, the stopword list and the page registry all still have exactly one home.
+
+### 68.8 Result, measured
+
+```
+BEFORE  11 of 30 everyday queries return NOTHING   (251 of 354 entries label-only)
+AFTER    1 of 30 — "trade in", declared in UNMAPPED and pinned by the §E ratchet
+```
+
+On the proof's own 43-word corpus, §E5 (armed) reports **15 of 43 find nothing without the
+vocabulary** and 1 of 43 with it. No ordering of two literal matches changed, no page became
+reachable that a viewer could not already open (the gate is untouched), and no sentence became
+"covered" that was not covered before.
+
+### 68.9 Status
+
+Code complete and proved: **389 checks** across five Node, dependency-free proofs
+(`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 94, `prove_route_index.mjs` 59,
+`prove_search_console_lock.mjs` 61, `prove_search_vocabulary.mjs` 61), run by the `search-console`
+job in `.github/workflows/data-qa-guard.yml`. **No migration, no endpoint, no money moved** — this is
+frontend ranking only. Nothing is switched on or off: the two existing search boxes (⌘K and ⌘/) both
+dereference the ranker, so both gain the vocabulary on deploy.
+
+**Registered in no §16–18 table, deliberately:** those are cross-references by TABLE, ENDPOINT and
+METRIC, and this adds none of the three — like §54 itself, it is frontend ranking over registries
+that already exist. The registration that matters here is the CI step and the §E ratchet.
+
+**Files:** `frontend/src/lib/search-vocabulary.ts` (new, the one home),
+`frontend/src/lib/search-rank.ts` (dereferences it; `Hit.literal`; phrases rejected as stems),
+`frontend/prove_search_vocabulary.mjs` (new), `frontend/prove_load_ts.mjs` (new, shared loader),
+`frontend/prove_search_rank.mjs` / `prove_search_catalog.mjs` / `prove_search_console_lock.mjs`
+(wired to the loader; the lock's import rule narrowed to an allowlist).
