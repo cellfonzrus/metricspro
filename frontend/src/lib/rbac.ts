@@ -174,6 +174,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/product-mix', 'commissions'],
   ['/commcalc/device-line-reimbursement', 'commissions'],
   ['/commcalc/device-line-reimbursement?view=transferred', 'commissions'],
+  ['/commcalc/mdf-entitlement-coverage', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
   ['/commcalc/dlar-vs-platform', 'commissions'],
@@ -719,6 +720,10 @@ export const NAV: NavGroup[] = [
     // side is the carrier statement, and the owner asked for it in both places.
     { href: '/commcalc/device-line-reimbursement', label: 'Reimbursement per Line', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/device-line-reimbursement?view=transferred', label: 'Activated at Another Store', icon: '⇄', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // An entitlement is a COUNT OF MONTHS per store (index §68, owner instruction 2026-10-10): which
+    // store-month inside a store's own term never arrived. Listed beside the carrier reconciliations
+    // because the evidence is the carrier's own two records of the payment.
+    { href: '/commcalc/mdf-entitlement-coverage', label: 'Subsidy Months Missing', icon: '📆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/carrier-recon', label: 'Carrier Reconciliation', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
     // agency-phase1). Intentionally NOT in REPORT_DIRECTORY: it is a config+invoicing surface, not a report.
@@ -1317,6 +1322,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/product-mix', 'sales'],
   ['/commcalc/device-line-reimbursement', 'assets'],
   ['/commcalc/device-line-reimbursement?view=transferred', 'assets'],
+  ['/commcalc/mdf-entitlement-coverage', 'comm'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],

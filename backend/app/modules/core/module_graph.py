@@ -183,6 +183,23 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_engine.py': ('device_cogs',),
         },
     },
+    'entitlement_month_coverage': {
+        "question": 'An entitlement is a COUNT OF MONTHS per store — which store-month inside a '
+                    'store\'s own entitlement window never arrived? And which of those absences is '
+                    'a fact about the CARRIER (the month\'s payment run arrived for other stores) '
+                    'rather than about OUR INGEST (no payment of this kind reached us at all that '
+                    'month) or simply undecidable (the store\'s first entitled month is not '
+                    'declared, so a gap cannot be told from the entitlement running out)?',
+        "homes": ('app/modules/commcalc/entitlement_coverage.py',),
+        "index": ('68',),
+        "locks": ('harness_mdf_entitlement_coverage.py',),
+        # SNAPSHOT — written BY HAND, multi-line, not blessed. `--bless` silently deleted 11 of 12
+        # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
+        # real import graph rather than regenerating it.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_ec',),
+        },
+    },
     'declared_metric_catalog': {
         "question": 'What does this business DECLARE at the end of a day, what is a unit worth, and '
                     'who declared it? Asked by the closing form, the Count Fields editor and the '
@@ -190,7 +207,7 @@ FACTS: dict[str, dict] = {
                     '(daily_closing.counts and closing_metric_line) are folded by one reader, and a '
                     'store-level figure is never attributed to a person.',
         "homes": ('app/modules/closing/metric_catalog.py',),
-        "index": ('72',),
+        "index": ('74',),
         "locks": ('harness_metric_catalog_lock.py', 'harness_daily_incentive.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04, and on 2026-10-10 it stripped the hand-written caller comments
@@ -214,7 +231,7 @@ FACTS: dict[str, dict] = {
                     'cannot be verified fails closed, and a pool whose split cannot be measured is '
                     'returned unallocated rather than split evenly.',
         "homes": ('app/modules/commcalc/daily_incentive.py',),
-        "index": ('72',),
+        "index": ('74',),
         "locks": ('harness_daily_incentive.py', 'harness_metric_catalog_lock.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (see the note above).
         "callers": {
@@ -250,7 +267,9 @@ FACTS: dict[str, dict] = {
             # A closing store-day's match key (§29.12) — a named alias, no second copy.
             'app/modules/closing/unfinished_day.py': ('_sid',),
             # `_leg_store_index` + the two commission-leg endpoints' row keys.
-            'app/modules/commcalc/router.py': ('_store_identity',),
+            # `_sid_pairs` since §68: the entitlement-month report's router glue reads this home's
+            # own PAIRWISE predicate (§70 `may_be_one_store`) for "may these two keys be one store".
+            'app/modules/commcalc/router.py': ('_sid_pairs', '_store_identity'),
         },
     },
     'carrier_dollar_component': {
@@ -325,6 +344,16 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/void_watchdog.py': ('_reg',),
             'app/modules/commcalc/watchdog_router.py': ('_reg',),
             'app/modules/payables/engine.py': ('_reg',),
+        },
+    },
+    'cash_count_correction_trail': {
+        "question": 'Was this management cash figure changed, from what, and by whom?',
+        "homes": ('app/modules/closing/count_revision.py',),
+        "index": ('73.2', '73.3'),
+        "locks": ('harness_cash_count_revision.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/closing/router.py': ('_count_revision',),
         },
     },
     'cash_drawer_variance_owner': {
@@ -445,6 +474,10 @@ FACTS: dict[str, dict] = {
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.
         "callers": {
+            # §68 — the entitlement-month report asks the calendar whether a window month has
+            # CLOSED (so an absence in it is a fact) and parses every month spelling through the same
+            # home; it re-implements neither, and holds no clock of its own.
+            'app/modules/commcalc/entitlement_coverage.py': ('_fp',),
             'app/modules/commcalc/epay_sweep.py': ('_feed_period',),
             'app/modules/commcalc/import_audit.py': ('_recon',),
             # §19.54 — the statement-coverage verdict dereferences `month_state` for "is this month
@@ -793,7 +826,9 @@ FACTS: dict[str, dict] = {
             # only ever matched the house's own hyphenated "Re-imbursement" (owner 2026-10-08).
             'app/modules/commcalc/gp_report.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
-            'app/modules/commcalc/router.py': ('_payment_category', '_pcat'),
+            # `_pc` since §68: the entitlement-month report's router glue reads this home's own
+            # `load_map` / `category_of` for "which payment types are the entitlement".
+            'app/modules/commcalc/router.py': ('_payment_category', '_pc', '_pcat'),
             # §60 — the spiff-impact report folds a PAY-TYPE KEY (its option list and its per-store
             # tally must agree about whether two spellings are one type) and dereferences §57's one
             # folding rule rather than keeping a second. It reads the TABLE through §58, never here,
@@ -840,6 +875,10 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/accessory_cost_audit.py': ('_f', 'pdq'),
+            # §68 — the entitlement-month report IMPORTS the three shipped verdict strings rather
+            # than respelling them, so its tri-state can never drift from this home's.
+            'app/modules/commcalc/entitlement_coverage.py': ('VERDICT_FAILED', 'VERDICT_NOT_MEASURED',
+                                                             'VERDICT_PASSED'),
             # §55.2 — the one clawback test dereferences PLACEABLE_CATEGORIES for "which categories
             # are pay", minus the phantom `Chargeback` entry it exists to replace.
             'app/modules/commcalc/clawback.py': ('PLACEABLE_CATEGORIES',),

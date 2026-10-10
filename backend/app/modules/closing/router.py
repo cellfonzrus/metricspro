@@ -29,6 +29,7 @@ from . import external_credit_recon as _external_credit_recon
 from . import envelope_report as envelope_report_mod
 from . import entry_quality
 from . import pickup_actual as _pickup_actual
+from . import count_revision as _count_revision
 from . import closer_resolution
 from . import billpay_netting
 from . import submit_refusal as _refusal
@@ -5254,7 +5255,20 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
         body = {k: v for k, v in body.items() if k != envelope_report_mod.COUNT_BASIS_COLUMN}
         saved = _ec.upsert(body, on_conflict="org_id,closing_row_id").execute()
     out = (saved.data or [body])[0]
-    return {"ok": True, "count": out, "chargeback": cb_row, "basis_stored": basis_stored}
+    # THE CORRECTION TRAIL (owner 2026-10-10, mig 1071). This handler UPSERTS, so a re-count has
+    # always replaced the previous figure with nothing kept — and this is the figure that can become
+    # a chargeback against the rep. `prior` is the row as it was read, `body` is exactly what was
+    # written; a re-save of the same number writes no revision, and a first count writes none either.
+    rev = _write_count_revisions(
+        client, org_id, _count_revision.SUBJECT_ENVELOPE_COUNT,
+        prior.get("id") or out.get("id"),
+        {"store_code": crow.get("store_code"),
+         "close_date": str(crow.get("close_date") or "")[:10],
+         "employee_name": crow.get("employee_name")},
+        prior, body, changed_by=body.get("counted_by"))
+    return {"ok": True, "count": out, "chargeback": cb_row, "basis_stored": basis_stored,
+            "corrections": rev["corrections"], "history_recorded": rev["recorded"],
+            "history_detail": rev["detail"]}
 
 
 class DecideEnvelopeChargebackIn(LaxModel):
@@ -6918,6 +6932,47 @@ class OpenCountIn(LaxModel):
     envelope_opened: Any = True
     actual_amount: Any = None
     counted_by: Any = None
+    # WHY the figure is being changed (owner 2026-10-10). Optional and never required: a correction
+    # refused for want of a reason is a correction that does not happen, and the un-reasoned edit is
+    # still on the record either way (mig 1071).
+    note: Any = None
+
+
+# ── THE ONE WRITER of the cash-count correction trail (owner 2026-10-10, mig 1071) ──────────────
+# "also need to edit the cash entered by the management during cash recon".
+#
+# A cash figure a human typed is a statement by that human, and replacing it without keeping the old
+# one destroys evidence — the same defect migration 935 exists for, on a figure that can take money
+# off a rep's pay through `envelope_report.chargeback_parent_row`. So EVERY writer of a management
+# cash count routes its before/after through here, and `closing/count_revision.revision_rows` is the
+# only place that decides what a correction IS.
+#
+# `harness_cash_count_revision.py` §D FAILS THE BUILD if a writer of a count column stops calling
+# this, or if anything else in the codebase inserts into the table.
+#
+# ADAPTIVE (the mig-201 precedent): an un-migrated database has no table, so the correction still
+# records the COUNT and this reports that the trail is unavailable. A trail that refused the edit
+# would be a worse outcome than a missing trail.
+def _write_count_revisions(client, org_id, subject, row_id, identity, prior, patch,
+                           changed_by=None, note=None):
+    """Append one revision row per FIELD this write actually changes. Returns a small report for the
+    API response: how many corrections were recorded, and whether the trail could be written."""
+    try:
+        revs = _count_revision.revision_rows(
+            org_id, subject, row_id, identity, prior, patch,
+            changed_by=changed_by, changed_at=_now(), note=note)
+    except Exception as _e:                      # a builder failure must never lose the count
+        print(f"WARN cash-count revision build failed ({subject}): {str(_e)[:200]}")
+        return {"corrections": 0, "recorded": False, "detail": "could not be built"}
+    if not revs:
+        return {"corrections": 0, "recorded": True, "detail": None}
+    try:
+        client.schema("commcalc").table(_count_revision.REVISION_TABLE).insert(revs).execute()
+    except Exception as _e:
+        print(f"WARN cash-count revision not stored (run migration 1071?): {str(_e)[:200]}")
+        return {"corrections": len(revs), "recorded": False,
+                "detail": "the correction was saved; its history could not be recorded yet"}
+    return {"corrections": len(revs), "recorded": True, "detail": None}
 
 
 def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
@@ -6977,12 +7032,26 @@ def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
             raise HTTPException(400, "run migration 990/1067 first — nothing recordable on this schema")
         client.schema("commcalc").table(table).update(upd).eq("id", row["id"]).eq("org_id", org_id).execute()
     vf = patch["variance"]
+    # THE CORRECTION TRAIL (owner 2026-10-10, mig 1071). This endpoint is how a figure management
+    # already entered gets changed, so it is the one that most needs the before-value kept. `row` is
+    # the row as it was READ, `upd` is exactly what was written, so a field this write never touched
+    # can never be logged as changed — and a re-save of the same figure writes nothing at all.
+    rev = _write_count_revisions(
+        client, org_id, table, row.get("id"),
+        {"store_code": store, "close_date": cdate, "employee_name": emp},
+        row, upd, changed_by=(payload.counted_by or "").strip() or None,
+        note=(payload.note or "").strip() or None)
     return {"ok": True, "store_code": store, "close_date": cdate, "employee_name": emp,
             "opened": patch["opened"], "declared_amount": round(declared, 2),
             "actual_picked_amount": (vf["actual"] if vf else None),
             "variance": (vf["variance"] if vf else None),
             "status": (vf["status"] if vf else None),
-            "counted_by": upd.get("actual_counted_by")}
+            "counted_by": upd.get("actual_counted_by"),
+            # What was CHANGED by this save, and whether the trail took it. The screen shows the
+            # second one: "saved, but its history could not be recorded" is a real state and hiding
+            # it would be the silent-degradation defect.
+            "corrections": rev["corrections"], "history_recorded": rev["recorded"],
+            "history_detail": rev["detail"]}
 
 
 @router.post("/pickup/open-count")
@@ -7045,6 +7114,24 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
     total = 0.0
     actual_total, variance_short, variance_over = None, 0, 0
     opened_count = 0
+    # THE PRIOR ROWS, read ONCE for the whole batch (owner 2026-10-10, mig 1071). A confirm UPSERTS,
+    # so re-confirming a day REPLACES an earlier count with nothing kept — the same defect the late
+    # open has, on the screen the count is usually entered on first. One batched read by the dates in
+    # the batch; without it there is no before-value to record, and a trail that only covers one of
+    # two writers is the half-fixed defect CLAUDE.md calls the same defect wearing a hat.
+    _prior_by_key, _prior_ok = {}, True
+    try:
+        _dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
+        if _dates:
+            for _pr in ((client.schema("commcalc").table(table).select("*").eq("org_id", org_id)
+                         .in_("close_date", _dates).limit(_SUBMISSIONS_MAX_ROWS)
+                         .execute().data) or []):
+                _prior_by_key[((_pr.get("store_code") or ""), str(_pr.get("close_date") or "")[:10],
+                               (_pr.get("employee_name") or ""))] = _pr
+    except Exception as _e:
+        _prior_ok = False
+        print(f"WARN pickup prior-row read failed, corrections not recorded: {str(_e)[:200]}")
+    corrections, history_recorded = 0, True
     for it in items:
         item_date = _date(it.get("close_date")) or top_date
         if not item_date:
@@ -7105,6 +7192,17 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
                           f"{str(_e)[:160]}")
             client.schema("commcalc").table(table).upsert(
                 row, on_conflict="org_id,close_date,store_code,employee_name").execute()
+        # Record what this confirm CHANGED about an existing envelope. `_prior` absent ⇒ a first
+        # entry, and `revision_rows` writes nothing for one: there was nothing to overwrite.
+        _pk = ((it.get("store_code") or ""), item_date, (it.get("employee_name") or ""))
+        _prior = _prior_by_key.get(_pk)
+        if _prior and _prior_ok:
+            _rev = _write_count_revisions(
+                client, org_id, table, _prior.get("id"),
+                {"store_code": _pk[0], "close_date": item_date, "employee_name": _pk[2]},
+                _prior, row, changed_by=dm, note=(it.get("note") or "").strip() or None)
+            corrections += _rev["corrections"]
+            history_recorded = history_recorded and _rev["recorded"]
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
     notify_label = top_date or (item_dates[0] if len(item_dates) == 1 else
                                 f"{item_dates[0]}..{item_dates[-1]}" if item_dates else "—")
@@ -7116,7 +7214,10 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
             "actual_total": actual_total,
             "variance_short": variance_short, "variance_over": variance_over,
             # mig 990 — how many of the confirmed envelopes the DM opened and counted
-            "opened_count": opened_count}
+            "opened_count": opened_count,
+            # mig 1071 — how many figures this confirm CHANGED on envelopes already recorded, and
+            # whether the trail took them. 0 on a first confirm, which is the normal case.
+            "corrections": corrections, "history_recorded": history_recorded}
 
 
 @router.post("/pickup")
@@ -8131,8 +8232,35 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
     # pickup_actual.row_variance (the envelope_report count_fields truth table). Uncounted envelopes
     # are reported as uncounted, never as short.
     dm_rows, dm_summary = _da.dm_shortage_rows(out)
+    # HAS THIS FIGURE BEEN CORRECTED (owner 2026-10-10, mig 1071)? Attached to the envelope the
+    # correction is about, so the board can show "was $250, changed by X" beside the number rather
+    # than presenting the latest edit as if it were the only thing ever entered. ONE read for the
+    # whole board, keyed on the pickup row id the envelopes already carry (no second walk of the
+    # pickup tables). Degrades to no history on an un-migrated database — the counts still render.
+    _revs_by_row, _history_available = {}, True
+    try:
+        _rev_rows = (client.schema("commcalc").table(_count_revision.REVISION_TABLE).select("*")
+                     .eq("org_id", org_id).gte("close_date", start).lte("close_date", end)
+                     .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+        _revs_by_row = _count_revision.history_by_subject(_rev_rows)
+    except Exception as _e:
+        _history_available = False
+        print(f"INFO cash_count_revision unavailable (run migration 1071?): {str(_e)[:160]}")
+    _visible_revs = []
+    for r in out:
+        for env in r["envelopes"]:
+            _h = _revs_by_row.get(str(env.get("pickup_row_id") or "")) or []
+            env["corrections"] = len(_h)
+            # The sentences, built by the pure module so the screen words nothing itself.
+            env["correction_history"] = [_count_revision.describe(x, money=_usd) for x in _h]
+            _visible_revs.extend(_h)
     return {"start": start, "end": end, "rows": out, "summary": summary,
             "by_dm": dm_rows, "dm_summary": dm_summary,
+            # Corrections across the VISIBLE rows only (keyset consistency, like `summary` above).
+            # `amount_moved` is the sum of ABSOLUTE deltas: +$200 then -$200 is two figures changed,
+            # not nothing happening.
+            "corrections": _count_revision.correction_count(_visible_revs),
+            "history_available": _history_available,
             # What was actually applied, so the section can state its own filters rather than the
             # page's — a filter the viewer cannot see is a filter they will mis-read.
             "filters": {"stores": sorted(store_set) if store_set else [],
