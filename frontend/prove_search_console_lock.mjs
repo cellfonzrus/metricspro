@@ -181,10 +181,21 @@ function checkJumper(rel, raw) {
 function checkRanker(raw) {
   const code = codeOnly(raw)
   const bad = []
-  // PURE and import-free: that is what lets the proof drive the real functions under Node, and what
-  // keeps the rule readable in one file.
-  const imports = raw.match(/^\s*import\s+(?!type\b)/gm) || []
-  if (imports.length) bad.push(`${RANKER} imports at runtime (${imports.length}) — it must stay pure`)
+  // PURE, and it may dereference exactly ONE shared fact: the search vocabulary (§71).
+  // The old rule here was "imports nothing", which was a PROXY for the two things actually at stake —
+  // the ranker holds no registry, and the proof can drive the real functions under bare Node. The
+  // vocabulary breaks neither (it is a pure word list, and prove_load_ts.mjs resolves the alias), so
+  // the rule now names what it protects instead of banning the mechanism that would protect it.
+  // Keep it an ALLOWLIST: a second import is red until somebody states why it belongs.
+  const ALLOWED_IMPORTS = ['@/lib/search-vocabulary']
+  const specs = [...raw.matchAll(/^\s*import\s+(?!type\b)[^'"]*['"]([^'"]+)['"]/gm)].map(m => m[1])
+  for (const spec of specs)
+    if (!ALLOWED_IMPORTS.includes(spec))
+      bad.push(`${RANKER} imports ${spec} — only ${ALLOWED_IMPORTS.join(', ')} is allowed`)
+  // And the one allowed import must still BE there: a ranker that stops dereferencing the vocabulary
+  // silently returns to the 11-of-30 misses the vocabulary was built to end.
+  if (!specs.includes('@/lib/search-vocabulary'))
+    bad.push(`${RANKER} no longer dereferences @/lib/search-vocabulary — similar words stop working`)
   if (/\bfetch\s*\(|\bapi\s*\(/.test(code)) bad.push(`${RANKER} does I/O — ranking must be pure`)
   // It must not hold a catalogue: items are passed in.
   if (/\bNAV\b|REPORT_CATEGORIES|\bSCREENS\b/.test(code))
@@ -298,8 +309,10 @@ console.log('§B  ARMED — every rule fails on a broken copy')
   arm('B10i the best-guess fall-through coming back goes red',
       s => `${s}\n  const onSubmit2 = () => { if (firstDest) go(firstDest.item.href) }\n`)
 
-  ok('B11 ARMED — an import added to the ranker goes red',
+  ok('B11 ARMED — a SECOND import added to the ranker goes red',
      checkRanker(`import x from 'y'\n${RAW.ranker}`).length > 0)
+  ok('B11b ARMED — the ranker dropping the vocabulary import goes red',
+     checkRanker(RAW.ranker.replace("from '@/lib/search-vocabulary'", "from './nowhere'")).length > 0)
   ok('B12 ARMED — a registry named in the ranker goes red',
      checkRanker(`${RAW.ranker}\nconst z = REPORT_CATEGORIES\n`).length > 0)
   ok('B13 ARMED — dropping rank() from the ranker goes red',

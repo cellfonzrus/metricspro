@@ -11664,18 +11664,21 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
     if mk:
         asset_rows = [r for r in asset_rows
                       if _drr.month_key(r.get(cols["distributor_date"])) == mk]
-    # WHICH store keys two store records claim — read from the ONE identity home through coa's I/O
-    # twin (§64), never derived here. The pure layer withholds the "a different store was paid"
-    # verdict on those, because the two spellings may be one physical store. Measured live (house
-    # org, September 2026): 23 of 135 such devices, worth $6,164.95, touch one of the three.
+    # WHICH PAIRS OF ADDRESSES may be one physical store — read from the ONE identity home through
+    # coa's I/O twin (§64), never derived here, and handed to the pure layer as that home's own
+    # PREDICATE so no copy of the rule travels with it. The pure layer withholds the "a different
+    # store was paid" verdict only for such a pair. Measured live (house org, September 2026): zero
+    # pairs, so all 135 transfers are reported — the per-address ambiguity read this replaced
+    # withheld 23 of them, worth $6,164.95, on a fact that could not bear the verdict (§65.4).
     try:
-        from app.modules.account import coa as _coa_amb
-        _amb = _coa_amb.ambiguous_store_keys(client, org_id, resolve_store)
+        from app.modules.account import coa as _coa_sid
+        _pairs = _coa_sid.shared_store_identity_pairs(client, org_id, resolve_store)
+        _same_store = lambda _a, _b: _store_identity.may_be_one_store(_a, _b, _pairs)
     except Exception as _ae:
-        print(f"WARN device-line reimbursement: store ambiguity unresolved ({_ae})")
-        _amb = set()
+        print(f"WARN device-line reimbursement: shared store identity unresolved ({_ae})")
+        _same_store = None
     res = _drr.device_lines(asset_rows, carrier_lines, cfg, resolve_store, coverage,
-                            configured=configured, ambiguous_stores=_amb)
+                            configured=configured, same_store=_same_store)
     if store:
         want = (resolve_store(store) if resolve_store else store) or store
         res["rows"] = [r for r in res["rows"] if r["store"] == want]
@@ -11726,8 +11729,9 @@ def device_line_reimbursement(period: str = "", store: str = "", org_id: str = O
 # EVERY DECISION IS SOMEBODY ELSE'S. This function only READS, and hands the pure home what it needs:
 #   · which payment types are the entitlement — §57 `payment_category.load_map` / `.category_of`
 #     (the org's OWN declaration; this report lists no payment type and names no carrier),
-#   · which store a row belongs to — §64 `coa.store_resolver`, and §64's `ambiguous_store_keys` so a
-#     store-month absence on a doubly-claimed address withholds its verdict,
+#   · which store a row belongs to — §64 `coa.store_resolver`, and §64's PAIRWISE identity predicate
+#     (§70 `coa.shared_store_identity_pairs` + `store_identity.may_be_one_store`) so a store-month
+#     whose money may have landed under this same store's OTHER spelling withholds its verdict,
 #   · the calendar and the verdict vocabulary — `feed_period` / `pay_data_quality`, through the pure
 #     home (`commcalc/entitlement_coverage.py`),
 #   · the window itself — the owner's declaration in config (mig 1068). UNDECLARED STAYS UNDECLARED.
@@ -11773,12 +11777,19 @@ def _mdf_entitlement_run(client, org_id: str, store: str = ""):
     except Exception as e:
         print(f"WARN entitlement coverage: store resolver unavailable ({e})")
         resolve_store = lambda v: (str(v or "").strip() or None)          # noqa: E731
+    # MAY THESE TWO ADDRESSES BE ONE PHYSICAL STORE? §64's own PAIRWISE predicate (§70), injected —
+    # never the superseded per-address ambiguity read, which asked whether an address had a twin
+    # instead of whether the two keys in hand may be one store, and withheld 23 true findings for it.
+    # Asked per STORE-MONTH inside the pure home: only a month in which a possible twin WAS paid is
+    # unjudgeable, and that twin is named on the row.
     try:
-        from app.modules.account import coa as _coa_amb
-        ambiguous = _coa_amb.ambiguous_store_keys(client, org_id, resolve_store)
+        from app.modules.account import coa as _coa_pairs
+        from app.modules.account import store_identity as _sid_pairs
+        _pairs = _coa_pairs.shared_store_identity_pairs(client, org_id, resolve_store)
+        same_store = lambda a, b: _sid_pairs.may_be_one_store(a, b, _pairs)      # noqa: E731
     except Exception as e:
-        print(f"WARN entitlement coverage: store ambiguity unresolved ({e})")
-        ambiguous = set()
+        print(f"WARN entitlement coverage: shared store identity unresolved ({e})")
+        same_store = None
 
     # ── the two feeds, PAGED through the one home (§19.48). No period filter: the question is the
     #    whole entitlement window, not one month, and the declared categories narrow the read.
@@ -11810,8 +11821,7 @@ def _mdf_entitlement_run(client, org_id: str, store: str = ""):
     # anything or not (the pure home takes those keys from the config itself), and a store with
     # neither a payment nor a declared window is not in this report's scope at all — listing the
     # whole estate as "not measured" would bury the store-months that are actually findings.
-    res = _ec.entitlement_store_months(received, cfg, today=None,
-                                       ambiguous_stores=ambiguous)
+    res = _ec.entitlement_store_months(received, cfg, today=None, same_store=same_store)
     if store:
         want = (resolve_store(store) if resolve_store else store) or store
         res["rows"] = [r for r in res["rows"] if r["store"] == want]

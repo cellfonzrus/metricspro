@@ -171,6 +171,98 @@ def resolve_device_cost_basis(org_basis, carrier_preset_basis=None, legacy_cogs_
     }
 
 
+# ── WHICH STORE CARRIES A HANDSET'S COST (owner directive 2026-10-10, index §70) ─────────────────
+# OWNER, on the decision card: *"Move the cost"* — move device cost to the store the carrier paid,
+# for the proven transfers.
+#
+# THE CLASS, named before the fix. "Which store does this handset's cost belong to?" had TWO
+# authorities and nothing reconciled them per device: the distributor ledger books the cost to the
+# STOCKING store (`asset_ledger.store`, the row this module reads), and the carrier statement pays
+# the ACTIVATING store. A phone stocked at one door and sold at another therefore charged one store
+# a cost whose reimbursement the carrier paid another — measured live (house org, Jun-Oct 2026): 468
+# devices and $195,155.32 of cost, nets to $0.00 company-wide and restates per-store gross profit.
+#
+# ONE FACT, ONE HOME, DEREFERENCED. "Where was this device activated" is NOT answered here. It is
+# §65's per-device verdict (`commcalc/device_reimb_recon.device_lines` -> `.activation_store_moves`),
+# the same reconciliation the owner reads on the report, and this module takes its answer as DATA.
+# A second opinion here — a join of its own, a store guess from the sale row — is the duplicate
+# defect the index rules forbid, and it would let the report and the books disagree about where one
+# phone was sold. `cost_store` below is the ONLY place a caller may turn that answer into a store.
+#
+# DECLARED, NEVER INFERRED, and OFF until declared: `account_config.device_cost_store_basis`
+# (migration 1069). NULL/'' is not a third basis, it is "not declared", and it resolves to
+# `stocking`, which is byte-identical to every figure this module produced before today.
+DEVICE_COST_STORE_BASES = ("stocking", "activating")
+STORE_BASIS_STOCKING = "stocking"
+STORE_BASIS_ACTIVATING = "activating"
+#: Why a device's cost sits where it does. Carried on every placement so a reader never has to guess
+#: whether a store's cost moved, stayed, or could not be judged.
+PLACED_LEDGER = "distributor_ledger_store"
+PLACED_ACTIVATION = "carrier_paid_store"
+PLACED_WITHHELD = "unmeasured_stays_put"
+
+
+def resolve_device_cost_store_basis(org_value):
+    """PURE. The whole "which store" decision, from one declaration. NEVER RAISES.
+
+    `org_value` the org's own `account_config.device_cost_store_basis`. None/'' = NOT DECLARED.
+
+    Returns `{"basis", "move", "source"}`. `move` is the single boolean every caller reads — kept
+    with the basis rather than derived beside it, the same reason `resolve_device_cost_basis` returns
+    its three consequences together: a caller that recomputes "should I move?" from the basis string
+    is a second copy of this rule and will drift from it."""
+    v = str(org_value or "").strip().lower()
+    if v not in DEVICE_COST_STORE_BASES:
+        return {"basis": STORE_BASIS_STOCKING, "move": False,
+                "source": "house default (no basis declared)"}
+    return {"basis": v, "move": v == STORE_BASIS_ACTIVATING, "source": "org declaration"}
+
+
+def load_device_cost_store_basis(client, org_id):
+    """The one READ of the one declaration. Each column its own defensive read (the mig-954 pattern):
+    a pre-1069 database has no `device_cost_store_basis` column, every org stays undeclared, and
+    every figure is byte-identical. NEVER raises."""
+    raw = None
+    try:
+        rows = (client.schema("commcalc").table("account_config")
+                .select("device_cost_store_basis").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            raw = rows[0].get("device_cost_store_basis")
+    except Exception:
+        raw = None
+    return resolve_device_cost_store_basis(raw)
+
+
+def cost_store(ledger_store, device_id, activation):
+    """PURE. THE ONE PLACE a device's cost is given a store. NEVER RAISES.
+
+    `ledger_store`  the store the distributor ledger books this unit to (already resolved).
+    `device_id`     the unit's identifier on that same row; falsy means no move is possible.
+    `activation`    what `load_activation_index` returned — `{"move": bool, "move_to": {...},
+                    "withheld": {...}}`, whose `move_to` is §65's own per-device verdict.
+
+    Returns `{"store", "basis", "moved_from", "withheld"}`. `basis` names WHY, from the three
+    PLACED_* reasons, so a caller can report the placement instead of inferring it. On the stocking
+    basis, on a device §65 proved nothing about, and on any unreadable input, the answer is the ledger
+    store — the figure this module has always produced. A cost is never left unplaced."""
+    st = (str(ledger_store).strip() if ledger_store is not None else "") or None
+    out = {"store": st, "basis": PLACED_LEDGER, "moved_from": None, "withheld": False}
+    a = activation if isinstance(activation, dict) else {}
+    if not a.get("move") or not st:
+        return out
+    dev = str(device_id or "").strip()
+    if not dev:
+        return out
+    if dev in (a.get("withheld") or {}):
+        out["basis"], out["withheld"] = PLACED_WITHHELD, True
+        return out
+    mv = (a.get("move_to") or {}).get(dev)
+    to = str((mv or {}).get("to") or "").strip()
+    if not to or to == st:
+        return out
+    return {"store": to, "basis": PLACED_ACTIVATION, "moved_from": st, "withheld": False}
+
+
 def load_basis(client, org_id, carrier_preset=None):
     """The one READ of the one declaration. Every caller (coa.build_inputs, statement_engine,
     account/router) dereferences THIS — nothing else reads `device_cost_basis` or branches on
@@ -199,6 +291,53 @@ def load_basis(client, org_id, carrier_preset=None):
         except Exception:
             carrier_preset = ""
     return resolve_device_cost_basis(org_basis, carrier_preset, legacy)
+
+
+def load_activation_index(client, org_id, period, basis=None):
+    """The one READ of "where did the carrier activate each device this period".
+
+    I/O ONLY. It dereferences §65's own assembly (`commcalc.router._device_line_reimb_run`, the one
+    place that reads the carrier's per-line feed over the reimbursement lag window and reconciles it
+    against the distributor ledger per device) and §65's own pure verdict reader
+    (`device_reimb_recon.activation_store_moves`). It reconciles nothing itself and reads neither
+    feed directly — a second assembly here would be two paths answering one question.
+
+    Returns `{"move", "move_to", "withheld", "totals", "basis", "reason"}` — the shape
+    `cost_store` consumes. NEVER RAISES, and it fails in the SAFE direction: on the stocking basis,
+    or when the reconciliation cannot be read, `move` is False with the reason recorded, so every
+    cost books exactly where it books today rather than half-moving on a partial answer."""
+    res = basis if isinstance(basis, dict) else load_device_cost_store_basis(client, org_id)
+    out = {"move": False, "move_to": {}, "withheld": {}, "totals": {},
+           "basis": res.get("basis"), "basis_source": res.get("source"), "reason": ""}
+    if not res.get("move"):
+        out["reason"] = ("device cost books to the distributor ledger's store — no activating-store "
+                         "basis is declared for this org")
+        return out
+    if not str(period or "").strip():
+        out["reason"] = "no period to reconcile — cost books to the distributor ledger's store"
+        return out
+    try:
+        from app.modules.commcalc import router as _crouter
+        from app.modules.commcalc import device_reimb_recon as _drr
+        run = _crouter._device_line_reimb_run(client, org_id, period)
+        if not (run or {}).get("configured"):
+            out["reason"] = ("the org declares no device-financing routing, so no device activation "
+                             "is proven — cost books to the distributor ledger's store")
+            return out
+        moves = _drr.activation_store_moves((run or {}).get("rows") or [])
+    except Exception as e:
+        _log.warning("device_cogs: activation index unavailable — %s: %s", type(e).__name__, e)
+        out["reason"] = ("the per-device reimbursement reconciliation could not be read (%s), so no "
+                         "cost was moved this run — reported, never guessed" % type(e).__name__)
+        return out
+    out.update({"move": True, "move_to": moves["move_to"], "withheld": moves["withheld"],
+                "totals": moves["totals"],
+                "reason": ("device cost follows the store the carrier paid, for the %d device(s) the "
+                           "per-device reconciliation proved; %d unmeasured device(s) worth %.2f stay "
+                           "on the distributor ledger's store"
+                           % (moves["totals"]["devices"], moves["totals"]["withheld_devices"],
+                              moves["totals"]["withheld_cost"]))})
+    return out
 
 
 def _page(client, table, select, eqs=None, page=1000, cap=200000):
@@ -297,18 +436,26 @@ def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
     }
 
 
-def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store):
-    """Consignment COGS for VIP/Boost: the amount VIP BILLED for each unit, recognised when the unit
+def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store, activation=None):
+    """Consignment COGS: the amount the distributor BILLED for each unit, recognised when the unit
     SOLD (policy §9 C2). Per-store, because `asset_ledger` carries a store.
 
     Dedup by `esn_imei` for the same reason as the MA path. Fee-only categories are excluded — those
     are already booked on `vip_fees` by `coa` and are not device cost.
+
+    WHICH store a unit's cost lands on is NOT decided here: every unit goes through `cost_store`
+    (§70), the one home, with `activation` carrying §65's per-device verdict. Undeclared, that
+    returns the ledger's own store for every unit and this function is byte-identical. `moved` counts
+    what changed hands and `withheld` what stayed put unmeasured, both reported on `meta` so a
+    restated store figure is never silent.
     """
     _FEE_CATS = {c.strip().upper() for c in FEE_CATEGORIES}      # ONE HOME, dereferenced
     rows = _page(client, "asset_ledger",
                  "esn_imei,store,category,owed_to_vip,date_sold", {"org_id": org_id})
     seen, by_store, detail = set(), {}, {}
     sold, dup = 0, 0
+    moved = {"devices": 0, "amount": 0.0, "pairs": set()}
+    held = {"devices": 0, "amount": 0.0}
     for r in rows:
         cat = (r.get("category") or "").strip().upper()
         if cat in _FEE_CATS:
@@ -325,7 +472,15 @@ def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store):
         if not owed:
             continue
         st = resolve_store(r.get("store")) if r.get("store") else None
-        key = st or "(company-wide)"
+        placed = cost_store(st, imei, activation)
+        if placed["basis"] == PLACED_ACTIVATION:
+            moved["devices"] += 1
+            moved["amount"] = round(moved["amount"] + owed, 2)
+            moved["pairs"].add((placed["moved_from"], placed["store"]))
+        elif placed["withheld"]:
+            held["devices"] += 1
+            held["amount"] = round(held["amount"] + owed, 2)
+        key = placed["store"] or "(company-wide)"
         by_store[key] = round(by_store.get(key, 0.0) + owed, 2)
         label = (r.get("category") or "Consignment device").strip()
         detail[label] = round(detail.get(label, 0.0) + owed, 2)
@@ -336,12 +491,20 @@ def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store):
         "by_store": by_store,
         "detail": detail,
         "meta": {"source": "asset_ledger (consignment, billed=COGS)",
-                 "rows": len(rows), "sold_in_period": sold, "dedup_dropped": dup},
+                 "rows": len(rows), "sold_in_period": sold, "dedup_dropped": dup,
+                 # The restatement, stated: what moved to the activating store, between how many
+                 # store pairs, and what stayed put because §65 could not measure it.
+                 "cost_store_basis": (activation or {}).get("basis") or STORE_BASIS_STOCKING,
+                 "cost_store_reason": (activation or {}).get("reason") or "",
+                 "moved_to_activating_store": {"devices": moved["devices"],
+                                               "amount": moved["amount"],
+                                               "store_pairs": len(moved["pairs"])},
+                 "unmeasured_stayed_put": {"devices": held["devices"], "amount": held["amount"]}},
     }
 
 
 def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,
-            ma_acct_index=None):
+            ma_acct_index=None, period=None):
     """The one entry point `coa.build_inputs` calls.
 
     Returns a dict:
@@ -356,6 +519,10 @@ def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,
       'auto'         → invoice-first; caller falls back to POS only if no invoice source answered.
       'invoice'      → invoice only; caller NEVER books POS cost (correct where POS cost is negative).
 
+    `period` is the period SPELLING, needed only to ask §65 where each device was activated (§70).
+    None means no activation index is read and every cost books to the distributor ledger's store —
+    the pre-§70 behaviour.
+
     NEVER RAISES. Any failure degrades to active=False, i.e. exactly the pre-621 POS behaviour, with
     the reason recorded in `meta` so a silent $0 is never mistaken for a real zero.
     """
@@ -365,6 +532,17 @@ def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,
         out["meta"]["skipped"] = "mode=%s (POS recognition)" % mode
         return out
 
+    # WHERE each device was activated, read ONCE for the period through the one home (§70). On the
+    # undeclared default this is a cheap no-op that moves nothing; the expensive reconciliation runs
+    # only for an org that has declared the activating basis.
+    _act = {"move": False}
+    try:
+        _act = load_activation_index(client, org_id, period)
+    except Exception as e:                                        # pragma: no cover - defensive
+        _log.warning("device_cogs: activation index unavailable — %s: %s", type(e).__name__, e)
+    out["meta"]["cost_store"] = {k: _act.get(k) for k in ("basis", "basis_source", "move", "reason")}
+    out["meta"]["cost_store"]["totals"] = _act.get("totals") or {}
+
     ma, vip = None, None
     try:
         ma = _ma_sold_cost(client, org_id, period_keys, ma_acct_index=ma_acct_index)
@@ -372,7 +550,7 @@ def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,
         _log.warning("device_cogs: MA/VidaPay invoice source unavailable — %s: %s", type(e).__name__, e)
         out["meta"]["ma_error"] = "%s: %s" % (type(e).__name__, e)
     try:
-        vip = _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store)
+        vip = _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store, activation=_act)
     except Exception as e:
         _log.warning("device_cogs: VIP consignment source unavailable — %s: %s", type(e).__name__, e)
         out["meta"]["vip_error"] = "%s: %s" % (type(e).__name__, e)

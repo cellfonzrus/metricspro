@@ -145,6 +145,7 @@ RE_AMB = _const(EC, "REASON_STORE_AMBIGUOUS")
 RE_FEED = _const(EC, "REASON_FEED_MONTH_ABSENT")
 
 TODAY = dt.date(2026, 10, 10)          # the day of the owner's instruction; the only clock in here
+_ec_code = _code_only(_src(EC_PATH))   # the module's CODE, comments and docstrings stripped
 
 # ── THE LIVE MEASUREMENT, read-only against the house org 2026-10-10, as the oracle ───────────────
 # `commcalc.payment_categories` declares 'Ramp Up Subsidy' and '4.0 $1K Ramp Up Bonus' into category
@@ -264,12 +265,28 @@ ok("B11 an unparseable declared start month is DROPPED, so the store stays not_m
    NORM({"entitlement_categories": ["MDF"], "store_windows": {"s": "whenever"}})["store_windows"] == {})
 ok("B12 with NO category declared nothing is an entitlement and every store says why",
    [r["reason"] for r in ESM(recv, NORM({}), today=TODAY)["rows"]] == [RE_NOCFG] * 6)
-ok("B13 an AMBIGUOUS store identity withholds the verdict with its own reason (§64)",
-   [r["reason"] for r in ESM({("x", "2026-03"): 1.0}, _cfg(store_windows={"x": "2026-03"}),
-                             ambiguous_stores={"x"}, today=TODAY)["rows"]] == [RE_AMB])
-ok("B14 CONTROL — with no ambiguous set injected the same store IS judged",
-   ESM({("x", "2026-03"): 1.0}, _cfg(store_windows={"x": "2026-03"}, term_months=2),
-       today=TODAY)["totals"]["store_months_judged"] == 2)
+# §64/§70 — "may these TWO keys be one physical store" is PAIRWISE, and the withholding is per
+# STORE-MONTH. The superseded per-address read asked whether an address had a twin and withheld 23
+# true findings for it (§70), so these four checks pin the narrower question.
+_twin = {("a", "2026-03"): 1.0, ("a", "2026-04"): 1.0, ("b", "2026-05"): 1.0}
+_pair = lambda x, y: {x, y} == {"a", "b"}                                      # noqa: E731
+_amb_run = ESM(_twin, _cfg(store_windows={"a": "2026-03"}, term_months=3),
+               same_store=_pair, today=TODAY)
+ok("B13 a store-month a POSSIBLE TWIN was paid in is not_measured with its own reason (§64/§70)",
+   [(r["month"], r["reason"]) for r in _amb_run["rows"] if r["status"] == R_NM]
+   == [("2026-05", RE_AMB)])
+ok("B13b ...and the twin that was paid is NAMED on that row, so the money is never hidden",
+   [r["same_store_paid"] for r in _amb_run["rows"] if r["status"] == R_NM] == [["b"]])
+ok("B13c the withholding is per STORE-MONTH, never the store wholesale (the §70 defect)",
+   _amb_run["totals"]["received_store_months"] == 3
+   and _amb_run["totals"]["missing_store_months"] == 0
+   and _amb_run["totals"]["not_measured_store_months"] == 1)
+ok("B14 CONTROL — with no predicate injected the SAME month is a judged gap",
+   ESM(_twin, _cfg(store_windows={"a": "2026-03"}, term_months=3),
+       today=TODAY)["totals"]["missing_store_months"] == 1)
+ok("B14b the predicate is INJECTED — this module states no identity rule and derives no key",
+   not [w for w in ("shared_identity_pairs", "store_mapping", "may_be_one_store(")
+        if w in _ec_code] and "same_store" in _ec_code)
 
 # ══ §C A MONTH THAT HAS NOT FINISHED IS NOT MISSING ═══════════════════════════════════════════════
 print("\n§C THE CALENDAR IS feed_period's, AND A MONTH IN FLIGHT IS NOT OWED")
@@ -365,7 +382,6 @@ ok("E6 a declaration BEATS the observed rate (the owner's number wins)",
 
 # ══ §F RULE TWO — config, never code ══════════════════════════════════════════════════════════════
 print("\n§F RULE TWO — the term, the category and every store's window are CONFIG")
-_ec_code = _code_only(_src(EC_PATH))
 ok("F1 no live store key appears anywhere in the module's code",
    not [s for s in LIVE_RATE if s in _ec_code], "a store name is in a branch")
 ok("F2 no carrier, tenant or payment-type name appears in the module at all",
@@ -430,9 +446,13 @@ ok("G8 the endpoint exists and DEREFERENCES this home",
    '@router.get("/mdf-entitlement-coverage")' in _rt and "_ec.entitlement_store_months(" in _rt)
 ok("G9 the endpoint is org-scoped and READ-ONLY (no writer, no flag, no payout)",
    "require_org(org_id)" in _part(_rt, '@router.get("/mdf-entitlement-coverage")', 1400))
-ok("G10 the router reads the store key through the ONE identity home, never its own split",
+ok("G10 the router reads the store key AND the pairwise identity predicate from the ONE home (§70)",
    "store_resolver(" in _part(_rt, "def _mdf_entitlement_run", 6000)
-   and "ambiguous_store_keys(" in _part(_rt, "def _mdf_entitlement_run", 6000))
+   and "shared_store_identity_pairs(" in _part(_rt, "def _mdf_entitlement_run", 6000)
+   and "may_be_one_store(" in _part(_rt, "def _mdf_entitlement_run", 6000))
+ok("G10b the SUPERSEDED per-address ambiguity read is nowhere in this report (§70's own lock)",
+   "ambiguous_store_keys" not in _part(_rt, "def _mdf_entitlement_run", 6000)
+   and "ambiguous_store" not in _src(EC_PATH))
 _rrun = _part(_rt, "def _mdf_entitlement_run", 6000)
 ok("G11 the router dereferences §57's own READ of the org's declaration, not a tenth copy of it",
    "_pc.load_map(" in _rrun and "_pc.category_of" in _rrun

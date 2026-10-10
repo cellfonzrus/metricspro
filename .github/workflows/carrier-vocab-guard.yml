@@ -615,6 +615,14 @@ on:
       # and the three frontend registries, so a change to any of them must run it.
       - "backend/harness_device_line_reimbursement.py"
       - "backend/app/modules/commcalc/imei_rebate_report.py"
+      # index §70 — WHICH STORE carries a handset's cost. The cost side DEREFERENCES the device
+      # verdict above, so the two locks guard one mechanism between them: §H of the device-cost
+      # harness and §K of the device-line one. A change to the cost home, its declaration or its
+      # migration must run both.
+      - "backend/harness_device_inventory_cogs.py"
+      - "backend/app/modules/account/device_cogs.py"
+      - "database/migrations/1069_device_cost_store_basis.sql"
+      - "database/runbooks/device_cost_store_activating.sql"
       - "frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
       # index §68 — an entitlement is a COUNT OF MONTHS per store: which store-month inside a store's
       # own window never arrived. The lock reads the pure home, the router's wiring, the module graph,
@@ -883,7 +891,7 @@ jobs:
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the deposit-accountability lock (the green rule, the cash-short-by-DM fold, the standard filters, the ONE home for an open-and-count statement, and the declared bank-deposit sections — index §12, §23p, §67)
+      - name: Run the deposit-accountability lock (the green rule, the cash-short-by-DM fold, the standard filters, the ONE home for an open-and-count statement, and the declared bank-deposit sections — index §12, §23p, §69)
         working-directory: backend
         run: python3 harness_deposit_accountability.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)

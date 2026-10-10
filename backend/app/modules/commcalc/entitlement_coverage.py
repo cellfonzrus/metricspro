@@ -83,8 +83,11 @@ ROW_STATUSES = (ROW_RECEIVED, ROW_MISSING, ROW_UNCONFIRMED_MISSING, ROW_NOT_DUE,
 REASON_NOT_CONFIGURED = "no_entitlement_configured"
 #: The store's first entitled month is not declared, so gap and expiry cannot be told apart.
 REASON_WINDOW_NOT_DECLARED = "entitlement_window_not_declared"
-#: Two store records claim this canonical key (§64), so a store-month absence may be the same store
-#: under its second spelling. The verdict is withheld; the evidence is still named.
+#: ANOTHER canonical key that MAY BE THIS SAME PHYSICAL STORE (§64/§70's pairwise predicate) was paid
+#: in this month, so the absence may be this store's own money under its other spelling. The verdict
+#: is withheld for THAT STORE-MONTH ONLY and the other key is named — never for the store wholesale,
+#: which is the §70 defect: the superseded per-address read withheld 23 true findings by asking
+#: whether an address was "ambiguous" instead of whether the two addresses in hand may be one store.
 REASON_STORE_AMBIGUOUS = "store_identity_ambiguous"
 #: No row for this payment reached us for ANY store in this month.
 REASON_FEED_MONTH_ABSENT = "entitlement_feed_month_absent"
@@ -296,7 +299,7 @@ def _blank_totals() -> dict:
 
 
 def entitlement_store_months(received, cfg, months_with_feed=None, today=None,
-                             ambiguous_stores=None, stores=None):
+                             same_store=None, stores=None):
     """PURE. **The "expected but absent" home at STORE x MONTH grain over an entitlement window.**
 
     Dereference this rather than growing a second one; nothing else in the platform answers this
@@ -309,7 +312,11 @@ def entitlement_store_months(received, cfg, months_with_feed=None, today=None,
       `months_with_feed` the months whose entitlement run DEMONSTRABLY arrived. Defaults to the months
                          `received` carries, which is the same evidence stated from the same rows.
       `today`            injected, so a proof stands on a fixed date and nothing reads a hidden clock.
-      `ambiguous_stores` canonical keys TWO store records claim (§64), injected, never derived.
+      `same_store`       `fn(a, b) -> bool`: may these TWO canonical keys be ONE physical store? §64's
+                         own pairwise predicate (`store_identity.may_be_one_store` over
+                         `coa.shared_store_identity_pairs`), INJECTED — this module states no identity
+                         rule and keeps no key of its own. With nothing injected nothing is withheld,
+                         which is the right direction to fail in (§70).
       `stores`           extra stores to judge (e.g. the estate's roster), so a store that received
                          NOTHING at all is still judged when its window is declared.
 
@@ -324,7 +331,7 @@ def entitlement_store_months(received, cfg, months_with_feed=None, today=None,
     term = int(cfg.get("term_months") or 0)
     windows = dict(cfg.get("store_windows") or {})
     declared_amounts = dict(cfg.get("monthly_amounts") or {})
-    amb = {_s(k) for k in (ambiguous_stores or ()) if _s(k)}
+    may_be_same = same_store if callable(same_store) else (lambda _a, _b: False)
 
     got = {}
     for k, v in (received or {}).items():
@@ -342,6 +349,15 @@ def entitlement_store_months(received, cfg, months_with_feed=None, today=None,
 
     all_stores = sorted({st for (st, _m) in got} | {_s(s) for s in (stores or ()) if _s(s)}
                         | {_s(k) for k in windows if _s(k)})
+
+    def paid_siblings(st, month):
+        """Canonical keys paid in `month` that MAY BE this same physical store (§64/§70).
+
+        Asked PER STORE-MONTH, never per store: withholding a store wholesale on the strength of its
+        address having a twin is exactly the read §70 superseded. Only a month in which a possible
+        twin WAS paid is unjudgeable, and that twin is named on the row.
+        """
+        return sorted(s2 for (s2, m2) in got if m2 == month and s2 != st and may_be_same(st, s2))
     rows, totals = [], _blank_totals()
     totals["stores"] = len(all_stores)
 
@@ -367,7 +383,7 @@ def entitlement_store_months(received, cfg, months_with_feed=None, today=None,
                  "entitlement_month": None, "received_months": len(own),
                  "first_received": own[0] if own else None,
                  "last_received": own[-1] if own else None,
-                 "stores_paid_in_month": None}
+                 "stores_paid_in_month": None, "same_store_paid": []}
             r.update(extra)
             rows.append(r)
             return r
@@ -376,19 +392,19 @@ def entitlement_store_months(received, cfg, months_with_feed=None, today=None,
             totals["not_measured_store_months"] += 1
             row(None, ROW_NOT_MEASURED, REASON_NOT_CONFIGURED)
             continue
-        if st in amb:
-            # The money stays named; only the VERDICT is withheld (§65's third guard). A gap called on
-            # this evidence could be one physical store spelled twice.
-            totals["not_measured_store_months"] += 1
-            row(None, ROW_NOT_MEASURED, REASON_STORE_AMBIGUOUS)
-            continue
-
         if not win:
             totals["windows_undeclared"] += 1
             # NOT "term months missing". Only what was OBSERVED: a month whose run arrived, after this
             # store's first payment, with no payment for it. Gap or expiry cannot be told apart, so
             # the verdict is withheld and the reason is the finding.
             for m in sorted(x for x in feed_months if own and x > own[0] and (st, x) not in got):
+                twins = paid_siblings(st, m)
+                if twins:
+                    # This month's money may be this very store under its other spelling (§64/§70).
+                    totals["not_measured_store_months"] += 1
+                    row(m, ROW_NOT_MEASURED, REASON_STORE_AMBIGUOUS, same_store_paid=twins,
+                        stores_paid_in_month=sum(1 for (s2, m2) in got if m2 == m and s2 != st))
+                    continue
                 totals["undeclared_absence_store_months"] += 1
                 if rate:
                     totals["undeclared_absence_amount_at_observed_rate"] = round(
@@ -422,6 +438,13 @@ def entitlement_store_months(received, cfg, months_with_feed=None, today=None,
                 # it would cry wolf every morning (`statement_month_coverage`'s OPEN-month rule).
                 totals["not_due_store_months"] += 1
                 row(m, ROW_NOT_DUE, None, entitlement_month=i)
+            elif m in feed_months and paid_siblings(st, m):
+                # A key that MAY BE this same physical store was paid this month, so "this store did
+                # not get its month" cannot be told from "it was paid under its other spelling".
+                totals["not_measured_store_months"] += 1
+                row(m, ROW_NOT_MEASURED, REASON_STORE_AMBIGUOUS, entitlement_month=i,
+                    same_store_paid=paid_siblings(st, m),
+                    stores_paid_in_month=sum(1 for (s2, m2) in got if m2 == m and s2 != st))
             elif m in feed_months:
                 totals["missing_store_months"] += 1
                 if rate:

@@ -29,7 +29,7 @@ name: data-qa-guard
 #       fail on a deliberately broken input, so a lock that has quietly stopped looking at anything
 #       cannot pass.
 #
-# THE SEARCH CONSOLE's three proofs run here too (index §54, owner directive 2026-10-05), as a third
+# THE SEARCH CONSOLE's proofs run here too (index §54, owner directive 2026-10-05), as a third
 # job rather than a workflow of their own: it is the surface that hands a question to this assistant,
 # so the two stand or fall together and the duplicate-check gate asks for one home per purpose.
 #
@@ -53,7 +53,17 @@ name: data-qa-guard
 #       one console surface; the build fails if a surface starts scoring, sorting or tokenizing for
 #       itself, or if a second stopword list or a second page list appears. Every control is ARMED.
 #
-# Node, not Python: the three modules under proof are the frontend's own, and Node strips their
+#   prove_search_vocabulary.mjs  — SIMILAR WORDS (index §71, owner directive 2026-10-10: *"all
+#       modules should be searcable, index and found by susing similar words like a search
+#       engine"*). Before it, 11 of 30 everyday words a manager would type found NOTHING, because
+#       the catalogue carries only the words on the menu. The vocabulary is the one home for "which
+#       words mean the same thing here" and the ranker dereferences it. §E is the RATCHET: a frozen
+#       baseline of words that still find nothing, which MAY ONLY SHRINK. §H fails the build if the
+#       ranker stops dereferencing the vocabulary or a second copy of it appears, and the typed word
+#       always outranks a synonym, so a vocabulary can never reorder two pages that both match what
+#       was actually typed.
+#
+# Node, not Python: the modules under proof are the frontend's own, and Node strips their
 # erasable TypeScript, so the proofs drive the REAL functions with no React, no network and no npm
 # install (the same pattern as prove_one_domain / prove_nav_deep_link in carrier-vocab-guard).
 #
@@ -96,6 +106,14 @@ on:
       - "frontend/prove_search_rank.mjs"
       - "frontend/prove_search_catalog.mjs"
       - "frontend/prove_search_console_lock.mjs"
+      # SIMILAR WORDS (index §71). The vocabulary is the ONE home for "which words mean the same
+      # thing here"; the ranker dereferences it. Both are listed so a change to either runs the
+      # ratchet that says an everyday word may never go back to finding nothing.
+      - "frontend/src/lib/search-vocabulary.ts"
+      - "frontend/prove_search_vocabulary.mjs"
+      # The shared TypeScript loader the Node proofs use to drive the real modules through Next's
+      # `@/lib/...` alias. If it breaks, three proofs stop testing the shipped code.
+      - "frontend/prove_load_ts.mjs"
       # Both search surfaces now dereference ONE viewer gate and ONE derived page index (§54.12),
       # so every file the proofs READ is listed. rbac.ts decides which pages are in a menu at all
       # (prove_route_index reads it to know which routes must drop their nav label) and supplies
@@ -218,6 +236,9 @@ jobs:
       - name: Run the search-console design lock (one ranker, one catalogue, no private scoring in a surface — index §54.3)
         working-directory: frontend
         run: node prove_search_console_lock.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the similar-words proof (one vocabulary, the typed word always wins, and an everyday word may never go back to finding nothing — index §71)
+        working-directory: frontend
+        run: node prove_search_vocabulary.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # A BACKGROUND JOB'S CONTROL (index §6q). Node 22 strips the erasable TypeScript of the real
   # src/lib/job-run.ts, so this proof drives the shipped functions rather than a copy — no React, no
