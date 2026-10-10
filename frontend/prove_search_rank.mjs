@@ -22,33 +22,17 @@
 //   H. determinism and purity — stable order regardless of input order, nothing mutated
 //
 // Run:  node frontend/prove_search_rank.mjs      (no network, no DB, no React, no npm install)
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, join } from 'node:path'
-import { createRequire } from 'node:module'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+import { loadLibs } from './prove_load_ts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
 // search-rank.ts dereferences the search VOCABULARY (§68), so it can no longer be imported straight
-// off disk: bare Node cannot resolve the `@/lib/...` alias Next uses. Both pure modules are
-// transpiled into one temp directory with that alias rewritten to the sibling file, so this proof
-// still drives the REAL functions and no stub or copy exists.
-async function loadRankWithVocabulary() {
-  const require_ = createRequire(import.meta.url)
-  const ts = require_('typescript')
-  const dir = mkdtempSync(join(tmpdir(), 'searchrank-'))
-  const emit = (rel, out) => {
-    const src = readFileSync(join(HERE, rel), 'utf8').replace(/'@\/lib\/([a-z-]+)'/g, "'./$1.mjs'")
-    const js = ts.transpileModule(src, { compilerOptions: {
-      target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } }).outputText
-    writeFileSync(join(dir, out), js, 'utf8')
-  }
-  emit('src/lib/search-vocabulary.ts', 'search-vocabulary.mjs')
-  emit('src/lib/search-rank.ts', 'search-rank.mjs')
-  return import(pathToFileURL(join(dir, 'search-rank.mjs')).href)
-}
-const S = await loadRankWithVocabulary()
+// off disk: bare Node cannot resolve the `@/lib/...` alias Next uses. The shared loader emits both
+// pure modules with that alias rewritten to the sibling file, so this proof still drives the REAL
+// functions and no stub or copy exists.
+const [S] = await loadLibs(HERE, ['search-rank'])
 
 let pass = 0, fail = 0
 const ck = (label, cond, extra) => {

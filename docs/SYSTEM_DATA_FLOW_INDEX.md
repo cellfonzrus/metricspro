@@ -22873,6 +22873,15 @@ alias-imported lib into one temp dir rewriting the alias to a relative path, and
 lets an ARMED control edit the real source **in flight** rather than keeping a deliberately wrong
 copy on disk.
 
+**It must not depend on `typescript`, and that cost a red CI run to learn.** The `search-console` job
+runs with **no `npm ci`** — that is what keeps the whole guard in the seconds-not-minutes class — so
+the loader's first version called `require('typescript')` to transpile, which passed locally (where
+`node_modules` happens to exist) and died on the runner with `Cannot find module 'typescript'`.
+Node strips erasable TypeScript itself, which is how these proofs drove these modules before the
+alias existed, so the loader now emits `.mts` files and changes **only the import specifier**. The
+fix was verified by re-running all five proofs from a copy of `src/` and the provers with no
+`node_modules` present at all — 389 checks, the runner's condition reproduced rather than assumed.
+
 ### 68.7 Duplicate check (build gate)
 
 Searched the index for an existing mechanism answering "which words mean this" before building.

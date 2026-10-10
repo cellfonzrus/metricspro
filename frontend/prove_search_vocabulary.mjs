@@ -31,13 +31,10 @@
 // Run:  node frontend/prove_search_vocabulary.mjs      (no network, no DB, no React, no npm install)
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
-import { createRequire } from 'node:module'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync } from 'node:fs'
+import { loadLibs } from './prove_load_ts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const require_ = createRequire(import.meta.url)
-const ts = require_('typescript')
 
 let pass = 0, fail = 0
 const ck = (label, cond, extra) => {
@@ -49,22 +46,10 @@ const must = (cond, msg) => { if (!cond) { console.error(`FATAL: ${msg}`); proce
 
 // ── load the REAL modules (no stub, no copy) ─────────────────────────────────────────────────────
 // search-rank.ts dereferences the vocabulary through Next's `@/lib/...` alias, which bare Node
-// cannot resolve, so both pure modules are transpiled into one directory with the alias rewritten.
-function loadReal(extraRewrite) {
-  const dir = mkdtempSync(join(tmpdir(), 'searchvocab-'))
-  const emit = (rel, out, mutate) => {
-    let src = readFileSync(join(HERE, rel), 'utf8').replace(/'@\/lib\/([a-z-]+)'/g, "'./$1.mjs'")
-    if (mutate) src = mutate(src)
-    writeFileSync(join(dir, out), ts.transpileModule(src, { compilerOptions: {
-      target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } }).outputText, 'utf8')
-  }
-  emit('src/lib/search-vocabulary.ts', 'search-vocabulary.mjs', extraRewrite?.vocabulary)
-  emit('src/lib/search-rank.ts', 'search-rank.mjs', extraRewrite?.rank)
-  return dir
-}
-const DIR = loadReal()
-const V = await import(pathToFileURL(join(DIR, 'search-vocabulary.mjs')).href)
-const S = await import(pathToFileURL(join(DIR, 'search-rank.mjs')).href)
+// cannot resolve, so both pure modules go through the shared loader (prove_load_ts.mjs — the ONE
+// home for this, because three provers need it). search-catalog and route-index are imported off
+// disk directly: the only alias in the catalogue is an `import type`, which Node erases.
+const [V, S] = await loadLibs(HERE, ['search-vocabulary', 'search-rank'])
 const C = await import(pathToFileURL(join(HERE, 'src/lib/search-catalog.ts')).href)
 const RI = await import(pathToFileURL(join(HERE, 'src/lib/route-index.ts')).href)
 
@@ -162,10 +147,9 @@ ck('B3  every hit carries `literal` as a subset of `matched`',
 ck('B4  the vocabulary DID widen `matched` on that sentence (so B2 is a rule, not an empty search)',
    hits509.some(h => h.matched.length > h.literal.length))
 // ARMED: if fullyCovered ever reads `matched` again, the sentence navigates and the defect is back.
-const ARMED = loadReal({ rank: src => src.replace(
+const [SA] = await loadLibs(HERE, ['search-rank'], { 'search-rank': src => src.replace(
   'return n > 0 && hits.some(h => h.literal.length === n)',
   'return n > 0 && hits.some(h => h.matched.length === n)') })
-const SA = await import(pathToFileURL(join(ARMED, 'search-rank.mjs')).href)
 ck('B5  ARMED — reading `matched` instead of `literal` reintroduces the defect',
    SA.fullyCovered(SA.rank(CATALOG, Q509, 8), Q509) === true)
 ck('B6  a question whose words ARE all literally covered still navigates (B1 is not "never navigate")',
@@ -252,21 +236,16 @@ ck('E3  the baseline may only shrink (it is 1 word; raising it needs this number
    FINDS_NOTHING_BASELINE.length <= 1, FINDS_NOTHING_BASELINE.length)
 ck('E4  ARMED — the corpus is big enough to be evidence', EVERYDAY.length >= 40, EVERYDAY.length)
 ck('E5  ARMED — without the vocabulary the same corpus fails badly (so E1 is the vocabulary working)',
-   (() => {
-     const BARE = loadReal({ vocabulary: src => src
-       .replace(/export const VOCABULARY[\s\S]*?\n\]\n/, 'export const VOCABULARY = []\n') })
-     return import(pathToFileURL(join(BARE, 'search-rank.mjs')).href).then(M => {
-       const miss = EVERYDAY.filter(q => M.rank(CATALOG, q, 1).length === 0)
-       return miss.length >= 8
-     })
-   })() instanceof Promise ? await (async () => {
-     const BARE = loadReal({ vocabulary: src => src
-       .replace(/export const VOCABULARY: readonly VocabGroup\[\] = \[[\s\S]*?\n\]\n/, 'export const VOCABULARY = []\n') })
-     const M = await import(pathToFileURL(join(BARE, 'search-rank.mjs')).href)
+   await (async () => {
+     // The vocabulary EMPTIED, everything else identical — so what E1 reports is the vocabulary
+     // working and not the catalogue happening to carry the words.
+     const [M] = await loadLibs(HERE, ['search-rank'], { 'search-vocabulary': src =>
+       src.replace(/export const VOCABULARY: readonly VocabGroup\[\] = \[[\s\S]*?\n\]\n/,
+                   'export const VOCABULARY: readonly VocabGroup[] = []\n') })
      const miss = EVERYDAY.filter(q => M.rank(CATALOG, q, 1).length === 0)
      console.log(`      (without the vocabulary: ${miss.length} of ${EVERYDAY.length} find nothing — ${miss.slice(0, 6).join(', ')}…)`)
      return miss.length >= 8
-   })() : false)
+   })())
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 section('F. every group leads somewhere real — no invented vocabulary')
@@ -311,7 +290,7 @@ ck('H4  the vocabulary imports nothing — it stays drivable under bare Node',
    !/^\s*import\s/m.test(rd('src/lib/search-vocabulary.ts')))
 ck('H5  only ONE module declares the vocabulary',
    (() => {
-     const libs = require_('node:fs').readdirSync(join(HERE, 'src/lib')).filter(f => f.endsWith('.ts'))
+     const libs = readdirSync(join(HERE, 'src/lib')).filter(f => f.endsWith('.ts'))
      const owners = libs.filter(f => /export const VOCABULARY/.test(rd(join('src/lib', f))))
      return owners.length === 1 && owners[0] === 'search-vocabulary.ts'
    })())
