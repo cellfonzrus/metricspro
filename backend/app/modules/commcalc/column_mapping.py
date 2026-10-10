@@ -93,6 +93,25 @@ TARGET_FIELDS = {
         ("has_payment_detail", "Has payment detail", "text", False, "HasPaymentDetail", ["Has Payment Detail"]),
         ("internal_brand", "Internal brand", "text", False, "InternalBrand", ["Internal Brand"]),
     ],
+    # ── THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1070, owner ask 2026-10-10, index §14z) ──
+    # RULE TWO: not one carrier, POS or tenant word appears below. The default source headers and
+    # aliases are the generic spellings a clock export uses; a tenant whose report spells a column
+    # differently maps it on the Column Mapping page like every other report — no code change.
+    # `business_date` is the only REQUIRED field besides the two identity strings: a row we cannot
+    # place on a day cannot be compared against anything, and `feed_day_hours` reports it rather
+    # than guessing a day.
+    "clock_punch": [
+        ("store_raw", "Store (as the report spells it)", "text", True, "Store",
+         ["Store Name", "Location", "Store Code", "Site"]),
+        ("employee_raw", "Employee (as the report spells it)", "text", True, "Employee",
+         ["Employee Name", "Name", "Associate", "User", "Salesperson"]),
+        ("business_date", "Business date", "date10", True, "Date",
+         ["Work Date", "Business Date", "Shift Date", "Clock In Date"]),
+        ("clock_in", "Clock in", "text", False, "Clock In", ["Time In", "In", "Start"]),
+        ("clock_out", "Clock out", "text", False, "Clock Out", ["Time Out", "Out", "End"]),
+        ("hours", "Hours", "number", False, "Hours",
+         ["Total Hours", "Hours Worked", "Worked Hours", "Duration"]),
+    ],
     "mi_report": [
         ("salesforce_id", "Salesforce ID", "text", True, "SalesForceID", ["Salesforce ID"]),
         ("subscriber_id", "Subscriber ID", "text", False, "SubscriberID", ["Subscriber ID"]),
@@ -455,7 +474,27 @@ TABLE_MAP = {
     # Processor daily transaction detail (mig 903) — the ePay-shaped bill-pay feed the mig-939 coverage
     # recon reads; landed by epay_ingest.ingest (idempotent upsert), NEVER by the slice replace.
     "epay_daily_tx": "raw_epay_daily_tx",
+    # The B2B CLOCK IN / CLOCK OUT report (mig 1070, owner ask 2026-10-10, index §14z). Lands in the
+    # storeops schema — the only entry here that does — because the clock belongs to the workforce
+    # module, not to commcalc, and a feed about employees has no business in the commission tables.
+    # The ingest reads the schema off TABLE_SCHEMA below rather than assuming commcalc.
+    # NOT storeops.timelog: this is a CLAIM about the day, our punches are a MEASUREMENT of it, and
+    # `storeops/clock_variance.py` is the one home for the difference.
+    "clock_punch": "raw_clock_punch",
 }
+
+# ── WHICH SCHEMA A LAYOUT'S TABLE LIVES IN ───────────────────────────────────────────────────────
+# Every table in TABLE_MAP is in `commcalc` except where this map says otherwise. Declared once, so a
+# landing can never be pointed at the wrong schema by a caller that assumed the default (mig 1070).
+TABLE_SCHEMA = {
+    "raw_clock_punch": "storeops",
+}
+
+
+def table_schema(table: str) -> str:
+    """The schema a landing table lives in. THE one home of that fact; a caller reads it, never
+    repeats it."""
+    return TABLE_SCHEMA.get((table or "").strip(), "commcalc")
 
 
 # A layout whose landing writes a SECOND, child-grain table beside its own (one row per invoice ×
@@ -776,6 +815,27 @@ def identity_fields(report_key, client=None, org_id=None):
     return ident or [tf for (tf, _l, _t, req, _d, _a) in defs if req]
 
 
+def split_footer_rows(mapped, report_key, base=None, client=None, org_id=None, fields=None):
+    """Separate FOOTER/TOTALS rows from data rows. Returns (kept, footers).
+
+    THE SAME predicate `drop_footer_rows` has always used (`feed_shape.is_footer_row`) — this is the
+    one implementation, and `drop_footer_rows` is the shape that only needs the count. The footer
+    rows themselves are returned because on some feeds a trailer is a CHECKSUM, not noise: the B2B
+    clock report's last row is blank except `Duration = '249:10'`, which equals the sum of its own
+    rows exactly, and `storeops/clock_feed.trailer_tie_out` REJECTS a file that does not tie. A
+    predicate that could only throw the trailer away was throwing away free integrity on a feed that
+    decides pay."""
+    from app.modules.commcalc.feed_shape import is_footer_row
+    req = list(fields) if fields is not None else required_fields(report_key, client, org_id)
+    if not req or not mapped:
+        return mapped, []
+    base_keys = set((base or {}).keys())
+    kept, footers = [], []
+    for m in mapped:
+        (footers if is_footer_row(m, req, base_keys) else kept).append(m)
+    return kept, footers
+
+
 def drop_footer_rows(mapped, report_key, base=None, client=None, org_id=None, fields=None):
     """Remove FOOTER/TOTALS rows. Returns (kept, dropped_count).
 
@@ -783,14 +843,10 @@ def drop_footer_rows(mapped, report_key, base=None, client=None, org_id=None, fi
     as data it doubles every sum. Identified by shape via feed_shape.is_footer_row against the
     report's declared required fields — a report that declares none is returned untouched.
     `fields` names the identity list explicitly (see identity_fields); omitted, the required list is
-    used, which is byte-identical to every call this function has ever served."""
-    from app.modules.commcalc.feed_shape import is_footer_row
-    req = list(fields) if fields is not None else required_fields(report_key, client, org_id)
-    if not req or not mapped:
-        return mapped, 0
-    base_keys = set((base or {}).keys())
-    kept = [m for m in mapped if not is_footer_row(m, req, base_keys)]
-    return kept, len(mapped) - len(kept)
+    used, which is byte-identical to every call this function has ever served. Delegates to
+    `split_footer_rows` — one predicate, never a second copy."""
+    kept, footers = split_footer_rows(mapped, report_key, base, client, org_id, fields)
+    return kept, len(footers)
 
 
 def blank_keys_to_null(mapped, table):

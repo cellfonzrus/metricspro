@@ -60,10 +60,14 @@ def _t(s):
     return str(s or "").strip()
 
 
+# THE ONE accent fold (`account.store_identity.fold_accents`) — dereferenced, never re-spelled.
+from app.modules.account import store_identity as _sid  # noqa: E402
+
+
 def _squash(s):
     """Case-folded, alnum-only key — word boundaries DISSOLVED ('B-1800' == 'b1800' == 'B 1800').
     Used for matching a store CODE across spellings, never for judging an address (see `_key`)."""
-    return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
+    return "".join(ch for ch in _sid.fold_accents(s).lower() if ch.isalnum())
 
 
 def _key(s):

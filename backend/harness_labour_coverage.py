@@ -26,7 +26,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
-from app.modules.commcalc import labour_coverage as lc  # noqa: E402
+from app.modules.commcalc import labour_coverage as lc
+from app.modules.storeops import payroll_hours_basis as _hb  # noqa: E402
 
 CHECKS = 0
 FAILS = []
@@ -102,10 +103,23 @@ hb = lc.hours_basis_by_code([
     shift("Chicago heights", actual=0, scheduled=0),
     shift(None, actual=5.0),                                  # no store -> ignored
 ])
-ok("B1 any actual hours -> basis 'actual'", hb["Diversey"]["basis"], "actual")
+# 2026-10-10 (index §14y): the basis vocabulary is now THE platform's one hours-basis vocabulary
+# (storeops/payroll_hours_basis), not this module's private 'actual'/'scheduled' pair — which is the
+# whole fix: the words this report prints and the words the money path decides on are now the same
+# words, so they cannot disagree. A DM-corrected `actual_hours` reads `clocked_corrected`.
+ok("B1 any actual hours -> basis 'clocked_corrected' (the one home's word for a human correction)",
+   hb["Diversey"]["basis"], _hb.CLOCKED_CORRECTED)
 near("B2 actual hours total", hb["Diversey"]["actual_hours"], 8.0)
 near("B3 scheduled hours are still reported alongside", hb["Diversey"]["scheduled_hours"], 15.5)
-ok("B4 no actual, scheduled present -> basis 'scheduled'", hb["Grand"]["basis"], "scheduled")
+ok("B4 no actual, scheduled present -> basis 'schedule_opt_in' — and it SAYS it is the schedule",
+   hb["Grand"]["basis"], _hb.SCHEDULE_OPT_IN)
+ok("B4a a schedule-paid store is NOT reported as measured", _hb.basis_is_measurement(hb["Grand"]["basis"]), False)
+ok("B4b …and under a clocked-only org those same hours are NOT payable, not silently scheduled",
+   lc.hours_basis_by_code([shift("Grand", actual=None, scheduled=9.0)],
+                          hours_basis_cfg={"hours_basis_mode": _hb.MODE_CLOCKED_ONLY,
+                                           "pay_from_schedule_default": False})["Grand"],
+   {"shifts": 1, "actual_hours": 0.0, "scheduled_hours": 9.0, "paid_hours": 0.0,
+    "basis": _hb.NOT_MEASURED_UNPAID, "bases": {_hb.NOT_MEASURED_UNPAID: 1}})
 near("B5 scheduled total", hb["Grand"]["scheduled_hours"], 18.0)
 ok("B6 shifts exist but carry NO hours -> basis None (nothing to compute from)",
    hb["Chicago heights"]["basis"], None)

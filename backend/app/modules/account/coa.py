@@ -40,6 +40,8 @@ from app.modules.account import device_cogs as _device_cogs
 # THE one home for "which store is this string?" (§13a / §64) — this module's `store_resolver` is
 # its I/O wrapper and states no resolution rule of its own.
 from app.modules.account import store_identity as _sid
+# THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
+from app.modules.storeops import payroll_hours_basis as _hours_basis
 # Canonical finance period parser lives in _period; re-exported here so existing
 # `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
 from app.modules.account._period import parse_period  # noqa: F401
@@ -597,7 +599,7 @@ def monthly_salary_equivalent(pay_basis, pay_amount):
     return round(m, 2)
 
 
-def derive_wage_cells(emps, shifts, code2addr):
+def derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg=None):
     """PURE core of wages_by_store (harness: harness_wages_salary_basis.py) → {store_address: wages}
     (key None = company-wide, no attributable store).
 
@@ -618,6 +620,11 @@ def derive_wage_cells(emps, shifts, code2addr):
         employee with no hours this month is skipped (no longer earning).
     Per-employee allocation shares are cents-rounded with the LAST store absorbing the residue, so
     each salaried employee's stores sum EXACTLY to their monthly equivalent."""
+    # The hours basis config (per org, house defaults = today). Passed in by `wages_by_store`;
+    # `None` resolves to the house defaults, so a direct caller is byte-identical to before.
+    hours_cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
+    emp_row_by_id = {e.get("employee_id"): e for e in (emps or []) if e.get("employee_id")}
+    basis_counts = {}
     rate, home, active, salary = {}, {}, {}, {}
     for e in (emps or []):
         eid = e.get("employee_id")
@@ -641,7 +648,12 @@ def derive_wage_cells(emps, shifts, code2addr):
     sal_hours = {}   # eid -> {addr: hours} for salaried allocation
     for s in (shifts or []):
         eid = s.get("employee_id")
-        hrs = safe_float(s.get("actual_hours")) or safe_float(s.get("scheduled_hours"))
+        # ONE HOME for paid hours (index §14y, storeops/payroll_hours_basis). This read used to be
+        # `actual_hours or scheduled_hours` — the silent `or` that made the P&L's wage line a copy
+        # of the schedule on 7,733 of 7,740 live shift rows. The basis now travels with the number
+        # and is rolled up into `hours_basis` for the labour-coverage banner to show.
+        hrs, _basis_kind, _ = _hours_basis.resolve_shift_row(s, hours_cfg, emp_row_by_id.get(eid))
+        basis_counts[_basis_kind] = basis_counts.get(_basis_kind, 0) + 1
         if eid in salary:
             if hrs:
                 a = addr_for(eid, s.get("store_code"))
@@ -669,12 +681,20 @@ def derive_wage_cells(emps, shifts, code2addr):
             if not active.get(eid, True):
                 continue                    # inactive, never worked this month → no salary booked
             _add(addr_for(eid) or None, meq)
-    return out
+    return out, basis_counts
+
+
+def derive_wage_cells(emps, shifts, code2addr, hours_basis_cfg=None):
+    """The wage cells alone — the shape every existing caller reads. See
+    `derive_wage_cells_with_basis` for the same computation plus the hours-basis rollup."""
+    cells, _basis = derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg)
+    return cells
 
 
 def wages_by_store(client, org_id, period):
     """StoreOps payroll for the period → {store_address: wages} (None key = company-wide).
-    Hourly: hours (actual, fallback scheduled) × employees.pay_rate; salaried (pay_basis
+    Hourly: the paid hours `storeops/payroll_hours_basis.resolve_shift_row` resolves for this org
+    (index §14y — NOT a local `actual_hours or scheduled_hours`) × employees.pay_rate; salaried (pay_basis
     weekly/monthly/annual, migs 416/417): the monthly salary equivalent allocated by worked hours —
     see derive_wage_cells. Store = shift.store_code (fallback employee home_store), mapped
     store_code → store_address. Returns {} if StoreOps has no employees/shifts for the month.
@@ -694,7 +714,8 @@ def wages_by_store(client, org_id, period):
               .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
               .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
               .range(0, 9999).execute().data) or []
-    return derive_wage_cells(emps, shifts, code2addr)
+    # The hours basis is this org's declared one (index §14y) — read once, here, and handed down.
+    return derive_wage_cells(emps, shifts, code2addr, _hours_basis.load_config(so, org_id))
 
 
 def store_code_to_address(client, org_id):

@@ -146,6 +146,10 @@ def _t(v):
     return str(v or "").strip()
 
 
+# THE ONE accent fold (`account.store_identity.fold_accents`) — dereferenced, never re-spelled.
+from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
+
+
 def as_date(v):
     """PURE: the ISO date prefix of a date/timestamp string ('2025-12-29T00:00:00+00:00' →
     '2025-12-29'); '' when there is nothing readable. ISO dates compare correctly as strings, which
@@ -172,7 +176,7 @@ def month_start(m):
 def norm_key(v):
     """PURE: the join key — non-alphanumerics stripped, upper-cased. Applied to BOTH sides so a
     dash, a space or a lower-case letter can never split a match."""
-    return "".join(ch for ch in str(v or "") if ch.isalnum()).upper()
+    return "".join(ch for ch in _sid_fold(v) if ch.isalnum()).upper()
 
 
 def is_serial_key(k):

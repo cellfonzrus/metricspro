@@ -35,6 +35,7 @@ from app.modules.storeops.salary_owed import (  # noqa: E402
     additional_payroll_excess, earned_lookback_start, EARNED_LOOKBACK_DAYS,
 )
 from app.modules.storeops.payroll_salary import derive_salary_pay, parse_date  # noqa: E402
+from app.modules.storeops import payroll_hours_basis as _hb  # noqa: E402  — THE one hours-basis vocabulary (§14y)
 
 PASS, FAIL = [], []
 
@@ -60,11 +61,26 @@ timelog_a = [
     {"work_date": "2026-08-04", "clock_out": None, "hours": None},             # open punch -> never counts
 ]
 days_a = daily_hours_for_employee(shifts_a, timelog_a, is_inactive=False)
-check("A1 act>0 day basis=actual, hours=7.5", days_a["2026-08-01"]["hours"] == 7.5 and days_a["2026-08-01"]["basis"] == "actual")
-check("A2 act==0 day falls back to scheduled, basis=scheduled", days_a["2026-08-02"]["hours"] == 6.0 and days_a["2026-08-02"]["basis"] == "scheduled")
+check("A1 act>0 day is a human CORRECTION, hours=7.5", days_a["2026-08-01"]["hours"] == 7.5 and days_a["2026-08-01"]["basis"] == _hb.CLOCKED_CORRECTED)
+check("A2 act==0 day falls back to the schedule AND SAYS SO", days_a["2026-08-02"]["hours"] == 6.0 and days_a["2026-08-02"]["basis"] == _hb.SCHEDULE_OPT_IN)
+check("A2a …and under a clocked-only org that same day pays NOTHING and is named, never scheduled",
+      daily_hours_for_employee(shifts_a, timelog_a, is_inactive=False,
+                               hours_basis_cfg={"hours_basis_mode": _hb.MODE_CLOCKED_ONLY,
+                                                "pay_from_schedule_default": False}
+                               )["2026-08-02"] == {"date": "2026-08-02", "hours": 0.0,
+                                                   "basis": _hb.NOT_MEASURED_UNPAID})
 check("A3 shift-covered punch dropped (no double-count)", "2026-08-01" not in [d for d in days_a if days_a[d]["hours"] == 16.5])
-check("A4 unshifted closed punch counts on its own day", days_a["2026-08-03"]["hours"] == 5.25 and days_a["2026-08-03"]["basis"] == "actual")
-check("A5 open punch never appears", "2026-08-04" not in days_a)
+# 2026-10-10 (index §14y): `basis` is now THE platform's one hours-basis vocabulary
+# (storeops/payroll_hours_basis) rather than this module's private 'actual'/'scheduled' pair, so the
+# word this report prints is the word the pay decision was actually made on.
+check("A4 unshifted closed punch counts on its own day", days_a["2026-08-03"]["hours"] == 5.25 and days_a["2026-08-03"]["basis"] == _hb.CLOCKED)
+# An OPEN punch is still never PAID — but since 2026-10-10 it is REPORTED instead of vanishing: the
+# day appears with ZERO hours and basis `punch_unusable`, so "somebody forgot to clock out" is
+# visible on the report rather than being indistinguishable from "nobody worked".
+check("A5 open punch pays nothing", days_a.get("2026-08-04", {}).get("hours", 0.0) == 0.0)
+check("A5a …and is REPORTED as an unusable punch, not silently dropped",
+      days_a.get("2026-08-04", {}).get("basis") == _hb.PUNCH_UNUSABLE)
+check("A5b …and `punch_unusable` is not a paying basis", _hb.basis_pays_hours(_hb.PUNCH_UNUSABLE) is False)
 
 # inactive phantom shift (act==0) contributes nothing; day stays open for a punch
 shifts_a2 = [{"shift_date": "2026-08-05", "scheduled_hours": 6, "actual_hours": 0}]
@@ -72,7 +88,7 @@ timelog_a2 = [{"work_date": "2026-08-05", "clock_out": "2026-08-05T14:00:00Z", "
 days_a2 = daily_hours_for_employee(shifts_a2, timelog_a2, is_inactive=True)
 check("A6 inactive phantom shift excluded entirely", "2026-08-05" in days_a2 and days_a2["2026-08-05"]["hours"] == 4.0,
       days_a2)
-check("A7 inactive phantom day basis=actual (from the punch, not the phantom)", days_a2["2026-08-05"]["basis"] == "actual")
+check("A7 inactive phantom day basis is the PUNCH's, not the phantom's", days_a2["2026-08-05"]["basis"] == _hb.CLOCKED)
 
 # inactive REAL shift (act>0) blocks a same-day punch (no double count for inactive either)
 shifts_a3 = [{"shift_date": "2026-08-06", "scheduled_hours": 6, "actual_hours": 6.0}]

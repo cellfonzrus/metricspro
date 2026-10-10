@@ -158,12 +158,14 @@ if row:
 # on a hours-carrying shift day suppressed and every shift pay act>0?act:sched — showing the scheduled
 # day paid 6.3 (not 6.6) and the total was 18.8 before punch-driven pay.
 _sac = R._shift_actual_contribution
-R._shift_actual_contribution = lambda s, md, pd: (float(s.get("actual_hours") or 0)
-                                                  or float(s.get("scheduled_hours") or 0))
+# The 4th parameter is the org's hours-basis config (index §14y, 2026-10-10) — the control ignores
+# it on purpose: it is reproducing the PRE-punch-driven arithmetic, which had no such concept.
+R._shift_actual_contribution = lambda s, md, pd, cfg=None: (float(s.get("actual_hours") or 0)
+                                                            or float(s.get("scheduled_hours") or 0))
 _pcf = R._punch_counts_for_pay
 # old suppression: a punch is dropped when its day carries any hours-bearing shift (sched>0 or act>0)
 _shell_days = {("E45", "2026-08-06")}   # the only zero-hour shell in this fixture
-R._punch_counts_for_pay = lambda t, md: bool(t.get("clock_out") and t.get("hours") is not None) and (
+R._punch_counts_for_pay = lambda t, md, cfg=None: bool(t.get("clock_out") and t.get("hours") is not None) and (
     (str(t.get("employee_id")), str(t.get("work_date") or "")[:10]) not in {
         (str(s.get("employee_id")), str(s.get("shift_date") or "")[:10])
         for s in STORE["shifts"]

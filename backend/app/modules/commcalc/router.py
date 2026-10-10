@@ -40,6 +40,8 @@ from app.modules.commcalc import whatif
 from app.modules.commcalc import implementation_spine
 from app.modules.commcalc import report_kinds as _report_kinds  # mig 1010 — THE report-kind registry (design §7)
 from app.modules.commcalc import connector_registry as _connector_registry  # mig 1014 — THE connector registry (its scope rides report_kinds' predicate)
+# THE ONE HOME for "what did the B2B clock in / clock out report say" (mig 1070, index §14z).
+from app.modules.storeops import clock_feed as _clock_feed
 from app.modules.commcalc import vendor_rebate_feed   # mig 1005 — earned-vs-collected, books nothing
 from app.modules.commcalc import tax_collected as _tax_agg  # THE one per-(store, day) sales-tax pass
 from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bucket vocabulary + presets
@@ -4264,11 +4266,51 @@ async def detect_column_mapping(report_key: str = Form(...), carrier_id: str = F
             "suggestions": column_mapping.suggest(headers, report_key, rules, client, org_id)}
 
 
-def _table_has_column(client, table, col):
-    """Cheap probe: True if commcalc.<table> has <col>. Lets the config-driven ingest stamp OPTIONAL
-    columns (e.g. carrier_id pre/post migration 081) without ever failing an upload on 42703."""
+def _clock_store_resolver(client, org_id):
+    """`raw_store_string -> canonical store CODE` for the clock feed, built from THE one home.
+
+    `account/store_identity.build_store_resolver` (§13d/§64) is the platform's only store-spelling
+    resolver and it answers with the canonical store ADDRESS; the clock feed wants the CODE, so the
+    org's own `store_mapping` address->code map is applied on top. Nothing here matches an address:
+    a spelling that the resolver does not place returns '' and `clock_feed` REPORTS it as a
+    store-setup gap. MEASURED on the real export 2026-10-09: 28 of 28 distinct spellings resolve,
+    so no mapping work is needed for this feed.
+    """
     try:
-        client.schema("commcalc").table(table).select(col).limit(1).execute()
+        mapping = (client.schema("commcalc").table("store_mapping").select("*")
+                   .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        mapping = []
+    try:
+        aliases = (client.schema("commcalc").table("store_aliases").select("*")
+                   .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        aliases = []
+    resolve = _store_identity.build_store_resolver(mapping, aliases)
+    addr_to_code = {}
+    for m in mapping:
+        addr, code = (m or {}).get("store_address"), (m or {}).get("store_code")
+        if addr and code:
+            addr_to_code.setdefault(str(addr).strip(), str(code).strip())
+
+    def resolve_code(raw):
+        hit = resolve(raw)
+        if not hit:
+            return ""
+        return addr_to_code.get(str(hit).strip(), str(hit).strip())
+
+    return resolve_code
+
+
+def _table_has_column(client, table, col):
+    """Cheap probe: True if <schema>.<table> has <col>. Lets the config-driven ingest stamp OPTIONAL
+    columns (e.g. carrier_id pre/post migration 081) without ever failing an upload on 42703.
+
+    The schema is `column_mapping.table_schema(table)` — the ONE home of that fact (mig 1070) — so a
+    landing outside `commcalc` (the B2B clock report, in `storeops`) is probed where it actually
+    lives instead of silently reporting every column as absent."""
+    try:
+        client.schema(column_mapping.table_schema(table)).table(table).select(col).limit(1).execute()
         return True
     except Exception:
         return False
@@ -4281,7 +4323,8 @@ _TABLE_COL_PRESENT: dict = {}
 
 
 def _known_columns(client, table, cols):
-    """The subset of `cols` that are REAL columns on commcalc.<table> (cached-positive probe per column).
+    """The subset of `cols` that are REAL columns on <schema>.<table> (cached-positive probe per column;
+    the schema comes from `column_mapping.table_schema`).
     Used to strip stray/misnamed mapped keys BEFORE the insert so a delete-first replace can never 42703
     (which wipes the period AND errors — the owner's double symptom)."""
     out = set()
@@ -4414,7 +4457,12 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     #    actually covers instead of landing entirely under one label; a caller that DOES name a period
     #    keeps today's single-stamp behaviour byte-for-byte. Rows whose date will not parse are
     #    COUNTED and reported, never booked to a guessed month.
-    mapped, footer_rows = column_mapping.drop_footer_rows(mapped, report_key, base, sb(), org_id)
+    # The footer rows are kept aside, not merely counted: on the B2B clock report the trailer IS a
+    # CHECKSUM (its `Duration` equals the sum of the sheet's own rows) and the clock-feed post-step
+    # below REJECTS a file that does not tie to it. One predicate, two shapes — `drop_footer_rows`
+    # delegates to the same `split_footer_rows`.
+    mapped, _footers = column_mapping.split_footer_rows(mapped, report_key, base, sb(), org_id)
+    footer_rows = len(_footers)
     undated_rows = 0
     if not period:
         mapped, dated_n = column_mapping.derive_row_periods(mapped, report_key, sb(), org_id)
@@ -4432,12 +4480,50 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     # commission) so the calc can sum per rep. Amount columns come from the per-tenant catalog (so
     # user-created categories are summed too); falls back to the hard-coded tuple pre-066. Any carrier
     # maps the columns it has; the rest stay 0.
+    # ── (d) THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1070, owner ask 2026-10-10, index §14z) ──────
+    #     Eleven shape facts the generic mapper cannot know, all of them in ONE home
+    #     (`storeops/clock_feed`): the trailer checksum, the address-not-a-code store column (bound
+    #     through `account/store_identity` — the platform's resolver, never a new matcher), the
+    #     local-wall-clock timestamps (converted through the store's OWN zone via
+    #     `storeops/router._biz_tz_for_store`, never a literal offset), the truncated duration
+    #     column used only as a cross-check, the payable-`Type` ALLOWLIST, the per-org back-office
+    #     login exclusion, the punch-grain key, the measured-zero rows, B2B's own org columns kept as
+    #     metadata, and the filename's claimed date range ASSERTED but never stamped onto a row.
+    #     A file that does not tie to its own trailer lands NOTHING and says both numbers.
+    if report_key == _clock_feed.REPORT_KEY:
+        from app.modules.storeops.router import sb as _so_sb, _biz_tz_for_store as _tz_for_store
+        _cf_cfg = _clock_feed.load_config(_so_sb(), org_id)
+        _resolve_store = _clock_store_resolver(sb(), org_id)
+        _trailer = next((f.get("duration_text") or f.get("hours") for f in _footers), None)
+        _cf = _clock_feed.normalize(
+            mapped, _cf_cfg, resolve_store=_resolve_store,
+            tz_for_store=lambda code: _tz_for_store(org_id, code),
+            filename=fname, trailer_value=_trailer)
+        if _cf["rejected"]:
+            _write_upload_trace(org_id, source=trace_source, filename=fname, upload_type=report_key,
+                                period=period,
+                                result={"saved": 0, "note": _cf["tie_out"]["reason"],
+                                        "guard": {"trailer": _cf["tie_out"]},
+                                        "_trace": {"rows_in": parsed_n, "target_table": table}},
+                                error=_cf["tie_out"]["reason"], status="error")
+            raise HTTPException(400, _cf["tie_out"]["reason"])
+        mapped = _clock_feed.landing_rows(org_id, _cf, source_file=fname, period=period or None)
+        _clock_feed_report = {"tie_out": _cf["tie_out"], "claim": _cf["claim"],
+                              "totals": _cf["totals"]}
+    else:
+        _clock_feed_report = None
+
     if report_key == 'carrier_commission':
         amt_fields = commission_catalog.amount_fields(sb(), org_id, 'carrier_commission')
         for m in mapped:
             m['total_commission'] = round(sum(safe_float(m.get(a)) for a in amt_fields), 2)
 
     client = sb()
+    # WHICH SCHEMA THIS LANDING LIVES IN is the registry's fact, not an assumption (mig 1070):
+    # every layout's table is in `commcalc` unless `column_mapping.TABLE_SCHEMA` says otherwise, and
+    # the B2B clock report lands in `storeops` because a feed about employees belongs to the
+    # workforce module. Read once, here, so no statement below can land in the wrong schema.
+    _schema = column_mapping.table_schema(table)
     started = _datetime.now(timezone.utc)
     parsed_n = len(df)
     # ── LANDING IDENTITY (owner 2026-09-20; landing_identity — ONE home). (i) the target table must
@@ -4550,13 +4636,13 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             try:
                 ids = [r["id"] for r in to_delete if r.get("id")]
                 for i in range(0, len(ids), 500):
-                    client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("id", ids[i:i + 500]).execute()
+                    client.schema(_schema).table(table).delete().eq("org_id", org_id).in_("id", ids[i:i + 500]).execute()
             except Exception as e:
                 _trace("error", 0, "delete failed — nothing deleted", error=str(e))
                 raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
         else:
             try:
-                d = client.schema("commcalc").table(table).delete().eq("org_id", org_id)
+                d = client.schema(_schema).table(table).delete().eq("org_id", org_id)
                 if period:                      # see _select_replace_slice — same filter, same slice
                     d = d.in_("period", _pvariants(period))
                 if source_aware:
@@ -4568,7 +4654,7 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
                 raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
         try:
             for i in range(0, len(mapped), 500):
-                client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
+                client.schema(_schema).table(table).insert(mapped[i:i + 500]).execute()
                 saved += len(mapped[i:i + 500])
         except Exception as e:
             # RESTORE the snapshot so the table is at least as full as before this failed import.
@@ -4588,7 +4674,7 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
         # No period ⇒ pure append (never deletes). Guard each chunk; nothing to restore.
         try:
             for i in range(0, len(mapped), 500):
-                client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
+                client.schema(_schema).table(table).insert(mapped[i:i + 500]).execute()
                 saved += len(mapped[i:i + 500])
         except Exception as e:
             _trace("partial" if saved else "error", saved, "append insert failed (no delete performed)", error=str(e))
@@ -4631,6 +4717,10 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             "auto_calc": auto_calc,
             "rules_used": len(rules), "used_defaults": used_defaults, "mapped": len(mapped),
             "footer_rows_skipped": footer_rows, "undated_rows": undated_rows,
+            # The clock feed's own receipt: the trailer tie-out, whether the filename's claimed day
+            # range agrees with the rows' own dates, and what was excluded and why (the back-office
+            # login's hours are SURFACED here rather than silently missing).
+            "clock_feed": _clock_feed_report,
             "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period),
             "replace_scope": ({"column": scope["partition_col"], "values": len(scope["values"]),
                                "from": scope["lo"], "to": scope["hi"],

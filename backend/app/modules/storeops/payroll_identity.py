@@ -162,3 +162,260 @@ def reconcile_employee_identity(rows, employees):
         merged["store"] = best[1].get("store") or merged["store"]
         out.append(merged)
     return out
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# WHICH EMPLOYEE IS THIS CLOCK-FEED ROW ABOUT? (owner ask 2026-10-10, index §14z)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# THE CLASS. The B2B clock report names a person two ways — `Salesperson` as `"Last, First"` (and
+# sometimes `"Last, First, M"`) and `User Login` (`gsantos`, `M.saul`, `Abdullah.M`, `Debo`) — and
+# MEASURED on the live house roster 2026-10-10, **neither is reliably stored on the employee record**:
+# only 14 of 57 employees have `epay_salesperson` and only 14 have `epay_login`, and the feed's own
+# login column is not stored anywhere at all. 29 of 45 rows match a roster employee by NAME TOKEN;
+# `Martínez, LESLIEE` and `Purkayastha, Deborshee` match nothing.
+#
+# SO A NAME IS A PROPOSAL, NEVER A BINDING. The house rule is that an identity is never guessed at
+# runtime (`core.scope._squash`'s own docstring says so, and migration 740's human-reviewed cleanup
+# exists because those decisions are not safe as code). A name-token hit therefore produces a
+# PROPOSAL for a human to approve, persisted once approved in `storeops.clock_feed_login_link`
+# (mig 1070); only an approved link, or one of the two stored id columns, BINDS. "This login is not
+# linked to anybody" is a first-class variance the DM resolves, exactly like an hours difference.
+#
+# THIS IS AN EXTENSION OF THIS MODULE, NOT A SECOND MATCHER. `business_id_alias_map` above already
+# owns "which employee id is which"; these functions add "which SPELLING is which employee" beside
+# it, in the same home, so nothing else in the platform has to decide.
+
+#: How a feed row was bound to an employee. Part of every answer; never a default.
+MATCH_APPROVED_LINK = "approved_login_link"
+MATCH_EPAY_LOGIN = "epay_login"
+MATCH_EPAY_SALESPERSON = "epay_salesperson"
+MATCH_EMPLOYEE_ID = "employee_id"
+MATCH_NAME_PROPOSED = "name_proposed"
+MATCH_NAME_AMBIGUOUS = "name_ambiguous"
+MATCH_UNMATCHED = "unmatched"
+
+ALL_MATCH_BASES = (MATCH_APPROVED_LINK, MATCH_EPAY_LOGIN, MATCH_EPAY_SALESPERSON,
+                   MATCH_EMPLOYEE_ID, MATCH_NAME_PROPOSED, MATCH_NAME_AMBIGUOUS, MATCH_UNMATCHED)
+
+#: THE ALLOWLIST (the `carrier_dollar_class.component_is_evidence` pattern, index §66). A basis on
+#: which a feed row may actually be ATTRIBUTED to a person. A name proposal is deliberately absent,
+#: and so is anything nobody has ruled on: an unknown basis does NOT bind, because the direction the
+#: next mistake should fall in is "ask a human", never "assume it is them".
+BINDING_MATCH_BASES = (MATCH_APPROVED_LINK, MATCH_EPAY_LOGIN, MATCH_EPAY_SALESPERSON,
+                       MATCH_EMPLOYEE_ID)
+NON_BINDING_MATCH_BASES = tuple(b for b in ALL_MATCH_BASES if b not in BINDING_MATCH_BASES)
+
+MATCH_REASONS = {
+    MATCH_APPROVED_LINK: "A human approved the link between this clock-report login and this "
+                         "employee, so the row is attributed to them.",
+    MATCH_EPAY_LOGIN: "The employee record stores this login (employees.epay_login).",
+    MATCH_EPAY_SALESPERSON: "The employee record stores this spelling of the name "
+                            "(employees.epay_salesperson).",
+    MATCH_EMPLOYEE_ID: "The feed carried this org's own employee id.",
+    MATCH_NAME_PROPOSED: "The name on this row matches exactly one roster employee by name token. "
+                         "That is a PROPOSAL for someone to approve, not an attribution — a person "
+                         "is never inferred from a name at runtime.",
+    MATCH_NAME_AMBIGUOUS: "The name on this row matches more than one roster employee, so it names "
+                          "nobody. Reported rather than resolved to the first hit.",
+    MATCH_UNMATCHED: "Nothing on this row binds to this org's employee roster — not an approved "
+                     "link, not a stored login, not a name. The hours cannot be attributed to "
+                     "anybody until a human says who this is.",
+}
+
+
+def match_is_binding(basis):
+    """PURE: may a clock-feed row be ATTRIBUTED to an employee on this basis? Allowlist; unknown
+    bases do not bind. THE QUESTION, NOT THE POLICY — the caller decides what a False means."""
+    return basis in BINDING_MATCH_BASES
+
+
+def match_reason(basis):
+    """PURE: the sentence shown beside an unmatched or proposed row."""
+    return MATCH_REASONS.get(basis, f"This match basis ({basis!r}) has no ruling in "
+                                    f"payroll_identity, so it does not bind.")
+
+
+def _fold_person(v):
+    """The comparison form for a person spelling: accent-folded through THE one accent fold
+    (`account/store_identity.fold_accents`), lower-cased, non-alphanumerics dropped.
+
+    THE ACCENT FOLD IS WHY THIS EXISTS. `str.isalnum()` is True for `'í'`, so every plain fold in
+    this codebase kept it and `Martínez` compared unequal to `Martinez` — a live employee whose
+    clock rows matched nothing at all. The fold itself was fixed in its one home, for every caller;
+    this function simply uses it."""
+    from app.modules.account.store_identity import fold_accents
+    return "".join(ch for ch in fold_accents(v).lower() if ch.isalnum())
+
+
+def name_tokens(v):
+    """PURE: the set of folded name TOKENS in a person spelling, in any of its shapes.
+
+    `"Martínez, LESLIEE"` → `{'martinez', 'lesliee'}`; `"Caba, David, A"` → `{'caba','david','a'}`
+    (a middle initial is a THIRD comma segment, so nothing here splits on the comma and assumes two
+    parts); `"Leslie Martinez"` → `{'leslie','martinez'}`. Order-free on purpose: the feed writes
+    `Last, First` and the roster writes `First Last`, and which way round a name is written is not a
+    fact about who the person is.
+    """
+    import re as _re
+    return {t for t in (_fold_person(x) for x in _re.split(r"[,\s]+", str(v or ""))) if t}
+
+
+def person_key(v):
+    """PURE: the order-free identity key for a person spelling — the sorted folded tokens joined.
+
+    `"Martínez, LESLIEE"` and `"LESLIEE Martinez"` share a key; `"Caba, David, A"` does NOT share a
+    key with `"Caba, David"`, because dropping a middle initial is a judgement a human makes, not
+    one a key may make silently. `match_tokens` is the looser, REPORTED comparison for that case.
+    """
+    return "|".join(sorted(name_tokens(v)))
+
+
+def build_employee_matcher(employees, link_rows=None):
+    """`match(feed_login, feed_name) -> (employee_id | None, basis, detail)` for one org.
+
+    `employees`  the org's `storeops.employees` rows (`employee_id`, `name`, `epay_login`,
+                 `epay_salesperson`).
+    `link_rows`  `storeops.clock_feed_login_link` rows (mig 1070): `feed_login`, `employee_id`,
+                 `status`. ONLY `status == 'approved'` binds; a `proposed` row is a pending
+                 question and a `rejected` row is a human saying "not this person", which must
+                 never be re-proposed as if nobody had looked.
+
+    PRECEDENCE: approved link > stored login > stored salesperson spelling > our own employee id >
+    a name PROPOSAL (not binding) > ambiguous > unmatched.
+    """
+    emps = [e for e in (employees or ()) if (e or {}).get("employee_id")]
+    by_id = {str(e["employee_id"]).strip(): e for e in emps}
+    by_login = {}
+    by_sales = {}
+    by_key = {}
+    by_token = {}
+    for e in emps:
+        eid = str(e["employee_id"]).strip()
+        for col, bucket in (("epay_login", by_login), ("epay_salesperson", by_sales)):
+            k = _fold_person(e.get(col))
+            if k:
+                bucket.setdefault(k, set()).add(eid)
+        k = person_key(e.get("name"))
+        if k:
+            by_key.setdefault(k, set()).add(eid)
+        for t in name_tokens(e.get("name")):
+            by_token.setdefault(t, set()).add(eid)
+
+    approved, rejected = {}, {}
+    for r in (link_rows or ()):
+        login = _fold_person((r or {}).get("feed_login"))
+        eid = str((r or {}).get("employee_id") or "").strip()
+        status = str((r or {}).get("status") or "").strip().lower()
+        if not login or not eid:
+            continue
+        if status == "approved":
+            approved[login] = eid
+        elif status == "rejected":
+            rejected.setdefault(login, set()).add(eid)
+
+    def match(feed_login, feed_name):
+        login_k = _fold_person(feed_login)
+        detail = {"feed_login": str(feed_login or "").strip(),
+                  "feed_name": str(feed_name or "").strip(),
+                  "candidates": []}
+
+        def done(eid, basis):
+            detail["reason"] = match_reason(basis)
+            detail["binds"] = match_is_binding(basis)
+            return eid, basis, detail
+
+        if login_k and login_k in approved:
+            return done(approved[login_k], MATCH_APPROVED_LINK)
+        for bucket, basis in ((by_login, MATCH_EPAY_LOGIN), (by_sales, MATCH_EPAY_SALESPERSON)):
+            hits = bucket.get(login_k) or set()
+            if len(hits) == 1:
+                return done(next(iter(hits)), basis)
+            if len(hits) > 1:
+                detail["candidates"] = sorted(hits)
+                return done(None, MATCH_NAME_AMBIGUOUS)
+        name_login_hits = by_sales.get(_fold_person(feed_name)) or set()
+        if len(name_login_hits) == 1:
+            return done(next(iter(name_login_hits)), MATCH_EPAY_SALESPERSON)
+        raw_id = str(feed_login or "").strip()
+        if raw_id in by_id:
+            return done(raw_id, MATCH_EMPLOYEE_ID)
+
+        # ── NAME: a PROPOSAL, never an attribution ──────────────────────────────────────────────
+        key = person_key(feed_name)
+        hits = set(by_key.get(key) or set())
+        if not hits:
+            toks = name_tokens(feed_name)
+            if toks:
+                # every roster employee sharing ALL of this row's tokens (so `Caba, David, A`
+                # proposes `David Caba`, while `Caba, David` never proposes a different David).
+                shared = None
+                for t in toks:
+                    s = by_token.get(t) or set()
+                    shared = s if shared is None else (shared & s)
+                hits = set(shared or ())
+                if not hits:
+                    # the other direction: the roster spelling is a SUBSET of the feed's tokens
+                    for t in toks:
+                        for eid in by_token.get(t) or ():
+                            if name_tokens((by_id.get(eid) or {}).get("name")) <= toks:
+                                hits.add(eid)
+        hits = {h for h in hits if h not in (rejected.get(login_k) or set())}
+        if len(hits) == 1:
+            eid = next(iter(hits))
+            detail["candidates"] = [eid]
+            detail["proposed_employee_id"] = eid
+            detail["proposed_name"] = (by_id.get(eid) or {}).get("name")
+            return done(None, MATCH_NAME_PROPOSED)
+        if len(hits) > 1:
+            detail["candidates"] = sorted(hits)
+            return done(None, MATCH_NAME_AMBIGUOUS)
+        return done(None, MATCH_UNMATCHED)
+
+    return match
+
+
+def link_proposals(rows, matcher):
+    """PURE: the login→employee links a human is asked to approve, one per distinct feed login.
+
+    `rows` are clock-feed rows carrying `feed_login` and `employee_raw`. Returns
+    `{proposals, unmatched, bound}`:
+      `proposals` one entry per login whose name proposes exactly one employee — the review screen's
+                  list, with the row count and hours behind it so the reviewer can see the weight of
+                  the decision.
+      `unmatched` logins that propose nobody (or more than one). These are REPORTED as a count on
+                  the discrepancy board; they are never guessed.
+      `bound`     logins that already bind, with the basis, so an approved link is visibly settled.
+    """
+    proposals, unmatched, bound = {}, {}, {}
+    for r in rows or ():
+        login = str((r or {}).get("feed_login") or "").strip()
+        name = str((r or {}).get("employee_raw") or "").strip()
+        eid, basis, detail = matcher(login, name)
+        key = _fold_person(login) or person_key(name)
+        if not key:
+            continue
+        hours = float((r or {}).get("hours") or 0)
+        if match_is_binding(basis):
+            cell = bound.setdefault(key, {"feed_login": login, "employee_id": eid, "basis": basis,
+                                          "rows": 0, "hours": 0.0})
+        elif basis == MATCH_NAME_PROPOSED:
+            cell = proposals.setdefault(key, {
+                "feed_login": login, "feed_name": name,
+                "proposed_employee_id": detail.get("proposed_employee_id"),
+                "proposed_name": detail.get("proposed_name"),
+                "basis": basis, "reason": detail["reason"], "rows": 0, "hours": 0.0})
+        else:
+            cell = unmatched.setdefault(key, {"feed_login": login, "feed_name": name,
+                                              "basis": basis, "reason": detail["reason"],
+                                              "candidates": detail.get("candidates") or [],
+                                              "rows": 0, "hours": 0.0})
+        cell["rows"] += 1
+        cell["hours"] = round(cell["hours"] + hours, 2)
+    return {"proposals": sorted(proposals.values(), key=lambda c: -c["hours"]),
+            "unmatched": sorted(unmatched.values(), key=lambda c: -c["hours"]),
+            "bound": sorted(bound.values(), key=lambda c: -c["hours"]),
+            "totals": {"logins": len(proposals) + len(unmatched) + len(bound),
+                       "proposed": len(proposals), "unmatched": len(unmatched),
+                       "bound": len(bound),
+                       "unmatched_hours": round(sum(c["hours"] for c in unmatched.values()), 2),
+                       "proposed_hours": round(sum(c["hours"] for c in proposals.values()), 2)}}

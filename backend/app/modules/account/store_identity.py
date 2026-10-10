@@ -23,7 +23,7 @@ or a second leading-token join appearing anywhere in the backend, FAILS THE BUIL
 """
 
 __all__ = [
-    "squash_key", "lead_num_key", "build_store_resolver", "store_key",
+    "fold_accents", "squash_key", "lead_num_key", "build_store_resolver", "store_key",
     "store_identity_index", "ambiguous_identities",
     "shared_identity_pairs", "may_be_one_store",
 ]
@@ -33,10 +33,37 @@ def _norm(v):
     return (str(v or "").strip()) or None
 
 
+def fold_accents(v):
+    """THE ONE accent fold. `'Martínez' -> 'Martinez'`, `'café' -> 'cafe'`, ASCII unchanged.
+
+    WHY IT IS ITS OWN FUNCTION (measured defect 2026-10-10). Every identity fold in this codebase —
+    this module's `squash_key`, `core.scope._squash`, `coa._squash_key`, `balance_sheet._squash`,
+    `store_identity_audit._squash` — is spelled `"".join(ch for ch in s.upper() if ch.isalnum())`,
+    and **`str.isalnum()` is TRUE for `'í'`**. So an accented spelling survives every one of those
+    folds and compares unequal to its own unaccented twin: the B2B clock report spells a live
+    employee `Martínez, LESLIEE` where the roster has `Leslie Martinez`, and the row matched nothing
+    at all. It is exactly the class of the `b-1115` phantom store that case drift produced — a fold
+    that does not fold.
+
+    FIXED HERE, FOR EVERY CALLER, not at the one call site that surfaced it: the five folds above
+    dereference this function, so an accented spelling can never again be a different identity from
+    the same word typed plainly. ASCII input is byte-identical, so no existing match changes — the
+    fold only ever gains matches it should always have had.
+
+    NFKD decomposes a precomposed letter into base + combining mark; the marks (Unicode category
+    `Mn`) are then dropped. Anything NFKD cannot decompose is left alone rather than guessed at.
+    """
+    import unicodedata
+    return "".join(ch for ch in unicodedata.normalize("NFKD", str(v or ""))
+                   if not unicodedata.combining(ch))
+
+
 def squash_key(v):
-    """UPPER alphanumeric-only spelling key — `'4640-A W Diversey Ave' == '4640a  w diversey ave'`.
-    The same folding idea as `core.scope._squash` and `coa._squash_key`."""
-    return "".join(ch for ch in str(v or "").upper() if ch.isalnum())
+    """UPPER alphanumeric-only spelling key — `'4640-A W Diversey Ave' == '4640a  w diversey ave'`,
+    and `'Martínez' == 'Martinez'` (see `fold_accents`).
+    The same folding idea as `core.scope._squash` and `coa._squash_key`, which dereference the same
+    accent fold."""
+    return "".join(ch for ch in fold_accents(v).upper() if ch.isalnum())
 
 
 def lead_num_key(v):

@@ -71,6 +71,8 @@ from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from app.modules.storeops import payroll_salary as _sal
+# THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
+from app.modules.storeops import payroll_hours_basis as _hours_basis
 
 # Defensive cap on how far back "earned to date" looks when an employee has no hire_date on file
 # (payroll_salary.MAX_PERIODS_WALKED is the sibling cap for the pay-period walk; this is the analogous
@@ -92,42 +94,44 @@ def _date_range(lo: date, hi: date):
     return out
 
 
-def daily_hours_for_employee(shifts, timelog, is_inactive: bool) -> dict:
-    """(day -> {"hours": float, "basis": 'actual'|'scheduled'}) for ONE employee, over ALREADY-FILTERED
-    (org, employee[, date-range]) shift + timelog rows. See module docstring for the exact rule this
-    reproduces from GET /storeops/payroll's legacy path. `shifts` should already exclude soft-deleted
-    rows (is_deleted=false), matching every /payroll query. Returns only days that have SOME hours
-    (>0) or an explicit shift row — a day with no shift and no counted punch simply never appears."""
+def daily_hours_for_employee(shifts, timelog, is_inactive: bool, hours_basis_cfg=None,
+                              employee_row=None, manual_rows=None) -> dict:
+    """(day -> {"hours": float, "basis": <a payroll_hours_basis basis>}) for ONE employee, over
+    ALREADY-FILTERED (org, employee[, date-range]) shift + timelog rows.
+
+    ⚠ BEHAVIOUR CORRECTED 2026-10-10 (index §14y) — AND IT IS A FIX, NOT A REGRESSION. This function's
+    docstring has always claimed it "reproduces GET /storeops/payroll's legacy path", and it did when
+    it was written. `/payroll` moved to PUNCH-DRIVEN pay on 2026-08-24 (a punch outranks the schedule
+    on its day) and this function did not follow: it kept the pre-change rule that any shift row
+    covering a day blocks that day's punch. So it has been paying the SCHEDULE where `/payroll` pays
+    the PUNCH — measured on production 2026-10-10, Luxelink July 2026 holds 3,174.0 scheduled hours
+    against 7,510.2 clocked hours, so this report was showing roughly half of what `/payroll` showed
+    for the same range. That is exactly the "two paths answering one question, one of them fixed and
+    the other not" defect CLAUDE.md forbids. It is now the ONE home's answer, so it cannot drift
+    again, and the lock fails the build if it reads either hours column directly.
+
+    `shifts` should already exclude soft-deleted rows (is_deleted=false), matching every /payroll
+    query. Returns only days that have SOME evidence — a day with no shift, no punch and no
+    correction simply never appears, because absence is not a zero measurement.
+    """
+    cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
+    sh = list(shifts or ())
+    if is_inactive:
+        # A phantom shift for an inactive rep never counts (matches _inactive_activity_rows): only a
+        # genuinely corrected row survives. Applied here, at the source, exactly as before.
+        sh = [x for x in sh if float((x or {}).get("actual_hours") or 0) > 0]
+    ev = _hours_basis.build_evidence(shifts=sh, punches=timelog, manual_rows=manual_rows)
     days: dict = {}
-    shift_days_covered = set()   # days a shift row (any, for an active emp; only a REAL one for inactive) covers
-    for s in shifts or ():
-        d = str(s.get("shift_date") or "")[:10]
+    for (_eid, d), cell in ev.items():
         if not d:
             continue
-        sched = float(s.get("scheduled_hours") or 0)
-        act = float(s.get("actual_hours") or 0)
-        if is_inactive and act <= 0:
-            continue   # phantom shift for an inactive rep never counts (matches _inactive_activity_rows)
-        eff, basis = (act, "actual") if act > 0 else (sched, "scheduled")
+        hours, basis, _detail = _hours_basis.resolve_day(cell, cfg, employee_row)
         row = days.setdefault(d, {"date": d, "hours": 0.0, "basis": basis})
-        row["hours"] += eff
-        if basis == "actual":
-            row["basis"] = "actual"   # a mixed day (>1 shift row) stays 'actual' if ANY contributor was
-        shift_days_covered.add(d)
-
-    for t in timelog or ():
-        d = str(t.get("work_date") or "")[:10]
-        if not d or d in shift_days_covered:
-            continue   # already represented by a shift that day -> never double-count (matches /payroll)
-        if not (t.get("clock_out") and t.get("hours") is not None):
-            continue   # only CLOSED punches count (matches /payroll-raw's own rule)
-        hrs = float(t.get("hours") or 0)
-        row = days.setdefault(d, {"date": d, "hours": 0.0, "basis": "actual"})
-        row["hours"] += hrs
-        row["basis"] = "actual"
-
-    for row in days.values():
-        row["hours"] = round(row["hours"], 2)
+        row["hours"] = round(row["hours"] + hours, 2)
+        # A day with several evidence kinds keeps the STRONGEST basis — a measurement outranks the
+        # schedule, which outranks nothing at all. Ordered by PAYING_BASES, never re-spelled here.
+        if _hours_basis.basis_is_measurement(basis):
+            row["basis"] = basis
     return days
 
 

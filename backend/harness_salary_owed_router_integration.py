@@ -256,8 +256,13 @@ check("a2 Harry's owed_total == /payroll's actual_pay (byte-exact)",
       (harry_owed["owed_total"], harry_payroll["actual_pay"]))
 check("a3 Harry: 03-02 (shift+punch same day) not double-counted (8h, not 16h)",
       next(d for d in harry_owed["days"] if d["date"] == "2026-03-02")["hours"] == 8.0)
-check("a4 Harry: 03-03 scheduled-fallback day basis='scheduled'",
-      next(d for d in harry_owed["days"] if d["date"] == "2026-03-03")["basis"] == "scheduled")
+# mig 1070 — ONE basis vocabulary (`storeops/payroll_hours_basis.ALL_BASES`). The word for a day
+# with no measurement that the schedule is paid for is `schedule_opt_in`, not the old local
+# `'scheduled'`: the basis now says WHY the schedule is being paid, and `basis_pays_hours` is the
+# only thing that decides whether it pays at all.
+check("a4 Harry: 03-03 nothing-measured day is paid from the schedule, and the basis SAYS so",
+      next(d for d in harry_owed["days"] if d["date"] == "2026-03-03")["basis"] == "schedule_opt_in",
+      next(d for d in harry_owed["days"] if d["date"] == "2026-03-03")["basis"])
 check("a5 Harry: 03-04 unshifted punch counted, basis='actual'",
       next(d for d in harry_owed["days"] if d["date"] == "2026-03-04")["hours"] == 5.25)
 check("a6 Harry: 03-06 open punch never appears / contributes 0",

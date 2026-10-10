@@ -209,8 +209,25 @@ FACTS: dict[str, dict] = {
             'app/modules/account/residual_subs.py': ('_sid',),
             # A closing store-day's match key (§29.12) — a named alias, no second copy.
             'app/modules/closing/unfinished_day.py': ('_sid',),
-            # `_leg_store_index` + the two commission-leg endpoints' row keys.
+            # `_leg_store_index` + the two commission-leg endpoints' row keys, and (mig 1070) the
+            # B2B clock report's `raw_store_string -> store CODE` resolver, which places a punch's
+            # store through THIS chain rather than matching an address of its own.
             'app/modules/commcalc/router.py': ('_store_identity',),
+            # ── THE ONE ACCENT FOLD (`fold_accents`, 2026-10-10) ────────────────────────────────
+            # `str.isalnum()` is TRUE for 'i-acute', so every alnum-only identity fold in this
+            # codebase kept the accent and compared an accented spelling unequal to its own plain
+            # twin (measured: the clock report's `Martinez, LESLIEE` matched no roster row). The
+            # fold now lives here once and these four siblings DEREFERENCE it — they are named so
+            # the next change cannot quietly re-spell one of them back into a private fold.
+            'app/core/scope.py': ('_fold_accents',),
+            'app/modules/account/balance_sheet.py': ('_sid_fold',),
+            'app/modules/account/device_payable.py': ('_sid_fold',),
+            'app/modules/account/store_identity_audit.py': ('_sid',),
+            # The B2B clock feed's own folds (`_fold`, login + punch-type keys) and the employee
+            # matcher's person key ride the same accent fold, so a person and a store are folded by
+            # one rule (mig 1070, §14z).
+            'app/modules/storeops/clock_feed.py': ('_sid',),
+            'app/modules/storeops/payroll_identity.py': ('fold_accents',),
         },
     },
     'carrier_dollar_component': {

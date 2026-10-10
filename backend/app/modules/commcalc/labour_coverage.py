@@ -9,10 +9,12 @@ This module owns the READ side of that sentence: whether the salary a store show
 and the P&L was MEASURED for the month on screen, and if so from what. It computes NO dollars — the
 dollar derivations already exist and are deliberately NOT duplicated here:
 
-  • `account/coa.derive_wage_cells` already implements "actual hours else scheduled hours"
-    (`hrs = safe_float(s['actual_hours']) or safe_float(s['scheduled_hours'])`) and turns it into
-    money, hourly × pay_rate and salaried × monthly equivalent. That IS the owner's rule; this
-    module reports the BASIS it resolved to, it never re-derives the amount.
+  • `account/coa.derive_wage_cells` turns the paid hours into money, hourly × pay_rate and salaried
+    × monthly equivalent. Since 2026-10-10 it asks `storeops/payroll_hours_basis.resolve_shift_row`
+    (index §14y) what those hours are, and so does this module — ONE home, one answer. Before that
+    both spelled `actual_hours or scheduled_hours` for themselves, so this report could label a
+    store `actual` while the dollars beside it came off the schedule. This module still reports the
+    BASIS and never re-derives the amount.
   • `commcalc/expenses_effective.effective_expense_rows` already owns the sticky carry-forward that
     decides WHICH month's rows a period displays. This module reads its `carried_from` answer.
 
@@ -62,6 +64,9 @@ Proof: backend/harness_labour_coverage.py (DB-free).
 Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §4.
 """
 from datetime import date, timedelta
+
+# THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
+from app.modules.storeops import payroll_hours_basis as _hours_basis
 
 # The producer tokens that carry an EXACT gross payroll and therefore make a period authoritative.
 # Kept in lockstep with `account/coa._WAGES_AUTHORITATIVE_KEYS` — 'additional_payroll' is an excess
@@ -185,36 +190,55 @@ def entered_amounts(exp_rows, payroll_names):
     return out
 
 
-def hours_basis_by_code(shifts):
-    """PURE: {store_code: {'shifts', 'actual_hours', 'scheduled_hours', 'basis'}}.
+def hours_basis_by_code(shifts, hours_basis_cfg=None, emp_by_id=None):
+    """PURE: {store_code: {'shifts', 'actual_hours', 'scheduled_hours', 'basis', 'bases'}}.
 
-    `basis` states which side of the owner's rule this store's month actually resolves to:
-      'actual'    — at least one shift carries actual hours (the preferred basis)
-      'scheduled' — no actual hours anywhere, but scheduled hours exist (the documented fallback)
-      None        — shifts exist but carry NO hours on either column: nothing to compute a salary
-                    from. This is the LIVE state of every LuxeLink shift row inspected on
-                    2026-09-08 (0 of 472 July shifts and 0 of 748 August shifts had actual hours),
-                    and for three July stores neither column had a number.
+    `basis` states which side of the owner's rule this store's month actually resolves to, in THE
+    platform's one hours-basis vocabulary (`storeops/payroll_hours_basis`, index §14y) rather than a
+    second two-word one of its own:
+      `clocked` / `clocked_corrected` — at least one of this store's paid hours was MEASURED
+      `measured_zero`                 — measured, and the measurement says zero
+      `schedule_opt_in`               — nothing measured; the schedule is being paid, and says so
+      `not_measured_unpaid`           — nothing measured and no opt-in: these hours are NOT payable
+      None                            — shifts exist but carry no hours on either column
 
-    Per-shift precedence is `actual or scheduled`, matching `coa.derive_wage_cells` exactly, so the
-    store's basis is the basis its dollars were actually computed on. Deleted shifts must be
-    filtered by the caller's query (`is_deleted = false`), as the wage path does.
+    `bases` is the full per-shift tally, so a banner can say "812 of 853 scheduled days were never
+    clocked" instead of one word. The per-shift decision is `payroll_hours_basis.resolve_shift_row`,
+    the SAME call `coa.derive_wage_cells` makes to turn those hours into money — which is the whole
+    point: before this, the coverage report and the money it reported on each decided for themselves
+    what "actual hours" meant, and `basis` could say `actual` while the dollars came off the
+    schedule. Deleted shifts must be filtered by the caller's query (`is_deleted = false`), as the
+    wage path does.
     """
+    cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
+    emp_by_id = emp_by_id or {}
     out = {}
     for s in (shifts or []):
         code = _norm(s.get("store_code"))
         if not code:
             continue
         cell = out.setdefault(code, {"shifts": 0, "actual_hours": 0.0, "scheduled_hours": 0.0,
-                                     "basis": None})
+                                     "paid_hours": 0.0, "basis": None, "bases": {}})
         cell["shifts"] += 1
         cell["actual_hours"] += _f(s.get("actual_hours"))
         cell["scheduled_hours"] += _f(s.get("scheduled_hours"))
+        hrs, basis, _detail = _hours_basis.resolve_shift_row(s, cfg, emp_by_id.get(s.get("employee_id")))
+        cell["paid_hours"] += _f(hrs)
+        cell["bases"][basis] = cell["bases"].get(basis, 0) + 1
     for cell in out.values():
         cell["actual_hours"] = round(cell["actual_hours"], 2)
         cell["scheduled_hours"] = round(cell["scheduled_hours"], 2)
-        cell["basis"] = ("actual" if cell["actual_hours"] else
-                         ("scheduled" if cell["scheduled_hours"] else None))
+        cell["paid_hours"] = round(cell["paid_hours"], 2)
+        # The store's basis is the STRONGEST basis any of its shifts resolved on — a measurement
+        # outranks the schedule. Ordered off the one home's own vocabulary, never re-spelled.
+        for b in (_hours_basis.CLOCKED, _hours_basis.CLOCKED_CORRECTED, _hours_basis.MEASURED_ZERO,
+                  _hours_basis.SCHEDULE_OPT_IN, _hours_basis.NOT_MEASURED_UNPAID,
+                  _hours_basis.PUNCH_UNUSABLE):
+            if cell["bases"].get(b):
+                cell["basis"] = b
+                break
+        if not (cell["actual_hours"] or cell["scheduled_hours"]):
+            cell["basis"] = None
     return out
 
 
@@ -231,10 +255,19 @@ def store_state(code, auth, hours, carried_from, is_active=True):
     if code in (auth or ()):
         return ENTERED
     cell = (hours or {}).get(code) or {}
-    if cell.get("basis") == "actual":
+    basis = cell.get("basis")
+    # DEREFERENCED, never re-spelled: which bases are a MEASUREMENT is `payroll_hours_basis`'s
+    # ruling (index §14y), not a pair of string literals here. The pre-2026-10-10 code compared
+    # against its own words 'actual' / 'scheduled', which is how this report could disagree with
+    # the money beside it.
+    if _hours_basis.basis_is_measurement(basis):
         return DERIVED_ACTUAL
-    if cell.get("basis") == "scheduled":
+    if basis == _hours_basis.SCHEDULE_OPT_IN:
         return DERIVED_SCHEDULED
+    if basis in (_hours_basis.NOT_MEASURED_UNPAID, _hours_basis.PUNCH_UNUSABLE):
+        # Hours exist on the schedule but this org does not pay them, so they are NOT a measurement
+        # of this store's labour cost and must never read as one.
+        return NOT_MEASURED
     if not cell.get("shifts") and not is_active:
         return NO_STAFF
     return NOT_MEASURED

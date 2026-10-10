@@ -805,10 +805,14 @@ def sales_tax_payable_bookings(store_tax_rows, basis, as_of):
 
 
 # ── 3+4. journal entries: company designation + fixed scoping ───────────────────────────────────
+# THE ONE accent fold (`account.store_identity.fold_accents`) — dereferenced, never re-spelled.
+from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
+
+
 def _squash(v):
     """UPPER alphanumeric-only spelling key (same folding as coa._squash_key; kept local so this
     module's purity does not depend on coa's import graph)."""
-    return "".join(ch for ch in str(v or "").upper() if ch.isalnum())
+    return "".join(ch for ch in _sid_fold(v).upper() if ch.isalnum())
 
 
 def _edit1(a, b):

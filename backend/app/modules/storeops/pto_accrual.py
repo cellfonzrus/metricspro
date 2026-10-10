@@ -31,6 +31,9 @@ from datetime import date
 from calendar import monthrange
 from typing import Dict, List, Optional
 
+# THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
+from app.modules.storeops import payroll_hours_basis as _hours_basis
+
 DEFAULT_CONFIG = {
     "enabled": True,
     "accrual_rate": 0.0385,          # PTO hours earned per hour worked (~80 hrs / 2080 hrs per year)
@@ -90,19 +93,26 @@ def _parse_date(s: str) -> Optional[date]:
         return None
 
 
-# ── worked hours from shifts (same basis as GET /payroll-by-store: actual > scheduled) ─────────────
-def hours_worked_from_shifts(shifts: List[dict]) -> Dict[str, Dict[str, float]]:
+# ── worked hours from shifts — THE one home (storeops/payroll_hours_basis, index §14y) ───────────
+def hours_worked_from_shifts(shifts: List[dict], hours_basis_cfg=None,
+                              emp_by_id=None) -> Dict[str, Dict[str, float]]:
     """employee_id -> {store_code: hours}. A floater's hours land at the store they actually
-    worked (the shift's own store_code), matching /payroll-by-store's attribution."""
+    worked (the shift's own store_code), matching /payroll-by-store's attribution.
+
+    The per-shift hours come from `payroll_hours_basis.resolve_shift_row` (index §14y) — the ONE
+    home — so this surface can never drift from payroll's own basis again. `hours_basis_cfg=None`
+    resolves to the house defaults, which are byte-identical to the `act if act > 0 else sched` this
+    replaced."""
+    cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
     out: Dict[str, Dict[str, float]] = {}
     for s in shifts or []:
         eid = s.get("employee_id")
         store = (s.get("store_code") or "").strip()
         if not eid or not store:
             continue
-        sched = float(s.get("scheduled_hours") or 0)
-        act = float(s.get("actual_hours") or 0)
-        hrs = act if act > 0 else sched
+        # ONE HOME for paid hours (index §14y). Was `act if act > 0 else sched` — the same silent
+        # fallback, in a fourth place. `hours_basis_cfg=None` = the house defaults = today.
+        hrs, _b, _ = _hours_basis.resolve_shift_row(s, cfg, (emp_by_id or {}).get(eid))
         out.setdefault(eid, {})
         out[eid][store] = out[eid].get(store, 0.0) + hrs
     return out
