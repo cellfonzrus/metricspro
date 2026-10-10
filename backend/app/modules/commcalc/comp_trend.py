@@ -12,7 +12,12 @@ large, push the per-(account,period) aggregation into a Postgres RPC per the per
 from app.modules.commcalc.calculator import parse_period, safe_float
 from app.modules.commcalc import carrier_map
 
-_COMPS = ("RESIDUAL", "COMMISSION", "SPIFF", "REIMBURSEMENT", "UNMAPPED")
+# THE COMPONENT VOCABULARY IS DEREFERENCED, never re-spelled (index §69). This was a second copy of
+# it, and a copy of a vocabulary silently loses whatever the vocabulary gains: a keyword rule naming
+# a kind of money this tuple had never heard of would have been folded into UNMAPPED here while the
+# P&L booked it correctly. `UNMAPPED` is this report's own bucket for "no rule matched" — not a
+# component, which is why it is appended rather than living in the vocabulary.
+_COMPS = tuple(carrier_map.COMPONENTS) + ("UNMAPPED",)
 
 
 def _pkey(period):

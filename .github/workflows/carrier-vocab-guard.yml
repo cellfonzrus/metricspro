@@ -582,6 +582,16 @@ on:
       # The lock reads the home, both GP paths, the router's trend wiring, the P&L caller it
       # EXCUSES, the module graph and the index, so a change to any of them must run it.
       - "backend/harness_component_basis_evidence.py"
+      # index §69 — a declaration the component vocabulary cannot EXPRESS is a hole in the
+      # vocabulary: while it is open a keyword guess books the money (measured: $260,500.00 of
+      # the house org's own declared MDF money on the device-financing reimbursement line).
+      # The lock reads the vocabulary, the classification home, BOTH P&L call sites, the
+      # per-device router wiring, the comp-trend copy it deleted, the pay-feed quality home
+      # that names the placeable categories, the module graph and the index — so a change to
+      # any of them must run it.
+      - "backend/harness_declared_category_honourable.py"
+      - "backend/app/modules/commcalc/comp_trend.py"
+      - "backend/app/modules/account/coa.py"
       - "backend/app/modules/commcalc/gp_report.py"
       - "backend/app/modules/commcalc/payment_category.py"
       - "database/migrations/1064_carrier_gp_columns.sql"
@@ -950,6 +960,9 @@ jobs:
       - name: Run the fallback-basis lock (a component reached on a FALLBACK BASIS is a placement of last resort, not evidence about the dollar — an explicit declaration is never overridden by a keyword guess, the predicate lives in ONE module and answers from `basis` alone while each caller keeps its own policy, and $260,500.00 of one declared category stops landing in two different GP columns on the two feeds while gross profit and the P&L move $0.00 — measured 2026-10-09, index §66)
         working-directory: backend
         run: python3 harness_component_basis_evidence.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the honourable-declaration lock (a category the platform can place must be expressible as a COMPONENT — the org's own declaration places the dollar and `basis` reads `declared`, never a keyword guess standing where a declaration already exists; every Gross-Profit money column is reachable from a component and every component has one; the component vocabulary, its labels and "which components are the device-financing side" each exist in exactly ONE module; and $260,500.00 of declared market-development money stops booking on the device-financing reimbursement line while revenue and net profit move $0.00 — owner ruling 2026-10-10, index §69)
+        working-directory: backend
+        run: python3 harness_declared_category_honourable.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the GP carrier-classification dereference lock (the Gross Profit report classifies no carrier dollar of its own — the comp-report keyword guess and the four pay-category literal compares are gone, the trend's self-declared COPY of them is gone, and $418,922.21 of August 2026 declared reimbursement no longer renders as commission while gross profit itself moves $0.00 — owner 2026-10-08, index §58.7)
         working-directory: backend
         run: python3 harness_gp_carrier_class_dereference.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

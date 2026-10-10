@@ -42,10 +42,24 @@ encodes, in order:
      outcome that is not ruling 1, INDEPENDENTLY of whether a keyword rule happened to catch it, so
      `tally()` reports it either way. The house org's `<a quarterly true-up type>` ($4,429.00) books
      on its keyword fallback AND is reported as undeclared in the same breath.
-  5. **A DECLARED CATEGORY OUTSIDE THE COMPONENT VOCABULARY IS NOT A GUESS EITHER.** The house org
-     declares $260,500.00 under a category the four-component vocabulary has no row for; that is
-     `declared_category_unmapped`, booked on its keyword fallback and REPORTED, because inventing a
-     component for an unmapped category is exactly the silent decision this file exists to stop.
+  5. **A DECLARED CATEGORY OUTSIDE THE COMPONENT VOCABULARY IS NOT A GUESS EITHER.** A category
+     this org's map has no row for is `declared_category_unmapped`, booked on its keyword fallback
+     and REPORTED, because inventing a component for an unmapped category is exactly the silent
+     decision this file exists to stop.
+  6. **BUT AN UNMAPPABLE DECLARATION IS A DEFECT IN THE VOCABULARY, NOT A FACT ABOUT THE DOLLAR**
+     (index §69, owner ruling 2026-10-10). Ruling 5 is the honest REPORT of a hole; it was never
+     meant to be the resting state, and while it was, a platform keyword guess stood where the org's
+     own word already existed — which is how $260,500.00 of money the house org itself declares as
+     market-development funds booked on the device-financing reimbursement line (40 rows of
+     `raw_comp_report`, Mar-Sep 2026; $39,300/mo over 6 stores Mar-Jul, $32,000 over 5 in Aug and
+     Sep). The fix is NOT a second routing map keyed by category — `component_lines` below already
+     answers "which P&L line does this money book to", and a sibling keyed by category would be two
+     paths to one answer. The fix is that the COMPONENT VOCABULARY can express what an org declares:
+     `carrier_map.COMPONENTS` covers every kind of carrier money the platform's own routing maps can
+     name a destination for, so the declaration is honourable, `basis` reads `declared`, and ONE
+     path still places the dollar. Which category means which component stays config
+     (`carrier_class_category_components`), and where that component books stays config
+     (`carrier_component_lines`) — both the org's rows, neither a branch here.
 
 RULE TWO, ABSOLUTELY. There is not one carrier, tenant, quarter, product or promo name in this
 file. Every string above is DATA: the declarations are rows in `payment_categories`, the keyword
@@ -152,6 +166,74 @@ def component_is_evidence(basis):
     reached is in exactly the position this predicate exists to protect."""
     return str(basis or "") in EVIDENTIAL_BASES
 
+# WHAT A COMPONENT IS CALLED FOR A HUMAN. Here, not at the surfaces, for the §69 reason: the P&L's
+# carrier drill-down kept its own four-entry dict and defaulted anything else to "Undeclared", so the
+# first component added to the vocabulary would have rendered DECLARED money under the word for
+# money nobody declared. A label is part of knowing what a component IS, so it lives with the
+# vocabulary and every surface dereferences it. Platform words only — a tenant that wants its own
+# wording has `pl_line_labels` on the LINE, which is where a tenant's vocabulary belongs.
+# The wording is the P&L drill-down's EXISTING wording, carried over unchanged — moving a fact into
+# its home must not restate a label the owner reads on the statement.
+COMPONENT_LABELS = {
+    "COMMISSION": "Commission (promo)",
+    "SPIFF": "SPIFF / bounty",
+    "RESIDUAL": "Residual",
+    "REIMBURSEMENT": "Reimbursement",
+    "MDF": "Market development funds",
+    "CHARGEBACK": "Chargeback",
+}
+# The one word for "this dollar has no component at all" — not a component, and never a label for a
+# component the vocabulary simply has no wording for yet (that would read as undeclared money).
+UNDECLARED_LABEL = "Undeclared"
+
+
+def component_label(component):
+    """PURE: the human label for a component, or `UNDECLARED_LABEL` when there is no component.
+
+    A component the vocabulary knows but this map has no wording for returns the component itself,
+    which is honest and visible, rather than the word for money nobody declared."""
+    c = str(component or "").strip().upper()
+    if not c:
+        return UNDECLARED_LABEL
+    return COMPONENT_LABELS.get(c) or c
+
+
+# WHICH COMPONENT IS THE DEVICE-FINANCING SIDE, and which components' dollars ARE that money. ONE
+# home, because three callers needed it and each had spelled it for itself: the P&L's distributor-
+# claim comparison, the P&L's line relabel, and the per-device reconciliation (§65) — whose own
+# spelling was "every component this org routed OFF the generic commission line". That was an
+# INFERENCE, and §69 broke it: a second component routed to a line of its own is not device money,
+# and under the owner's MDF ruling it would have re-admitted $91,000.00 a month of per-store lump
+# sums (no device named, nothing to name one for) to a per-DEVICE report that §65.5 had just cleared
+# of exactly that money. So the question is asked the way it is meant: which components book to the
+# line the device-financing reimbursement books to.
+DEVICE_FINANCING_COMPONENT = "REIMBURSEMENT"
+
+
+def device_reimb_line(line_map, default_line):
+    """PURE: the P&L line the device-financing reimbursement component books to under this org's
+    own routing — `component_line` for that component, dereferenced so no caller spells it."""
+    return component_line(DEVICE_FINANCING_COMPONENT, line_map, default_line)
+
+
+def device_reimb_components(line_map, default_line):
+    """PURE: the components whose dollars ARE the device-financing side, per this org's routing.
+
+    EMPTY when the org has not routed that component off `default_line`: with no routing declared
+    there is no declaration of "this money is not commission", and a caller must then say it has
+    measured nothing rather than guess (that is §65's `configured: false`).
+
+    A component sharing the destination line is included — one line is one kind of money on the
+    books, and an org that routes two components together has said they are the same money. A
+    component routed to a DIFFERENT line of its own is not this money, which is the whole §69
+    correction."""
+    line = device_reimb_line(line_map, default_line)
+    if not line or line == default_line:
+        return set()
+    return {str(k).strip().upper() for k, v in (line_map or {}).items()
+            if str(v or "").strip() == line and str(k).strip().upper() in COMPONENTS}
+
+
 # Whose figure the device-financing reimbursement line carries. An unknown value keeps the house
 # default, so a typo can never silently re-recognise revenue.
 DEVICE_REIMB_SOURCES = ("carrier_paid", "distributor_claim")
@@ -192,6 +274,15 @@ def default_config():
     collapsed) to one of `COMPONENTS`. The house map covers the three spellings the platform's own
     seed vocabulary uses for each component plus the hyphen variant the house org actually stores; a
     category with no row here is `declared_category_unmapped` and is REPORTED, never guessed.
+
+    THE DEFAULT MAP DELIBERATELY DOES NOT SEED EVERY COMPONENT (§69). Mapping a category is a MONEY
+    MOVE: it decides which P&L line the dollars of every payment type declared to that category book
+    on, so the destination is the owner's to name in the same breath — exactly why `component_lines`
+    below ships empty. A default row for a kind of money an org already declares would restate a
+    booked statement on merge, with the destination defaulting to the caller's generic line. So the
+    vocabulary ships able to EXPRESS those kinds of money and the org's own row activates them,
+    paired with their line in one config write. Measured 2026-10-10: of the three live tenants only
+    the house org declares any category at all, so this default is byte-identical for all three.
 
     `rename_pattern` is the per-org shape of a period-renamed payment type: a regex with named
     groups `period` (the part that changes as the carrier re-issues the offer) and `stem` (the part
@@ -246,16 +337,24 @@ def default_config():
         # `GP_UNCLASSIFIED_COLUMN` and is reported rather than folded into a column that would mean
         # something else. These defaults reproduce what the GP report's columns have always MEANT —
         # the defect was never the columns, it was the classification feeding them.
+        # EVERY component has a row, and `harness_declared_category_honourable.py` fails the build
+        # if one does not: a component with no row lands in `GP_UNCLASSIFIED_COLUMN`, so adding a
+        # component without a column would turn real money into "unclassified" by omission — the
+        # §69 trap, caught on the way in.
         "gp_component_columns": {
             "COMMISSION": GP_COMMISSION_COLUMN,
             "SPIFF": GP_COMMISSION_COLUMN,
             "RESIDUAL": GP_COMMISSION_COLUMN,
             "REIMBURSEMENT": "reimb",
+            "MDF": "mdf",
+            "CHARGEBACK": "chb",
         },
-        # The GP report has two money columns the four-component vocabulary has no component for.
-        # They are keyed by the org's DECLARED CATEGORY (normalised by `_norm`, so the hyphen and the
-        # casing the house actually stores cannot miss) and exist so an MDF or chargeback dollar
-        # keeps its own column instead of becoming unclassified money.
+        # THE LAST-RESORT GP PLACEMENT, kept (§66): when a dollar's component is not evidence
+        # about it, the org's own DECLARED CATEGORY names the column. Keyed by category (normalised
+        # by `_norm`, so a hyphen or the casing a tenant stores cannot miss). Since §69 the
+        # vocabulary HAS a component for both of these kinds of money, so a declaration the org's
+        # own `category_components` row maps never reaches here — this is what still places the
+        # dollar for an org that has not mapped it, instead of leaving real money unclassified.
         "gp_category_columns": {"mdf": "mdf", "chargeback": "chb"},
         "config_columns_missing": [],
         "config_migrations_missing": [],
