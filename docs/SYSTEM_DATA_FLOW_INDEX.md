@@ -94,6 +94,7 @@ Primary code homes:
 | 67 | **Bank deposit is a step, not a form on a report** | "Where does a bank deposit get recorded, and can a sealed envelope be opened at the store that found it?" |
 | 68 | **An entitlement is a count of months PER STORE** | "The ramp-up subsidy is only 12 months per store and the carrier is winding it down — which store-month inside a store's own entitlement never arrived? Why is a store with no declared start month reported NOT MEASURED instead of missing its whole term, why is a month no payment reached us for at all kept apart from the gaps, and why is a month that has not finished never missing?" |
 | 69 | **A declaration must be HONOURABLE — the vocabulary has to be able to express it** | "My own declaration says this carrier money is MDF, so why is it booking on the device reimbursement line? When the platform cannot express the category I declared, who decides where the dollar goes — me or a keyword rule? And which months need a P&L recompute once it is fixed?" |
+| 72 | **The frontend type check is a CHECK** | "A frontend TypeScript error was invisible to all 49 GitHub checks while the Vercel deploy was red on every head — what compiles the frontend in CI now, where is that gate, why can it not skip silently on tsconfig.json or package.json, and what stops someone reaching green with `strict: false`, `ignoreBuildErrors` or a blanket `@ts-ignore`?" |
 
 ---
 
@@ -23513,3 +23514,138 @@ number `1069` is NOT renumbered — it is unique on disk and uniqueness is the o
 numbering lock asserts (`harness_unique_numbers_lock.py`); a migration number does not have to match
 its index section, and renaming an applied-or-pending file is the riskier change. See the
 index-section-number race in §62.
+
+
+---
+
+## 72. THE FRONTEND TYPE CHECK IS A CHECK — a type error must fail something, not only a deploy nobody is required to read (owner directive 2026-10-10)
+
+Owner, verbatim: *"fix the frontend type error"*.
+
+### 72.1 THE CLASS, NOT THE INSTANCE
+
+The instance: a `SCREENS` entry whose key sat outside the closed `ScreenKey` union in
+`frontend/src/components/ScreenLink.tsx`. It was found **by hand** with `npx tsc --noEmit` during the
+§68 work, and it is already fixed and merged — so this section is not about it.
+
+The class is the reason it stayed hidden: **nothing in `.github/workflows/` ran the TypeScript
+compiler at all.** Measured on `origin/main` (`1c73ba09`) before any of this was designed:
+
+- `frontend/package.json` declared exactly `dev`, `build`, `start`, `lint` — **no type-check script**.
+- Across all ten workflows, the only occurrence of `tsc` was a **comment** describing a proof that
+  transpiles ONE display module. No job, step or script ran `tsc`, `typecheck` or `type-check`.
+- So all **49** checks on every head of PR #432 were green while the Vercel deploy was **red on every
+  one of them** — and Vercel is not a required check, so its red told nobody.
+
+This is §19.18's class once more: a mechanism that fully exists (TypeScript, `strict: true` already
+set in `frontend/tsconfig.json`) with **no caller wired to it**. Fixing the union and stopping there
+would have left the next type error exactly as invisible as this one was.
+
+### 72.2 WHAT MAIN ACTUALLY MEASURED — and therefore NO debt file
+
+Measured on a clean `origin/main` with the repo's own compiler (`typescript@5.9.3`), after a real
+`npm ci`:
+
+| What | Measured |
+|---|---|
+| `tsc --noEmit` over the whole frontend | **0 errors** |
+| Files in the program / under `frontend/src` | 1309 / **547** (every `.ts`/`.tsx` on disk) |
+| Same, WITH Next's generated route types (`next typegen`) | **0 errors** |
+| `@ts-nocheck` / `@ts-ignore` / `@ts-expect-error` under `frontend/` | **0 / 0 / 0** |
+| `typescript.ignoreBuildErrors` in `next.config.ts` | absent |
+
+Main is **clean**, so this ships as a plain gate that must stay clean. It deliberately does **NOT**
+get a pinned debt list in the shape of `frontend/table_sort_pending.txt` or
+`backend/harness_unrun_pending.txt`: there is no debt to register, and a ratchet file holding zero
+entries is a decoration that teaches the next reader the gate is negotiable. If the frontend had been
+red, that ratchet shape — and not a relaxed `tsconfig` — would have been the answer.
+
+### 72.3 THE ONE HOME, AND THE GATE
+
+**One home for the command.** `frontend/package.json` now declares
+
+    "typecheck": "next typegen && tsc --noEmit"
+
+CI **dereferences** that script (`npm run typecheck`) rather than spelling the compiler invocation a
+second time, so what CI checks is exactly what a developer runs — the §19.18 "one fact, one home,
+dereferenced, never copied" rule applied to a command. `next typegen` is inside the script because it
+generates `next-env.d.ts` (gitignored) and `.next/types/**`, both of which `tsconfig.json` already
+`include`s; without it CI would check strictly LESS than the Vercel build does.
+
+**The gate.** Job `frontend-typecheck` in `.github/workflows/carrier-vocab-guard.yml` — checkout,
+`setup-node@v4` (node 22), `npm ci --ignore-scripts --no-audit --no-fund`, `npm run typecheck`.
+
+*Why that workflow, and not a new one (the duplicate-check gate).* `carrier-vocab-guard.yml` already
+fires on `frontend/src/**` for **both** `pull_request` and `push`, already declares the top-level
+`defaults: run: shell: bash` that `harness_ci_pipefail_lock.py` requires, and already carries the
+`setup-node` + `npm ci --ignore-scripts` recipe in its `pl-drill-path-proof` job. A new workflow would
+duplicate all three. *Why its own job, and not a step inside `pl-drill-path-proof`:* a whole-frontend
+type failure must not report as "P&L drill-path proof" failing, and the two gates should not share a
+runtime.
+
+*Why the path filter was widened.* `frontend/src/**` alone does **not** match `frontend/tsconfig.json`,
+`package.json`, `package-lock.json`, `next.config.ts` or `site-routing.ts` — every one of which can
+introduce or hide a type error. The filter now names **`frontend/**`** on both `pull_request` and
+`push`, plus the lock's own harness (the §13e lesson: a harness at the backend root is outside the
+`backend/app` glob it guards). **A gate that skips silently on the very file that broke the build is
+worse than no gate, because it reports green.**
+
+### 72.4 THE LOCK — so it cannot un-wire
+
+`backend/harness_frontend_typecheck_lock.py` — **33 checks**, stdlib only, DB-free. It runs **in the
+`frontend-typecheck` job itself**, as the first run step, before `npm ci` (it needs no `node_modules`),
+so its verdict is reported even when `tsc` is what goes red. It is deliberately NOT in the
+dependency-free `carrier-vocab-guard` job: see §72.5 — that job is red on main today, and a step after
+a failed step never runs, so the lock would have been silently unexecuted. A lock belongs with the gate
+it guards. It fails the build on each way the gate could quietly stop being one:
+
+| | Fails the build when |
+|---|---|
+| (a) | `frontend/package.json` has no `typecheck` script, or one that does not run `tsc --noEmit` |
+| (b) | no workflow runs `npm run typecheck`, or runs it in a job that never installs `node_modules` (§19.25: a gate that dies on its first line is not a gate) |
+| (c) | a workflow **runs** `tsc --noEmit` itself instead of dereferencing the script — a second home that will drift |
+| (d) | the gate's workflow `pull_request` or `push` filter stops covering `frontend/**` — i.e. the gate could skip silently |
+| (e) | `tsconfig.json` drops `strict: true` / `noEmit: true`, drops a source glob from `include`, or `exclude`s anything under `src` |
+| (f) | `next.config.ts` sets `typescript.ignoreBuildErrors: true` — the one switch that silences the only signal that reported this defect |
+| (g) | a blanket `@ts-nocheck` or `@ts-ignore` appears anywhere under `frontend/` (both at 0 today). `@ts-expect-error` is deliberately **permitted**: it fails the build once the error it names is gone, so it cannot rot, and banning the honest form pushes people to the dishonest one |
+| (h) | any rule above has stopped being able to go RED — every one is driven against a synthetic input |
+
+Verified RED against the pre-fix tree: run against `origin/main`'s own `package.json` and workflows it
+reports 4 failures and exits 1, naming (a) and (b).
+
+Two of its own negative controls caught real bugs in it while it was being written — a job-boundary
+slice that read every correctly-wired job as having no install, and a second-home scan that flagged
+the lock's own job comment and step `name:` for *saying* `tsc --noEmit` while running nothing. A prose
+mention is not a second home; a `run:` value is, and only `run:` values are scanned now.
+
+### 72.5 What this does NOT do, stated so it is not mistaken for done
+
+- **`harness_carrier_vocab_guard.py` is RED on `origin/main` (`1c73ba09`) right now, and this change
+  does not fix it.** Reproduced on a pristine `origin/main` worktree before and after, byte-identical:
+  `modules/commcalc/router.py:22512` emits `'could not save the excluded-seller list (is migration …'`,
+  a shape the setup-notice boundary does not recognise, so the setup-internals lock fails — and with it
+  the FIRST run step of the dependency-free `carrier-vocab-guard` job, which means **every step after it
+  in that job is currently not running at all.** That is a live §19.25 instance affecting many locks,
+  it is a backend-copy defect in a different subsystem, and it is REPORTED here rather than quietly
+  worked around. It is the reason §72.4's lock sits in its own job. It is owed its own change.
+- **It does not make the Vercel deploy a required check.** That is a repository setting, not code, and
+  it is the other half of this class: a build host whose red is advisory. Worth the owner's one toggle.
+- **It does not run ESLint as a gate.** `npm run lint` exists and nothing runs it either. Same class,
+  separate change — the eslint surface was not measured here and a gate nobody measured first is how
+  a debt file gets invented.
+- **It does not type-check `frontend/prove_*.mjs`.** Those are plain `.mjs`, outside `tsconfig.json`'s
+  `include`, and each is already executed by its own CI job.
+- **`website/`** was checked for a sibling frontend: it is plain HTML/CSS with no `tsconfig.json`, so
+  there is no second type-check path to wire.
+
+### 72.6 Cross-references
+
+Registers **no table, no endpoint, no metric and no report** — so §16 (by TABLE), §17 (by ENDPOINT)
+and §18 (by METRIC/KPI) carry nothing for it, and a row invented in any of them would be noise in the
+cross-reference people rely on. What it registers is a CI gate and a lock:
+
+- `.github/workflows/carrier-vocab-guard.yml` → job `frontend-typecheck`; the `harness_frontend_typecheck_lock.py` step in the `carrier-vocab-guard` job; `frontend/**` on both path filters.
+- `frontend/package.json` → the `typecheck` script (the one home).
+- `backend/harness_frontend_typecheck_lock.py` → the lock (33 checks).
+- Ratchet precedents read and deliberately NOT copied: §19.25 / `harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt` (§72.2 says why).
+- Same class: §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate), §13e (a harness outside the glob it guards).

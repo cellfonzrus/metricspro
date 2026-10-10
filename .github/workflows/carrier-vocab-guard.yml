@@ -688,10 +688,21 @@ on:
       - "backend/harness_gp_store_identity.py"
       - "backend/app/modules/account/store_identity.py"
       - "database/migrations/1066_commission_leg_rollup_store_address.sql"
+      # index §72 — THE FRONTEND TYPE CHECK. `frontend/src/**` above covers the pages, but a type
+      # error is just as easily introduced by tsconfig.json (strictness), package.json /
+      # package-lock.json (a @types bump), next-env.d.ts or a .ts file at the frontend ROOT
+      # (next.config.ts, site-routing.ts) — none of which that glob matches. A gate that skips
+      # silently on the very file that broke the build is not a gate, so the whole directory is
+      # named here and in the push filter below.
+      - "frontend/**"
+      - "backend/harness_frontend_typecheck_lock.py"
   push:
     branches: [main]
     paths:
       - "frontend/src/**"
+      # index §72 — the frontend type check; same reason as the pull_request filter above.
+      - "frontend/**"
+      - "backend/harness_frontend_typecheck_lock.py"
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/app/modules/commcalc/report_kinds.py"
@@ -1105,6 +1116,52 @@ jobs:
       - name: Run the Account-hub expenses-column proof (the display contract behind the Expenses column)
         working-directory: frontend
         run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE FRONTEND TYPE CHECK (index §72, owner directive 2026-10-10: "fix the frontend type error").
+  # Nothing in this repo ran `tsc` as a gate. A `SCREENS` key outside the closed `ScreenKey` union in
+  # components/ScreenLink.tsx made the compiler red, all 49 checks on PR #432 stayed green on every
+  # head, the Vercel deploy was RED on every one of them — and Vercel is not a required check, so its
+  # red told nobody. The error was found by hand. This job is the gate; the instance is already fixed.
+  #
+  # It lives HERE, in carrier-vocab-guard, rather than in a new workflow, because this workflow already
+  # fires on `frontend/src/**` for BOTH pull_request and push, already declares the top-level
+  # `defaults: run: shell: bash` that the pipefail lock requires, and already carries the
+  # setup-node@v4 / `npm ci --ignore-scripts` recipe (see pl-drill-path-proof below). A new workflow
+  # would duplicate all three. It is its OWN job rather than a step inside pl-drill-path-proof so that
+  # a whole-frontend type failure does not report as "P&L drill-path proof" failing, and so the two
+  # gates do not share a runtime.
+  #
+  # ONE HOME for the command: frontend/package.json's `typecheck` script. CI dereferences it rather
+  # than spelling `tsc --noEmit` a second time, so what CI checks is exactly what a developer runs.
+  # `next typegen` inside that script generates next-env.d.ts (gitignored) and .next/types, both of
+  # which tsconfig.json `include`s — without it CI would check LESS than the Vercel build does.
+  # Locked by backend/harness_frontend_typecheck_lock.py (run in the guard job above).
+  frontend-typecheck:
+    name: Frontend type check (tsc --noEmit over the whole frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      # The lock lives in THIS job, beside the gate it guards, and not in the dependency-free
+      # carrier-vocab-guard job above. Two reasons, and the first is measured: that job's FIRST run
+      # step (harness_carrier_vocab_guard.py) is RED on main today for an unrelated backend string
+      # (commcalc/router.py:22512 names a migration in a shape the setup-notice boundary does not
+      # recognise), and a step after a failed one never runs — so the lock would have been silently
+      # unexecuted, which is the very §19.25 defect it exists to prevent. Second, a lock belongs with
+      # the thing it guards. It is stdlib-only and needs no node_modules, so it runs BEFORE the
+      # install: its verdict is reported even when tsc itself is what goes red.
+      - name: "Run the frontend type-check gate lock (index §72): the gate has ONE home, a workflow runs it with node_modules installed, its path filter covers frontend/**, and strictness / ignoreBuildErrors / blanket @ts-ignore cannot be used to reach green"
+        working-directory: backend
+        run: python3 harness_frontend_typecheck_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install the frontend's dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Type-check the whole frontend (the ONE home — package.json `typecheck`)
+        working-directory: frontend
+        run: npm run typecheck 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
