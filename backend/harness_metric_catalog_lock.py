@@ -133,10 +133,13 @@ TABLE_OWNERS = {
     "incentive_rule": {"backend/app/modules/commcalc/router.py"},
     "incentive_rule_assignment": {"backend/app/modules/commcalc/router.py"},
 }
+# Scanned as table ACCESS (`.table("x")` / `.from_("x")`), not as the bare word: `core/module_graph.py`
+# names tables in the prose of its facts, and a scanner that cried wolf there would get switched off.
 for table, owners in TABLE_OWNERS.items():
+    access = re.compile(r"""(?:table|from_)\s*\(\s*["']""" + re.escape(table) + r"""["']""")
     offenders = sorted({rel(p) for p in py_files(APP)
-                        if table in code_only(p) and rel(p) not in owners})
-    eq(offenders, [], f"B-{table}: only its owner names the table")
+                        if access.search(code_only(p)) and rel(p) not in owners})
+    eq(offenders, [], f"B-{table}: only its owner reaches the table")
 
 # And the owner must reach it through ONE function, not scattered queries.
 closing_router = code_only(os.path.join(APP, "modules", "closing", "router.py"))
@@ -236,8 +239,12 @@ ok(re.search(r"['\"]individual_sales['\"]\s*,\s*['\"]equal['\"]",
    "F2 the split scanner fires on a planted copy")
 ok(re.search(r'''\.get\(\s*["']counts["']\s*\)''', 'row.get("counts")') is not None,
    "F3 the counts-reader scanner fires on a planted read")
-ok("closing_metric_line" in 'client.table("closing_metric_line")',
+ok(re.search(r"""(?:table|from_)\s*\(\s*["']closing_metric_line["']""",
+             'client.table("closing_metric_line")') is not None,
    "F4 the table scanner fires on a planted query")
+ok(re.search(r"""(?:table|from_)\s*\(\s*["']closing_metric_line["']""",
+             'the closing_metric_line table holds the lines') is None,
+   "F4b ...and NOT on prose that merely names the table (module_graph's facts)")
 ok(re.search(r"(_metrics|metric_catalog)\s*\.\s*build\s*\(", "metric_catalog.build(defs)") is not None,
    "F5 the construction scanner fires on a planted build")
 ok(code_only(os.path.join(APP, "modules", "closing", "metric_catalog.py")) != "",

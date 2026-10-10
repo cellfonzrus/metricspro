@@ -183,6 +183,46 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_engine.py': ('device_cogs',),
         },
     },
+    'declared_metric_catalog': {
+        "question": 'What does this business DECLARE at the end of a day, what is a unit worth, and '
+                    'who declared it? Asked by the closing form, the Count Fields editor and the '
+                    'daily-incentive rules. ONE registry; the two physical stores '
+                    '(daily_closing.counts and closing_metric_line) are folded by one reader, and a '
+                    'store-level figure is never attributed to a person.',
+        "homes": ('app/modules/closing/metric_catalog.py',),
+        "index": ('72',),
+        "locks": ('harness_metric_catalog_lock.py', 'harness_daily_incentive.py'),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04, and on 2026-10-10 it stripped the hand-written caller comments
+        # off five facts; that run was reverted).
+        "callers": {
+            # The ONE construction site (`_metric_catalog`), the store-day fold and the metric-line
+            # writer. Every closing endpoint that offers a category list routes through it.
+            'app/modules/closing/router.py': ('_metrics',),
+            # The incentive engine measures THROUGH the catalog — `gross_revenue`, `units_of`,
+            # `amount_of` — so a payout rule and a target cannot disagree about what a day's sales
+            # were. It holds no category list and no second definition of revenue.
+            'app/modules/commcalc/daily_incentive.py': ('mc',),
+            # The rule editor and the day calculation reach the catalog through the closing home's
+            # `_metric_catalog`, never by building one.
+            'app/modules/commcalc/router.py': ('_mc',),
+        },
+    },
+    'daily_incentive_shapes': {
+        "question": 'What does a day\'s declared categories PAY each employee? Three SHAPES only; '
+                    'every rule, category, rate, threshold and split is a config row. A gate that '
+                    'cannot be verified fails closed, and a pool whose split cannot be measured is '
+                    'returned unallocated rather than split evenly.',
+        "homes": ('app/modules/commcalc/daily_incentive.py',),
+        "index": ('72',),
+        "locks": ('harness_daily_incentive.py', 'harness_metric_catalog_lock.py'),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (see the note above).
+        "callers": {
+            # The rule editor and the day calculation. Scope precedence is NOT here — it is
+            # `management_incentive.resolve_plan`, so there is no second ladder.
+            'app/modules/commcalc/router.py': ('_daily_incentive',),
+        },
+    },
     'store_identity': {
         "question": 'Which STORE is this string? Asked by the GP report, the commission-leg '
                     'trend/breakout, the residual report, flags 7/8, the closing store-day match, '
