@@ -93,6 +93,7 @@ Primary code homes:
 | 66 | **A fallback-basis component is a placement of last resort** | "Why does the Gross Profit report show one declared pay type in the Comp Rebate column on one feed and the Comp MDF column on the other? When may a keyword guess override the org’s own declaration (never), and what should a report do with a dollar whose component was a guess — decline it, or name a column for it?" |
 | 67 | **Bank deposit is a step, not a form on a report** | "Where does a bank deposit get recorded, and can a sealed envelope be opened at the store that found it?" |
 | 69 | **A declaration must be HONOURABLE — the vocabulary has to be able to express it** | "My own declaration says this carrier money is MDF, so why is it booking on the device reimbursement line? When the platform cannot express the category I declared, who decides where the dollar goes — me or a keyword rule? And which months need a P&L recompute once it is fixed?" |
+| 73 | **A cash figure a human typed is evidence — a correction keeps the old one** | "Management typed the wrong cash amount at recon — can they fix it, and will anyone be able to tell it was changed, by whom, from what? Why is an edit button without a trail the same defect migration 935 already fixed once?" |
 
 ---
 
@@ -3651,6 +3652,11 @@ the owner wants it).
 
 **Purpose.** Reconcile cash collected at close vs cash actually deposited in the bank, per store per day.
 
+> **A COUNT MAY BE CORRECTED, AND EVERY CORRECTION IS ON THE RECORD — see §73.** A counted
+> envelope carries `✏️ edit` on the board, and all three writers of a management cash count
+> append to ONE trail (`commcalc.cash_count_revision`, mig `1071`). A re-save of the same
+> figure records nothing; a first entry is not a correction; an erasure is.
+>
 > **The BANKING STEP is now its own screen — see §67.** `/closing/bank-deposit` sits between the two
 > pickups and this reconciliation, with Store Cash and bill-payment cash in their own sections
 > (declared by the category's mig-509 `basis`, never a new column). It derives nothing: the figures
@@ -6244,6 +6250,7 @@ rendering the resolved name.
 
 - `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§70).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
+- `commcalc.cash_count_revision` (mig `1071`) — APPEND-ONLY trail of every correction to a management cash count, one row per FIELD whose stored value changed, across `cash_pickup` / `billpay_pickup` / `envelope_count` (`subject_table` is a VALUE, not a branch). Written in ONE place, `closing/router._write_count_revisions`, from `closing/count_revision.revision_rows`; read by `GET /closing/deposit-accountability`. Nothing updates or deletes a row here — that is what makes it evidence; `harness_cash_count_revision.py` §D fails the build on a writer that stops appending (§73).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
 
@@ -6493,6 +6500,7 @@ rendering the resolved name.
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
 - `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§70) — one reconciliation, two readers, never two derivations.
+- `POST /closing/pickup/open-count` · `POST /closing/billpay-pickup/open-count` — open a SEALED envelope and record the count, **or CORRECT a count already entered** (owner 2026-10-10). Optional `note` for why. Every changed field appends to `commcalc.cash_count_revision` through the one writer, and the reply carries `corrections` / `history_recorded` / `history_detail` so a trail that could not be written is stated rather than implied (§73.5). `POST /closing/pickup` and `POST /closing/envelope-count` return the same two keys.
 - `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1069): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§70).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
@@ -23353,3 +23361,110 @@ number `1069` is NOT renumbered — it is unique on disk and uniqueness is the o
 numbering lock asserts (`harness_unique_numbers_lock.py`); a migration number does not have to match
 its index section, and renaming an applied-or-pending file is the riskier change. See the
 index-section-number race in §62.
+
+---
+
+## 73. A CASH FIGURE A HUMAN TYPED IS A STATEMENT BY THAT HUMAN — replacing it without keeping the old one destroys evidence (owner ask 2026-10-10)
+
+Owner, verbatim: *"also need to edit the cash entered by the management during cash recon"*.
+
+### 73.1 Two defects wearing one hat
+
+1. **No way in.** The deposit-accountability board offered `📂 open & count` on a **SEALED** envelope
+   only (§67.2). Once a count existed the cell rendered *"N counted · by X"* as text, so a typo — a
+   transposed figure, a count entered against the wrong envelope — could not be corrected from the
+   screen it was entered on.
+2. **And no record if you got in anyway.** All three writers of a management cash count UPDATE or
+   UPSERT in place, so a second save REPLACED the first with nothing kept: not the previous figure,
+   not who had entered it, not that it had ever been different.
+
+### 73.2 The class, not the instance
+
+Defect 2 is **migration `935` happening again** — that migration exists because *"the verification
+row is an UPSERT, so a second DM save overwrote the previous `dm_*` correction with no history"*. The
+same sentence was true of a cash count, and a cash count is worse: when it reads short,
+`envelope_report.chargeback_parent_row` can turn it into money off a named rep's pay.
+
+So the fix is not an edit button on one screen. It is ONE append-only trail that EVERY writer of a
+management cash count appends to:
+
+| Writer | Screen | Table |
+|---|---|---|
+| `router._confirm_pickup_impl` | Cash Pickup / Bill Payment Pickup | `cash_pickup` / `billpay_pickup` |
+| `router._open_count_impl` | the late open on the recon board (§67.2) | `cash_pickup` / `billpay_pickup` |
+| `router.save_envelope_count` | Management Envelope Receipt (§12) | `envelope_count` |
+
+`closing/count_revision.revision_rows` is the ONE place that decides what a correction IS; the router
+has ONE writer, `_write_count_revisions`, that inserts what it returns.
+**`harness_cash_count_revision.py` §D fails the build** if a writer of a count column stops calling
+it, if anything else inserts into the table, or if anything updates or deletes a revision row — so
+the trail cannot un-wire, which is the failure mode §19.18 records three times.
+
+`_confirm_pickup_impl` previously had no prior value to compare (it upserts blind), so it now does
+ONE batched read of the existing rows for the dates in the batch. Without that, the trail would have
+covered one of two pickup writers — the half-fixed defect CLAUDE.md calls *"the same defect wearing a
+hat"*.
+
+### 73.3 What is recorded, and what is not
+
+- **Only a real change.** Re-saving the same number writes nothing (compared on **rounded cents**, so
+  `250` and `250.00` are one figure; text trimmed). A **first entry is not a correction** — nothing
+  was overwritten. A value being **REMOVED is** a correction: a figure taken away is exactly what a
+  reviewer needs to see. `$0.00 → $0.00` is a no-op, `absent → $0.00` a first entry, `$0.00 → absent`
+  a correction.
+- **The write, not a diff.** `revision_rows` takes the writer's own patch, so a field the writer never
+  touched can never be logged as changed.
+- **Money and text in separate columns**, so a figure is never read back out of a string and a
+  reviewer can total the corrections.
+- **Re-attribution counts.** Changing `actual_counted_by` / `counted_by` is a change like moving the
+  figure — a count silently re-attributed to a different person is still a different statement.
+- **Never a change without a changer, never a lost change either.** `changed_by` is NULLABLE and a
+  NULL reads as *not recorded*; dropping the revision because the actor is unknown would lose the
+  evidence to protect the attribution, which is backwards.
+- **The reason is OPTIONAL.** A correction refused for want of a reason is a correction that does not
+  happen; the un-reasoned edit is on the record either way.
+
+### 73.4 Why a new table and not a column (the duplicate-check gate)
+
+A column cannot hold a HISTORY: one `previous_amount` keeps only the last-but-one value, the same
+defect one step back. The existing audit tables are each bound to their own subject
+(`daily_closing_verification_audit` mig `935` is keyed on a verification row and names the six `dm_*`
+money columns; the `core.access_log` family records READS, not value changes), so none can carry a
+cash count from three different tables. `commcalc.cash_count_revision` (mig `1071`) is deliberately
+**subject-parameterised** — `subject_table` is a VALUE, not a branch (RULE TWO) — so the fourth count
+writer needs no fourth audit table. Its CHECK constraint is pinned to `count_revision.SUBJECTS` by the
+harness, so the database cannot hold a subject the module has no behaviour for.
+
+### 73.5 Surfaces
+
+- **Module:** `backend/app/modules/closing/count_revision.py` — PURE (no I/O, no framework
+  import, no clock of its own; the caller passes `changed_at`). Proof:
+  `backend/harness_cash_count_revision.py`.
+
+- `POST /closing/pickup/open-count` · `/closing/billpay-pickup/open-count` — now accept an optional
+  `note` and return `corrections` / `history_recorded` / `history_detail`. `POST /closing/pickup`
+  and `POST /closing/envelope-count` return `corrections` / `history_recorded` too.
+- `GET /closing/deposit-accountability` — each envelope carries `pickup_row_id`, `corrections` and
+  `correction_history` (sentences built by `count_revision.describe`, so the screen words nothing
+  itself), plus a board-level `corrections` fold over the **visible** rows only (keyset consistency,
+  like `summary`) and `history_available`.
+- `/closing/deposit-recon` — a **counted** envelope now carries `✏️ edit`, the modal pre-fills the
+  stored figure, offers a reason, lists what has already been corrected, and the reply says when a
+  correction saved but its history could not be recorded (never silently).
+- Migration `1071` (new table, append-only; 💰 moves no money — it books nothing, pays nothing,
+  settles nothing, and no payout path reads it).
+
+### 73.6 Seams, reported not hidden
+
+- **Adaptive, not blocking** (the mig-201 precedent): on an un-migrated database the correction still
+  records the COUNT and the response says the history was not recorded. A trail that refused the edit
+  would be a worse outcome than a missing trail.
+- `amount_moved` is the sum of **ABSOLUTE** deltas, not the net: `+$200` then `−$200` is two people's
+  figures being changed, not nothing happening.
+- Correcting a count can change a variance that a human later turns into a chargeback — through the
+  EXISTING, human-ticked `envelope_report` flow (§12), never from here. This module creates no
+  liability and settles none.
+- A revision whose `changed_at` is missing still appears in its own history rather than being dropped.
+- **Section number**: §68 and §72 were claimed in flight by open PRs, §69–71 are taken, so this is
+  §73; migration `1071` is not renumbered to match (uniqueness is the only property
+  `harness_unique_numbers_lock.py` asserts). See the index-section-number race in §62.
