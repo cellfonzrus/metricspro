@@ -165,7 +165,7 @@ INGEST_TABLES_BY_MODULE = {
         "storeops.employees", "storeops.stores", "storeops.store_alias",
         "storeops.store_merchant_id", "store_mapping",
         "storeops.google_review_store", "storeops.google_review_snapshot", "storeops.google_review_item",
-        # THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1070, owner ask 2026-10-10, index §14z). Landed by
+        # THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1073, owner ask 2026-10-10, index §14z). Landed by
         # the EXISTING email sweep (upload_type 'clock_punch') through the EXISTING column_mapping
         # engine — no second sweep, no second mapper. It is a CLAIM about each store-day and is
         # deliberately NOT storeops.timelog: our own punches are a measurement, the report is somebody
@@ -229,7 +229,7 @@ FRESHNESS_COLUMN_BY_TABLE = {
     "asset_ledger": "uploaded_at",
     "pos_tender_summary": "updated_at",
     "inventory_value": "updated_at",
-    # The B2B clock report (mig 1070): rows are replaced per slice on a re-send, so `created_at` moves
+    # The B2B clock report (mig 1073): rows are replaced per slice on a re-send, so `created_at` moves
     # on a re-write — exactly the daily_sales_feed trap. `arrived_at` is stamped once, when the row
     # first lands, and is the only honest answer to "is the clock report still arriving?".
     "storeops.raw_clock_punch": "arrived_at",
@@ -343,12 +343,12 @@ FULL_REPLACE_UPLOAD_TYPES = frozenset({
     # each is a per-period SNAPSHOT of the same numbers, rewritten whole on every ingest.
     "x_report",
     "sales_trend",
-    # ⚠ DELIBERATELY ABSENT: 'clock_punch' (the B2B clock in / clock out report, mig 1070). A clock
+    # ⚠ DELIBERATELY ABSENT: 'clock_punch' (the B2B clock in / clock out report, mig 1073). A clock
     # report for a store is sent PER STORE and often per week, so a day's slice arrives in several
     # files and each file is a FRAGMENT of the period, never a snapshot of it. Collapsing older copies
     # would silently drop whole stores' punches, and a dropped punch is exactly the variance this feed
     # exists to surface. Its ingest replaces its OWN key (org, store string, person string, day,
-    # clock-in instant — the unique index in mig 1070), so a re-sent file is idempotent without a
+    # clock-in instant — the unique index in mig 1073), so a re-sent file is idempotent without a
     # period-wide delete. Stated here rather than left implicit, because `replaces_whole_period`
     # returning False by default would otherwise read as nobody having thought about it.
 })
@@ -491,7 +491,7 @@ DATA_DATE_COLUMN_BY_TABLE = {
     "raw_mi": None,
     COMMISSION_PER_DEVICE_FEED: None,
     # day-grain operational feeds
-    # The B2B clock in / clock out report (mig 1070, §14z): one row per punch, and `business_date` is
+    # The B2B clock in / clock out report (mig 1073, §14z): one row per punch, and `business_date` is
     # the DAY THE PUNCH IS ABOUT — never `arrived_at`, which only says when the mailbox delivered it.
     # The distinction is load-bearing here: the file arrives at 08:00 for the PREVIOUS day, so the two
     # dates are never equal and a watchdog reading arrival would call a current feed a day stale.

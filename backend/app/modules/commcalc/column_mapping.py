@@ -93,7 +93,7 @@ TARGET_FIELDS = {
         ("has_payment_detail", "Has payment detail", "text", False, "HasPaymentDetail", ["Has Payment Detail"]),
         ("internal_brand", "Internal brand", "text", False, "InternalBrand", ["Internal Brand"]),
     ],
-    # ── THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1070, owner ask 2026-10-10, index §14z) ──
+    # ── THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1073, owner ask 2026-10-10, index §14z) ──
     # RULE TWO: not one carrier, POS or tenant word appears below. The default source headers and
     # aliases are the generic spellings a clock export uses; a tenant whose report spells a column
     # differently maps it on the Column Mapping page like every other report — no code change.
@@ -474,7 +474,7 @@ TABLE_MAP = {
     # Processor daily transaction detail (mig 903) — the ePay-shaped bill-pay feed the mig-939 coverage
     # recon reads; landed by epay_ingest.ingest (idempotent upsert), NEVER by the slice replace.
     "epay_daily_tx": "raw_epay_daily_tx",
-    # The B2B CLOCK IN / CLOCK OUT report (mig 1070, owner ask 2026-10-10, index §14z). Lands in the
+    # The B2B CLOCK IN / CLOCK OUT report (mig 1073, owner ask 2026-10-10, index §14z). Lands in the
     # storeops schema — the only entry here that does — because the clock belongs to the workforce
     # module, not to commcalc, and a feed about employees has no business in the commission tables.
     # The ingest reads the schema off TABLE_SCHEMA below rather than assuming commcalc.
@@ -485,7 +485,7 @@ TABLE_MAP = {
 
 # ── WHICH SCHEMA A LAYOUT'S TABLE LIVES IN ───────────────────────────────────────────────────────
 # Every table in TABLE_MAP is in `commcalc` except where this map says otherwise. Declared once, so a
-# landing can never be pointed at the wrong schema by a caller that assumed the default (mig 1070).
+# landing can never be pointed at the wrong schema by a caller that assumed the default (mig 1073).
 TABLE_SCHEMA = {
     "raw_clock_punch": "storeops",
 }

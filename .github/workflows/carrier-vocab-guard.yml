@@ -473,7 +473,7 @@ on:
       # the closing / storeops / commcalc routers) are already named above and by the push globs.
       - "backend/harness_market_resolution_guard.py"
       # index §14y/§14z — THE ONE HOME for paid hours and the clock-report variance / ask / gate
-      # (mig 1070). The harness NAMES ITSELF for the same §13e reason as the line above: a lock behind
+      # (mig 1073). The harness NAMES ITSELF for the same §13e reason as the line above: a lock behind
       # an allowlist that does not list its own file skips silently on the PR that edits it. Its
       # subjects are listed too, because the whole point of the lock is that a change to ANY of them
       # must re-run it — the pay path, the feed, the two vocabularies and the one accent fold.
@@ -492,7 +492,7 @@ on:
       - "backend/app/modules/account/store_identity.py"
       - "backend/app/modules/account/coa.py"
       - "backend/app/modules/hr/router.py"
-      - "database/migrations/1070_payroll_clocked_hours_basis.sql"
+      - "database/migrations/1073_payroll_clocked_hours_basis.sql"
       - "backend/app/modules/storeops/org_chain.py"
       - "backend/app/modules/closing/deposit_accountability.py"
       - "backend/app/core/actors.py"

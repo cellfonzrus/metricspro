@@ -256,7 +256,7 @@ check("a2 Harry's owed_total == /payroll's actual_pay (byte-exact)",
       (harry_owed["owed_total"], harry_payroll["actual_pay"]))
 check("a3 Harry: 03-02 (shift+punch same day) not double-counted (8h, not 16h)",
       next(d for d in harry_owed["days"] if d["date"] == "2026-03-02")["hours"] == 8.0)
-# mig 1070 — ONE basis vocabulary (`storeops/payroll_hours_basis.ALL_BASES`). The word for a day
+# mig 1073 — ONE basis vocabulary (`storeops/payroll_hours_basis.ALL_BASES`). The word for a day
 # with no measurement that the schedule is paid for is `schedule_opt_in`, not the old local
 # `'scheduled'`: the basis now says WHY the schedule is being paid, and `basis_pays_hours` is the
 # only thing that decides whether it pays at all.

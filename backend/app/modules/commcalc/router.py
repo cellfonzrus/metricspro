@@ -40,7 +40,7 @@ from app.modules.commcalc import whatif
 from app.modules.commcalc import implementation_spine
 from app.modules.commcalc import report_kinds as _report_kinds  # mig 1010 — THE report-kind registry (design §7)
 from app.modules.commcalc import connector_registry as _connector_registry  # mig 1014 — THE connector registry (its scope rides report_kinds' predicate)
-# THE ONE HOME for "what did the B2B clock in / clock out report say" (mig 1070, index §14z).
+# THE ONE HOME for "what did the B2B clock in / clock out report say" (mig 1073, index §14z).
 from app.modules.storeops import clock_feed as _clock_feed
 from app.modules.commcalc import vendor_rebate_feed   # mig 1005 — earned-vs-collected, books nothing
 from app.modules.commcalc import tax_collected as _tax_agg  # THE one per-(store, day) sales-tax pass
@@ -4306,7 +4306,7 @@ def _table_has_column(client, table, col):
     """Cheap probe: True if <schema>.<table> has <col>. Lets the config-driven ingest stamp OPTIONAL
     columns (e.g. carrier_id pre/post migration 081) without ever failing an upload on 42703.
 
-    The schema is `column_mapping.table_schema(table)` — the ONE home of that fact (mig 1070) — so a
+    The schema is `column_mapping.table_schema(table)` — the ONE home of that fact (mig 1073) — so a
     landing outside `commcalc` (the B2B clock report, in `storeops`) is probed where it actually
     lives instead of silently reporting every column as absent."""
     try:
@@ -4480,7 +4480,7 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     # commission) so the calc can sum per rep. Amount columns come from the per-tenant catalog (so
     # user-created categories are summed too); falls back to the hard-coded tuple pre-066. Any carrier
     # maps the columns it has; the rest stay 0.
-    # ── (d) THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1070, owner ask 2026-10-10, index §14z) ──────
+    # ── (d) THE B2B CLOCK IN / CLOCK OUT REPORT (mig 1073, owner ask 2026-10-10, index §14z) ──────
     #     Eleven shape facts the generic mapper cannot know, all of them in ONE home
     #     (`storeops/clock_feed`): the trailer checksum, the address-not-a-code store column (bound
     #     through `account/store_identity` — the platform's resolver, never a new matcher), the
@@ -4519,7 +4519,7 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             m['total_commission'] = round(sum(safe_float(m.get(a)) for a in amt_fields), 2)
 
     client = sb()
-    # WHICH SCHEMA THIS LANDING LIVES IN is the registry's fact, not an assumption (mig 1070):
+    # WHICH SCHEMA THIS LANDING LIVES IN is the registry's fact, not an assumption (mig 1073):
     # every layout's table is in `commcalc` unless `column_mapping.TABLE_SCHEMA` says otherwise, and
     # the B2B clock report lands in `storeops` because a feed about employees belongs to the
     # workforce module. Read once, here, so no statement below can land in the wrong schema.

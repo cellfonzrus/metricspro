@@ -209,7 +209,7 @@ FACTS: dict[str, dict] = {
             'app/modules/account/residual_subs.py': ('_sid',),
             # A closing store-day's match key (§29.12) — a named alias, no second copy.
             'app/modules/closing/unfinished_day.py': ('_sid',),
-            # `_leg_store_index` + the two commission-leg endpoints' row keys, and (mig 1070) the
+            # `_leg_store_index` + the two commission-leg endpoints' row keys, and (mig 1073) the
             # B2B clock report's `raw_store_string -> store CODE` resolver, which places a punch's
             # store through THIS chain rather than matching an address of its own.
             'app/modules/commcalc/router.py': ('_store_identity',),
@@ -225,7 +225,7 @@ FACTS: dict[str, dict] = {
             'app/modules/account/store_identity_audit.py': ('_sid',),
             # The B2B clock feed's own folds (`_fold`, login + punch-type keys) and the employee
             # matcher's person key ride the same accent fold, so a person and a store are folded by
-            # one rule (mig 1070, §14z).
+            # one rule (mig 1073, §14z).
             'app/modules/storeops/clock_feed.py': ('_sid',),
             'app/modules/storeops/payroll_identity.py': ('fold_accents',),
             # The remaining five identity folds, found by the lock's second axis and wired in the

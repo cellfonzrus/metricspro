@@ -6240,8 +6240,198 @@ flagged), `send_identity` is the only module that may define `report_label`, and
 rendering the resolved name.
 
 
+### 14y. PAID HOURS HAVE ONE HOME, AND IT ANSWERS WITH THE BASIS (owner directive 2026-10-10, mig `1073`)
+
+Owner: *"for the payroll menu need to turn off the payroll automatically being calculated as per
+schedule, it is only based on actual hours clocked in unless a button is checked for each employee
+separately against that employee name."*
+
+**THE CLASS, not the instance.** Paid hours were decided by `actual_hours or scheduled_hours` in
+**six** modules at once, over a column effectively nothing writes. MEASURED on production 2026-10-10:
+
+| fact | measured |
+| --- | --- |
+| `storeops.shifts` rows in total | 7,740 |
+| …carrying `actual_hours > 0` | **7** — and in all seven `actual == scheduled == 9` |
+| anything that WRITES `shifts.actual_hours` | only `PATCH /storeops/shifts` (a DM editing one shift) |
+| `storeops.timelog` punches | 3,663 rows, **3,555 with `hours > 0`** |
+| …of those, auto-clocked-out by the kiosk sweep | **290**, and they are being PAID today |
+| `storeops.manual_hours` corrections | **569 rows, which `GET /storeops/payroll` has never read** |
+
+So the punch data **exists**; the measurement never reached the column payroll reads. Every one of
+the six `or`s was locally reasonable, and collectively they meant payroll ran off the schedule and
+told no reader which of the two they were looking at. The second half of the same class: a DM's
+corrections in `manual_hours` never reached pay either.
+
+**THE ONE HOME** — `backend/app/modules/storeops/payroll_hours_basis.py`. It answers *"which hours is
+this employee paid for on this day, and on what BASIS"*, and it returns the hours **with** the basis,
+never the number alone, so no caller can display a figure without saying where it came from.
+
+| basis | pays? | a measurement? | what it means |
+| --- | --- | --- | --- |
+| `clocked` | yes | yes | a usable closed punch measured the day |
+| `clocked_corrected` | yes | yes | a human corrected it (`manual_hours`, or a DM's `actual_hours` edit) |
+| `clocked_reconciled` | yes | yes | two clock records disagreed and the org's declared rule chose (§14z) |
+| `clocked_override` | yes | yes | a manager set the day by hand, with a reason, audited |
+| `measured_zero` | yes (0.0) | yes | the day WAS measured and the answer is zero |
+| `schedule_opt_in` | yes | **no** | nothing measured the day and this employee's tick box is on |
+| `not_measured_unpaid` | no | no | nothing measured it and the box is off |
+| `punch_unusable` | no | no | the punch is open, or the kiosk closed it — not evidence of anything |
+
+`PAYING_BASES` is an **ALLOWLIST** on the `carrier_dollar_class.component_is_evidence` pattern (§66):
+`NON_PAYING_BASES` is DERIVED from it, and `basis_pays_hours` of an unruled basis is **False**. A
+basis added in 2027 cannot silently start paying the schedule again.
+
+**THE PER-EMPLOYEE TICK BOX** is `storeops.employees.pay_from_schedule BOOLEAN`, deliberately
+NULLABLE: NULL means *use the org default*, so a database that has not run 1073 behaves exactly as it
+does today. The org default is `payroll_hours_basis_config.pay_from_schedule_default`, seeded TRUE.
+A flip writes `storeops.payroll_change_log` with `entry_point = 'pay_from_schedule_change'`.
+
+**NOTHING MOVES ON APPLY, AND THE MIGRATION PROVES IT WITH A ROW COUNT.** `resolve_shift_row`
+reproduces `actual_hours or scheduled_hours` byte-for-byte under the shipped default, and
+`resolve_config` makes two deliberate mode-dependent forcings so that applying 1070 moves no money:
+`count_manual_hours` is forced FALSE in schedule-fallback mode (because `/storeops/payroll` has never
+read those 569 rows, and folding them in WOULD move pay), and `count_auto_clockout_punches` is forced
+TRUE unless an org has set it (because those 290 punches are paid today). Migration 1073 STEP 7 is a
+read-only SELECT union that must all read `OK` — a receipt, not a promise.
+
+**THE INTERLOCK.** `coverage` + `interlock` REFUSE to compute clocked-only hours when the measured
+share of scheduled employee-days falls below `min_punch_coverage_pct` (default 85), and REPORT a data
+defect instead of paying a shortfall. It trips on PARTIAL coverage, not only on zero — a period that
+is 60% measured would otherwise look like a finished payroll that underpays four employees in ten.
+
+**WHAT CLOCKED-ONLY WOULD COST, measured per tenant per month** — stated so switching it on is a
+decision and not a surprise. See the PR for the table; the harness pins the shape.
+
+Callers, all DEREFERENCING (no local `or` survives): `storeops/router.py` (`/payroll`,
+`/payroll-by-store` — the money path), `storeops/salary_owed.py`, `storeops/salary_expense.py`
+(whose three hours states `MEASURED_NONZERO` / `MEASURED_ZERO` / `NOT_MEASURED`, §14s, now DELEGATE
+to `measurement_state`), `storeops/pto_accrual.py`, `account/coa.py` (the P&L wage line, via
+`derive_wage_cells_with_basis`), `commcalc/labour_coverage.py`, `hr/router.py`.
+
+Proof: `backend/harness_payroll_hours_basis.py` — sections A–I, **R the regression** (the `or` paying
+the schedule while a punch measured the day), **O the owner ruling** (§14z), Z an armed negative
+control. Lock: `backend/harness_payroll_hours_basis_lock.py`, six axes, CI job in
+`carrier-vocab-guard.yml`.
+
+
+### 14z. THE B2B CLOCK REPORT — a claim, then a PAY SOURCE; the ask, the gate, the run (owner directive 2026-10-10, mig `1073`)
+
+Owner: *"also need to import the clock in clock out report from b2b and match with what we have in
+metrics pro and asses the difference and ask the DM on every monday and require the correction to be
+done before the payroll is run … block them from logging in unless they fix it by tuesday so the
+payroll can be run on Wednesday. this will be picked from the emails for each store like other
+reports."*
+
+Owner ruling, same day, which changes the feed's STATUS: *"if they are clocking out at earlier time
+from the elevate then it means they are spending time in store to make extra hours and they ahve no
+more work to do, use that as the time used to create payroll and mention on the report why you are
+doing so."* **The clock report is therefore a PAY SOURCE, not only a check.**
+
+**INGEST — the existing email sweep, not a second one.** `upload_type` `clock_punch` →
+`commcalc/column_mapping` layout → `_ingest_mapped_df` → `storeops.raw_clock_punch`. The feed-shape
+post-step is `storeops/clock_feed.normalize`, beside the footer-row / row-period / blank-key
+post-steps already there. `commcalc/column_mapping.TABLE_SCHEMA` is the ONE home for the fact that
+this landing lives in `storeops`, not `commcalc` — `_table_has_column` / `_known_columns`
+dereference it rather than probing the wrong schema and reporting every column absent.
+
+**THE ELEVEN MEASURED SHAPE TRAPS** (the real export, `A1:M47`, 45 punch rows for 2026-10-09; each
+one silently corrupts the import or the comparison if ignored, and `clock_feed.py`'s docstring carries
+them in full): the trailer row is a **CHECKSUM** (`Duration = '249:10'` = the 249.17h row sum, so a
+file that does not tie is REJECTED, naming both numbers); `Store` is an ADDRESS resolved through
+`account/store_identity.build_store_resolver` (28/28 on the real file) and never matched here;
+`Salesperson` is `"Last, First"` and sometimes `"Last, First, M"` and carries accents; the stamps are
+LOCAL WALL CLOCK with no zone, converted through the store's own `ZoneInfo` and REPORTED when none
+resolves; `Duration Decimal` is TRUNCATED so hours come from the timestamps; `Type` is an ALLOWLIST;
+the back-office login is not a store shift (14 rows / 12.48h across twelve stores, as a CONFIG array
+— RULE TWO); the key is (employee, date, **punch**) because one person has two stores on the sample
+day; a zero-duration row is a `measured_zero`; B2B's `Division`/`Region`/`District` are feed METADATA
+that may never resolve a recipient; and the business date comes from `Clock In`, **never** from the
+filename — stamping rows from an upload label is the defect that once read carrier commission 28×
+high, so `claim_agrees` reports a mismatch and the rows keep their own dates.
+
+**THE FEED NEVER WRITES `storeops.timelog` OR `shifts.actual_hours`.** It lands in its own table as
+evidence we keep, and every row lands — payable or not — with `excluded` naming why, because a
+landing that dropped the back-office rows could not explain where 12.48 hours went.
+
+**THE OWNER'S RULING, AS A DECLARED CHOICE** (`payroll_hours_basis.reconcile_clock_records`, config
+`clock_source_rule`; no `min()` in a handler and no feed name in code):
+
+| rule | 2026-10-09, 16 measured pairs | note |
+| --- | --- | --- |
+| today (our kiosk alone) | **146.42 h · $2,156.45** | `ours_only` reproduces this exactly |
+| `earlier_clock_out` — the ruling read literally | **143.63 h · $2,113.60** | pays **MORE than today on 3 of 16 rows** |
+| `narrowest_window` — **HOUSE DEFAULT** | **142.98 h · $2,102.63** | never pays more than today on any row |
+
+The literal reading takes the earlier-clocking-out record's WHOLE duration, which also takes its
+earlier clock-**in** — so on Khan Amir, Mohammed Abdullah and Seelam Sunethri it pays more, the
+opposite of the ruling's intent. The house default pays the window the two records **agree** on
+(later clock-in → earlier clock-out). The literal reading is one config value away, and both carry
+their own explaining sentence. **The resolved hours travel WITH the reason string** — the owner asked
+for *"mention on the report why you are doing so"*, so the reason is part of the return value, not a
+label a screen adds later. Under `clock_agreement_tolerance_hours` (default 0.034h, two minutes) the
+two records are treated as AGREEING and ours stands, so a rounding difference never shaves a minute
+off somebody's pay. **A DM may override any row**, with a reason, and the override OUT-RANKS the rule
+(`clock_variance_correction.override_hours`, basis `clocked_override`, logged to
+`payroll_change_log` under `entry_point = 'clock_variance_override'`; the schema refuses an override
+with no reason and no name).
+
+**THE VARIANCE BOARD** — `storeops/clock_variance.py`. Nine kinds, each with its own sentence:
+`missing_punch`, `extra_punch`, `hours_differ`, `employee_unmatched`, `store_unmatched`,
+`login_unlinked`, `no_clock_feed`, `store_mismatch`, `auto_clockout`. **An UNRULED kind BLOCKS** —
+the safe direction for *"is it safe to run payroll"* is the opposite of §14y's, and the two facts live
+in two modules so neither can be read off the other. A day whose file never arrived is its own
+blocking kind, never an implicit zero: with no rows from a store every other test is trivially
+silent. A `store_mismatch` is raised although the hours tie, because the labour cost would land on
+the wrong store's P&L; an `auto_clockout` is raised **even when the numbers agree**, because today's
+default PAYS those punches — the fact is read from `payroll_hours_basis.auto_closed_punches`,
+separately from whether policy pays it.
+
+**WHO IS ASKED** — `storeops/org_chain.chain_for` (§48.7) and nothing else; B2B's own district column
+may never resolve a person. `recipient_ladder` goes DM → the nearest manager above the district →
+`unowned`, REPORTED. The ladder exists because the coverage demands it: **6 of 29 Cellfonz stores and
+0 of 20 Luxelink stores resolve a DM** (2026-10-10), so a DM-keyed ask alone would reach eight stores
+of fifty-one and look as though it had asked everybody. Delivery is `storeops/alert_log.py` (the only
+reader/writer of `storeops.alert_log`; `channel` required) + `notify/digest_delivery.py` (the only
+channel ladder) — no bespoke sender.
+
+**THE GATE IS A CONFINEMENT, NOT A REFUSED SIGN-IN.** This is the one place the package does not do
+what the owner literally said, and the reason is ★ NO LOCKOUT ★ (§22): a person who cannot sign in
+cannot fix what blocks them, so a refused sign-in would make the Wednesday payroll impossible rather
+than protected. `gate_decision` alerts on ANY weekday as soon as something is uncorrected, and from
+the gate weekday confines the session to the correction board — signing in always succeeds.
+Mon / Tue / Wed are the house defaults of `ask_weekday` / `gate_weekday` / `run_weekday`; a tenant
+that runs payroll on Friday changes three numbers.
+
+**THE RUN GATE REFUSES AND NAMES WHAT BLOCKS IT** — a refusal that does not say which rows is a wall,
+not a gate. TWO preflight refusals: uncorrected variances (only when the org switched the gate on),
+and **employees this run would price at NOTHING**. That second one fires either way, because
+**13 of 46 active hourly house employees have no `pay_rate` at all** (E252, E257–E267, E282, measured
+2026-10-10) and ten of them are the reps a 3 October runbook was meant to set to $17.00/h — still
+NULL, so it was never applied. Pricing them at zero produces a payroll that looks complete and pays
+nobody; that is reported, never fixed in code.
+
+**EVERYTHING SHIPS OFF.** `clock_feed_enabled`, `variance_ask_enabled`, `login_gate_enabled`,
+`payroll_run_gate_enabled` and `clock_feed_is_pay_source` are all FALSE, no mailbox rule is seeded
+and no `pg_cron` job is registered.
+
+Proof: `backend/harness_clock_feed.py` (the 45 real rows as a fixture; every number re-derived, not
+asserted) and `backend/harness_clock_variance.py` (all nine kinds, the ladder, ★ NO LOCKOUT ★, the
+two run-gate refusals). Lineage: `clock_punch_report` in `data_lineage_registry.py` +
+`925_data_lineage_seed.sql`, four edges (ingest · derive · gate · **pay**), data-date column
+`business_date` — never `arrived_at`, since the file arrives at 08:00 for the PREVIOUS day.
+Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver), §48.7 (the org walk),
+§22 (no lockout), §66 (the allowlist pattern), §16–§18.
+
+
+
 ## 16. Cross-reference: by TABLE
 
+- `storeops.employees.pay_from_schedule` (mig `1073`) — THE per-employee tick box the owner asked for, next to that employee's name. **NULLABLE on purpose**: NULL = use the org's `payroll_hours_basis_config.pay_from_schedule_default` (seeded TRUE), so a database that has not run 1073 behaves exactly as it does today and nobody stops being paid on apply. Read in ONE place, `storeops/payroll_hours_basis.pay_from_schedule`; a flip writes `storeops.payroll_change_log` with `entry_point = 'pay_from_schedule_change'` (§14y).
+- `storeops.payroll_hours_basis_config` (mig `1073`, org_id PK) — the per-org knobs for BOTH §14y and §14z: one row, one feature. `hours_basis_mode` (`schedule_fallback` = today / `clocked_only`), `pay_from_schedule_default`, `count_auto_clockout_punches`, `count_open_punches`, `count_manual_hours`, `min_punch_coverage_pct`, `interlock_refuses`, the four `*_enabled` switches, `ask_weekday`/`gate_weekday`/`run_weekday` (0 = Monday, the convention `shift_templates.weekday` already uses), `variance_tolerance_hours`, `clock_source_rule` + `clock_agreement_tolerance_hours` + `clock_feed_is_pay_source` (the owner's 2026-10-10 ruling), and the feed's shape arrays `payable_punch_types` / `non_shift_logins` / `gated_roles` / `gate_exempt_logins` — the only tenant-specific strings in the package, and they are ROWS (RULE TWO). Read in ONE place per half: `payroll_hours_basis.load_config` / `clock_variance.load_config`, over the SAME table.
+- `storeops.raw_clock_punch` (mig `1073`) — the B2B clock in / clock out report **as a CLAIM about a store-day**. Written only by `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) / the email sweep, through `_ingest_mapped_df` → `storeops/clock_feed.landing_rows`. Keeps the raw store and employee spellings, the LOCAL stamps **and** their UTC conversion, the file's own declared decimal, and `excluded` naming why a row is not a payable punch. **NEVER writes `storeops.timelog` or `shifts.actual_hours`.** Unique on (org, store_raw, employee_raw, business_date, clock_in_local), so a re-pull restates a day instead of duplicating it. Data-date column `business_date`, freshness column `arrived_at` (§14z).
+- `storeops.clock_variance_correction` (mig `1073`) — what a HUMAN decided about one clock variance, so "all clear" is an assertion by a named person and not an absence of rows. `resolution` ∈ `corrected` / `accepted_ours` / `accepted_feed`, plus the DM's per-row `override_hours` / `override_reason` / `override_by` / `override_at`, which OUT-RANK the org's `clock_source_rule`. A CHECK constraint refuses an override without a reason and a name, so no endpoint or hand-written UPDATE can land a bare number on a pay row (§14z).
+- `storeops.clock_feed_login_link` (mig `1073`) — which B2B login is which employee. **Only `status = 'approved'` binds** (`storeops/payroll_identity.match_is_binding`); a name-token match is a `proposed` row for a human to approve and NEVER an attribution, and a `rejected` row is a human saying "not this person", which is never re-proposed (§14z).
 - `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§70).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
@@ -6485,6 +6675,16 @@ rendering the resolved name.
 | `commcalc.payment_categories` | the tenant's OWN payment-type → pay-category map (free text, tenant-filled). ONE reader: **`commcalc/payment_category.py`** (`load_map`/`category_of`/`declared_categories`) — nine private readers existed before it and are an exact excused inventory in `harness_payment_category_home_lock.py`, every one a money path. A type with no row is **not** a category: reported as not classified, never guessed (live 2026-10-07: $573,241.39, 72% of 60 days of the house feed). Sentinel + placeable set dereferenced from `pay_data_quality`. Surfaces: the §57.2 Category filter/column on the processor ledger, §55 withholding — §57.1 |
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
+
+| endpoint | code | what it is the one home of |
+| --- | --- | --- |
+| `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
+| `GET /storeops/payroll/clock-variances` | `storeops/router.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
+| `POST /storeops/payroll/clock-variances/resolve` | `storeops/router.py` → `storeops.clock_variance_correction` | one human decision about one variance — including the DM's per-row override, which out-ranks the declared rule and is audited to `payroll_change_log` (§14z) |
+| `GET` / `POST /storeops/payroll/clock-link-proposals` | `storeops/router.py` → `payroll_identity.link_proposals` | the login↔employee approvals. A proposal is never an attribution; only an approved row binds hours to a person (§14z) |
+| `GET /storeops/payroll/gate` | `storeops/router.py` → `clock_variance.gate_decision` | what a signing-in manager is shown. ★ NEVER a refused sign-in ★ — an alert on any day, a confinement to the correction board from the gate weekday (§14z, §22) |
+| `PATCH /storeops/employees/{id}/pay-from-schedule` | `storeops/router.py` → `payroll_hours_basis.CHANGE_ENTRY_POINT` | the per-employee tick box, beside that employee's NAME. Pay-visibility RBAC'd, org-scoped, audited (§14y) |
+| `GET /storeops/payroll` · `GET /storeops/payroll-by-store` | `storeops/router.py` | **no longer decide hours themselves** — they dereference `payroll_hours_basis.resolve_shift_row` / `punch_counts_for_pay`, and every hours figure carries its basis (§14y) |
 
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).
 - `GET /account/pl/{period}?scope=&stores=&markets=` — unchanged, and now ALSO the drill path of the Account hub: company → market → store is this one read with one more thing in the filter, spelled by the one frontend helper `plStatement.plQuery`. Its per-scope snapshots now carry real per-line drill `detail` (§4e).
@@ -6791,6 +6991,14 @@ rendering the resolved name.
 | `POST /storevisit/visit-assignments/auto-fill` | the Friday-evening fill; DRY RUN by default, tops a DM-day up to quota without replacing a manual pick (§47.17) |
 
 ## 18. Cross-reference: by METRIC / KPI
+
+| metric | basis | where it is decided |
+| --- | --- | --- |
+| **Paid hours, and the BASIS they rest on** | a usable closed punch, else a human correction, else the two clock records under the org's declared rule, else the schedule when that employee's tick box is on — and NEVER `actual_hours or scheduled_hours` | `storeops/payroll_hours_basis.resolve_day` / `resolve_shift_row` — THE one home, returning hours WITH the basis so no caller can show one without the other (§14y). Lock: `harness_payroll_hours_basis_lock.py` |
+| **Punch coverage %**, and THE INTERLOCK | measured employee-days ÷ scheduled employee-days for the period | `payroll_hours_basis.coverage` / `interlock` — below `min_punch_coverage_pct` (default 85) a clocked-only period is REFUSED and reported as a data defect, never paid as a shortfall (§14y) |
+| **Clock variance** (ours vs the B2B report), per store-employee-day | both numbers, our basis, the classified kind, and whether it blocks | `storeops/clock_variance.compare` — nine kinds, an unruled kind BLOCKS, a day with no file is its own kind (§14z) |
+| **Reconciled paid hours**, and the sentence saying why | the window the two clock records agree on (house default), or the ruling read literally, or ours alone — declared per org | `payroll_hours_basis.reconcile_clock_records`. Measured 2026-10-09 across 16 pairs: today 146.42h/$2,156.45 · literal 143.63h/$2,113.60 · house default 142.98h/$2,102.63 (§14z) |
+| **Employees a payroll run would price at $0.00** | an active hourly employee with no `pay_rate` | `clock_variance.employees_without_rate` → `payroll_run_gate`, which REFUSES and names them. Measured 2026-10-10: 13 of 46 house hourly employees (§14z) |
 
 - **Which expense rows are LABOUR the statement already books from its own source — so they must not be counted twice?** — ONE home `commcalc/labour_vocabulary.resolve` (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`; a non-empty tenant list wins wholesale; `mode='off'` opts out), dereferenced by `account/coa._account_config`, `commcalc/router._expense_apply_default_tokens` and the Expenses sheet's pinned mirror. Locks `harness_labour_vocabulary.py` (109). Live 2026-10-07: 2 of 3 tenants were double-counting; the house org by **$90,922.80 / $92,565.89 / $97,362.88** in July / August / September 2026 — §4e.
 - **What makes up THIS line, for THIS scope?** — `coa.accrue_detail` records every drill dollar at the store grain and `engine._scoped` sums the stores in its own scope (Σ `detail_by_store` + `detail_company_wide` == `detail`); `statement_filter.aggregate` already summed it and was unchanged. Before this, 39 of the house org's 40 stored August 2026 P&L scopes carried an EMPTY drill-down. Locks `harness_pl_drill_detail.py` (56); the panel and `prove_pl_drill_path.mjs` (58) land in PR #408 — §4e.

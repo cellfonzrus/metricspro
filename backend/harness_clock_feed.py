@@ -108,7 +108,7 @@ SAMPLE = [
 TRAILER = "249:10"
 FILENAME = "My_Employee_Time_Sheet_10092026-10092026.Xlsx"
 # The only tenant-specific string in this file, and in the real system it is a CONFIG ROW
-# (`storeops.payroll_hours_basis_config.non_shift_logins`, seeded by mig 1070) — never code.
+# (`storeops.payroll_hours_basis_config.non_shift_logins`, seeded by mig 1073) — never code.
 BACK_OFFICE_LOGIN = "PAADMIN"
 
 CFG = F.resolve_config({"non_shift_logins": (BACK_OFFICE_LOGIN,)})

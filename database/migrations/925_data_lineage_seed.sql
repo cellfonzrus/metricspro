@@ -143,7 +143,7 @@ values
 -- ── STORE IDENTITY (the merge key everything joins on) ───────────────────────────────────────────
 ('store_identity','Store identity / aliases','Store Management · store_mapping · merchant IDs','all_store_grouped','Every per-store report','All reports','display',false,'router.py:_canonical_store_key_fn / _dealer_to_store_map','Store spelling/ID variants collapse to one canonical key. If a b2b Dealer Code is NOT linked to a store record, Activation Details rows show as numeric IDs instead of merging onto the named store row — a mapping gap to close.',60),
 
--- ── INGEST: the B2B clock in / clock out report (mig 1070, index §14z) ───────────────────────────
+-- ── INGEST: the B2B clock in / clock out report (mig 1073, index §14z) ───────────────────────────
 -- Emailed per store mailbox every morning at 08:00 for the PREVIOUS day, landed by the EXISTING
 -- email sweep under upload_type 'clock_punch' through the EXISTING column_mapping ingest. Seeded
 -- HERE and not in 1070 because this file is a wholesale reseed (`delete from commcalc.data_lineage`

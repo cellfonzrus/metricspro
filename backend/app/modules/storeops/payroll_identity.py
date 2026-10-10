@@ -178,7 +178,7 @@ def reconcile_employee_identity(rows, employees):
 # runtime (`core.scope._squash`'s own docstring says so, and migration 740's human-reviewed cleanup
 # exists because those decisions are not safe as code). A name-token hit therefore produces a
 # PROPOSAL for a human to approve, persisted once approved in `storeops.clock_feed_login_link`
-# (mig 1070); only an approved link, or one of the two stored id columns, BINDS. "This login is not
+# (mig 1073); only an approved link, or one of the two stored id columns, BINDS. "This login is not
 # linked to anybody" is a first-class variance the DM resolves, exactly like an hours difference.
 #
 # THIS IS AN EXTENSION OF THIS MODULE, NOT A SECOND MATCHER. `business_id_alias_map` above already
@@ -275,7 +275,7 @@ def build_employee_matcher(employees, link_rows=None):
 
     `employees`  the org's `storeops.employees` rows (`employee_id`, `name`, `epay_login`,
                  `epay_salesperson`).
-    `link_rows`  `storeops.clock_feed_login_link` rows (mig 1070): `feed_login`, `employee_id`,
+    `link_rows`  `storeops.clock_feed_login_link` rows (mig 1073): `feed_login`, `employee_id`,
                  `status`. ONLY `status == 'approved'` binds; a `proposed` row is a pending
                  question and a `rejected` row is a human saying "not this person", which must
                  never be re-proposed as if nobody had looked.

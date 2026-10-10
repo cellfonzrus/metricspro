@@ -72,7 +72,7 @@ CONFIG, NEVER CODE (RULE TWO)
 -----------------------------
 Not one tenant, store, employee or carrier name appears here. Every fork is a row:
 `storeops.payroll_hours_basis_config` per org over the house defaults in `DEFAULT_CONFIG`, plus the
-per-employee `storeops.employees.pay_from_schedule` tick box (mig 1070).
+per-employee `storeops.employees.pay_from_schedule` tick box (mig 1073).
 
 **THE DEFAULT PROTECTS THE PAYROLL.** `hours_basis_mode` ships as `MODE_SCHEDULE_FALLBACK` and
 `pay_from_schedule_default` ships TRUE, so every existing tenant behaves **byte-identically to
@@ -202,7 +202,7 @@ CLOCK_RULE_REASONS = {
 
 # ── CONFIG (RULE TWO — house defaults; storeops.payroll_hours_basis_config rows override) ────────
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
-MIGRATION = "1070_payroll_clocked_hours_basis.sql"
+MIGRATION = "1073_payroll_clocked_hours_basis.sql"
 
 DEFAULT_CONFIG = {
     # The fork the owner asked for. The house default is TODAY'S behaviour, deliberately.
@@ -253,7 +253,7 @@ def resolve_config(org_row=None):
     """Merge a (possibly partial / absent) per-org config row over the house defaults.
 
     Same shape and posture as `salary_expense.resolve_config` and `payroll_expenses
-    .resolve_tax_config` — an org with no row, or a database where mig 1070 has not run, behaves
+    .resolve_tax_config` — an org with no row, or a database where mig 1073 has not run, behaves
     exactly as the house default, which is exactly as today.
 
     THE ONE THING THIS FUNCTION DECIDES RATHER THAN MERGES: `count_manual_hours` is forced FALSE in
@@ -573,7 +573,7 @@ def pay_from_schedule(employee_row, cfg):
 
     The owner's button, resolved in one place: the employee's own
     `storeops.employees.pay_from_schedule` when it is set, else the org's
-    `pay_from_schedule_default`. A NULL / absent column (a pre-1070 database) falls to the org
+    `pay_from_schedule_default`. A NULL / absent column (a pre-1073 database) falls to the org
     default, so an un-applied migration is byte-identical to today rather than silently unpaying
     everybody — which is the direction a migration gap must always fail in on a pay path.
     """
@@ -867,7 +867,7 @@ CONFIG_TABLE = "payroll_hours_basis_config"
 def load_config(client, org_id, *, use_cache=True):
     """The per-org row merged over the house defaults. THE one reader of `CONFIG_TABLE`.
 
-    Every failure mode — no row, no table (mig 1070 not applied), an unreachable database — returns
+    Every failure mode — no row, no table (mig 1073 not applied), an unreachable database — returns
     the house defaults, which are byte-identical to today's behaviour. A pay path must never change
     its arithmetic because a config read failed, and it must never fail CLOSED into paying nobody.
     `client` is already schema-scoped to `storeops` by the caller (`storeops.router.sb()`).

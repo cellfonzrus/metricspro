@@ -134,9 +134,9 @@ section("C. the per-employee tick box")
 check("C1 an employee ticked ON is paid from the schedule",
       B.pay_from_schedule({"pay_from_schedule": True}, CLOCKED), True)
 check("C2 an employee ticked OFF is not", B.pay_from_schedule({"pay_from_schedule": False}, DEFAULT), False)
-# A pre-1070 database has no column at all. On a PAY path a migration gap must fail toward today,
+# A pre-1073 database has no column at all. On a PAY path a migration gap must fail toward today,
 # never toward paying nobody.
-check("C3 NULL falls to the org default (a pre-1070 database is byte-identical to today)",
+check("C3 NULL falls to the org default (a pre-1073 database is byte-identical to today)",
       B.pay_from_schedule({}, DEFAULT), True)
 check("C4 …and under a clocked-only org the same NULL falls to ITS default",
       B.pay_from_schedule({}, CLOCKED), False)

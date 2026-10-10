@@ -52,7 +52,7 @@ THE ELEVEN TRAPS, AND WHAT IS DONE ABOUT EACH
  7. **THE BACK-OFFICE LOGIN IS NOT A STORE SHIFT.** 14 of the 45 rows are one back-office login,
     12.48h in bursts of 0:00–5:18 across twelve stores as somebody moves between them in the back
     office. Those must not become paid hours — and RULE TWO forbids the login being named in code,
-    so `non_shift_logins` is a per-org CONFIG ARRAY (seeded for the house org by mig 1070) and the
+    so `non_shift_logins` is a per-org CONFIG ARRAY (seeded for the house org by mig 1073) and the
     excluded hours are SURFACED in `excluded`, never silently dropped.
  8. **THE KEY IS (employee, date, PUNCH), NEVER (employee, date).** One person has two rows at two
     stores on the sample day. Hours attribute to each punch's OWN store.
@@ -88,7 +88,7 @@ from app.modules.storeops import payroll_hours_basis as _basis
 REPORT_KEY = "clock_punch"
 TABLE = "raw_clock_punch"
 
-# ── CONFIG (RULE TWO — house defaults; the per-org row mig 1070 adds) ────────────────────────────
+# ── CONFIG (RULE TWO — house defaults; the per-org row mig 1073 adds) ────────────────────────────
 DEFAULT_CONFIG = {
     # THE ALLOWLIST (trap 6). Folded case/space-insensitively. An unlisted type is NOT payable.
     "payable_punch_types": ("work",),
@@ -537,7 +537,7 @@ def landing_rows(org_id, result, *, source_file=None, period=None):
 
 # ── THE ONE IMPURE FUNCTION (the `carrier_dollar_class.load_config` convention) ──────────────────
 #: The feed's shape knobs live in the SAME per-org row the hours basis and the variance gate read
-#: (mig 1070) — one row, one read, no third config table for one feature.
+#: (mig 1073) — one row, one read, no third config table for one feature.
 CONFIG_TABLE = _basis.CONFIG_TABLE
 _CONFIG_CACHE = {}
 

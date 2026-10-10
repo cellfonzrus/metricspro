@@ -10,7 +10,7 @@ reports."*
 THE FEED IS A CLAIM, NOT A CORRECTION
 -------------------------------------
 This module never writes `storeops.shifts.actual_hours` and never writes `storeops.timelog`. The
-B2B clock report lands in `storeops.raw_clock_punch` (mig 1070) as what the CARRIER'S clock says —
+B2B clock report lands in `storeops.raw_clock_punch` (mig 1073) as what the CARRIER'S clock says —
 the same posture as the distributor figure in the carrier work (owner ruling: *"the distributor
 figure is a CLAIM about the same payment"*). The VARIANCE between the claim and what MetricsPro
 holds is the thing a human corrects, and the correction is made through the mechanisms that already
@@ -171,7 +171,7 @@ _WEEKDAY_FIELDS = ("ask_weekday", "gate_weekday", "run_weekday")
 
 def resolve_config(org_row=None):
     """Merge a (possibly partial / absent) per-org row over the house defaults. An org with no row —
-    or a database where mig 1070 has not run — gets the whole feature OFF, which is today."""
+    or a database where mig 1073 has not run — gets the whole feature OFF, which is today."""
     eff = dict(DEFAULT_CONFIG)
     for f in _CONFIG_FIELDS:
         v = (org_row or {}).get(f)
@@ -743,7 +743,7 @@ def payroll_run_gate(*, blocking, cfg, employee_rows=None, paid_employee_ids=Non
 
 
 # ── THE ONE IMPURE FUNCTION (the `carrier_dollar_class.load_config` convention) ──────────────────
-#: The variance / ask / gate knobs live in the SAME per-org row the hours basis reads (mig 1070):
+#: The variance / ask / gate knobs live in the SAME per-org row the hours basis reads (mig 1073):
 #: one row, one read, no second config table for one feature.
 CONFIG_TABLE = _basis.CONFIG_TABLE
 _CONFIG_CACHE = {}

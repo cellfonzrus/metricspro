@@ -1,4 +1,4 @@
--- 1070_payroll_clocked_hours_basis.sql — PAYROLL FROM THE CLOCK, NOT THE SCHEDULE (owner ask 2026-10-10)
+-- 1073_payroll_clocked_hours_basis.sql — PAYROLL FROM THE CLOCK, NOT THE SCHEDULE (owner ask 2026-10-10)
 --
 -- ── WHY ────────────────────────────────────────────────────────────────────────────────────────
 -- Owner, verbatim: "for the payroll menu need to turn off the payroll automatically being calculated
