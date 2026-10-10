@@ -17,7 +17,7 @@ import { SendReportButton } from '@/lib/send-report'
 import StatTile from '@/components/StatTile'
 import { PAY_BASES, PAY_BASIS_LABEL, periodPayPreviewLabel, type PayBasis } from '../storeops/lib/pay-basis'
 import { planRowSave, runRowSave, commitSaved, rowSaveMessage, rowDirty, dirtySlices, pendingRowCount, rebaseRows, fieldChanged } from '@/lib/rowSave'
-import { HR_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
+import { HR_EMPLOYEE_ROW_SLICES, buildPayFromScheduleWrite } from '@/lib/employeeRowSlices'
 import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
 import { useUrlTab } from '@/lib/useUrlTab'
 import ScreenLink from '@/components/ScreenLink'
@@ -120,6 +120,54 @@ function HRPageBody() {
   const setEmpField = (id: number, patch: any) => setEmps(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
   const setPay = (id: number, v: string) => setEmpField(id, { pay_rate: v })
   const [rowMsg, setRowMsg] = useState<Record<string, { ok: boolean; text: string }>>({})
+
+  // ---- THE TICK BOX, BESIDE THE NAME (owner directive 2026-10-10, index §14y) -------------------
+  // Owner: "turn off the payroll automatically being calculated as per schedule, it is only based on
+  // actual hours clocked in unless a button is checked for each employee separately against that
+  // employee name."
+  //
+  // It is DELIBERATELY NOT one of the row's save slices. The row's one Save exists because three
+  // buttons lost the owner's typing (§19.35); this control has its OWN endpoint, saves itself the
+  // instant it is changed, and rolls back on failure — the same posture as the Active checkbox on
+  // StoreOps → Employee Setup. Folding it into planRowSave would make a yes/no that decides whether
+  // somebody is PAID for an unmeasured day depend on remembering to press Save.
+  //
+  // THREE states, not two: Default (org), Yes, No. `null` means "use the organisation's default",
+  // which is a different fact from "no" — and pretending otherwise is how a tenant that pays from the
+  // schedule by default would silently stop paying anybody the first time this column rendered.
+  //
+  // The server is the gate, not this column. `PATCH …/pay-from-schedule` re-checks pay visibility on
+  // every call (market manager and above, per-org configurable), so a DM who reaches this page sees
+  // the control read-only — hiding it here is politeness, not the gate.
+  const [pfsBusy, setPfsBusy] = useState<Record<string, boolean>>({})
+  const [pfsMsg, setPfsMsg] = useState<Record<string, { ok: boolean; text: string }>>({})
+  // `strip_pay` DELETES the money keys server-side, so the key's absence IS the answer — the same
+  // test /storeops/payroll uses rather than a second role check in the browser.
+  const canSeePay = emps.length === 0 || emps.some(e => Object.prototype.hasOwnProperty.call(e, 'pay_rate'))
+  const pfsAvailable = emps.some(e => Object.prototype.hasOwnProperty.call(e, 'pay_from_schedule'))
+  const pfsModeOf = (e: any) => e.pay_from_schedule === true ? 'yes' : e.pay_from_schedule === false ? 'no' : 'default'
+
+  async function setPayFromSchedule(e: any, mode: string) {
+    const prev = e.pay_from_schedule
+    const next = mode === 'yes' ? true : mode === 'no' ? false : null
+    const key = String(e.id)
+    setEmpField(e.id, { pay_from_schedule: next })
+    setPfsBusy(b => ({ ...b, [key]: true }))
+    try {
+      // The request is BUILT in the one home (`lib/employeeRowSlices.ts`), never spelled here — the
+      // §19.35 rule is that no page writes an employee path of its own, and a one-click control is
+      // not an exception to it, only to needing the row's Save.
+      const w = buildPayFromScheduleWrite(e.employee_id, next)
+      if (!w) throw new Error('this person has no employee id yet, so there is nothing to set')
+      const r = await api(w.path, { method: w.method, body: JSON.stringify(w.body) })
+      // The server's own sentence, not one composed here: it knows the org default and what an
+      // unmeasured day becomes, and two renderings of one rule that disagree is the rule nobody trusts.
+      setPfsMsg(m => ({ ...m, [key]: { ok: true, text: r?.reason || 'saved' } }))
+    } catch (err: any) {
+      setEmpField(e.id, { pay_from_schedule: prev })   // rollback — never show a fake success
+      setPfsMsg(m => ({ ...m, [key]: { ok: false, text: err?.message || 'save failed' } }))
+    } finally { setPfsBusy(b => ({ ...b, [key]: false })) }
+  }
 
   async function saveRow(e: any) {
     const snap = snapsRef.current[String(e.id)]
@@ -295,7 +343,7 @@ function HRPageBody() {
               <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Name', 'Emp ID', 'Home store', 'Role', 'Pay basis',
+                    {['Name', ...(pfsAvailable ? ['Pay from schedule'] : []), 'Emp ID', 'Home store', 'Role', 'Pay basis',
                       ...(salaryFieldsAvailable ? ['Salary amount', 'Pay $/hr', 'Terminated'] : ['Pay $/hr']),
                       'Lunch (auto-deduct)', 'Face recognition', 'Email', 'Phone'].map(h => <th key={h} style={th}>{h}</th>)}
                   </tr></thead>
@@ -326,6 +374,34 @@ function HRPageBody() {
                           {rm && pending.length === 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: rm.ok ? '#15803d' : '#b42318' }}>{rm.ok ? '✅ ' : '❌ '}{rm.text}</div>}
                           {rm && !rm.ok && pending.length > 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: '#b42318' }}>❌ {rm.text}</div>}
                         </td>
+                        {pfsAvailable && (
+                          <td style={td}>
+                            {canSeePay ? (
+                              <>
+                                <select value={pfsModeOf(e)} disabled={!!pfsBusy[String(e.id)]}
+                                  title={'Tick this person to keep paying them from the SCHEDULE when a day has no clock-in. '
+                                    + 'Left on Default they follow the organisation setting; set to No, an unmeasured day pays nothing '
+                                    + 'and is reported rather than quietly becoming zero. Saves itself — there is no Save to press.'}
+                                  onChange={ev => setPayFromSchedule(e, ev.target.value)}
+                                  style={{ padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
+                                  <option value="default">Default (org)</option>
+                                  <option value="yes">Yes — pay from schedule</option>
+                                  <option value="no">No — clocked hours only</option>
+                                </select>
+                                {pfsMsg[String(e.id)] && (
+                                  <div style={{ fontSize: 11, marginTop: 2, maxWidth: 260, color: pfsMsg[String(e.id)].ok ? '#15803d' : '#b42318' }}>
+                                    {pfsMsg[String(e.id)].ok ? '✅ ' : '❌ '}{pfsMsg[String(e.id)].text}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <span style={{ fontSize: 12, color: 'var(--text3)' }}
+                                title="This decides whether somebody is paid for a day nobody clocked, so it is gated with the pay figures — market manager and above.">
+                                {pfsModeOf(e) === 'default' ? 'Default (org)' : pfsModeOf(e) === 'yes' ? 'Yes' : 'No'} 🔒
+                              </span>
+                            )}
+                          </td>
+                        )}
                         <td style={td}>{e.employee_id || '—'}</td>
                         <td style={td}>{e.home_store || '—'}</td>
                         <td style={td}>{e.role || '—'}</td>

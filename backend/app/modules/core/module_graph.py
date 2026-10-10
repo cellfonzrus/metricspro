@@ -459,6 +459,11 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/closing/router.py': ('_delivery',),
             'app/modules/commcalc/router.py': ('_delivery',),
+            # §14z — the weekly clock-variance ask carries itself on this ladder and holds no mail
+            # call, no channel list and no send record of its own. That is the point of routing it
+            # here: the ask was the sixth place that would have grown its own "try email, try
+            # WhatsApp, write one dedup row", which is the drift this fact exists to stop.
+            'app/modules/storeops/clock_variance_api.py': ('_delivery',),
             'app/modules/storeops/router.py': ('_delivery',),
             'app/modules/storevisit/router.py': ('_delivery',),
         },
@@ -662,6 +667,11 @@ FACTS: dict[str, dict] = {
             'app/modules/storeops/payroll_approval.py': ('_cscope',),
             'app/modules/storeops/router.py': ('_cscope',),
             'app/modules/storevisit/router.py': ('_cscope',),
+            # The clock-variance board is person-keyed (one row per employee-day), so it rides
+            # the SAME gate as every other person-keyed read: `gate_person_rows`, which narrows BOTH
+            # the board and the login gate's blocking count to the stores this manager owns. A DM is
+            # never gated by another district's unfixed rows (mig 1073, §14z).
+            'app/modules/storeops/clock_variance_api.py': ('_cscope',),
         },
     },
     'payout_audience': {

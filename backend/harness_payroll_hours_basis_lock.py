@@ -199,6 +199,31 @@ for rel, why in sorted(PAY_PATH.items()):
        uses, f"alias={alias}")
 
 
+# ── B3: the TWO router shift resolvers cannot drift ──────────────────────────────────────────────
+# `_shift_actual_contribution` answers "how many hours", `_shift_actual_contribution_with_basis`
+# answers "how many, and WHY". Two functions answering overlapping questions is exactly the
+# duplicate the index rules forbid — so the lock requires that BOTH reach the one home and that
+# neither grows arithmetic of its own. A `max(`/`or`/`if act` in either body is the old defect back.
+_ROUTER_SRC = strip_comments_and_strings(read(os.path.join(_MODULES, "storeops/router.py")))
+for _fn in ("_shift_actual_contribution", "_shift_actual_contribution_with_basis"):
+    _m = re.search(r"\ndef %s\(.*?(?=\ndef )" % _fn, _ROUTER_SRC, re.S)
+    ok(f"B3 {_fn} exists", bool(_m), "the pay path's shift resolver was renamed — re-pin this axis")
+    _body = _m.group(0) if _m else ""
+    ok(f"B4 {_fn} resolves through the one home",
+       "resolve_shift_row" in _body, "it no longer dereferences payroll_hours_basis")
+    # The pre-2026-10-10 defect, literally: `actual_hours or scheduled_hours` decided in the caller.
+    ok(f"B5 {_fn} decides nothing itself",
+       not re.search(r"scheduled_hours\s*\)?\s*(?:if|or)\b", _body),
+       "an `or`/inline-if over scheduled_hours is back in the caller")
+# And the figure's SENTENCE is the one home's, never one composed beside it.
+# NOTE the different stripper: `strip_comments_and_strings` would eat the key name this check is
+# about, so B6 reads the comment-free source that KEEPS single-line literals.
+_ROUTER_LIT = strip_comments_only(read(os.path.join(_MODULES, "storeops/router.py")))
+ok("B6 /payroll's basis sentence is read from the one home, not spelled on the row",
+   re.search(r'hours_basis_reason"\]\s*=\s*_hours_basis\.basis_reason\(', _ROUTER_LIT) is not None,
+   "hours_basis_reason must be basis_reason(dom) — a literal sentence on the row drifts from the API")
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 section("C. no SECOND COPY of the basis vocabulary")
 _HOME_SRC = read(_HOME)

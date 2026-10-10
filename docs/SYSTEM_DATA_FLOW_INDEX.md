@@ -6410,6 +6410,42 @@ of fifty-one and look as though it had asked everybody. Delivery is `storeops/al
 reader/writer of `storeops.alert_log`; `channel` required) + `notify/digest_delivery.py` (the only
 channel ladder) — no bespoke sender.
 
+**THE ASK, END TO END.** `clock_variance.ask_plan` (who) → `ask_digests` (the fan-out shape the
+ladder eats, ONE item per **store** so a store that turns blocking mid-week is asked about rather
+than deduped away by a recipient-only key) → `build_ask_digest` (subject/html/text, the WhatsApp
+text carrying the same facts in the same order) → `digest_delivery.deliver_digests` under scope
+`clock_variance_weekly_ask`. **`ASK_WHY` puts the owner's ruling in the email body**, because
+*"mention on the report why you are doing so"* is not satisfied by a correction request that does not
+say why the earlier Elevate clock-out is being paid. **No pay figure is ever in the ask** — it goes to
+district managers and money is market-manager-and-above (§14 pay visibility, mig 434), and an email
+is past every RBAC check once it is sent. `POST /storeops/payroll/clock-variance-ask` previews by
+default (`dry_run=True`); `POST …/clock-variance-ask/run-due` is the `NOTIFY_RUN_SECRET`-guarded
+pg_cron entrypoint, **one hourly job for every tenant** — each org's `ask_weekday` is compared against
+ITS OWN business weekday via `_biz_tz_for`, so no weekday is spelled in the cron line and a
+behind-UTC store is not asked on Sunday evening. The job is registered by
+`/mnt/project-files/payroll-clocked-hours/TURN_ON_monday_clock_ask_2026-10-10.sql`, and registering
+it sends nothing while `variance_ask_enabled` is false.
+
+**THE SCREENS.** `frontend/src/app/(platform)/storeops/payroll/clock-variances/page.tsx` is the
+correction board and the gate's escape — standard filters + `ReportExportBar` (no exporter of its
+own), both numbers and OUR BASIS with its sentence on every row, a store with nothing wrong shown
+saying so, and a Record button the reason gates. The tick box is a column beside the NAME on
+HR → Employees & Pay, saving ITSELF through `lib/employeeRowSlices.buildPayFromScheduleWrite` (a
+one-click write, deliberately NOT a row-save slice — a yes/no that decides whether somebody is paid
+must not depend on remembering to press Save, §19.35). `/storeops/payroll` gains an `Hours basis
+(why)` column, read from `hours_basis` / `hours_basis_reason` which `GET /storeops/payroll` now
+carries per row from `_shift_actual_contribution_with_basis` + `basis_reason` — additive and purely
+explanatory, with `hours_basis_mixed` saying "mixed" out loud rather than naming a winner for a
+fortnight that mixed punched and scheduled days. Lock: axis B3–B6 of
+`harness_payroll_hours_basis_lock.py`.
+
+**THE CONFINEMENT HAS ONE HOME** — `frontend/src/lib/setup-gate.ts::confineRedirect`. The setup
+wizard (§39) was the first gate of this shape and this is the second, so the rule was FACTORED OUT
+rather than copied: `setupRedirect` is now an adapter onto it, `clockGateConfinement` shapes the
+clock gate's reply, and the account pages are always open in both. Proof:
+`frontend/prove_confinement.mjs` (35 checks, armed) — it also reads the shipped layout, because a
+rule no gate calls is not a rule, and asserts the gate can never sign anybody out.
+
 **THE GATE IS A CONFINEMENT, NOT A REFUSED SIGN-IN.** This is the one place the package does not do
 what the owner literally said, and the reason is ★ NO LOCKOUT ★ (§22): a person who cannot sign in
 cannot fix what blocks them, so a refused sign-in would make the Wednesday payroll impossible rather
@@ -6428,11 +6464,15 @@ nobody; that is reported, never fixed in code.
 
 **EVERYTHING SHIPS OFF.** `clock_feed_enabled`, `variance_ask_enabled`, `login_gate_enabled`,
 `payroll_run_gate_enabled` and `clock_feed_is_pay_source` are all FALSE, no mailbox rule is seeded
-and no `pg_cron` job is registered.
+and no `pg_cron` job is registered. The ask endpoint additionally previews by default, so a cron line
+pasted early describes what it would send and sends nothing.
 
 Proof: `backend/harness_clock_feed.py` (the 45 real rows as a fixture; every number re-derived, not
-asserted) and `backend/harness_clock_variance.py` (all nine kinds, the ladder, ★ NO LOCKOUT ★, the
-two run-gate refusals). Lineage: `clock_punch_report` in `data_lineage_registry.py` +
+asserted), `backend/harness_clock_variance.py` (all nine kinds, the ladder, the rendered ask and its
+money-free body, ★ NO LOCKOUT ★, the two run-gate refusals) and
+`backend/harness_clock_variance_api.py` (the shipped endpoints over an in-memory client: off reads as
+OFF and not as clean, the board's period IS payroll's period, a gate that cannot look does not gate,
+an override with no reason is refused, and the ask holds no mail call or send record of its own). Lineage: `clock_punch_report` in `data_lineage_registry.py` +
 `925_data_lineage_seed.sql`, four edges (ingest · derive · gate · **pay**), data-date column
 `business_date` — never `arrived_at`, since the file arrives at 08:00 for the PREVIOUS day.
 Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver), §48.7 (the org walk),
@@ -6697,11 +6737,14 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
 | `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
-| `GET /storeops/payroll/clock-variances` | `storeops/router.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
-| `POST /storeops/payroll/clock-variances/resolve` | `storeops/router.py` → `storeops.clock_variance_correction` | one human decision about one variance — including the DM's per-row override, which out-ranks the declared rule and is audited to `payroll_change_log` (§14z) |
-| `GET` / `POST /storeops/payroll/clock-link-proposals` | `storeops/router.py` → `payroll_identity.link_proposals` | the login↔employee approvals. A proposal is never an attribution; only an approved row binds hours to a person (§14z) |
-| `GET /storeops/payroll/gate` | `storeops/router.py` → `clock_variance.gate_decision` | what a signing-in manager is shown. ★ NEVER a refused sign-in ★ — an alert on any day, a confinement to the correction board from the gate weekday (§14z, §22) |
+| `GET /storeops/payroll/clock-variances` | `storeops/clock_variance_api.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
+| `POST /storeops/payroll/clock-variances/resolve` | `storeops/clock_variance_api.py` → `storeops.clock_variance_correction` | one human decision about one variance — including the DM's per-row override, which out-ranks the declared rule and is audited to `payroll_change_log` (§14z) |
+| `GET /storeops/payroll/clock-link-proposals` · `POST /storeops/payroll/clock-link-proposals/decide` | `storeops/clock_variance_api.py` → `payroll_identity.link_proposals` | the login↔employee approvals. A proposal is never an attribution; only an approved row binds hours to a person (§14z) |
+| `GET /storeops/payroll/clock-gate` | `storeops/clock_variance_api.py` → `clock_variance.gate_decision` | what a signing-in manager is shown. ★ NEVER a refused sign-in ★ — an alert on any day, a confinement to the correction board from the gate weekday (§14z, §22) |
 | `PATCH /storeops/employees/{id}/pay-from-schedule` | `storeops/router.py` → `payroll_hours_basis.CHANGE_ENTRY_POINT` | the per-employee tick box, beside that employee's NAME. Pay-visibility RBAC'd, org-scoped, audited (§14y) |
+| `GET /storeops/payroll/run-preflight` | `storeops/clock_variance_api.py` → `clock_variance.payroll_run_gate` + `payroll_hours_basis.interlock` | may payroll run for this period — refuses by DEFAULT and NAMES what blocks: uncorrected variances, the punch-coverage interlock, and the employees this run would price at $0.00 for want of a `pay_rate` (§14z) |
+| `POST /storeops/payroll/clock-variance-ask` | `storeops/clock_variance_api.py` → `clock_variance.ask_plan` + `notify/digest_delivery.deliver_digests` | the Monday ask: who owns each still-blocking store, asked over the ONE delivery ladder with the ONE send record. `dry_run` defaults TRUE; stores nobody owns are NAMED, never dropped (§14z, §15.1, §15.2, §48.7) |
+| `POST /storeops/payroll/clock-variance-ask/run-due` | `storeops/clock_variance_api.py` → `clock_variance_ask` per tenant | the pg_cron entrypoint behind the ask, `NOTIFY_RUN_SECRET`-guarded. One hourly job serves every tenant; each org's ask weekday is read in ITS OWN business timezone, so no weekday is spelled in the cron line (§14z) |
 | `GET /storeops/payroll` · `GET /storeops/payroll-by-store` | `storeops/router.py` | **no longer decide hours themselves** — they dereference `payroll_hours_basis.resolve_shift_row` / `punch_counts_for_pay`, and every hours figure carries its basis (§14y) |
 
 - `GET /commcalc/expenses/apply-config` — additionally serves `labour_rows` (the resolved per-org labour vocabulary from its one home, with `payroll_source` / `commission_source` / `mode` / `grain`), so the Expenses sheet DEREFERENCES which of its rows the platform auto-fills instead of keeping a copy; its `default_tokens` are now DERIVED from that same vocabulary rather than a literal list (§4e).

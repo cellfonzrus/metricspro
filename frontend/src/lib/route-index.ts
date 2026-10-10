@@ -340,6 +340,9 @@ export const ROUTES: RouteEntry[] = [
   { path: '/storeops/payroll-change-log', label: 'Payroll Change Log', aliases: ['payroll changes', 'who changed pay'] },
   { path: '/storeops/payroll-tax' },
   { path: '/storeops/payroll/approvals' },
+  // The LABEL lives in NAV (src/lib/rbac.ts) — a second spelling here is the duplicate the
+  // registry proof forbids. Only the search aliases belong on this side.
+  { path: '/storeops/payroll/clock-variances', aliases: ['clock variance', 'clock in clock out differences', 'elevate clock report', 'b2b clock report', 'correct the clock'] },
   { path: '/storeops/payroll/payers' },
   { path: '/storeops/reports' },
   { path: '/storeops/reviews' },

@@ -132,3 +132,34 @@ export const EMP_EMAIL_SLICE: RowSlice<any, unknown> = {
 /** Roles & Access → People: the employee-record slices one row edits (the role ASSIGNMENT is a login
  *  record, saved by `/core/users/assign` after these). */
 export const ROLES_EMPLOYEE_ROW_SLICES = [EMP_DETAILS_SLICE, EMP_EMAIL_SLICE] as const
+
+// ── ONE-CLICK WRITES, in the same home (index §14y) ──────────────────────────────────────────────
+// Not every employee write is a row EDITOR. A control whose value is chosen and written in the SAME
+// click cannot leave a typed edit pending, so it is not a slice and must not need a row's Save —
+// that is the category `harness_row_save_lock.py` already calls "one-click ACTIONS". It still builds
+// its request HERE, because the thing the lock is actually protecting is that no page spells an
+// employee-write path itself (one fact, one home, dereferenced).
+
+/** PAY FROM SCHEDULE — `PATCH /storeops/employees/{employee_id}/pay-from-schedule` (mig 1073).
+ *
+ *  The per-employee tick box beside the person's NAME on HR → Employees & Pay. THREE values, not
+ *  two: `true` pay from the schedule when a day has no clock-in, `false` clocked hours only, and
+ *  `null` follow the organisation's default — which is a different fact from "no", and conflating
+ *  them would silently stop paying every unmeasured day in a tenant whose default is yes.
+ *
+ *  NOTE THE KEY: this path takes the BUSINESS `employee_id` ('E252'), not the numeric row `id` every
+ *  slice above uses. It is deliberately not `empPath` — borrowing that helper would send the wrong
+ *  key and 404 on every save.
+ *
+ *  Pay visibility is re-checked SERVER-side on every call (market manager and above, per-org
+ *  config), so a caller who may not see pay cannot set this by calling it directly.
+ */
+export function buildPayFromScheduleWrite(employeeId: string, value: boolean | null) {
+  const id = String(employeeId || '').trim()
+  if (!id) return null
+  return {
+    path: `/api/v1/storeops/employees/${encodeURIComponent(id)}/pay-from-schedule`,
+    method: 'PATCH' as const,
+    body: { pay_from_schedule: value },
+  }
+}

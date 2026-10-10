@@ -487,6 +487,11 @@ on:
       - "backend/harness_payroll_hours_basis.py"
       - "backend/harness_clock_feed.py"
       - "backend/harness_clock_variance.py"
+      - "backend/harness_clock_variance_api.py"
+      - "frontend/src/lib/setup-gate.ts"
+      - "frontend/prove_confinement.mjs"
+      - "frontend/src/app/(platform)/layout.tsx"
+      - "backend/app/modules/storeops/clock_variance_api.py"
       - "backend/app/modules/storeops/payroll_hours_basis.py"
       - "backend/app/modules/storeops/clock_feed.py"
       - "backend/app/modules/storeops/clock_variance.py"
@@ -1153,6 +1158,12 @@ jobs:
       - name: Run the Account-hub expenses-column proof (the display contract behind the Expenses column)
         working-directory: frontend
         run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE CONFINEMENT RULE (index §39, §14z). Runs HERE because it transpiles the real
+      # src/lib/setup-gate.ts with the repo's own tsc, so it needs the frontend's dependencies —
+      # and `harness_ci_pipefail_lock.py` fails the build when a proof is run where it cannot load.
+      - name: "Confinement rule (index §14z, §22): one rule for the setup wizard AND the clock gate, and ★ NO LOCKOUT ★ holds in both — the sign-in is never refused, an unreadable gate traps nobody"
+        working-directory: frontend
+        run: node prove_confinement.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
@@ -1182,6 +1193,13 @@ jobs:
       - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
         working-directory: backend
         run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # Runs HERE and not in the dependency-free guard job because it drives the REAL endpoints over the
+      # in-memory client, so it imports the router and therefore FastAPI. In the guard job the step died
+      # on `import fastapi` before check one — the same §19.25 trap the comments above name, and
+      # `harness_ci_pipefail_lock.py` fails the build when a harness is run where it cannot import.
+      - name: "Clock-variance ENDPOINT proof (index §14z): switched off reads as off and not as clean; the board's period IS payroll's period; a gate that cannot look does not gate; an override with no reason is refused"
+        working-directory: backend
+        run: python3 harness_clock_variance_api.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: "Peer sales comparison (index §59): the add-a-line ONE HOME over the whole measured vocabulary + the equivalence pin that says no promo column moved; the traffic band; and the un-wire lock on every _sales_cell_agg field it rolls up"
         working-directory: backend
         run: python3 harness_peer_comparison.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"

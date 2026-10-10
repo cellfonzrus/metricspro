@@ -318,6 +318,66 @@ check("E9 the ask reference key is stable, so the same ask is not sent twice",
 check("E10 …and differs per period, so next period's ask is a new one",
       V.ask_ref_key("org-1", "2026-10-01", "2026-10-15", "D1")
       != V.ask_ref_key("org-1", "2026-10-16", "2026-10-31", "D1"), True)
+check("E11 …and differs per STORE, so a store that turns blocking mid-week is asked about",
+      V.ask_ref_key("org-1", "2026-10-01", "2026-10-15", "D1", "B-151")
+      != V.ask_ref_key("org-1", "2026-10-01", "2026-10-15", "D1", "B-4712"), True)
+check("E12 a key with no store is the key the earlier callers already wrote (additive)",
+      V.ask_ref_key("org-1", "2026-10-01", "2026-10-15", "D1"), "org-1:2026-10-01:2026-10-15:D1")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+section("E2. the ask RENDERED — the fan-out the delivery ladder eats, and what it says")
+# This is where the ask meets `notify/digest_delivery.deliver_digests`. The shape is not ours to
+# choose: a digest is {to, to_name, addresses, items}, and each item carries its own `ref_key` so
+# `storeops/alert_log` can dedup it PER CHANNEL. Nothing here sends anything.
+_fan = V.ask_digests(_plan, org_id="org-1", period_start="2026-10-01", period_end="2026-10-15")
+check("E2a one digest per recipient, in a stable order",
+      [d["employee_id"] for d in _fan], ["D1", "M1"])
+check("E2b one ITEM per store, each with its own dedup key",
+      [[(i["store_code"], i["ref_key"]) for i in d["items"]] for d in _fan],
+      [[("B-4712", "org-1:2026-10-01:2026-10-15:D1:B-4712")],
+       [("B-151", "org-1:2026-10-01:2026-10-15:M1:B-151")]])
+check("E2c the addresses dict is what the ladder reads — email present, WhatsApp absent",
+      [d["addresses"] for d in _fan],
+      [{"email": "dm@example.com"}, {"email": "mm@example.com"}])
+# A recipient the org tree names but whose record carries no address at all must still appear. The
+# ladder marks that row `no_channel` and records nothing, so it retries once an address exists —
+# dropping them here would make an unreachable manager look like a satisfied one.
+_noaddr = V.ask_digests({"recipients": {"X1": {"stores": ["B-1"], "blocking": 1, "variances": 1,
+                                               "level": "dm", "name": "No Address"}}},
+                        org_id="o", period_start="a", period_end="b")
+check("E2d a recipient with NO address is still returned, with no addresses",
+      [(d["employee_id"], d["addresses"], d["to"]) for d in _noaddr], [("X1", {}, "")])
+check("E2e a recipient with no blocking store produces no digest at all",
+      V.ask_digests({"recipients": {"X1": {"stores": [], "blocking": 0}}},
+                    org_id="o", period_start="a", period_end="b"), [])
+
+_built = V.build_ask_digest("The DM", _fan[0]["items"], period_start="2026-10-01",
+                            period_end="2026-10-15", gate_weekday=1, run_weekday=2,
+                            link="/storeops/payroll/clock-variances")
+check("E2f the three parts the delivery ladder requires are all present",
+      sorted(_built), ["html", "subject", "text"])
+check("E2g the subject counts the BLOCKING rows and the stores, not the org's total",
+      _built["subject"],
+      "Clock-in corrections needed before payroll: 1 row across 1 store")
+# THE OWNER RULING TRAVELS WITH THE ASK. *"mention on the report why you are doing so"* — an email
+# that asks a manager to correct a row without saying why the earlier Elevate clock-out is being
+# paid is the report the ruling was about, missing its reason.
+for _part in ("html", "text"):
+    check(f"E2h the WHY is in the {_part} body, in the owner's own terms",
+          "time in the store, not time worked" in _built[_part], True)
+    check(f"E2i the {_part} body names the store being asked about",
+          "B-4712" in _built[_part], True)
+    check(f"E2j the {_part} body says when the correction is due and when payroll runs",
+          ("weekday 1" in _built[_part] and "weekday 2" in _built[_part]), True)
+# THE ASK GOES TO DISTRICT MANAGERS, and money is market-manager-and-above
+# (`storeops/pay_visibility.py`, mig 434). A digest that priced the hours would walk straight past
+# that gate on its way to an inbox, where no RBAC check can reach it.
+for _part in ("html", "text"):
+    check(f"E2k NO money figure appears in the {_part} body",
+          ("$" in _built[_part] or "pay_rate" in _built[_part] or "gross" in _built[_part]), False)
+check("E2l a store spelling with an & in it cannot break the email",
+      "&amp;" in V.build_ask_digest("x", [{"store_code": "A & B", "blocking": 1}])["html"], True)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

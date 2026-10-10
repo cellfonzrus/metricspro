@@ -25,6 +25,21 @@ interface StoreRow { store_code: string; address?: string; market?: string; is_a
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
 
+// The basis words come from the ONE home (`backend/app/modules/storeops/payroll_hours_basis.py`,
+// index §14y) and are shown as the human phrase here. Deliberately a DISPLAY map only: the decision,
+// the vocabulary and the explaining sentence all live server-side, and an unknown word falls through
+// to itself rather than being hidden — a basis this page has not been taught about is still a fact.
+const BASIS_LABEL: Record<string, string> = {
+  clocked: 'Clocked in',
+  clocked_corrected: 'Corrected by hand',
+  clocked_reconciled: 'Clock records reconciled',
+  clocked_override: 'Overridden, with a reason',
+  measured_zero: 'Measured — nothing worked',
+  schedule_opt_in: 'From the schedule (ticked)',
+  not_measured_unpaid: 'Not measured — unpaid',
+  punch_unusable: 'Punch unusable — reported',
+}
+
 export default function PayrollPage() {
   // RULE FIVE (§3d) period filter: an arbitrary date RANGE (owner 2026-07-25: "need time range to
   // create payroll for the employees universally" — biweekly/semimonthly/custom periods), defaulted
@@ -175,6 +190,19 @@ export default function PayrollPage() {
     // ONE ROW PER REP (2026-07-27): /payroll now returns a single, merged row per employee — this
     // column just displays it.
     { header: 'Actual Hrs', field: 'actual_hours', type: 'number', get: r => r.actual_hours.toFixed(1) },
+    // WHY THESE HOURS (owner 2026-10-10: "mention on the report why you are doing so"). The hours and
+    // the reason they are those hours are ONE fact — this column is the reason, and both the word and
+    // its sentence come from the server (`payroll_hours_basis.basis_reason`), never composed here, so
+    // the screen and the API cannot disagree. A period that mixes punched and scheduled days says
+    // "mixed" rather than picking a winner. Absent on an older backend, where the column reads blank.
+    { header: 'Hours basis (why)', field: 'hours_basis', get: r => {
+        const b = (r as any).hours_basis
+        if (!b) return ''
+        const label = BASIS_LABEL[b] || String(b).replace(/_/g, ' ')
+        // "Mixed" is said OUT LOUD, not resolved. A fortnight with punched days and scheduled days
+        // has no single basis, and printing the dominant one alone would be the tidier lie.
+        return (r as any).hours_basis_mixed ? `${label} · mixed` : label
+      } },
     // Lunch-break auto-deduction (owner directive 2026-07-27, Deliverable 3) — HONESTY: an explicit
     // line, never folded silently into Actual Hrs (which is already the NET/post-deduction figure —
     // see GET /payroll). 0 for the common case (feature off, or no day qualified this period).

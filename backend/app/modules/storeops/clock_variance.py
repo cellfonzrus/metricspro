@@ -572,11 +572,115 @@ ASK_SCOPE = "clock_variance_weekly_ask"
 LOGIN_SCOPE = "clock_variance_login_alert"
 
 
-def ask_ref_key(org_id, period_start, period_end, employee_id):
+def ask_ref_key(org_id, period_start, period_end, employee_id, store_code=None):
     """PURE: the `alert_log.ref_key` for one recipient's weekly ask. Keyed by PERIOD, so a second
     sweep in the same week is deduped and the next period asks again — the same shape every other
-    weekly digest in this codebase uses."""
-    return f"{org_id}:{period_start}:{period_end}:{employee_id}"
+    weekly digest in this codebase uses.
+
+    `store_code`, when given, puts the STORE in the key tail. That is deliberate and not cosmetic: a
+    store whose file arrives late turns blocking halfway through the week, and a key that named only
+    the recipient would count them as already asked and never mention the new store. One key per
+    (recipient, store) asks again for the store that is new and stays silent about the ones already
+    carried — which is what the per-channel dedup in `alert_log` is for.
+    """
+    tail = f":{store_code}" if _s(store_code) else ""
+    return f"{org_id}:{period_start}:{period_end}:{employee_id}{tail}"
+
+
+def ask_digests(plan, *, org_id, period_start, period_end):
+    """PURE: `ask_plan` output rendered as the digest fan-out `digest_delivery.deliver_digests` eats.
+
+    One digest per recipient, one ITEM per store, each item carrying its own `ref_key` — see
+    `ask_ref_key`. The `addresses` dict is what the delivery ladder reads, so a recipient with only a
+    phone is still reached on WhatsApp and a recipient with neither is returned with no addresses at
+    all rather than silently dropped (`deliver_recipient` marks that `no_channel`, which retries).
+
+    Nothing here decides whether to send. The weekday decision is `is_ask_day`, the switch is
+    `variance_ask_enabled`, and both live with the rest of the config.
+    """
+    out = []
+    for eid, r in sorted(((k, v) for k, v in ((plan or {}).get("recipients") or {}).items()),
+                         key=lambda kv: _s(kv[0])):
+        items = [{"ref_key": ask_ref_key(org_id, period_start, period_end, eid, code),
+                  "employee_id": eid, "store_code": code, "level": r.get("level"),
+                  "variances": int(r.get("variances") or 0),
+                  "blocking": int(r.get("blocking") or 0)}
+                 for code in (r.get("stores") or ())]
+        if not items:
+            continue
+        addrs = {}
+        if _s(r.get("email")):
+            addrs["email"] = _s(r.get("email"))
+        if _s(r.get("phone")):
+            addrs["whatsapp"] = _s(r.get("phone"))
+        out.append({"to": addrs.get("email") or addrs.get("whatsapp") or "",
+                    "to_name": r.get("name"), "addresses": addrs,
+                    "employee_id": eid, "items": items})
+    return out
+
+
+def _esc(v):
+    """PURE: the five XML entities, so a store spelling with an `&` in it cannot break the email."""
+    return (_s(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
+
+
+#: Why the ask says what it says. The owner's own words, kept whole, because the reason the Elevate
+#: clock-out is used as pay has to travel to the person being asked to correct it — the ruling says
+#: *"mention on the report why you are doing so"*, and an email that asks for a correction without
+#: saying why is the report the ruling was about.
+ASK_WHY = ("Where the Elevate clock-out is earlier than ours, the earlier record is what payroll "
+           "pays: a later clock-out with no work left to do is time in the store, not time worked. "
+           "If that reading is wrong for a row, override it with a reason and the override wins.")
+
+
+def build_ask_digest(name, items, *, period_start=None, period_end=None, run_weekday=None,
+                     gate_weekday=None, link=None, why=None):
+    """PURE: ONE recipient's weekly clock-variance ask — `{"subject", "html", "text"}`.
+
+    The text body is the WhatsApp rendering: shorter, same facts in the same order, because two
+    renderings of one ask that disagree is an ask nobody trusts (the `visit_alerts.build_digest`
+    convention, followed rather than re-invented).
+
+    It states WHAT blocks, WHICH stores, BY WHEN, and WHY — the four things a manager needs to act
+    without replying to ask. It never carries a pay figure: the ask goes to district managers, and
+    money is market-manager-and-above (`storeops/pay_visibility.py`).
+    """
+    items = [it for it in (items or []) if isinstance(it, dict)]
+    stores = sorted({_s(it.get("store_code")) for it in items if _s(it.get("store_code"))})
+    blocking = sum(int(it.get("blocking") or 0) for it in items)
+    period = (f"{period_start} to {period_end}" if _s(period_start) and _s(period_end)
+              else "the current pay period")
+    subject = ("Clock-in corrections needed before payroll: {b} row{s} across {k} store{ks}"
+               .format(b=blocking, s="" if blocking == 1 else "s", k=len(stores),
+                       ks="" if len(stores) == 1 else "s"))
+    by = ""
+    if gate_weekday is not None and run_weekday is not None:
+        by = (" Corrections are due before this org's gate day (weekday {g}); payroll runs on "
+              "weekday {r}.".format(g=int(gate_weekday), r=int(run_weekday)))
+    rows = "".join(
+        "<tr><td>{st}</td><td>{b}</td><td>{v}</td></tr>".format(
+            st=_esc(it.get("store_code")), b=int(it.get("blocking") or 0),
+            v=int(it.get("variances") or 0)) for it in items)
+    foot = ('<p><a href="{0}">Open the clock-variance board</a></p>'.format(_esc(link))
+            if _s(link) else "")
+    html = (
+        "<p>Hello {name},</p>"
+        "<p>The Elevate clock-in/clock-out report and our own time clock disagree on {b} row{s} "
+        "for {p}, across {k} store{ks}. Payroll cannot run for those rows until each one is either "
+        "corrected or accepted.{by}</p>"
+        "<p><i>{why}</i></p>"
+        "<table border=1 cellpadding=6 cellspacing=0>"
+        "<tr><th>Store</th><th>Still blocking</th><th>Variances seen</th></tr>{rows}</table>{foot}"
+    ).format(name=_esc(name) or "there", b=blocking, s="" if blocking == 1 else "s", p=_esc(period),
+             k=len(stores), ks="" if len(stores) == 1 else "s", by=_esc(by).replace("&#39;", "'"),
+             why=_esc(why or ASK_WHY), rows=rows, foot=foot)
+    text = ("{b} clock-in row{s} need correcting for {p} ({k} store{ks}: {names}). "
+            "Payroll cannot run for those rows until each is corrected or accepted.{by} {why}"
+            ).format(b=blocking, s="" if blocking == 1 else "s", p=period, k=len(stores),
+                     ks="" if len(stores) == 1 else "s", names=", ".join(stores) or "none named",
+                     by=by, why=why or ASK_WHY)
+    return {"subject": subject, "html": html, "text": text}
 
 
 # ── THE WEEK ─────────────────────────────────────────────────────────────────────────────────────
@@ -604,6 +708,17 @@ def _gate_window_open(weekday, cfg):
     ask, gate, run = cfg["ask_weekday"], cfg["gate_weekday"], cfg["run_weekday"]
     off = lambda d: (int(d) - ask) % 7           # noqa: E731 — days since the ask, in week order
     return off(gate) <= off(weekday) <= off(run)
+
+
+# ── THE DM's PER-ROW OVERRIDE (owner ruling 2026-10-10) ──────────────────────────────────────────
+#: How the override appears in `storeops.payroll_change_log`. DECLARED HERE, once, because the
+#: endpoint that writes the log and the harness that proves it was written must agree on the word —
+#: two string literals in two files is how an audit trail quietly stops being searchable.
+OVERRIDE_ENTRY_POINT = "clock_variance_override"
+OVERRIDE_FIELD = "override_hours"
+#: The resolutions a human may record. The SQL CHECK constraint carries the same three, so a value
+#: this module does not know cannot reach the table either.
+RESOLUTIONS = ("corrected", "accepted_ours", "accepted_feed")
 
 
 # ── THE GATE ─────────────────────────────────────────────────────────────────────────────────────
