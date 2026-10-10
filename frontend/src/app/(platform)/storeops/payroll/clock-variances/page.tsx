@@ -26,6 +26,7 @@ import { api } from '@/lib/client'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { ReportExportBar, type ExportColumn } from '@/components/ReportExportBar'
 import type { StandardFilterValue } from '@/lib/standard-filters'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 type Row = {
   store_code?: string; employee_id?: string; employee_name?: string; employee_raw?: string
@@ -162,7 +163,10 @@ export default function ClockVariancesPage() {
         <div style={{ ...card, borderColor: '#f59e0b', background: 'rgba(245,158,11,0.08)' }}>
           <strong style={{ color: '#b45309' }}>Part of this board could not be read.</strong>
           <ul style={{ margin: '6px 0 0 18px', fontSize: 12.5, color: 'var(--text2)' }}>
-            {d.blockers.map((b, i) => <li key={i}><code>{b.table}</code> — {b.reason}</li>)}
+            {/* A feed's PLAIN name through the one home (`lib/sourceLabels.ts`, index §19.38) — a
+                manager reads "the clock in / clock out report", never a table name, and the API
+                sends the table as DATA so the page must translate it rather than print it. */}
+            {d.blockers.map((b, i) => <li key={i}><strong>{sourceLabel(b.table) || 'a data source'}</strong> — {b.reason}</li>)}
           </ul>
         </div>
       )}

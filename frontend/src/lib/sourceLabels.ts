@@ -39,6 +39,14 @@ const SOURCE_LABEL: Record<string, string> = {
   daily_closing: 'daily closing sheet',
   store_mapping: 'Store Mapping',
   payout_config: 'payout rates',
+  // The clock-in/clock-out package (mig 1073, index §14z). The variance board names the feeds it
+  // could not read, and a manager reads "the clock in / clock out report", never a table.
+  raw_clock_punch: 'clock in / clock out report',
+  timelog: 'our own time clock',
+  manual_hours: 'hand-entered hours',
+  shifts: 'the schedule',
+  clock_variance_correction: 'recorded clock corrections',
+  clock_feed_login_link: 'approved clock-report logins',
 }
 
 /** The plain name of a data source. An unknown table still never prints as an identifier: `raw_` is dropped and

@@ -1025,7 +1025,23 @@ _all_routes = _flatten_routes(real_app.routes)
 # feed replay). Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1759"))
+# Re-pinned 1759 -> 1768 on 2026-10-10 for the payroll clocked-hours basis + Elevate clock variance
+# work (index §14y/§14z). The delta is NINE routes and every one is named:
+#   GET   /storeops/payroll/clock-variances            the variance board
+#   POST  /storeops/payroll/clock-variances/resolve     the DM correction / override
+#   GET   /storeops/payroll/clock-gate                  is this manager confined right now
+#   GET   /storeops/payroll/clock-link-proposals        proposed feed-login -> employee links
+#   POST  /storeops/payroll/clock-link-proposals/decide the owner approving one
+#   GET   /storeops/payroll/run-preflight               may payroll run for this period
+#   POST  /storeops/payroll/clock-variance-ask          the Monday ask, on demand
+#   POST  /storeops/payroll/clock-variance-ask/run-due  its due-sweep (pg_cron)
+#   PATCH /storeops/employees/{employee_id}/pay-from-schedule   the per-employee tick box
+# None of them is a second answer to an existing question and none adds a route to db_resilience
+# itself (I0b below proves that independently of this number). Verified the same way as every pin
+# above: `git diff origin/main HEAD -- backend/ | grep -cE '^\+.*@router\.'` = 9 and
+# `'^-.*@router\.'` = 0 — nine added, NONE removed, and 1759 + 9 = 1768, the figure CI measured. So
+# the pin was re-taken on a counted, named addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1768"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

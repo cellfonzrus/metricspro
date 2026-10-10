@@ -76,13 +76,19 @@ def sb_public():
 # of this surface is that they never print the same.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 def _rows(table, select, org_id, **eqs):
+    """A failed read is REPORTED as {table, reason}, never as one formatted string.
+
+    `reason` is a boundary MESSAGE key (`core.setup_notice.MESSAGE_KEYS`), so the raw database error
+    is neutralized for a tenant and kept whole for a platform admin by the one boundary — and `table`
+    stays DATA under a non-message key, which the page renders through `sourceLabel()` rather than
+    printing the identifier at a district manager who is being gated into this screen."""
     try:
         q = sb().table(table).select(select).eq("org_id", org_id)
         for k, v in eqs.items():
             q = q.eq(k, v)
         return (q.execute().data or []), None
     except Exception as e:
-        return [], f"{table}: {e}"
+        return [], {"table": table, "reason": str(e)}
 
 
 def _range_rows(table, select, org_id, col, lo, hi):
@@ -96,7 +102,7 @@ def _range_rows(table, select, org_id, col, lo, hi):
             q = q.lt(col, hi)
         return (q.execute().data or []), None
     except Exception as e:
-        return [], f"{table}: {e}"
+        return [], {"table": table, "reason": str(e)}
 
 
 def _load(org_id, lo, hi):
