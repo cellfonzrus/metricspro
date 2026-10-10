@@ -96,7 +96,8 @@ Primary code homes:
 | 69 | **A declaration must be HONOURABLE — the vocabulary has to be able to express it** | "My own declaration says this carrier money is MDF, so why is it booking on the device reimbursement line? When the platform cannot express the category I declared, who decides where the dollar goes — me or a keyword rule? And which months need a P&L recompute once it is fixed?" |
 | 72 | **A cash variance is meaningless unless both figures count the same cash** | "After management recon, who is short and who is over — management's count against the cash envelope and against the B2B cash? Why does nothing ever match, which differences are a definition rather than a shortage, and which store or employee is out the same way every week?" |
 | 73 | **A cash figure a human typed is evidence — a correction keeps the old one** | "Management typed the wrong cash amount at recon — can they fix it, and will anyone be able to tell it was changed, by whom, from what? Why is an edit button without a trail the same defect migration 935 already fixed once?" |
-| 74 | **The frontend type check is a CHECK** | "A frontend TypeScript error was invisible to all 49 GitHub checks while the Vercel deploy was red on every head — what compiles the frontend in CI now, where is that gate, why can it not skip silently on tsconfig.json or package.json, and what stops someone reaching green with `strict: false`, `ignoreBuildErrors` or a blanket `@ts-ignore`?" |
+| 74 | **A count of the whole envelope is not comparable with a netted expectation** | "The envelope says $671 and the count says $671, so why does the screen expect $552.50 and call it a declaration? Which of the short and over verdicts on the recon board are measuring two different cashes against each other?" |
+| 75 | **The frontend type check is a CHECK** | "A frontend TypeScript error was invisible to all 49 GitHub checks while the Vercel deploy was red on every head — what compiles the frontend in CI now, where is that gate, why can it not skip silently on tsconfig.json or package.json, and what stops someone reaching green with `strict: false`, `ignoreBuildErrors` or a blanket `@ts-ignore`?" |
 
 ---
 
@@ -23534,11 +23535,11 @@ index-section-number race in §62.
 
 ---
 
-## 74. THE FRONTEND TYPE CHECK IS A CHECK — a type error must fail something, not only a deploy nobody is required to read (owner directive 2026-10-10)
+## 75. THE FRONTEND TYPE CHECK IS A CHECK — a type error must fail something, not only a deploy nobody is required to read (owner directive 2026-10-10)
 
 Owner, verbatim: *"fix the frontend type error"*.
 
-### 74.1 THE CLASS, NOT THE INSTANCE
+### 75.1 THE CLASS, NOT THE INSTANCE
 
 The instance: a `SCREENS` entry whose key sat outside the closed `ScreenKey` union in
 `frontend/src/components/ScreenLink.tsx`. It was found **by hand** with `npx tsc --noEmit` during the
@@ -23557,7 +23558,7 @@ This is §19.18's class once more: a mechanism that fully exists (TypeScript, `s
 set in `frontend/tsconfig.json`) with **no caller wired to it**. Fixing the union and stopping there
 would have left the next type error exactly as invisible as this one was.
 
-### 74.2 WHAT MAIN ACTUALLY MEASURED — and therefore NO debt file
+### 75.2 WHAT MAIN ACTUALLY MEASURED — and therefore NO debt file
 
 Measured on a clean `origin/main` with the repo's own compiler (`typescript@5.9.3`), after a real
 `npm ci`:
@@ -23576,7 +23577,7 @@ get a pinned debt list in the shape of `frontend/table_sort_pending.txt` or
 entries is a decoration that teaches the next reader the gate is negotiable. If the frontend had been
 red, that ratchet shape — and not a relaxed `tsconfig` — would have been the answer.
 
-### 74.3 THE ONE HOME, AND THE GATE
+### 75.3 THE ONE HOME, AND THE GATE
 
 **One home for the command.** `frontend/package.json` now declares
 
@@ -23606,7 +23607,7 @@ introduce or hide a type error. The filter now names **`frontend/**`** on both `
 `backend/app` glob it guards). **A gate that skips silently on the very file that broke the build is
 worse than no gate, because it reports green.**
 
-### 74.4 THE LOCK — so it cannot un-wire
+### 75.4 THE LOCK — so it cannot un-wire
 
 `backend/harness_frontend_typecheck_lock.py` — **33 checks**, stdlib only, DB-free. It runs **in the
 `frontend-typecheck` job itself**, as the first run step, before `npm ci` (it needs no `node_modules`),
@@ -23634,7 +23635,7 @@ slice that read every correctly-wired job as having no install, and a second-hom
 the lock's own job comment and step `name:` for *saying* `tsc --noEmit` while running nothing. A prose
 mention is not a second home; a `run:` value is, and only `run:` values are scanned now.
 
-### 74.5 What this does NOT do, stated so it is not mistaken for done
+### 75.5 What this does NOT do, stated so it is not mistaken for done
 
 - **FOUND AND NOT FIXED: this repo's harnesses are Python-version-sensitive, and
   `harness_carrier_vocab_guard.py` goes RED on Python 3.12+ while CI pins 3.11.** On Python 3.13 it
@@ -23658,7 +23659,7 @@ mention is not a second home; a `run:` value is, and only `run:` values are scan
 - **`website/`** was checked for a sibling frontend: it is plain HTML/CSS with no `tsconfig.json`, so
   there is no second type-check path to wire.
 
-### 74.6 Cross-references
+### 75.6 Cross-references
 
 Registers **no table, no endpoint, no metric and no report** — so §16 (by TABLE), §17 (by ENDPOINT)
 and §18 (by METRIC/KPI) carry nothing for it, and a row invented in any of them would be noise in the
@@ -23667,13 +23668,16 @@ cross-reference people rely on. What it registers is a CI gate and a lock:
 - `.github/workflows/carrier-vocab-guard.yml` → job `frontend-typecheck`, which runs BOTH the lock and `npm run typecheck`; `frontend/**` on both the `pull_request` and `push` path filters.
 - `frontend/package.json` → the `typecheck` script (the one home).
 - `backend/harness_frontend_typecheck_lock.py` → the lock (33 checks).
-- Ratchet precedents read and deliberately NOT copied: §19.25 / `harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt` (§74.2 says why).
+- Ratchet precedents read and deliberately NOT copied: §19.25 / `harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt` (§75.2 says why).
 - Same class: §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate), §13e (a harness outside the glob it guards).
 ---
 
-**Section number:** written as `72`, and it is **74**. `#435` (Cash Variance, mig 1070) merged while
-this PR was open and took `72`; `#437` had already taken `73`. Renumbered here rather than renumbering
-theirs — the later arrival moves. Same race as §62 and §70 record. Nothing outside this section
+**Section number:** written as `72`, and it is **75** — the third renumber of one PR. `#435` (Cash
+Variance) took `72` while this was open, `#437` took `73`, and `#439` took `74` minutes after this
+section was renumbered TO `74`. Each time the later arrival moved, never theirs. Same race as
+§62 and §70 record — but four claims on three numbers inside one hour is no longer an occasional
+collision, it is a missing allocator: the number is chosen by reading the file, and every open PR
+reads the same free number. Worth a real fix (claim-on-open, or stop numbering sections at all). Nothing outside this section
 depended on the number except four §-references in `carrier-vocab-guard.yml`, which moved with it.
 Renumbering file-wide also rewrote #435's OWN `index §72` reference in its cash-variance step name;
 that was caught by diffing the workflow against `origin/main` and restored.
@@ -23901,3 +23905,103 @@ harness, so the database cannot hold a subject the module has no behaviour for.
 - **Section number**: §68 and §72 were claimed in flight by open PRs, §69–71 are taken, so this is
   §73; migration `1071` is not renumbered to match (uniqueness is the only property
   `harness_unique_numbers_lock.py` asserts). See the index-section-number race in §62.
+
+---
+
+## 74. A COUNT OF THE WHOLE ENVELOPE IS NOT COMPARABLE WITH A NETTED EXPECTATION (owner question 2026-10-10)
+
+Owner, verbatim: *"on teh management recon for 3 pl on 10/2 it shows declard on envelope is 552 but
+written on enevelp 671 actual cash is 671 , where is the 552 coming from"*.
+
+**Module:** `backend/app/modules/closing/billpay_netting.py` (the gate) ·
+`backend/app/modules/closing/pickup_actual.py` (the one application of it)
+**Lock:** `backend/harness_envelope_count_basis.py` — 53 checks, run by `carrier-vocab-guard.yml`
+
+### 74.1 What the owner saw, traced to the cent
+
+Nothing was wrong with the money. B-3PL / 2026-10-02, measured in production and verified line by
+line against the sales feed:
+
+| Figure | Amount | Where it comes from |
+|---|---|---|
+| `daily_closing.t_cash` | $2,646.00 | the whole drawer, as the rep declared it |
+| declared `epay_on_cash` | $1,975.00 | the rep's own bill-payment cash |
+| POS bill-payment cash | **$2,093.50** | $2,013.50 of bills + $80.00 of service fees, **cash tender only** (26 + 20 feed lines) |
+| `cash_pickup.amount`, basis `pos` | **$552.50** | $2,646.00 − $2,093.50 — the system's expectation |
+| `actual_picked_amount` | **$671.00** | $2,646.00 − $1,975.00 — what the rep bagged and the DM counted |
+
+The screen called $552.50 *"declared on the envelope"*. **Nobody declared it.** The $118.50 "over"
+is exactly $2,093.50 − $1,975.00: the rep under-declared his bill-payment cash by $38.50 and did not
+count $80.00 of service-fee cash as bill-payment money at all.
+
+### 74.2 The class — and the distinction §72's vocabulary cannot express
+
+§72 says a variance between two cash figures is meaningless unless both count the same cash. This is
+the same class one level down. Here **both figures count the same cash** (store cash) and they still
+disagree, because they were **netted from different sources**: the expectation by the POS figure, the
+bag by the rep's own declaration. §72's bases name WHICH CASH; a pickup basis names **whose figure
+came out**. So the judgement lives beside the pickup basis words, not folded into §72's cash bases —
+which would make `pos` and `declared` look identical.
+
+### 74.3 The gate — one home, read by the read path AND the write path
+
+`billpay_netting.count_comparable(basis)` is the only place that decides, on the **resolved** basis:
+
+| basis | what was netted | comparable? |
+|---|---|---|
+| `off` | nothing | ✅ both figures are the whole drawer |
+| `none` | nothing (no POS figure that day) | ✅ |
+| `declared` | the rep's own figure | ✅ the bag was netted the same way |
+| `pos` | the POS figure | ❌ the bag was netted by the rep's figure instead |
+| not recorded / unrecognised | resolves to `off` | ✅ see 74.4 |
+
+`pickup_actual.gate_on_basis` applies it once and is dereferenced by **both** `row_variance` (the
+board and the two pickup lists) and `count_patch` (the open-and-count save) — a figure scored on
+save and refused on the board is the drift the lock forbids. A refused comparison gets
+`status='not_comparable'` and `variance=None`: **not** `match` and **not** `0.00`, either of which
+would read as "it tied out". Both figures are kept so a screen can still show what was expected.
+
+### 74.4 An unrecorded basis is NOT "unknown" — and that was not a free choice
+
+`router.pickup_basis_label` had already ruled it: unrecorded resolves to `off`, worded "total cash
+(not recorded — collected before the basis was stored)". That is right on the facts — netting did not
+exist before mig 1038/1039, so an amount written before the column IS the whole drawer. The first cut
+of this fix invented a second answer ("unknown, refuse it") and would have **withdrawn 226 sound
+shortage findings worth $59,321.53**. The resolution is therefore MOVED into `billpay_netting`
+(`resolved_basis` / `basis_recorded`) and `pickup_basis_label` dereferences it. One fact, one home.
+
+### 74.5 The sibling — checked before shipping, and it needed no migration
+
+`amount_basis` exists on `commcalc.cash_pickup` **only** (mig 1039). Left alone, the gate would have
+read the bill-payment envelope's missing column as unknown and refused **every** bill-pay count — the
+fix breaking the sibling it was meant to protect. The fact is settled by construction: netting moves
+bill-pay cash *into* that envelope, never out, so its amount is never reduced.
+`billpay_netting.pickup_amount_basis_for(table, stored_basis)` is the one home for it, so neither the
+confirm path nor the late open decides for itself, and **no migration is needed** for a knowable
+fact. A blank table name fails closed to the row's own basis.
+
+### 74.6 Measured effect (house org, 998 cash pickups, 660 with a DM count)
+
+| | before | after |
+|---|---|---|
+| short | 285 | **226** |
+| over | 59 | **13** |
+| match | 316 | 286 |
+| not comparable | — | **135** |
+
+**135 verdicts withdrawn** ($2,316.80 of "variance" no longer asserted), every one of them on the
+`pos` basis; **239 sound verdicts preserved**. Nothing books, pays or settles from this figure — the
+pickup variance is display plus a flag, and chargebacks key off `envelope_count.counted_amount`
+(§29) — so no money moves and no migration ships.
+
+### 74.7 What the screens say now
+
+- The open/correct dialog reads **"Expected in this envelope: $552.50 — sales cash (the
+  POS-calculated bill-pay cash netted out)"**, the basis words served by `pickup_basis_label`, so the
+  page spells no basis of its own.
+- A refused comparison states its one-sentence reason where it is rendered.
+- The board shows a **neutral** "N not comparable" count — not red, which would accuse somebody of
+  the POS-versus-declared gap as though it were missing cash, and not hidden, which would lose it.
+- The by-DM shortage rollup — the surface that **names a DM** — keeps them in their own bucket,
+  never as uncounted (untrue: somebody did count) and never as a match (untrue, and it hides the
+  finding).

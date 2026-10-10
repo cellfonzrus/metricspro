@@ -6127,6 +6127,9 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # WHY a variance was refused, where it was (owner question 2026-10-10). None when the
+            # comparison stands, so an older reader is byte-identical.
+            "pickup_variance_reason": (_pickup_actual.row_variance(p) or {}).get("reason") if p else None,
             # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
             # schema and on every row recorded before the checkbox existed: "collected sealed",
             # which is exactly how those pickups behaved.
@@ -7048,7 +7051,13 @@ def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
     # `amount` — the same figure `pickup_actual.row_variance` uses on the board and on the pickup
     # list, so a count entered here and the chip that renders it can never disagree.
     declared = _f(row.get("amount"))
-    patch = _pickup_actual.count_patch(item, declared=declared, counted_at=_now())
+    # WHICH CASH that snapshot counted, from the ONE home (owner question 2026-10-10). Only the cash
+    # envelope is ever netted, so the bill-pay sibling resolves comparable without a column of its
+    # own; a netted-by-POS snapshot resolves NOT comparable and the reply says so rather than
+    # announcing a shortage the board then refuses to show.
+    _basis_for_gate = billpay_netting.pickup_amount_basis_for(table, row.get("amount_basis"))
+    patch = _pickup_actual.count_patch(item, declared=declared, counted_at=_now(),
+                                       basis=_basis_for_gate)
     if not patch["row"]:
         raise HTTPException(400, "Nothing to record — send the count, or the opened flag.")
     upd = dict(patch["row"])
@@ -7081,6 +7090,13 @@ def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
             "actual_picked_amount": (vf["actual"] if vf else None),
             "variance": (vf["variance"] if vf else None),
             "status": (vf["status"] if vf else None),
+            # WHICH CASH the expected figure counted, and whether a count may be scored against it
+            # at all (owner question 2026-10-10). The reply is what the screen prints after a save,
+            # so a refused comparison must say so here too — otherwise the save announces a verdict
+            # the board then declines to show.
+            "comparable": (vf.get("comparable") if vf else None),
+            "basis_reason": (vf.get("reason") if vf else None),
+            "amount_basis": (vf.get("amount_basis") if vf else None),
             "counted_by": upd.get("actual_counted_by"),
             # What was CHANGED by this save, and whether the trail took it. The screen shows the
             # second one: "saved, but its history could not be recorded" is a real state and hiding
@@ -7193,7 +7209,11 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
         # deposit-accountability board's late open). Spelling the columns inline here is what
         # would let the two surfaces drift — harness_deposit_accountability.py §J fails the build
         # on a second copy.
-        _cp = _pickup_actual.count_patch(it, declared=amt, counted_at=_now())
+        _cp = _pickup_actual.count_patch(
+            it, declared=amt, counted_at=_now(),
+            # The basis being written on THIS confirm, through the one home — so the bill-pay
+            # sibling (which has no such column) is not refused for lacking one.
+            basis=billpay_netting.pickup_amount_basis_for(table, _basis))
         row.update(_cp["row"])
         _vf = _cp["variance"]
         if _vf:
@@ -7557,6 +7577,9 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # WHY a variance was refused, where it was (owner question 2026-10-10). None when the
+            # comparison stands, so an older reader is byte-identical.
+            "pickup_variance_reason": (_pickup_actual.row_variance(p) or {}).get("reason") if p else None,
             # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
             # schema and on every row recorded before the checkbox existed: "collected sealed",
             # which is exactly how those pickups behaved.
@@ -7694,10 +7717,12 @@ def pickup_basis_label(basis, in_force=None):
     actually asked to collect, which is the money-rewriting this file exists to refuse. The same
     rule mig 1036 applies to a stored envelope count.
     """
-    b = str(basis or "").strip().lower()
-    recorded = b in billpay_netting.PICKUP_BASES
-    if not recorded:
-        b = "off"
+    # ONE HOME for both halves (owner question 2026-10-10): WAS a basis recorded, and WHAT does a
+    # missing one resolve to. Both moved into `billpay_netting` so the basis GATE
+    # (`count_comparable`, which decides whether a count may be scored) reads the same resolution
+    # this label words. A private copy here is how the screen and the gate came to disagree.
+    recorded = billpay_netting.basis_recorded(basis)
+    b = billpay_netting.resolved_basis(basis)
     out = {"basis": b, "recorded": recorded,
            "label": (_PICKUP_BASIS_WORDS[b] if recorded else
                      "total cash (not recorded — collected before the basis was stored)")}
@@ -8281,6 +8306,9 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
     except Exception as _e:
         _history_available = False
         print(f"INFO cash_count_revision unavailable (run migration 1071?): {str(_e)[:160]}")
+    # The basis a pickup written NOW would use — read ONCE for the board, so `pickup_basis_label`
+    # can also say when a stored row answers a question the screen no longer asks.
+    _basis_now = pickup_amount_basis(client, org_id)
     _visible_revs = []
     for r in out:
         for env in r["envelopes"]:
@@ -8289,6 +8317,15 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
             # The sentences, built by the pure module so the screen words nothing itself.
             env["correction_history"] = [_count_revision.describe(x, money=_usd) for x in _h]
             _visible_revs.extend(_h)
+            # WHICH CASH the expected figure counted, in the words the pickup screen already uses
+            # (owner question 2026-10-10: "declared on envelope is 552 but written on envelope
+            # 671"). The $552.50 was never DECLARED by anybody — it is the drawer less the POS
+            # bill-payment cash — so the board states the basis beside the figure instead of
+            # calling it a declaration. ONE home for the words (`pickup_basis_label`), dereferenced
+            # here; the screen spells no basis of its own.
+            _bl = pickup_basis_label(env.get("pickup_amount_basis"), _basis_now)
+            env["amount_basis_label"] = _bl["label"]
+            env["amount_basis_recorded"] = _bl["recorded"]
     return {"start": start, "end": end, "rows": out, "summary": summary,
             "by_dm": dm_rows, "dm_summary": dm_summary,
             # Corrections across the VISIBLE rows only (keyset consistency, like `summary` above).
