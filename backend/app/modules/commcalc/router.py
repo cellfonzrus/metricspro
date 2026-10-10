@@ -11660,18 +11660,21 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
     if mk:
         asset_rows = [r for r in asset_rows
                       if _drr.month_key(r.get(cols["distributor_date"])) == mk]
-    # WHICH store keys two store records claim — read from the ONE identity home through coa's I/O
-    # twin (§64), never derived here. The pure layer withholds the "a different store was paid"
-    # verdict on those, because the two spellings may be one physical store. Measured live (house
-    # org, September 2026): 23 of 135 such devices, worth $6,164.95, touch one of the three.
+    # WHICH PAIRS OF ADDRESSES may be one physical store — read from the ONE identity home through
+    # coa's I/O twin (§64), never derived here, and handed to the pure layer as that home's own
+    # PREDICATE so no copy of the rule travels with it. The pure layer withholds the "a different
+    # store was paid" verdict only for such a pair. Measured live (house org, September 2026): zero
+    # pairs, so all 135 transfers are reported — the per-address ambiguity read this replaced
+    # withheld 23 of them, worth $6,164.95, on a fact that could not bear the verdict (§65.4).
     try:
-        from app.modules.account import coa as _coa_amb
-        _amb = _coa_amb.ambiguous_store_keys(client, org_id, resolve_store)
+        from app.modules.account import coa as _coa_sid
+        _pairs = _coa_sid.shared_store_identity_pairs(client, org_id, resolve_store)
+        _same_store = lambda _a, _b: _store_identity.may_be_one_store(_a, _b, _pairs)
     except Exception as _ae:
-        print(f"WARN device-line reimbursement: store ambiguity unresolved ({_ae})")
-        _amb = set()
+        print(f"WARN device-line reimbursement: shared store identity unresolved ({_ae})")
+        _same_store = None
     res = _drr.device_lines(asset_rows, carrier_lines, cfg, resolve_store, coverage,
-                            configured=configured, ambiguous_stores=_amb)
+                            configured=configured, same_store=_same_store)
     if store:
         want = (resolve_store(store) if resolve_store else store) or store
         res["rows"] = [r for r in res["rows"] if r["store"] == want]

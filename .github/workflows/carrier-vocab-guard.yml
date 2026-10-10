@@ -600,6 +600,13 @@ on:
       # and the three frontend registries, so a change to any of them must run it.
       - "backend/harness_device_line_reimbursement.py"
       - "backend/app/modules/commcalc/imei_rebate_report.py"
+      # index §67 — WHICH STORE carries a handset's cost. The cost side DEREFERENCES the device
+      # verdict above, so the two locks guard one mechanism between them: §H of the device-cost
+      # harness and §K of the device-line one. A change to the cost home, its declaration or its
+      # migration must run both.
+      - "backend/harness_device_inventory_cogs.py"
+      - "backend/app/modules/account/device_cogs.py"
+      - "database/migrations/1067_device_cost_store_basis.sql"
       - "frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
       - "backend/harness_statement_crosscheck_earned.py"
       - "backend/app/modules/account/analysis.py"

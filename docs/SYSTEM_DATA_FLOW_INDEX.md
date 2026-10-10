@@ -6210,6 +6210,7 @@ rendering the resolved name.
 
 ## 16. Cross-reference: by TABLE
 
+- `commcalc.account_config.device_cost_store_basis` (mig `1067`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§67).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
@@ -6457,7 +6458,8 @@ rendering the resolved name.
 - `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
-- `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65).
+- `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§67) — one reconciliation, two readers, never two derivations.
+- `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1067): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§67).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
@@ -6763,7 +6765,8 @@ rendering the resolved name.
 | **What is ONE carrier pay type worth to a store — to its commission payout revenue and to its net profit — and which stores are not earning it on the sales they make?** The share is of the P&L line the dollars actually book to (a “spiff” the org declares a reimbursement is NOT commission revenue, and the report says so); the lift is `spiff ÷ (net_income − spiff)` and is withheld with its reason when no positive base survives; the rate is paid units per 100 boxes, flagged as a different cohort when the pay type names a month rung | `commcalc.raw_comp_report` (`compensation_type`, `payment_amount`, `quantity`) classified through `commcalc/carrier_dollar_class` × the stored `commcalc.account_statements` per-store P&L × `router._sales_cell_agg`’s `box_count` / `_billpay_exec` | ONE home `commcalc/spiff_impact.py` (`pay_type_options` / `default_selection` / `store_money` / `profit_effect` / `units_per_100_boxes` / `caveats` / `build`) → `GET /commcalc/spiff-impact`; reads NO sale line and classifies NO dollar itself (both AST-locked); module-graph fact `spiff_store_impact`; lock `harness_spiff_impact.py` — §60. Live September 2026 (house org): $110,780.14 to `carrier_comm` and $373,211.61 to `vip_reimb`, both tying to the cent to the 31 stored per-store snapshots; **77% of the statement is not commission**, only 3 of 49 pay types carry the SPIFF component, and 13 of 28 stores have no positive profit base for a lift |
 | **Given ONE company accessory sales goal, what target should each store carry?** Weighted by the store's own accessories-per-box over the last two months x the boxes it is projected to sell; a store that sold boxes and attached nothing is weighted at the COMPANY rate and flagged, never given a $0 target; an unselected store's target is RESERVED out of the goal rather than assumed away; the assignments foot to the goal by largest remainder | `commcalc.daily_sales_feed`/`raw_sales` via `router._fetch_actuals` (`acc_gp` = accessory revenue + device set-up fee; `box_count`) x `router._targets_trending_by_code` (the projection) x `commcalc.targets.accessories_monthly` (mig `006`, the target in force — read AND written) | ONE home `commcalc/accessory_target_plan.py` (`company_goal` / `basis_amounts` / `company_rate` / `capacity_row` / `allocate` / `plan` / `assignment_payload`) → `GET /commcalc/accessory-target-plan/{period}` + its gated `/assign`; reads NO sale line and derives NO projection of its own (both AST-locked); module-graph fact `accessory_target_allocation`; lock `harness_accessory_target_plan.py` — §61. No new table: the suggestion is written into mig `006`'s own column, the row §5's Accessory Sales Targets tracker reads |
 | **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §62. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
-| **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; lock `harness_device_line_reimbursement.py` (74 checks) — §65. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 140 devices and $43,568.83 sit on one store's cost with another store's money |
+| **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; lock `harness_device_line_reimbursement.py` (89 checks) — §65. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 135 devices and $41,548.83 sit on one store's cost with another store's money |
+| **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1067) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §67. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
 | **What did management declare for this month, and what does it still owe this week?** The focus in a manager's own words, the pay type named as driving the month's spiffs, the temporary spiffs on the table with a status, and the weekly check-ins done; the OUTSTANDING list is COMPUTED from the row + today + live measurements, so an item cannot outlive its cause, and an unmeasured count raises nothing rather than reading as a zero | `commcalc.month_focus` (mig `1065`, the declaration) x `commcalc.targets` (mig `006`, SAVED rows only — a seeded carry-forward is not an assigned target) x `commcalc.payout_config.custom_spiffs` (§6, READ ONLY — the money) x §59's bands / `lagging()` x §60's pay-type options and per-store units | ONE home `commcalc/month_focus.py` (`outstanding` / `spiff_reconciliation` / `plays` / `confirm_checkin` / `may_declare`) → `GET`/`PUT` `/commcalc/month-focus/{period}` + `/checkin`; TWO surfaces over the one due list (the login attention item and the platform banner), neither recomputing it; opens no client, reads no feed and sends on no channel (all AST-locked); module-graph fact `month_focus_declaration`; lock `harness_month_focus.py` — §63. Nothing is paid from the row: a declared spiff is an intent with a status, and the reconciliation reports declared-against-live in BOTH directions |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
@@ -22287,13 +22290,16 @@ neither side is ever derived from the other. Where it went: `559 Broadway` $3,90
 units), `4712 White Plains Rd` $432.49, `5135 Bergenline` $377.50, `117 E Burnside Ave` $294.99.
 Every one of the 15 is on **652's** ledger and no other store's.
 
-Estate-wide, the same month: **112 devices, $35,383.88** paid to a store other than the one carrying
-the cost, and **$0.00** genuinely unpaid. It is not one store's problem. A further **23 devices worth
-$6,164.95** read as transfers until §65.4's third guard landed and are now reported **not measured**:
-one of the two addresses in each pair is claimed by two `store_mapping` records, so "a different
-store" cannot be told from "the same store spelled twice" (§65.4). The first measurement of this
-report said 140 / $43,568.83 — that figure counted those 23 as proven transfers and is superseded.
-None of 652's four counterpart stores is ambiguous, so its own $5,004.98 is unaffected.
+Estate-wide, the same month: **135 devices, $41,548.83** paid to a store other than the one carrying
+the cost, and **$0.00** genuinely unpaid. It is not one store's problem.
+
+**TWO SUPERSEDED FIGURES, NAMED so neither is read as a disagreement.** The first measurement said
+140 / $43,568.83, on a window and a basis this report no longer uses. The second said 112 /
+$35,383.88 proven plus 23 / $6,164.95 reported *not measured*, because §65.4's identity guard then
+withheld any pair touching an address two `store_mapping` records claim. That guard asked the wrong
+question and all 23 withholdings were false — §67.2 carries the defect and its proof. The owner asked
+what those 23 devices were (2026-10-10), which is how it was found. None of 652's own figures ever
+moved: no pair of its four counterpart stores was involved.
 
 ### 65.2 The class, named — not "652's rebate is short"
 
@@ -22352,18 +22358,18 @@ contains no split, fold, lower-casing or street-number step of its own, and the 
 - **Nothing paid anywhere, on a short month, is `not_measured`** with `carrier_coverage_incomplete`,
   carrying the missing days and what they were worth (`pay_data_quality.statement_month_coverage`,
   §19.54 — read, never re-derived). Unknown coverage is treated exactly like incomplete.
-- **An AMBIGUOUS store identity withholds the transfer verdict** — `store_identity_ambiguous`. Three
-  house addresses are claimed by TWO `store_mapping` records each (§13d / §64: `1 S 60th street`,
-  `1598 Mount Ephraim Ave`, `1800 Great Neck Rd`), so where one of them is on either side of a pair,
-  "the carrier paid a DIFFERENT store" and "the same store under its second spelling" are
-  indistinguishable — and a transfer called on that evidence would move real cost between two records
-  of one physical store. Measured live: 23 of the 135 devices, **$6,164.95**. The money stays on the
-  row and the other store is still named; only the VERDICT is withheld, and the withheld dollars are
-  counted apart from `not_paid`, never netted into it. The ambiguous SET is **injected** from the one
-  identity home through `account/coa.ambiguous_store_keys` (an I/O twin of `store_resolver`, reading
-  `store_identity.store_identity_index` → `.ambiguous_identities`); this module states no identity
-  rule of its own, and §K10 is the control that the withholding is the guard's doing — with no set
-  injected the same rows DO read as transfers.
+- **Two addresses that MAY BE ONE STORE withhold the transfer verdict** — `store_identity_ambiguous`.
+  Where one store is on record at both addresses of a pair, "the carrier paid a DIFFERENT store" and
+  "the same store under its other name" are indistinguishable, and a transfer called on that evidence
+  would move real cost between two records of one physical store. So the verdict is withheld: the
+  money stays on the row, the other store is still named, and the withheld dollars are counted apart
+  from `not_paid`, never netted into it. The rule is **injected as the identity home's own predicate**
+  — `account/coa.shared_store_identity_pairs` (an I/O twin of `store_resolver`) feeds
+  `store_identity.may_be_one_store`, and this module keeps no copy of it, not even a set-membership
+  test. ALL, not ANY: one payment at an address that cannot be this store proves the transfer.
+  **Live today: zero such pairs across the house org's 34 records, so nothing is withheld** — §K12 is
+  the control that the guard would still fire, and §67.2 carries the version of this guard that asked
+  the wrong question and withheld 23 true findings.
 
 ### 65.5 The lag window is SYMMETRIC, and that is measured
 
@@ -22446,7 +22452,7 @@ where. A line with no rep reports **no** rep and is never filled from the store'
   component, or give it a P&L line of its own, so a declaration stops being overridden by a keyword —
   which moves money and is therefore surfaced for the owner, not applied; it is owned by the
   commission-audit thread along with the rest of the classification path.
-- Lock `backend/harness_device_line_reimbursement.py` (**87 checks**), wired into
+- Lock `backend/harness_device_line_reimbursement.py` (**89 checks**), wired into
   `carrier-vocab-guard.yml`: the owner's own figures as fixtures, the transferred-vs-unpaid guard, the
   coverage guard, the symmetric-window regression, the absence-is-never-a-zero set, RULE TWO and
   purity, the un-wiring locks, and five controls that MUTATE each guard and show it is what produces
@@ -22627,3 +22633,140 @@ it.
 Module-graph fact: `carrier_dollar_component` — the same fact (one dollar, one classification); its
 `question` now names the basis rule, its `index` carries `66`, and this lock joins its locks.
 Written by hand, multi-line (never `--bless` — §50).
+
+---
+
+## 67. WHICH STORE CARRIES A HANDSET'S COST — the ledger stocks it, the carrier pays whoever sold it (owner directive 2026-10-10)
+
+Owner, on the decision card: *"Move the cost"* — move device cost to the store the carrier paid, for
+the proven transfers. The ask that led to it (§65): *"move the cost to a different store if this
+happens but capture that in a report for phones activated under different report"*.
+
+### 67.1 THE CLASS, NOT THE INSTANCE
+
+> **"Which store does this handset's cost belong to?" had two authorities and nothing reconciled them
+> per device.** `commcalc.asset_ledger` books the unit's cost to the **stocking** store, on the row's
+> own `store`. `commcalc.raw_payment_detail` pays the **activating** store. A phone stocked at one
+> door and sold at another charged one store a cost whose reimbursement a different store received.
+
+That is the same class §65 named for the reimbursement side, now answered on the cost side. It is not
+652's problem and it is not one tenant's: the fix is the MECHANISM by which any cost row acquires a
+store, for every caller of it.
+
+**Measured live** (house org, read-only, 2026-10-10) — Jun–Oct 2026, through the shipped code:
+
+| month | devices on the ledger | proven activated elsewhere | cost that moves |
+|---|---|---|---|
+| 2026-06 | 1,233 | 86 | $40,039.14 |
+| 2026-07 | 1,474 | 118 | $47,148.82 |
+| 2026-08 | 1,222 | 117 | $46,968.83 |
+| 2026-09 | 1,029 | 135 | $56,958.65 |
+| 2026-10 (partial) | 195 | 12 | $4,039.88 |
+| | | **468** | **$195,155.32** |
+
+Across 100 store pairs, and it **nets to $0.00 company-wide**: every dollar leaves one store and
+lands on another. Consolidated COGS and consolidated gross profit do not move. What restates is each
+STORE's gross profit — which is the point. The largest net movers in that window: `1750 5th Ave`
+−$14,829.66, `1800 Great Neck Rd` +$13,689.72, `4712 White Plains Rd` −$13,089.74, `3605 Germantown
+Ave` −$13,059.73, `3 Palisade Ave` +$11,399.57, `11636 Springfield Blvd` −$11,199.72.
+
+### 67.2 THE GUARD THAT ASKED THE WRONG QUESTION — a design fix found by the owner's question
+
+§65.4 shipped a third guard that withheld "the carrier paid a different store" whenever **either**
+address was one §13d reports as claimed by two `store_mapping` records. The owner asked what the 23
+withheld devices were (2026-10-10), and the answer was that the guard could not be right:
+
+- An ambiguous identity is **one canonical address claimed by two codes**, and
+  `build_store_resolver` step 3 places **both codes on that same canonical key**. So a payment under
+  either code is already counted at that store and can never reach the "different store" branch —
+  **the guard could not fire for its own stated reason.**
+- What it actually caught was pairs of two plainly different addresses (`1750 5th Ave` is not `1800
+  Great Neck Rd`), so **all 23 withholdings were false**: $6,164.95 of payments and $9,769.77 of cost
+  withheld from a verdict the evidence supported.
+- The fact that genuinely makes two addresses one store is the **relocation shape** — one `store_code`
+  or one `salesforce_id` (the carrier's own door) on record at two addresses. Measured the same day:
+  **zero of either** across the house org's 34 records.
+
+**The fix is the question, re-keyed, in the identity home.** `store_identity.shared_identity_pairs`
+derives the pairs that may be one store; `store_identity.may_be_one_store(a, b, pairs)` is the
+predicate; `coa.shared_store_identity_pairs` is the I/O twin that reads the rows. The pure layer takes
+the **predicate**, for the same reason it takes `classify` and `resolve_store` — the rule stays in its
+own home and `device_reimb_recon` keeps no copy, not even a set-membership test. A **pair relation**,
+never a per-address flag, because nothing about one address can answer a question about two. ALL, not
+ANY: one payment at an address that cannot be this store proves the transfer. The superseded
+`coa.ambiguous_store_keys` is **deleted**, and §K11 fails the build if any caller reaches for it
+again. `ambiguous_identities` itself stays — §13d's report of the collisions is a legitimate and
+different use.
+
+### 67.3 THE ONE HOME — and it dereferences §65 rather than forming a second opinion
+
+| | |
+|---|---|
+| **The verdict** ("where was this device activated") | `commcalc/device_reimb_recon.activation_store_moves(rows)` — derived from §65's own `device_lines` rows, from `LINE_PAID_OTHER_STORE` and nothing else |
+| **The declaration** | `account_config.device_cost_store_basis` (mig 1067), resolved by `account/device_cogs.resolve_device_cost_store_basis` |
+| **The I/O read** | `device_cogs.load_device_cost_store_basis` · `device_cogs.load_activation_index` (which calls `commcalc.router._device_line_reimb_run`, §65's one assembly, and reads neither feed itself) |
+| **The placement** | `device_cogs.cost_store(ledger_store, device_id, activation)` — **the only place a device's cost is given a store** |
+| **The caller** | `device_cogs._vip_sold_cost`, every unit through `cost_store`; `coa.build_inputs` hands the period down |
+
+`cost_store` returns the placement **and why**, from three reasons —
+`distributor_ledger_store` · `carrier_paid_store` · `unmeasured_stays_put` — so a reader never has to
+infer whether a store's cost moved, stayed, or could not be judged. The restatement is reported on the
+line's `meta`: `moved_to_activating_store` (devices, amount, store pairs) and `unmeasured_stayed_put`
+(devices, amount). A moved store figure is never silent.
+
+### 67.4 OFF UNTIL DECLARED, AND IT FAILS IN THE SAFE DIRECTION
+
+`device_cost_store_basis` NULL ⇒ `stocking` ⇒ **byte-identical** to every figure this module produced
+before §67. Only the declared word `activating` moves a cost (case and surrounding space folded, the
+same way the sibling mig-1041 basis folds its own). A cost moves ONLY on a proven activation
+elsewhere; a device with no identifier, a short month, a possibly-same-store pair, an unreadable
+reconciliation, or an org with no device-financing routing declared **moves nothing**, stays on the
+ledger's store, and says so. A cost is never left unplaced and never moved on a verdict nobody proved.
+
+**The sibling, excused explicitly.** The MA/VidaPay cost path (`device_cogs._ma_sold_cost`) places
+cost by an account→store index and its rows carry **no device identifier**, so §65's per-device
+verdict cannot reach it. Excused — and PINNED: §H6 asserts that path is identifier-free, so the day it
+gains one the check goes red and the sibling must be fixed too.
+
+### 67.5 THE LOCK
+
+`harness_device_inventory_cogs.py` **§H** (the harness that already owns the device-cost basis; 70 →
+89 checks, 0 failed). H1 the home exists and is pure · H2/H2b/H2c off until declared, exhaustive over
+every input, with the folding rule pinned against its sibling · H3–H3c the placement ladder ·
+**H3d/H3e the controls** (the same proven verdict moves nothing undeclared; no junk index can move a
+cost) · H4 the cost side assembles nothing and reads §65's own verdict reader · H4b only proven
+transfers become moves · H4c the two dollar columns never netted · H5 the cost loop keeps no placement
+rule · **H5b `coa` hands the period down** (the §19.18 un-wiring failure mode) · H5c the restatement
+is reported on the line's meta · **H5e and stated ON the statement line itself**, because `meta`
+alone never reaches a reader — the §K3(b) lesson applied to a restatement, with the honest zero still
+winning where both could apply · H5d one reader, no second · H6 the sibling's excuse, pinned ·
+H7 RULE TWO.
+
+`harness_device_line_reimbursement.py` **§K is RESTATED, not relaxed** (84 → 89 checks): the predicate
+is injected (K1), a possibly-same-store pair withholds (K2), **the defect that named this** — an
+address with two records paid at an unrelated one is a PROVEN transfer (K3) — ALL not ANY (K6), the
+one home and the router's binding of it (K9/K10), **the superseded name is gone from every caller**
+(K11), and two controls (K12/K13). `A9b` is RESTATED the same way: it used to forbid the name
+`store_identity` anywhere in the router's run function as shorthand for "derives no identity"; it now
+says what it always meant — the router may NAME the home's answers (`may_be_one_store`) and must never
+build a key itself (no `store_identity_index`, `build_store_resolver`, `squash_key`, `lead_num_key`,
+`store_key(`, `split(`).
+
+### 67.6 DUPLICATE CHECK (build gate)
+
+Searched §64 (store identity, `store_identity_index`, `ambiguous_identities`), §65 (the per-device
+reconciliation and its guards), §42.5 / §42.1 / §42.3 (the device-cost basis and its three
+consequences), §23n (the dead inventory predicate), §19.53 (the store-month recon), §13d (the identity
+audit), §4 / §4e (the P&L engine and the drill grain), §16–18. **REUSED, not rebuilt:** §65's
+`device_lines` verdict and `_device_line_reimb_run` assembly (the cost side reads neither feed), §64's
+resolver and identity index, §42.5's `account_config` declaration pattern and its `load_*` defensive
+read, `device_cogs._vip_sold_cost`'s existing dedup and fee exclusion, and both existing locks
+(extended, never duplicated). **BUILT NEW:** one pure verdict reader (`activation_store_moves`), one
+pure pair relation and predicate in the identity home, one declaration + resolver + placement in the
+cost home, one nullable column (mig 1067), and the config read/write on the existing
+`/account/config` endpoint. **Nothing else:** no new table, no new endpoint, no new report, no
+frontend change, and no second store resolver.
+
+Module-graph fact: `device_cost_store` — new, because "which store carries a handset's cost" is a
+question no existing fact answered; its callers are DERIVED from the import graph (§50) and its locks
+are the two above. Written by hand, multi-line (never `--bless` — §50).

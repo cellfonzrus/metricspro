@@ -102,6 +102,14 @@ def function_sources(src):
 COA_STORE_IDENTITY_SANCTION = (
     "store_resolver", "_squash_key", "_lead_num_key",
     "store_resolver._num_key", "store_resolver.resolve",      # nested, removed with the chain
+    # EXTENDED 2026-10-10 (§67). The identity I/O twin that answers "may these two addresses be one
+    # store" for the per-device reconciliation. `ambiguous_store_keys` was its first shape and
+    # tested the wrong fact — a per-ADDRESS ambiguity flag, which withheld 23 true findings because
+    # the resolver already folds both codes of one address onto one key — so it is REMOVED and
+    # `shared_store_identity_pairs` (a PAIR relation, derived in the one identity home) replaces it.
+    # Both names are sanctioned here because this is the §64 chain moving again, in the same module,
+    # for the same reason. Every resolver and attribution function stays pinned byte-identical.
+    "ambiguous_store_keys", "shared_store_identity_pairs",
 )
 
 

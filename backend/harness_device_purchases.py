@@ -397,6 +397,17 @@ check("B3 …and the only account-module file this work touches at all, besides 
                     # core.column_tolerant.read_row instead of a column block; no booking function
                     # changed (harness_any_columns.py pins each reader's values byte-identical when
                     # every column exists). coa.py's change is the sanctioned wages_by_store (B2b).
+                    # RE-BASELINED 2026-10-10 (index §67, owner: "Move the cost"). WHICH STORE
+                    # carries a handset's cost moves to the store the carrier PAID. That touches
+                    # `device_cogs.py` (the cost home: the declaration, its resolver, and
+                    # `cost_store` — the one placement), `store_identity.py` (the identity home
+                    # gains the pair relation that says when two addresses may be one store) and
+                    # `router.py` (the declaration on the existing config endpoint). coa.py's change
+                    # is one argument inside the sanctioned `build_inputs` (B2a-B2c), and
+                    # `harness_device_inventory_cogs.py` §H is the STRICTER claim: it pins that no
+                    # caller places a cost without that one home.
+                    "backend/app/modules/account/device_cogs.py",
+                    "backend/app/modules/account/store_identity.py",
                     "backend/app/modules/account/billpay_pl.py",
                     "backend/app/modules/account/residual_subs.py"}, mods)
 

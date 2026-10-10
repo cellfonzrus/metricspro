@@ -907,31 +907,33 @@ def store_resolver(client, org_id):
     return _sid.build_store_resolver(mapping_rows, alias_rows)
 
 
-def ambiguous_store_keys(client, org_id, resolve=None):
-    """Return the set of canonical store keys that TWO `store_mapping` records claim.
+def shared_store_identity_pairs(client, org_id, resolve=None):
+    """Return the pairs of canonical store addresses that MAY be one physical store.
 
     I/O ONLY, the twin of `store_resolver` above: it reads the one config table and hands the rows to
-    the ONE identity home (`account.store_identity.store_identity_index` → `.ambiguous_identities`,
-    §64 / §13d), which decides what "ambiguous" means. No caller gets a different answer from a
-    second copy, and nothing here derives a store key.
+    the ONE identity home (`account.store_identity.shared_identity_pairs`, §64), which decides what
+    "may be one store" means. No caller gets a different answer from a second copy, and nothing here
+    derives a store key or a pair.
 
-    A report dereferences this to WITHHOLD a verdict that only holds if the two spellings are two
-    different stores — e.g. "the carrier paid a different store for this device" (§65). Never raises:
-    an unreadable config degrades to the empty set, which withholds nothing (the report then states
-    what it measured, as it did before this existed)."""
+    A report dereferences this to WITHHOLD a cross-address verdict that only holds if the two
+    addresses are two different stores — e.g. "the carrier paid a different store for this device"
+    (§65). It REPLACED a per-address ambiguity read that tested the wrong fact and withheld 23 true
+    findings; `store_identity.shared_identity_pairs` carries that history.
+
+    Never raises: an unreadable config degrades to the empty set, which withholds nothing. That is
+    the right direction to fail in — the report then states what it measured, naming the evidence,
+    rather than silently calling 23 real transfers unmeasurable."""
     try:
         mapping_rows = _fetch_all(client, "store_mapping",
                                   "store_code,store_address,salesforce_id,is_active",
                                   {"org_id": org_id})
     except Exception as e:
-        _warn("store identity ambiguity unresolved — no identity is treated as ambiguous", e)
+        _warn("shared store identity unresolved — no two addresses are treated as one store", e)
         return set()
     try:
-        index = _sid.store_identity_index(mapping_rows, resolve)
-        return {str(e["store"]).strip() for e in _sid.ambiguous_identities(index)
-                if str(e.get("store") or "").strip()}
+        return _sid.shared_identity_pairs(mapping_rows, resolve)
     except Exception as e:
-        _warn("store identity ambiguity unresolved — no identity is treated as ambiguous", e)
+        _warn("shared store identity unresolved — no two addresses are treated as one store", e)
         return set()
 
 
@@ -1625,9 +1627,12 @@ def build_inputs(client, org_id, period):
     # to the line so a $0 is never mistaken for a measurement. See device_cogs.py for the figures.
     _dev = {"active": False, "meta": {"mode": device_cogs_mode}}
     try:
+        # `period` is passed for ONE purpose: §67 asks §65 where each device was ACTIVATED, so a
+        # handset stocked at one store and sold at another expenses where the carrier paid. Inert
+        # until an org declares the activating basis.
         _dev = _device_cogs.resolve(client, org_id, period_keys, pm, py,
                                     _in_period, resolve_store, device_cogs_mode,
-                                    ma_acct_index=_ma_acct_index)
+                                    ma_acct_index=_ma_acct_index, period=period)
     except Exception as e:
         _warn("device COGS invoice source unavailable — falling back to POS", e)
     if _dev.get("active"):
@@ -1656,6 +1661,25 @@ def build_inputs(client, org_id, period):
     # (`engine._assemble` rebuilds each line from key/label/amount/kind/detail, and `_scoped` drops
     # zero-valued detail), so an honest zero rendered identically to a measured one. `note` is the
     # passthrough; it is set ONLY here and ONLY in this case, so every other line stays byte-identical.
+    # §67 — AND THE SAME LESSON APPLIES TO A RESTATEMENT. `meta` alone never reaches a reader
+    # (`engine._assemble` rebuilds each line from key/label/amount/kind/detail), so a store whose
+    # device cost MOVED would show a different figure with nothing on the statement saying why. The
+    # note says it, in the same passthrough and only when a move actually happened. The honest zero
+    # wins where both could apply: a month with no invoice at all has no cost to have moved.
+    _moved_meta = (((_dev.get("meta") or {}).get("vip") or {}).get("moved_to_activating_store")) or {}
+    if not (_dev.get("meta") or {}).get("honest_zero") and _moved_meta.get("devices"):
+        _held_meta = (((_dev.get("meta") or {}).get("vip") or {}).get("unmeasured_stayed_put")) or {}
+        L["device_cost"]["note"] = (
+            "Device cost follows the store the carrier paid. {d:,} handset(s) worth ${a:,.2f} moved "
+            "to the store that activated them, across {p:,} store pair(s) — the company total is "
+            "unchanged, each store's figure restates.".format(
+                d=_moved_meta["devices"], a=float(_moved_meta.get("amount") or 0.0),
+                p=_moved_meta.get("store_pairs") or 0)
+            + ((" {d:,} handset(s) worth ${a:,.2f} stayed on the stocking store because the "
+                "per-device reconciliation could not measure where they were activated; they are "
+                "listed on the Equipment Reimbursement by Device report.").format(
+                    d=_held_meta["devices"], a=float(_held_meta.get("amount") or 0.0))
+               if _held_meta.get("devices") else ""))
     if (_dev.get("meta") or {}).get("honest_zero"):
         L["device_cost"]["note"] = (
             "No distributor invoice covers this period, so device cost is $0.00 BY DECLARATION, not by "

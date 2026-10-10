@@ -25,6 +25,7 @@ or a second leading-token join appearing anywhere in the backend, FAILS THE BUIL
 __all__ = [
     "squash_key", "lead_num_key", "build_store_resolver", "store_key",
     "store_identity_index", "ambiguous_identities",
+    "shared_identity_pairs", "may_be_one_store",
 ]
 
 
@@ -216,3 +217,61 @@ def ambiguous_identities(index) -> list:
     two codes, named so a report can say so instead of hiding the pick it made."""
     return [{"store": k, "store_code": v.get("store_code"), "codes": list(v.get("codes") or [])}
             for k, v in sorted((index or {}).items()) if v.get("ambiguous")]
+
+
+# ── COULD THESE TWO ADDRESSES BE ONE PHYSICAL STORE? (owner question 2026-10-10) ─────────────────
+# THE CLASS, and the defect that named it. A per-device report (§65) withheld "the carrier paid a
+# DIFFERENT store" whenever EITHER address was an `ambiguous_identities` row, reasoning that two
+# records might be one store and a transfer between them would be fictional. That tested the wrong
+# fact. An ambiguous identity is ONE canonical address claimed by TWO codes, and `build_store_resolver`
+# step 3 places BOTH codes on that same address — so a payment under either code is already counted
+# at that store and can never reach a "different store" branch. The guard could not fire for its own
+# stated reason; what it actually caught was pairs of two plainly different addresses, so every one of
+# its withholdings was false (measured live, house org, September 2026: 23 devices, $6,164.95 of
+# payments and $9,769.77 of cost withheld from a verdict the evidence supported).
+#
+# The fact a caller actually needs is the RELOCATION shape: one store KNOWN BY ONE NAME at two
+# different canonical addresses. That is what makes two addresses one store, and it is detectable
+# from the same rows — a `store_code` or a `salesforce_id` (the carrier's own door) claimed at two
+# addresses. Measured live the same day: ZERO of either across the house org's 34 records, which is
+# why those 23 devices are real transfers.
+#
+# It lives HERE, with the rest of identity, so no caller re-derives "same store" its own way, and it
+# is a PAIR relation rather than a per-address flag precisely because the question is about two
+# addresses and nothing about one address can answer it.
+def shared_identity_pairs(mapping_rows, resolve=None) -> set:
+    """PURE: the set of `frozenset({address_a, address_b})` pairs of CANONICAL addresses that MAY be
+    one physical store, because one `store_code` or one `salesforce_id` claims both.
+
+    Empty when every name belongs to exactly one address — the normal, healthy state, in which no
+    caller has any reason to withhold a cross-address finding.
+
+    An explicitly inactive row is skipped, matching `store_identity_index`."""
+    by_name: dict = {}
+    for r in (mapping_rows or []):
+        if (r or {}).get("is_active") is False:
+            continue
+        key = store_key(resolve, (r or {}).get("store_address"))
+        if not key:
+            continue
+        for field in ("store_code", "salesforce_id"):
+            name = str((r or {}).get(field) or "").strip()
+            if name:
+                by_name.setdefault((field, name.upper()), set()).add(key)
+    pairs = set()
+    for addrs in by_name.values():
+        ordered = sorted(addrs)
+        for i, a in enumerate(ordered):
+            for b in ordered[i + 1:]:
+                pairs.add(frozenset((a, b)))
+    return pairs
+
+
+def may_be_one_store(a, b, pairs) -> bool:
+    """PURE: is the pair (a, b) one of `shared_identity_pairs`? False for an empty pair set, for a
+    missing side, and for a key compared with itself — a caller asking about one address is not
+    asking this question at all."""
+    ka, kb = _norm(a), _norm(b)
+    if not ka or not kb or ka == kb:
+        return False
+    return frozenset((ka, kb)) in (pairs or set())
