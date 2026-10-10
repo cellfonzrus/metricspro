@@ -903,6 +903,9 @@ jobs:
       - name: Run the cash-count correction lock (every writer of a management cash count appends to ONE append-only trail; nothing updates or deletes a revision — index §73)
         working-directory: backend
         run: python3 harness_cash_count_revision.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the cash-variance lock (a cash figure carries its basis; compare REFUSES across bases — replays the six live store-days whose "shortage" was the bill-pay cash to the cent; the $5 band is config, never code — index §72)
+        working-directory: backend
+        run: python3 harness_cash_variance.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

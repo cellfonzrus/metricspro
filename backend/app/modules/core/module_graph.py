@@ -327,6 +327,16 @@ FACTS: dict[str, dict] = {
             'app/modules/closing/router.py': ('_count_revision',),
         },
     },
+    'cash_figure_basis': {
+        "question": 'Which cash does this figure count, and may it be compared with that one?',
+        "homes": ('app/modules/closing/cash_variance.py',),
+        "index": ('72.2', '72.3'),
+        "locks": ('harness_cash_variance.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/closing/router.py': ('_cash_variance',),
+        },
+    },
     'cash_drawer_variance_owner': {
         "question": 'Which store-day carries a drawer variance nobody has ruled on?',
         "homes": ('app/modules/closing/cash_watchdog.py',),
