@@ -11603,15 +11603,20 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
     # monthly per-store lump sums ($91,000.00 in the September window, $287,500.00 across the feed)
     # are correctly identifier-less — there is no phone for a ramp subsidy to name. Counting them as
     # device money put $91,000.00 in a bucket a reader would take for unattributable device money.
-    _DECLINED_BASIS = (_cdc.BASIS_DECLARED_UNMAPPED, _cdc.BASIS_UNRESOLVED)
-
+    # WHICH BASES THOSE ARE IS NOT DECIDED HERE (§66). "Is a component reached on this basis
+    # evidence about the dollar, or a placement of last resort" has ONE home — the module that owns
+    # `basis` — and this layer asks it (`_cdc.component_is_evidence`) rather than keeping its own
+    # tuple of basis names. The POLICY stays here, because it is this layer's and nobody else's: at
+    # a per-PHONE grain an unreliable component is DECLINED. A statement that must book every dollar
+    # answers the same False differently, by naming a column or a line for it, which is why the home
+    # answers only the question.
     def is_device_dollar(raw_type):
         key = str(raw_type or "")
         hit = _cache.get(key)
         if hit is None:
             c = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg) or {}
             hit = _cache[key] = (str(c.get("component") or "").upper() in _device_components
-                                 and str(c.get("basis") or "") not in _DECLINED_BASIS)
+                                 and _cdc.component_is_evidence(c.get("basis")))
         return hit
 
     # The carrier's PER-LINE feed over the REIMBURSEMENT LAG WINDOW. The lag LENGTH and the month
@@ -24682,7 +24687,10 @@ def _leg_comp_commission_predicate(decl, rules, cfg):
         col = seen.get(s)
         if col is None:
             c = _cdc_leg.classify(decl, rules, s, cfg)
-            col = seen[s] = _cdc_leg.gp_column(c['component'], c.get('declared_category'), cfg)
+            # The whole classification, not its component alone (index §66): a component reached on
+            # a last-resort basis never overrides the org's own declared category, so the trend and
+            # the GP column it explains cannot place one payment type two ways.
+            col = seen[s] = _cdc_leg.gp_column_of_classification(c, cfg)
         return col == _cdc_leg.GP_COMMISSION_COLUMN
     return is_commission
 

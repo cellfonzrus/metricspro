@@ -572,6 +572,11 @@ on:
       # wiring of it (_compute_gp and both commission-leg endpoints), the module graph and the
       # index, so a change to any of them must run it.
       - "backend/harness_gp_carrier_class_dereference.py"
+      # index §66 — a component reached on a FALLBACK BASIS is a placement of last resort, not
+      # evidence about the dollar, so a keyword guess never overrides the org's own declaration.
+      # The lock reads the home, both GP paths, the router's trend wiring, the P&L caller it
+      # EXCUSES, the module graph and the index, so a change to any of them must run it.
+      - "backend/harness_component_basis_evidence.py"
       - "backend/app/modules/commcalc/gp_report.py"
       - "backend/app/modules/commcalc/payment_category.py"
       - "database/migrations/1064_carrier_gp_columns.sql"
@@ -931,6 +936,9 @@ jobs:
       - name: Run the carrier-dollar classification lock (a carrier dollar's component has ONE home; the org's own payment_categories declaration beats the generic keyword ladder, a period-renamed twin is used but LABELLED as an inference, an undeclared type is reported and never guessed, and the distributor's reimbursement claim is held rather than booked as a second receipt — owner 2026-10-08, index §58)
         working-directory: backend
         run: python3 harness_carrier_dollar_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the fallback-basis lock (a component reached on a FALLBACK BASIS is a placement of last resort, not evidence about the dollar — an explicit declaration is never overridden by a keyword guess, the predicate lives in ONE module and answers from `basis` alone while each caller keeps its own policy, and $260,500.00 of one declared category stops landing in two different GP columns on the two feeds while gross profit and the P&L move $0.00 — measured 2026-10-09, index §66)
+        working-directory: backend
+        run: python3 harness_component_basis_evidence.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the GP carrier-classification dereference lock (the Gross Profit report classifies no carrier dollar of its own — the comp-report keyword guess and the four pay-category literal compares are gone, the trend's self-declared COPY of them is gone, and $418,922.21 of August 2026 declared reimbursement no longer renders as commission while gross profit itself moves $0.00 — owner 2026-10-08, index §58.7)
         working-directory: backend
         run: python3 harness_gp_carrier_class_dereference.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

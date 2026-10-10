@@ -103,6 +103,55 @@ BASIS_REASONS = {
 # Every basis other than `declared` is reported by `tally` as money the org has not declared.
 UNDECLARED_BASES = (BASIS_INFERRED_TWIN, BASIS_KEYWORD, BASIS_DECLARED_UNMAPPED, BASIS_UNRESOLVED)
 
+# THE BASES ON WHICH A COMPONENT IS A PLACEMENT OF LAST RESORT, NOT EVIDENCE ABOUT THE DOLLAR
+# (index §66). `basis` has existed since this file was written precisely so a caller could refuse
+# a last-resort placement, and two callers then read `component` and ignored it:
+#
+#   · the GP report's comp-report path placed a dollar by its component while its payment-detail
+#     path placed the SAME declared category by the category — one report, two answers for one
+#     payment type, measured live at $260,500.00 (Mar–Sep 2026, house org);
+#   · a per-device report counted the same dollars as device money although nothing in them names
+#     a device.
+#
+# THE RULE IS AN ALLOWLIST, deliberately. The component is evidence on exactly three bases: the
+# org's own word, a LABELLED carry-forward of its own word, and the platform ladder ruling on a
+# type the org has declared nothing about. The other two are the last-resort placements —
+# `declared_category_unmapped` means the org DID declare a category and the component map could not
+# honour it, so the component is a keyword guess standing where a declaration already exists;
+# `unresolved` means nothing resolved at all.
+#
+# An allowlist because of which way the next mistake should fall: a basis nobody has ruled on reads
+# as NOT evidence, so a new last-resort basis added later cannot silently start overriding
+# declarations again — it degrades to the org's own declared category, which is visible and
+# reported. A denylist would have defaulted the other way, which is this defect.
+ALL_BASES = (BASIS_DECLARED, BASIS_INFERRED_TWIN, BASIS_KEYWORD, BASIS_DECLARED_UNMAPPED,
+             BASIS_UNRESOLVED)
+EVIDENTIAL_BASES = (BASIS_DECLARED, BASIS_INFERRED_TWIN, BASIS_KEYWORD)
+# DERIVED, never re-spelled: the complement cannot drift out of step with the allowlist.
+NON_EVIDENTIAL_BASES = tuple(b for b in ALL_BASES if b not in EVIDENTIAL_BASES)
+
+
+def component_is_evidence(basis):
+    """PURE: is a component reached on this `basis` EVIDENCE about the dollar, or a placement of
+    LAST RESORT? Answered from the basis ALONE.
+
+    THE QUESTION, NOT THE POLICY. This function knows nothing about who is asking, at what grain,
+    or what they should do with a False — and it must not, because the right policy differs per
+    caller and only the caller knows it:
+
+      · a per-device or per-line report (a grain FINER than the category) DECLINES the dollar: it
+        cannot name a device for a placement that was a guess;
+      · the GP report and the P&L cannot decline anything — every dollar has to land somewhere —
+        so their answer is a NAMED column or line from the org's own declared category
+        (`gp_column_of_classification` below), never the guessed component's and never a refusal.
+
+    If a caller ever needs to pass its grain or its intent in here, that is the signal the question
+    and the policy have been folded into one function again; split them and leave only the question.
+
+    An unknown or missing basis is NOT evidence: a caller that cannot say how a component was
+    reached is in exactly the position this predicate exists to protect."""
+    return str(basis or "") in EVIDENTIAL_BASES
+
 # Whose figure the device-financing reimbursement line carries. An unknown value keeps the house
 # default, so a typo can never silently re-recognise revenue.
 DEVICE_REIMB_SOURCES = ("carrier_paid", "distributor_claim")
@@ -455,6 +504,30 @@ def gp_column(component, declared_category=None, cfg=None):
         if col:
             return col
     return GP_UNCLASSIFIED_COLUMN
+
+
+def gp_column_of_classification(classification, cfg=None):
+    """PURE: the Gross-Profit money column for a `classify()` RESULT — the comp-report shape, and
+    the one entry point a caller holding a classification should use (index §66).
+
+    This is the POLICY `component_is_evidence` deliberately has no opinion about, stated once for
+    the two surfaces that cannot decline a dollar. When the component is a placement of last resort,
+    it is NOT consulted and the org's own DECLARED CATEGORY places the dollar instead; when the
+    category cannot place it either, it lands in `GP_UNCLASSIFIED_COLUMN` and is reported. So:
+
+      · an explicit declaration is never overridden by a keyword guess, which is what
+        `gp_column(result["component"], …)` did — the component map had no row for the declared
+        category, the keyword ladder named a component, and that guess then won the column while
+        the payment-detail feed placed the very same declared category by the category. Measured
+        live, house org, Mar–Sep 2026: $260,500.00 of one declared category folded two ways inside
+        one report;
+      · the two feeds now reach the SAME column for the same declared category, by construction:
+        for any declared row this function and `gp_column_of_declared_category` are the same
+        composition of the same two maps.
+    """
+    c = classification or {}
+    comp = c.get("component") if component_is_evidence(c.get("basis")) else None
+    return gp_column(comp, c.get("declared_category"), cfg)
 
 
 def gp_column_of_declared_category(category, cfg=None):

@@ -324,8 +324,14 @@ section("F. THE UN-WIRING LOCK — no private classifier survives, and the calle
 
 ok("F1 the GP engine imports the two homes",
    "import carrier_dollar_class as _cdc" in GP and "import payment_category as _pc" in GP)
-ok("F2 the comp-report loop asks the home",
-   "_cdc.classify(carrier_declarations, carrier_rules" in GP and "_cdc.gp_column(" in GP)
+# §66: the comp loop hands the WHOLE classification over, `basis` included. It used to pass
+# `_c['component']` alone, so a component reached on a last-resort basis overrode the org's own
+# declared category and this feed placed one declared category in a different column from the pay
+# feed ($260,500.00, house org, Mar–Sep 2026). The component-only entry point may not come back.
+ok("F2 the comp-report loop asks the home, with the whole classification",
+   "_cdc.classify(carrier_declarations, carrier_rules" in GP
+   and "_cdc.gp_column_of_classification(" in GP
+   and "_cdc.gp_column(" not in code_only(GP).replace("\n", ""))
 ok("F3 the pay-detail loop asks the home",
    "_cdc.gp_column_of_declared_category(cat, _cc_cfg)" in GP)
 ok("F4 the GP engine reads the declared category through §57, not past it",
@@ -346,7 +352,9 @@ ok("F6 the trend's self-declared COPY of that rule is gone",
    "def _leg_comp_is_commission(label)" not in ROUTER
    and not re.search(r"reimbursement.{0,8}in ct", ROUTER_CODE))
 ok("F7 the trend asks the home instead, through one resolved posture per request",
-   "_leg_comp_commission_predicate(" in ROUTER and "_cdc_leg.gp_column(" in ROUTER
+   "_leg_comp_commission_predicate(" in ROUTER
+   and "_cdc_leg.gp_column_of_classification(" in ROUTER          # §66, as above
+   and "_cdc_leg.gp_column(" not in code_only(ROUTER).replace("\n", "")
    and "_leg_carrier_class(client, org_id)" in ROUTER)
 ok("F8 the trend's pay side rules on the declared category through the home too",
    "_leg_pay_commission_predicate(" in ROUTER

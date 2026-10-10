@@ -555,10 +555,20 @@ ok("K10. control: with no set injected the same two rows read 'paid to another s
    row_of(_k_blind, "K-1")["status"] == R.LINE_PAID_OTHER_STORE
    and row_of(_k_blind, "K-2")["status"] == R.LINE_PAID_OTHER_STORE
    and _k_blind["totals"]["by_status"][R.LINE_PAID_OTHER_STORE] == 3)
+# RESTATED, NOT RELAXED (§66). This used to require the router to SPELL the two basis names
+# itself. That was a second copy of the rule "which bases make a component unreliable", and the GP
+# report was reading the same `basis` field a different way at the same time — so the question now
+# has ONE home (`carrier_dollar_class.component_is_evidence`, answered from the basis alone) and
+# this call site DEREFERENCES it. The POLICY is unchanged and still lives here, where the grain is:
+# at one row per phone an unreliable component is DECLINED. §66's own lock fails the build if the
+# copy comes back, in this module or any other.
+_IDD = _src(ROUTER).split("def is_device_dollar")[1].split("return hit")[0]
 ok("K12. a dollar §58 placed on a category the component vocabulary has no row for is DECLINED as "
-   "device money — the router reads §58's own `basis`, it does not re-judge the category",
-   "BASIS_DECLARED_UNMAPPED" in _src(ROUTER) and "BASIS_UNRESOLVED" in _src(ROUTER)
-   and "basis" in _src(ROUTER).split("def is_device_dollar")[1].split("return hit")[0])
+   "device money — the router asks §58's own home whether the component is evidence, and keeps no "
+   "copy of which bases those are",
+   "component_is_evidence(" in _IDD
+   and "BASIS_DECLARED_UNMAPPED" not in _src(ROUTER)
+   and "BASIS_UNRESOLVED" not in _src(ROUTER))
 ok("K13. …and that decision lives at the CALL SITE, not as a second classifier in the pure layer",
    not any(t in _code_only(_src(MOD)) for t in ("declared_category_unmapped", "payment_categories",
                                                 "carrier_category_map")))
