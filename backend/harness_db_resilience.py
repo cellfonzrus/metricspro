@@ -1004,7 +1004,15 @@ _all_routes = _flatten_routes(real_app.routes)
 # index §63). Verified the same way: `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 3
 # and `'^-@router\.'` = 0 — three added, NONE removed — so the pin was re-taken on a known addition,
 # never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1755"))
+# Re-pinned 1755 -> 1757 on 2026-10-10, measured against origin/main b0bdb27 (the tree this branch
+# forked from). The delta is TWO routes and both are named: POST /closing/pickup/open-count and
+# POST /closing/billpay-pickup/open-count — opening a cash envelope that was collected SEALED and
+# recording the count, from the deposit-accountability board (index §67.2). They are a sibling PAIR
+# over ONE impl (the mig-942 cash/billpay machinery), write to an EXISTING row of an EXISTING table,
+# and add no table. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 2 and `'^-@router\.'` = 0 — two
+# added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1757"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

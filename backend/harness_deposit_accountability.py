@@ -369,6 +369,187 @@ check("H20 both pickup kinds are covered — a bill-pay envelope short is the DM
            "actual_picked_amount": 45}])[0])[0][0]["shorts"][0]["kind"] == "billpay")
 
 
+# ── I. THE STANDARD FILTERS reach the accountability board (owner 2026-10-10) ──────────────────
+# Owner: *"Need filter standard in deposit accountability section"*. The board shipped with a date
+# range and nothing else, so on a page whose header carries market and store pickers the section
+# below ignored both. These checks are SOURCE checks on the endpoint, because the filtering is
+# I/O-shaped (keyset + store metadata) and the pure layer has nothing to drive; the behavioural
+# contract itself — blank ⇒ None, accepts ⇒ applies — is already locked by
+# harness_closing_filter_contract.py, which this endpoint now falls under by declaring the params.
+print("\n== I. standard filters on /closing/deposit-accountability ==")
+_ROUTER = open("app/modules/closing/router.py", encoding="utf-8").read()
+_BOARD = _ROUTER.split("@router.get(\"/deposit-accountability\")")[1].split("@router.get(\"/accountability-chain\")")[0]
+
+check("I1 the endpoint ACCEPTS all three standard filters (plus the singular `market=` alias the "
+      "chain endpoint already takes, so no existing link breaks)",
+      all(p in _BOARD.split('"""')[0] for p in ("stores: str", "markets: str", "market: str", "employees: str")))
+check("I2 each filter goes through its ONE resolver — never a set rebuilt inline (the spelling "
+      "divergence harness_closing_filter_contract exists to stop)",
+      "_resolve_store_filter(stores)" in _BOARD
+      and "_resolve_market_filter(market, markets)" in _BOARD
+      and "_resolve_employee_filter(employees)" in _BOARD)
+check("I3 ACCEPTS ⇒ APPLIES: every resolved set is actually used to drop rows",
+      "store_set and" in _BOARD and "if market_set:" in _BOARD and "if employee_set:" in _BOARD)
+check("I4 the EMPLOYEE filter narrows the PICKUP ROWS, before the fold — filtering after it would "
+      "show one rep's name beside another rep's money, and would leave the summary, the green "
+      "rule and the by-DM report describing envelopes that are not on screen",
+      _BOARD.index("if employee_set:") < _BOARD.index("_da.day_accountability(prows)"))
+check("I5 the payload STATES what was applied, so the section can show its own filters",
+      '"filters": {"stores"' in _BOARD)
+check("I6 the keyset is still applied — a filter must never be able to widen a viewer's span",
+      "in_keyset(ks, r[\"store_code\"]" in _BOARD)
+
+# ── J. ONE HOME for the open-and-count statement (owner 2026-10-10; mig 1067) ──────────────────
+# "if the cash is not opened in cash pickup or epay pick up it should [have] the option to open on
+# this module and it should also give the field to enter the cash pick[ed] by the manag[e]ment or
+# handed over to the manag[e]ment."
+#
+# The DESIGN fix, not the instance fix: the columns that record "this envelope was opened and this
+# is what was in it" are produced by ONE pure function, and both writers dereference it. The checks
+# below fail the build if either stops, or if a second copy of the column names appears in the
+# router — the un-wiring the house rules name as the thing that has happened three times.
+print("\n== J. open-and-count — one home, one gate ==")
+from app.modules.closing.pickup_actual import count_patch, gate_items, COUNT_COLUMNS
+
+_p = count_patch({"envelope_opened": True, "actual_amount": 80}, declared=100, counted_at="T")
+check("J1 an opened envelope with a count produces both statements, and the variance is scored "
+      "against the declared snapshot by the ONE truth table (envelope_report.count_fields)",
+      _p["row"]["envelope_opened"] is True and _p["row"]["actual_picked_amount"] == 80.0
+      and _p["variance"]["status"] == "short" and _p["variance"]["variance"] == -20.0, str(_p))
+check("J2 a key the client never sent is never written — an older frontend, or a caller that only "
+      "opens, stays byte-identical and no blank is stored as a fake 0.00",
+      count_patch({"envelope_opened": True}, declared=100)["row"] == {"envelope_opened": True})
+check("J3 a blank count CLEARS to NULL ('I recorded nothing'), never to zero",
+      count_patch({"actual_amount": ""}, declared=100)["row"] == {"actual_picked_amount": None})
+check("J4 a counted 0.00 on an OPENED envelope is a real finding and is stored as 0.00",
+      count_patch({"envelope_opened": True, "actual_amount": 0}, declared=100)["row"]["actual_picked_amount"] == 0.0)
+check("J5 the counter's name is recorded with its timestamp (mig 1067) — and a timestamp is NEVER "
+      "written without a person",
+      count_patch({"actual_amount": 5, "counted_by": "Mgr A"}, declared=5, counted_at="T")["row"]
+      == {"actual_picked_amount": 5.0, "actual_counted_by": "Mgr A", "actual_counted_at": "T"}
+      and "actual_counted_at" not in count_patch({"actual_amount": 5}, declared=5, counted_at="T")["row"])
+check("J6 THE GATE is the same one the pickup screen uses: opened with no count is refused, "
+      "sealed needs none",
+      len(gate_items([{"envelope_opened": True}])) == 1
+      and gate_items([{"envelope_opened": False}]) == []
+      and gate_items([{"envelope_opened": True, "actual_amount": 0}]) == [])
+check("J7 the LATE open writer (deposit-accountability board) dereferences the one home and the "
+      "one gate — it does not spell the columns itself",
+      "_pickup_actual.count_patch(" in _ROUTER.split("def _open_count_impl")[1].split("@router.post(\"/pickup/open-count\")")[0]
+      and "_pickup_actual.gate_items(" in _ROUTER.split("def _open_count_impl")[1].split("@router.post(\"/pickup/open-count\")")[0])
+check("J8 the PICKUP-TIME writer dereferences the SAME home — two writers, one column set, so a "
+      "count made at pickup and a count made later can never be stored differently",
+      "_pickup_actual.count_patch(" in _ROUTER.split("async def _confirm_pickup_impl")[1].split("item_dates =")[0])
+# The ratchet targets the STORED dicts (`row` / `upd` — what reaches the table), not the wire
+# `item` a caller assembles to hand TO count_patch: naming a key on the way in is how you ask the
+# home a question, and banning that would ban using it.
+_STORED_WRITE = [f'{d}["{c}"] =' for c in COUNT_COLUMNS for d in ("row", "upd")]
+check("J9 NO SECOND COPY: no writer puts these columns into a stored row itself — every one of "
+      "them reaches the table through count_patch (the un-wiring ratchet: a writer that stops "
+      "asking the registry must fail the build)",
+      not any(w in _ROUTER for w in _STORED_WRITE),
+      [w for w in _STORED_WRITE if w in _ROUTER])
+check("J10 the late open REFUSES to invent a pickup — an envelope with no pickup row is a 404 and "
+      "one not yet picked up is a 409, because this records a count on a collection that "
+      "happened, it never creates one",
+      "No pickup recorded for this envelope" in _ROUTER and "has not been picked up yet" in _ROUTER)
+check("J11 both kinds are covered — the bill-pay sibling points the SAME impl at its own table "
+      "(mig 942: one machinery)",
+      '_open_count_impl(payload, org_id, "cash_pickup")' in _ROUTER
+      and '_open_count_impl(payload, org_id, "billpay_pickup")' in _ROUTER)
+check("J12 the board CARRIES the counter back, so a count made here is attributable on screen",
+      '"actual_counted_by": r.get("actual_counted_by")' in
+      open("app/modules/closing/deposit_accountability.py", encoding="utf-8").read())
+
+# The amount is now recorded for EITHER disposition — the hand-over used to record who and when
+# and no figure at all, so a hand-over short by $200 looked exactly like one that tied.
+print("\n== J-b. a hand-over records an amount, scored like a deposit ==")
+_DEP = _ROUTER.split("def _record_deposit_impl")[1].split("@router.post(\"/pickup/deposit\")")[0]
+check("Jb1 the declared comparison and the mismatch flag run for BOTH dispositions — one "
+      "mechanism, not a branch that records money on one path and nothing on the other",
+      _DEP.index('upd["deposit_amount"] =') > _DEP.index('if disp == "handed_to_mgmt":')
+      and 'if disp == "handed_to_mgmt":' in _DEP
+      and _DEP.count('upd["deposit_flagged"] = not matched') == 1)
+check("Jb2 the SLIP stays particular to a deposit — only a deposit has one, so a hand-over never "
+      "uploads or OCRs anything",
+      'slip = payload.deposit_slip if disp == "deposited" else None' in _DEP)
+check("Jb3 the deposit CAPTURE line is unaffected — it still reads 'deposited' only, so a handed "
+      "envelope's amount can never be counted as money that reached the bank",
+      'if (str(r.get("disposition") or "")).strip().lower() != "deposited":' in
+      open("app/modules/closing/deposit_accountability.py", encoding="utf-8").read())
+
+# ── K. THE BANK-DEPOSIT SECTIONS — declared, never guessed (owner 2026-10-10) ──────────────────
+# "Bank deposit should be a separate module for both cash and epay in one link on top and bottom
+# but recorded separately". The separation is the deposit category's own mig-509 `basis`; nothing
+# new is stored, and no section is ever decided by matching a category NAME.
+print("\n== K. bank-deposit sections ==")
+from app.modules.closing.deposit_recon import (
+    section_for_basis, section_catalog, assemble_category_block,
+    SECTION_CASH, SECTION_BILLPAY, SECTION_OTHER, BASIS_VALUES)
+
+check("K1 the two declared cash bases are the CASH section; the bill-payment basis is its own",
+      section_for_basis("store_cash") == SECTION_CASH
+      and section_for_basis("total_cash") == SECTION_CASH
+      and section_for_basis("bill_payment_cash") == SECTION_BILLPAY)
+check("K2 'manual' — a tenant's own bucket with no computed expected figure — is its OWN group, "
+      "counted in neither pile",
+      section_for_basis("manual") == SECTION_OTHER)
+check("K3 an unknown / blank / future basis resolves to 'other', never silently to cash: guessing "
+      "would mis-bank money",
+      section_for_basis(None) == SECTION_OTHER and section_for_basis("") == SECTION_OTHER
+      and section_for_basis("some_future_basis") == SECTION_OTHER)
+check("K4 EVERY declared basis has a section — a new one added to BASIS_VALUES without a mapping "
+      "must not quietly vanish into 'other'",
+      all(section_for_basis(b) in (SECTION_CASH, SECTION_BILLPAY, SECTION_OTHER) for b in BASIS_VALUES)
+      and {section_for_basis(b) for b in BASIS_VALUES} == {SECTION_CASH, SECTION_BILLPAY, SECTION_OTHER})
+_cat = section_catalog("VidaPay")
+check("K5 the catalog is SERVED, in display order, and the bill-pay section is named with the "
+      "TENANT'S OWN processor term — no carrier word is ever spelled in code or page copy (RULE TWO)",
+      [c["key"] for c in _cat] == [SECTION_CASH, SECTION_BILLPAY, SECTION_OTHER]
+      and [c["label"] for c in _cat][1] == "VidaPay Cash", str(_cat))
+check("K6 with no processor term declared the bill-pay section falls back to the neutral noun, "
+      "never to a blank label",
+      section_catalog(None)[1]["label"] == "Bill Payment Cash")
+_blk = assemble_category_block({"id": "c1", "name": "Bill Payment Cash Deposit", "basis": "bill_payment_cash"},
+                               500.0, 120.0, 0.0, 0.0, 0.0, False, False, False, [], 1.0)
+check("K7 the recon block carries its section, derived from the SAME home — so the module's "
+      "sections and the reconciliation can never disagree about where money was banked",
+      _blk["section"] == SECTION_BILLPAY and _blk["basis"] == "bill_payment_cash", str(_blk)[:200])
+check("K8 NO SECOND COPY of the mapping: the section is never decided by a category NAME anywhere "
+      "(a name match would break the moment a tenant renamed a bucket)",
+      "Bill Payment Cash Deposit" not in
+      open("app/modules/closing/deposit_recon.py", encoding="utf-8").read().split("def section_for_basis")[1])
+check("K9 the FRONTEND spells no section key of its own — it reads the served catalog, the "
+      "stage_catalog precedent",
+      "bill_payment_cash" not in
+      open("../frontend/src/app/(platform)/closing/bank-deposit/page.tsx", encoding="utf-8").read())
+check("K10 the Bank Deposit module records through the EXISTING one writer, never a new endpoint "
+      "— a second write path is a second answer to 'how much was banked'",
+      "/api/v1/closing/bank-deposit'" in
+      open("../frontend/src/app/(platform)/closing/bank-deposit/page.tsx", encoding="utf-8").read())
+check("K11 and it DERIVES nothing: every figure comes from the existing recon endpoint",
+      "/api/v1/closing/deposit-recon?" in
+      open("../frontend/src/app/(platform)/closing/bank-deposit/page.tsx", encoding="utf-8").read())
+
+# ── L. THE WORKFLOW ORDER — one array, not three copies (owner 2026-10-10) ─────────────────────
+# "add another step in the workflow after cash pick up epay pick then add bank deposit and the
+# cash recon". The order was written out three times, once per runbook over the same chain.
+print("\n== L. the store-cash workflow order ==")
+_FC = open("../frontend/src/lib/flowcharts.tsx", encoding="utf-8").read()
+check("L1 ONE array — the three runbooks over the cash chain reference it rather than carrying "
+      "their own copy (three copies is how two sets of users get walked through two workflows)",
+      _FC.count("const storeCashStages = [") == 1 and _FC.count("stages: storeCashStages,") == 3)
+_order = [l.split("href: '")[1].split("'")[0]
+          for l in _FC.split("const storeCashStages = [")[1].split("\n]")[0].splitlines() if "href: '" in l]
+check("L2 Bank Deposit sits AFTER both pickups and BEFORE the reconciliation — the order the "
+      "money actually moves: out of the store, into the bank, then checked",
+      _order.index("/closing/bank-deposit") > _order.index("/closing/billpay-pickup")
+      and _order.index("/closing/bank-deposit") < _order.index("/closing/deposit-recon"), str(_order))
+check("L3 the new screen is REGISTERED so it can be reached and found — nav entry + route index",
+      "'/closing/bank-deposit'" in open("../frontend/src/lib/rbac.ts", encoding="utf-8").read()
+      and "'/closing/bank-deposit'" in open("../frontend/src/lib/route-index.ts", encoding="utf-8").read())
+
+
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
     print("FAILED:")

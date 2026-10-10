@@ -1,4 +1,4 @@
--- 1067_device_cost_store_basis.sql — WHICH STORE CARRIES A HANDSET'S COST (owner 2026-10-10, §67)
+-- 1069_device_cost_store_basis.sql — WHICH STORE CARRIES A HANDSET'S COST (owner 2026-10-10, §69)
 --
 -- Owner, on the decision card: "Move the cost" — move device cost to the store the carrier paid,
 -- for the devices the per-device reconciliation PROVED were activated elsewhere.
@@ -53,7 +53,7 @@
 --                            'activating'  the store the carrier paid, for the proven devices.
 --                            NULL          NOT DECLARED (the default this migration installs for
 --                                          every org): resolves to 'stocking', which is
---                                          byte-identical to every figure produced before §67.
+--                                          byte-identical to every figure produced before §69.
 --
 -- INERT BY CONSTRUCTION. This migration adds a nullable column and NOTHING else. It books no money,
 -- restates no period and sets no org's basis. Declaring 'activating' is a SEPARATE, owner-approved
@@ -66,7 +66,7 @@
 -- Idempotent · additive · numbered.
 -- REVERT:
 --   ALTER TABLE commcalc.account_config DROP COLUMN IF EXISTS device_cost_store_basis;
---   -- Dropping the column returns every org to the pre-1067 placement (the distributor ledger's
+--   -- Dropping the column returns every org to the pre-1069 placement (the distributor ledger's
 --   -- store), because `device_cogs.load_device_cost_store_basis` reads the column defensively and
 --   -- treats its absence as "not declared". No other table, row or line is touched here.
 
@@ -76,8 +76,8 @@ ALTER TABLE commcalc.account_config
            OR device_cost_store_basis IN ('stocking', 'activating'));
 
 COMMENT ON COLUMN commcalc.account_config.device_cost_store_basis IS
-  'mig 1067 — WHICH STORE carries a handset''s cost for this org. ''stocking'' = the distributor '
-  'ledger''s own store (pre-1067 behaviour). ''activating'' = the store the carrier paid, for the '
+  'mig 1069 — WHICH STORE carries a handset''s cost for this org. ''stocking'' = the distributor '
+  'ledger''s own store (pre-1069 behaviour). ''activating'' = the store the carrier paid, for the '
   'devices the per-device reimbursement reconciliation (index SS65) PROVED were activated at another '
   'store; everything it could not measure stays on the ledger''s store and is reported. NULL = NOT '
   'DECLARED, which resolves to ''stocking'' byte-identically. The company total never moves (a '

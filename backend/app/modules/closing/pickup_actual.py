@@ -186,3 +186,72 @@ def actual_relieves_cash(client, org_id):
         return bool(rows and rows[0].get("pickup_actual_relieves_cash"))
     except Exception:
         return False
+
+
+# ── THE OPEN-AND-COUNT PATCH — ONE HOME (owner directive 2026-10-10) ───────────────────────────
+#
+# Owner, verbatim: *"if the cash is not opened in cash pickup or epay pick up it should [have] the
+# option to open on this module and it should also give the field to enter the cash pick[ed] by the
+# manag[e]ment or handed over to the manag[e]ment"*.
+#
+# THE CLASS, NOT THE INSTANCE. The instance is "the deposit-accountability board cannot open a
+# sealed envelope". The class is that "the DM/management opened this envelope and counted it" was
+# a fact only ONE writer could record — `_confirm_pickup_impl`, at confirm time — and that writer
+# built the stored columns INLINE. A second surface recording the same fact would have had to spell
+# `envelope_opened` / `actual_picked_amount` / the mig-1067 counter columns itself, which is the
+# divergence the house rules forbid: two paths answering "was it opened, and what was in it".
+#
+# So the column set is a FUNCTION, dereferenced by every writer:
+#   · closing/router._confirm_pickup_impl  — the DM's count at pickup time (the original caller)
+#   · closing/router._open_count_impl      — opening a sealed envelope later, from the
+#                                            deposit-accountability board (this directive)
+# `harness_deposit_accountability.py` §J FAILS THE BUILD if either stops dereferencing it, or if a
+# second copy of the column names appears in the router.
+#
+# WHO COUNTED IT (mig 1067). mig 949 recorded the count and mig 990 recorded that the seal was
+# broken, but neither recorded WHO made the count or WHEN — the same gap the index already names on
+# the management side (`envelope_count.counted_by` writing the literal string "management"). When
+# the opener is not the DM who collected it, `picked_up_by` is the wrong name and overwriting it
+# would destroy the collection record. `actual_counted_by` / `actual_counted_at` are that fact's own
+# home; they are written only when the caller supplies a counter, and the writer retries without
+# them on a pre-1067 schema (the mig-201 precedent every optional statement column here follows).
+COUNT_COLUMNS = ("envelope_opened", "actual_picked_amount", "actual_counted_by", "actual_counted_at")
+
+
+def count_patch(item, declared=None, counted_at=None):
+    """PURE — THE ONE HOME for the stored shape of an open-and-count statement.
+
+    `item` is either wire shape the pickup surfaces send (`actual_amount` from a page,
+    `actual_picked_amount` from a direct/harness caller; `envelope_opened` as a JSON or
+    stringified boolean; `counted_by` naming the person). `declared` is the envelope's declared
+    snapshot, used only to score the variance for the caller's response — it is never stored by
+    this function.
+
+    Returns {"row": {...columns to write...}, "variance": {...} | None, "opened": bool}.
+
+    THE KEY RULES, identical for every caller:
+      · a column appears in `row` ONLY when the item actually carries that statement. A key the
+        client never sent is never written, so an older frontend stays byte-identical and a blank
+        is never recorded as a fake 0.00 (absence of a count, not a count of nothing).
+      · `actual_amount` present-but-blank CLEARS the count to NULL — "I recorded nothing", the
+        mig-949 blank-clears rule, not a zero.
+      · a counted amount of 0.00 on an OPENED envelope is a real finding ("I opened it and it was
+        empty") and is stored as 0.00, never dropped.
+      · `actual_counted_at` is only ever set alongside a counter name, so a timestamp can never
+        stand for a person.
+    The variance triple is `envelope_report.count_fields` through `variance_fields` — the same
+    truth table the management count and the pickup list already use."""
+    it = dict(item or {})
+    row, opened = {}, envelope_opened(it)
+    if "envelope_opened" in it:
+        row["envelope_opened"] = opened
+    vf = None
+    if "actual_amount" in it or "actual_picked_amount" in it:
+        act = it.get("actual_amount", it.get("actual_picked_amount"))
+        vf = variance_fields(declared, act)
+        row["actual_picked_amount"] = vf["actual"] if vf else None
+    who = str(it.get("counted_by") or "").strip()
+    if who:
+        row["actual_counted_by"] = who
+        row["actual_counted_at"] = counted_at
+    return {"row": row, "variance": vf, "opened": opened}

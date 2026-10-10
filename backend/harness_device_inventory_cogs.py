@@ -705,7 +705,7 @@ check("G11 the basis declaration is a per-org CONFIG value, never a tenant or ca
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-print("\n§H  WHICH STORE CARRIES THE COST — ONE HOME, AND NO CALLER DECIDES FOR ITSELF (§67)")
+print("\n§H  WHICH STORE CARRIES THE COST — ONE HOME, AND NO CALLER DECIDES FOR ITSELF (§69)")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # OWNER, decision card 2026-10-10: *"Move the cost"*. THE CLASS: the distributor ledger books a
 # handset's cost to the STOCKING store and the carrier pays the ACTIVATING store, and nothing

@@ -140,28 +140,50 @@ const cashFigure = (
   </svg>
 )
 
+// ── THE STORE-CASH STAGE ORDER — ONE HOME (owner directive 2026-10-10) ─────────────────────────
+// Owner: *"add another step in the workflow after cash pick up epay pick then add bank deposit and
+// the cash recon"*.
+//
+// This array WAS written out three times — once inside each of the three runbooks that walk the
+// same cash chain (Store Cash, Daily Closing, DM Verify). Three copies of one order is the
+// duplicate defect the house rules name: inserting a stage meant editing it in three places, and
+// the first edit that missed one would have walked two sets of users through two different
+// workflows. The whole point of `stagesAfter()` — the function WorkflowNext asks at the foot of
+// every screen — is that there is ONE answer to "what comes next". So there is now one array, and
+// the three runbooks reference it.
+//
+// THE NEW STAGE. Bank Deposit sits AFTER both pickups and BEFORE the recon, which is the order the
+// money actually moves: the DM takes the cash out of the store, somebody banks it, and only then
+// can a reconciliation ask whether what was collected matches what was deposited. Before this, the
+// banking step had no screen of its own — it was a mini-form wedged into the top of the recon
+// report, which is why it read as part of the reconciliation rather than as the step before it.
+const storeCashStages = [
+  { href: '/closing/submit', label: 'Submit Closing', who: 'Rep',
+    does: 'Count the drawer, enter every tender, attach the envelope photo.',
+    handoff: 'the declared figures and a sealed envelope' },
+  { href: '/closing/verify', label: 'DM Verify', who: 'District Manager',
+    does: 'Check each store-day against the POS and correct what is wrong.',
+    handoff: 'verified figures the money can be collected against' },
+  { href: '/closing/pickup', label: 'Cash Pickup', who: 'District Manager',
+    does: 'Tick the envelopes you physically take, and count any you opened.',
+    handoff: 'cash out of the store, and a count if the seal was broken' },
+  { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', who: 'District Manager',
+    does: 'The same collection, for bill-payment cash.',
+    handoff: 'bill-payment cash out of the store' },
+  { href: '/closing/bank-deposit', label: 'Bank Deposit', who: 'District Manager / Market Mgr',
+    does: 'Bank the collected cash and the bill-payment cash, each recorded in its own section with its slip.',
+    handoff: 'money in the bank, with a slip against every deposit' },
+  { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', who: 'Market Mgr / Accounting',
+    does: 'Confirm hand-overs, chase missing slips, drive the day green.',
+    handoff: 'every envelope accounted for' },
+  { href: '/closing/envelope-report', label: 'Management Envelope Receipt', who: 'Market Manager',
+    does: 'Count disputed envelopes and raise a chargeback where one is genuinely short.' },
+  { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', who: 'Owner / Accounting',
+    does: 'What is still sitting in stores undeposited.' },
+]
+
 const storeCash: Runbook = {
-  stages: [
-    { href: '/closing/submit', label: 'Submit Closing', who: 'Rep',
-      does: 'Count the drawer, enter every tender, attach the envelope photo.',
-      handoff: 'the declared figures and a sealed envelope' },
-    { href: '/closing/verify', label: 'DM Verify', who: 'District Manager',
-      does: 'Check each store-day against the POS and correct what is wrong.',
-      handoff: 'verified figures the money can be collected against' },
-    { href: '/closing/pickup', label: 'Cash Pickup', who: 'District Manager',
-      does: 'Tick the envelopes you physically take, and count any you opened.',
-      handoff: 'cash out of the store, and a count if the seal was broken' },
-    { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', who: 'District Manager',
-      does: 'The same collection, for bill-payment cash.',
-      handoff: 'bill-payment cash out of the store' },
-    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', who: 'Market Mgr / Accounting',
-      does: 'Confirm hand-overs, chase missing slips, drive the day green.',
-      handoff: 'every envelope accounted for' },
-    { href: '/closing/envelope-report', label: 'Management Envelope Receipt', who: 'Market Manager',
-      does: 'Count disputed envelopes and raise a chargeback where one is genuinely short.' },
-    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', who: 'Owner / Accounting',
-      does: 'What is still sitting in stores undeposited.' },
-  ],
+  stages: storeCashStages,
 
   slug: 'store-cash',
   title: 'Store Cash Runbook',
@@ -325,27 +347,7 @@ const closingFigure = (
 )
 
 const dailyClosing: Runbook = {
-  stages: [
-    { href: '/closing/submit', label: 'Submit Closing', who: 'Rep',
-      does: 'Count the drawer, enter every tender, attach the envelope photo.',
-      handoff: 'the declared figures and a sealed envelope' },
-    { href: '/closing/verify', label: 'DM Verify', who: 'District Manager',
-      does: 'Check each store-day against the POS and correct what is wrong.',
-      handoff: 'verified figures the money can be collected against' },
-    { href: '/closing/pickup', label: 'Cash Pickup', who: 'District Manager',
-      does: 'Tick the envelopes you physically take, and count any you opened.',
-      handoff: 'cash out of the store, and a count if the seal was broken' },
-    { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', who: 'District Manager',
-      does: 'The same collection, for bill-payment cash.',
-      handoff: 'bill-payment cash out of the store' },
-    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', who: 'Market Mgr / Accounting',
-      does: 'Confirm hand-overs, chase missing slips, drive the day green.',
-      handoff: 'every envelope accounted for' },
-    { href: '/closing/envelope-report', label: 'Management Envelope Receipt', who: 'Market Manager',
-      does: 'Count disputed envelopes and raise a chargeback where one is genuinely short.' },
-    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', who: 'Owner / Accounting',
-      does: 'What is still sitting in stores undeposited.' },
-  ],
+  stages: storeCashStages,
 
   slug: 'daily-closing',
   title: 'Daily Closing Runbook',
@@ -489,27 +491,7 @@ const verifyFigure = (
 )
 
 const dmVerify: Runbook = {
-  stages: [
-    { href: '/closing/submit', label: 'Submit Closing', who: 'Rep',
-      does: 'Count the drawer, enter every tender, attach the envelope photo.',
-      handoff: 'the declared figures and a sealed envelope' },
-    { href: '/closing/verify', label: 'DM Verify', who: 'District Manager',
-      does: 'Check each store-day against the POS and correct what is wrong.',
-      handoff: 'verified figures the money can be collected against' },
-    { href: '/closing/pickup', label: 'Cash Pickup', who: 'District Manager',
-      does: 'Tick the envelopes you physically take, and count any you opened.',
-      handoff: 'cash out of the store, and a count if the seal was broken' },
-    { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', who: 'District Manager',
-      does: 'The same collection, for bill-payment cash.',
-      handoff: 'bill-payment cash out of the store' },
-    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', who: 'Market Mgr / Accounting',
-      does: 'Confirm hand-overs, chase missing slips, drive the day green.',
-      handoff: 'every envelope accounted for' },
-    { href: '/closing/envelope-report', label: 'Management Envelope Receipt', who: 'Market Manager',
-      does: 'Count disputed envelopes and raise a chargeback where one is genuinely short.' },
-    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', who: 'Owner / Accounting',
-      does: 'What is still sitting in stores undeposited.' },
-  ],
+  stages: storeCashStages,
 
   slug: 'dm-verify',
   title: 'DM Verify Runbook',

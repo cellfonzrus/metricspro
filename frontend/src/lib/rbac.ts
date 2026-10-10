@@ -1012,6 +1012,14 @@ export const NAV: NavGroup[] = [
     // for the terminal comes from the mig-960 label preset, rendered inside the page).
     { href: '/closing/external-credit-recon', label: 'Card Settlement Recon', icon: '💳', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // Bank Deposit (owner 2026-10-10) — the banking STEP, its own screen, sitting ABOVE both
+    // recons because that is where it falls in the workflow: the DM takes the cash out of the
+    // store, somebody banks it, and only then can a reconciliation ask whether the two agree.
+    // Deliberately NOT between ePay Recon and Cash Deposit Recon: prove_deposit_recon_nav.mjs
+    // locks those two as adjacent, and the two reconciliations belong together.
+    // Same `module: 'closing'` key and scope tiers as the recons below it, so no role re-seeding
+    // is needed: any role that already has the closing module sees it.
+    { href: '/closing/bank-deposit', label: 'Bank Deposit', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Cash Deposit Recon + Deposit Categories (mig 509) — nav entries per mod-retail-ops NEEDS CORE
     // 2026-08-05 (both pages were reachable only via direct links on the Closing dashboard / ePay recon).

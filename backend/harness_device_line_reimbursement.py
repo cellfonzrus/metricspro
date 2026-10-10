@@ -188,7 +188,7 @@ ok("A9. the store key is §64's ONE store-identity home, reached through `coa.st
    and "resolve_store" in _fn_src(MOD, "device_lines")
    and not any(t in _dev_fns for t in ("split(", ".lower()", "partition(", "store_mapping",
                                         "store_alias", "street")))
-# RESTATED 2026-10-10, NOT RELAXED (§67). This used to forbid the name `store_identity` anywhere in
+# RESTATED 2026-10-10, NOT RELAXED (§69). This used to forbid the name `store_identity` anywhere in
 # the run function, as shorthand for "the router derives no identity". The run function now binds
 # §64's OWN pair predicate (`may_be_one_store` over `shared_identity_pairs`) to hand to the pure
 # layer, which is a dereference of the home, not a derivation beside it — so the rule is stated as
@@ -508,7 +508,7 @@ ok("J4. control: the same rows WITH a declaration are measured, so §D4's not-me
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n§K  TWO ADDRESSES THAT MAY BE ONE STORE WITHHOLD THE TRANSFER VERDICT — AND ONLY THOSE")
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# RESTATED 2026-10-10, AND IT WITHHOLDS LESS (§67). This guard first read a per-ADDRESS ambiguity
+# RESTATED 2026-10-10, AND IT WITHHOLDS LESS (§69). This guard first read a per-ADDRESS ambiguity
 # set — any address §13d reports as claimed by two store codes — and withheld a transfer whenever
 # EITHER side was in it. That tested the wrong fact. `build_store_resolver` step 3 places both codes
 # of such an address on the SAME canonical key, so a payment under either code is already counted at

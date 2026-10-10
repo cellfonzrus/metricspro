@@ -3649,6 +3649,14 @@ the owner wants it).
 
 **Purpose.** Reconcile cash collected at close vs cash actually deposited in the bank, per store per day.
 
+> **The BANKING STEP is now its own screen — see §67.** `/closing/bank-deposit` sits between the two
+> pickups and this reconciliation, with Store Cash and bill-payment cash in their own sections
+> (declared by the category's mig-509 `basis`, never a new column). It derives nothing: the figures
+> are this report's, and deposits are written through the same `POST /closing/bank-deposit`. §67 also
+> adds the standard filters to the deposit-accountability board below, lets a SEALED envelope be
+> opened and counted from it (`POST /closing/pickup/open-count`, one home `pickup_actual.count_patch`,
+> mig `1067` records WHO counted), and makes a HAND-OVER record an amount like a deposit does.
+
 - **Module:** `backend/app/modules/closing/deposit_recon.py`. Helpers:
   `closing_cash_raw_by_store_day(client, org_id, date_from, date_to, store_codes)` `:147`;
   `bank_deposits_by_store_day(...)` `:179`; `cash_for_basis(t_cash, epay_cash, basis)` `:196`;
@@ -4383,12 +4391,33 @@ second silent victim: `"2778 Ephraim Ave"` (8 rows, $1,709.77 payout) market-inv
 way. Both now resolve (LI / PA) — verified live against all 31 distinct rep_commissions store
 spellings for the org (every one resolves a market).
 
-**ENFORCED BY CI:** `backend/harness_market_resolution_guard.py` scans the backend for any query
+**ENFORCED BY CI — and it genuinely RUNS since 2026-10-10:** `backend/harness_market_resolution_guard.py`
+is a step of `.github/workflows/carrier-vocab-guard.yml` (the lock-harness home, alongside the
+org-tree walk lock §48.7 and the closing locks), with the harness named in that workflow's
+`pull_request.paths` so a change to the guard runs the guard (the §13e lesson: a lock behind an
+allowlist that does not name its own subject skips silently). **Until then it ran in NO workflow at
+all** and had drifted red — a guard nobody runs is not a gate. It scans the backend for any query
 reading a market column off `stores`/`store_mapping` and FAILS the build unless the site is
 canonical or pinned there with a reviewed classification (CANONICAL / OVERLAY — blank-fill from the
 canonical map, set values never overwritten / EDITOR / AUDITOR / GRANT / ROSTER / PAY-ENGINE /
 ATTRIBUTION / STORED — asset's persisted conflict-audited backfill). The pin table in that harness
-IS the per-module inventory; changing it is a reviewed act in the same PR. Resolver truth table
+IS the per-module inventory; changing it is a reviewed act in the same PR.
+
+**TWO SCAN AXES (2026-10-10).** Axis 1 is the inline chain `.table("stores"|"store_mapping")` +
+a literal `.select("…market…")`. Axis 2 is the **read through a local helper** — a module that wraps
+its reads (`def _read(table, cols): …c.table(table).select(cols)…`) passes table AND columns as
+VARIABLES, so the chain carries no literal select list and axis 1 cannot see it. That blindness was
+live: when the org-tree walk was factored into `storeops.org_chain` (§48.7) the market read MOVED
+out of `_dm_for_store` / `_managers_above_dm` and into `storeops.router.org_chain_inputs`, whose
+`_read("stores", "store_code,org_unit_id,market")` shape was invisible — the two old pins then read
+as merely "stale" while the live read stood unguarded (it was, and is, correctly overlaid through
+`core.scope.market_by_code`, so no market answer was wrong; the GUARD was wrong). Axis 2 matches a
+call whose first argument is a vocabulary-table literal and whose second is a column list naming
+market, under the same pinning rule. The guard also carries **negative controls** (C1-C8) proving
+each axis and the stale-pin prune can go red — a scan that cannot fail reports an empty inventory
+forever and reads exactly like a clean codebase.
+
+Resolver truth table
 (incl. the 1115-Liberty shape, the mirror-image mapping-only shape, aliases, ambiguity fail-closed,
 code_groups inheritance): `backend/harness_store_market_resolution.py`.
 
@@ -4402,7 +4431,8 @@ the mirror-image storeops-only gap), commission-plan roster, accessory-flags opt
 + expenses/commission/gp trends (`_trend_market_by_code`) + `_leg_store_index`; closing module
 (`_overlay_canonical_market` on rollup/summary/recon/DM-verify/envelope/pickups/positions/
 accountability — replaces the pickup pages' private stores+store_mapping inline union), closing
-DM routing (`ops_chargebacks._dm_for_stores_batch`, storeops `_dm_for_store`/`_managers_above_dm`);
+DM routing (`ops_chargebacks._dm_for_stores_batch`, storeops `org_chain_inputs` — the one set of
+org-tree walk inputs, where `_dm_for_store`/`_managers_above_dm`'s market read now lives);
 payables (`_market_by_store` + filter-options); pos tax-code resolve/markets/store-grid; storevisit
 `/stores`; storeops hours-budgets; core `/filter-options` overlay; core onboarding tax coverage;
 asset `_store_mapping_market_index` (storeops rows join the conflict-audited candidate pool),
@@ -6210,7 +6240,7 @@ rendering the resolved name.
 
 ## 16. Cross-reference: by TABLE
 
-- `commcalc.account_config.device_cost_store_basis` (mig `1067`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§67).
+- `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§69).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
@@ -6370,6 +6400,8 @@ rendering the resolved name.
 | `commcalc.billpay_pickup_config` (mig `942`) | `PUT /closing/billpay-pickup-config` | `_notify_pickup` (billpay kind; falls back to `cash_pickup_config` recipient when unset) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `mgmt_confirmed(+by/at)` (mig `943`) | `POST /closing/deposit-mgmt-confirm` (management-gated confirm/revoke) | `GET /closing/deposit-accountability` (green-day rule), `GET /closing/deposit-recon` `pickup_deposit` line item (§12 deposit accountability) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_picked_amount` (mig `949`) + `cash_pickup_config.pickup_actual_relieves_cash` knob | `POST /closing/pickup` / `/billpay-pickup` (item `actual_amount`, shared `_confirm_pickup_impl`; NULL = not recorded) | `GET /closing/pickups` + `/billpay-pickups` variance fields, `GET /closing/deposit-accountability` short-pickup chips (pure `closing/pickup_actual.py`, reusing `envelope_report.count_fields`); outflow swap in `_cash_position_core` ONLY under the knob (default false = declared, byte-identical; §12 actual cash picked) |
+| `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_counted_by` / `actual_counted_at` (mig `1067`) | `POST /closing/pickup/open-count` + `/closing/billpay-pickup/open-count` (the late open from the accountability board) AND `POST /closing/pickup` — BOTH through the ONE home `closing/pickup_actual.count_patch` (`COUNT_COLUMNS`); written only when a counter is supplied, and the write retries without them on a pre-1067 schema | `GET /closing/deposit-accountability` envelopes (`actual_counted_by`/`_at`) → the board's "Opened & counted" column. Never summed, never relieves cash. Lock: `harness_deposit_accountability.py` §J (incl. the no-second-copy ratchet over `row`/`upd` writes). §67.2 |
+| THE BANK-DEPOSIT SECTION a deposit category belongs to (`cash` \| `billpay` \| `other`) — DERIVED from the mig-509 `closing_deposit_category.basis`, never stored twice and never matched on the category NAME | `closing/deposit_recon.section_for_basis` / `section_catalog(processor_term)` (ONE home; the bill-pay label is the tenant's own processor term, RULE TWO) | `GET /closing/deposit-categories` (`section` per row + `sections`), `GET /closing/deposit-recon` (`sections` + `section` on every `assemble_category_block`), screen `/closing/bank-deposit`. Lock: `harness_deposit_accountability.py` §K. §67.4 |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `envelope_opened` (mig **`990`**, WRITTEN NOT APPLIED) | `POST /closing/pickup` / `/billpay-pickup` (item `envelope_opened`, shared `_confirm_pickup_impl`; written only when sent, and the upsert retries WITHOUT it on a pre-990 schema — mig-201 precedent) | THE CONFIRM GATE: opened ⇒ `actual_amount` REQUIRED (pure `pickup_actual.opened_without_count`/`gate_items`, batch checked before any write). Surfaced on `GET /closing/pickups` + `/billpay-pickups` and on the deposit-accountability envelopes. NULL and FALSE are ONE state ('collected sealed'); never relieves cash, never summed (§23p) |
 | `commcalc.cash_pickup_config.pickup_billpay_net_source` (mig **`1038`**, WRITTEN NOT APPLIED; CHECK-tied to `billpay_netting.NET_SOURCES`, default `pos` = byte-identical to mig `989`) | chosen per org in SQL; read by `closing/router.billpay_net_source` (never raises — a database without the column reads `pos`) | `GET /closing/pickups` (`billpay_net_source`, and `billpay_pos_disagrees`/`billpay_pos_gap` when the declared source is in force and a POS figure also exists) — §47.11 |
 | `commcalc.cash_pickup.amount_basis` (mig **`1039`**, WRITTEN NOT APPLIED; nullable, CHECK-tied to `billpay_netting.PICKUP_BASES`, never backfilled) | `POST /closing/pickup` via `pickup_amount_basis` — from the config in force, server-side, never from the client; the upsert retries WITHOUT it on a pre-1039 schema | `GET /closing/pickups` `amount_basis` (worded by `pickup_basis_label`, which reports `recorded: false` for a pre-`1039` row and `stale` when the basis in force differs — the stored amount and its variance are never re-scored) — §47.11 |
@@ -6458,8 +6490,8 @@ rendering the resolved name.
 - `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
-- `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§67) — one reconciliation, two readers, never two derivations.
-- `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1067): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§67).
+- `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§69) — one reconciliation, two readers, never two derivations.
+- `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1069): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§69).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
@@ -6766,7 +6798,7 @@ rendering the resolved name.
 | **Given ONE company accessory sales goal, what target should each store carry?** Weighted by the store's own accessories-per-box over the last two months x the boxes it is projected to sell; a store that sold boxes and attached nothing is weighted at the COMPANY rate and flagged, never given a $0 target; an unselected store's target is RESERVED out of the goal rather than assumed away; the assignments foot to the goal by largest remainder | `commcalc.daily_sales_feed`/`raw_sales` via `router._fetch_actuals` (`acc_gp` = accessory revenue + device set-up fee; `box_count`) x `router._targets_trending_by_code` (the projection) x `commcalc.targets.accessories_monthly` (mig `006`, the target in force — read AND written) | ONE home `commcalc/accessory_target_plan.py` (`company_goal` / `basis_amounts` / `company_rate` / `capacity_row` / `allocate` / `plan` / `assignment_payload`) → `GET /commcalc/accessory-target-plan/{period}` + its gated `/assign`; reads NO sale line and derives NO projection of its own (both AST-locked); module-graph fact `accessory_target_allocation`; lock `harness_accessory_target_plan.py` — §61. No new table: the suggestion is written into mig `006`'s own column, the row §5's Accessory Sales Targets tracker reads |
 | **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §62. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
 | **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; lock `harness_device_line_reimbursement.py` (89 checks) — §65. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 135 devices and $41,548.83 sit on one store's cost with another store's money |
-| **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1067) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §67. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
+| **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1069) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §69. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
 | **What did management declare for this month, and what does it still owe this week?** The focus in a manager's own words, the pay type named as driving the month's spiffs, the temporary spiffs on the table with a status, and the weekly check-ins done; the OUTSTANDING list is COMPUTED from the row + today + live measurements, so an item cannot outlive its cause, and an unmeasured count raises nothing rather than reading as a zero | `commcalc.month_focus` (mig `1065`, the declaration) x `commcalc.targets` (mig `006`, SAVED rows only — a seeded carry-forward is not an assigned target) x `commcalc.payout_config.custom_spiffs` (§6, READ ONLY — the money) x §59's bands / `lagging()` x §60's pay-type options and per-store units | ONE home `commcalc/month_focus.py` (`outstanding` / `spiff_reconciliation` / `plays` / `confirm_checkin` / `may_declare`) → `GET`/`PUT` `/commcalc/month-focus/{period}` + `/checkin`; TWO surfaces over the one due list (the login attention item and the platform banner), neither recomputing it; opens no client, reads no feed and sends on no channel (all AST-locked); module-graph fact `month_focus_declaration`; lock `harness_month_focus.py` — §63. Nothing is paid from the row: a declared spiff is an intent with a status, and the reconciliation reports declared-against-live in BOTH directions |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
@@ -22297,7 +22329,7 @@ the cost, and **$0.00** genuinely unpaid. It is not one store's problem.
 140 / $43,568.83, on a window and a basis this report no longer uses. The second said 112 /
 $35,383.88 proven plus 23 / $6,164.95 reported *not measured*, because §65.4's identity guard then
 withheld any pair touching an address two `store_mapping` records claim. That guard asked the wrong
-question and all 23 withholdings were false — §67.2 carries the defect and its proof. The owner asked
+question and all 23 withholdings were false — §69.2 carries the defect and its proof. The owner asked
 what those 23 devices were (2026-10-10), which is how it was found. None of 652's own figures ever
 moved: no pair of its four counterpart stores was involved.
 
@@ -22368,7 +22400,7 @@ contains no split, fold, lower-casing or street-number step of its own, and the 
   `store_identity.may_be_one_store`, and this module keeps no copy of it, not even a set-membership
   test. ALL, not ANY: one payment at an address that cannot be this store proves the transfer.
   **Live today: zero such pairs across the house org's 34 records, so nothing is withheld** — §K12 is
-  the control that the guard would still fire, and §67.2 carries the version of this guard that asked
+  the control that the guard would still fire, and §69.2 carries the version of this guard that asked
   the wrong question and withheld 23 true findings.
 
 ### 65.5 The lag window is SYMMETRIC, and that is measured
@@ -22636,13 +22668,138 @@ Written by hand, multi-line (never `--bless` — §50).
 
 ---
 
-## 67. WHICH STORE CARRIES A HANDSET'S COST — the ledger stocks it, the carrier pays whoever sold it (owner directive 2026-10-10)
+## 67. BANK DEPOSIT IS A STEP, NOT A FORM ON A REPORT — and a sealed envelope can be opened where it is found (owner directive 2026-10-10)
+
+Owner, verbatim, in two parts:
+
+> *"Need filter standard in deposit accountability section, if the cash is not opened in cash pickup
+> or epay pick up it should the option to open on this module and it should also give the field to
+> enter the cash pickle by the managment or handed over to the managment"*
+
+> *"Bank deposit should be a separate module for broth cash and epay in one link on top and bottom
+> but recorded separately as right now it is confusing and not traceable by employees easily add
+> another step in the workflow after cash pick up epay pick then add bank deposit and the cash recon"*
+
+**Duplicate check (the build gate), stated.** Searched §12 / §23p / §48 for an existing mechanism for
+each of the four things built here, and EXTENDED rather than added in all four cases:
+
+| Asked for | Already existed | What shipped |
+|---|---|---|
+| Filters on the accountability board | `_resolve_market_filter` / `_resolve_store_filter` / `_resolve_employee_filter` (§29.10) | `GET /closing/deposit-accountability` now declares and applies all three. No new resolver. |
+| Open a sealed envelope, record the count | `envelope_opened` (mig `990`) + `actual_picked_amount` (mig `949`), written inline by `_confirm_pickup_impl` | the column set became `pickup_actual.count_patch`, ONE home dereferenced by both writers. No new count column. |
+| Who counted it | nothing (mig 949/990 recorded a count with no counter) | mig `1067` `actual_counted_by` / `actual_counted_at`. |
+| Cash vs ePay as separate deposit sections | `closing_deposit_category.basis` (mig `509`, presets "Store Cash Deposit" / "Bill Payment Cash Deposit") | the section is DERIVED from the basis. **No `deposit_kind` column, no new table, no new endpoint, no second writer.** |
+
+### 67.1 The standard filters reach the board
+
+`GET /closing/deposit-accountability` took a date range and nothing else, so on a page whose header
+carries market and store pickers the accountability section below ignored both — the one closing
+surface that could not answer "this market". It now takes `markets` / `stores` / `employees` (plus
+the singular `market=` alias `/accountability-chain` already accepted) through the same three
+resolvers, and `harness_closing_filter_contract.py` covers it by construction. The payload carries
+`filters` — what was actually applied — and the screen states it.
+
+**Employees filter the PICKUP ROWS, before the fold.** A day row's totals, the GREEN rule, the by-DM
+shortage report and the summary are all folds over its envelopes, so narrowing after the fold would
+show one rep's name beside another rep's money. Market and store are day-grain and are applied to
+the rows beside the keyset, exactly as the chain endpoint applies them. The keyset is unchanged: a
+filter can never widen a viewer's span.
+
+### 67.2 Opening a sealed envelope, late — ONE home for the statement
+
+150 envelopes in the live September range were collected **sealed** (no count at all), and the only
+place that could ever record an opening was the pickup screen, at confirm time, by the DM.
+
+- `closing/pickup_actual.count_patch(item, declared, counted_at)` is **THE one home** for the stored
+  shape of an open-and-count statement (`COUNT_COLUMNS` = `envelope_opened`, `actual_picked_amount`,
+  `actual_counted_by`, `actual_counted_at`). Two writers dereference it:
+  `router._confirm_pickup_impl` (the DM at pickup) and `router._open_count_impl` (the late open).
+- NEW `POST /closing/pickup/open-count` + `POST /closing/billpay-pickup/open-count` — one impl, the
+  mig-942 sibling pattern. **404** when no pickup row exists and **409** when it is not picked up:
+  this records a count on a collection that happened, it never creates one. The SAME gate
+  (`pickup_actual.gate_items`) refuses "opened" with no count; a counted `0.00` is a real finding.
+- **Deliberately NOT `POST /pickup`**: that endpoint upserts `picked_up_by` / `picked_up_at` and
+  re-notifies, so a late count through it would overwrite who collected the cash and send a second
+  pickup notification.
+- **Deliberately NOT `envelope_count`** (mig `936`): that is MANAGEMENT'S own later count in the
+  Management Envelope Receipt — a different key (`daily_closing.id`), scored against the whole
+  declared drawer, and wired to the `envelope_short` chargeback machinery that moves a rep's pay.
+  This is the pickup-step count performed late, so it lands where that count already lives and the
+  board's existing short/over chips read it with no new derivation.
+- Mig `1067` — `actual_counted_by` / `actual_counted_at` on `cash_pickup` + `billpay_pickup`. A
+  timestamp is never written without a person. Both writers retry WITHOUT these columns when the
+  error names them (the mig-201 precedent), so the money figure always lands.
+
+### 67.3 A hand-over now records an amount
+
+`_record_deposit_impl` recorded an amount for a DEPOSIT and **nothing at all** for a HAND-OVER, so an
+envelope handed to management carried only the rep's declared snapshot: management ticked "received"
+and no figure ever stated what they actually got. A hand-over short by $200 looked exactly like one
+that tied. The amount, the `declared_amount` comparison and the `deposit_flagged` mismatch flag are
+ONE mechanism and both dispositions now run it; the slip + OCR stay particular to a deposit, because
+only a deposit has a slip. `pickup_deposit_line` still reads `disposition == 'deposited'` only, so a
+handed amount can never be counted as money that reached the bank.
+
+### 67.4 Bank Deposit — the module
+
+NEW screen `/closing/bank-deposit`, nav **Daily Closing** group (above both recons), route index
+registered. Two (three) sections from the SERVED catalog, section links at the top AND the bottom.
+
+- **The section is declared, not guessed.** `deposit_recon.section_for_basis(basis)` is the one home:
+  `store_cash` / `total_cash` → `cash`, `bill_payment_cash` → `billpay`, `manual` and anything
+  unknown → `other` (its own group, counted in neither pile — guessing would silently mis-bank
+  money). `section_catalog(processor_term)` names the bill-pay section with the tenant's OWN
+  processor term, so no carrier word is spelled in code or page copy (RULE TWO, the `stage_catalog`
+  precedent). Served on `GET /closing/deposit-categories` and `GET /closing/deposit-recon`; carried
+  on every `assemble_category_block`.
+- **It derives nothing and stores nothing new.** Every figure comes from `GET /closing/deposit-recon`
+  (same expected/deposited/variance math, same keyset); every deposit is written through
+  `POST /closing/bank-deposit`, the one writer every other deposit-recording surface already uses.
+  Recording separately is enforced by the form: each section offers only its own categories.
+
+### 67.5 The workflow order — one array, not three
+
+`frontend/src/lib/flowcharts.tsx` carried the store-cash stage list **three times**, once per runbook
+over the same chain (Store Cash, Daily Closing, DM Verify). It is now one `storeCashStages` array the
+three reference, with Bank Deposit inserted after both pickups and before the reconciliation — the
+order the money actually moves. `WorkflowNext` and the runbooks ask the same array, as designed.
+
+### 67.6 Where it is locked
+
+`backend/harness_deposit_accountability.py` — **now RUN BY CI** (`carrier-vocab-guard.yml`, closing
+job; removed from `harness_unrun_pending.txt`, `PINNED_MAX` 324 → 323). 106 checks, of which the new
+ratchets are: **§I** the three filters are accepted AND applied, employees before the fold, keyset
+intact; **§J** `count_patch` is the one home, both writers dereference it, and **no writer puts
+`COUNT_COLUMNS` into a stored `row`/`upd` dict itself**; **§J-b** both dispositions run one amount
+mechanism; **§K** every declared basis has a section, an unknown basis never reads as cash, the
+catalog is served and the frontend spells no section key; **§L** one stage array, Bank Deposit
+between the pickups and the recon, the screen registered.
+
+### 67.7 Cross-references
+
+| Thing | Home | Readers |
+|---|---|---|
+| An open-and-count statement's stored columns | `closing/pickup_actual.count_patch` (`COUNT_COLUMNS`) | `router._confirm_pickup_impl`, `router._open_count_impl` |
+| `commcalc.cash_pickup` / `billpay_pickup` `actual_counted_by`+`_at` (mig `1067`) | `POST /closing/pickup/open-count` + billpay sibling, and `POST /closing/pickup` — both via `count_patch` | `GET /closing/deposit-accountability` envelopes (`actual_counted_by`), the board's "Opened & counted" column |
+| Which Bank Deposit section a deposit category belongs to | `closing/deposit_recon.section_for_basis` / `section_catalog` | `GET /closing/deposit-categories` (`section`, `sections`), `GET /closing/deposit-recon` (`sections`, per-block `section`), `/closing/bank-deposit` |
+| The store-cash workflow ORDER | `frontend/src/lib/flowcharts.tsx` `storeCashStages` | the three runbooks, `WorkflowNext`, `stagesAfter` |
+| The amount management RECEIVED on a hand-over | `cash_pickup.deposit_amount` vs `declared_amount` (mig `089`), via `router._record_deposit_impl` | `GET /closing/deposit-accountability` (`flagged_rows`), §12 deposit accountability |
+
+**Endpoints added:** `POST /closing/pickup/open-count`, `POST /closing/billpay-pickup/open-count`.
+**Endpoints changed:** `GET /closing/deposit-accountability` (+`markets`/`stores`/`employees`/`market`,
+`filters`), `GET /closing/deposit-categories` (+`section`, `sections`), `GET /closing/deposit-recon`
+(+`sections`, +`section` per block), `POST /closing/pickup/deposit` + billpay sibling (amount on a
+hand-over). **Screen added:** `/closing/bank-deposit`. **Migration:** `1067`.
+
+---
+
+## 69. WHICH STORE CARRIES A HANDSET'S COST — the ledger stocks it, the carrier pays whoever sold it (owner directive 2026-10-10)
 
 Owner, on the decision card: *"Move the cost"* — move device cost to the store the carrier paid, for
 the proven transfers. The ask that led to it (§65): *"move the cost to a different store if this
 happens but capture that in a report for phones activated under different report"*.
 
-### 67.1 THE CLASS, NOT THE INSTANCE
+### 69.1 THE CLASS, NOT THE INSTANCE
 
 > **"Which store does this handset's cost belong to?" had two authorities and nothing reconciled them
 > per device.** `commcalc.asset_ledger` books the unit's cost to the **stocking** store, on the row's
@@ -22670,7 +22827,7 @@ STORE's gross profit — which is the point. The largest net movers in that wind
 −$14,829.66, `1800 Great Neck Rd` +$13,689.72, `4712 White Plains Rd` −$13,089.74, `3605 Germantown
 Ave` −$13,059.73, `3 Palisade Ave` +$11,399.57, `11636 Springfield Blvd` −$11,199.72.
 
-### 67.2 THE GUARD THAT ASKED THE WRONG QUESTION — a design fix found by the owner's question
+### 69.2 THE GUARD THAT ASKED THE WRONG QUESTION — a design fix found by the owner's question
 
 §65.4 shipped a third guard that withheld "the carrier paid a different store" whenever **either**
 address was one §13d reports as claimed by two `store_mapping` records. The owner asked what the 23
@@ -22698,12 +22855,12 @@ ANY: one payment at an address that cannot be this store proves the transfer. Th
 again. `ambiguous_identities` itself stays — §13d's report of the collisions is a legitimate and
 different use.
 
-### 67.3 THE ONE HOME — and it dereferences §65 rather than forming a second opinion
+### 69.3 THE ONE HOME — and it dereferences §65 rather than forming a second opinion
 
 | | |
 |---|---|
 | **The verdict** ("where was this device activated") | `commcalc/device_reimb_recon.activation_store_moves(rows)` — derived from §65's own `device_lines` rows, from `LINE_PAID_OTHER_STORE` and nothing else |
-| **The declaration** | `account_config.device_cost_store_basis` (mig 1067), resolved by `account/device_cogs.resolve_device_cost_store_basis` |
+| **The declaration** | `account_config.device_cost_store_basis` (mig 1069), resolved by `account/device_cogs.resolve_device_cost_store_basis` |
 | **The I/O read** | `device_cogs.load_device_cost_store_basis` · `device_cogs.load_activation_index` (which calls `commcalc.router._device_line_reimb_run`, §65's one assembly, and reads neither feed itself) |
 | **The placement** | `device_cogs.cost_store(ledger_store, device_id, activation)` — **the only place a device's cost is given a store** |
 | **The caller** | `device_cogs._vip_sold_cost`, every unit through `cost_store`; `coa.build_inputs` hands the period down |
@@ -22714,10 +22871,10 @@ infer whether a store's cost moved, stayed, or could not be judged. The restatem
 line's `meta`: `moved_to_activating_store` (devices, amount, store pairs) and `unmeasured_stayed_put`
 (devices, amount). A moved store figure is never silent.
 
-### 67.4 OFF UNTIL DECLARED, AND IT FAILS IN THE SAFE DIRECTION
+### 69.4 OFF UNTIL DECLARED, AND IT FAILS IN THE SAFE DIRECTION
 
 `device_cost_store_basis` NULL ⇒ `stocking` ⇒ **byte-identical** to every figure this module produced
-before §67. Only the declared word `activating` moves a cost (case and surrounding space folded, the
+before §69. Only the declared word `activating` moves a cost (case and surrounding space folded, the
 same way the sibling mig-1041 basis folds its own). A cost moves ONLY on a proven activation
 elsewhere; a device with no identifier, a short month, a possibly-same-store pair, an unreadable
 reconciliation, or an org with no device-financing routing declared **moves nothing**, stays on the
@@ -22728,7 +22885,7 @@ cost by an account→store index and its rows carry **no device identifier**, so
 verdict cannot reach it. Excused — and PINNED: §H6 asserts that path is identifier-free, so the day it
 gains one the check goes red and the sibling must be fixed too.
 
-### 67.4a THE OWNER STATEMENT, VERSIONED
+### 69.4a THE OWNER STATEMENT, VERSIONED
 
 The column is migration `1067`; declaring `activating` is a separate owner-approved statement, and it
 lives at **`database/runbooks/device_cost_store_activating.sql`** — the column and the declaration in
@@ -22739,7 +22896,7 @@ be audited later. **A recompute follows** for each month to be restated (Jun–O
 is not recomputed keeps its stored per-store figures. Undo is `SET device_cost_store_basis = NULL`
 plus the same recomputes.
 
-### 67.5 THE LOCK
+### 69.5 THE LOCK
 
 `harness_device_inventory_cogs.py` **§H** (the harness that already owns the device-cost basis; 70 →
 89 checks, 0 failed). H1 the home exists and is pure · H2/H2b/H2c off until declared, exhaustive over
@@ -22763,7 +22920,7 @@ says what it always meant — the router may NAME the home's answers (`may_be_on
 build a key itself (no `store_identity_index`, `build_store_resolver`, `squash_key`, `lead_num_key`,
 `store_key(`, `split(`).
 
-### 67.6 DUPLICATE CHECK (build gate)
+### 69.6 DUPLICATE CHECK (build gate)
 
 Searched §64 (store identity, `store_identity_index`, `ambiguous_identities`), §65 (the per-device
 reconciliation and its guards), §42.5 / §42.1 / §42.3 (the device-cost basis and its three
@@ -22774,7 +22931,7 @@ resolver and identity index, §42.5's `account_config` declaration pattern and i
 read, `device_cogs._vip_sold_cost`'s existing dedup and fee exclusion, and both existing locks
 (extended, never duplicated). **BUILT NEW:** one pure verdict reader (`activation_store_moves`), one
 pure pair relation and predicate in the identity home, one declaration + resolver + placement in the
-cost home, one nullable column (mig 1067), and the config read/write on the existing
+cost home, one nullable column (mig 1069), and the config read/write on the existing
 `/account/config` endpoint. **Nothing else:** no new table, no new endpoint, no new report, no
 frontend change, and no second store resolver.
 

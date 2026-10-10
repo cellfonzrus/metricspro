@@ -98,6 +98,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/closing/accessory-recon' },
   { path: '/closing/accountability' },
   { path: '/closing/billpay-pickup' },
+  { path: '/closing/bank-deposit' },
   { path: '/closing/cash-config' },
   { path: '/closing/cash-position', label: 'Cash Position', aliases: ['cash on hand', 'cash position'] },
   { path: '/closing/cash-recon-management' },

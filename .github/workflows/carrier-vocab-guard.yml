@@ -467,6 +467,11 @@ on:
       - "database/migrations/1046_billpay_fee_charged.sql"
       - "backend/harness_accountability_chain.py"
       - "backend/harness_org_chain.py"
+      # index §13a — the canonical store→market resolution guard. It had never run in ANY workflow
+      # (wired 2026-10-10), and a lock behind an allowlist that does not name its own subject skips
+      # silently (the §13e lesson), so the harness itself is listed; its subjects (core/scope.py,
+      # the closing / storeops / commcalc routers) are already named above and by the push globs.
+      - "backend/harness_market_resolution_guard.py"
       - "backend/app/modules/storeops/org_chain.py"
       - "backend/app/modules/closing/deposit_accountability.py"
       - "backend/app/core/actors.py"
@@ -600,13 +605,13 @@ on:
       # and the three frontend registries, so a change to any of them must run it.
       - "backend/harness_device_line_reimbursement.py"
       - "backend/app/modules/commcalc/imei_rebate_report.py"
-      # index §67 — WHICH STORE carries a handset's cost. The cost side DEREFERENCES the device
+      # index §69 — WHICH STORE carries a handset's cost. The cost side DEREFERENCES the device
       # verdict above, so the two locks guard one mechanism between them: §H of the device-cost
       # harness and §K of the device-line one. A change to the cost home, its declaration or its
       # migration must run both.
       - "backend/harness_device_inventory_cogs.py"
       - "backend/app/modules/account/device_cogs.py"
-      - "database/migrations/1067_device_cost_store_basis.sql"
+      - "database/migrations/1069_device_cost_store_basis.sql"
       - "database/runbooks/device_cost_store_activating.sql"
       - "frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
       - "backend/harness_statement_crosscheck_earned.py"
@@ -869,9 +874,15 @@ jobs:
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the deposit-accountability lock (the green rule, the cash-short-by-DM fold, the standard filters, the ONE home for an open-and-count statement, and the declared bank-deposit sections — index §12, §23p, §69)
+        working-directory: backend
+        run: python3 harness_deposit_accountability.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
         working-directory: backend
         run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the canonical store→market resolution guard (ONE resolver; every vocabulary read canonical, overlaid or pinned with a reviewed classification; a read that moves behind a helper stays visible — index §13a)
+        working-directory: backend
+        run: python3 harness_market_resolution_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1627,7 +1627,7 @@ def build_inputs(client, org_id, period):
     # to the line so a $0 is never mistaken for a measurement. See device_cogs.py for the figures.
     _dev = {"active": False, "meta": {"mode": device_cogs_mode}}
     try:
-        # `period` is passed for ONE purpose: §67 asks §65 where each device was ACTIVATED, so a
+        # `period` is passed for ONE purpose: §69 asks §65 where each device was ACTIVATED, so a
         # handset stocked at one store and sold at another expenses where the carrier paid. Inert
         # until an org declares the activating basis.
         _dev = _device_cogs.resolve(client, org_id, period_keys, pm, py,
@@ -1661,7 +1661,7 @@ def build_inputs(client, org_id, period):
     # (`engine._assemble` rebuilds each line from key/label/amount/kind/detail, and `_scoped` drops
     # zero-valued detail), so an honest zero rendered identically to a measured one. `note` is the
     # passthrough; it is set ONLY here and ONLY in this case, so every other line stays byte-identical.
-    # §67 — AND THE SAME LESSON APPLIES TO A RESTATEMENT. `meta` alone never reaches a reader
+    # §69 — AND THE SAME LESSON APPLIES TO A RESTATEMENT. `meta` alone never reaches a reader
     # (`engine._assemble` rebuilds each line from key/label/amount/kind/detail), so a store whose
     # device cost MOVED would show a different figure with nothing on the statement saying why. The
     # note says it, in the same passthrough and only when a move actually happened. The honest zero
