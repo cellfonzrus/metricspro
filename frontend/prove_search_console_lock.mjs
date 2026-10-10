@@ -181,7 +181,7 @@ function checkJumper(rel, raw) {
 function checkRanker(raw) {
   const code = codeOnly(raw)
   const bad = []
-  // PURE, and it may dereference exactly ONE shared fact: the search vocabulary (§68).
+  // PURE, and it may dereference exactly ONE shared fact: the search vocabulary (§71).
   // The old rule here was "imports nothing", which was a PROXY for the two things actually at stake —
   // the ranker holds no registry, and the proof can drive the real functions under bare Node. The
   // vocabulary breaks neither (it is a pure word list, and prove_load_ts.mjs resolves the alias), so

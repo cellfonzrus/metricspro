@@ -30,7 +30,7 @@
 // see would leak its existence, which is why the filter is upstream and not a flag here.
 //
 // PURE, so `frontend/prove_search_rank.mjs` can drive the real functions under Node with no React,
-// no network and no build step. It imports exactly ONE thing: the search VOCABULARY (§68), which is
+// no network and no build step. It imports exactly ONE thing: the search VOCABULARY (§71), which is
 // equally pure. That import is deliberate rather than an injected argument — a vocabulary passed in
 // by each caller is a vocabulary one caller forgets to pass, and "wrote the registry without wiring
 // the callers" is the failure the house rules name three times over (§19.18). Importing it cannot
@@ -70,7 +70,7 @@ export type Hit = {
   score: number
   /** Which CONTENT tokens this hit actually accounted for — shown to the person so a surprising
    *  result explains itself instead of looking arbitrary. Includes tokens reached through the
-   *  vocabulary (§68): "wages" counts as accounted for by a page that says "payroll". */
+   *  vocabulary (§71): "wages" counts as accounted for by a page that says "payroll". */
   matched: string[]
   /** The subset of `matched` the item answered with THE WORD THE PERSON TYPED, no vocabulary in
    *  between. This is what `fullyCovered` reads, and the distinction is load-bearing — see the
@@ -161,7 +161,7 @@ const words = (s?: string) => new Set(tokens(s || ''))
 function sharedStem(a: string, b: string): boolean {
   if (a === b) return false
   if (/\d/.test(a) || /\d/.test(b)) return false
-  // A PHRASE IS NOT A STEM OF A WORD. Vocabulary candidates (§68) may be multi-word, and without
+  // A PHRASE IS NOT A STEM OF A WORD. Vocabulary candidates (§71) may be multi-word, and without
   // this line 'gross sales' read as a longer form of 'gross' and 'sales volume' as a longer form of
   // 'sales' — so "turnover" matched every page whose text contained either word, and Connectors
   // ranked level with Gross Profit. The rule above says one WORD must be a prefix of the other;
@@ -190,7 +190,7 @@ function stemHit(text: string | undefined, t: string): boolean {
 
 /**
  * The best score `item` can get for ONE typed token, the typed word first and its vocabulary
- * equivalents second (§68).
+ * equivalents second (§71).
  *
  * The literal word is always tried on its own first and returned if it hits, so adding a vocabulary
  * can never REORDER two items that both match what was typed — it can only find items that matched
@@ -271,7 +271,7 @@ export function rank(items: Searchable[], q: string, limit = 8): Hit[] {
   out.sort((a, b) =>
     b.matched.length - a.matched.length ||
     // THE TYPED WORD WINS A TIE. A hit on the person's own word and a hit reached through the
-    // vocabulary (§68) can land on the same score — "statement" matches the title "P&L Statement"
+    // vocabulary (§71) can land on the same score — "statement" matches the title "P&L Statement"
     // as a label word (45) exactly as "billing" reaches "Bill Payments" as a label prefix less the
     // synonym penalty (70 - 25). Without this line the tie broke alphabetically and the page the
     // person had literally named lost to one the vocabulary suggested.
@@ -285,7 +285,7 @@ export function rank(items: Searchable[], q: string, limit = 8): Hit[] {
 /** Does any hit explain the WHOLE query? The console uses this to decide whether to lead with a
  *  destination or with the assistant: a question nothing covers is a question, not a bad search.
  *
- *  IT READS `literal`, NOT `matched`, AND THAT IS THE WHOLE POINT. The search vocabulary (§68) makes
+ *  IT READS `literal`, NOT `matched`, AND THAT IS THE WHOLE POINT. The search vocabulary (§71) makes
  *  far more things matchable — which is what it is for — and coverage is also the signal that
  *  decides whether a sentence gets NAVIGATED instead of ASKED. Counting vocabulary hits here let
  *  *"which sales rep worked in 509 today"* become "fully explained" (rep, sales and worked all

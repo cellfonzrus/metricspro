@@ -28,7 +28,7 @@ import { loadLibs } from './prove_load_ts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-// search-rank.ts dereferences the search VOCABULARY (§68), so it can no longer be imported straight
+// search-rank.ts dereferences the search VOCABULARY (§71), so it can no longer be imported straight
 // off disk: bare Node cannot resolve the `@/lib/...` alias Next uses. The shared loader emits both
 // pure modules with that alias rewritten to the sibling file, so this proof still drives the REAL
 // functions and no stub or copy exists.

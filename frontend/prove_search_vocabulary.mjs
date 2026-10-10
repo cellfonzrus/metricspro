@@ -1,6 +1,6 @@
 // Proof harness — EVERY MODULE IS FINDABLE BY THE WORDS A PERSON WOULD ACTUALLY TYPE
 // (owner directive 2026-10-10: *"all modules should be searcable, index and found by susing similar
-// words like a search enegine"*, index §68).
+// words like a search enegine"*, index §71).
 //
 // WHAT WAS WRONG, measured on 2026-10-10 by driving the real ranker over the real registries. Of
 // 351 findable things, 250 carried a LABEL AND NOTHING ELSE — no description, no alternate
@@ -274,7 +274,7 @@ ck('G4  unmappedReason() answers for a registered word and not for others',
 // carrier and product vocabulary from the seed migrations and scans every frontend/src/**/*.ts —
 // this file included. The list below is a cheap local echo of the obvious names, kept only so this
 // proof fails fast on an obvious slip, and it must never be mistaken for the derived one: it is a
-// hand-written second copy, and it was WEAKER. On the first push of §68 it passed while the derived
+// hand-written second copy, and it was WEAKER. On the first push of §71 it passed while the derived
 // guard found two carrier-side page names ("PayGo", "Asset Ledger") in group NOTES — because this
 // check read only the TERMS. Hence G5b: the whole FILE is scanned, prose included, and G5c pins the
 // file inside the derived guard's reach so the real check can never stop covering it.

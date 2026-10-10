@@ -353,11 +353,12 @@ ok("G4 the commission-leg trend — the surface that EXPLAINS the GP column — 
 #
 # EXCUSED, each for a stated reason, each a MONEY path whose change is its own surfaced decision:
 EXCUSED = {
-    # The P&L books every dollar somewhere and cannot decline one. Whether a dollar declared to a
-    # category the component map cannot honour belongs on the reimbursement line or a line of its
-    # own is a CONFIG decision surfaced to the owner and unanswered; routing it here would move
-    # $260,500.00 of booked money unasked.
-    "app/modules/account/coa.py": "P&L booking — component_line routing is the owner's pending config decision",
+    # The P&L books every dollar somewhere and cannot decline one, so it places by the component
+    # and has no use for a refusal. §69 (owner ruling 2026-10-10) answered the question this entry
+    # recorded as unanswered: the declared category was UNHONOURABLE, the component vocabulary now
+    # expresses it, and the dollar is placed by the org's own declaration on `basis='declared'` —
+    # an EVIDENTIAL component, which is the one case this rule never governed.
+    "app/modules/account/coa.py": "P&L booking — places every dollar by component; the declaration is honourable since index 69",
     # The same question, same answer, for the carrier drill-down that renders those P&L lines.
     "app/modules/commcalc/router.py": "P&L line routing (component_line) + the GP/trend paths, which DO dereference it",
 }

@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path'
 import { loadLibs } from './prove_load_ts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-// search-rank.ts now dereferences the search vocabulary (§68) through Next's `@/lib/...` alias,
+// search-rank.ts now dereferences the search vocabulary (§71) through Next's `@/lib/...` alias,
 // which bare Node cannot resolve, so both go through the shared loader. Still the real files.
 const [C, R] = await loadLibs(HERE, ['search-catalog', 'search-rank'])
 

@@ -53,7 +53,7 @@ name: data-qa-guard
 #       one console surface; the build fails if a surface starts scoring, sorting or tokenizing for
 #       itself, or if a second stopword list or a second page list appears. Every control is ARMED.
 #
-#   prove_search_vocabulary.mjs  — SIMILAR WORDS (index §68, owner directive 2026-10-10: *"all
+#   prove_search_vocabulary.mjs  — SIMILAR WORDS (index §71, owner directive 2026-10-10: *"all
 #       modules should be searcable, index and found by susing similar words like a search
 #       engine"*). Before it, 11 of 30 everyday words a manager would type found NOTHING, because
 #       the catalogue carries only the words on the menu. The vocabulary is the one home for "which
@@ -106,7 +106,7 @@ on:
       - "frontend/prove_search_rank.mjs"
       - "frontend/prove_search_catalog.mjs"
       - "frontend/prove_search_console_lock.mjs"
-      # SIMILAR WORDS (index §68). The vocabulary is the ONE home for "which words mean the same
+      # SIMILAR WORDS (index §71). The vocabulary is the ONE home for "which words mean the same
       # thing here"; the ranker dereferences it. Both are listed so a change to either runs the
       # ratchet that says an everyday word may never go back to finding nothing.
       - "frontend/src/lib/search-vocabulary.ts"
@@ -236,7 +236,7 @@ jobs:
       - name: Run the search-console design lock (one ranker, one catalogue, no private scoring in a surface — index §54.3)
         working-directory: frontend
         run: node prove_search_console_lock.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the similar-words proof (one vocabulary, the typed word always wins, and an everyday word may never go back to finding nothing — index §68)
+      - name: Run the similar-words proof (one vocabulary, the typed word always wins, and an everyday word may never go back to finding nothing — index §71)
         working-directory: frontend
         run: node prove_search_vocabulary.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 

@@ -11587,11 +11587,15 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
         cdc_rules = []
     cdc_decl = _cdc.load_declarations(client, org_id)
     _lines_map = (cdc_cfg or {}).get("component_lines") or {}
-    # The components this org routed OFF the generic carrier-commission line. That routing is the
-    # org's declaration of "this money is not commission", and the P&L's reimbursement line is
-    # exactly its destination — so dereferencing it cannot disagree with the statement being read.
-    _device_components = {str(k).strip().upper() for k, v in _lines_map.items()
-                          if str(v or "").strip() and str(v).strip() != "carrier_comm"}
+    # WHICH COMPONENTS' DOLLARS ARE THE DEVICE-FINANCING SIDE — §58's own question, asked, not
+    # derived here (§69). This read used to be "every component this org routed OFF the generic
+    # carrier-commission line", which was an INFERENCE that held only while exactly one component
+    # was routed anywhere. A second component routed to a line of ITS own is not device money: under
+    # the owner's 2026-10-10 MDF ruling that inference would have re-admitted $91,000.00 a month of
+    # per-store lump sums — no device named, and nothing for one to name — to this per-DEVICE report
+    # minutes after §65.5 cleared it of exactly that money. The home answers the question as it is
+    # meant: the components that book to the line the device-financing reimbursement books to.
+    _device_components = _cdc.device_reimb_components(_lines_map, "carrier_comm")
     configured = bool(_device_components)
     _cache: dict = {}
 
@@ -11769,7 +11773,12 @@ def carrier_category_options(period: str = "", org_id: str = ORG_ID):
         {(r.get("subtype") or "").strip() for r in srows
          if (r.get("subtype") or "").strip()},
         key=lambda s: s.lower())
-    return {"categories": cats, "subtypes": subs}
+    # THE COMPONENT VOCABULARY IS SERVED, not re-spelled on the page (index §69). The page kept its
+    # own array of the four components it knew; a vocabulary that can grow needs ONE source, and a
+    # setup screen that cannot offer a kind of money the platform understands is a hole the owner
+    # has to work around. Additive — an existing caller that ignores the key is unaffected.
+    return {"categories": cats, "subtypes": subs,
+            "components": list(carrier_map.COMPONENTS)}
 
 
 # ── Unified connector model (SaaS framework Phase 2: registry + live status + run-now dispatch) ──
