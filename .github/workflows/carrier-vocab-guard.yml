@@ -472,7 +472,7 @@ on:
       # silently (the §13e lesson), so the harness itself is listed; its subjects (core/scope.py,
       # the closing / storeops / commcalc routers) are already named above and by the push globs.
       - "backend/harness_market_resolution_guard.py"
-      # index §72 — the declared-metric catalog and the daily-incentive engine. Both locks name
+      # index §73 — the declared-metric catalog and the daily-incentive engine. Both locks name
       # themselves for the same reason as the line above: an allowlist that omits its own subject
       # skips silently.
       - "backend/harness_daily_incentive.py"

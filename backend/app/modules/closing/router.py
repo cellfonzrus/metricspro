@@ -3305,7 +3305,7 @@ def put_count_config(payload: PutCountConfigIn, org_id: str = ORG_ID, authorizat
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing count-field configuration is permission-restricted.")
     defs = payload.defs or []
-    # The save is a full replace, so a client that does not KNOW about the mig-1070 fields would
+    # The save is a full replace, so a client that does not KNOW about the mig-1071 fields would
     # silently reset them. Carry the stored values forward for any def whose payload omits them all —
     # an explicit value still wins, so the editor can always change one.
     try:
@@ -3332,7 +3332,7 @@ def put_count_config(payload: PutCountConfigIn, org_id: str = ORG_ID, authorizat
         key = (dd.get("field_key") or "").strip()
         if not key:
             continue
-        # mig 1070: a category also declares what it is MEASURED in, WHO declares it, and what a
+        # mig 1071: a category also declares what it is MEASURED in, WHO declares it, and what a
         # unit is worth. Absent keys fall back to the mig-501 defaults, so an older client that
         # sends none saves exactly what it saves today.
         _vk = str(dd.get("value_kind") or "count").strip().lower()
@@ -3369,7 +3369,7 @@ def seed_standard_counts(org_id: str = ORG_ID, authorization: str = Header(defau
     return {"ok": True, "seeded": len(rows)}
 
 
-# ── THE DECLARED-METRIC CATALOG (mig 1070) ────────────────────────────────────────────────────────
+# ── THE DECLARED-METRIC CATALOG (mig 1071) ────────────────────────────────────────────────────────
 # "What does this business declare at the end of a day, and what is a unit worth." ONE answer, asked
 # by the closing form, the incentive-rule editor and the targets editor. A surface that builds its own
 # category list has reproduced the vocabulary — `harness_metric_catalog_lock.py` fails the build.
@@ -3389,7 +3389,7 @@ def _metric_catalog(client, org_id, *, include_inactive=False, with_tenders=True
 
 
 def _metric_lines(client, org_id, store_code, close_date):
-    """`closing_metric_line` rows for one store-day. [] before mig 1070 is applied, so every caller
+    """`closing_metric_line` rows for one store-day. [] before mig 1071 is applied, so every caller
     degrades to the mig-501 behaviour instead of failing."""
     try:
         q = (client.schema("commcalc").table("closing_metric_line").select("*")
@@ -3501,7 +3501,7 @@ def put_metric_lines(payload: PutMetricLinesIn, org_id: str = ORG_ID,
             client.schema("commcalc").table("closing_metric_line").insert(rows).execute()
     except Exception as e:
         raise HTTPException(400, f"Could not save — run migration "
-                                 f"1070_declared_metric_catalog.sql first. [{e}]")
+                                 f"1071_declared_metric_catalog.sql first. [{e}]")
     return {"ok": True, "lines": len(rows)}
 
 

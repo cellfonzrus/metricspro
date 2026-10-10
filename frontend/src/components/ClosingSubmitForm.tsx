@@ -97,7 +97,7 @@ function draftHasContent(d: Draft | null): boolean {
 type StoreOpt = { sfid?: string; store_code?: string; store_address?: string; store_name?: string; market?: string; closing_source?: string }
 type TenderDef = { tender_key: string; label?: string; recon_class?: string }
 type CountDef = { field_key: string; label?: string }
-// mig 1070 — the declared-metric catalog. `storage` is the HOME's own answer to "where does this
+// mig 1071 — the declared-metric catalog. `storage` is the HOME's own answer to "where does this
 // value live"; the form never works that out itself (harness_metric_catalog_lock.py §A8).
 type Metric = {
   key: string; label: string; value_kind: string; declared_by: string
@@ -188,7 +188,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [tv, setTv] = useState<Record<string, string>>({})   // amount per configured tender_key
   const [cdefs, setCdefs] = useState<CountDef[] | null>(null)      // configured count fields (null = built-in 3, static)
   const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
-  const [metrics, setMetrics] = useState<Metric[]>([])        // mig 1070 declared-metric catalog
+  const [metrics, setMetrics] = useState<Metric[]>([])        // mig 1071 declared-metric catalog
   const [mlines, setMlines] = useState<MetricLine[]>([])      // the richer (money / per-person) lines
   const [emps, setEmps] = useState<Employee[]>([])                 // employee roster (RULE THREE picker, see below)
   const [empsLoaded, setEmpsLoaded] = useState(false)         // fetch landed — tells "empty" apart from "loading"
@@ -368,7 +368,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
   // built-in 3 (static), so an un-opted tenant's form is byte-identical to today.
   useEffect(() => { api('/api/v1/closing/count-config').then((d: { defs?: CountDef[]; configured?: boolean } | null) => setCdefs(d?.configured ? (d.defs || []) : ((d?.defs && d.defs.length) ? d.defs : null))).catch(() => setCdefs(null)) }, [])
-  // The declared-metric catalog (mig 1070): the categories that carry money or are declared per
+  // The declared-metric catalog (mig 1071): the categories that carry money or are declared per
   // person. The plain count-only ones keep rendering through `cdefs` above, unchanged. An empty
   // catalog (or a pre-migration backend) leaves the form exactly as it is today.
   useEffect(() => {
@@ -761,7 +761,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           </Row>
         )}
 
-        {/* mig 1070 — the categories that carry money, or that each person declares for themselves.
+        {/* mig 1071 — the categories that carry money, or that each person declares for themselves.
             Rendered entirely from the catalog: this form names no category and knows no business. */}
         {!!storeMoneyMetrics.length && (<>
           <SectionLabel>Today&apos;s sales by category</SectionLabel>

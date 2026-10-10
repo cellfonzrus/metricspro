@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, fmt } from '@/lib/client'
 
-// DAILY INCENTIVE RULES (mig 1070). Owner 2026-10-10: "when you add a category it should be
+// DAILY INCENTIVE RULES (mig 1071). Owner 2026-10-10: "when you add a category it should be
 // available in teh cincentive payout plan to be assesed to be paid out … i dont wnat them to be hard
 // coded it should be a design effect".
 //

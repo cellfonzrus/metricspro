@@ -22,7 +22,7 @@ from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
-from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1070); every rule is a config row (index §72)
+from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1071); every rule is a config row (index §73)
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — THE peer traffic-band comparison (index §59)
 from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
@@ -47155,7 +47155,7 @@ async def zero_sales_alerts_run_now(send: bool = False, authorization: str = Hea
                                         dry_run=(not send))
 
 
-# ══ DAILY INCENTIVE — what a day's declared categories pay (mig 1070) ══════════════════════════════
+# ══ DAILY INCENTIVE — what a day's declared categories pay (mig 1071) ══════════════════════════════
 # Owner 2026-10-10: "when you add a category it should be available in teh cincentive payout plan to
 # be assesed to be paid out … i dont wnat them to be hard coded it should be a design effect".
 #
@@ -47170,7 +47170,7 @@ _INCENTIVE_ASSIGN_TABLE = "incentive_rule_assignment"
 
 
 def _incentive_rules(client, org_id, *, active_only=True):
-    """The tenant's rules with their assignments nested. [] before mig 1070, so every caller degrades
+    """The tenant's rules with their assignments nested. [] before mig 1071, so every caller degrades
     to "this tenant pays no daily incentive" instead of failing."""
     try:
         q = (client.schema("commcalc").table(_INCENTIVE_RULE_TABLE).select("*")
@@ -47294,7 +47294,7 @@ def save_incentive_rule(body: SaveIncentiveRuleIn, org_id: str = ORG_ID,
         saved = r.data[0] if r.data else row
     except Exception as e:
         raise HTTPException(400, f"Could not save — run migration "
-                                 f"1070_declared_metric_catalog.sql first. [{e}]")
+                                 f"1071_declared_metric_catalog.sql first. [{e}]")
     if body.assignments is not None and saved.get("id"):
         try:
             (client.schema("commcalc").table(_INCENTIVE_ASSIGN_TABLE).delete()

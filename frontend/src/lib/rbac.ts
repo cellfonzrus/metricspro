@@ -744,7 +744,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/management-incentive', label: 'Management Incentives', icon: '🏆', module: 'commissions', scopes: ['all'], tileOnly: true },
-    // Daily incentive on the categories this business declares (mig 1070, index §72). Every rule is a
+    // Daily incentive on the categories this business declares (mig 1071, index §73). Every rule is a
     // config row; the categories come from the closing metric catalog, never a list kept in the page.
     { href: '/commcalc/incentive-rules', label: 'Daily Incentive Rules', icon: '🎯', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/plan-installments', label: 'Multi‑Month Installments', icon: '🗓️', module: 'commissions', scopes: ['all'], tileOnly: true },
