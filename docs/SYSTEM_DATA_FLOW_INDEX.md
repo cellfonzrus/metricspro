@@ -23664,7 +23664,7 @@ Registers **no table, no endpoint, no metric and no report** — so §16 (by TAB
 and §18 (by METRIC/KPI) carry nothing for it, and a row invented in any of them would be noise in the
 cross-reference people rely on. What it registers is a CI gate and a lock:
 
-- `.github/workflows/carrier-vocab-guard.yml` → job `frontend-typecheck`; the `harness_frontend_typecheck_lock.py` step in the `carrier-vocab-guard` job; `frontend/**` on both path filters.
+- `.github/workflows/carrier-vocab-guard.yml` → job `frontend-typecheck`, which runs BOTH the lock and `npm run typecheck`; `frontend/**` on both the `pull_request` and `push` path filters.
 - `frontend/package.json` → the `typecheck` script (the one home).
 - `backend/harness_frontend_typecheck_lock.py` → the lock (33 checks).
 - Ratchet precedents read and deliberately NOT copied: §19.25 / `harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt` (§74.2 says why).
@@ -23674,7 +23674,9 @@ cross-reference people rely on. What it registers is a CI gate and a lock:
 **Section number:** written as `72`, and it is **74**. `#435` (Cash Variance, mig 1070) merged while
 this PR was open and took `72`; `#437` had already taken `73`. Renumbered here rather than renumbering
 theirs — the later arrival moves. Same race as §62 and §70 record. Nothing outside this section
-depended on the number except the two workflow comments and the lock's step name, which moved with it.
+depended on the number except four §-references in `carrier-vocab-guard.yml`, which moved with it.
+Renumbering file-wide also rewrote #435's OWN `index §72` reference in its cash-variance step name;
+that was caught by diffing the workflow against `origin/main` and restored.
 
 ## 72. A VARIANCE BETWEEN TWO CASH FIGURES IS MEANINGLESS UNLESS BOTH COUNT THE SAME CASH (owner ask 2026-10-10)
 
