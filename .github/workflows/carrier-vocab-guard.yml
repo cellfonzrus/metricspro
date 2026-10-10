@@ -688,7 +688,7 @@ on:
       - "backend/harness_gp_store_identity.py"
       - "backend/app/modules/account/store_identity.py"
       - "database/migrations/1066_commission_leg_rollup_store_address.sql"
-      # index §72 — THE FRONTEND TYPE CHECK. `frontend/src/**` above covers the pages, but a type
+      # index §74 — THE FRONTEND TYPE CHECK. `frontend/src/**` above covers the pages, but a type
       # error is just as easily introduced by tsconfig.json (strictness), package.json /
       # package-lock.json (a @types bump), next-env.d.ts or a .ts file at the frontend ROOT
       # (next.config.ts, site-routing.ts) — none of which that glob matches. A gate that skips
@@ -700,7 +700,7 @@ on:
     branches: [main]
     paths:
       - "frontend/src/**"
-      # index §72 — the frontend type check; same reason as the pull_request filter above.
+      # index §74 — the frontend type check; same reason as the pull_request filter above.
       - "frontend/**"
       - "backend/harness_frontend_typecheck_lock.py"
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
@@ -908,6 +908,9 @@ jobs:
       - name: Run the cash-count correction lock (every writer of a management cash count appends to ONE append-only trail; nothing updates or deletes a revision — index §73)
         working-directory: backend
         run: python3 harness_cash_count_revision.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the cash-variance lock (a cash figure carries its basis; compare REFUSES across bases — replays the six live store-days whose "shortage" was the bill-pay cash to the cent; the $5 band is config, never code — index §72)
+        working-directory: backend
+        run: python3 harness_cash_variance.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
         working-directory: backend
         run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1120,7 +1123,7 @@ jobs:
         working-directory: frontend
         run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # THE FRONTEND TYPE CHECK (index §72, owner directive 2026-10-10: "fix the frontend type error").
+  # THE FRONTEND TYPE CHECK (index §74, owner directive 2026-10-10: "fix the frontend type error").
   # Nothing in this repo ran `tsc` as a gate. A `SCREENS` key outside the closed `ScreenKey` union in
   # components/ScreenLink.tsx made the compiler red, all 49 checks on PR #432 stayed green on every
   # head, the Vercel deploy was RED on every one of them — and Vercel is not a required check, so its
@@ -1154,7 +1157,7 @@ jobs:
       # at all (§19.25 — a gate that does not run is not a gate). It is stdlib-only and needs no
       # node_modules, so it runs BEFORE the install: its verdict is reported even when tsc itself is
       # what goes red.
-      - name: "Run the frontend type-check gate lock (index §72): the gate has ONE home, a workflow runs it with node_modules installed, its path filter covers frontend/**, and strictness / ignoreBuildErrors / blanket @ts-ignore cannot be used to reach green"
+      - name: "Run the frontend type-check gate lock (index §74): the gate has ONE home, a workflow runs it with node_modules installed, its path filter covers frontend/**, and strictness / ignoreBuildErrors / blanket @ts-ignore cannot be used to reach green"
         working-directory: backend
         run: python3 harness_frontend_typecheck_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Install the frontend's dependencies
