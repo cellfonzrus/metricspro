@@ -196,7 +196,7 @@ export const VOCABULARY: readonly VocabGroup[] = [
     note: 'Retention Analysis, Watchdog port-outs and churn.' },
   { terms: ['financing', 'finance plan', 'instalment', 'instalments', 'installment',
             'installments', 'credit', 'lease', 'leasing'],
-    note: 'Financing, Multi-Month Installments, Insurance & Leases, Asset Lending (PayGo).' },
+    note: 'Financing, Multi-Month Installments, Insurance & Leases, device lending.' },
 
   // ── keeping the place honest ───────────────────────────────────────────────────────────────────
   { terms: ['flag', 'flags', 'alert', 'alerts', 'exception', 'exceptions', 'finding', 'findings',
@@ -266,7 +266,7 @@ export const VOCABULARY: readonly VocabGroup[] = [
   { terms: ['royalty', 'royalties', 'franchise fee', 'franchise'],
     note: 'Royalty Report, Royalty vs Daily Sales.' },
   { terms: ['asset', 'assets', 'ledger', 'book value', 'depreciation', 'capital'],
-    note: 'Asset Ledger, Assets Dashboard, Balance Sheet, Inventory Values.' },
+    note: 'Assets Dashboard, Balance Sheet, Inventory Values, and the book of owned stock.' },
   { terms: ['event', 'events', 'promotion day', 'roadshow', 'pop up', 'popup', 'campaign',
             'campaigns', 'marketing'],
     note: 'Plan an Event, Events Dashboard, Sales from Events, Marketing Settings.' },

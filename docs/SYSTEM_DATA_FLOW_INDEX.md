@@ -20389,9 +20389,9 @@ first, with `[^:]` so `https://` survives, and say why.
 
 ### 54.9 Status
 
-Code complete and proved: **389 checks** across five Node, dependency-free proofs
+Code complete and proved: **392 checks** across five Node, dependency-free proofs
 (`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 94, `prove_route_index.mjs` 59,
-`prove_search_console_lock.mjs` 61, `prove_search_vocabulary.mjs` 61 — **§68** added the fifth and
+`prove_search_console_lock.mjs` 61, `prove_search_vocabulary.mjs` 64 — **§68** added the fifth and
 the ranker's one allowed import), run by the `search-console` job in
 `.github/workflows/data-qa-guard.yml`. No migration. The entity half of the catalogue appears as soon
 as the two endpoints answer; the assistant half is live wherever `GET /core/data-qa/status` returns
@@ -22863,6 +22863,14 @@ to find something, which is exactly what the check is for.
   ranker holds no registry; the proof can drive it under bare Node). It now names them.
 - **§E, the RATCHET**: a frozen `FINDS_NOTHING_BASELINE` of everyday words that still find nothing.
   It is **1 word** and **may only shrink** — raising it means changing the number on purpose.
+- **The DERIVED carrier guard owns RULE TWO here, and a hand-written echo proved weaker.** §G5 was a
+  local list of the obvious carrier and product names and it passed, while
+  `harness_carrier_vocab_guard.py` — which DERIVES the vocabulary from the seed migrations and scans
+  every `frontend/src/**/*.ts` — found two carrier-side page names (`PayGo`, `Asset Ledger`) in group
+  **notes**, because the local check read only the TERMS. The notes are reworded, §G5b now scans the
+  whole file including prose, and §G5c pins the file inside the derived guard's reach so the real
+  check cannot stop covering it. The lesson generalises: a second copy of a derived fact is not a
+  check, it is a thing that agrees until it matters.
 
 ### 68.6 One shared loader, because three proofs needed the same dance
 
@@ -22905,10 +22913,12 @@ reachable that a viewer could not already open (the gate is untouched), and no s
 
 ### 68.9 Status
 
-Code complete and proved: **389 checks** across five Node, dependency-free proofs
+Code complete and proved: **392 checks** across five Node, dependency-free proofs
 (`prove_search_rank.mjs` 114, `prove_search_catalog.mjs` 94, `prove_route_index.mjs` 59,
-`prove_search_console_lock.mjs` 61, `prove_search_vocabulary.mjs` 61), run by the `search-console`
-job in `.github/workflows/data-qa-guard.yml`. **No migration, no endpoint, no money moved** — this is
+`prove_search_console_lock.mjs` 61, `prove_search_vocabulary.mjs` 64), run by the `search-console`
+job in `.github/workflows/data-qa-guard.yml`, plus `harness_carrier_vocab_guard.py` (104 checks,
+green under CI's Python 3.11) which owns the RULE TWO verdict on this file. **No migration, no
+endpoint, no money moved** — this is
 frontend ranking only. Nothing is switched on or off: the two existing search boxes (⌘K and ⌘/) both
 dereference the ranker, so both gain the vocabulary on deploy.
 

@@ -270,13 +270,39 @@ ck('G4  unmappedReason() answers for a registered word and not for others',
 // RULE TWO: behaviour is per-org config, and no carrier / tenant / product name belongs in code.
 // The names are read from the platform's OWN carrier vocabulary rather than typed here, so this
 // check cannot go stale against a tenant list it does not know about.
+// RULE TWO. The AUTHORITATIVE check is backend/harness_carrier_vocab_guard.py, which DERIVES the
+// carrier and product vocabulary from the seed migrations and scans every frontend/src/**/*.ts —
+// this file included. The list below is a cheap local echo of the obvious names, kept only so this
+// proof fails fast on an obvious slip, and it must never be mistaken for the derived one: it is a
+// hand-written second copy, and it was WEAKER. On the first push of §68 it passed while the derived
+// guard found two carrier-side page names ("PayGo", "Asset Ledger") in group NOTES — because this
+// check read only the TERMS. Hence G5b: the whole FILE is scanned, prose included, and G5c pins the
+// file inside the derived guard's reach so the real check can never stop covering it.
 const FORBIDDEN = ['boost', 'total wireless', 'luxelink', 'cellfonz', 'vzone', 'ny logistics',
                    'metro', 'tmobile', 't mobile', 'verizon', 'att', 'at t', 'cricket',
-                   'iphone', 'samsung', 'motorola', 'moto', 'apple', 'android', 'byod']
+                   'iphone', 'samsung', 'motorola', 'moto', 'apple', 'android', 'byod',
+                   'paygo', 'asset ledger']
 ck('G5  RULE TWO — no carrier, tenant or product name is a vocabulary term',
    ALLTERMS.every(t => !FORBIDDEN.includes(t)),
    ALLTERMS.filter(t => FORBIDDEN.includes(t)))
+const VOCABPROSE = rd('src/lib/search-vocabulary.ts').toLowerCase()
+ck('G5b RULE TWO reaches the group NOTES too, not just the terms (the gap that shipped red CI)',
+   !FORBIDDEN.some(f => f.includes(' ') && VOCABPROSE.includes(f)),
+   FORBIDDEN.filter(f => f.includes(' ') && VOCABPROSE.includes(f)))
+ck('G5c the DERIVED guard reaches this file — it scans frontend/src/**/*.ts, so it owns the verdict',
+   (() => {
+     // Read defensively and REPORT, never throw: if the derived guard is moved or renamed, that is a
+     // finding worth a named failure rather than an ENOENT stack trace.
+     try { return /frontend\/src\/\*\*/.test(
+       readFileSync(join(HERE, '../backend/harness_carrier_vocab_guard.py'), 'utf8').slice(0, 4000)) }
+     catch (e) { return `cannot read backend/harness_carrier_vocab_guard.py — has it moved? ${e.code}` }
+   })() === true,
+   (() => { try { readFileSync(join(HERE, '../backend/harness_carrier_vocab_guard.py'), 'utf8'); return 'pattern not found in its header' }
+            catch (e) { return `backend/harness_carrier_vocab_guard.py unreadable (${e.code})` } })())
 ck('G6  ARMED — the RULE TWO scan is not vacuous', FORBIDDEN.some(f => f === 'boost'))
+ck('G6b ARMED — G5b would catch a carrier-side page name put back into a note',
+   FORBIDDEN.some(f => f.includes(' ') &&
+     `  { terms: ['x'], note: 'Asset Ledger, Balance Sheet.' },`.toLowerCase().includes(f)))
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 section('H. the wiring cannot un-wire')
