@@ -171,7 +171,7 @@ def resolve_device_cost_basis(org_basis, carrier_preset_basis=None, legacy_cogs_
     }
 
 
-# ── WHICH STORE CARRIES A HANDSET'S COST (owner directive 2026-10-10, index §69) ─────────────────
+# ── WHICH STORE CARRIES A HANDSET'S COST (owner directive 2026-10-10, index §70) ─────────────────
 # OWNER, on the decision card: *"Move the cost"* — move device cost to the store the carrier paid,
 # for the proven transfers.
 #
@@ -444,7 +444,7 @@ def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store, activation=
     are already booked on `vip_fees` by `coa` and are not device cost.
 
     WHICH store a unit's cost lands on is NOT decided here: every unit goes through `cost_store`
-    (§69), the one home, with `activation` carrying §65's per-device verdict. Undeclared, that
+    (§70), the one home, with `activation` carrying §65's per-device verdict. Undeclared, that
     returns the ledger's own store for every unit and this function is byte-identical. `moved` counts
     what changed hands and `withheld` what stayed put unmeasured, both reported on `meta` so a
     restated store figure is never silent.
@@ -519,9 +519,9 @@ def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,
       'auto'         → invoice-first; caller falls back to POS only if no invoice source answered.
       'invoice'      → invoice only; caller NEVER books POS cost (correct where POS cost is negative).
 
-    `period` is the period SPELLING, needed only to ask §65 where each device was activated (§69).
+    `period` is the period SPELLING, needed only to ask §65 where each device was activated (§70).
     None means no activation index is read and every cost books to the distributor ledger's store —
-    the pre-§69 behaviour.
+    the pre-§70 behaviour.
 
     NEVER RAISES. Any failure degrades to active=False, i.e. exactly the pre-621 POS behaviour, with
     the reason recorded in `meta` so a silent $0 is never mistaken for a real zero.
@@ -532,7 +532,7 @@ def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,
         out["meta"]["skipped"] = "mode=%s (POS recognition)" % mode
         return out
 
-    # WHERE each device was activated, read ONCE for the period through the one home (§69). On the
+    # WHERE each device was activated, read ONCE for the period through the one home (§70). On the
     # undeclared default this is a cheap no-op that moves nothing; the expensive reconciliation runs
     # only for an org that has declared the activating basis.
     _act = {"move": False}

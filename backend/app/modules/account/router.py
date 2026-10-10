@@ -335,7 +335,7 @@ def _device_cost_basis_config(client, org_id):
                     "double_book_risk": resolved["double_book_risk"]})
     except Exception as e:
         out["note"] = f"unavailable: {type(e).__name__}"
-    # mig 1069 — WHICH STORE carries a handset's cost (§69). A second, independent declaration on
+    # mig 1069 — WHICH STORE carries a handset's cost (§70). A second, independent declaration on
     # the same screen: the basis above says WHAT a handset costs, this says WHOSE cost it is. Both
     # read their one home; this endpoint has no opinion of its own.
     try:
@@ -560,7 +560,7 @@ def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
                 raise HTTPException(400, "device_cost_basis must be one of: "
                                          + ", ".join(_dccfg.DEVICE_COST_BASES))
             row["device_cost_basis"] = b
-    # mig 1069 — WHICH STORE CARRIES THE COST (§69). Declaring 'activating' makes a handset's cost
+    # mig 1069 — WHICH STORE CARRIES THE COST (§70). Declaring 'activating' makes a handset's cost
     # follow the store the CARRIER PAID, for the devices §65's per-device reconciliation PROVED were
     # activated elsewhere; everything it could not measure stays on the distributor ledger's store
     # and is reported. MONEY-TOUCHING and PER-STORE: the company total does not move (every dollar

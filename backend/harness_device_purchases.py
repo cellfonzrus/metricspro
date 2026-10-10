@@ -397,7 +397,7 @@ check("B3 …and the only account-module file this work touches at all, besides 
                     # core.column_tolerant.read_row instead of a column block; no booking function
                     # changed (harness_any_columns.py pins each reader's values byte-identical when
                     # every column exists). coa.py's change is the sanctioned wages_by_store (B2b).
-                    # RE-BASELINED 2026-10-10 (index §69, owner: "Move the cost"). WHICH STORE
+                    # RE-BASELINED 2026-10-10 (index §70, owner: "Move the cost"). WHICH STORE
                     # carries a handset's cost moves to the store the carrier PAID. That touches
                     # `device_cogs.py` (the cost home: the declaration, its resolver, and
                     # `cost_store` — the one placement), `store_identity.py` (the identity home

@@ -1,4 +1,4 @@
--- 1069_device_cost_store_basis.sql — WHICH STORE CARRIES A HANDSET'S COST (owner 2026-10-10, §69)
+-- 1069_device_cost_store_basis.sql — WHICH STORE CARRIES A HANDSET'S COST (owner 2026-10-10, §70)
 --
 -- Owner, on the decision card: "Move the cost" — move device cost to the store the carrier paid,
 -- for the devices the per-device reconciliation PROVED were activated elsewhere.
@@ -53,7 +53,7 @@
 --                            'activating'  the store the carrier paid, for the proven devices.
 --                            NULL          NOT DECLARED (the default this migration installs for
 --                                          every org): resolves to 'stocking', which is
---                                          byte-identical to every figure produced before §69.
+--                                          byte-identical to every figure produced before §70.
 --
 -- INERT BY CONSTRUCTION. This migration adds a nullable column and NOTHING else. It books no money,
 -- restates no period and sets no org's basis. Declaring 'activating' is a SEPARATE, owner-approved

@@ -91,6 +91,8 @@ Primary code homes:
 | 64 | **Store identity — a leading address token is not one** | "Why is the Gross Profit report below the P&L, where did a store's whole carrier income go, why does a relocated store show no commission, why does a store with sales raise 'no payment received' every month, and why did one store's residual vanish when two codes share one address? Which ONE thing answers 'which store is this string'?" |
 | 65 | **Equipment reimbursement per device (claimed, cost, charged in store, and WHO was paid)** | “The equipment rebate on this store’s P&L is thousands below the equipment reimbursement — which devices account for it? Per device: what did the distributor claim, what did the handset cost, what did the store charge for it, who sold it, and did the carrier actually pay — at THIS store or at another one? Why is ‘the carrier paid a different store’ never reported as ‘we were never paid’, and why is a device on a short-statement month not measured instead?” |
 | 66 | **A fallback-basis component is a placement of last resort** | "Why does the Gross Profit report show one declared pay type in the Comp Rebate column on one feed and the Comp MDF column on the other? When may a keyword guess override the org’s own declaration (never), and what should a report do with a dollar whose component was a guess — decline it, or name a column for it?" |
+| 67 | **Bank deposit is a step, not a form on a report** | "Where does a bank deposit get recorded, and can a sealed envelope be opened at the store that found it?" |
+| 69 | **A declaration must be HONOURABLE — the vocabulary has to be able to express it** | "My own declaration says this carrier money is MDF, so why is it booking on the device reimbursement line? When the platform cannot express the category I declared, who decides where the dollar goes — me or a keyword rule? And which months need a P&L recompute once it is fixed?" |
 
 ---
 
@@ -6240,7 +6242,7 @@ rendering the resolved name.
 
 ## 16. Cross-reference: by TABLE
 
-- `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§69).
+- `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§70).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `storeops.alert_recipient` — THE notification list for every alert scope (mig 089). Store-visit scopes `store_visit_todo` / `store_visit_accessories` are VALUES here, not a second table (§47.16).
 - `commcalc.purchase_order.store_visit_id` — the visit whose accessory list raised this draft (`source='store_visit'`); unique where present, so one visit raises one draft (§47.16, mig 1047).
@@ -6251,9 +6253,9 @@ rendering the resolved name.
 | `commcalc.flags` · `flag_type='DEVICE_REIMB_CLAIMED_NOT_PAID'` / `'DEVICE_REIMB_NOT_MEASURED'` | `commcalc/router.device_reimbursement_recon_sync_flags` → `device_reimb_recon.recon_flags`, written through the ADDITIVE `flag_persist.sync` (mig 287) at **store_period** grain, keyed `source_ref = '<YYYY-MM>|<store>'` so a re-read refreshes the one row instead of accumulating | the existing all-flags board (`GET /commcalc/flags/{period}`, the "All Flags" tile, mig `1002`) and the Management Watchdog areas `distributor` / `feed`. Registered in `flag_registry` — §19.53 |
 | `commcalc.flags` · `flag_type='sales_basis_not_loaded'` | `sales_recon.sync_recon_flags` via `_persist` — **grain `period`** (the first type at that grain), keyed `source_ref = plabel` so re-running replaces the one row instead of accumulating, and retired by the same additive `flag_persist` path the per-transaction findings use | ONE condition for a closed month whose month-end archive never arrived — it REPLACED 11,233 September + 3,001 October per-transaction criticals. Registered in `flag_registry`, severity HIGH — §19.52 |
 | `commcalc.month_focus` (mig `1065`) — **the month's DECLARED focus**: the headline, the pay type named as driving its spiffs, the temporary spiffs on the table (status `proposed`/`approved`/`live`/`ended`) and the weekly check-ins done. One row per (org, period), `declaration jsonb`. A DECLARATION, never a pay table — nothing is paid from it, and `commcalc.payout_config` stays the only money. Plus `commcalc.commission_org_config.focus_declaration_days` / `focus_checkin_weekday` — the two policy knobs, NULL ⇒ the house defaults (7 days, Monday) | `PUT /commcalc/month-focus/{period}` and `POST …/checkin` — the only writers; the shape is `month_focus.normalise_declaration`'s | `router._month_focus_payload` → `month_focus.outstanding` / `spiff_reconciliation` / `plays`, read by the page, the platform banner and the login attention provider `commcalc_month_focus` — §62 |
-| `commcalc.payment_categories` — **the org's OWN declaration** of what each carrier payment type IS. Read through the §57 one home `commcalc/payment_category.load_map`, whose own lock (`harness_payment_category_home_lock.py`) owns the EXACT reader inventory. §58's component ruling dereferences it and keeps no copy of the read or the folding rule; §66 adds that a declaration this org's component map cannot honour is NEVER overridden by the keyword ladder when a column is chosen | the setup/CRUD screens in `commcalc/router.py` | `carrier_dollar_class.load_declarations` (itself §57's `payment_category.load_map`, dereferenced) ← `account/coa.py` (the P&L carrier block), `commcalc/gp_report.py` + `router._compute_gp` (the GROSS PROFIT columns, §58.7) and `commcalc/router.py::_recon_payment_bucketer`; `pay_data_quality.reconcile_pay_feed` is HANDED the map (§19.48, §57, §58) |
+| `commcalc.payment_categories` — **the org's OWN declaration** of what each carrier payment type IS. Read through the §57 one home `commcalc/payment_category.load_map`, whose own lock (`harness_payment_category_home_lock.py`) owns the EXACT reader inventory. §58's component ruling dereferences it and keeps no copy of the read or the folding rule; §66 adds that a declaration this org's component map cannot honour is NEVER overridden by the keyword ladder when a column is chosen; §69 adds that such a declaration is a HOLE IN THE VOCABULARY — every category `pay_data_quality.PLACEABLE_CATEGORIES` names must be expressible as a component, so the declaration places the dollar on the P&L too and `basis` reads `declared` | the setup/CRUD screens in `commcalc/router.py` | `carrier_dollar_class.load_declarations` (itself §57's `payment_category.load_map`, dereferenced) ← `account/coa.py` (the P&L carrier block), `commcalc/gp_report.py` + `router._compute_gp` (the GROSS PROFIT columns, §58.7) and `commcalc/router.py::_recon_payment_bucketer`; `pay_data_quality.reconcile_pay_feed` is HANDED the map (§19.48, §57, §58) |
 | `commcalc.carrier_category_map` — the platform's generic keyword LADDER. Since §58 it is the FALLBACK for an undeclared payment type only, never an override of the org's declaration | carrier onboarding (rows, not code) | `carrier_map.load_rules` / `classify`, reached only through `carrier_dollar_class.classify` (§58) |
-| `commcalc.commission_org_config.carrier_class_*` / `carrier_component_lines` / `pl_device_reimb_source` (mig `1062`, APPLIED 2026-10-08) / `carrier_gp_component_columns` + `carrier_gp_category_columns` (mig `1064`, **NOT applied** — which GROSS-PROFIT column each component and each GP-only declared category lands in, §58.7; the house defaults reproduce today's columns, so an unapplied 1064 is byte-identical) — per-org classification and routing: whether the declaration wins, the category→component map, the period-rename pattern and lookback, which P&L line each component books to, and whether the device-financing reimbursement line carries what the carrier PAID or what the distributor CLAIMED | the owner (config rows) | `carrier_dollar_class.load_config`, adaptive — a missing column degrades to the house default and is REPORTED (§58.2) |
+| `commcalc.commission_org_config.carrier_class_*` / `carrier_component_lines` / `pl_device_reimb_source` (mig `1062`, APPLIED 2026-10-08) / `carrier_gp_component_columns` + `carrier_gp_category_columns` (mig `1064`, **NOT applied** — which GROSS-PROFIT column each component and each GP-only declared category lands in, §58.7; the house defaults reproduce today's columns, so an unapplied 1064 is byte-identical) — per-org classification and routing: whether the declaration wins, the category→component map, the period-rename pattern and lookback, which P&L line each component books to, and whether the device-financing reimbursement line carries what the carrier PAID or what the distributor CLAIMED | the owner (config rows) | `carrier_dollar_class.load_config`, adaptive — a missing column degrades to the house default and is REPORTED (§58.2). **Since §69 `carrier_class_category_components` is what HONOURS a declaration the four-component vocabulary could not express**: mapping a category and routing its component are ONE config write, because mapping alone would book the money on the caller's generic line (house org 2026-10-10: `{"mdf": "MDF"}` + `{"MDF": "mdf_income"}` moves $260,500.00 off `vip_reimb`, Mar–Sep 2026 — surfaced as SQL, never applied by code) |
 | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount` / `termination_date` — EVERY writer passes `storeops/router.py::gate_pay_write` first (§19.44): `POST /storeops/employees`, `POST /storeops/employees/bulk`, `PATCH /storeops/employees/{id}` (+ `PATCH /hr/employees/{id}`), `POST /storeops/employees/bulk-payscale`, `POST /hr/employees`; `employee_id` is minted by the one `_ensure_employee_id` after EVERY insert, incl. the Roles path `core._ensure_employee` (§19.45) | the create / edit / upload handlers named | unchanged (§14 pay visibility) |
 | `storeops.payroll_change_log` (mig `414`) — ONE writer, `storeops/router.py::_log_payroll_change`; its `employee_id` / `employee_name` / `store_code` are built by `storeops/payroll_log_identity.resolve_log_identity` from the stored employee (§19.45); `DELETE /manual-hours/{mid}` no longer logs a repeat delete | 20 call sites (storeops router + `payroll_approval`) | `GET /storeops/payroll-change-log`; `payroll_actual_hours_detail` edit markers |
 | `storeops.payroll_change_log_id_backfill` (mig `1054`, **NOT applied**) — the exact rows mig 1054 filled (`log_id`, `org_id`, `filled_employee_id`, `source_employee_pk`), kept so the backfill reverts exactly | mig `1054` only | the mig's own `-- REVERT:` |
@@ -6490,8 +6492,8 @@ rendering the resolved name.
 - `GET /commcalc/spiff-impact?period=&spiff=&bands=&markets=` — ONE carrier pay type per store: its dollars and paid units, its share of the P&L line those dollars ACTUALLY book to (§58’s classification, so the figures tie to the P&L’s carrier lines by construction), the store’s net profit WITH it against WITHOUT it from the stored per-store snapshot (§4’s `analysis.pl_totals` via `statement_filter.store_snapshots`), and the paid units per 100 boxes ranked inside the store’s own §59 traffic band through `peer_comparison.with_extra_metric` — so “behind” keeps ONE definition. The pay-type dropdown is derived from the month’s own statement, never a list in code, and a report that chose its own subject SAYS so (`selection_basis`). READ-ONLY (§60).
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
-- `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§69) — one reconciliation, two readers, never two derivations.
-- `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1069): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§69).
+- `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§70) — one reconciliation, two readers, never two derivations.
+- `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1069): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§70).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
@@ -6500,6 +6502,7 @@ rendering the resolved name.
 | `GET /commcalc/device-reimbursement-recon?period=` — what ePay PAID vs what the distributor CLAIMS it reimbursed, per store per month: `carrier_paid`, `distributor_claimed`, `difference` + `direction` (`claimed_not_paid` / `paid_above_claim` / `agreed`), `verdict` (`measured` / `measured_floor` / `not_measured`) + `reason`, the claim's devices, the statement's missing days and its per-day run-rate, and `carrier_not_claimed_by_class`. READ-ONLY — books nothing, pays nobody, writes no flag. `POST /commcalc/device-reimbursement-recon/sync-flags` writes the findings to `commcalc.flags` through the additive merge | `router.device_reimbursement_recon` / `.device_reimbursement_recon_sync_flags` → `_device_reimb_recon_inputs` → `device_reimb_recon.carrier_side` / `.distributor_side` / `.reconcile` / `.recon_flags` | §19.53 |
 | `GET /commcalc/sales-recon` · `POST /commcalc/sales-recon/sync-flags` · `GET /commcalc/sales-derive-gap` — every payload now carries the comparability `verdict` (`comparable` / `archive_not_due` / `archive_not_loaded` / `no_feed` / `nothing_to_compare`), `archive_due`, `month_state` and the buckets the verdict allows; `sales-derive-gap`'s `is_closed_month` READS that verdict instead of string-comparing against `_ftp_current_period()` | `sales_recon.run_sales_recon` / `.sync_recon_flags` / `.derive_gap` → `comparability` → `feed_period.archive_due` | §19.52 |
 | `GET /account/pl` (and every statement/export reader of it) — the carrier block now classifies through ONE home, so the drill-down's Commission / SPIFF / Reimbursement / Residual labels are the org's own declaration where it made one. Two side entries ride alongside: `_carrier_class_coverage` (by component, by basis, the inferred dollars named with their twin, the undeclared dollars named per type, `reclassified_vs_keyword`, `balances`) and `_distributor_reimb_claim` (the distributor's claim per store, the carrier figure beside it, the difference, `status`) | `account/coa.py::build_inputs` → `commcalc/carrier_dollar_class.classify` / `.tally` / `.component_line` | §58 |
+| `GET /account/pl` — **the carrier drill-down's LABEL and the device-financing line are the home's facts, not this block's** (§69): the private four-entry component→label dict is gone (it would have shown the owner's DECLARED MDF money as "Undeclared") and the two spelled `"REIMBURSEMENT"` call sites now ask `device_reimb_line`. Once the org's config maps its MDF category, $260,500.00 books on `mdf_income` instead of `vip_reimb` (Mar–Sep 2026, house org) with revenue and net profit unmoved | `account/coa.py::build_inputs` → `carrier_dollar_class.component_label` / `.device_reimb_line` / `.DEVICE_FINANCING_COMPONENT` | §69 |
 | `GET /commcalc/carrier-recon` (ours side) — the payment-detail bucketer reads the org's declaration through the one home instead of keyword-matching the category string, so a declared reimbursement is no longer deferred to a comp-type guess (September 2026: $1,207.50 changes bucket) | `commcalc/router.py::_recon_payment_bucketer` / `_recon_cat_bucket` → `carrier_dollar_class.load_declarations` (itself §57's `payment_category.load_map`, dereferenced) / `.component_of_declared_category` | §58.1 |
 | `GET /commcalc/payout-schedule/preview` (`?period=`) — the RESIDUAL multi-month installment preview, READ-ONLY (`persist=False`). Since §19.51 its payload also carries `month_basis` (rows AND dollars per `activation_date` / `origin_period` / `window_edge`, plus `unanchored_rows` / `unanchored_amount`), `unresolved_schedule` (`subscribers`, `subscribers_with_no_carrier_id`, `by_carrier_id`), `totals.amount_no_rep` and `persisted` — and `note` is a real sentence instead of an unconditional `None` | `router.preview_payout_installments` `19762` → `installment_engine.compute_installments` | §7, §19.51 |
 | `POST /storeops/employees` · `POST /storeops/employees/bulk` · `POST /hr/employees` — pay fields pass the ONE pay-write gate: dropped and named in `pay_fields_ignored` for a caller who may not see pay (people still added), 403 for a non-manager sending pay; the StoreOps create echo is pay-stripped | `storeops/router.py::create_employee` / `bulk_create_employees` (now take `authorization`), `hr/router.py::hr_create_employee` → `gate_pay_write` | §19.44 |
@@ -6548,6 +6551,8 @@ rendering the resolved name.
 | `GET /gp/{period}` — **every money source is joined to its store through the ONE store-identity home** (owner directive 2026-10-09, *"chase trhew street number matching"*): the engine's private `street_num()` leading-token join is GONE, so a carrier address the roster spells differently (`116-36` vs `11636`) or a relocated store's feed spelling no longer drops its money out of the report. Live house Jul–Oct 2026 this moves **+$106,400.37** of revenue onto the stores that earned it (+$178.75 of rep pay in Oct) and no company total; unresolvable money rides on an explicit `store_unplaced` row with its reason, and the payload carries a `store_identity` evidence block (resolver, `stores_resolved`, `unplaced*`, `ambiguous_identities`) | `router._compute_gp` (now builds `coa.store_resolver` ALWAYS — it was gated `if ma_income`, i.e. ePay-less orgs only) → `gp_report.calc_gp_report` via `account/store_identity.store_key` / `store_identity_index` | §64 — lock `harness_store_identity_lock.py`, proof `harness_gp_store_identity.py` |
 | `GET /gp/{period}` — **the carrier COLUMNS classify through §58's one home** (owner report 2026-10-08, *"gross profit is still showing the old data m teh source of information should be the same"*): `comp_comm` / `comp_reimb` / `comp_mdf` and the new `comp_chb` / `comp_unmapped` are the org's own declaration, the same ruling the P&L books on — August 2026 restates Comp Comm 522,190.14 → 118,415.35 and Comp Rebate 802.50 → 404,577.29 on the same rows (the feed classifies 120,799.55 / 418,922.21 — the difference is the pre-existing store join, §58.5); `carrier_class_coverage` (by component, by basis, undeclared named per type, `balances`) rides on the payload. GROSS PROFIT ITSELF DOES NOT MOVE: the comp columns are not terms of `total_rev` or `net_profit` | `router._compute_gp` (resolves `payment_category.load_map` + `carrier_dollar_class.load_config` / `load_declarations` + `carrier_map.load_rules`) → `gp_report.calc_gp_report` → `carrier_dollar_class.gp_column_of_classification` (§66 — the WHOLE classification, `basis` included: a component reached on a fallback basis never overrides the org's own declared category, which is what put $260,500.00 of one declared category in `comp_reimb` on this feed and `mdf` on the pay feed, Mar–Sep 2026) | §58.7 + §66 — locks `harness_gp_carrier_class_dereference.py`, `harness_component_basis_evidence.py` |
 | `GET /commcalc/commission-leg-trend` / `GET /commcalc/commission-received-breakout` — **the store index and the row keys are canonical store identity, not a street-number token** (§64). `_leg_store_index` used to be keyed by the leading token "the SAME street-number join gp_report uses" and inherited exactly that loss, so the store/market filter could not select those rows. Both now dereference `account/store_identity`; the primary read, mig 274's `commission_leg_label_rollup`, is superseded by **mig `1066`** so SQL no longer decides identity — and the resolver places a bare token too, so merged-without-applied still works | `router._leg_store_index` (returns `resolve`) + `_store_identity.store_key` on every row | §64 |
+| `GET /commcalc/carrier-category-options` — serves `components` (the canonical component vocabulary) alongside `categories` and `subtypes`, so the Carrier Mapping screen has ONE source for the kinds of money it offers instead of an array of its own. ADDITIVE; an existing caller that ignores the key is unaffected | `router.carrier_category_options` → `carrier_map.COMPONENTS` | §69 |
+| `GET /commcalc/device-line-reimbursement` — **unchanged output, on a re-founded fact** (§69): "which components ARE the device-financing side" was inferred from "everything this org routed off the generic commission line", which held only while exactly one component was routed. It now asks the home. Measured: identical today, and it is what keeps $91,000.00 a month of per-store lump sums OUT of a per-device report once a second component is routed | `router._device_line_reimb_run` → `carrier_dollar_class.device_reimb_components` | §69 |
 | `GET /commcalc/commission-leg-trend` and `GET /commcalc/commission-received-breakout` — **the Comprehensive-Comp series is the org's declaration, not a keyword guess**. `router._leg_comp_is_commission` was a self-declared COPY of `gp_report`'s rule (*"IDENTICAL to gp_report's"*, its own docstring); both endpoints now resolve the §58 posture once per request and ask the home, so the trend explains exactly the money the GP column shows. Declared reimbursement leaves the comp commission series — August 2026: $418,922.21 — and the ePay side's `!= 'Commission'` compare is the home's ruling on the declared category | `router._leg_carrier_class` → `_leg_comp_commission_predicate` / `_leg_pay_commission_predicate` → `carrier_dollar_class.gp_column_of_classification` (§66) / `.gp_column_of_declared_category`; the two per-month fallbacks read `payment_categories` through §57 instead of privately | §58.7 + §66 |
 | `GET /gp/{period}` — **the month-of-life COLUMNS** (owner report 2026-09-21): every store row carries `comm_ladder` `{rung: $}` plus flat `comm_month_<n>` / `comm_month_unlabelled` companions, `totals.comm_ladder` is summed rung by rung, and `commission_legs` carries `ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` — the COLUMN LIST from the data, never a hardcoded 6 or 12 | `router._compute_gp` → `gp_report.calc_gp_report` → `commission_legs.months_present` / `ladder_to_public` (the one home) | §4a.2 — rendered by the GP page's 📅 Months toggle and its 'Commission by month-of-life' card (EARNED sheet above RECEIVED cash, booked basis marked); both exports follow the visible columns (WYSIWYG) and a 'Commission by month-of-life' sheet always ships. Locked by `harness_ma_month_columns.py` + CHECK 2c |
 | `DELETE /commcalc/commission-plans/{plan_id}/assignments/{assignment_id}` — THE single-assignment remover: ONE `commission_plan_assignment` row of that plan and org, 404 otherwise; gated `'commission_plans'`; drops the config memo | `router.delete_commission_plan_assignment` → `_remove_plan_assignment` (`_require_commission_plans_edit`) | §6n |
@@ -6798,13 +6803,13 @@ rendering the resolved name.
 | **Given ONE company accessory sales goal, what target should each store carry?** Weighted by the store's own accessories-per-box over the last two months x the boxes it is projected to sell; a store that sold boxes and attached nothing is weighted at the COMPANY rate and flagged, never given a $0 target; an unselected store's target is RESERVED out of the goal rather than assumed away; the assignments foot to the goal by largest remainder | `commcalc.daily_sales_feed`/`raw_sales` via `router._fetch_actuals` (`acc_gp` = accessory revenue + device set-up fee; `box_count`) x `router._targets_trending_by_code` (the projection) x `commcalc.targets.accessories_monthly` (mig `006`, the target in force — read AND written) | ONE home `commcalc/accessory_target_plan.py` (`company_goal` / `basis_amounts` / `company_rate` / `capacity_row` / `allocate` / `plan` / `assignment_payload`) → `GET /commcalc/accessory-target-plan/{period}` + its gated `/assign`; reads NO sale line and derives NO projection of its own (both AST-locked); module-graph fact `accessory_target_allocation`; lock `harness_accessory_target_plan.py` — §61. No new table: the suggestion is written into mig `006`'s own column, the row §5's Accessory Sales Targets tracker reads |
 | **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §62. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
 | **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; lock `harness_device_line_reimbursement.py` (89 checks) — §65. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 135 devices and $41,548.83 sit on one store's cost with another store's money |
-| **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1069) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §69. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
+| **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1069) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §70. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
 | **What did management declare for this month, and what does it still owe this week?** The focus in a manager's own words, the pay type named as driving the month's spiffs, the temporary spiffs on the table with a status, and the weekly check-ins done; the OUTSTANDING list is COMPUTED from the row + today + live measurements, so an item cannot outlive its cause, and an unmeasured count raises nothing rather than reading as a zero | `commcalc.month_focus` (mig `1065`, the declaration) x `commcalc.targets` (mig `006`, SAVED rows only — a seeded carry-forward is not an assigned target) x `commcalc.payout_config.custom_spiffs` (§6, READ ONLY — the money) x §59's bands / `lagging()` x §60's pay-type options and per-store units | ONE home `commcalc/month_focus.py` (`outstanding` / `spiff_reconciliation` / `plays` / `confirm_checkin` / `may_declare`) → `GET`/`PUT` `/commcalc/month-focus/{period}` + `/checkin`; TWO surfaces over the one due list (the login attention item and the platform banner), neither recomputing it; opens no client, reads no feed and sends on no channel (all AST-locked); module-graph fact `month_focus_declaration`; lock `harness_month_focus.py` — §63. Nothing is paid from the row: a declared spiff is an intent with a status, and the reconciliation reports declared-against-live in BOTH directions |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
 | **Which STORE does this money belong to?** — asked by the GP report, the commission-leg trend/breakout, the residual report, flags 7/8, the closing store-day match, the P&L's store grain and the MA account index. Answered by the org's OWN declared spellings; AMBIGUITY RESOLVES TO NOTHING and unplaceable money is reported on its own row, never dropped and never guessed | `commcalc.store_mapping` × `commcalc.store_aliases` (config rows; a new spelling is ONE alias row, never code) | ONE home `account/store_identity.py` (`build_store_resolver` / `store_key` / `store_identity_index` / `ambiguous_identities`) behind the I/O wrapper `coa.store_resolver`; lock `harness_store_identity_lock.py` (523 checks), proof `harness_gp_store_identity.py` (50) — §64. Measured live Jul–Oct 2026: the token join it replaced was dropping **$106,400.37** of house revenue out of the Gross Profit report |
-| **Is this carrier dollar a commission, a spiff, a residual or a reimbursement — and is that the ORG'S OWN declaration or a guess the platform made?** The basis is part of every answer: `declared` / `inferred_prior_year_twin` / `keyword_rule` / `declared_category_unmapped` / `unresolved`, each with its reason in words. An inference never passes as a declaration | `commcalc.payment_categories` (the declaration) × `commcalc.carrier_category_map` (the fallback ladder) × `commission_org_config.carrier_class_*` | ONE home `commcalc/carrier_dollar_class.py` (`classify` / `tally` / `component_line` for the P&L line, `gp_column_of_classification` / `gp_column_of_declared_category` for the GROSS-PROFIT column, and `component_is_evidence` — §66 — for "is this component evidence about the dollar, or a placement of last resort", which a per-device caller answers by DECLINING the dollar and a statement by NAMING a column for it), dereferenced by `account/coa.py`, `commcalc/gp_report.py` and `commcalc/router.py`; locks `harness_carrier_dollar_class.py` (88 checks, the owner's 103 Fulton figures armed as a negative control) and `harness_gp_carrier_class_dereference.py` (§58.7, the GP dereference and `harness_component_basis_evidence.py` (§66, the basis→reliability rule, its caller inventory and its one-copy check); module-graph fact `carrier_dollar_component` — §58. Measured live Mar–Oct 2026: **$2,784,846.76** booked as commission against the org's own declaration, $1,078,862.83 of the reclassification resting on an inference |
+| **Is this carrier dollar a commission, a spiff, a residual or a reimbursement — and is that the ORG'S OWN declaration or a guess the platform made?** The basis is part of every answer: `declared` / `inferred_prior_year_twin` / `keyword_rule` / `declared_category_unmapped` / `unresolved`, each with its reason in words. An inference never passes as a declaration | `commcalc.payment_categories` (the declaration) × `commcalc.carrier_category_map` (the fallback ladder) × `commission_org_config.carrier_class_*` | ONE home `commcalc/carrier_dollar_class.py` (`classify` / `tally` / `component_line` for the P&L line, `gp_column_of_classification` / `gp_column_of_declared_category` for the GROSS-PROFIT column, and `component_is_evidence` — §66 — for "is this component evidence about the dollar, or a placement of last resort", which a per-device caller answers by DECLINING the dollar and a statement by NAMING a column for it), dereferenced by `account/coa.py`, `commcalc/gp_report.py` and `commcalc/router.py`; locks `harness_carrier_dollar_class.py` (88 checks, the owner's 103 Fulton figures armed as a negative control) and `harness_gp_carrier_class_dereference.py` (§58.7, the GP dereference and `harness_component_basis_evidence.py` (§66, the basis→reliability rule, its caller inventory and its one-copy check); module-graph fact `carrier_dollar_component` — §58. Measured live Mar–Oct 2026: **$2,784,846.76** booked as commission against the org's own declaration, $1,078,862.83 of the reclassification resting on an inference. **§69: the declaration must be EXPRESSIBLE** — `carrier_map.COMPONENTS` covers every category `PLACEABLE_CATEGORIES` names, because a category it could not express left a keyword guess booking $260,500.00 of the house org's own declared MDF money on the device-financing reimbursement line; `component_label`, `device_reimb_line` and `device_reimb_components` are the same fact and live here too; lock `harness_declared_category_honourable.py` (74) |
 | **Did the carrier actually pay what the distributor claims it paid?** One payment, two sides: the carrier statement is the money, `asset_ledger.reimbursement` is a claim about it. The claim books NO revenue under `device_reimb_source='carrier_paid'` and is HELD, per store, with the difference named | `commcalc.raw_comp_report` (REIMBURSEMENT component) vs `commcalc.asset_ledger.reimbursement` | `account/coa.py` → `L["_distributor_reimb_claim"]` (`claim_total`, `carrier_paid_total`, `difference`, `status`). 103 Fulton Sept 2026: claimed $7,999.93 vs paid $7,583.96, gap $415.97. Reconciling the gap and flagging it is a SEPARATE mechanism — §58.3 |
 | **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |
 | **Who is a payroll change-log row about?** (employee number, name, store) | `storeops.employees.employee_id` / `name` / `home_store` of the STORED person (event store for shifts / punches) | `storeops/payroll_log_identity.resolve_log_identity`, called only by `_log_payroll_change`; lock `harness_payroll_log_identity_lock.py` (§19.45) |
@@ -22329,7 +22334,7 @@ the cost, and **$0.00** genuinely unpaid. It is not one store's problem.
 140 / $43,568.83, on a window and a basis this report no longer uses. The second said 112 /
 $35,383.88 proven plus 23 / $6,164.95 reported *not measured*, because §65.4's identity guard then
 withheld any pair touching an address two `store_mapping` records claim. That guard asked the wrong
-question and all 23 withholdings were false — §69.2 carries the defect and its proof. The owner asked
+question and all 23 withholdings were false — §70.2 carries the defect and its proof. The owner asked
 what those 23 devices were (2026-10-10), which is how it was found. None of 652's own figures ever
 moved: no pair of its four counterpart stores was involved.
 
@@ -22400,7 +22405,7 @@ contains no split, fold, lower-casing or street-number step of its own, and the 
   `store_identity.may_be_one_store`, and this module keeps no copy of it, not even a set-membership
   test. ALL, not ANY: one payment at an address that cannot be this store proves the transfer.
   **Live today: zero such pairs across the house org's 34 records, so nothing is withheld** — §K12 is
-  the control that the guard would still fire, and §69.2 carries the version of this guard that asked
+  the control that the guard would still fire, and §70.2 carries the version of this guard that asked
   the wrong question and withheld 23 true findings.
 
 ### 65.5 The lag window is SYMMETRIC, and that is measured
@@ -22582,7 +22587,7 @@ discrepancy.
 | `gp_report.py` payment-detail loop | `gp_column_of_declared_category` | unchanged — it already honoured the declaration |
 | `router._leg_comp_commission_predicate` (the commission-leg trend, the surface that EXPLAINS the GP column) | `_cdc_leg.gp_column(c['component'], …)` | `_cdc_leg.gp_column_of_classification(c, cfg)` — its verdict is unchanged ($0.00 moves: the dollar was not commission either way), but the trend and the column can no longer place one type two ways |
 | `router._leg_pay_commission_predicate` | `gp_column_of_declared_category` | unchanged |
-| `account/coa.py` + `router`'s carrier breakout — `component_line` | rules on the component | **EXCUSED, explicitly.** Whether a dollar declared to a category the component map cannot honour belongs on the reimbursement line or a line of its own is a CONFIG decision surfaced to the owner and UNANSWERED. Routing it here would move **$260,500.00** of booked P&L money unasked. The P&L books exactly what it booked before this change |
+| `account/coa.py` + `router`'s carrier breakout — `component_line` | rules on the component | **EXCUSED, explicitly.** Whether a dollar declared to a category the component map cannot honour belongs on the reimbursement line or a line of its own is a CONFIG decision surfaced to the owner and UNANSWERED. Routing it here would move **$260,500.00** of booked P&L money unasked. The P&L books exactly what it booked before this change . **ANSWERED in §69** (owner ruling 2026-10-10): the right answer was neither — the category was unhonourable, the vocabulary now expresses it, and the dollar is placed by the org's declaration with `basis='declared'`, so this site reads an EVIDENTIAL component rather than being excused from a fallback one |
 | `router._recon_cat_bucket` | `component_of_declared_category` | already correct: an unhonourable category returns `None` and the comp type decides |
 | `router.is_device_dollar` (§65, the per-device reimbursement recon) | its own `(BASIS_DECLARED_UNMAPPED, BASIS_UNRESOLVED)` tuple at the call site | `_cdc.component_is_evidence(c.get("basis"))` — the copy deleted, the policy (DECLINE, because the grain is one row per phone) kept where it belongs |
 
@@ -22793,13 +22798,232 @@ hand-over). **Screen added:** `/closing/bank-deposit`. **Migration:** `1067`.
 
 ---
 
-## 69. WHICH STORE CARRIES A HANDSET'S COST — the ledger stocks it, the carrier pays whoever sold it (owner directive 2026-10-10)
+## 69. A DECLARATION THE VOCABULARY CANNOT EXPRESS IS A HOLE IN THE VOCABULARY — the org's own word must be HONOURABLE, or a keyword guess stands in its place (owner ruling 2026-10-10)
+
+Owner, on a decision card and again in his own words the same day: **"mdf is not equipment
+ereimbursement- prepare and fix"**, and *"Its own MDF line"*. He approved the OUTCOME; the config
+write that moves the money is SURFACED, not applied (§69.6).
+
+§58 ruled that the org's own declaration beats the platform's keyword ladder. §66 ruled that a
+component reached on a fallback basis is not evidence about the dollar. Both are right, and both left
+the same hole open: **a declaration can only be HONOURED if the component vocabulary can express
+it.** It could not, so §58 fell through to the ladder, said so honestly in `basis`, and a platform
+guess kept booking the money.
+
+### 69.1 THE CLASS, NOT THE INSTANCE
+
+> **A DECLARATION THE PLATFORM'S VOCABULARY CANNOT EXPRESS IS A HOLE IN THE VOCABULARY, NOT A FACT
+> ABOUT THE DOLLAR — and while the hole is open, a keyword guess stands where the org's own word
+> already exists.**
+
+Measured live read-only, house org `00000000-0000-0000-0000-000000000001`, with the REAL functions
+and the LIVE config (not read off the code):
+
+    classify('Ramp Up Subsidy')            ->  component='REIMBURSEMENT',
+                                               basis='declared_category_unmapped',
+                                               declared=False, declared_category='MDF',
+                                               subtype='subsidy'
+    component_of_declared_category('MDF')  ->  None
+    component_line('REIMBURSEMENT', {'REIMBURSEMENT': 'vip_reimb'}, 'carrier_comm') -> 'vip_reimb'
+
+The org DOES declare that payment type into category `MDF` (`commcalc.payment_categories`, §57 — it
+and `4.0 $1K Ramp Up Bonus`, 0 live rows, are its only two MDF declarations). The pay engine's own
+`pay_data_quality.PLACEABLE_CATEGORIES` has listed `Commission`, `Re-imbursement`, `MDF` and
+`Chargeback` as the categories the platform can place **all along** — and the four-component
+vocabulary could express only two of them. So the money booked where a keyword rule for a subsidy
+word put it: **$260,500.00, 40 rows of `commcalc.raw_comp_report`, March–September 2026**
+($39,300.00/mo over 6 stores Mar–Jul, $32,000.00 over 5 in August and September, October 0.00 in that
+feed) on the device-financing reimbursement line — while the `mdf_income` COA line
+(`coa.py`: `("mdf_income", "MDF (market spiffs)", "revenue", "auto_opt", "store")`) got none of it.
+
+The same payments sit in `raw_payment_detail` at 44 rows / $287,500.00 (Mar–Oct). October's $27,000
+has not reached the comp feed — the known month-end lag, NOT a defect and not "fixed" here. The P&L
+reads `raw_comp_report`; `coa.py` never selects `raw_payment_detail`.
+
+### 69.2 THE MECHANISM CHOSEN, AND THE ONE REJECTED
+
+Two shapes could place the dollar on the MDF line. They are not equivalent, and the criterion is
+**which of them makes the org's DECLARATION the thing that places the dollar**:
+
+| shape | what places the dollar | `basis` | verdict |
+|---|---|---|---|
+| **CHOSEN — the vocabulary expresses the category.** `carrier_map.COMPONENTS` gains the kinds of money the platform's own routing maps can already name a destination for, so `carrier_class_category_components` can map the declared category to a component and `carrier_component_lines` routes that component to a line | the org's declaration, through the path that already exists | **`declared`** | ONE path: category → component → line |
+| REJECTED — a category→P&L-line map beside `component_line` | a second routing map | stays `declared_category_unmapped` — a FALLBACK | `component_line` already answers "which line does this money book to". A sibling keyed by category is two paths to one answer — the duplicate defect the index rules forbid — and they would drift the first time either was edited. It also leaves `basis` on a fallback, which §66's four callers correctly refuse to trust |
+
+So `COMPONENTS` is `("RESIDUAL", "COMMISSION", "SPIFF", "REIMBURSEMENT", "MDF", "CHARGEBACK")`, still
+spelled in exactly one place (`commcalc/carrier_map.py`) and dereferenced by §58's home. These are
+KINDS OF MONEY — platform vocabulary, like the Gross-Profit column keys `mdf` and `chb` that have
+been in the engine since §58.7. WHICH tenant category means which kind stays a config row
+(`carrier_class_category_components`), and where each kind books stays a config row
+(`carrier_component_lines`). RULE TWO is intact: no category, carrier or tenant name decides anything
+in a branch.
+
+**THE STRUCTURAL RULE THAT CLOSES THE CLASS**, locked so it cannot re-open: every Gross-Profit money
+column except the unclassified one must be REACHABLE from some component, and every component must
+HAVE a column. An unreachable column is a kind of money no org can declare into — which is exactly
+what forced a guess — and a component with no column would turn real money into "unclassified" by
+omission. Both halves fail the build (§69.5 §B5/§B6).
+
+### 69.3 WHAT ELSE IS THE SAME FACT, AND THEREFORE MOVED INTO THE HOME
+
+| fact | where it was | now |
+|---|---|---|
+| what a component is CALLED for a human | a private four-entry dict in the P&L carrier block (`_CC_LABEL`), defaulting to **"Undeclared"** | `carrier_dollar_class.COMPONENT_LABELS` / `component_label()`. The private dict would have rendered the owner's DECLARED MDF money under the word for money nobody declared. The existing wording is carried over unchanged, so the drill-down reads exactly as before |
+| which component IS the device-financing side, and which LINE it books to | spelled `"REIMBURSEMENT"` at three call sites (two in `coa.py`, one derivation in `router.py`) | `DEVICE_FINANCING_COMPONENT` / `device_reimb_line()` / `device_reimb_components()` |
+| the component vocabulary itself | a SECOND tuple in `commcalc/comp_trend.py` (`_COMPS`), which would have folded a new kind of money into its `UNMAPPED` bucket while the P&L booked it correctly | `carrier_map.COMPONENTS + ("UNMAPPED",)` — dereferenced; `UNMAPPED` is that report's own "no rule matched" bucket, not a component |
+| the vocabulary the Carrier Mapping SCREEN offers | a hardcoded array of four in `frontend/src/app/(platform)/commcalc/carrier-mapping/page.tsx` | **HALF-DONE, deliberately, and said so.** `GET /commcalc/carrier-category-options` now SERVES `components` (additive), so the page has a source to read; the page still reads its own array, and wiring it is a visible UI change that waits for the owner's eyeball under the house merge policy. Until then the lock pins that array as a strict SUBSET of the vocabulary, so it can never offer a kind of money the platform does not know. **Consequence, stated: the dropdown on that screen cannot yet pick the two new kinds of money.** It edits the KEYWORD LADDER — the fallback — so nothing in the owner's ruling depends on it; the declaration path is `payment_categories` plus the config write in §69.6 |
+
+**THE §65 SIBLING — a protection re-founded on the right fact, measured.** `router.is_device_dollar`
+decides what the per-DEVICE reimbursement report counts, and §66 had it decline a dollar whose
+component was reached on a fallback basis. Honouring the declaration makes this money's basis
+`declared`, so that guard correctly stops protecting it — and the layer's OTHER rule, "the device
+components are every component this org routed OFF the generic commission line", is an INFERENCE that
+held only while exactly one component was routed anywhere. Measured both ways over the live config:
+
+| `carrier_component_lines` | the pre-fix derivation | `device_reimb_components` |
+|---|---|---|
+| `{"REIMBURSEMENT": "vip_reimb"}` (live today) | `{REIMBURSEMENT}` | `{REIMBURSEMENT}` — identical, so nothing moves today |
+| `{"REIMBURSEMENT": "vip_reimb", "MDF": "mdf_income"}` (after the owner's write) | `{REIMBURSEMENT, MDF}` — **$91,000.00 a month of per-store lump sums back inside a per-device report** | `{REIMBURSEMENT}` |
+
+**So `GET /commcalc/device-line-reimbursement` does exactly what it did before, by design** — 140
+devices / $43,568.83 and the September figures of §65 are unchanged — and it does so because the
+question is now asked as it is meant ("which components book to the line the device-financing
+reimbursement books to") instead of inferred from what else happened to be routed. A ramp subsidy is
+a per-store lump sum with no device identifier; there is no phone for it to name.
+
+### 69.4 THE MONEY — per month, house org, same live rows, both sides in one pass
+
+Measured read-only over `commcalc.raw_comp_report` (78,053 rows for the org) with the REAL
+`classify` / `component_line` / `gp_column*` functions, the LIVE declarations (154 rows) and the LIVE
+keyword ladder (19 rules). The P&L side is what the owner's ruling moves; the Gross-Profit side is
+unchanged because §66 already placed this money by the declared category.
+
+| period | P&L `vip_reimb` before | after | P&L `mdf_income` before | after | moved | `carrier_comm` (unmoved) |
+|---|---|---|---|---|---|---|
+| March 2026 | 618,846.88 | 579,546.88 | 0.00 | 39,300.00 | 39,300.00 | 152,725.69 |
+| April 2026 | 446,491.33 | 407,191.33 | 0.00 | 39,300.00 | 39,300.00 | 131,948.58 |
+| May 2026 | 396,008.25 | 356,708.25 | 0.00 | 39,300.00 | 39,300.00 | 134,901.45 |
+| June 2026 | 467,685.90 | 428,385.90 | 0.00 | 39,300.00 | 39,300.00 | 118,886.90 |
+| July 2026 | 475,630.90 | 436,330.90 | 0.00 | 39,300.00 | 39,300.00 | 155,574.12 |
+| August 2026 | 418,922.21 | 386,922.21 | 0.00 | 32,000.00 | 32,000.00 | 120,799.55 |
+| September 2026 | 373,211.61 | 341,211.61 | 0.00 | 32,000.00 | 32,000.00 | 110,780.14 |
+| October 2026 | 77,685.42 | 77,685.42 | 0.00 | 0.00 | **0.00** | 30,112.05 |
+| **TOTAL** | **3,274,482.50** | **3,013,982.50** | **0.00** | **260,500.00** | **260,500.00** | **955,728.48** |
+
+Each month's "after" re-sums to its "before" to the cent — the arithmetic statement that this is a
+reclassification between two revenue lines and nothing else. **TOTAL REVENUE AND NET PROFIT DO NOT
+MOVE in any month**: both lines are revenue, so the company and store totals are identical and only
+the composition changes. October moves $0.00, which is the rows' own answer and not a blanket.
+
+**The Gross-Profit report does not move either, in any month**: `comp_reimb` / `comp_mdf` /
+`comp_comm` / `comp_chb` / `comp_unmapped` are byte-identical before and after on the comp side, and
+the payment-detail side likewise (it reached the `mdf` column through the declared category already —
+§66). Verified column-by-column over the same live rows. The MDF money's GP column is `mdf` both
+before and after; what changes is that it now gets there through its component, which is why the two
+can no longer disagree.
+
+**The other two tenants are untouched, provably**: `commcalc.payment_categories` holds 154 rows and
+every one of them belongs to the house org — the other two orgs declare NOTHING, so `classify` never
+reaches the declared path for them and every answer is byte-identical whatever the vocabulary can
+express. Neither has a `carrier_class_category_components` or `carrier_component_lines` row
+(both NULL live).
+
+### 69.5 THE LOCK
+
+**`backend/harness_declared_category_honourable.py` — 76 checks**, DB-free, network-free, stdlib
+only. **§A** THE REGRESSION: the live case as a fixture, the pre-fix answer (the keyword's component
+standing on a declaration) armed as a DEAD control, and the dollar moving off the reimbursement line
+onto the line the org named · **§B** the vocabulary IS the mechanism — one spelling, every PLACEABLE
+category expressible and honoured, every component with a GP column, every GP money column reachable
+from a component, `load_config` keeping a row that maps each kind (pre-fix it DROPPED the two it did
+not know), and **the rejected shape absent from the tree** (no category→line map beside
+`component_line`) · **§C** the whole CROSS-PRODUCT: for every placeable category and every contrary
+keyword verdict the declaration wins and `basis` is `declared`, the line follows the declaration, and
+the coverage report names the reclassification · **§D** declared money is never LABELLED undeclared
+· **§E** the §65 sibling: the pre-fix derivation kept live and asserted to get it WRONG · **§F** the
+measured restatement re-sums, and an org that declares nothing is byte-identical · **§G** THE
+UN-WIRING LOCK: the callers must keep asking the home, the pre-fix comprehension may not come back,
+the vocabulary / the labels / the device-side derivation may each exist in exactly ONE module, and
+the carrier recon's own last-mile map is pinned to DEFER for a component it has no column for, and
+the Carrier Mapping screen's own array of components is pinned as a strict SUBSET of the vocabulary ·
+**§H** purity, RULE TWO, the module graph and this section.
+
+Verified **RED** against the pre-fix tree, by checkout and run: **A3 A4 A6 A7 A8** (the declaration
+not honoured, and the dollar still on the reimbursement line), **B3 B4 B6 B7 B8** (the kind of money
+inexpressible, the GP column unreachable, and `load_config` DROPPING the org's own row), **C1 C2 C3
+C6 C7** (the keyword guess winning the cross-product, and the coverage report calling the money
+undeclared), and then the run DIES at **D1** — `component_label` does not exist pre-fix, which is the
+private dict in the P&L that would have labelled declared money "Undeclared". The fixtures are built
+through `load_config` over a stub row, deliberately: a hand-built config dict would sail past the
+very gate that rejected the org's declaration, and the A-section would have passed on the pre-fix
+tree. Wired into `.github/workflows/carrier-vocab-guard.yml` — paths
+filter AND a step; counted before and after by parsing the workflow, not by eye: **jobs 23 → 23,
+steps 204 → 205, paths-filter entries 420 → 423** (the lock, `comp_trend.py` and `coa.py`). Nothing
+was removed — a silently deleted job removes its own gate.
+`harness_component_basis_evidence.py` (61), `harness_carrier_dollar_class.py` (88),
+`harness_gp_carrier_class_dereference.py` (65), `harness_device_line_reimbursement.py` (87) and
+`harness_device_reimb_recon.py` (117) all stay green unchanged — the §66 fixture still reproduces the
+pre-fix shape because the shipped DEFAULT map is deliberately unchanged (§69.6).
+
+### 69.6 THE ACTIVATION IS A CONFIG WRITE, AND IT IS SURFACED — not a code default
+
+The code ships INERT and byte-identical for all three tenants: the shipped default
+`category_components` does NOT seed the two new kinds of money. That is deliberate and is the same
+reason `carrier_component_lines` ships empty (§58). **Mapping a category is a money move**: it
+decides which P&L line every payment type declared to that category books on, and the destination is
+the owner's to name in the same breath. A default row would have restated a booked statement on
+merge — and worse, with the destination defaulting to the caller's generic commission line, because
+the house org's own `carrier_component_lines` row (live `{"REIMBURSEMENT": "vip_reimb"}`) replaces the
+default map wholesale and has no row for a kind of money that did not exist when it was written.
+
+So ONE self-committing SQL file does both halves in one statement, for the owner to paste into the
+Supabase SQL Editor: **`/mnt/project-files/2026-10-10_mdf_books_on_its_own_pl_line.sql`**. No
+migration is needed — `carrier_class_category_components` and `carrier_component_lines` are mig
+`1062` columns and both exist live. The file writes `carrier_class_category_components` as the house
+default map PLUS the two new rows (jsonb-merged over `COALESCE`, never assigned bare: assigning only
+`{"mdf": "MDF"}` would drop the commission and reimbursement mappings and restate $3.1M), and
+`carrier_component_lines` as the live routing PLUS `{"MDF": "mdf_income"}`. Idempotent, no
+`BEGIN;`/`COMMIT;` (the SQL Editor ends each Run's transaction, so a split transaction is silently
+discarded), with a commented post-run verification query.
+
+**AFTER the SQL is run, the P&L needs a Recompute for MARCH–SEPTEMBER 2026** (seven months; October
+has no such row in the comp feed, so it is unaffected). The stored statements carry the old
+composition until then, and nothing here recomputes one.
+
+**DUPLICATE CHECK (build gate).** Searched: §58 / §58.1 / §58.2 / §58.4 / §58.5 / §58.7 (the
+component ruling, `basis`, the config knobs, the GP columns), §57 + §57.1 + §57.2 (the org's declared
+category and its ONE reader), §66 (the fallback-basis rule and its caller inventory), §65 + §19.53
+(the device-reimbursement surfaces), §4 / §4e (the P&L, its lines and its drill-down), §19.48 (the
+pay-feed quality home and `PLACEABLE_CATEGORIES`), §16–18. **REUSED, not rebuilt:** `classify` /
+`basis` / `component_of_declared_category` / `component_line` / `gp_column*` /
+`component_is_evidence`, §57's read and folding rule, the mig-`1062` config columns (no new column,
+no new table, no new endpoint, no new report, no migration), the existing `mdf_income` COA line and
+its existing MA-side feed, and the four existing locks. **BUILT NEW:** two members of the component
+vocabulary, three small pure functions in the EXISTING home (a label, a line, a set), and one lock
+that owns what no existing lock does — that a declaration must be EXPRESSIBLE. **FIXED IN THE SAME
+CHANGE, not left for later:** the P&L's private label dict, the three spelled `"REIMBURSEMENT"` call
+sites, `comp_trend`'s second copy of the vocabulary, and the §65 device-side inference. **EXCUSED,
+with the reason measured:** `router._RECON_COMPONENT_BUCKET` (the carrier recon's own last-mile map)
+has no column for the two new kinds of money, so it DEFERS to the comp type exactly as an
+unhonourable category always did — its buckets are identical before and after, and giving them a
+workbook column is a decision about a comparison report, taken separately or not at all.
+
+Module-graph fact: `carrier_dollar_component` — the same fact (one dollar, one classification); its
+`question` now says the declaration must be honourable and names the three new entry points, its
+`index` carries `69`, and this lock joins its locks. Written by hand, multi-line (never `--bless`).
+
+**Section number:** `68` was skipped deliberately — an in-flight change in this repo had already
+claimed it (MDF entitlement-month coverage, with migration `1068`) when this section was written.
+
+---
+
+## 70. WHICH STORE CARRIES A HANDSET'S COST — the ledger stocks it, the carrier pays whoever sold it (owner directive 2026-10-10)
 
 Owner, on the decision card: *"Move the cost"* — move device cost to the store the carrier paid, for
 the proven transfers. The ask that led to it (§65): *"move the cost to a different store if this
 happens but capture that in a report for phones activated under different report"*.
 
-### 69.1 THE CLASS, NOT THE INSTANCE
+### 70.1 THE CLASS, NOT THE INSTANCE
 
 > **"Which store does this handset's cost belong to?" had two authorities and nothing reconciled them
 > per device.** `commcalc.asset_ledger` books the unit's cost to the **stocking** store, on the row's
@@ -22827,7 +23051,7 @@ STORE's gross profit — which is the point. The largest net movers in that wind
 −$14,829.66, `1800 Great Neck Rd` +$13,689.72, `4712 White Plains Rd` −$13,089.74, `3605 Germantown
 Ave` −$13,059.73, `3 Palisade Ave` +$11,399.57, `11636 Springfield Blvd` −$11,199.72.
 
-### 69.2 THE GUARD THAT ASKED THE WRONG QUESTION — a design fix found by the owner's question
+### 70.2 THE GUARD THAT ASKED THE WRONG QUESTION — a design fix found by the owner's question
 
 §65.4 shipped a third guard that withheld "the carrier paid a different store" whenever **either**
 address was one §13d reports as claimed by two `store_mapping` records. The owner asked what the 23
@@ -22855,7 +23079,7 @@ ANY: one payment at an address that cannot be this store proves the transfer. Th
 again. `ambiguous_identities` itself stays — §13d's report of the collisions is a legitimate and
 different use.
 
-### 69.3 THE ONE HOME — and it dereferences §65 rather than forming a second opinion
+### 70.3 THE ONE HOME — and it dereferences §65 rather than forming a second opinion
 
 | | |
 |---|---|
@@ -22871,10 +23095,10 @@ infer whether a store's cost moved, stayed, or could not be judged. The restatem
 line's `meta`: `moved_to_activating_store` (devices, amount, store pairs) and `unmeasured_stayed_put`
 (devices, amount). A moved store figure is never silent.
 
-### 69.4 OFF UNTIL DECLARED, AND IT FAILS IN THE SAFE DIRECTION
+### 70.4 OFF UNTIL DECLARED, AND IT FAILS IN THE SAFE DIRECTION
 
 `device_cost_store_basis` NULL ⇒ `stocking` ⇒ **byte-identical** to every figure this module produced
-before §69. Only the declared word `activating` moves a cost (case and surrounding space folded, the
+before §70. Only the declared word `activating` moves a cost (case and surrounding space folded, the
 same way the sibling mig-1041 basis folds its own). A cost moves ONLY on a proven activation
 elsewhere; a device with no identifier, a short month, a possibly-same-store pair, an unreadable
 reconciliation, or an org with no device-financing routing declared **moves nothing**, stays on the
@@ -22885,7 +23109,7 @@ cost by an account→store index and its rows carry **no device identifier**, so
 verdict cannot reach it. Excused — and PINNED: §H6 asserts that path is identifier-free, so the day it
 gains one the check goes red and the sibling must be fixed too.
 
-### 69.4a THE OWNER STATEMENT, VERSIONED
+### 70.4a THE OWNER STATEMENT, VERSIONED
 
 The column is migration `1067`; declaring `activating` is a separate owner-approved statement, and it
 lives at **`database/runbooks/device_cost_store_activating.sql`** — the column and the declaration in
@@ -22896,7 +23120,7 @@ be audited later. **A recompute follows** for each month to be restated (Jun–O
 is not recomputed keeps its stored per-store figures. Undo is `SET device_cost_store_basis = NULL`
 plus the same recomputes.
 
-### 69.5 THE LOCK
+### 70.5 THE LOCK
 
 `harness_device_inventory_cogs.py` **§H** (the harness that already owns the device-cost basis; 70 →
 89 checks, 0 failed). H1 the home exists and is pure · H2/H2b/H2c off until declared, exhaustive over
@@ -22920,7 +23144,7 @@ says what it always meant — the router may NAME the home's answers (`may_be_on
 build a key itself (no `store_identity_index`, `build_store_resolver`, `squash_key`, `lead_num_key`,
 `store_key(`, `split(`).
 
-### 69.6 DUPLICATE CHECK (build gate)
+### 70.6 DUPLICATE CHECK (build gate)
 
 Searched §64 (store identity, `store_identity_index`, `ambiguous_identities`), §65 (the per-device
 reconciliation and its guards), §42.5 / §42.1 / §42.3 (the device-cost basis and its three
@@ -22938,3 +23162,11 @@ frontend change, and no second store resolver.
 Module-graph fact: `device_cost_store` — new, because "which store carries a handset's cost" is a
 question no existing fact answered; its callers are DERIVED from the import graph (§50) and its locks
 are the two above. Written by hand, multi-line (never `--bless` — §50).
+
+**Section number:** this section was written as `67`, then `69`, and is `70`. Each renumber was a
+concurrent PR merging first and taking the number (`67` + migration `1067` to the bank-deposit work,
+`69` to the honourable-declaration ruling above, `68` already claimed in flight). The migration
+number `1069` is NOT renumbered — it is unique on disk and uniqueness is the only property the
+numbering lock asserts (`harness_unique_numbers_lock.py`); a migration number does not have to match
+its index section, and renaming an applied-or-pending file is the riskier change. See the
+index-section-number race in §62.
