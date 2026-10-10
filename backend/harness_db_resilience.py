@@ -1025,7 +1025,19 @@ _all_routes = _flatten_routes(real_app.routes)
 # feed replay). Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1759"))
+# Re-pinned 1759 -> 1766 on 2026-10-10, after origin/main dd47887 (the §72.6 route above) was
+# merged INTO this branch. Both additions are real and independent, so the merged tree carries
+# both and every record above stays: main's one route took 1758 to 1759, this branch's seven take
+# it to 1766. Measured on the merged tree, which IS the tree that ships. The delta is SEVEN routes and each is named:
+# GET /closing/metric-catalog, GET /closing/declared/{close_date}, PUT /closing/metric-lines,
+# GET /commcalc/incentive-rules, PUT /commcalc/incentive-rules,
+# DELETE /commcalc/incentive-rules/{rule_id} and GET /commcalc/daily-incentive/{close_date} — the
+# declared-metric catalog and the daily incentive it feeds (index §74). The three reads compute and
+# never write; the two writes are the admin's own rule and line declarations; none of them pays
+# anybody. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 7 and `'^-@router\.'` = 0 — seven
+# added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1766"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

@@ -97,6 +97,14 @@ function draftHasContent(d: Draft | null): boolean {
 type StoreOpt = { sfid?: string; store_code?: string; store_address?: string; store_name?: string; market?: string; closing_source?: string }
 type TenderDef = { tender_key: string; label?: string; recon_class?: string }
 type CountDef = { field_key: string; label?: string }
+// mig 1072 — the declared-metric catalog. `storage` is the HOME's own answer to "where does this
+// value live"; the form never works that out itself (harness_metric_catalog_lock.py §A8).
+type Metric = {
+  key: string; label: string; value_kind: string; declared_by: string
+  unit_price: number; in_revenue: boolean; source: string; storage: string
+}
+// One person's declaration of one category on one day.
+type MetricLine = { metric_key: string; employee_name: string; units: string; amount: string }
 type Employee = { id?: string | number; name?: string; email?: string; home_store?: string }
 type ExpenseCategory = { id: string; name: string; kind?: string }
 type Coach = { needs_walkthrough?: boolean; message?: string; tour_slug?: string }
@@ -180,6 +188,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [tv, setTv] = useState<Record<string, string>>({})   // amount per configured tender_key
   const [cdefs, setCdefs] = useState<CountDef[] | null>(null)      // configured count fields (null = built-in 3, static)
   const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
+  const [metrics, setMetrics] = useState<Metric[]>([])        // mig 1072 declared-metric catalog
+  const [mlines, setMlines] = useState<MetricLine[]>([])      // the richer (money / per-person) lines
   const [emps, setEmps] = useState<Employee[]>([])                 // employee roster (RULE THREE picker, see below)
   const [empsLoaded, setEmpsLoaded] = useState(false)         // fetch landed — tells "empty" apart from "loading"
   const [cats, setCats] = useState<ExpenseCategory[]>([])                 // expense categories (mig 506, lazy-seeded)
@@ -358,6 +368,14 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
   // built-in 3 (static), so an un-opted tenant's form is byte-identical to today.
   useEffect(() => { api('/api/v1/closing/count-config').then((d: { defs?: CountDef[]; configured?: boolean } | null) => setCdefs(d?.configured ? (d.defs || []) : ((d?.defs && d.defs.length) ? d.defs : null))).catch(() => setCdefs(null)) }, [])
+  // The declared-metric catalog (mig 1072): the categories that carry money or are declared per
+  // person. The plain count-only ones keep rendering through `cdefs` above, unchanged. An empty
+  // catalog (or a pre-migration backend) leaves the form exactly as it is today.
+  useEffect(() => {
+    api('/api/v1/closing/metric-catalog')
+      .then((d: { metrics?: Metric[] } | null) => setMetrics((d?.metrics || []).filter(m => m.source === 'count_field')))
+      .catch(() => setMetrics([]))
+  }, [])
   // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
@@ -410,6 +428,29 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     set({ sfid: s.sfid as string, store_code: s.store_code as string, store_name: (s.store_address || s.store_code) as string })
   }
 
+  // The catalog's own split. `simpleKeys` is what the mig-501 path still owns; `richMetrics` is
+  // everything that needs a dollar figure or a person's name against it.
+  const simpleKeys = new Set(metrics.filter(m => m.storage === 'counts_jsonb').map(m => m.key))
+  const richMetrics = metrics.filter(m => m.storage !== 'counts_jsonb')
+  const perEmployeeMetrics = richMetrics.filter(m => m.declared_by === 'employee')
+  const storeMoneyMetrics = richMetrics.filter(m => m.declared_by !== 'employee')
+  // Whoever has a line so far, in the order they were added — the people the rep says worked today.
+  const declaredPeople = Array.from(new Set(mlines.map(l => l.employee_name).filter(Boolean)))
+  const lineFor = (metric: string, who: string) =>
+    mlines.find(l => l.metric_key === metric && l.employee_name === who)
+  const setLine = (metric: string, who: string, patch: Partial<MetricLine>) =>
+    setMlines(ls => {
+      const i = ls.findIndex(l => l.metric_key === metric && l.employee_name === who)
+      if (i < 0) return [...ls, { metric_key: metric, employee_name: who, units: '', amount: '', ...patch }]
+      return ls.map((l, j) => j === i ? { ...l, ...patch } : l)
+    })
+  const addPerson = (who: string) => {
+    if (!who || declaredPeople.includes(who) || !perEmployeeMetrics.length) return
+    setMlines(ls => [...ls, { metric_key: perEmployeeMetrics[0].key, employee_name: who, units: '', amount: '' }])
+  }
+  const dropPerson = (who: string) => setMlines(ls => ls.filter(l => l.employee_name !== who))
+
+
   async function submit() {
     if (!f.close_date) { setMsg('❌ Pick a date.'); return }
     if (!f.sfid && !f.store_code) { setMsg('❌ Pick your store.'); return }
@@ -459,7 +500,11 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     // no config → the static upgrade_count/new_line_count/postpaid_count fields (unchanged behaviour).
     let countFields: Record<string, unknown>
     if (cdefs) {
-      countFields = { counts: Object.fromEntries(cdefs.map(d => [d.field_key, cv[d.field_key] || '0'])) }
+      // Only the plain count-only, store-level fields ride the mig-501 `counts` map; a category that
+      // carries money or is declared per person is a metric LINE instead. The catalog says which is
+      // which (`storage`) — this form never decides.
+      const simple = cdefs.filter(d => simpleKeys.has(d.field_key))
+      countFields = { counts: Object.fromEntries(simple.map(d => [d.field_key, cv[d.field_key] || '0'])) }
     } else {
       countFields = { upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count }
     }
@@ -487,6 +532,29 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         return
       }
       setRetry(null)
+      // The richer declarations (money, or a person's name against them) ride a second call, AFTER
+      // the row is accepted — a refused closing must not leave half a day's declarations behind.
+      // A failure here is SAID, never swallowed: the incentive is computed from these lines, so
+      // losing them silently would mean somebody is paid less than they earned.
+      const rich = mlines
+        .map(l => ({ ...l, units: l.units.trim(), amount: l.amount.trim() }))
+        .filter(l => l.metric_key && (l.units || l.amount))
+      if (rich.length) {
+        try {
+          await api('/api/v1/closing/metric-lines', { method: 'PUT', body: JSON.stringify({
+            store_code: f.store_code, close_date: f.close_date, closing_row_id: r?.id,
+            lines: rich.map(l => ({
+              metric_key: l.metric_key, employee_name: l.employee_name || undefined,
+              units: l.units || 0, amount: l.amount || 0,
+            })),
+          }) })
+        } catch (e: unknown) {
+          setMsg('⚠️ The closing was submitted, but the per-category figures were not saved — '
+            + (e instanceof Error ? e.message : String(e))
+            + '. Enter the day again so the incentive is calculated on the full figures.')
+          return
+        }
+      }
       const flags: string[] = r?.recon?.flags || []
       const pending = r?.recon?.status === 'recon_pending'
       const auto = r?.recon?.auto_accepted
@@ -496,7 +564,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         : '✅ Closing submitted and tallies with the system. You can enter another below.')
       setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
-      setTv({}); setCv({}); setExpLines([])
+      setTv({}); setCv({}); setExpLines([]); setMlines([])
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([]); setPhotoError('')
       clearDraft()   // submitted successfully → the saved draft is done
       loadRecent()
@@ -692,6 +760,69 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
             ))}
           </Row>
         )}
+
+        {/* mig 1072 — the categories that carry money, or that each person declares for themselves.
+            Rendered entirely from the catalog: this form names no category and knows no business. */}
+        {!!storeMoneyMetrics.length && (<>
+          <SectionLabel>Today&apos;s sales by category</SectionLabel>
+          <Row>
+            {storeMoneyMetrics.map(m => (
+              <Field key={m.key} label={m.value_kind === 'amount' ? `${m.label} $` : `${m.label} #`}>
+                <input style={inp} inputMode="decimal"
+                  value={(m.value_kind === 'amount'
+                    ? lineFor(m.key, '')?.amount : lineFor(m.key, '')?.units) || ''}
+                  placeholder="0"
+                  onChange={e => setLine(m.key, '', m.value_kind === 'amount'
+                    ? { amount: e.target.value } : { units: e.target.value })} />
+              </Field>
+            ))}
+          </Row>
+        </>)}
+
+        {!!perEmployeeMetrics.length && (<>
+          <SectionLabel>What each person did today</SectionLabel>
+          <div style={{ fontSize: 12.5, color: 'var(--text2)', margin: '-4px 0 10px' }}>
+            Add everyone who worked and enter their own figures. This is what decides each person&apos;s
+            incentive, so a blank line is read as nothing sold, not as unknown.
+          </div>
+          {declaredPeople.map(who => (
+            <div key={who} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <strong style={{ fontSize: 13 }}>{who}</strong>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: 12 }}
+                  onClick={() => dropPerson(who)}>Remove</button>
+              </div>
+              <Row>
+                {perEmployeeMetrics.map(m => (<span key={m.key} style={{ display: 'contents' }}>
+                  {m.value_kind !== 'amount' && (
+                    <Field label={`${m.label} #`}>
+                      <input style={inp} inputMode="numeric" placeholder="0"
+                        value={lineFor(m.key, who)?.units || ''}
+                        onChange={e => setLine(m.key, who, { units: e.target.value })} />
+                    </Field>
+                  )}
+                  {m.value_kind !== 'count' && (
+                    <Field label={`${m.label} $`}>
+                      <input style={inp} inputMode="decimal" placeholder="0.00"
+                        value={lineFor(m.key, who)?.amount || ''}
+                        onChange={e => setLine(m.key, who, { amount: e.target.value })} />
+                    </Field>
+                  )}
+                </span>))}
+              </Row>
+            </div>
+          ))}
+          <select style={{ ...inp, maxWidth: 280 }} value="" onChange={e => { addPerson(e.target.value); }}>
+            <option value="">＋ Add a person who worked today…</option>
+            {emps.filter(x => x.name && !declaredPeople.includes(x.name))
+              .map(x => <option key={String(x.id ?? x.name)} value={x.name}>{x.name}</option>)}
+          </select>
+          {!emps.length && empsLoaded && (
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
+              No employees available to pick — ask an admin to check your store assignment.
+            </div>
+          )}
+        </>)}
 
         <SectionLabel>Expenses taken from the envelope (categorized — DM approves each line)</SectionLabel>
         {expLines.map((l, i) => {

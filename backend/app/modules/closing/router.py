@@ -37,6 +37,7 @@ from . import submit_refusal as _refusal
 from . import dedup_key as _dedup
 from . import unfinished_day as _unfinished
 from . import closing_source as _closing_src
+from . import metric_catalog as _metrics
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -3306,6 +3307,24 @@ def put_count_config(payload: PutCountConfigIn, org_id: str = ORG_ID, authorizat
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing count-field configuration is permission-restricted.")
     defs = payload.defs or []
+    # The save is a full replace, so a client that does not KNOW about the mig-1072 fields would
+    # silently reset them. Carry the stored values forward for any def whose payload omits them all —
+    # an explicit value still wins, so the editor can always change one.
+    try:
+        from . import count_config as _cc
+        _prior = {str(d.get("field_key") or ""): d
+                  for d in _cc.load_count_config(client, org_id, include_inactive=True)}
+    except Exception:
+        _prior = {}
+    for _dd in defs:
+        if not isinstance(_dd, dict):
+            continue
+        _was = _prior.get(str(_dd.get("field_key") or ""))
+        if not _was:
+            continue
+        if all(_dd.get(_f) is None for _f in ("value_kind", "declared_by", "unit_price", "in_revenue")):
+            for _f in ("value_kind", "declared_by", "unit_price", "in_revenue"):
+                _dd[_f] = _was.get(_f)
     try:
         client.schema("commcalc").table("closing_count_field_def").delete().eq("org_id", org_id).execute()
     except Exception as e:
@@ -3315,10 +3334,22 @@ def put_count_config(payload: PutCountConfigIn, org_id: str = ORG_ID, authorizat
         key = (dd.get("field_key") or "").strip()
         if not key:
             continue
+        # mig 1072: a category also declares what it is MEASURED in, WHO declares it, and what a
+        # unit is worth. Absent keys fall back to the mig-501 defaults, so an older client that
+        # sends none saves exactly what it saves today.
+        _vk = str(dd.get("value_kind") or "count").strip().lower()
+        _db = str(dd.get("declared_by") or "store").strip().lower()
+        _up = dd.get("unit_price")
         rows.append({"org_id": org_id, "field_key": key, "label": dd.get("label") or key,
                      "sort_order": dd.get("sort_order", i), "is_standard": bool(dd.get("is_standard")),
                      "is_active": dd.get("is_active", True) is not False,
-                     "recon_class": dd.get("recon_class") or "other"})
+                     "recon_class": dd.get("recon_class") or "other",
+                     "value_kind": _vk if _vk in _metrics.VALUE_KINDS else "count",
+                     "declared_by": _db if _db in _metrics.DECLARED_BY else "store",
+                     "unit_price": (_money(_up) if str(_up if _up is not None else "").strip() != ""
+                                    else None),
+                     "in_revenue": (None if dd.get("in_revenue") is None
+                                    else bool(dd.get("in_revenue")))})
     if rows:
         client.schema("commcalc").table("closing_count_field_def").insert(rows).execute()
     return {"ok": True, "defs": len(rows)}
@@ -3338,6 +3369,142 @@ def seed_standard_counts(org_id: str = ORG_ID, authorization: str = Header(defau
             for (k, lbl, rc, so) in count_config.STANDARD_DEFS]
     client.schema("commcalc").table("closing_count_field_def").insert(rows).execute()
     return {"ok": True, "seeded": len(rows)}
+
+
+# ── THE DECLARED-METRIC CATALOG (mig 1072) ────────────────────────────────────────────────────────
+# "What does this business declare at the end of a day, and what is a unit worth." ONE answer, asked
+# by the closing form, the incentive-rule editor and the targets editor. A surface that builds its own
+# category list has reproduced the vocabulary — `harness_metric_catalog_lock.py` fails the build.
+
+def _metric_catalog(client, org_id, *, include_inactive=False, with_tenders=True):
+    """The tenant's catalog. THE single construction site — every endpoint below routes through it."""
+    from . import count_config
+    cdefs = count_config.load_count_config(client, org_id, include_inactive=include_inactive)
+    tdefs = []
+    if with_tenders:
+        try:
+            from . import tender_config
+            tdefs, _maps = tender_config.load_tender_config(client, org_id)
+        except Exception:
+            tdefs = []
+    return _metrics.build(cdefs, tender_defs=tdefs)
+
+
+def _metric_lines(client, org_id, store_code, close_date):
+    """`closing_metric_line` rows for one store-day. [] before mig 1072 is applied, so every caller
+    degrades to the mig-501 behaviour instead of failing."""
+    try:
+        q = (client.schema("commcalc").table("closing_metric_line").select("*")
+             .eq("org_id", org_id).eq("close_date", str(close_date)))
+        if store_code:
+            q = q.eq("store_code", str(store_code))
+        return q.execute().data or []
+    except Exception:
+        return []
+
+
+@router.get("/metric-catalog")
+def get_metric_catalog(include_inactive: bool = False, org_id: str = ORG_ID):
+    """Every category this tenant declares, with how it is measured, who declares it and what a unit
+    is worth. The incentive-rule editor and the targets editor read THIS — not a list of their own."""
+    require_org(org_id)
+    client = sb()
+    cat = _metric_catalog(client, org_id, include_inactive=include_inactive)
+    return {
+        "metrics": cat,
+        "revenue_keys": _metrics.revenue_keys(cat),
+        "employee_keys": _metrics.employee_keys(cat),
+        "value_kinds": list(_metrics.VALUE_KINDS),
+        "declared_by": list(_metrics.DECLARED_BY),
+        "configured": bool([m for m in cat if m.get("source") == "count_field"]),
+    }
+
+
+@router.get("/declared/{close_date}")
+def get_declared_day(close_date: str, store_code: str = "", org_id: str = ORG_ID):
+    """What a store-day declared, folded across both physical stores, plus the per-employee split and
+    the day's gross revenue. The ONE read behind the incentive calculation and the day's report."""
+    require_org(org_id)
+    client = sb()
+    cat = _metric_catalog(client, org_id)
+    row = None
+    try:
+        q = (client.schema("commcalc").table("daily_closing").select("*")
+             .eq("org_id", org_id).eq("close_date", str(close_date)))
+        if store_code:
+            q = q.eq("store_code", str(store_code))
+        rows = q.execute().data or []
+        row = rows[0] if rows else None
+    except Exception:
+        row = None
+    lines = _metric_lines(client, org_id, store_code, close_date)
+    declared = _metrics.declared(cat, row, lines)
+    per_emp = _metrics.by_employee(cat, lines)
+    return {
+        "close_date": str(close_date), "store_code": store_code,
+        "declared": declared,
+        "by_employee": per_emp,
+        "store_revenue": _metrics.gross_revenue(cat, declared),
+        "employee_revenue": _metrics.employee_revenue(cat, per_emp),
+        "metrics": cat,
+    }
+
+
+class PutMetricLinesIn(LaxModel):
+    store_code: Any = None
+    close_date: Any = None
+    lines: Any = None
+    closing_row_id: Any = None
+
+
+@router.put("/metric-lines")
+def put_metric_lines(payload: PutMetricLinesIn, org_id: str = ORG_ID,
+                     authorization: str = Header(default="")):
+    """Save a store-day's richer declarations — the amount-valued and per-employee categories.
+
+    A full replace for that store-day, mirroring how a corrected closing resubmit replaces the day's
+    counts. A line whose metric is not on the catalog is REFUSED rather than stored: a declaration
+    pointing at a category the business does not have is a mistake, and keeping it would let a rule
+    pay on a number nobody can explain."""
+    require_org(org_id)
+    client = sb()
+    code = str(payload.store_code or "").strip()
+    day = str(payload.close_date or "").strip()
+    if not code or not day:
+        raise HTTPException(400, "store_code and close_date are required")
+    from app.modules.commcalc.router import _caller_uid as _uid
+    cat = _metric_catalog(client, org_id)
+    known = {m["key"]: m for m in cat if m.get("source") == "count_field"}
+    rows, rejected = [], []
+    for ln in (payload.lines or []):
+        if not isinstance(ln, dict):
+            continue
+        key = str(ln.get("metric_key") or "").strip()
+        m = known.get(key)
+        if not m:
+            rejected.append(key)
+            continue
+        who = str(ln.get("employee_name") or "").strip() or None
+        if _metrics.is_employee_declared(cat, key) and not who:
+            rejected.append(key)
+            continue
+        rows.append({"org_id": org_id, "store_code": code, "close_date": day,
+                     "metric_key": key, "employee_name": who,
+                     "units": _int(ln.get("units")), "amount": _money(ln.get("amount")),
+                     "closing_row_id": payload.closing_row_id,
+                     "submitted_by": _uid(authorization)})
+    if rejected:
+        raise HTTPException(400, "These categories are not declared by this business: "
+                                 + ", ".join(sorted(set(rejected))))
+    try:
+        (client.schema("commcalc").table("closing_metric_line").delete()
+         .eq("org_id", org_id).eq("store_code", code).eq("close_date", day).execute())
+        if rows:
+            client.schema("commcalc").table("closing_metric_line").insert(rows).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration "
+                                 f"1072_declared_metric_catalog.sql first. [{e}]")
+    return {"ok": True, "lines": len(rows)}
 
 
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────

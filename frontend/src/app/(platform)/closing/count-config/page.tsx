@@ -19,9 +19,26 @@ const reconClasses = (pos: string) => [
 
 // is_active (index §29.9): a switched-off count stays listed here (so it can come back) but is gone from the
 // closing form, the DM verify view and every recon.
-type Def = { field_key: string; label: string; recon_class: string; is_active: boolean; is_standard?: boolean }
+// mig 1072: a category also declares HOW it is measured, WHO declares it and what a unit is worth.
+// Those three facts are what let it be paid on — the incentive-rule editor reads this same registry
+// through /closing/metric-catalog rather than carrying a category list of its own.
+type Def = {
+  field_key: string; label: string; recon_class: string; is_active: boolean; is_standard?: boolean
+  value_kind: string; declared_by: string; unit_price: string; in_revenue: boolean | null
+}
 type RawDef = Partial<Def> & { field_key: string }
 type ConfigResp = { defs?: RawDef[]; all_defs?: RawDef[]; standard?: RawDef[] }
+// The vocabularies come from the server (closing/metric_catalog.py), never a copy kept here.
+type CatalogResp = { value_kinds?: string[]; declared_by?: string[] }
+const KIND_LABEL: Record<string, string> = {
+  count: 'Count — a tally (drop-offs)',
+  amount: 'Amount — a dollar figure (printing sales)',
+  both: 'Both — a tally that carries its own dollars',
+}
+const WHO_LABEL: Record<string, string> = {
+  store: 'The store — one figure for the day',
+  employee: 'Each employee — a line per person',
+}
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 function slug(s: string) { return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') }
@@ -30,6 +47,8 @@ export default function CountConfigPage() {
   const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const RECON_CLASSES = reconClasses(pos)
   const [defs, setDefs] = useState<Def[]>([])
+  const [valueKinds, setValueKinds] = useState<string[]>([])
+  const [declaredBy, setDeclaredBy] = useState<string[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -39,14 +58,26 @@ export default function CountConfigPage() {
       const dfs: Def[] = (saved?.length ? saved : d?.standard || []).map((x: RawDef) => ({
         field_key: x.field_key, label: x.label || x.field_key, recon_class: x.recon_class || 'other',
         is_active: x.is_active !== false, is_standard: !!x.is_standard,
+        value_kind: (x as { value_kind?: string }).value_kind || 'count',
+        declared_by: (x as { declared_by?: string }).declared_by || 'store',
+        unit_price: (x as { unit_price?: number | null }).unit_price == null
+          ? '' : String((x as { unit_price?: number }).unit_price),
+        in_revenue: (x as { in_revenue?: boolean | null }).in_revenue ?? null,
       }))
       setDefs(dfs)
     }).catch((e: unknown) => setMsg('❌ ' + errText(e)))
+    api('/api/v1/closing/metric-catalog?include_inactive=1').then((d: CatalogResp | null) => {
+      setValueKinds(d?.value_kinds || [])
+      setDeclaredBy(d?.declared_by || [])
+    }).catch(() => { /* pre-migration: the selects fall back to what is already on the row */ })
   }, [])
   useEffect(() => { load() }, [load])
 
   const setDef = (i: number, patch: Partial<Def>) => setDefs(ds => ds.map((d, j) => j === i ? { ...d, ...patch } : d))
-  const addDef = () => setDefs(ds => [...ds, { field_key: '', label: '', recon_class: 'other', is_active: true }])
+  const addDef = () => setDefs(ds => [...ds, {
+    field_key: '', label: '', recon_class: 'other', is_active: true,
+    value_kind: 'count', declared_by: 'store', unit_price: '', in_revenue: null,
+  }])
   const delDef = (i: number) => setDefs(ds => ds.filter((_, j) => j !== i))
   const move = (i: number, dir: -1 | 1) => setDefs(ds => {
     const j = i + dir; if (j < 0 || j >= ds.length) return ds
@@ -61,8 +92,10 @@ export default function CountConfigPage() {
   }
 
   async function saveAll() {
-    const cleanDefs = defs.map((d, i) => ({ ...d, field_key: d.field_key || slug(d.label), sort_order: i }))
-      .filter(d => d.field_key)
+    const cleanDefs = defs.map((d, i) => ({
+      ...d, field_key: d.field_key || slug(d.label), sort_order: i,
+      unit_price: d.unit_price === '' ? null : Number(d.unit_price),
+    })).filter(d => d.field_key)
     setBusy(true)
     try {
       const r = (await api('/api/v1/closing/count-config', { method: 'PUT', body: JSON.stringify({ defs: cleanDefs }) })) as { defs?: number } | null
@@ -81,6 +114,12 @@ export default function CountConfigPage() {
             Recon class drives which {pos} count (activations vs upgrades) a field is compared against; it&apos;s a flag only, never part of the cash/credit close gate.
             Leave it unconfigured to use the built-in 3.
           </p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '6px 0 0' }}>
+            Whatever you add here becomes available to pay on. Say how it is measured, who declares it
+            and what a unit is worth, and it shows up on the closing sheet and in the{' '}
+            <Link href="/commcalc/incentive-rules" style={{ textDecoration: 'underline' }}>incentive rules</Link>{' '}
+            with no further setup.
+          </p>
         </div>
         <Link href="/closing" className="btn btn-secondary" style={{ fontSize: 13 }}>← Dashboard</Link>
       </div>
@@ -94,7 +133,7 @@ export default function CountConfigPage() {
       <div className="card table-wrapper" style={{ marginTop: 16, padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['', 'Active', 'Label (on the sheet)', 'Key', 'Recon class', ''].map(h =>
+            {['', 'Active', 'Label (on the sheet)', 'Key', 'Measured in', 'Declared by', '$ per unit', 'Counts as revenue', 'Recon class', ''].map(h =>
               <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -110,6 +149,36 @@ export default function CountConfigPage() {
                   {!d.is_active && <div style={{ fontSize: 10, color: 'var(--text3)' }}>switched off — not shown anywhere</div>}</td>
                 <td style={cell}><input style={{ ...sel, width: 150 }} value={d.field_key} placeholder={slug(d.label) || 'auto'} disabled={!!d.is_standard} onChange={e => setDef(i, { field_key: slug(e.target.value) })} />
                   {d.is_standard && <div style={{ fontSize: 10, color: 'var(--text3)' }}>standard</div>}</td>
+                <td style={cell}>
+                  <select style={sel} value={d.value_kind} onChange={e => setDef(i, { value_kind: e.target.value })}>
+                    {(valueKinds.length ? valueKinds : [d.value_kind]).map(v =>
+                      <option key={v} value={v}>{KIND_LABEL[v] || v}</option>)}
+                  </select>
+                </td>
+                <td style={cell}>
+                  <select style={sel} value={d.declared_by} onChange={e => setDef(i, { declared_by: e.target.value })}>
+                    {(declaredBy.length ? declaredBy : [d.declared_by]).map(v =>
+                      <option key={v} value={v}>{WHO_LABEL[v] || v}</option>)}
+                  </select>
+                  {d.declared_by === 'employee' &&
+                    <div style={{ fontSize: 10, color: 'var(--text3)' }}>each person enters their own</div>}
+                </td>
+                <td style={cell}>
+                  <input style={{ ...sel, width: 90 }} value={d.unit_price} inputMode="decimal"
+                    placeholder={d.value_kind === 'amount' ? 'n/a' : '0.00'}
+                    disabled={d.value_kind === 'amount'}
+                    title="What one unit earns, so a counted category can join gross revenue without the rep typing a dollar figure"
+                    onChange={e => setDef(i, { unit_price: e.target.value })} />
+                </td>
+                <td style={cell}>
+                  <select style={sel} value={d.in_revenue === null ? 'auto' : d.in_revenue ? 'yes' : 'no'}
+                    title="Does this category's money count as the day's gross revenue"
+                    onChange={e => setDef(i, { in_revenue: e.target.value === 'auto' ? null : e.target.value === 'yes' })}>
+                    <option value="auto">Automatic</option>
+                    <option value="yes">Yes — it is a sale</option>
+                    <option value="no">No — track the volume only</option>
+                  </select>
+                </td>
                 <td style={cell}>
                   <select style={sel} value={d.recon_class} onChange={e => setDef(i, { recon_class: e.target.value })}>
                     {RECON_CLASSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}

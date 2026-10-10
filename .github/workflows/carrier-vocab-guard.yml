@@ -472,6 +472,14 @@ on:
       # silently (the §13e lesson), so the harness itself is listed; its subjects (core/scope.py,
       # the closing / storeops / commcalc routers) are already named above and by the push globs.
       - "backend/harness_market_resolution_guard.py"
+      # index §76 — the declared-metric catalog and the daily-incentive engine. Both locks name
+      # themselves for the same reason as the line above: an allowlist that omits its own subject
+      # skips silently.
+      - "backend/harness_daily_incentive.py"
+      - "backend/harness_metric_catalog_lock.py"
+      - "backend/app/modules/closing/metric_catalog.py"
+      - "backend/app/modules/closing/count_config.py"
+      - "backend/app/modules/commcalc/daily_incentive.py"
       # index §74 — the envelope-count basis gate. The lock names its OWN subjects, because a job
       # behind an allowlist that does not name them skips silently (the §13e lesson). The two
       # routers and deposit_accountability.py are already named here and below.
@@ -926,6 +934,12 @@ jobs:
       - name: Run the canonical store→market resolution guard (ONE resolver; every vocabulary read canonical, overlaid or pinned with a reviewed classification; a read that moves behind a helper stays visible — index §13a)
         working-directory: backend
         run: python3 harness_market_resolution_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the daily-incentive proof (the owner's six live rules replayed as CONFIG; gates fail closed; an unsplittable pool is reported, never guessed - index 72)
+        working-directory: backend
+        run: python3 harness_daily_incentive.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the declared-metric catalog lock (ONE home for what a business declares daily; no second copy of the vocabulary, no caller reaching past it - index 72)
+        working-directory: backend
+        run: python3 harness_metric_catalog_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
