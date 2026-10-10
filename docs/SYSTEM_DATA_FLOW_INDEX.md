@@ -23595,9 +23595,9 @@ worse than no gate, because it reports green.**
 `backend/harness_frontend_typecheck_lock.py` — **33 checks**, stdlib only, DB-free. It runs **in the
 `frontend-typecheck` job itself**, as the first run step, before `npm ci` (it needs no `node_modules`),
 so its verdict is reported even when `tsc` is what goes red. It is deliberately NOT in the
-dependency-free `carrier-vocab-guard` job: see §72.5 — that job is red on main today, and a step after
-a failed step never runs, so the lock would have been silently unexecuted. A lock belongs with the gate
-it guards. It fails the build on each way the gate could quietly stop being one:
+dependency-free `carrier-vocab-guard` job: a lock belongs with the gate it guards, and in that 94-step
+job it would sit behind 90 unrelated steps, any one of whose failure would stop it running at all
+(§19.25). It fails the build on each way the gate could quietly stop being one:
 
 | | Fails the build when |
 |---|---|
@@ -23620,14 +23620,18 @@ mention is not a second home; a `run:` value is, and only `run:` values are scan
 
 ### 72.5 What this does NOT do, stated so it is not mistaken for done
 
-- **`harness_carrier_vocab_guard.py` is RED on `origin/main` (`1c73ba09`) right now, and this change
-  does not fix it.** Reproduced on a pristine `origin/main` worktree before and after, byte-identical:
-  `modules/commcalc/router.py:22512` emits `'could not save the excluded-seller list (is migration …'`,
-  a shape the setup-notice boundary does not recognise, so the setup-internals lock fails — and with it
-  the FIRST run step of the dependency-free `carrier-vocab-guard` job, which means **every step after it
-  in that job is currently not running at all.** That is a live §19.25 instance affecting many locks,
-  it is a backend-copy defect in a different subsystem, and it is REPORTED here rather than quietly
-  worked around. It is the reason §72.4's lock sits in its own job. It is owed its own change.
+- **FOUND AND NOT FIXED: this repo's harnesses are Python-version-sensitive, and
+  `harness_carrier_vocab_guard.py` goes RED on Python 3.12+ while CI pins 3.11.** On Python 3.13 it
+  reports `modules/commcalc/router.py:22512` as naming a migration in a shape the setup-notice
+  boundary would miss, and its own negative control N10 fails too. That line is an implicitly
+  concatenated `str` + f-string (`"… (is migration " f"248_….sql applied?): {e}"`), and **PEP 701**
+  changed f-string tokenisation in 3.12, so the AST walk reads it differently. Verified both ways:
+  on a pristine `origin/main` worktree the harness exits 1 under `python3.13` and **0 under
+  `python3.11`**, and the CI run for `1c73ba09` is green. So it is a FALSE red that only a developer
+  on a modern Python sees — CI is honest. Nothing here is broken in production, and this change does
+  not fix it: the harness is in another subsystem and the fix (pin the harnesses' parse to the
+  version CI runs, or make the walk PEP-701-proof) is owed its own change. Recorded because the next
+  agent will hit it, spend time on it, and may "fix" live code to satisfy a phantom.
 - **It does not make the Vercel deploy a required check.** That is a repository setting, not code, and
   it is the other half of this class: a build host whose red is advisory. Worth the owner's one toggle.
 - **It does not run ESLint as a gate.** `npm run lint` exists and nothing runs it either. Same class,

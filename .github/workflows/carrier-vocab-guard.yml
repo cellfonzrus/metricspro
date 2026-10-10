@@ -1145,14 +1145,12 @@ jobs:
         with: { node-version: "22" }
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
-      # The lock lives in THIS job, beside the gate it guards, and not in the dependency-free
-      # carrier-vocab-guard job above. Two reasons, and the first is measured: that job's FIRST run
-      # step (harness_carrier_vocab_guard.py) is RED on main today for an unrelated backend string
-      # (commcalc/router.py:22512 names a migration in a shape the setup-notice boundary does not
-      # recognise), and a step after a failed one never runs — so the lock would have been silently
-      # unexecuted, which is the very §19.25 defect it exists to prevent. Second, a lock belongs with
-      # the thing it guards. It is stdlib-only and needs no node_modules, so it runs BEFORE the
-      # install: its verdict is reported even when tsc itself is what goes red.
+      # The lock lives in THIS job, beside the gate it guards, rather than in the dependency-free
+      # carrier-vocab-guard job above: a lock belongs with the thing it guards, and in a 94-step job
+      # it would sit behind 90 unrelated steps, any one of whose failure would stop it from running
+      # at all (§19.25 — a gate that does not run is not a gate). It is stdlib-only and needs no
+      # node_modules, so it runs BEFORE the install: its verdict is reported even when tsc itself is
+      # what goes red.
       - name: "Run the frontend type-check gate lock (index §72): the gate has ONE home, a workflow runs it with node_modules installed, its path filter covers frontend/**, and strictness / ignoreBuildErrors / blanket @ts-ignore cannot be used to reach green"
         working-directory: backend
         run: python3 harness_frontend_typecheck_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
