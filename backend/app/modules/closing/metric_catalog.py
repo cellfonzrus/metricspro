@@ -145,6 +145,10 @@ def build(count_defs, *, tender_defs=None):
             "sort_order": 1000 + _int(t.get("sort_order"), j),
         })
     out.sort(key=lambda m: (m["sort_order"], m["label"]))
+    # Every entry carries WHERE its value lives, so no caller — backend or screen — has to work it
+    # out. A surface that decides for itself has reproduced the fold; the lock fails the build on it.
+    for m in out:
+        m["storage"] = storage_for(m)
     return out
 
 

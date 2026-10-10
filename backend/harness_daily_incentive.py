@@ -110,6 +110,8 @@ ok(all(m["value_kind"] == "count" and m["declared_by"] == "store" and not m["in_
        for m in _std), "A4 the built-in three stay counts, store-level, out of revenue (mig 501 unchanged)")
 ok(all(mc.storage_for(m) == "counts_jsonb" for m in _std),
    "A5 the built-in three still write daily_closing.counts — no existing tenant moves")
+ok(all(m["storage"] == mc.storage_for(m) for m in CAT),
+   "A5b every catalog entry carries WHERE it is stored, so no caller decides")
 eq(mc.storage_for({"declared_by": "employee", "value_kind": "count"}), "metric_line",
    "A6 a per-employee category writes the new table")
 eq(mc.storage_for({"declared_by": "store", "value_kind": "amount"}), "metric_line",
