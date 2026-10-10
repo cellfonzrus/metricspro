@@ -1012,7 +1012,20 @@ _all_routes = _flatten_routes(real_app.routes)
 # and add no table. Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 2 and `'^-@router\.'` = 0 — two
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1757"))
+# Re-pinned 1757 -> 1758 on 2026-10-10, measured against origin/main 32853a7 (the tree this branch
+# forked from). The delta is ONE route and it is named: GET /commcalc/mdf-entitlement-coverage — the
+# entitlement-month completeness report (index §68). It is READ-ONLY, writes nothing, adds no table
+# and no writer. Verified the same way as every pin above:
+# Re-pinned 1758 -> 1759 on 2026-10-10, when origin/main 1c73ba0 (the §68 route above) was merged
+# INTO this branch. Both additions are real and independent, so the merged tree carries both and the
+# two records above stay — a pin's history is the reason it may be re-taken. This branch's own delta
+# is ONE route and it is named: GET /closing/cash-variance — the shortage/overage assessment after
+# management recon (index §72.6). It is READ-ONLY, adds no writer, reads only tables that already
+# exist, and re-derives nothing (the POS figure comes from stored `closing_attempt.b2b_cash`, not a
+# feed replay). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
+# added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1759"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

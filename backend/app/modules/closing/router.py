@@ -29,6 +29,8 @@ from . import external_credit_recon as _external_credit_recon
 from . import envelope_report as envelope_report_mod
 from . import entry_quality
 from . import pickup_actual as _pickup_actual
+from . import count_revision as _count_revision
+from . import cash_variance as _cash_variance
 from . import closer_resolution
 from . import billpay_netting
 from . import submit_refusal as _refusal
@@ -4952,6 +4954,207 @@ def envelope_report(date_from: str = None, date_to: str = None,
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
 
 
+# ── Cash variance after management recon (owner ask 2026-10-10, mig 1070) ───────────────────────
+# "assess the shortage and overage based on what the management received compared with the b2b data
+# and the cash envelope, the data will never match so we ignore upto $5 of variance, the system
+# should then be smart to find the trends of a particular store / employee and highlight the same".
+#
+# WHAT THIS DOES NOT DO, because the index says somebody else already does it:
+#   · it computes no variance math — `cash_variance.compare` scores through `deposit_recon.status_for`;
+#   · it re-reads no B2B feed — the POS cash for a (store, day, rep) is ALREADY STORED on
+#     `commcalc.closing_attempt.b2b_cash` (mig 103) at exactly this grain, which is the figure the
+#     close gate judged the rep against. Replaying `_b2b_day` per date would be a second derivation
+#     of a number the platform already recorded, and 45x slower;
+#   · it writes nothing and assigns no chargeback — `envelope_report` owns turning a counted shortage
+#     into money off a rep's pay, from a screen where a human ticks the box.
+#
+# THE DESIGN POINT (see closing/cash_variance.py for the measured numbers): each leg is carried WITH
+# its basis, and a pair whose bases differ is reported as not measurable instead of subtracted. On
+# live data the naive subtraction read 141 of 275 counted store-days as SHORT, every one of them by
+# the bill-payment cash to the cent, which would have accused nine named employees of ~$20,000.
+@router.get("/cash-variance")
+def cash_variance_report(date_from: str = None, date_to: str = None,
+                         market: str = None, markets: str = None, stores: str = None,
+                         reps: str = None, verdict: str = "",
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Shortage/overage after management recon: what management RECEIVED against the cash envelope
+    the rep declared and against the POS cash the till rang, per store-day-rep.
+
+    RULE FIVE standard filters (date range + markets/stores/reps, bucket-aware market matching,
+    manager-span keyset at admission) + `verdict`
+    (short|over|ok|not_measured|discrepancy). The $5 band and the trend threshold are per-org config
+    (mig 1070) resolved through the pure module — never spelled here."""
+    require_org(org_id)
+    client = sb()
+    today = _biz_today_iso()
+    if not date_from and not date_to:
+        date_from, date_to = today[:8] + "01", today
+    else:
+        date_to = date_to or today
+        date_from = date_from or (date_to[:8] + "01")
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select(envelope_report_mod.CLOSING_SELECT)
+            .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+            .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
+
+    store_set = _resolve_store_filter(stores)
+    rep_set = _resolve_rep_filter(reps)
+    market_set = _resolve_market_filter(market, markets)
+    if store_set is not None:
+        rows = [r for r in rows if not r.get("store_code") or (r.get("store_code") or "").upper() in store_set]
+    if rep_set is not None:
+        rows = [r for r in rows if (r.get("employee_name") or "").strip().casefold() in rep_set]
+
+    market_by_code, market_filter_skipped = {}, False
+    try:
+        _srows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,market")
+                  .eq("org_id", org_id).execute().data) or [])
+        market_by_code = {s.get("store_code"): _market_bucket(s.get("market"))
+                          for s in _srows if s.get("store_code")}
+    except Exception:
+        if market_set is not None:
+            market_filter_skipped = True   # NIT-4b posture: never mis-drop on a degraded roster read
+            market_set = None
+    if market_set is not None:
+        rows = [r for r in rows
+                if market_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
+
+    # The per-org band and trend threshold (mig 1070). SELECT * and resolve whatever comes back, so an
+    # un-migrated database reads the house $5 / 3 days instead of erroring — the mig-201 precedent
+    # every writer in this module follows.
+    cfg_row = {}
+    try:
+        _cfgs = (client.schema("commcalc").table("cash_pickup_config").select("*")
+                 .eq("org_id", org_id).limit(1).execute().data) or []
+        cfg_row = _cfgs[0] if _cfgs else {}
+    except Exception as e:
+        print(f"WARN cash_pickup_config unavailable, house cash-variance band used: {e}")
+    dollar_band = _cash_variance.band(cfg_row)
+    trend_days = _cash_variance.min_days(cfg_row)
+
+    def _key(r):
+        return ((r.get("store_code") or "").strip().upper(),
+                str(r.get("close_date") or "")[:10],
+                (r.get("employee_name") or "").strip().casefold())
+
+    # ── The three legs, each read from the ONE table that records it. ──────────────────────────
+    # 1. What management RECEIVED. Two writers can record a count and the report honours both:
+    #    `envelope_count` (mig 936, the Management Envelope Receipt, which also records WHICH cash it
+    #    counted, mig 1036) and `cash_pickup.actual_picked_amount` (mig 949, the count at pickup,
+    #    which records its basis as mig-1039 `amount_basis`). The envelope count wins where both
+    #    exist: it is management's own later count, and the pickup figure is the DM's.
+    #    Live 2026-10-10: envelope_count holds 1 row and cash_pickup 619, so the pickup side carries
+    #    this report today — which is exactly why its basis has to be honoured rather than assumed.
+    pickups, billpays, counts, attempts = {}, {}, {}, {}
+    try:
+        for p in (client.schema("commcalc").table("cash_pickup")
+                  .select("store_code,close_date,employee_name,amount,actual_picked_amount,"
+                          "amount_basis,envelope_opened,actual_counted_by,picked_up_by")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []:
+            pickups[_key(p)] = p
+    except Exception as e:
+        print(f"WARN cash_pickup read failed for cash-variance: {e}")
+    try:
+        for p in (client.schema("commcalc").table("billpay_pickup")
+                  .select("store_code,close_date,employee_name,amount,actual_picked_amount")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []:
+            billpays[_key(p)] = p
+    except Exception as e:
+        print(f"WARN billpay_pickup read failed for cash-variance: {e}")
+    try:
+        for c in (client.schema("commcalc").table("envelope_count").select("*")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []:
+            if c.get("closing_row_id"):
+                counts[c["closing_row_id"]] = c
+    except Exception as e:
+        print(f"WARN envelope_count read failed (run migration 936?): {e}")
+    # 3. The POS cash the till rang, as the close gate recorded it. The LAST attempt for a store-day-
+    #    rep is the one that stands: earlier attempts are the rep's corrected tries, and scoring
+    #    against a superseded figure would report a variance the rep already fixed.
+    try:
+        for a in (client.schema("commcalc").table("closing_attempt")
+                  .select("store_code,close_date,employee_name,attempt_no,b2b_cash")
+                  .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                  .limit(_SUBMISSIONS_MAX_ROWS * 2).execute().data) or []:
+            k = _key(a)
+            prev = attempts.get(k)
+            if prev is None or _f(a.get("attempt_no")) >= _f(prev.get("attempt_no")):
+                attempts[k] = a
+    except Exception as e:
+        print(f"WARN closing_attempt read failed for cash-variance: {e}")
+
+    out = []
+    for r in rows:
+        k = _key(r)
+        p, bp = pickups.get(k) or {}, billpays.get(k) or {}
+        cnt = counts.get(r.get("id")) or {}
+        att = attempts.get(k) or {}
+        out.append(_cash_variance.day_row(
+            {
+                "closing_row_id": r.get("id"),
+                "close_date": str(r.get("close_date") or "")[:10],
+                "store_code": r.get("store_code"),
+                "store_address": r.get("store_address") or r.get("store_name") or r.get("store_code"),
+                "market": market_by_code.get(r.get("store_code")) or "(no market)",
+                "employee_name": r.get("employee_name"),
+                "envelope_opened": bool(p.get("envelope_opened")),
+                "picked_up_by": p.get("picked_up_by"),
+                "counted_by": cnt.get("counted_by") or p.get("actual_counted_by"),
+                "billpay_counted": bp.get("actual_picked_amount") is not None,
+            },
+            received=_cash_variance.received_leg(cnt, p, bp),
+            declared=_cash_variance.declared_leg(r),
+            pos=_cash_variance.pos_leg(att),
+            dollar_band=dollar_band))
+    out = _cash_variance.verdict_filter(out, verdict)
+
+    stores_roll = _cash_variance.by_store(out)
+    emps_roll = _cash_variance.by_employee(out)
+    return {
+        "rows": out,
+        "totals": _cash_variance.totals(out),
+        "by_store": stores_roll,
+        "by_employee": emps_roll,
+        # "be smart to find the trends of a particular store / employee and highlight the same" —
+        # derived off the rollups above, so a highlight can never disagree with its own table.
+        "trends": (_cash_variance.trends(stores_roll, "store_code", trend_days)
+                   + _cash_variance.trends(emps_roll, "employee_name", trend_days)),
+        # Why the report cannot answer more than it does, counted. REPORTED, never hidden behind a
+        # shorter table: live, the bill-payment envelope is counted on 1 store-day of 50, so the
+        # end-to-end check is unmeasurable almost everywhere and no report code can change that.
+        "blockers": _cash_variance.measurement_blockers(out, _pos_term(client, org_id)),
+        # The screen spells no pair key, no basis word and no verdict label — all three vocabularies
+        # are served from the pure module, so a new pair gets its column and cannot get a stale header.
+        # The pair labels carry the TENANT'S OWN POS word (RULE TWO — no vendor is spelled on a
+        # screen or in a payload; harness_carrier_vocab_guard's POS axis fails the build on one).
+        "pairs": _cash_variance.pair_catalog(_pos_term(client, org_id)),
+        "bases": _cash_variance.basis_catalog(
+            _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
+        "band": dollar_band,
+        "trend_min_days": trend_days,
+        "band_is_house_default": not bool((cfg_row or {}).get("cash_variance_band")),
+        "date_from": date_from, "date_to": date_to,
+        "market_filter_skipped": market_filter_skipped,
+    }
+
+
 class EnvelopeCountIn(LaxModel):
     closing_row_id: Any = None
     counted_amount: Any = None
@@ -5093,7 +5296,20 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
         body = {k: v for k, v in body.items() if k != envelope_report_mod.COUNT_BASIS_COLUMN}
         saved = _ec.upsert(body, on_conflict="org_id,closing_row_id").execute()
     out = (saved.data or [body])[0]
-    return {"ok": True, "count": out, "chargeback": cb_row, "basis_stored": basis_stored}
+    # THE CORRECTION TRAIL (owner 2026-10-10, mig 1071). This handler UPSERTS, so a re-count has
+    # always replaced the previous figure with nothing kept — and this is the figure that can become
+    # a chargeback against the rep. `prior` is the row as it was read, `body` is exactly what was
+    # written; a re-save of the same number writes no revision, and a first count writes none either.
+    rev = _write_count_revisions(
+        client, org_id, _count_revision.SUBJECT_ENVELOPE_COUNT,
+        prior.get("id") or out.get("id"),
+        {"store_code": crow.get("store_code"),
+         "close_date": str(crow.get("close_date") or "")[:10],
+         "employee_name": crow.get("employee_name")},
+        prior, body, changed_by=body.get("counted_by"))
+    return {"ok": True, "count": out, "chargeback": cb_row, "basis_stored": basis_stored,
+            "corrections": rev["corrections"], "history_recorded": rev["recorded"],
+            "history_detail": rev["detail"]}
 
 
 class DecideEnvelopeChargebackIn(LaxModel):
@@ -5917,6 +6133,9 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # WHY a variance was refused, where it was (owner question 2026-10-10). None when the
+            # comparison stands, so an older reader is byte-identical.
+            "pickup_variance_reason": (_pickup_actual.row_variance(p) or {}).get("reason") if p else None,
             # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
             # schema and on every row recorded before the checkbox existed: "collected sealed",
             # which is exactly how those pickups behaved.
@@ -6757,6 +6976,47 @@ class OpenCountIn(LaxModel):
     envelope_opened: Any = True
     actual_amount: Any = None
     counted_by: Any = None
+    # WHY the figure is being changed (owner 2026-10-10). Optional and never required: a correction
+    # refused for want of a reason is a correction that does not happen, and the un-reasoned edit is
+    # still on the record either way (mig 1071).
+    note: Any = None
+
+
+# ── THE ONE WRITER of the cash-count correction trail (owner 2026-10-10, mig 1071) ──────────────
+# "also need to edit the cash entered by the management during cash recon".
+#
+# A cash figure a human typed is a statement by that human, and replacing it without keeping the old
+# one destroys evidence — the same defect migration 935 exists for, on a figure that can take money
+# off a rep's pay through `envelope_report.chargeback_parent_row`. So EVERY writer of a management
+# cash count routes its before/after through here, and `closing/count_revision.revision_rows` is the
+# only place that decides what a correction IS.
+#
+# `harness_cash_count_revision.py` §D FAILS THE BUILD if a writer of a count column stops calling
+# this, or if anything else in the codebase inserts into the table.
+#
+# ADAPTIVE (the mig-201 precedent): an un-migrated database has no table, so the correction still
+# records the COUNT and this reports that the trail is unavailable. A trail that refused the edit
+# would be a worse outcome than a missing trail.
+def _write_count_revisions(client, org_id, subject, row_id, identity, prior, patch,
+                           changed_by=None, note=None):
+    """Append one revision row per FIELD this write actually changes. Returns a small report for the
+    API response: how many corrections were recorded, and whether the trail could be written."""
+    try:
+        revs = _count_revision.revision_rows(
+            org_id, subject, row_id, identity, prior, patch,
+            changed_by=changed_by, changed_at=_now(), note=note)
+    except Exception as _e:                      # a builder failure must never lose the count
+        print(f"WARN cash-count revision build failed ({subject}): {str(_e)[:200]}")
+        return {"corrections": 0, "recorded": False, "detail": "could not be built"}
+    if not revs:
+        return {"corrections": 0, "recorded": True, "detail": None}
+    try:
+        client.schema("commcalc").table(_count_revision.REVISION_TABLE).insert(revs).execute()
+    except Exception as _e:
+        print(f"WARN cash-count revision not stored (run migration 1071?): {str(_e)[:200]}")
+        return {"corrections": len(revs), "recorded": False,
+                "detail": "the correction was saved; its history could not be recorded yet"}
+    return {"corrections": len(revs), "recorded": True, "detail": None}
 
 
 def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
@@ -6797,7 +7057,13 @@ def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
     # `amount` — the same figure `pickup_actual.row_variance` uses on the board and on the pickup
     # list, so a count entered here and the chip that renders it can never disagree.
     declared = _f(row.get("amount"))
-    patch = _pickup_actual.count_patch(item, declared=declared, counted_at=_now())
+    # WHICH CASH that snapshot counted, from the ONE home (owner question 2026-10-10). Only the cash
+    # envelope is ever netted, so the bill-pay sibling resolves comparable without a column of its
+    # own; a netted-by-POS snapshot resolves NOT comparable and the reply says so rather than
+    # announcing a shortage the board then refuses to show.
+    _basis_for_gate = billpay_netting.pickup_amount_basis_for(table, row.get("amount_basis"))
+    patch = _pickup_actual.count_patch(item, declared=declared, counted_at=_now(),
+                                       basis=_basis_for_gate)
     if not patch["row"]:
         raise HTTPException(400, "Nothing to record — send the count, or the opened flag.")
     upd = dict(patch["row"])
@@ -6816,12 +7082,33 @@ def _open_count_impl(payload: OpenCountIn, org_id: str, table: str):
             raise HTTPException(400, "run migration 990/1067 first — nothing recordable on this schema")
         client.schema("commcalc").table(table).update(upd).eq("id", row["id"]).eq("org_id", org_id).execute()
     vf = patch["variance"]
+    # THE CORRECTION TRAIL (owner 2026-10-10, mig 1071). This endpoint is how a figure management
+    # already entered gets changed, so it is the one that most needs the before-value kept. `row` is
+    # the row as it was READ, `upd` is exactly what was written, so a field this write never touched
+    # can never be logged as changed — and a re-save of the same figure writes nothing at all.
+    rev = _write_count_revisions(
+        client, org_id, table, row.get("id"),
+        {"store_code": store, "close_date": cdate, "employee_name": emp},
+        row, upd, changed_by=(payload.counted_by or "").strip() or None,
+        note=(payload.note or "").strip() or None)
     return {"ok": True, "store_code": store, "close_date": cdate, "employee_name": emp,
             "opened": patch["opened"], "declared_amount": round(declared, 2),
             "actual_picked_amount": (vf["actual"] if vf else None),
             "variance": (vf["variance"] if vf else None),
             "status": (vf["status"] if vf else None),
-            "counted_by": upd.get("actual_counted_by")}
+            # WHICH CASH the expected figure counted, and whether a count may be scored against it
+            # at all (owner question 2026-10-10). The reply is what the screen prints after a save,
+            # so a refused comparison must say so here too — otherwise the save announces a verdict
+            # the board then declines to show.
+            "comparable": (vf.get("comparable") if vf else None),
+            "basis_reason": (vf.get("reason") if vf else None),
+            "amount_basis": (vf.get("amount_basis") if vf else None),
+            "counted_by": upd.get("actual_counted_by"),
+            # What was CHANGED by this save, and whether the trail took it. The screen shows the
+            # second one: "saved, but its history could not be recorded" is a real state and hiding
+            # it would be the silent-degradation defect.
+            "corrections": rev["corrections"], "history_recorded": rev["recorded"],
+            "history_detail": rev["detail"]}
 
 
 @router.post("/pickup/open-count")
@@ -6884,6 +7171,24 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
     total = 0.0
     actual_total, variance_short, variance_over = None, 0, 0
     opened_count = 0
+    # THE PRIOR ROWS, read ONCE for the whole batch (owner 2026-10-10, mig 1071). A confirm UPSERTS,
+    # so re-confirming a day REPLACES an earlier count with nothing kept — the same defect the late
+    # open has, on the screen the count is usually entered on first. One batched read by the dates in
+    # the batch; without it there is no before-value to record, and a trail that only covers one of
+    # two writers is the half-fixed defect CLAUDE.md calls the same defect wearing a hat.
+    _prior_by_key, _prior_ok = {}, True
+    try:
+        _dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
+        if _dates:
+            for _pr in ((client.schema("commcalc").table(table).select("*").eq("org_id", org_id)
+                         .in_("close_date", _dates).limit(_SUBMISSIONS_MAX_ROWS)
+                         .execute().data) or []):
+                _prior_by_key[((_pr.get("store_code") or ""), str(_pr.get("close_date") or "")[:10],
+                               (_pr.get("employee_name") or ""))] = _pr
+    except Exception as _e:
+        _prior_ok = False
+        print(f"WARN pickup prior-row read failed, corrections not recorded: {str(_e)[:200]}")
+    corrections, history_recorded = 0, True
     for it in items:
         item_date = _date(it.get("close_date")) or top_date
         if not item_date:
@@ -6910,7 +7215,11 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
         # deposit-accountability board's late open). Spelling the columns inline here is what
         # would let the two surfaces drift — harness_deposit_accountability.py §J fails the build
         # on a second copy.
-        _cp = _pickup_actual.count_patch(it, declared=amt, counted_at=_now())
+        _cp = _pickup_actual.count_patch(
+            it, declared=amt, counted_at=_now(),
+            # The basis being written on THIS confirm, through the one home — so the bill-pay
+            # sibling (which has no such column) is not refused for lacking one.
+            basis=billpay_netting.pickup_amount_basis_for(table, _basis))
         row.update(_cp["row"])
         _vf = _cp["variance"]
         if _vf:
@@ -6944,6 +7253,17 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
                           f"{str(_e)[:160]}")
             client.schema("commcalc").table(table).upsert(
                 row, on_conflict="org_id,close_date,store_code,employee_name").execute()
+        # Record what this confirm CHANGED about an existing envelope. `_prior` absent ⇒ a first
+        # entry, and `revision_rows` writes nothing for one: there was nothing to overwrite.
+        _pk = ((it.get("store_code") or ""), item_date, (it.get("employee_name") or ""))
+        _prior = _prior_by_key.get(_pk)
+        if _prior and _prior_ok:
+            _rev = _write_count_revisions(
+                client, org_id, table, _prior.get("id"),
+                {"store_code": _pk[0], "close_date": item_date, "employee_name": _pk[2]},
+                _prior, row, changed_by=dm, note=(it.get("note") or "").strip() or None)
+            corrections += _rev["corrections"]
+            history_recorded = history_recorded and _rev["recorded"]
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
     notify_label = top_date or (item_dates[0] if len(item_dates) == 1 else
                                 f"{item_dates[0]}..{item_dates[-1]}" if item_dates else "—")
@@ -6955,7 +7275,10 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
             "actual_total": actual_total,
             "variance_short": variance_short, "variance_over": variance_over,
             # mig 990 — how many of the confirmed envelopes the DM opened and counted
-            "opened_count": opened_count}
+            "opened_count": opened_count,
+            # mig 1071 — how many figures this confirm CHANGED on envelopes already recorded, and
+            # whether the trail took them. 0 on a first confirm, which is the normal case.
+            "corrections": corrections, "history_recorded": history_recorded}
 
 
 @router.post("/pickup")
@@ -7260,6 +7583,9 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # WHY a variance was refused, where it was (owner question 2026-10-10). None when the
+            # comparison stands, so an older reader is byte-identical.
+            "pickup_variance_reason": (_pickup_actual.row_variance(p) or {}).get("reason") if p else None,
             # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
             # schema and on every row recorded before the checkbox existed: "collected sealed",
             # which is exactly how those pickups behaved.
@@ -7397,10 +7723,12 @@ def pickup_basis_label(basis, in_force=None):
     actually asked to collect, which is the money-rewriting this file exists to refuse. The same
     rule mig 1036 applies to a stored envelope count.
     """
-    b = str(basis or "").strip().lower()
-    recorded = b in billpay_netting.PICKUP_BASES
-    if not recorded:
-        b = "off"
+    # ONE HOME for both halves (owner question 2026-10-10): WAS a basis recorded, and WHAT does a
+    # missing one resolve to. Both moved into `billpay_netting` so the basis GATE
+    # (`count_comparable`, which decides whether a count may be scored) reads the same resolution
+    # this label words. A private copy here is how the screen and the gate came to disagree.
+    recorded = billpay_netting.basis_recorded(basis)
+    b = billpay_netting.resolved_basis(basis)
     out = {"basis": b, "recorded": recorded,
            "label": (_PICKUP_BASIS_WORDS[b] if recorded else
                      "total cash (not recorded — collected before the basis was stored)")}
@@ -7970,8 +8298,47 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
     # pickup_actual.row_variance (the envelope_report count_fields truth table). Uncounted envelopes
     # are reported as uncounted, never as short.
     dm_rows, dm_summary = _da.dm_shortage_rows(out)
+    # HAS THIS FIGURE BEEN CORRECTED (owner 2026-10-10, mig 1071)? Attached to the envelope the
+    # correction is about, so the board can show "was $250, changed by X" beside the number rather
+    # than presenting the latest edit as if it were the only thing ever entered. ONE read for the
+    # whole board, keyed on the pickup row id the envelopes already carry (no second walk of the
+    # pickup tables). Degrades to no history on an un-migrated database — the counts still render.
+    _revs_by_row, _history_available = {}, True
+    try:
+        _rev_rows = (client.schema("commcalc").table(_count_revision.REVISION_TABLE).select("*")
+                     .eq("org_id", org_id).gte("close_date", start).lte("close_date", end)
+                     .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+        _revs_by_row = _count_revision.history_by_subject(_rev_rows)
+    except Exception as _e:
+        _history_available = False
+        print(f"INFO cash_count_revision unavailable (run migration 1071?): {str(_e)[:160]}")
+    # The basis a pickup written NOW would use — read ONCE for the board, so `pickup_basis_label`
+    # can also say when a stored row answers a question the screen no longer asks.
+    _basis_now = pickup_amount_basis(client, org_id)
+    _visible_revs = []
+    for r in out:
+        for env in r["envelopes"]:
+            _h = _revs_by_row.get(str(env.get("pickup_row_id") or "")) or []
+            env["corrections"] = len(_h)
+            # The sentences, built by the pure module so the screen words nothing itself.
+            env["correction_history"] = [_count_revision.describe(x, money=_usd) for x in _h]
+            _visible_revs.extend(_h)
+            # WHICH CASH the expected figure counted, in the words the pickup screen already uses
+            # (owner question 2026-10-10: "declared on envelope is 552 but written on envelope
+            # 671"). The $552.50 was never DECLARED by anybody — it is the drawer less the POS
+            # bill-payment cash — so the board states the basis beside the figure instead of
+            # calling it a declaration. ONE home for the words (`pickup_basis_label`), dereferenced
+            # here; the screen spells no basis of its own.
+            _bl = pickup_basis_label(env.get("pickup_amount_basis"), _basis_now)
+            env["amount_basis_label"] = _bl["label"]
+            env["amount_basis_recorded"] = _bl["recorded"]
     return {"start": start, "end": end, "rows": out, "summary": summary,
             "by_dm": dm_rows, "dm_summary": dm_summary,
+            # Corrections across the VISIBLE rows only (keyset consistency, like `summary` above).
+            # `amount_moved` is the sum of ABSOLUTE deltas: +$200 then -$200 is two figures changed,
+            # not nothing happening.
+            "corrections": _count_revision.correction_count(_visible_revs),
+            "history_available": _history_available,
             # What was actually applied, so the section can state its own filters rather than the
             # page's — a filter the viewer cannot see is a filter they will mis-read.
             "filters": {"stores": sorted(store_set) if store_set else [],

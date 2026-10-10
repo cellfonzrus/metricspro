@@ -104,6 +104,13 @@ PINNED = {
         "closing_attempts": "OVERLAY", "accountability_chain": "OVERLAY",
         "_billpay_position_core": "OVERLAY", "billpay_pickups": "OVERLAY",
         "cash_recon_management": "OVERLAY", "deposit_accountability_board": "OVERLAY",
+        # The cash-variance report (index §72): reads the storeops roster for market and passes it
+        # through the SAME `_overlay_canonical_market` every sibling above uses (it IS
+        # core.scope.market_by_code) before the market filter or any display, so a store whose market
+        # is spelled only in commcalc.store_mapping still binds. Not a fourth spelling of "which
+        # market" — the closing family's standard OVERLAY, and the preferred resolution this guard's
+        # own docstring asks for.
+        "cash_variance_report": "OVERLAY",
     },
     "closing/ops_chargebacks.py": {"_dm_for_stores_batch": "OVERLAY"},
     "storeops/router.py": {

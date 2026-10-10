@@ -523,11 +523,23 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
           store_code: o.store_code, close_date: o.day, employee_name: o.employee_name,
           envelope_opened: true, actual_amount: o.amount,
           counted_by: (o.counted_by || '').trim() || user?.full_name || undefined,
+          // WHY it was changed, when this is a correction rather than a first count (mig 1071).
+          note: (o.note || '').trim() || undefined,
         }),
       })
+      // 'not_comparable' must NOT fall through to "matches" — that is the wrong answer, and it is
+      // the one the old else-branch would have given (owner question 2026-10-10).
       const verdict = res?.status === 'short' ? `⚠ SHORT ${fmt(res.variance)}`
-        : res?.status === 'over' ? `+${fmt(res.variance)} over` : 'matches the declared amount'
-      setMsg(`📂 Opened and counted ${fmt(res?.actual_picked_amount)} against ${fmt(res?.declared_amount)} declared — ${verdict}.`)
+        : res?.status === 'over' ? `+${fmt(res.variance)} over`
+        : res?.status === 'not_comparable'
+          ? `not scored — ${res?.basis_reason || 'the expected figure counts a different cash than the envelope holds'}`
+          : 'matches the expected amount'
+      // A CORRECTION SAYS SO, and so does a trail that could not be written — "saved but its
+      // history was not recorded" is a real state and hiding it is the silent-degradation defect.
+      const corr = res?.corrections ? ` ${res.corrections} figure(s) changed and recorded.` : ''
+      const nohist = res?.history_recorded === false
+        ? ` ⚠ ${res?.history_detail || 'the correction history could not be recorded'}.` : ''
+      setMsg(`📂 ${o.editing ? 'Corrected to' : 'Opened and counted'} ${fmt(res?.actual_picked_amount)} against ${fmt(res?.declared_amount)} expected — ${verdict}.${corr}${nohist}`)
       setOpenEnv(null)
       load()
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
@@ -547,12 +559,19 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
   // Actual-vs-declared at pickup time (owner 2026-09-04, mig 949): a SHORT pickup is visible on
   // the day — display + flag only, it never gates green (the money posture is the owner-gated
   // pickup_actual_relieves_cash knob, not this board).
+  // NOT COMPARABLE IS NOT A SHORTAGE, AND NOT A MATCH (owner question 2026-10-10). Where the
+  // expected figure nets bill-payment cash by the POS and the envelope was netted by the rep's own
+  // declared figure, the server refuses the comparison and sends the count as not-comparable. It is
+  // shown as its own neutral chip: hiding it would lose a real finding, and colouring it red would
+  // accuse somebody of the POS-versus-declared gap as though it were missing cash.
   function pickupVarianceChip(r: any) {
-    if (!r.pickup_short_rows && !r.pickup_over_rows) return null
+    const nc = r.pickup_not_comparable_rows || 0
+    if (!r.pickup_short_rows && !r.pickup_over_rows && !nc) return null
     return (
-      <span title={`DM-recorded actual vs declared at pickup: net ${fmt(r.pickup_variance_total)}`}>
-        {r.pickup_short_rows ? <span style={{ color: '#dc2626', fontWeight: 700 }}> · ⚠ {r.pickup_short_rows} short pickup{r.pickup_short_rows === 1 ? '' : 's'} ({fmt(r.pickup_variance_total)})</span> : null}
-        {!r.pickup_short_rows && r.pickup_over_rows ? <span style={{ color: '#b45309', fontWeight: 600 }}> · +{fmt(r.pickup_variance_total)} over</span> : null}
+      <span>
+        {r.pickup_short_rows ? <span title={`DM-recorded count vs the envelope's expected figure: net ${fmt(r.pickup_variance_total)}`} style={{ color: '#dc2626', fontWeight: 700 }}> · ⚠ {r.pickup_short_rows} short pickup{r.pickup_short_rows === 1 ? '' : 's'} ({fmt(r.pickup_variance_total)})</span> : null}
+        {!r.pickup_short_rows && r.pickup_over_rows ? <span title={`DM-recorded count vs the envelope's expected figure: net ${fmt(r.pickup_variance_total)}`} style={{ color: '#b45309', fontWeight: 600 }}> · +{fmt(r.pickup_variance_total)} over</span> : null}
+        {nc ? <span title="Counted, but the expected figure counts a different cash than the envelope holds — so it cannot be scored short or over. Open the envelope to see why." style={{ color: 'var(--text3)', fontWeight: 600 }}> · {nc} not comparable</span> : null}
       </span>
     )
   }
@@ -569,14 +588,40 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
     const sealed = picked.filter(e => !(e.actual_picked_amount !== null && e.actual_picked_amount !== undefined))
     return (
       <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 3 }}>
-        {counted.length ? (
-          <span style={{ color: '#166534' }}>
-            {counted.length} counted
-            {counted.some(e => e.actual_counted_by)
-              ? <span style={{ color: 'var(--text3)' }}> · by {counted.find(e => e.actual_counted_by)?.actual_counted_by}</span>
-              : null}
+        {/* A COUNTED ENVELOPE IS EDITABLE (owner 2026-10-10: "also need to edit the cash entered by
+            the management during cash recon"). It was read-only text, so a typo could not be fixed
+            from the screen it was typed on. Every change is recorded (mig 1071) and shown under the
+            figure, because replacing a cash figure a human typed without keeping the old one
+            destroys evidence — and this figure can become a chargeback against the rep. */}
+        {counted.map(e => (
+          <span key={envKey(r, e) + ':c'} style={{ display: 'inline-flex', flexDirection: 'column', gap: 1 }}>
+            <span style={{ color: '#166534' }}>
+              {fmt(e.actual_picked_amount)} counted
+              {e.actual_counted_by ? <span style={{ color: 'var(--text3)' }}> · by {e.actual_counted_by}</span> : null}
+              {e.employee_name ? <span style={{ color: 'var(--text3)' }}> · {e.employee_name}</span> : null}
+              {e.kind === 'billpay' ? <span style={{ color: 'var(--text3)' }}> (bill-pay)</span> : null}
+              {' '}
+              <button className="btn btn-secondary" style={{ fontSize: 10.5, padding: '1px 6px' }}
+                disabled={busyKey === k}
+                title={`Correct this figure — declared ${fmt(e.amount)}. Every change is recorded with who made it.`}
+                onClick={() => setOpenEnv({
+                  rowK: k, kind: e.kind, store_code: r.store_code, day: r.day,
+                  employee_name: e.employee_name, store_name: r.store_name || r.store_code,
+                  declared: e.amount, basis_label: e.amount_basis_label, basis_reason: e.pickup_variance_reason, amount: String(e.actual_picked_amount ?? ''),
+                  counted_by: e.actual_counted_by || user?.full_name || '', note: '',
+                  editing: true, history: e.correction_history || [],
+                })}>
+                ✏️ edit
+              </button>
+            </span>
+            {(e.corrections || 0) > 0 && (
+              <span style={{ fontSize: 10.5, color: '#b45309' }}
+                title={(e.correction_history || []).join('\n')}>
+                ✎ corrected {e.corrections} time{e.corrections === 1 ? '' : 's'}
+              </span>
+            )}
           </span>
-        ) : null}
+        ))}
         {sealed.map(e => (
           <button key={envKey(r, e)} className="btn btn-secondary"
             style={{ fontSize: 11, padding: '2px 7px' }}
@@ -585,7 +630,7 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
             onClick={() => setOpenEnv({
               rowK: k, kind: e.kind, store_code: r.store_code, day: r.day,
               employee_name: e.employee_name, store_name: r.store_name || r.store_code,
-              declared: e.amount, amount: '', counted_by: user?.full_name || '',
+              declared: e.amount, basis_label: e.amount_basis_label, basis_reason: e.pickup_variance_reason, amount: '', counted_by: user?.full_name || '',
             })}>
             📂 open &amp; count{e.employee_name ? ` · ${e.employee_name}` : ''}{e.kind === 'billpay' ? ' (bill-pay)' : ''}
           </button>
@@ -691,26 +736,50 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
       {openEnv && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
           <div className="card" style={{ padding: 20, maxWidth: 430, width: '90%' }}>
-            <h3 style={{ margin: 0, fontSize: 16 }}>📂 Open and count this envelope</h3>
+            <h3 style={{ margin: 0, fontSize: 16 }}>
+              {openEnv.editing ? '✏️ Correct the counted cash' : '📂 Open and count this envelope'}
+            </h3>
             <p style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>
               {openEnv.store_name} · {openEnv.day}{openEnv.employee_name ? ` · ${openEnv.employee_name}` : ''}
               {openEnv.kind === 'billpay' ? ' · bill-payment envelope' : ''}
-              <br />Declared on the envelope: <b>{fmt(openEnv.declared)}</b>.
+              {/* NOT "declared" — nobody declared this figure. It is what the system EXPECTS in
+                  this envelope, and on a netted basis that is the drawer less the bill-payment
+                  cash. Saying "declared" is what made a correct count read as money missing
+                  (owner question 2026-10-10). The basis words come from the server. */}
+              <br />Expected in this envelope: <b>{fmt(openEnv.declared)}</b>
+              {openEnv.basis_label ? <> — {openEnv.basis_label}</> : null}.
+              {openEnv.basis_reason
+                ? <><br /><span style={{ color: 'var(--text3)' }}>A count here cannot be scored short or over: {openEnv.basis_reason}</span></>
+                : null}
             </p>
             <div style={{ display: 'grid', gap: 8 }}>
               <input autoFocus className="select" inputMode="decimal" placeholder="Cash actually counted $"
                 value={openEnv.amount} onChange={e => setOpenEnv((o: any) => ({ ...o, amount: e.target.value }))} />
               <input className="select" placeholder="Counted by"
                 value={openEnv.counted_by} onChange={e => setOpenEnv((o: any) => ({ ...o, counted_by: e.target.value }))} />
+              {openEnv.editing && (
+                <input className="select" placeholder="Why it is being changed (optional)"
+                  value={openEnv.note || ''}
+                  onChange={e => setOpenEnv((o: any) => ({ ...o, note: e.target.value }))} />
+              )}
             </div>
+            {openEnv.editing && (openEnv.history || []).length > 0 && (
+              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--text2)' }}>
+                <b>Already corrected:</b>
+                {(openEnv.history || []).map((h: string, i: number) => (
+                  <div key={i} style={{ color: 'var(--text3)' }}>· {h}</div>
+                ))}
+              </div>
+            )}
             <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '8px 0 0' }}>
               An opened envelope must carry its count — a count of $0.00 is recorded as a real finding,
               but a blank is refused. Management&rsquo;s own later count stays on the Management Envelope Receipt.
+              {openEnv.editing ? ' Changing this figure keeps the previous one on the record, with your name against the change.' : ''}
             </p>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button className="btn" style={{ background: 'var(--accent)', color: '#fff' }}
                 disabled={!!busyKey || String(openEnv.amount).trim() === ''} onClick={saveOpenCount}>
-                {busyKey ? 'Saving…' : 'Record the count'}
+                {busyKey ? 'Saving…' : (openEnv.editing ? 'Save the correction' : 'Record the count')}
               </button>
               <button className="btn btn-secondary" onClick={() => setOpenEnv(null)}>Cancel</button>
             </div>
@@ -732,7 +801,7 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
                 <label key={envKey(handModal.row, e)} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}>
                   <span style={{ flex: 1 }}>
                     {e.employee_name || '—'}{e.kind === 'billpay' ? ' · bill-pay' : ''}
-                    <span style={{ color: 'var(--text3)' }}> · declared {fmt(e.amount)}</span>
+                    <span style={{ color: 'var(--text3)' }} title={e.amount_basis_label || undefined}> · expected {fmt(e.amount)}</span>
                   </span>
                   <input className="select" style={{ width: 120 }} inputMode="decimal" placeholder="Received $"
                     value={handModal.amounts[envKey(handModal.row, e)] ?? ''}
