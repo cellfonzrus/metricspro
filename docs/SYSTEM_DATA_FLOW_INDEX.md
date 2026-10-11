@@ -99,6 +99,7 @@ Primary code homes:
 | 74 | **A count of the whole envelope is not comparable with a netted expectation** | "The envelope says $671 and the count says $671, so why does the screen expect $552.50 and call it a declaration? Which of the short and over verdicts on the recon board are measuring two different cashes against each other?" |
 | 75 | **The frontend type check is a CHECK** | "A frontend TypeScript error was invisible to all 49 GitHub checks while the Vercel deploy was red on every head — what compiles the frontend in CI now, where is that gate, why can it not skip silently on tsconfig.json or package.json, and what stops someone reaching green with `strict: false`, `ignoreBuildErrors` or a blanket `@ts-ignore`?" |
 | 76 | **A category you declare is a category you can be paid on** | "I added a category to the daily closing — why can no incentive rule point at it? Where is it declared that a category carries dollars, or that each employee declares their own? Which employee generated the most revenue today, and how is a daily pool split when nobody's hours were recorded?" |
+| CORE-01 | **A section id carries its module** | "What number does my new index section get, who else could be taking it right now, and what happens if two of us take the same one? Which module does a section belong to, which module does nothing document yet, and why are the 111 existing numbers not renumbered?" |
 
 ---
 
@@ -24424,3 +24425,265 @@ pickup variance is display plus a flag, and chargebacks key off `envelope_count.
 - The by-DM shortage rollup — the surface that **names a DM** — keeps them in their own bucket,
   never as uncounted (untrue: somebody did count) and never as a match (untrue, and it hides the
   finding).
+
+---
+
+## §CORE-01. A SECTION ID CARRIES ITS MODULE, AND A CLAIM ON ONE IS A CLAIM NOBODY ELSE CAN TAKE (owner directive 2026-10-11)
+
+Owner: *"So we should assign the numbers with a prefix of the module we are working with and update
+the same in the index and back connection it"*.
+
+### CORE-01.1 The defect, stated once
+
+A section number in this file had **no allocator**. The number was chosen by *reading the file*, so
+every branch open at the same time read the same free number as free — and a collision was the
+normal outcome of parallel work, not a slip. On 2026-10-10 one pull request's number was taken out
+from under it three times in about an hour (§72, §73, §74 each claimed by a different, earlier
+merge), costing four renumber-and-re-dispatch cycles; and the file-wide renumber that followed
+rewrote a *different* pull request's `§72` reference, caught only by diffing against `origin/main`.
+`harness_unique_numbers_lock.py` already failed the build on a duplicate number — but only once both
+claims were in one tree, which is after one of them has merged. Detection was never the gap;
+**allocation** was.
+
+### CORE-01.2 The scheme — `§<MODULE>-NN`
+
+A new section's id is the **module directory name, upper-cased, a hyphen, and a two-digit number
+that counts within that module**: `§COMMCALC-01`, `§CLOSING-01`, `§CORE-01`. Subsections keep the
+dotted form under it: `§CORE-01.2`.
+
+- **The prefix is not a vocabulary somebody has to maintain.** It is literally the folder under
+  `backend/app/modules/`, so there is nothing to keep in step and nothing to drift. `ls
+  backend/app/modules` is the whole list.
+- **The number is per module.** Two branches can only reach for the same id when they are writing
+  about the same module — which is also exactly when they should be talking to each other.
+- **Nobody reads this file to find the next number.** `python3 backend/harness_index_section_register.py
+  --next commcalc` prints the next free id for that module and the register line to paste.
+- **A reader sees the module in the id.** "§CLOSING-03" says what it is about before it is opened.
+
+### CORE-01.3 How a collision now FAILS instead of happening quietly
+
+Three gates, in the order they bite:
+
+1. **The claim is a line in one sorted table** — the register in CORE-01.5. Two branches claiming
+   `COMMCALC-01` write *different content at the same sort position*, so the second one to reach
+   GitHub has a **merge conflict in that table**, shown on the pull request before it merges. The
+   cost of losing the race is re-pasting one line, not a renumber: nothing outside the branch
+   references a section that does not exist yet.
+2. **A duplicate id fails the build** — `harness_unique_numbers_lock.py`, which stays the ONE home
+   for "a number that names one thing is claimed once", now matches the prefixed shape too. If
+   somebody resolves the conflict by keeping both sides, CI is red.
+3. **An unregistered section fails the build** — `harness_index_section_register.py` requires every
+   top-level `##` heading to have a register row and every register row to resolve to a real
+   heading. A section that skips the register cannot land, so the allocator cannot be bypassed.
+
+What this is **not**: collisions are not impossible by construction. Making them impossible needs an
+id that is not a sequence at all (a slug, `§COMMCALC-ma-tx-installments`), and the directive asked
+for numbers. What is guaranteed is that a collision is a **conflict or a red build**, never a silent
+overwrite, and that it is confined to one module.
+
+### CORE-01.4 The back connection, and what fails when one side drifts
+
+`harness_index_section_register.py` (CI: `module-graph-guard`) checks both directions:
+
+| Direction | What must be true | What fails it |
+|---|---|---|
+| section → module | every `##` section has a register row naming its module(s) | a new section with no row |
+| module → section | every folder under `backend/app/modules/` is either named by a register row or listed in CORE-01.6 with a reason | a new module that documents itself nowhere |
+| register → index | every register id resolves to a real heading | a renamed or deleted heading |
+| declared → cited | the declared module(s) intersect the modules whose code paths the section actually cites, wherever it cites any | a row that names the wrong module |
+| code → section | every `module_graph.FACTS[*]["index"]` reference resolves to a **registered** section (or a subsection of one) | a fact pointing at an unregistered section |
+| the scheme is closed | every *numeric* register id is one of the 112 that predate this directive; the list may only shrink | allocating a new bare number instead of a prefixed id |
+
+The last row is what keeps this ONE scheme rather than two live ones: bare numeric ids are **frozen,
+not permitted**. `§77` cannot be allocated.
+
+`backend/app/modules/core/module_graph.py` stays the one home for *which files answer which
+question*; it already carried an `index` reference per fact and the guard already checked it
+resolved to a heading. This change does not copy that — it **tightens** it to "resolves to a
+registered section" and adds the module↔section direction it never had.
+
+### CORE-01.5 THE REGISTER — section → module
+
+113 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
+once), plus §15.1–§15.3, which are where the `notify` module is actually documented.
+
+Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
+110 sections cite a backend module path and are checked against it, 12 of those cite four or more
+modules and are cross-cutting (reported, not ruled on), and the remaining 29 are declared from their
+subject and are the rows most worth a second pair of eyes. The three cross-reference sections, the
+gap list, the TOC and the harness audit are `core` because they are index infrastructure, not a
+module's documentation.
+
+<!-- SECTION-REGISTER:BEGIN -->
+
+| Section | Module(s) |
+|---|---|
+| 1 | core |
+| 2 | commcalc |
+| 3 | commcalc |
+| 4 | account |
+| 4a | account |
+| 4b | account |
+| 4c | account |
+| 4d | account |
+| 4e | commcalc |
+| 5 | commcalc |
+| 6 | commcalc |
+| 7 | commcalc |
+| 8 | commcalc |
+| 9 | commcalc |
+| 10 | commcalc |
+| 11 | pos |
+| 12 | closing |
+| 13 | storeops |
+| 14 | storeops, hr |
+| 15z | commcalc |
+| 15v | storeops |
+| 16 | core |
+| 17 | core |
+| 18 | core |
+| 19 | core |
+| 20 | core |
+| 21 | billing |
+| 22 | core |
+| 23 | core |
+| 23b | pos |
+| 23c | closing |
+| 23d | core |
+| 23e | closing |
+| 23f | commcalc |
+| 23g | core |
+| 23h | pos |
+| 23i | pos |
+| 23j | closing |
+| 23k | core |
+| 23l | pos |
+| 23m | closing |
+| 23n | core |
+| 23o | commcalc |
+| 23p | closing |
+| 23s | commcalc, storevisit |
+| 24 | core |
+| 23q | core |
+| 23r | account |
+| 23t | chat |
+| 23u | commcalc |
+| 23v | commcalc |
+| 23w | core |
+| 23x | core |
+| 23y | account |
+| 23z | account |
+| 23aa | account |
+| 25 | commcalc |
+| 26 | commcalc |
+| 27 | commcalc |
+| 28 | core |
+| 29 | closing |
+| 30 | commcalc |
+| 31 | marketing |
+| 32 | commcalc |
+| 33 | pos |
+| 34 | supply |
+| 35 | core |
+| 36 | supply |
+| 37 | account |
+| 38 | core |
+| 39 | core |
+| 40 | core |
+| 41 | core |
+| 42 | account |
+| 43 | commcalc |
+| 41a | core |
+| 44 | core |
+| 45 | pos |
+| 46 | closing |
+| 47 | closing |
+| 48 | storeops |
+| 49 | vision |
+| 50 | commcalc |
+| 51 | supply |
+| 52 | core |
+| 53 | commcalc |
+| 54 | core |
+| 55 | commcalc |
+| 56 | core |
+| 57 | commcalc |
+| 58 | commcalc |
+| 59 | commcalc |
+| 60 | commcalc |
+| 61 | commcalc |
+| 62 | commcalc |
+| 63 | commcalc |
+| 64 | account |
+| 65 | commcalc |
+| 66 | commcalc |
+| 67 | closing |
+| 68 | commcalc |
+| 76 | closing |
+| 71 | core |
+| 69 | commcalc |
+| 70 | commcalc |
+| 75 | commcalc |
+| 72 | closing |
+| 73 | closing |
+| 74 | closing |
+| 15.1 | notify |
+| 15.2 | notify |
+| 15.3 | notify |
+| CORE-01 | core |
+
+<!-- SECTION-REGISTER:END -->
+
+### CORE-01.6 Modules no section documents yet
+
+Each of these is a real folder under `backend/app/modules/` that **nothing in this index documents**.
+That is a finding, not an exemption: the next author to touch one registers a section for it and
+deletes its row here. The list may only shrink — an entry that is now covered fails the build until
+it is removed.
+
+<!-- MODULES-WITHOUT-SECTION:BEGIN -->
+
+| Module | Why there is no section yet |
+|---|---|
+| approvals | the approvals engine is covered only by `harness_approvals_engine.py`; no section describes it |
+| asset | its paths appear in passing in §34 only; no section documents the asset module itself |
+| crm | undocumented |
+| helpdesk | undocumented |
+| payables | its paths appear in passing in §14u and §53.1 only; no section documents it |
+| recovery | undocumented |
+| referral | undocumented |
+| remediation | undocumented |
+
+<!-- MODULES-WITHOUT-SECTION:END -->
+
+### CORE-01.7 Why the 112 existing ids were NOT renumbered
+
+Measured before deciding: **4,061 `§NN` references outside this file, in 895 files** — 2,676 in
+`backend/`, 614 in `frontend/`, 318 in `database/`, 295 in `.github/`, plus 2,577 cross-references
+inside this file. A file-wide renumber rewrites all of them, conflicts with every open pull request,
+and the one renumber already attempted rewrote another author's reference by accident. So the
+existing ids **keep their numbers and are registered as they are**, and the numeric space is closed
+to new claims.
+
+This leaves one allocator, one register and one set of rules — but **two id shapes**, said plainly:
+legacy numeric (frozen, 112 of them) and module-prefixed (every new one). That is a closed scheme
+plus a frozen tail, not two live schemes, and the build check in CORE-01.4 is what keeps it so.
+
+### CORE-01.8 Duplicate check (build gate) — what was checked, what was reused
+
+- `harness_unique_numbers_lock.py` already owned "an id is claimed once" and already parsed this
+  file's headings, `§N.M **…**` paragraphs and TOC rows. **Reused**: its three id patterns were
+  taught the prefixed shape — and, in the same change, a multi-letter suffix, because `\d+[a-z]?`
+  could not see **§23aa** at all, and the pattern allowed no `§`, so neither §23aa nor **§43** (whose
+  heading is written `## §43 …`) was visible to the uniqueness check — two sections whose numbers
+  could have been claimed a second time with nothing failing. This guard's stricter parser found
+  both. Its checks moved inside `main()` so a second caller can
+  import it, and the register guard dereferences `_HEADING` and `_PARA` from it rather than keeping
+  a second copy of either. No new uniqueness check was written.
+- `backend/app/modules/core/module_graph.py` already owned "which files answer this question" with
+  an `index` reference per fact, derived callers and a resolution check. **Reused** and tightened;
+  the section↔module mapping is a different fact at a different grain (113 rows against 52
+  facts) and would have corrupted `FACTS`, so it lives in this register and the two are interlinked
+  by the check above rather than copied.
+- `.github/workflows/module-graph-guard.yml` already ran on this file and on `backend/harness_*.py`.
+  **Reused**: one step added to the existing job; no new workflow, no job removed or disabled.

@@ -14,6 +14,12 @@ name: module-graph-guard
 #     piece CANNOT land silently: the build fails until the author registers it and says what else it
 #     now has to be true for.
 #
+#   · SECTION REGISTER (enforcing, fails the build) — every top-level section of the index has a
+#     register row naming its module, every module folder resolves to a section or says why it does
+#     not, and the numeric space is CLOSED so a new section must take a module-prefixed id from the
+#     allocator instead of reading the file for a free number (index CORE-01). The graph's own index
+#     references are tightened from "a real heading" to "a registered section" by the same harness.
+#
 #   · IMPACT (report-only) — prints, into the pull request's summary, every fact the changed files
 #     are wired to and the siblings that answer the same question. This is the hand talking to the
 #     other hand; it never fails a build on its own.
@@ -26,6 +32,8 @@ on:
     paths:
       - "backend/app/**"
       - "backend/harness_*.py"
+      - "backend/harness_index_section_register.py"
+      - "backend/harness_unique_numbers_lock.py"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - ".github/workflows/**"
   push:
@@ -33,6 +41,11 @@ on:
     paths:
       - "backend/app/**"
       - "backend/harness_*.py"
+      - "backend/harness_index_section_register.py"
+      - "backend/harness_unique_numbers_lock.py"
+      # On main as well: two branches can each be green on a stale base and still collide once both
+      # are merged, so the merged tree is the only place both claims are visible together.
+      - "docs/SYSTEM_DATA_FLOW_INDEX.md"
   workflow_dispatch:
 
 permissions:
@@ -60,6 +73,9 @@ jobs:
       - name: Run the module-graph guard
         working-directory: backend
         run: python3 harness_module_graph_guard.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Every section is registered to a module, and a collision fails here
+        working-directory: backend
+        run: python3 harness_index_section_register.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   impact:
     name: What else answers this question?
