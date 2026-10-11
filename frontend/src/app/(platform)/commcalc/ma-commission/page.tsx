@@ -51,7 +51,7 @@ export default function MaCommissionPage() {
   const didMount = useRef(false)
   useEffect(() => {
     if (!didMount.current) { didMount.current = true; return }
-    load(period, filt)   // eslint-disable-line react-hooks/exhaustive-deps
+    load(period, filt)
   }, [filt])   // eslint-disable-line react-hooks/exhaustive-deps
   // Stable pick-don't-type options from the backend (computed pre-filter, so the list never collapses).
   const storeOpts: EntityOption[] = (d?.store_options || []).map((o: any) => ({ id: o.id, label: o.label }))

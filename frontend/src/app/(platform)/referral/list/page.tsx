@@ -33,7 +33,7 @@ export default function ReferralsListPage() {
     } catch (e: any) { setMsg(e?.message || String(e)) }
     setLoading(false)
   }
-  useEffect(() => { load() }, [status, fraudOnly]) // eslint-disable-line
+  useEffect(() => { load() }, [status, fraudOnly]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ padding: 20, maxWidth: 1100 }}>

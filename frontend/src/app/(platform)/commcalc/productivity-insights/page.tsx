@@ -37,7 +37,7 @@ export default function ProductivityInsightsPage() {
       setData(r)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)); setData(null) } finally { setLoading(false) }
   }
-  useEffect(() => { if (storeCode) load() }, [storeCode, period, metric]) // eslint-disable-line
+  useEffect(() => { if (storeCode) load() }, [storeCode, period, metric]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const reps: any[] = data?.reps || []
   const recs: any[] = data?.recommendations || []

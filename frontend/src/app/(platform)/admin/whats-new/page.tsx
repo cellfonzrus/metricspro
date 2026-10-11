@@ -20,7 +20,7 @@ import ReportShell from '@/components/ReportShell'
 import { MODULE_LABEL } from '@/lib/tours'
 import {
   CATEGORY_ICON, CATEGORY_LABEL, CATEGORY_ORDER, ReleaseNote, WhatsNewPayload, EMPTY_PAYLOAD,
-  fetchWhatsNew, markSeen,
+   markSeen
 } from '@/lib/whats-new'
 import { api } from '@/lib/client'
 

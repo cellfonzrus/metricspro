@@ -7,9 +7,9 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { absoluteApiUrl } from '@/lib/apiBase'
 import { apiCached, LOOKUP } from '@/lib/cache'
-import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
+import { panel, btn, btnPrimary, cell, th, fmtDateTime, type Camera, type VisionConfig, visionError,
   idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent, type EdgeAgent,
-  type GoogleLinkState, type StoreOption,
+  type GoogleLinkState, type StoreOption
 } from '@/lib/vision'
 import { SetupNotice } from '@/lib/setupNotice'
 

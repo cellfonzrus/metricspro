@@ -119,7 +119,6 @@ function CallPanel({ channelId, me }: { channelId: string; me: Me }) {
     ch.subscribe()
     chRef.current = ch
     return () => { chRef.current = null; supabase.removeChannel(ch); cleanup() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, me.employee_id, cleanup])
 
   async function startCall(withVideo: boolean) {

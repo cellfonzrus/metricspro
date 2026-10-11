@@ -3,7 +3,7 @@
 // Server-gated (_support_ctx: super_admin OR house-org membership w/ modules.support); a tenant user gets 403.
 // Same grouping + plain-English UX as /failures, filterable by tenant / module / kind / date; club a group of
 // similar failures (across tenants) into ONE fix request → super-admin approval → the automation queue.
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'

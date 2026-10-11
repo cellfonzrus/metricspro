@@ -3,7 +3,7 @@
 // a line: qty + date + optional per-unit IMEI/serial capture (capturing serials is what lets Sold Tally /
 // Aging join a unit to raw_sales / ePay by IMEI at exact confidence instead of a qty-window estimate).
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import { api, fmt, localToday } from '@/lib/client'
+import { api, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'

@@ -45,7 +45,7 @@ export default function TargetFieldsPage() {
     setLoading(false)
   }
   useEffect(() => { loadKeys() }, [])           // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { loadFields(reportKey) }, [reportKey])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadFields(reportKey) }, [reportKey])
 
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 3500) }
 

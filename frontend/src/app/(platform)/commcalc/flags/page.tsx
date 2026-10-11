@@ -96,7 +96,7 @@ export default function FlagsPage() {
   const actMonths = useMemo(() => [...new Set(flags.map(f => String(f.activation_date || f.transaction_date || '').slice(0, 7)).filter(Boolean))].sort().reverse(), [flags])
 
   const filtered = useMemo(() => {
-    let rows = flags.filter(f => {
+    const rows = flags.filter(f => {
       if (fType && f.flag_type !== fType) return false
       if (fRep && f.epay_salesperson !== fRep) return false
       if (fStore && storeOf(f) !== fStore) return false

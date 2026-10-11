@@ -184,7 +184,7 @@ export default function CommissionLedgerPage() {
     </table>
   )
   const orphanPeriods = (prov?.periods || []).filter(p => p.orphan && p.lines > 0)
-  useEffect(() => { loadTemplates() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadTemplates() }, [])
   useEffect(() => { loadSummary(); setDrill(null); setSelReps([]) }, [src, period, origin])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setPrev(null); loadProvenance() }, [src])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (view === 'rep') loadByRep() }, [view, src, period, origin])  // eslint-disable-line react-hooks/exhaustive-deps

@@ -105,7 +105,6 @@ export default function PayrollChangeLogPage() {
       .then((r: any) => { setItems(r?.items || []); setAvailable(r?.available !== false) })
       .catch(() => { setItems([]); setAvailable(false) })
       .finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeReady, filt.period, filt.periodTo])
 
   const storeMarket = useMemo(() => {

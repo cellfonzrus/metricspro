@@ -736,6 +736,8 @@ on:
       # named here and in the push filter below.
       - "frontend/**"
       - "backend/harness_frontend_typecheck_lock.py"
+      - "backend/harness_frontend_lint_lock.py"
+      - "frontend/eslint_pending.txt"
   push:
     branches: [main]
     paths:
@@ -743,6 +745,8 @@ on:
       # index §75 — the frontend type check; same reason as the pull_request filter above.
       - "frontend/**"
       - "backend/harness_frontend_typecheck_lock.py"
+      - "backend/harness_frontend_lint_lock.py"
+      - "frontend/eslint_pending.txt"
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/app/modules/commcalc/report_kinds.py"
@@ -1233,6 +1237,37 @@ jobs:
       - name: Type-check the whole frontend (the ONE home — package.json `typecheck`)
         working-directory: frontend
         run: npm run typecheck 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE FRONTEND LINT GATE (index §77, owner 2026-10-11: *"Run the code style checker and fix the
+  # problems"*). `frontend/package.json` declared a `lint` script all along and NOTHING ran it —
+  # measured on main: 5953 findings over 422 files, reported by nobody. The same §19.25 class as the
+  # type-check hole #438 closed one layer over, and it ships the same way: the lock first (stdlib,
+  # pre-install, so its verdict survives a red lint step), then `npm ci`, then the gate.
+  #
+  # The gate is a RATCHET, not a clean check: 4903 of those findings are `no-explicit-any` and 666
+  # are React-Compiler/hook rules whose fixes change RUNTIME BEHAVIOUR in commission, payroll,
+  # closing and P&L pages — 5569 money-touching behaviour changes are not a decision a lint job makes
+  # on the owner's behalf. So frontend/eslint_pending.txt pins today's debt, anything NEW fails, and
+  # the register may only shrink. Unlike #438 (which refused to create a zero-entry ratchet), this
+  # register holds real entries.
+  frontend-lint:
+    name: Frontend lint (eslint over the whole frontend, ratcheted)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: "Run the frontend lint gate lock (index §77): the linter has ONE home, a workflow runs it with node_modules installed, its path filter covers frontend/**, and the config's rule sets, the ignores, the suppression ceiling and the pinned register cannot be relaxed to reach green"
+        working-directory: backend
+        run: python3 harness_frontend_lint_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install the frontend's dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Lint the whole frontend against the pinned register (the ONE home — package.json `lint`, dereferenced by `lint:gate`)
+        working-directory: frontend
+        run: npm run lint:gate 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's

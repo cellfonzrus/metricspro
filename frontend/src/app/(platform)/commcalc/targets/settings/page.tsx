@@ -55,7 +55,7 @@ export default function TargetSettingsPage() {
       const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}${inc}`)
       // The financing target lives in its own table (migration 272). Fetched alongside and merged in;
       // if that migration has not been run the column simply renders as unavailable.
-      let finByCode: Record<string, number> = {}
+      const finByCode: Record<string, number> = {}
       let finReady = false
       try {
         const f = await api(`/api/v1/commcalc/financing/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}${inc}`)

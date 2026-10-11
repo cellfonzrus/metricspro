@@ -85,7 +85,7 @@ export default function CommissionCategoryMapPage() {
   async function loadClasses() {
     try { const d = await api('/api/v1/commcalc/ma-product-class/classes'); setClassKeys(d?.assignable || []) } catch { setClassKeys([]) }
   }
-  useEffect(() => { loadTemplates(); loadClasses() }, [])         // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadTemplates(); loadClasses() }, [])
   useEffect(() => { loadMap(src); loadObserved(src) }, [src])  // eslint-disable-line react-hooks/exhaustive-deps
 
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }

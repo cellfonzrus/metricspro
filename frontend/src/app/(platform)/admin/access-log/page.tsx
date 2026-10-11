@@ -45,8 +45,8 @@ export default function AccessLogPage() {
     try { const r: any = await api('/api/v1/core/sessions/revoke', { method: 'POST', body: JSON.stringify({}) }); setMsg(`✅ Revoked ${r?.revoked ?? 0} session(s)${r?.enforced ? '' : ' — note: SESSION_ENFORCE is OFF, so this takes effect once enabled.'}`) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
-  useEffect(() => { load() }, [group, dateFrom, anonOnly]) // eslint-disable-line
-  useEffect(() => { loadBlocks() }, []) // eslint-disable-line
+  useEffect(() => { load() }, [group, dateFrom, anonOnly]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadBlocks() }, [])
 
   const rows: any[] = data?.rows || []
   const gmap = (lat: any, lng: any) => (lat != null && lng != null)

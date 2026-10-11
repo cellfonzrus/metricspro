@@ -196,7 +196,7 @@ export default function PosInventoryPage() {
   useEffect(() => {
     apiCached('/api/v1/storeops/stores').then(rows => setStores(rows || [])).catch(() => {})
     api('/api/v1/pos/products?active_only=true').then(r => setProducts(r.products || [])).catch(() => {})
-  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // Resolve the active store once the store list (and possibly the login) is known:
   // localStorage → login's store_code → first store. Stock views default to it.

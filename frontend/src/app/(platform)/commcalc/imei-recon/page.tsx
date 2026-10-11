@@ -38,7 +38,7 @@ export default function ImeiReconPage() {
       if (!r.counts?.devices && !r.counts?.sales) setMsg('No inventory or sales rows matched this store/period.')
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)); setData(null) } finally { setLoading(false) }
   }
-  useEffect(() => { if (storeCode) load() }, [storeCode, period]) // eslint-disable-line
+  useEffect(() => { if (storeCode) load() }, [storeCode, period]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const c = data?.counts || {}
   const Tile = ({ label, value, tone }: { label: string; value: any; tone?: string }) => (

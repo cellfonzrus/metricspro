@@ -183,7 +183,7 @@ export default function PosReportsPage() {
     setDateTo(ymd(now))
     loadStats()
     loadFilterOptions()
-  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   async function loadFilterOptions() {
     const problems: string[] = []

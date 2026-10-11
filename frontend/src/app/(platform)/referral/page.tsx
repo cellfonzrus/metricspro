@@ -6,8 +6,8 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import {
-  panel, cell, th, btn, btnPrimary, fmtMoney, fmtDate, referrerName, customerName,
-  STATUS_COLOR, STATUS_LABEL, type Referral,
+  panel, cell, th, btnPrimary, fmtMoney, fmtDate, referrerName, customerName,
+  STATUS_COLOR, STATUS_LABEL, type Referral
 } from '@/lib/referral'
 
 export default function ReferralDashboard() {

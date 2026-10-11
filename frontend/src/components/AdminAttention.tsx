@@ -8,8 +8,8 @@ import { apiCached } from '@/lib/cache'
 import { canSeeAttention } from '@/lib/rbac'
 import { safeHref } from '@/lib/safe-url'   // H6: deep_link is tenant-writable config
 import {
-  CATEGORY_ICON, CATEGORY_LABEL, ReleaseNote, WhatsNewPayload, EMPTY_PAYLOAD,
-  fetchWhatsNew, lastSeen, markSeen,
+  CATEGORY_ICON, CATEGORY_LABEL, WhatsNewPayload, EMPTY_PAYLOAD,
+  fetchWhatsNew, lastSeen, markSeen
 } from '@/lib/whats-new'
 
 // ── ADMIN ATTENTION (owner directive 2026-07-25, mig 717) ────────────────────────────────────────────

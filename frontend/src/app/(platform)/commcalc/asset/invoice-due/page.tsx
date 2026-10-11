@@ -15,7 +15,7 @@
 //
 // RULE FOUR: ExportButtons + SendReportButton via the in-browser exportPayload path (never a
 // reportKey+filters server re-query — the export-filter-fix package's whole point).
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'

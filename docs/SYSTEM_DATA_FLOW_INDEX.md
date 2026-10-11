@@ -99,6 +99,7 @@ Primary code homes:
 | 74 | **A count of the whole envelope is not comparable with a netted expectation** | "The envelope says $671 and the count says $671, so why does the screen expect $552.50 and call it a declaration? Which of the short and over verdicts on the recon board are measuring two different cashes against each other?" |
 | 75 | **The frontend type check is a CHECK** | "A frontend TypeScript error was invisible to all 49 GitHub checks while the Vercel deploy was red on every head — what compiles the frontend in CI now, where is that gate, why can it not skip silently on tsconfig.json or package.json, and what stops someone reaching green with `strict: false`, `ignoreBuildErrors` or a blanket `@ts-ignore`?" |
 | 76 | **A category you declare is a category you can be paid on** | "I added a category to the daily closing — why can no incentive rule point at it? Where is it declared that a category carries dollars, or that each employee declares their own? Which employee generated the most revenue today, and how is a daily pool split when nobody's hours were recorded?" |
+| 77 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
 
 ---
 
@@ -24424,3 +24425,174 @@ pickup variance is display plus a flag, and chargebacks key off `envelope_count.
 - The by-DM shortage rollup — the surface that **names a DM** — keeps them in their own bucket,
   never as uncounted (untrue: somebody did count) and never as a match (untrue, and it hides the
   finding).
+
+---
+
+## 77. THE CODE STYLE CHECKER IS A CHECK — and a ratchet only turns one way (owner directive 2026-10-11)
+
+Owner, verbatim: *"Run the code style checker and fix the problems"*.
+
+### 77.1 THE CLASS, NOT THE INSTANCE
+
+§75 closed this hole for the type checker and **named this one on its way past**: *"It does not run
+ESLint as a gate. `npm run lint` exists and nothing runs it either. Same class, separate change — the
+eslint surface was not measured here and a gate nobody measured first is how a debt file gets
+invented."* This is that change, and it measured first.
+
+The instance is 5953 lint findings. The class is **a checker the repo declares and never executes**:
+`frontend/package.json` has carried `"lint": "eslint"` all along, and `grep -r "npm run lint"
+.github/workflows/` returned **nothing**. §19.18 again (a mechanism written, no caller wired to it)
+and §19.25 again (a gate that does not run is not a gate) — the same defect the type check had, one
+layer over, in the script sitting directly above it in the same `scripts` block.
+
+### 77.2 WHAT MAIN ACTUALLY MEASURED — and therefore a debt file that holds REAL entries
+
+Measured on `origin/main` (`567e7050`) with a clean `npm ci`, before anything was changed:
+
+| | |
+|---|---|
+| **5953** | problems — **5675** errors, **278** warnings |
+| **422** | files with at least one finding |
+| **4903** | `@typescript-eslint/no-explicit-any` (82% of everything) |
+| **666** | React Compiler / hook rules: `set-state-in-effect` 334, `exhaustive-deps` 158, `static-components` 141, `immutability` 20, `preserve-manual-memoization` 7, `purity` 5, `refs` 1 |
+| **249** | `react/no-unescaped-entities` |
+| **96** | unused vars (73), unused expressions (23) |
+| **20** | ESLint's own "unused eslint-disable directive" — suppressions suppressing nothing |
+| **1** | a **parse error**: one tracked proof script ESLint could not read at all |
+
+So this ships the opposite way round from §75. §75 found the frontend type-checking **clean** and
+therefore refused to create a ratchet file, because *"a ratchet file holding zero entries is a
+decoration that teaches people the gate is negotiable"*. Here the register holds **real entries**,
+and the reason is in the numbers above: 5569 of the 5953 are `no-explicit-any` or React-Compiler
+rules whose fixes change **runtime behaviour**, overwhelmingly in `commcalc/`, `storeops/payroll/`,
+`closing/` and `accounts/` pages — money paths. Money-touching changes are surfaced for owner
+approval in this house; a lint job does not get to make 5569 of them unasked.
+
+The shape is the one the house already uses for exactly this: `frontend/table_sort_pending.txt` and
+`backend/harness_unrun_pending.txt` + `PINNED_MAX`. Both were read before this was instantiated.
+
+### 77.3 THE ONE HOME, AND THE GATE
+
+`frontend/package.json` keeps **one** spelling of the linter and adds one for the gate:
+
+    "lint":      "eslint"
+    "lint:gate": "node tools/eslint-ratchet.mjs"
+
+`frontend/tools/eslint-ratchet.mjs` **shells out to `npm run lint`** rather than importing ESLint or
+spelling `eslint` itself, so CI, a developer and the gate run byte-identically the same command —
+§19.18's "one fact, one home, dereferenced, never copied" applied to a command, as §75.3 did for
+`tsc`. CI never spells the linter either; it runs `npm run lint:gate`.
+
+**The ratchet, stated once.** A finding not in `frontend/eslint_pending.txt` fails the build. A pinned
+count that goes **up** fails. A count that goes **down**, or an entry whose findings are all gone,
+also fails — until the register is corrected — so the register can never read as worse than reality
+and quietly re-admit debt somebody already paid off. There is deliberately **no `--write` flag**: a
+trapdoor that re-pins the register from whatever the tree currently says is how a ratchet becomes a
+rubber stamp.
+
+### 77.4 WHAT WAS FIXED, AND WHAT WAS DELIBERATELY NOT
+
+**Fixed — the defects, not the formatting:**
+
+- **The parse error.** `frontend/scratchpad/prove_rule5_commission_wave1.mjs` was not being linted at
+  all. An arrow function returning a parenthesised object literal, with no statement terminator,
+  immediately followed by a bare `{ … }` scoping block: Node's parser accepts it, the **TypeScript**
+  parser reads `({ period: '', … })` as that arrow's *parameter list* with the block as its body, so
+  `period: ''` becomes a destructuring rename wanting an identifier. The file reported one parse error
+  instead of being linted, and its 37 assertions ran green the whole time. Also replaced two **raw
+  NUL bytes** used as composite-key separators (`p + '\0' + st`) with the `\u0000` escape — identical
+  runtime value, and raw NULs in tracked source are their own defect. 11 sibling proof scripts use
+  the same bare-block idiom and parse fine; the gate is what will catch the next one.
+- **20 suppressions that suppressed nothing**, which ESLint itself was reporting as unused directives.
+- **8 BLANKET `// eslint-disable-line` directives** (no rule named — they switch off *every* rule on
+  the line, including ones nobody has written yet) now **name the rule** they rely on. This **raised**
+  the measured count, because naming the rule exposed `react-hooks/set-state-in-effect` errors those
+  blanket directives had been hiding in `admin/access-log` and `commcalc/coaching`. Those are now in
+  the register, visible, instead of invisible. That is the intended direction.
+- **2 `prefer-const`**, and **20 unused import specifiers** — unambiguous dead code, each verified by
+  `npm run typecheck` staying at 0 errors over 547 files.
+
+**Deliberately NOT fixed, and never suppressed — each left in the register where it can be seen:**
+
+- **4903 `no-explicit-any`.** Typing these properly is the right fix and it is a large, careful change
+  across commission, payroll and P&L pages. Annotating them `unknown` to reach green would move the
+  errors into `tsc` and change behaviour at every call site.
+- **666 React Compiler / hook findings.** `exhaustive-deps` and `set-state-in-effect` fixes change
+  *when effects re-run*. On `commcalc/ma-commission`, `commcalc/commission-ledger`,
+  `storeops/payroll`, `accounts/pl` and `closing/*` that decides which period's money a screen shows.
+  Not guessed at; see 77.5.
+- **249 `react/no-unescaped-entities`** and **23 `no-unused-expressions`** — genuinely cosmetic
+  (apostrophes in JSX text; the deliberate `set.has(k) ? set.delete(k) : set.add(k)` idiom). Left for
+  budget, not for principle, and registered rather than hidden.
+- **7 `no-require-imports`** in `scratchpad/prove_plan_match_render.cjs` — a `.cjs` file **must** use
+  `require`. This is a case of the rule being wrong for the file, stated here rather than silenced
+  with a disable comment.
+- **4 `no-img-element`, 4 `no-html-link-for-pages`, 1 `incompatible-library`, 1 `refs`** — each a
+  behaviour change (`<a>` → `<Link>` changes a full reload into a client navigation, which §"nav no
+  reload" already has opinions about).
+
+**MEASURED AFTER, on the same clean install:** **5917** findings — **5679** errors, **238**
+warnings — over **419** files, pinned as **932** `(rule, file)` entries in
+`frontend/eslint_pending.txt`. Against main's 5953 / 5675 / 278 / 422 that is **36 fewer findings and
+3 fewer files**, with warnings down 40 and **errors UP 4** — the four are the
+`react-hooks/set-state-in-effect` errors that naming the 8 blanket directives stopped hiding, minus
+the parse error and the em-dash rule name. An honest gate that reports 4 more errors than the tree
+admitted to yesterday is the point; they were always there. `eslint-disable` directives went
+**110 → 92**, and PINNED_SUPPRESSIONS is pinned at exactly 92 so the count cannot grow at all.
+
+### 77.5 UNUSED VARIABLES THAT ARE CANDIDATE DEFECTS — reported, not deleted
+
+`no-unused-vars` is the rule the owner's brief singled out as possibly "shadowing a real bug", and it
+does. **Deleting an abandoned variable hides the fact that nobody wired it up**, so these were left
+alone and are listed for a human:
+
+- **`commcalc/commission-structure/page.tsx:166` — a permission gate that cannot fire.**
+  `const [accCanEdit, setAccCanEdit] = useState(true)`; the setter is **never called**. So
+  `accCanEdit` is permanently `true`: the read-only notice at line 547 ("Read-only — you don't have
+  the Classification permission") can **never render**, the four `disabled={!accCanEdit}` editors are
+  never disabled, and the Save button always shows. The Classification permission check on a
+  commission-config surface is dead code. **Money-adjacent — not touched.**
+- `accounts/device-purchases/page.tsx:118` — `qtyTotal` computed and never rendered beside the
+  `deviceTotal` / `unitTotal` that are.
+- `commcalc/settings/page.tsx:307` — `groupedRates`, under the comment *"Group comp rates by
+  comp_type for display"*. The display was never wired.
+- `closing/tender-recon-3way/page.tsx:89`, `commcalc/custom-report/page.tsx:50` (`grants` — a fetched
+  permission list never read), `commcalc/productivity/page.tsx:236`,
+  `storeops/payroll-change-log/page.tsx:50` and `storeops/salary-advances/page.tsx:43` (`ppSettings`
+  — pay-period settings declared and abandoned in both), `storeops/payroll/PtoAccrualPanel.tsx:23`
+  (`runResult` — a PTO accrual run's result never shown).
+- `admin/support/docs/page.tsx:56` — `async function del(d: Doc)`, a delete handler never wired to
+  anything.
+- `components/ReportShell.tsx:56` — the exported component destructures a **`compact` prop and
+  ignores it**, so every caller passing `compact` gets no effect. Not money; still a real defect.
+
+### 77.6 THE LOCK — so it cannot un-wire
+
+`backend/harness_frontend_lint_lock.py` (stdlib only, DB-free, does **not** run ESLint) fails the
+build when: the `lint` or `lint:gate` script loses its one home (a); no workflow runs the gate, or
+runs it in a job that never `npm ci`s (b); a workflow spells `eslint` itself (c); the `pull_request`
+or `push` path filter stops covering `frontend/**` (d); `eslint.config.mjs` stops spreading
+`core-web-vitals` or `typescript` (e); `globalIgnores` grows beyond build output (f); the count of
+`eslint-disable` directives exceeds **PINNED_SUPPRESSIONS**, or any directive is **blanket** (g); the
+register fails to parse or pins more than **PINNED_TOTAL** (h). Every rule has a negative control
+driving it RED over a synthetic input (i), so a rule that has stopped matching cannot sit here reading
+green. It runs **before** `npm ci` in its own job, so its verdict is reported even when the lint step
+is what goes red — the §19.25 lesson about a lock sitting behind the thing it guards.
+
+Rule (g) is the one that answers the owner's brief directly: **the suppression ceiling is what makes
+"fix the problems" mean fix, rather than comment out.**
+
+### 77.7 Cross-references
+
+Registers **no table, no endpoint, no metric and no report** — so §16 (by TABLE), §17 (by ENDPOINT)
+and §18 (by METRIC/KPI) carry nothing for it, exactly as §75.6 reasoned; a row invented in any of
+them would be noise. What it registers is a CI gate, a runner, a register and a lock:
+
+- `.github/workflows/carrier-vocab-guard.yml` → job `frontend-lint` (6 steps), which runs BOTH the lock and `npm run lint:gate`; `frontend/**` on both the `pull_request` and `push` path filters, plus `backend/harness_frontend_lint_lock.py` and `frontend/eslint_pending.txt` so a change to the gate's own parts re-runs it. Parsed, not eyeballed: 24 jobs / 224 steps before, **25 jobs / 230 steps** after; no existing job or step removed or altered.
+- `frontend/package.json` → the `lint` script (the one home for the linter) and `lint:gate` (the one home for the gate).
+- `frontend/tools/eslint-ratchet.mjs` → the runner; dereferences `npm run lint`, no `--write` trapdoor.
+- `frontend/eslint_pending.txt` → the pinned debt register; may only SHRINK.
+- `backend/harness_frontend_lint_lock.py` → the lock.
+- Duplicate check (the build gate): the **existing** `frontend-typecheck` job of #438 / §75 is the pattern this reuses step for step — checkout, `setup-node` 22, `setup-python` 3.11, stdlib lock, `npm ci --ignore-scripts --no-audit --no-fund`, dereferenced script. No sibling workflow, no second lint path, and no second home for the linter invocation was created; `harness_frontend_typecheck_lock.py` is the lock this one is modelled on and is left untouched.
+- Ratchet precedents read before instantiating one: §19.25 / `backend/harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt`.
+- Same class: §75 (which named this gap), §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate).

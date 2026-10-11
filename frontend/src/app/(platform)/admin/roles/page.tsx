@@ -5,7 +5,7 @@ import { api } from '@/lib/client'
 import { planRowSave, runRowSave, commitSaved, rowSaveMessage, dirtySlices, pendingRowCount, rebaseRows } from '@/lib/rowSave'
 import { ROLES_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
 import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
-import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, reportAreaForPath, canSeeItem, navBlockReason,
+import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, canSeeItem, navBlockReason,
          schedulingReach, peopleVisibility, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
          grantableModules, missingReportAreasForModule, reportGrantedByConfig, isDeepLinkItem,
          type Permissions } from '@/lib/rbac'
