@@ -25,7 +25,7 @@ export default function RepMapPage() {
   const names: string[] = (data.names || []).filter((n: string) =>
     !mapped.has(n.toUpperCase()) && (!search || n.toLowerCase().includes(search.toLowerCase())))
 
-  function toggle(n: string) { setSel(s => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x }) }
+  function toggle(n: string) { setSel(s => { const x = new Set(s); if (x.has(n)) x.delete(n); else x.add(n); return x }) }
 
   async function merge() {
     const aliases = Array.from(sel).filter(n => n !== canonical)

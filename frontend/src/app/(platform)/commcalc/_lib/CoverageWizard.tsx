@@ -153,7 +153,7 @@ export default function CoverageWizard(
   const setDec = (k: string, patch: Partial<Decision>) =>
     setDecisions(prev => ({ ...prev, [k]: { ...(prev[k] || { pay: false, matchOn: 'category', kind: 'flat_per_unit', amount: '', pct: '' }), ...patch } }))
   const toggleRep = (rep: string) =>
-    setPickedReps(prev => { const n = new Set(prev); n.has(rep) ? n.delete(rep) : n.add(rep); return n })
+    setPickedReps(prev => { const n = new Set(prev); if (n.has(rep)) n.delete(rep); else n.add(rep); return n })
 
   // distinct reps whose lines fall in the "pay it" groups — recomputed after Apply so their stored row
   // reflects the new rule immediately (union'd with the reps we just attached the plan to).
@@ -245,7 +245,7 @@ export default function CoverageWizard(
         after = Number(u2?.totals?.ext_price || 0)
       } catch { /* keep the pre-apply number if the re-read fails */ }
       setResult({ ok: true, steps, covered: Math.max(0, before - after), stillUnpaid: after })
-      onApplied && onApplied()
+      if (onApplied) onApplied()
     } catch (e: any) {
       setResult({ error: e?.message || String(e), steps })
     } finally { setApplying(false) }

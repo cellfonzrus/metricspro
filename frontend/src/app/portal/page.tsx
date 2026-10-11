@@ -450,7 +450,7 @@ export default function PortalPage() {
     // punch via the photo-only path instead of opening an enroll/verify flow the backend will refuse.
     if (faceEnabled !== true || faceError) { await clockInNoFace(); return }
     await openCamera()
-    setTimeout(() => { registered ? doVerify() : doEnroll() }, 800)
+    setTimeout(() => { if (registered) doVerify(); else doEnroll() }, 800)
   }
 
   async function doEnroll() {

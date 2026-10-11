@@ -407,7 +407,7 @@ export default function CommissionPlansPage() {
     })
   }
   function toggleOne(v: string) {
-    setChecked(prev => { const n = new Set(prev); n.has(v) ? n.delete(v) : n.add(v); return n })
+    setChecked(prev => { const n = new Set(prev); if (n.has(v)) n.delete(v); else n.add(v); return n })
   }
   async function applyBulk(replace: boolean) {
     if (!bulkPlanId || selectedPeople.length === 0) return

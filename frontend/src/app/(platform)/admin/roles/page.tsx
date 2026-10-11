@@ -1365,7 +1365,7 @@ function StorePicker({ value, stores, placeholder, single, invalid, onChange }:
   const chosen = new Set(value || [])
   const toggle = (code: string) => {
     if (single) { onChange(chosen.has(code) ? [] : [code]); setOpen(false); return }
-    const next = new Set(chosen); next.has(code) ? next.delete(code) : next.add(code)
+    const next = new Set(chosen); if (next.has(code)) next.delete(code); else next.add(code)
     onChange(Array.from(next))
   }
   const label = chosen.size === 0 ? (placeholder || 'Store(s)…')
@@ -1424,7 +1424,7 @@ function MarketPicker({ value, markets, invalid, onChange }:
   const known = new Set(markets.map(m => m.toLowerCase()))
   const dead = Array.from(chosen).filter(m => !known.has(m.toLowerCase()))
   const toggle = (m: string) => {
-    const next = new Set(chosen); next.has(m) ? next.delete(m) : next.add(m)
+    const next = new Set(chosen); if (next.has(m)) next.delete(m); else next.add(m)
     onChange(Array.from(next).join(', '))
   }
   const label = chosen.size === 0 ? 'Market(s)…' : chosen.size === 1 ? Array.from(chosen)[0] : `${chosen.size} markets`

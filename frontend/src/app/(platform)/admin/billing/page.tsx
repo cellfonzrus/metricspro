@@ -294,7 +294,7 @@ export default function BillingAdmin() {
               const allKeys = moduleCatalog.map(m => m.key)
               const sel = (draft.modules && draft.modules.length) ? new Set(draft.modules) : new Set(allKeys)
               const toggle = (k: string) => {
-                const next = new Set(sel); next.has(k) ? next.delete(k) : next.add(k)
+                const next = new Set(sel); if (next.has(k)) next.delete(k); else next.add(k)
                 const arr = allKeys.filter(x => next.has(x))
                 setDraft(d => ({ ...d, modules: arr.length === allKeys.length ? [] : arr }))
               }

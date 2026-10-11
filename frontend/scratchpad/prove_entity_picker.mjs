@@ -114,11 +114,11 @@ function check(name, got, want) {
   const g = JSON.stringify(got), w = JSON.stringify(want)
   const ok = g === w
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : `\n        got:  ${g}\n        want: ${w}`}`)
-  ok ? pass++ : fail++
+  if (ok) pass++; else fail++
 }
 function ok(name, cond) {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}`)
-  cond ? pass++ : fail++
+  if (cond) pass++; else fail++
 }
 const ids = rows => rows.filter(r => r.kind === 'option').map(r => r.id)
 const kinds = rows => rows.map(r => r.kind)
@@ -267,7 +267,7 @@ const need = [
 for (const s of need) {
   const found = src.includes(s)
   console.log(`${found ? 'PASS' : 'FAIL'}  core contains \`${s.slice(0, 52)}…\``)
-  found ? pass++ : fail++
+  if (found) pass++; else fail++
 }
 // the US_STATES canonical-first-adopter export exists and stores the code as the id
 ok('US_STATES exports Illinois as {id:\'IL\', label:\'Illinois (IL)\'}', src.includes("{ id: 'IL', label: 'Illinois (IL)' }"))

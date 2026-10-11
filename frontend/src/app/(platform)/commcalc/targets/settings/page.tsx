@@ -132,7 +132,7 @@ export default function TargetSettingsPage() {
   }
 
   function toggleSel(code: string) {
-    setSelected(s => { const n = new Set(s); n.has(code) ? n.delete(code) : n.add(code); return n })
+    setSelected(s => { const n = new Set(s); if (n.has(code)) n.delete(code); else n.add(code); return n })
   }
   function selectAllFiltered(on: boolean, codes: string[]) {
     setSelected(on ? new Set(codes) : new Set())

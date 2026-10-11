@@ -1125,7 +1125,7 @@ export default function PlanInstallmentsPage() {
           const shownKeys = shown.map(c => c.plan)
           const allShownPicked = shown.length > 0 && shown.every(c => pickedCands.has(c.plan))
           const toggleAllShown = () => setPickedCands(p => { const n = new Set(p); if (allShownPicked) shownKeys.forEach(k => n.delete(k)); else shownKeys.forEach(k => n.add(k)); return n })
-          const toggleOne = (k: string) => setPickedCands(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
+          const toggleOne = (k: string) => setPickedCands(p => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n })
           return (
           <>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
