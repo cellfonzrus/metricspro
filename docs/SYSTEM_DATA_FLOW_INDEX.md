@@ -24464,11 +24464,13 @@ dotted form under it: `§CORE-01.2`.
 
 Three gates, in the order they bite:
 
-1. **The claim is a line in one sorted table** — the register in CORE-01.5. Two branches claiming
-   `COMMCALC-01` write *different content at the same sort position*, so the second one to reach
-   GitHub has a **merge conflict in that table**, shown on the pull request before it merges. The
-   cost of losing the race is re-pasting one line, not a renumber: nothing outside the branch
-   references a section that does not exist yet.
+1. **The claim is one line in one table** — the register in CORE-01.5, kept in the index's own
+   section order, so a newly allocated id is appended at the end of it. Two branches claiming
+   `COMMCALC-01` therefore write *different content at the same position*, and the second one to
+   reach GitHub has a **merge conflict in that table**, shown on the pull request before it merges
+   rather than discovered after. The cost of losing the race is re-running `--next` and re-pasting
+   one line — not a renumber, because nothing outside the branch references a section that does not
+   exist yet.
 2. **A duplicate id fails the build** — `harness_unique_numbers_lock.py`, which stays the ONE home
    for "a number that names one thing is claimed once", now matches the prefixed shape too. If
    somebody resolves the conflict by keeping both sides, CI is red.
@@ -24493,6 +24495,7 @@ overwrite, and that it is confined to one module.
 | declared → cited | the declared module(s) intersect the modules whose code paths the section actually cites, wherever it cites any | a row that names the wrong module |
 | code → section | every `module_graph.FACTS[*]["index"]` reference resolves to a **registered** section (or a subsection of one) | a fact pointing at an unregistered section |
 | the scheme is closed | every *numeric* register id is one of the 112 that predate this directive; the list may only shrink | allocating a new bare number instead of a prefixed id |
+| a heading has an id at all | every `##` heading carries one of the two id shapes | a top-level section headed with prose and no number |
 
 The last row is what keeps this ONE scheme rather than two live ones: bare numeric ids are **frozen,
 not permitted**. `§77` cannot be allocated.
