@@ -1025,6 +1025,31 @@ _all_routes = _flatten_routes(real_app.routes)
 # feed replay). Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 and `'^-@router\.'` = 0 — one
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
+# Re-pinned 1766 -> 1775 on 2026-10-10, measured on the tree that merges origin/main f0909893 INTO
+# this branch. Both additions are real and independent, so the merged tree carries both and every
+# record below stays whole: main's own work took the count to 1766 (its note is kept verbatim after
+# this one), and this branch's NINE routes take it to 1775. Counted on the merged tree, which IS the
+# tree that ships: `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 9 and
+# `'^-.*@router\.'` = 0 — nine added, NONE removed, 1766 + 9 = 1775.
+#
+# Re-pinned 1759 -> 1768 on 2026-10-10 for the payroll clocked-hours basis + Elevate clock variance
+# work (index §14y/§14z). The delta is NINE routes and every one is named:
+#   GET   /storeops/payroll/clock-variances            the variance board
+#   POST  /storeops/payroll/clock-variances/resolve     the DM correction / override
+#   GET   /storeops/payroll/clock-gate                  is this manager confined right now
+#   GET   /storeops/payroll/clock-link-proposals        proposed feed-login -> employee links
+#   POST  /storeops/payroll/clock-link-proposals/decide the owner approving one
+#   GET   /storeops/payroll/run-preflight               may payroll run for this period
+#   POST  /storeops/payroll/clock-variance-ask          the Monday ask, on demand
+#   POST  /storeops/payroll/clock-variance-ask/run-due  its due-sweep (pg_cron)
+#   PATCH /storeops/employees/{employee_id}/pay-from-schedule   the per-employee tick box
+# None of them is a second answer to an existing question and none adds a route to db_resilience
+# itself (I0b below proves that independently of this number). Verified the same way as every pin
+# above: `git diff origin/main HEAD -- backend/ | grep -cE '^\+.*@router\.'` = 9 and
+# `'^-.*@router\.'` = 0 — nine added, NONE removed, and 1759 + 9 = 1768, the figure CI measured. So
+# the pin was re-taken on a counted, named addition, never relaxed to make CI green.
+# (that branch-point figure is superseded by the merged count at the top of this block)
+#
 # Re-pinned 1759 -> 1766 on 2026-10-10, after origin/main dd47887 (the §72.6 route above) was
 # merged INTO this branch. Both additions are real and independent, so the merged tree carries
 # both and every record above stays: main's one route took 1758 to 1759, this branch's seven take
@@ -1037,7 +1062,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # anybody. Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 7 and `'^-@router\.'` = 0 — seven
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1766"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1775"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

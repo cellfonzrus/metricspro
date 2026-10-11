@@ -37,6 +37,7 @@ from . import submit_refusal as _refusal
 from . import dedup_key as _dedup
 from . import unfinished_day as _unfinished
 from . import closing_source as _closing_src
+from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 from . import metric_catalog as _metrics
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -113,7 +114,12 @@ def _ts(v) -> str | None:
 
 
 def _norm(c) -> str:
-    return "".join(ch for ch in str(c).lower() if ch.isalnum())
+    # THE ONE ACCENT FOLD (`account/store_identity.fold_accents`, 2026-10-10) — dereferenced,
+    # never re-spelled: `str.isalnum()` is TRUE for an accented letter, so this fold kept the
+    # accent and an accented spelling was a different key from its own plain twin. ASCII input
+    # is byte-identical, so no existing match moves; the fold only gains the ones it should
+    # always have had.
+    return "".join(ch for ch in _sid_fold(c).lower() if ch.isalnum())
 
 
 # ── DM-Verify / dashboard filter helpers (retail-ops-14, RULE FIVE parity + de-hard-coded market

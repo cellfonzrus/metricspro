@@ -24,6 +24,8 @@ from app.core import crypto
 from app.modules.storeops.router import scope_emp_ids, _tenant_pp_settings, _employees_with_pay_fields
 from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
+# THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
+from app.modules.storeops import payroll_hours_basis as _hours_basis
 
 router = APIRouter(prefix="/hr", tags=["HR"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -246,6 +248,9 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
     period_lo = _date.fromisoformat(start) if start else None
     period_hi = (_date.fromisoformat(nxt) - timedelta(days=1)) if start else None
     hours_by_eid = {}
+    _hb_cfg = _hours_basis.load_config(so, org_id)
+    _emp_by_id = {e.get("employee_id"): e for e in (emps or []) if e.get("employee_id")}
+    _hb_bases = {}
     if start:
         shifts = (so.table("shifts").select("employee_id,scheduled_hours,actual_hours")
                   .eq("org_id", org_id).eq("is_deleted", False)
@@ -254,8 +259,10 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
             eid = s.get("employee_id")
             if not eid:
                 continue
-            h = float(s.get("actual_hours") or 0) or float(s.get("scheduled_hours") or 0)
+            # ONE HOME for paid hours (index §14y). Was `actual_hours or scheduled_hours`.
+            h, _b, _ = _hours_basis.resolve_shift_row(s, _hb_cfg, _emp_by_id.get(eid))
             hours_by_eid[eid] = hours_by_eid.get(eid, 0.0) + h
+            _hb_bases[_b] = _hb_bases.get(_b, 0) + 1
 
     # Commission — rep_commissions for the period, keyed by either name field.
     comm = (cc.table("rep_commissions")

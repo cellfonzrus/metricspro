@@ -9,7 +9,7 @@ import DocumentTitle from '@/components/DocumentTitle'
 import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg, api } from '@/lib/client'
-import { setupRedirect, setupGateApplies, type SetupGate } from '@/lib/setup-gate'
+import { setupRedirect, setupGateApplies, confineRedirect, clockGateConfinement, type SetupGate } from '@/lib/setup-gate'
 import { apiCached, CONFIG } from '@/lib/cache'
 import { NAV, platformOK, platformPathOK, isPlatformAdmin, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout, type Scope } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
@@ -781,6 +781,36 @@ function Guard({ children }: { children: React.ReactNode }) {
     if (dest && dest !== pathname) router.replace(dest)
   }, [gateOn, setupGate, pathname, router])
 
+  // THE CLOCK-VARIANCE GATE (owner directive 2026-10-10, index §14z). Owner: "the dm should be
+  // notified as an alert as soon as they log in to fix it and block them from logging in unless they
+  // fix it by tuesday so the payroll can be run on Wednesday."
+  //
+  // THIS IS A CONFINEMENT, NOT A REFUSED SIGN-IN — the one place the package does not do what the
+  // owner literally said, and the reason is ★ NO LOCKOUT ★ (index §22): a person who cannot sign in
+  // cannot fix what blocks them, so refusing the sign-in would make the Wednesday payroll
+  // impossible rather than protected. The session signs in normally and is held on the correction
+  // board until the rows are cleared.
+  //
+  // It goes through the SAME `confineRedirect` the setup wizard uses — one rule, one home. The
+  // SERVER decides everything: the weekday, this org's own gate weekday, which roles are gated, the
+  // exempt logins, and whether anything is still uncorrected. It answers `gated: false` when the
+  // feature is off AND when it could not read the board, so an unreachable backend confines nobody.
+  const [clockGate, setClockGate] = useState<{ alert?: boolean; gated?: boolean; reason?: string; allowed_paths?: string[]; correction_path?: string } | null>(null)
+  const clockGateOn = enforce === true && !!session && provisioned && active && !isSuperAdmin(permissions)
+  useEffect(() => {
+    if (!clockGateOn) return
+    let on = true
+    api('/api/v1/storeops/payroll/clock-gate')
+      .then((g: any) => { if (on) setClockGate(g) })
+      .catch(() => { if (on) setClockGate(null) })      // unreadable → never trap anyone
+    return () => { on = false }
+  }, [clockGateOn, pathname, tenant?.org_id])
+  useEffect(() => {
+    if (!clockGateOn) return
+    const dest = confineRedirect(clockGateConfinement(clockGate), pathname)
+    if (dest && dest !== pathname) router.replace(dest)
+  }, [clockGateOn, clockGate, pathname, router])
+
   // The backend could not be reached, so whether login is enforced is UNKNOWN (§40.12). Never the open
   // app, and never a page of $0.00: say the one true thing instead. Ordered before the `null` splash so
   // a dead backend stops at a readable notice rather than spinning on "Loading…" forever.
@@ -819,7 +849,31 @@ function Guard({ children }: { children: React.ReactNode }) {
   if (!canAccessPath(permissions, pathname)) return <Splash text="Redirecting…" />
   if (!isSuperAdmin(permissions) && !verticalPathOK(pathname, tenant?.vertical)) return <Splash text="Redirecting…" />
   if (!platformPathOK(pathname, user)) return <Splash text="Redirecting…" />
-  return <PlatformShell open={false}>{children}</PlatformShell>
+  return (
+    <PlatformShell open={false}>
+      {/* THE ALERT, ON ANY WEEKDAY (owner 2026-10-10: "notified as an alert as soon as they log in
+          to fix it"). The alert fires the moment anything is uncorrected; the CONFINEMENT only
+          starts on this org's gate weekday. Keeping them separate is deliberate — a manager told on
+          Monday and confined on Monday has lost the day they were given to fix it. The sentence is
+          the server's own, because it is what knows which weekday the gate falls on. */}
+      {clockGate?.alert && (
+        <div style={{ margin: '0 0 12px', padding: '10px 14px', borderRadius: 8,
+                      border: `1px solid ${clockGate.gated ? '#f87171' : '#f59e0b'}`,
+                      background: clockGate.gated ? 'rgba(248,113,113,0.10)' : 'rgba(245,158,11,0.08)',
+                      fontSize: 13, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong style={{ color: clockGate.gated ? '#b42318' : '#b45309' }}>
+            ⏱ {clockGate.gated ? 'Clock corrections are due now' : 'Clock corrections are waiting'}
+          </strong>
+          <span style={{ color: 'var(--text2)' }}>{clockGate.reason}</span>
+          <div style={{ flex: 1 }} />
+          <a href={clockGate.correction_path || '/storeops/payroll/clock-variances'}
+             style={{ padding: '5px 11px', borderRadius: 7, background: 'var(--accent)', color: '#fff',
+                      fontWeight: 600, textDecoration: 'none' }}>Fix them →</a>
+        </div>
+      )}
+      {children}
+    </PlatformShell>
+  )
 }
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {

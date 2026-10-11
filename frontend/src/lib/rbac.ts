@@ -555,6 +555,12 @@ export const NAV: NavGroup[] = [
     // the customer, against accessory $ per box and port share, with the lagging-store action plan. A
     // management review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // CLOCK VARIANCES (owner directive 2026-10-10, index §14z) — the one management surface that says
+    // whether payroll can be run at all this week. Listed here as a tileOnly DUPLICATE of its StoreOps
+    // entry, module + scopes byte-identical, so it adds no permission surface (the Reports-directory
+    // duplicate precedent). WHERE the tile sits on the hub is D1 CONFIG, editable in the Dashboard
+    // Designer — this row only gives the hub the right to show it (RULE TWO: no layout in code).
+    { href: '/storeops/payroll/clock-variances', label: 'Clock Variances', icon: '⏱', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -623,6 +629,12 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/accountability', label: 'Lateness %', icon: '🎓', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/payroll/approvals', label: 'Hours Approval', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    // Clock variances (owner directive 2026-10-10, index §14z). Same scopes as its Hours Approval
+    // sibling and for the same reason: the DM ('market') is who is ASKED to correct these, and from
+    // the gate weekday a DM with uncorrected rows is confined to THIS page — so a scope that could
+    // not reach it would be the lockout ★ NO LOCKOUT ★ (§22) exists to forbid. A store manager
+    // standing in sees only their own span; the read is span-scoped server-side.
+    { href: '/storeops/payroll/clock-variances', label: 'Clock Variances', icon: '⏱', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/envelope-report', label: 'Management Envelope Receipt', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
@@ -973,6 +985,12 @@ export const NAV: NavGroup[] = [
     // absent DM sees only their own span anyway (the read is span-scoped server-side). Same shape as
     // its Payroll sibling, so it adds no permission surface an existing role did not already have.
     { href: '/storeops/payroll/approvals', label: 'Hours Approval', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    // Clock variances (owner directive 2026-10-10, index §14z). Same scopes as its Hours Approval
+    // sibling and for the same reason: the DM ('market') is who is ASKED to correct these, and from
+    // the gate weekday a DM with uncorrected rows is confined to THIS page — so a scope that could
+    // not reach it would be the lockout ★ NO LOCKOUT ★ (§22) exists to forbid. A store manager
+    // standing in sees only their own span; the read is span-scoped server-side.
+    { href: '/storeops/payroll/clock-variances', label: 'Clock Variances', icon: '⏱', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     // Payer registry — admin-only config ('all'), like every other "who receives money" setting.
     { href: '/storeops/payroll/payers', label: 'Who Pays Payroll', icon: '🏦', module: 'storeops', scopes: ['all'], tileOnly: true },
     { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },

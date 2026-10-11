@@ -486,6 +486,32 @@ on:
       - "backend/harness_envelope_count_basis.py"
       - "backend/app/modules/closing/pickup_actual.py"
       - "backend/app/modules/closing/billpay_netting.py"
+      # index §14y/§14z — THE ONE HOME for paid hours and the clock-report variance / ask / gate
+      # (mig 1073). The harness NAMES ITSELF for the same §13e reason as the line above: a lock behind
+      # an allowlist that does not list its own file skips silently on the PR that edits it. Its
+      # subjects are listed too, because the whole point of the lock is that a change to ANY of them
+      # must re-run it — the pay path, the feed, the two vocabularies and the one accent fold.
+      - "backend/harness_payroll_hours_basis_lock.py"
+      - "backend/harness_payroll_hours_basis.py"
+      - "backend/harness_clock_feed.py"
+      - "backend/harness_clock_variance.py"
+      - "backend/harness_clock_variance_api.py"
+      - "frontend/src/lib/setup-gate.ts"
+      - "frontend/prove_confinement.mjs"
+      - "frontend/src/app/(platform)/layout.tsx"
+      - "backend/app/modules/storeops/clock_variance_api.py"
+      - "backend/app/modules/storeops/payroll_hours_basis.py"
+      - "backend/app/modules/storeops/clock_feed.py"
+      - "backend/app/modules/storeops/clock_variance.py"
+      - "backend/app/modules/storeops/payroll_identity.py"
+      - "backend/app/modules/storeops/salary_owed.py"
+      - "backend/app/modules/storeops/salary_expense.py"
+      - "backend/app/modules/storeops/pto_accrual.py"
+      - "backend/app/modules/commcalc/labour_coverage.py"
+      - "backend/app/modules/account/store_identity.py"
+      - "backend/app/modules/account/coa.py"
+      - "backend/app/modules/hr/router.py"
+      - "database/migrations/1073_payroll_clocked_hours_basis.sql"
       - "backend/app/modules/storeops/org_chain.py"
       - "backend/app/modules/closing/deposit_accountability.py"
       - "backend/app/core/actors.py"
@@ -934,6 +960,18 @@ jobs:
       - name: Run the canonical store→market resolution guard (ONE resolver; every vocabulary read canonical, overlaid or pinned with a reviewed classification; a read that moves behind a helper stays visible — index §13a)
         working-directory: backend
         run: python3 harness_market_resolution_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the paid-hours one-home lock (no module falls back from one hours column to the other; every pay-path caller still dereferences the one home; the basis allowlist stays derived; the one accent fold stays wired; every declared variance kind is emitted or excused — index §14y, §14z)
+        working-directory: backend
+        run: python3 harness_payroll_hours_basis_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the paid-hours basis proof (the shipped default IS today, the owner ruling's three readings pinned to the measured day, and the regression that reproduces payroll computed from the schedule — index §14y)
+        working-directory: backend
+        run: python3 harness_payroll_hours_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the clock-report feed proof (the eleven measured shape traps, the trailer checksum, and a file that does not tie to its own total is rejected rather than landed short — index §14z)
+        working-directory: backend
+        run: python3 harness_clock_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the clock-variance / ask / gate proof (an unruled kind blocks, the recipient ladder the measured DM coverage demands, ★ NO LOCKOUT ★, and a payroll run that refuses and names what blocks it — index §14z, §22)
+        working-directory: backend
+        run: python3 harness_clock_variance.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the daily-incentive proof (the owner's six live rules replayed as CONFIG; gates fail closed; an unsplittable pool is reported, never guessed - index 72)
         working-directory: backend
         run: python3 harness_daily_incentive.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1145,6 +1183,12 @@ jobs:
       - name: Run the Account-hub expenses-column proof (the display contract behind the Expenses column)
         working-directory: frontend
         run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE CONFINEMENT RULE (index §39, §14z). Runs HERE because it transpiles the real
+      # src/lib/setup-gate.ts with the repo's own tsc, so it needs the frontend's dependencies —
+      # and `harness_ci_pipefail_lock.py` fails the build when a proof is run where it cannot load.
+      - name: "Confinement rule (index §14z, §22): one rule for the setup wizard AND the clock gate, and ★ NO LOCKOUT ★ holds in both — the sign-in is never refused, an unreadable gate traps nobody"
+        working-directory: frontend
+        run: node prove_confinement.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE FRONTEND TYPE CHECK (index §75, owner directive 2026-10-10: "fix the frontend type error").
   # Nothing in this repo ran `tsc` as a gate. A `SCREENS` key outside the closed `ScreenKey` union in
@@ -1218,6 +1262,13 @@ jobs:
       - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
         working-directory: backend
         run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # Runs HERE and not in the dependency-free guard job because it drives the REAL endpoints over the
+      # in-memory client, so it imports the router and therefore FastAPI. In the guard job the step died
+      # on `import fastapi` before check one — the same §19.25 trap the comments above name, and
+      # `harness_ci_pipefail_lock.py` fails the build when a harness is run where it cannot import.
+      - name: "Clock-variance ENDPOINT proof (index §14z): switched off reads as off and not as clean; the board's period IS payroll's period; a gate that cannot look does not gate; an override with no reason is refused"
+        working-directory: backend
+        run: python3 harness_clock_variance_api.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: "Peer sales comparison (index §59): the add-a-line ONE HOME over the whole measured vocabulary + the equivalence pin that says no promo column moved; the traffic band; and the un-wire lock on every _sales_cell_agg field it rolls up"
         working-directory: backend
         run: python3 harness_peer_comparison.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"

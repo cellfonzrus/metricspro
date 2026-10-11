@@ -63,10 +63,26 @@ below; no tenant, carrier or store name appears in this file.
 """
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
+# THE ONE HOME for "was this day measured, and what did the measurement say" (index §14y). This
+# module used to implement that test itself; since 2026-10-10 it DEREFERENCES it, so the three-state
+# salary rollup and the payroll figure it annotates can never disagree about whether a day was
+# measured. The state NAMES below stay this module's own (its readers and its ledger column speak
+# them), but they are now a one-line TRANSLATION of the one home's verdict, not a second test.
+from app.modules.storeops import payroll_hours_basis as _hb
+
 # ── per-(employee, day) hours provenance ─────────────────────────────────────────────────────────
 MEASURED_NONZERO = "measured_nonzero"
 MEASURED_ZERO = "measured_zero"
 NOT_MEASURED = "not_measured"
+
+#: The one home's verdict -> this module's state name. DERIVED, so a new basis cannot be silently
+#: absorbed: `_STATE_OF` raises KeyError on an unknown verdict rather than defaulting to measured.
+_STATE_OF = {
+    _hb.CLOCKED: MEASURED_NONZERO,
+    _hb.CLOCKED_CORRECTED: MEASURED_NONZERO,
+    _hb.MEASURED_ZERO: MEASURED_ZERO,
+    _hb.MEASUREMENT_NONE: NOT_MEASURED,
+}
 
 # ── per-store-month rollup state ─────────────────────────────────────────────────────────────────
 STATE_MEASURED = "measured"
@@ -123,17 +139,26 @@ def day_measurement(employee_id, day: str,
     long-standing rule: a human DM correction always wins).
 
     Returns MEASURED_ZERO — not NOT_MEASURED — for a present-but-zero measurement, which is the whole
-    point of this function: only NOT_MEASURED may fall back to the schedule."""
+    point of this function: only NOT_MEASURED may fall back to the schedule.
+
+    THE TEST ITSELF LIVES IN `payroll_hours_basis.measurement_state` (index §14y) and this function
+    is a thin dereference of it. Before 2026-10-10 the same test was implemented here as well, and a
+    module that re-implements a decision is a module that will one day disagree with it.
+    """
     d = str(day or "")[:10]
     m = (manual_hours_by_day or {}).get(employee_id) or {}
-    if d in m:
-        h = float(m[d] or 0)
-        return (MEASURED_NONZERO if h > 0 else MEASURED_ZERO), h
     p = (punch_hours_by_day or {}).get(employee_id) or {}
-    if d in p:
-        h = float(p[d] or 0)
-        return (MEASURED_NONZERO if h > 0 else MEASURED_ZERO), h
-    return NOT_MEASURED, 0.0
+    cell = {}
+    if d in m:
+        cell["manual"] = float(m[d] or 0)
+        cell["manual_rows"] = 1
+    elif d in p:
+        # A pre-folded punch map carries CLOSED, usable punches only (the caller's own filter), so it
+        # is handed in as the day's punch evidence with no further usability test — the one home's
+        # open / auto-clockout policy applies where the RAW timelog rows are read, not here.
+        cell["_raw_punches"] = [{"clock_out": d, "hours": float(p[d] or 0)}]
+    verdict, hours = _hb.measurement_state(cell, _hb.resolve_config(None))
+    return _STATE_OF[verdict], hours
 
 
 def hours_for_shift(shift: dict,

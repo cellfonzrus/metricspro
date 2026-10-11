@@ -5,7 +5,7 @@ import requests
 import time
 from typing import Any, Optional
 from datetime import datetime, timezone, timedelta, date as _date
-from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
+from fastapi import APIRouter, Body, HTTPException, Header, BackgroundTasks, Response
 from fastapi.concurrency import run_in_threadpool   # SEV-1 2026-07-30: slow sync work (the AI document reader) MUST hop off the event loop
 from app.core.database import get_supabase
 # The SHARED outbound-AI guard (migs 972/983): the ONE decision function + its ONE I/O seam.
@@ -50,6 +50,10 @@ from app.modules.storeops.payroll_expenses import (
 # punches and salaried pay-basis — the second derivation this change removed. They stay in
 # payroll_expenses.py as the wage base for the TAX/burden buckets, which is their real job.
 from app.modules.storeops import salary_expense as _salexp
+# THE ONE HOME for "which hours is this employee paid for on this day, and on what basis" (§14y),
+# and the clock-report variance / Monday ask / Tuesday gate it feeds (§14z).
+from app.modules.storeops import payroll_hours_basis as _hours_basis
+from app.modules.storeops import clock_variance as _clockvar
 from app.modules.storeops.payroll_identity import (
     business_id_alias_map as _business_id_alias_map,
     reconcile_employee_identity as _reconcile_employee_identity,
@@ -917,12 +921,25 @@ def _shift_contributes_hours(s) -> bool:
 # Keys are the RAW employee_id (shifts may carry a numeric id, kiosk punches the business id) — the
 # SAME raw-id grain the mig-407 anti-join and the legacy shift_days set already used, so the existing
 # identity-merge / double-count behavior is preserved unchanged; only the hours DECISION changes.
-def _punch_driven_day_maps(shifts, timelog):
+def _hours_basis_cfg(org_id):
+    """This org's declared hours basis (index §14y). ONE read, cached in the one home."""
+    return _hours_basis.load_config(sb(), org_id)
+
+
+def _punch_driven_day_maps(shifts, timelog, hours_cfg=None):
     """(manual_shift_days, closed_punch_days), each: raw employee_id -> set of 'YYYY-MM-DD'.
 
     manual_shift_days: days the employee has a shift with actual_hours>0 (a human correction — see
-    module note above; actual_hours>0 == manual). closed_punch_days: days with >=1 CLOSED punch
-    (clock_out set AND hours NOT NULL). Open punches are excluded (they are not a punch for pay)."""
+    module note above; actual_hours>0 == manual). closed_punch_days: days with >=1 punch this org
+    counts as EVIDENCE.
+
+    WHICH PUNCHES COUNT IS NOT DECIDED HERE any more (2026-10-10, index §14y). It is
+    `payroll_hours_basis.punch_usability` — the ONE home — so the open-punch and auto-clocked-out
+    policy is stated once instead of being re-derived by every reader of this table. Under the
+    shipped house default the answer is byte-identical to the pre-change `clock_out and hours is not
+    None` test; under a clocked-only org an auto-closed punch stops being a measurement.
+    """
+    cfg = hours_cfg if isinstance(hours_cfg, dict) else _hours_basis.resolve_config(None)
     manual_days: dict = {}
     punch_days: dict = {}
     for s in shifts or []:
@@ -931,42 +948,82 @@ def _punch_driven_day_maps(shifts, timelog):
             if eid is not None:
                 manual_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
     for t in timelog or []:
-        if t.get("clock_out") and t.get("hours") is not None:
+        ok, _why = _hours_basis.punch_usability(t, cfg)
+        if ok:
             eid = t.get("employee_id")
             if eid:
                 punch_days.setdefault(eid, set()).add(str(t.get("work_date") or "")[:10])
     return manual_days, punch_days
 
 
-def _shift_actual_contribution(s, manual_days, punch_days):
-    """Effective ACTUAL hours a shift row contributes to PAY under the punch-driven model:
-      * actual_hours            if actual_hours > 0        — a manual DM correction ALWAYS wins.
-      * 0                       elif a CLOSED punch exists that day AND no manual correction that day
-                                — the punch drives pay; the schedule is REPLACED (the punch is counted
-                                  separately, so this avoids double-counting), incl. the PR #74
-                                  zero-hour override shell (sched 0/act 0) whose punch already won.
-      * scheduled_hours         else                       — no punch that day: scheduled fallback,
-                                                              the pre-existing behavior, unchanged."""
-    act = float(s.get("actual_hours") or 0)
-    if act > 0:
-        return act
+def _shift_actual_contribution(s, manual_days, punch_days, hours_cfg=None):
+    """Effective ACTUAL hours a shift row contributes to PAY, per THE one home (index §14y).
+
+    THE ARITHMETIC IS NO LONGER HERE. It is `payroll_hours_basis.resolve_shift_row`, which answers
+    the same question for every payroll and labour surface in the platform — this function only
+    assembles the day's evidence from the two day-maps and hands it over. Under the shipped house
+    default the three outcomes are byte-identical to the pre-2026-10-10 code:
+
+      * actual_hours            if actual_hours > 0        — a manual DM correction ALWAYS wins
+                                                             (basis `clocked_corrected`).
+      * 0                       elif an evidential punch exists that day AND no manual correction
+                                that day — the punch drives pay and is counted at its own store
+                                (basis `measured_zero` from this row's point of view).
+      * scheduled_hours         else — no punch that day (basis `schedule_opt_in`: the hours are
+                                the SCHEDULE'S, and under a clocked-only org they are 0 and the
+                                basis says `not_measured_unpaid` instead of paying them silently).
+    """
+    cfg = hours_cfg if isinstance(hours_cfg, dict) else _hours_basis.resolve_config(None)
     eid = s.get("employee_id")
     d = str(s.get("shift_date") or "")[:10]
+    cell = {"scheduled": float(s.get("scheduled_hours") or 0),
+            "shift_actual": max(0.0, float(s.get("actual_hours") or 0)),
+            "shift_actual_rows": 1 if float(s.get("actual_hours") or 0) > 0 else 0}
     if d in punch_days.get(eid, ()) and d not in manual_days.get(eid, ()):
-        return 0.0
-    return float(s.get("scheduled_hours") or 0)
+        # The punch is this day's measurement. Its HOURS are counted from the punch row itself (at
+        # the store the person actually stood in), so the evidence handed over carries presence
+        # only — which is exactly `_punch_counts_for_pay`'s other half of the same no-double-count
+        # rule, now stated in one place rather than two.
+        cell["_raw_punches"] = [{"clock_out": d, "hours": 0.0}]
+    hrs, _basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell)
+    return hrs
 
 
-def _punch_counts_for_pay(t, manual_days):
-    """True iff this CLOSED punch contributes its hours to pay: it counts UNLESS a manual correction
-    (a shift with actual_hours>0) exists that day for the SAME raw employee_id (manual wins). This
-    REPLACES PR #74's 'any hours-carrying shift blocks the punch' rule — a merely-SCHEDULED shift no
-    longer blocks its day's punch (that is the punch-driven change); only a manual correction does."""
-    if not (t.get("clock_out") and t.get("hours") is not None):
-        return False
+def _shift_actual_contribution_with_basis(s, manual_days, punch_days, hours_cfg=None):
+    """`(hours, basis)` — the SAME answer as `_shift_actual_contribution`, with the basis kept.
+
+    Owner, 2026-10-10: *"mention on the report why you are doing so"*. The hours and the reason they
+    are those hours are ONE fact, and a surface that shows the figure without it asks the reader to
+    guess. This exists so the caller that wants to SAY why dereferences the same resolution rather
+    than running a second one beside it — `_shift_actual_contribution` is this function's first
+    element, so the two cannot drift.
+    """
+    cfg = hours_cfg if isinstance(hours_cfg, dict) else _hours_basis.resolve_config(None)
+    eid = s.get("employee_id")
+    d = str(s.get("shift_date") or "")[:10]
+    cell = {"scheduled": float(s.get("scheduled_hours") or 0),
+            "shift_actual": max(0.0, float(s.get("actual_hours") or 0)),
+            "shift_actual_rows": 1 if float(s.get("actual_hours") or 0) > 0 else 0}
+    if d in punch_days.get(eid, ()) and d not in manual_days.get(eid, ()):
+        cell["_raw_punches"] = [{"clock_out": d, "hours": 0.0}]
+    hrs, basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell)
+    return hrs, basis
+
+
+def _punch_counts_for_pay(t, manual_days, hours_cfg=None):
+    """True iff this punch contributes its hours to pay — `payroll_hours_basis.punch_counts_for_pay`
+    (index §14y), the ONE home for the precedence `correction > punch`.
+
+    It counts iff this org treats the punch as evidence AND no manual correction (a shift with
+    actual_hours>0) exists that day for the SAME raw employee_id. Under the shipped house default
+    that is byte-identical to the pre-2026-10-10 test; a clocked-only org additionally stops
+    counting an open or auto-closed punch, and `payroll_hours_basis` reports it rather than paying
+    it."""
+    cfg = hours_cfg if isinstance(hours_cfg, dict) else _hours_basis.resolve_config(None)
     eid = t.get("employee_id")
     d = str(t.get("work_date") or "")[:10]
-    return d not in manual_days.get(eid, ())
+    cell = {"shift_actual": 1.0 if d in manual_days.get(eid, ()) else 0.0}
+    return _hours_basis.punch_counts_for_pay(t, cell, cfg)
 
 
 def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
@@ -1286,7 +1343,8 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
         if lo and hi:
             tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
                   .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
-        manual_days, punch_days = _punch_driven_day_maps(shifts, tl)
+        _hb_cfg = _hours_basis_cfg(org_id)
+        manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
         for s in shifts:
             eid = s.get("employee_id")
             if eid in inactive_ids:
@@ -1306,10 +1364,16 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
             # PUNCH-DRIVEN PAY: actual_hours>0 (manual) wins; else the punch drives (shift -> 0) on a
             # day with a closed punch and no manual correction; else the scheduled fallback. The punch
             # itself is added by the timelog loop below, so a punch-driven day counts its hours ONCE.
-            act = _shift_actual_contribution(s, manual_days, punch_days)
+            act, _act_basis = _shift_actual_contribution_with_basis(s, manual_days, punch_days, _hb_cfg)
             summary[eid]["scheduled_hours"] += sched
             summary[eid]["actual_hours"]    += act
             summary[eid]["shifts"] += 1
+            # WHY THESE HOURS (owner 2026-10-10). Additive and purely explanatory: the figures above
+            # are untouched. A day the punch measured contributes `measured_zero` here and its hours
+            # arrive from the punch loop below as `clocked` — so the tally shows BOTH, which is the
+            # honest account of a period that mixes punched and scheduled days.
+            _bt = summary[eid].setdefault("hours_by_basis", {})
+            _bt[_act_basis] = round(_bt.get(_act_basis, 0.0) + act, 4)
             st = (s.get("store_code") or "").strip()
             if st:
                 sh = store_hours.setdefault(eid, {})
@@ -1330,7 +1394,7 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                 if eid in inactive_ids:
                     continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
-                if not eid or not wd or not _punch_counts_for_pay(t, manual_days):
+                if not eid or not wd or not _punch_counts_for_pay(t, manual_days, _hb_cfg):
                     continue   # manual correction that day wins -> punch excluded (never double-count)
                 emp = emp_map.get(eid, {})
                 if eid not in summary:
@@ -1345,6 +1409,10 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                     }
                 hrs = float(t.get("hours") or 0)
                 summary[eid]["actual_hours"] += hrs
+                # The punch's own basis, from the one home — never the word 'clocked' spelled here.
+                _pb = _hours_basis.CLOCKED
+                _bt = summary[eid].setdefault("hours_by_basis", {})
+                _bt[_pb] = round(_bt.get(_pb, 0.0) + hrs, 4)
                 st = (t.get("store_code") or "").strip()
                 if st:
                     sh = store_hours.setdefault(eid, {})
@@ -1441,6 +1509,21 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store"))]
+    # WHY THESE HOURS, on every row (owner 2026-10-10: *"mention on the report why you are doing
+    # so"*). LAST, so it describes the figure the row actually carries after lunch, the salary
+    # override, identity reconciliation and an approved human figure. `hours_basis` names the basis
+    # the MOST hours came from and `hours_basis_reason` is that basis's own sentence from the one
+    # home — never a sentence composed here, so screen and API cannot disagree. The tally stays
+    # alongside, because a period that mixes punched and scheduled days has no single answer and
+    # collapsing it to one word would be the lie this key exists to prevent.
+    for r in rows:
+        bt = {k: v for k, v in (r.get("hours_by_basis") or {}).items() if v}
+        if not bt:
+            continue
+        dom = max(bt.items(), key=lambda kv: kv[1])[0]
+        r["hours_basis"] = dom
+        r["hours_basis_reason"] = _hours_basis.basis_reason(dom)
+        r["hours_basis_mixed"] = len(bt) > 1
     return sorted(rows, key=lambda x: x["name"])
 
 
@@ -1595,7 +1678,8 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
         if lo and hi:
             tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
                   .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
-        manual_days, punch_days = _punch_driven_day_maps(shifts, tl)
+        _hb_cfg = _hours_basis_cfg(org_id)
+        manual_days, punch_days = _punch_driven_day_maps(shifts, tl, _hb_cfg)
         for s in shifts:
             eid = s.get("employee_id")
             if eid in inactive_ids:
@@ -1606,7 +1690,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             sched = float(s.get("scheduled_hours") or 0)
             # actual_hours>0 (manual) wins; else 0 on a punch-driven day (punch replaces the schedule,
             # attributed to the punch's own store below); else scheduled fallback.
-            hrs = _shift_actual_contribution(s, manual_days, punch_days)
+            hrs = _shift_actual_contribution(s, manual_days, punch_days, _hb_cfg)
             rate = rate_map.get(eid, 0.0)
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
@@ -1628,7 +1712,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                     continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
                 store = (t.get("store_code") or "").strip()
-                if not eid or not wd or not store or not _punch_counts_for_pay(t, manual_days):
+                if not eid or not wd or not store or not _punch_counts_for_pay(t, manual_days, _hb_cfg):
                     continue
                 hrs = float(t.get("hours") or 0)
                 rate = rate_map.get(eid, 0.0)
@@ -11019,3 +11103,89 @@ router.include_router(_payroll_approval_router)
 # the endpoint, so this line's position stays irrelevant to import order.
 from app.modules.storeops.clockin_evidence import router as _clockin_evidence_router  # noqa: E402
 router.include_router(_clockin_evidence_router)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# THE PER-EMPLOYEE TICK BOX (owner ask 2026-10-10, mig 1073, index §14y)
+# Owner: "it is only based on actual hours clocked in unless a button is checked for each employee
+# separately against that employee name." This is that button's writer, and it is the ONLY one.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+@router.patch("/employees/{employee_id}/pay-from-schedule")
+def set_pay_from_schedule(employee_id: str, body: dict = Body(default={}),
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Tick or untick "pay this person their schedule when nothing measured the day".
+
+    `pay_from_schedule`: true / false / null. **NULL is a real value and it means "use the org
+    default"** — not "unknown", and not false. That distinction is the reason nobody's pay moves when
+    migration 1073 is applied: an employee row that has never been touched reads NULL, falls to the
+    org default (seeded TRUE), and behaves exactly as it does today.
+
+    GATED on pay visibility, because this box decides whether somebody is paid for an unmeasured day
+    and that is a pay decision, not a schedule preference. AUDITED through the one change-log writer
+    with `entry_point = 'pay_from_schedule_change'`, so "who stopped paying this person's unmeasured
+    days, and when" is answerable.
+    """
+    mgr = _require_manager(authorization, org_id)
+    org_id = (mgr.get("org_id") or "").strip() or org_id
+    if not _payvis.can_see_pay(authorization or "", org_id, client=sb()):
+        raise HTTPException(
+            403, "This box decides whether somebody is paid for a day nobody measured, so it needs "
+                 "the same permission as seeing pay. Ask whoever administers roles for your "
+                 "organisation.")
+    eid = (employee_id or "").strip()
+    if not eid:
+        raise HTTPException(400, "employee_id is required")
+    raw = body.get("pay_from_schedule", "__absent__")
+    if raw == "__absent__":
+        raise HTTPException(400, "pay_from_schedule is required (true, false, or null for the "
+                                 "organisation default)")
+    if raw is None:
+        want = None
+    elif isinstance(raw, bool):
+        want = raw
+    elif str(raw).strip().lower() in ("true", "1", "yes"):
+        want = True
+    elif str(raw).strip().lower() in ("false", "0", "no"):
+        want = False
+    else:
+        raise HTTPException(400, "pay_from_schedule must be true, false or null")
+
+    rows = (sb().table("employees").select("*").eq("org_id", org_id)
+            .eq("employee_id", eid).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "No employee with that id in this organisation")
+    emp = rows[0]
+    before = emp.get("pay_from_schedule")
+    try:
+        saved = (sb().table("employees").update({"pay_from_schedule": want})
+                 .eq("org_id", org_id).eq("employee_id", eid).execute().data or [emp])[0]
+    except Exception as e:
+        raise HTTPException(
+            400, f"The setting could not be saved — has migration 1073 been applied? ({e})")
+    try:
+        _log_payroll_change(
+            org_id, field=_hours_basis.CHANGE_FIELD,
+            entry_point=_hours_basis.CHANGE_ENTRY_POINT,
+            employee_id=eid, employee_row=emp, store_code=emp.get("home_store"),
+            before=before, after=want, source_table="employees", source_id=emp.get("id"),
+            who=_who_for_log(authorization, org_id),
+            reason=(str(body.get("reason") or "").strip() or None))
+    except Exception:
+        pass
+    _hours_basis.invalidate_config(org_id)
+    cfg = _hours_basis.load_config(sb(), org_id, use_cache=False)
+    effective = _hours_basis.pay_from_schedule(saved, cfg)
+    return {"employee_id": eid, "pay_from_schedule": saved.get("pay_from_schedule"),
+            "effective": effective,
+            "org_default": cfg.get("pay_from_schedule_default"),
+            "basis_if_unmeasured": (_hours_basis.SCHEDULE_OPT_IN if effective
+                                    else _hours_basis.NOT_MEASURED_UNPAID),
+            "reason": _hours_basis.basis_reason(
+                _hours_basis.SCHEDULE_OPT_IN if effective else _hours_basis.NOT_MEASURED_UNPAID)}
+
+
+# THE CLOCK-REPORT VARIANCE SURFACE (mig 1073, index §14z) — mounted here for the same reason as the
+# blocks above: main.py is shared and no agent edits it (AGENT_CONTRACT §1). Its own module imports
+# this one lazily, inside each endpoint, so this line's position stays irrelevant to import order.
+from app.modules.storeops.clock_variance_api import router as _clock_variance_router  # noqa: E402
+router.include_router(_clock_variance_router)

@@ -354,7 +354,11 @@ def _squash(v) -> str:
     Collision safety is a property of the tenant's roster, not of this function, so every caller
     that resolves through `_squash` treats a squash that lands on more than ONE physical store as
     UNRESOLVED (see `resolve_store_grant`)."""
-    return _SQUASH_RE.sub("", str(v or "").upper())
+    # ACCENT-FOLDED FIRST, through the ONE accent fold (`account.store_identity.fold_accents`,
+    # 2026-10-10): `_SQUASH_RE` keeps `í` because it is a word character, so an accented grant value
+    # compared unequal to its own plain-ASCII twin. ASCII input is byte-identical.
+    from app.modules.account.store_identity import fold_accents as _fold_accents
+    return _SQUASH_RE.sub("", _fold_accents(v).upper())
 
 
 def build_market_index(store_rows, mapping_rows, alias_rows=None) -> dict:

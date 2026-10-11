@@ -266,10 +266,36 @@ FACTS: dict[str, dict] = {
             'app/modules/account/residual_subs.py': ('_sid',),
             # A closing store-day's match key (§29.12) — a named alias, no second copy.
             'app/modules/closing/unfinished_day.py': ('_sid',),
-            # `_leg_store_index` + the two commission-leg endpoints' row keys.
+            # `_leg_store_index` + the two commission-leg endpoints' row keys, and (mig 1073) the
+            # B2B clock report's `raw_store_string -> store CODE` resolver, which places a punch's
+            # store through THIS chain rather than matching an address of its own.
             # `_sid_pairs` since §68: the entitlement-month report's router glue reads this home's
             # own PAIRWISE predicate (§70 `may_be_one_store`) for "may these two keys be one store".
             'app/modules/commcalc/router.py': ('_sid_pairs', '_store_identity'),
+            # ── THE ONE ACCENT FOLD (`fold_accents`, 2026-10-10) ────────────────────────────────
+            # `str.isalnum()` is TRUE for 'i-acute', so every alnum-only identity fold in this
+            # codebase kept the accent and compared an accented spelling unequal to its own plain
+            # twin (measured: the clock report's `Martinez, LESLIEE` matched no roster row). The
+            # fold now lives here once and these four siblings DEREFERENCE it — they are named so
+            # the next change cannot quietly re-spell one of them back into a private fold.
+            'app/core/scope.py': ('_fold_accents',),
+            'app/modules/account/balance_sheet.py': ('_sid_fold',),
+            'app/modules/account/device_payable.py': ('_sid_fold',),
+            'app/modules/account/store_identity_audit.py': ('_sid',),
+            # The B2B clock feed's own folds (`_fold`, login + punch-type keys) and the employee
+            # matcher's person key ride the same accent fold, so a person and a store are folded by
+            # one rule (mig 1073, §14z).
+            'app/modules/storeops/clock_feed.py': ('_sid',),
+            'app/modules/storeops/payroll_identity.py': ('fold_accents',),
+            # The remaining five identity folds, found by the lock's second axis and wired in the
+            # same PR rather than left as "the ones we did not get to". Each folds a KEY nothing
+            # ever shows a human — a store code, a carrier label, a clock-in evidence key, a role
+            # name — so routing it through the one fold gains matches and moves none.
+            'app/modules/closing/router.py': ('_sid_fold',),
+            'app/modules/commcalc/b2b_sweep.py': ('_sid_fold',),
+            'app/modules/commcalc/vidapay_sweep.py': ('_sid_fold',),
+            'app/modules/storeops/clockin_evidence.py': ('_sid_fold',),
+            'app/modules/storeops/clock_variance.py': ('_sid_fold',),
         },
     },
     'carrier_dollar_component': {
@@ -473,6 +499,11 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/closing/router.py': ('_delivery',),
             'app/modules/commcalc/router.py': ('_delivery',),
+            # §14z — the weekly clock-variance ask carries itself on this ladder and holds no mail
+            # call, no channel list and no send record of its own. That is the point of routing it
+            # here: the ask was the sixth place that would have grown its own "try email, try
+            # WhatsApp, write one dedup row", which is the drift this fact exists to stop.
+            'app/modules/storeops/clock_variance_api.py': ('_delivery',),
             'app/modules/storeops/router.py': ('_delivery',),
             'app/modules/storevisit/router.py': ('_delivery',),
         },
@@ -676,6 +707,11 @@ FACTS: dict[str, dict] = {
             'app/modules/storeops/payroll_approval.py': ('_cscope',),
             'app/modules/storeops/router.py': ('_cscope',),
             'app/modules/storevisit/router.py': ('_cscope',),
+            # The clock-variance board is person-keyed (one row per employee-day), so it rides
+            # the SAME gate as every other person-keyed read: `gate_person_rows`, which narrows BOTH
+            # the board and the login gate's blocking count to the stores this manager owns. A DM is
+            # never gated by another district's unfixed rows (mig 1073, §14z).
+            'app/modules/storeops/clock_variance_api.py': ('_cscope',),
         },
     },
     'payout_audience': {
