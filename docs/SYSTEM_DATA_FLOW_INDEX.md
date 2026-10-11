@@ -24917,6 +24917,53 @@ Proof on the final tree: `npm run typecheck` **0 errors** over 547 files; `npm r
 `npm run lint:gate` **OK** (measured 5645 == pinned 5645); `harness_frontend_lint_lock.py`
 **42 passed, 0 failed**.
 
+**WHAT THIS EXPOSED — an apostrophe was hiding real leaks from the carrier-vocab guard.**
+`harness_carrier_vocab_guard.py` decides "is this line display copy?" in `jsx_prose_line`, and its
+prose-vs-code test `_prose_bad = [<>=;'"`]` **rejects any line containing a raw apostrophe**. So a
+tenant-facing sentence that happened to contain `isn't`, `can't` or `that's` was discarded as CODE
+and never scanned at all. Escaping those apostrophes — which `react/no-unescaped-entities` requires —
+removed the thing that was hiding them, and **5 genuine pre-existing leaks in tenant-facing copy
+became visible for the first time**:
+
+| lock | file:line | what a tenant can read |
+|---|---|---|
+| setup-internals | `commcalc/plan-installments/page.tsx:638` | "Migration 245 isn't applied yet, so these boxes can't be saved." |
+| setup-internals | `commcalc/plan-installments/page.tsx:815` | "Migration {payCfg.migration} isn't applied yet, so this can't be saved." |
+| setup-internals | `storeops/payroll-change-log/page.tsx:195` | "…table isn't set up yet on this tenant (migration 414)" |
+| setup-internals | `storeops/salary-advances/page.tsx:378` | "…ledger isn't set up yet on this tenant (migration 419)" |
+| infra-names | `commcalc/connectors/page.tsx:116` | "point **pg_cron** at POST /api/v1/… and it fans out to every connector that's due." |
+
+These are **NOT regressions** — every one is on `main` today, rendered to tenants; `main` is green only
+because the apostrophe made the sentence unreadable to the guard. Since the whole rule is now at zero
+and the ratchet refuses a new raw apostrophe in JSX text, **this coverage hole is structurally closed
+and stays closed** — which is the lasting value here, over and above the 272 findings.
+
+They are **left exactly as they are, and reported** rather than disposed of, because every available
+disposal is someone else's call:
+- **Fixing the copy** (`<SetupNotice detail=… />` / `sourceLabel()`) changes what a tenant-facing
+  screen displays. A lint job does not get to rewrite product copy.
+- **`SETUP_PROSE_DEBT`** is the house's shrink-only ledger and there IS precedent — the existing 11
+  entries are pre-existing hits registered when the 2026-10-01 widening exposed them. Pinning 4 more
+  is defensible, but it accepts a leak as carried debt, and the owner's standing position is that a
+  temporary accommodation is not a fix.
+- **`INFRA_FE_ALLOW` is deliberately EMPTY**, and `pg_cron` in tenant copy has no excuse. Making it
+  the first entry to reach a green build is the cheap way out the register rules already forbid.
+
+**So the carrier-vocab guard is RED on this branch and the PR was NOT merged.** The lint work itself
+is complete and green on every gate that owns it (lint 5645, `lint:gate` OK, typecheck 0,
+lint lock 42/42); the one open question is the disposition of those 5 sentences.
+
+**One design fix WAS made, because it is a defect in the guard and not a copy decision:**
+`jsx_prose_line` **deleted** HTML entities instead of decoding them, so `isn&apos;t` was read as
+`isnt`. That is not what the screen says, and it means a sentence pinned by its own text stops
+matching its pin the moment an apostrophe in it is escaped. Entities are now **decoded** to the
+characters they render as. The deletion was not arbitrary, so the fix separates the two uses rather
+than reversing it: the prose-vs-code gate still reads the entity-**stripped** line (so **no line
+changes visibility** and coverage is unchanged), while what the scans **match on** is the
+**decoded** line. Armed controls **E13–E16** pin all of it, including E15 — decoding before the gate
+would classify escaped prose as code and make it invisible, which would be strictly worse than the
+bug.
+
 **Duplicate check (the build gate).** Nothing new was built: no new report, endpoint, query, table,
 function or feed, so there is nothing to register in §16–18 or the lineage registry. This EXTENDS
 CORE-02 — the same gate, the same runner, the same register, the same lock — which is why it is a
