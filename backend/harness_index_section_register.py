@@ -13,7 +13,8 @@ scheme; this file is what makes it true of every tree CI builds.
 WHAT THIS FAILS ON
   A  the register in CORE-01.5 is missing, unparseable, or claims one id twice.
   B  a register row names a section that is not a real heading of the index.
-  C  a top-level `##` heading has no register row — so the allocator cannot be bypassed.
+  C  a top-level `##` heading has no register row — so the allocator cannot be bypassed — or a
+     top-level heading carries no id at all.
   D  a register row names a module that is not a folder under backend/app/modules/, or a folder is
      neither named by a row nor listed in CORE-01.6 with a reason.
   E  CORE-01.6 excuses a module that IS now covered (the list may only shrink), or lists one twice.
@@ -131,18 +132,30 @@ def headings(lines) -> set:
            {m.group(1) for line in lines for m in [_PARA.match(line)] if m}
 
 
-def sections(lines) -> dict:
-    """-> {top_level_id: body lines}, the `##` grain, its `###` subsections included."""
+# A top-level heading's id: legacy numeric (`6p`, `23aa`, `15.1`) or module-prefixed. Deliberately
+# narrow — a `## ` heading that does not match is an UNNUMBERED top-level section, which `unnumbered`
+# reports rather than quietly treating its first word as an id.
+TOP = re.compile(r"^## +§?\s*((?:\d+[a-z]*|[A-Z][A-Z0-9]{2,11}-\d{2})(?:\.\d+[a-z]?)*)\.?\s+\S")
+ANY_TOP = re.compile(r"^## +\S")
+
+
+def sections(lines) -> "tuple[dict, list]":
+    """-> ({top_level_id: body lines, `###` subsections included}, [unnumbered heading, …])"""
     out = collections.OrderedDict()
+    unnumbered = []
     cur = None
     for line in lines:
-        m = re.match(r"^## +§?\s*([0-9A-Z][0-9A-Za-z.\-]*?)\.?\s+\S", line)
-        if m:
-            cur = m.group(1)
-            out.setdefault(cur, [])
+        if ANY_TOP.match(line):
+            m = TOP.match(line)
+            if m:
+                cur = m.group(1)
+                out.setdefault(cur, [])
+            else:
+                unnumbered.append(line.strip())
+                cur = None
         elif cur is not None:
             out[cur].append(line)
-    return out
+    return out, unnumbered
 
 
 def cited_modules(body, on_disk) -> set:
@@ -315,6 +328,11 @@ def controls(on_disk) -> None:
           check_resolution([("999", ["core"])], {"1"}) != [])
     check("control: an unregistered `##` section fails C",
           check_coverage(["77"], [("1", ["core"])]) != [])
+    check("control: an unnumbered `##` heading is reported, not read as an id",
+          sections(["## Appendix — notes", "body"]) == ({}, ["## Appendix — notes"]))
+    check("control: every id shape is read as a top-level section",
+          list(sections(["## 23aa. A", "## §43 B", "## §CORE-01. C", "## 6p. D"])[0]) ==
+          ["23aa", "43", "CORE-01", "6p"])
     check("control: a registered section passes C",
           check_coverage(["1"], [("1", ["core"])]) == [])
     check("control: the grandfathered duplicate heading §23s is still ONE register row",
@@ -387,7 +405,7 @@ def main() -> int:
     rows = parse_register(lines)
     excuses = table_rows(lines, EXCUSES)
     heads = headings(lines)
-    bodies = sections(lines)
+    bodies, unnumbered = sections(lines)
     top = list(bodies)
 
     print("A. the register parses and no id is claimed twice")
@@ -405,6 +423,8 @@ def main() -> int:
     probs = check_coverage(top, rows)
     check("every `##` section has a register row", not probs,
           "\n        " + "\n        ".join(probs))
+    check("no top-level section is unnumbered — an id is how it is referenced at all",
+          not unnumbered, "\n        " + "\n        ".join(unnumbered))
 
     print("D/E. every module folder resolves to a section, or says why it does not")
     check("the module folders were read", len(on_disk) > 15, f"{len(on_disk)} folders")
