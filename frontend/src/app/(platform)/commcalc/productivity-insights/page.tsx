@@ -48,7 +48,7 @@ export default function ProductivityInsightsPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Productivity Insights</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          {period} · output per hour + how well each rep's hours fit the store's busy hours. Suggestions only — you decide.
+          {period} · output per hour + how well each rep&apos;s hours fit the store&apos;s busy hours. Suggestions only — you decide.
         </p>
       </div>
 
@@ -117,7 +117,7 @@ export default function ProductivityInsightsPage() {
               </table>
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8 }}>
-              Peak share = % of a rep's scheduled hours that fall in the store's busy hours. {!data.has_demand && 'Busy hours are a staffing proxy until time-stamped sales accumulate.'}
+              Peak share = % of a rep&apos;s scheduled hours that fall in the store&apos;s busy hours. {!data.has_demand && 'Busy hours are a staffing proxy until time-stamped sales accumulate.'}
             </div>
           </div>
         </>

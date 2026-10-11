@@ -164,7 +164,7 @@ export default function PayrollChangeLogPage() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📜 Payroll Change Log</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Every manual change to a rep's scheduled/actual hours — shift edits, manager clock-in
+          Every manual change to a rep&apos;s scheduled/actual hours — shift edits, manager clock-in
           overrides, manual hours adjustments, force clock-outs, and lunch-deduction setting changes —
           who made it, when, and the before → after values. {periodName}. Click a row to jump to the
           Time Clock report for that employee/day.
@@ -192,9 +192,9 @@ export default function PayrollChangeLogPage() {
 
       {!available && (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
-          ℹ️ The Payroll Change Log table isn't set up yet on this tenant (migration 414) — no entries
+          ℹ️ The Payroll Change Log table isn&apos;t set up yet on this tenant (migration 414) — no entries
           can be recorded or shown until it runs. Every underlying write (shift edits, overrides,
-          manual hours) still works normally; it just isn't logged yet.
+          manual hours) still works normally; it just isn&apos;t logged yet.
         </div>
       )}
 

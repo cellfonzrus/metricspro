@@ -468,10 +468,10 @@ export default function CommissionLegsPage() {
             <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>
           ) : shown.length === 0 ? (
             <div style={{ color: 'var(--text3)', fontSize: 13, lineHeight: 1.7, maxWidth: 900 }}>
-              No carrier commission labels in this window. Labels come from the processor's Commission
+              No carrier commission labels in this window. Labels come from the processor&apos;s Commission
               Payment Detail and Comprehensive Compensation reports
               {activeCarrier === 'total'
-                ? <>; a Total-processor tenant has none — its leg is the COLUMN on the processor's
+                ? <>; a Total-processor tenant has none — its leg is the COLUMN on the processor&apos;s
                   commission export, which needs no mapping.</>
                 : '.'} See <b>💰 What we made</b>.
             </div>
@@ -537,7 +537,7 @@ export default function CommissionLegsPage() {
                 {cfg?.carrier_mode ? ` · carrier mode: ${cfg.carrier_mode}` : ''}
                 {' · '}money whose source states no month goes to <b>{LEG_LABEL[(resolved || cfg?.resolved)?.unlabeled_bucket] || 'Unsplit'}</b>.
                 <br />
-                Note: the processor's Commission Payment Detail export carries an &ldquo;Activation Date&rdquo; column, but the
+                Note: the processor&apos;s Commission Payment Detail export carries an &ldquo;Activation Date&rdquo; column, but the
                 carrier ships it empty — so the month written into the payment type is the only activation month that
                 source actually gives us. Residual (MI/ATU) is different: it carries a real activation date, so it is
                 split by date.

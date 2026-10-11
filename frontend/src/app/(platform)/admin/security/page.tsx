@@ -267,9 +267,9 @@ export default function SecuritySettingsPage() {
       {/* Admin-assigned password */}
       {canEdit && (
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Set an employee's password</div>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Set an employee&apos;s password</div>
           <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
-            Set a specific password for anyone in this company. It must pass the policy above; they'll be asked to change it on next login (unless you turn that off).
+            Set a specific password for anyone in this company. It must pass the policy above; they&apos;ll be asked to change it on next login (unless you turn that off).
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
             <div style={{ minWidth: 240 }}>

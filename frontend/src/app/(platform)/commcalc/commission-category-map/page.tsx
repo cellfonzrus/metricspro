@@ -117,7 +117,7 @@ export default function CommissionCategoryMapPage() {
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗺️ Category → Bucket Map (Commission Ledger)</h1>
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 8 }}>
-        Rules that classify a carrier's labels into the five canonical buckets. First match by ascending
+        Rules that classify a carrier&apos;s labels into the five canonical buckets. First match by ascending
         priority wins; payouts are <b>negative</b> amounts. Pick a template ({carrierNames} / your own) — a
         new tenant can adopt a preconfigured one or fork it. See results on{' '}
         <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger →</a>
@@ -171,8 +171,8 @@ export default function CommissionCategoryMapPage() {
       <details style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface)', padding: 12, marginBottom: 14 }}>
         <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>📘 How to use this page (step by step)</summary>
         <ol style={{ margin: '10px 0 6px 18px', fontSize: 13, lineHeight: 1.7, color: 'var(--text2)' }}>
-          <li>Pick the <b>Template</b> for the carrier/file you're mapping ({carrierNames2} or <b>＋ New template</b> for your own).</li>
-          <li><b>Import that carrier's commission file</b> on the{' '}
+          <li>Pick the <b>Template</b> for the carrier/file you&apos;re mapping ({carrierNames2} or <b>＋ New template</b> for your own).</li>
+          <li><b>Import that carrier&apos;s commission file</b> on the{' '}
             <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger</a> page,
             so its real labels appear in the table at the bottom of this page.</li>
           <li>Scroll to <b>“Observed labels in the ledger”</b> — <b style={{ color: '#9a3412' }}>orange rows land in
@@ -189,8 +189,8 @@ export default function CommissionCategoryMapPage() {
           &nbsp;<b>Priority:</b> lower number is tested first and the <b>first match wins</b>, so put specific rules
           above generic ones.
           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
-            ℹ️ <b>Not the same as “Carrier Mapping”.</b> THIS page classifies a carrier's <b>commission-file line
-            items</b> into the 5 <b>Commission Ledger</b> buckets. To classify a carrier's <b>comp / residual
+            ℹ️ <b>Not the same as “Carrier Mapping”.</b> THIS page classifies a carrier&apos;s <b>commission-file line
+            items</b> into the 5 <b>Commission Ledger</b> buckets. To classify a carrier&apos;s <b>comp / residual
             statement</b> into the 4 components for <b>Total Compensation</b>, use{' '}
             <a href="/commcalc/carrier-mapping" style={{ color: 'var(--accent,#2563eb)' }}>Carrier Mapping</a>.
           </div>

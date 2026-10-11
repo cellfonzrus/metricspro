@@ -146,7 +146,7 @@ export default function HelpPanel() {
                 <Markdown md={doc.user_md} />
               ) : (
                 <div style={{ color: 'var(--text3)', fontSize: 13 }}>
-                  Help for this page is coming soon. If you're stuck, contact support and a specialist will help.
+                  Help for this page is coming soon. If you&apos;re stuck, contact support and a specialist will help.
                 </div>
               )}
             </div>

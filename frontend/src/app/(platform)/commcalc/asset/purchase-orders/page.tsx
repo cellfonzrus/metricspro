@@ -245,7 +245,7 @@ export default function PurchaseOrdersHubPage() {
         />
         <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
           Recommended qty = projected demand (recent sales velocity × horizon) minus current on-hand,
-          per store × device model. Edit any Order Qty / Unit Cost below, remove rows you don't want, or add
+          per store × device model. Edit any Order Qty / Unit Cost below, remove rows you don&apos;t want, or add
           an item manually. Refreshing recommendations replaces unsaved edits.
         </div>
 

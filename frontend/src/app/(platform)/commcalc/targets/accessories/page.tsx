@@ -112,8 +112,8 @@ export default function AccessoryTargetsPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>🔖 Accessory Sales Targets</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             Per store: the monthly accessory‑$ goal, achieved so far this month, the projected month‑end
-            (<b>Trending</b>, same source as Executive MTD), and what's still needed — total remaining,
-            today's target, and the $/day pace for the days left.
+            (<b>Trending</b>, same source as Executive MTD), and what&apos;s still needed — total remaining,
+            today&apos;s target, and the $/day pace for the days left.
           </p>
         </div>
         {rows.length > 0 && <div style={{ display: 'flex', gap: 8 }}><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></div>}
@@ -212,9 +212,9 @@ export default function AccessoryTargetsPage() {
             </table>
           </div>
           <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>
-            "Behind" = achieved MTD is under the pace expected by today. <b>Trending</b> is the projected
+            &quot;Behind&quot; = achieved MTD is under the pace expected by today. <b>Trending</b> is the projected
             month‑end (MTD × days‑in‑month ÷ complete days elapsed) computed by the SAME code as Executive
-            MTD, <b>on the same basis as Achieved</b>. "$/day needed" spreads the remaining target over the
+            MTD, <b>on the same basis as Achieved</b>. &quot;$/day needed&quot; spreads the remaining target over the
             open days left in the month. Stores with accessory sales but marked <b>No target</b> still appear
             here so achieved $ is tracked — set a target for them in Target Settings to get pacing.
           </p>

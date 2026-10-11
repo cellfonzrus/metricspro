@@ -261,8 +261,8 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
         {tpl.source_kind === 'boost_rates'
-          ? <>Rates pre-filled from your <b>payout rates</b> for {period}; quantities from actual <b>calculated rep commissions</b>. Payout = Σ(qty × rate) × tier — the exact engine formula. Accessory / Setup rates are a fraction of sales $ (0.10 = 10%), which is why those rows carry a <b>basis</b>: <b>per month</b> treats the quantity as the month's sales $ (×1), <b>per accessory</b> treats it as a COUNT and multiplies by the $/item you set (default ${DEFAULT_ITEM_PRICE}).</>
-          : <>Components auto-populated from <b>{data.carrier?.name}</b>'s configured Incentive Plans / rules / tiers + payout schedules; baseline quantities from the read-only plan preview for {period}. Payout = Σ(qty × rate) × tier.</>}
+          ? <>Rates pre-filled from your <b>payout rates</b> for {period}; quantities from actual <b>calculated rep commissions</b>. Payout = Σ(qty × rate) × tier — the exact engine formula. Accessory / Setup rates are a fraction of sales $ (0.10 = 10%), which is why those rows carry a <b>basis</b>: <b>per month</b> treats the quantity as the month&apos;s sales $ (×1), <b>per accessory</b> treats it as a COUNT and multiplies by the $/item you set (default ${DEFAULT_ITEM_PRICE}).</>
+          : <>Components auto-populated from <b>{data.carrier?.name}</b>&apos;s configured Incentive Plans / rules / tiers + payout schedules; baseline quantities from the read-only plan preview for {period}. Payout = Σ(qty × rate) × tier.</>}
       </p>
     </div>
   )

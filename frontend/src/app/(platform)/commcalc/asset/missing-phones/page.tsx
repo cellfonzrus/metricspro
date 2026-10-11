@@ -72,7 +72,7 @@ export default function MissingPhonesPage() {
 
           {rows.length === 0 ? (
             <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
-              No phones flagged missing. Tick "Missing?" on a device in Inventory Aging to add it here.
+              No phones flagged missing. Tick &quot;Missing?&quot; on a device in Inventory Aging to add it here.
             </div>
           ) : (
             <div className="card" style={{ padding: 0, overflow: 'auto' }}>

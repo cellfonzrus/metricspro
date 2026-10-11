@@ -267,7 +267,7 @@ export default function CommCalcDashboard() {
             <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)', fontSize: 13 }}>Multi-month schedules →</a>
             {/* a carrier surface (index §6m) — offered only to a viewer the server serves it to */}
             {!payoutRefused(permissions, '/commcalc/commission-explain') && (
-              <a href="/commcalc/commission-explain" style={{ color: 'var(--accent)', fontSize: 13 }}>Explain a rep's pay →</a>
+              <a href="/commcalc/commission-explain" style={{ color: 'var(--accent)', fontSize: 13 }}>Explain a rep&apos;s pay →</a>
             )}
             <a href="/commcalc/accessory-cost-audit" style={{ color: 'var(--accent)', fontSize: 13 }}>Accessory cost audit →</a>
           </div>

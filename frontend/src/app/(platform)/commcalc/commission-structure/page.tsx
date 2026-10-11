@@ -338,7 +338,7 @@ export default function CommissionStructurePage() {
           <div style={{ fontWeight: 700 }}>{optionHeading(EXEC_MTD_FLAT)}</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
-          Computes each rep's commission straight from the <b>Executive MTD</b> numbers, over the chosen plan's
+          Computes each rep&apos;s commission straight from the <b>Executive MTD</b> numbers, over the chosen plan&apos;s
           stores. Set a <b>$ rate per activation category</b> below (each type is its own option — pay BYOD,
           Tablet or Home Internet differently, and <b>Upgrade</b> separately, $0 by default) plus the
           accessory %. Same data source as the Sales Report and Exec MTD, so the accessory number you see on
@@ -428,7 +428,7 @@ export default function CommissionStructurePage() {
               </div>
             ) : (
               <div style={{ fontSize: 13, color: '#b45309' }}>
-                No Exec MTD rows for <b>{selected?.name}</b>’s stores in {period}. Check the plan's store
+                No Exec MTD rows for <b>{selected?.name}</b>’s stores in {period}. Check the plan&apos;s store
                 assignments (Step 5) and that {period} has sales.
               </div>
             )}
@@ -511,8 +511,8 @@ export default function CommissionStructurePage() {
           <div style={{ fontWeight: 700 }}>Set the activation source</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
-          Where this plan's reps get their activations counted from. <b>Activation Details report</b> pays
-          activations from the uploaded report and suppresses POS activations for this plan's reps (single
+          Where this plan&apos;s reps get their activations counted from. <b>Activation Details report</b> pays
+          activations from the uploaded report and suppresses POS activations for this plan&apos;s reps (single
           source, no double-count); <b>POS sales</b> always counts POS activations; <b>Inherit</b> uses the
           org default. Also settable on the plan editor.
         </p>
@@ -544,7 +544,7 @@ export default function CommissionStructurePage() {
         </p>
         {acc == null ? <div style={{ fontSize: 13, color: 'var(--text2)' }}>Loading…</div> : (
           <>
-            {!accCanEdit && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>Read-only — you don't have the Classification permission.</div>}
+            {!accCanEdit && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>Read-only — you don&apos;t have the Classification permission.</div>}
             <ChipEditor label="Accessory departments" values={accSel.d} disabled={!accCanEdit}
               onChange={v => setAccSel(s => ({ ...s, d: v }))} placeholder="e.g. Accessories" />
             <ChipEditor label="Accessory categories" values={accSel.c} disabled={!accCanEdit}
@@ -554,7 +554,7 @@ export default function CommissionStructurePage() {
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '4px 0 12px' }}>
               <input type="checkbox" checked={accSel.drives} disabled={!accCanEdit}
                 onChange={e => setAccSel(s => ({ ...s, drives: e.target.checked }))} />
-              <span><b>Accessory Definition decides pay</b> — let this classification drive the plan engine's{' '}
+              <span><b>Accessory Definition decides pay</b> — let this classification drive the plan engine&apos;s{' '}
                 <code>accessory</code> match field.</span>
             </label>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -581,7 +581,7 @@ export default function CommissionStructurePage() {
         </div>
         <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
           A rep pays under exactly one plan (most-specific assignment wins: employee &gt; role &gt; store &gt;
-          market &gt; default). Assign people, roles, stores or markets in the plan editor's assignment surface.
+          market &gt; default). Assign people, roles, stores or markets in the plan editor&apos;s assignment surface.
         </p>
         <div style={{ fontSize: 13, marginBottom: 10 }}>
           {selected
@@ -602,7 +602,7 @@ export default function CommissionStructurePage() {
         </div>
         <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
           Read-only — changes no stored pay. By default this shows only the reps whose <b>assigned</b> plan
-          is the selected one, and what they'd earn under it. Tick <b>“apply to everyone”</b> to instead see
+          is the selected one, and what they&apos;d earn under it. Tick <b>“apply to everyone”</b> to instead see
           the org-wide hypothetical (the selected plan forced onto every rep, ignoring assignments).
         </p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>

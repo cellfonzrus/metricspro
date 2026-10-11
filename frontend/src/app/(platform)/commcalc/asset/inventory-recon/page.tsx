@@ -151,7 +151,7 @@ export default function InventoryReconPage() {
         </div>
       )}
       <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>
-        ⚙️ Auto-import from the {pos} portal is pending the live portal sweep. Until it's wired,
+        ⚙️ Auto-import from the {pos} portal is pending the live portal sweep. Until it&apos;s wired,
         upload a {pos} <b>Inventory Aging</b> export below (columns: <code>store</code>, <code>category</code>, <code>qty</code> —
         plus an optional $ <code>value</code>/<code>cost</code> column). If the file has a $ column, this same upload also
         populates the <Link href="/accounts/inventory" style={{ color: 'inherit', textDecoration: 'underline' }}>Balance Sheet inventory value</Link> per store —

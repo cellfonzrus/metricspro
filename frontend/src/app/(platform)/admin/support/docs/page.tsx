@@ -98,7 +98,7 @@ export default function HelpDocsEditor() {
         <Link href="/admin/support" className="btn btn-sm">← Support Console</Link>
       </div>
       <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-        Per-page help. <b>User help</b> shows in the "?" panel; the <b>support playbook</b> shows only in the console.
+        Per-page help. <b>User help</b> shows in the &quot;?&quot; panel; the <b>support playbook</b> shows only in the console.
       </p>
       {msg && <div className="card" style={{ padding: 8, marginBottom: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', fontSize: 13 }}>{msg}</div>}
       {err && <div className="card" style={{ padding: 8, marginBottom: 10, borderColor: '#c0392b', color: '#c0392b', fontSize: 13 }}>{err}</div>}
@@ -123,7 +123,7 @@ export default function HelpDocsEditor() {
           </div>
         </div>
         <div>
-          <label style={lbl}>User help (markdown — shows in the "?" panel)</label>
+          <label style={lbl}>User help (markdown — shows in the &quot;?&quot; panel)</label>
           <textarea style={{ ...sel, minHeight: 110, fontFamily: 'inherit' }} value={form.user_md || ''} onChange={e => setForm(f => ({ ...f, user_md: e.target.value }))} placeholder="What this page does, in plain language. Supports **bold**, `code`, # headings, - bullets." />
         </div>
         <div>

@@ -243,18 +243,18 @@ export default function TenderRecon3WayPage() {
           </div>
           <div style={{ fontSize: 13, color: '#78350f', lineHeight: 1.5 }}>
             The <strong>POS X-report</strong> column below will read $0 for every store/tender until this is set up —
-            it isn't a bug in the recon, there's simply no X-report data in the system yet. Two things to do:
+            it isn&apos;t a bug in the recon, there&apos;s simply no X-report data in the system yet. Two things to do:
           </div>
           <ol style={{ fontSize: 13, color: '#78350f', margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>
             <li>
               <strong>Prove the pipe today:</strong> click <a href="#xr-upload-btn" onClick={e => { e.preventDefault(); document.getElementById('xr-upload-btn')?.click() }} style={{ color: '#92400e', fontWeight: 600 }}>⬆ Upload X‑Report</a> above
-              with today's report file (or upload it from <a href="/commcalc/upload" style={{ color: '#92400e', fontWeight: 600 }}>Data Imports</a>, type "X Report (POS tenders)").
+              with today&apos;s report file (or upload it from <a href="/commcalc/upload" style={{ color: '#92400e', fontWeight: 600 }}>Data Imports</a>, type &quot;X Report (POS tenders)&quot;).
             </li>
             <li>
               <strong>Set up automatic daily import:</strong> under <a href="/commcalc/email-imports" style={{ color: '#92400e', fontWeight: 600 }}>Email Imports</a>,
               confirm the mailbox has a <code>*X-Report*</code> → <code>x_report</code> rule (this is a default rule on a freshly configured mailbox,
-              so if it's missing it may have been edited out), AND confirm with the POS vendor that the X-Report is actually
-              <em> scheduled</em> to be emailed to that inbox daily — that's a separate step from the mailbox rule itself.
+              so if it&apos;s missing it may have been edited out), AND confirm with the POS vendor that the X-Report is actually
+              <em> scheduled</em> to be emailed to that inbox daily — that&apos;s a separate step from the mailbox rule itself.
             </li>
           </ol>
           <div style={{ fontSize: 12, color: '#92400e', marginTop: 6 }}>
@@ -264,15 +264,15 @@ export default function TenderRecon3WayPage() {
       )}
       {!loading && !data?.error && xReportEver && (summary.unmappedX > 0 || summary.unmappedS > 0) && (
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 13, color: '#78350f' }}>
-          {summary.unmappedX > 0 && <>⚠ {fmt(summary.unmappedX)} of the selected range's X-report tenders used a raw label this tenant's mapping doesn't recognize. </>}
-          {summary.unmappedS > 0 && <>⚠ {fmt(summary.unmappedS)} of the selected range's sales-transaction tenders used a raw label this tenant's mapping doesn't recognize. </>}
+          {summary.unmappedX > 0 && <>⚠ {fmt(summary.unmappedX)} of the selected range&apos;s X-report tenders used a raw label this tenant&apos;s mapping doesn&apos;t recognize. </>}
+          {summary.unmappedS > 0 && <>⚠ {fmt(summary.unmappedS)} of the selected range&apos;s sales-transaction tenders used a raw label this tenant&apos;s mapping doesn&apos;t recognize. </>}
           See the ⚠ per-store note below. Map it on <a href="/closing/tender-config" style={{ color: '#92400e', fontWeight: 600 }}>Tender Setup</a> so
-          it's bucketed instead of sitting outside the table.
+          it&apos;s bucketed instead of sitting outside the table.
         </div>
       )}
       {data?.range_capped && (
         <div className="card" style={{ padding: '8px 14px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 12, color: '#78350f' }}>
-          ⚠ The selected range spans {data.dates_total} days — showing the most recent {days.length} (this report replays real per-day report legs, so it's bounded). Narrow the date range to see earlier days.
+          ⚠ The selected range spans {data.dates_total} days — showing the most recent {days.length} (this report replays real per-day report legs, so it&apos;s bounded). Narrow the date range to see earlier days.
         </div>
       )}
 

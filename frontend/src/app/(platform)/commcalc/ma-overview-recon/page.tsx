@@ -197,8 +197,8 @@ export default function MaOverviewReconPage() {
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openMapping}>⚙ Tile mapping</button>
       </div>
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginTop: 6, maxWidth: 980 }}>
-        The master-agent portal's <b>Overview of Accounts</b> states a fixed tile set for a period. This page
-        puts the report's <b>stated</b> numbers next to the <b>same tiles computed from our ingested data</b>
+        The master-agent portal&apos;s <b>Overview of Accounts</b> states a fixed tile set for a period. This page
+        puts the report&apos;s <b>stated</b> numbers next to the <b>same tiles computed from our ingested data</b>
         {' '}(MA Commission Details + MA Daily Tx) and shows the delta — so activation counts, commission and
         rebates can be validated against the source. Upload the report for the period, then read the deltas.
         Nothing here adjusts a payout.
@@ -445,7 +445,7 @@ export default function MaOverviewReconPage() {
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Unmapped tile candidates</div>
           <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
             “Commissions Not Eligible” and “Appeal Count” have <b>no system source mapped on purpose</b> — the
-            source report's definition is not known, and a fake 0 would be worse than an honest blank. These
+            source report&apos;s definition is not known, and a fake 0 would be worse than an honest blank. These
             are the real value distributions in our data for the columns that could define them; pick the
             right values and save them under ⚙ Tile mapping.
           </div>
@@ -522,9 +522,9 @@ export default function MaOverviewReconPage() {
             <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setShowRates(false)}>Close</button>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}>
-            What the carrier pays per month leg, as a percentage of the line's MRC plus any flat spiff.
-            The owner's standing Total plan is <b>M1 50%, M2–M6 75%</b>; M3–M6 are temporary spiffs, so
-            expect to change them here rather than in code. Leave "in force from" blank for "always".
+            What the carrier pays per month leg, as a percentage of the line&apos;s MRC plus any flat spiff.
+            The owner&apos;s standing Total plan is <b>M1 50%, M2–M6 75%</b>; M3–M6 are temporary spiffs, so
+            expect to change them here rather than in code. Leave &quot;in force from&quot; blank for &quot;always&quot;.
             <b> This changes the EXPECTED column only — it pays nobody.</b>
           </div>
           <table style={{ borderCollapse: 'collapse' }}>

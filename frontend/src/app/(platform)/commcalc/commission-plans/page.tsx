@@ -814,10 +814,10 @@ export default function CommissionPlansPage() {
           </div>
           {/* mig 297 — one-line explainer for the Activation source dropdown above. */}
           <div style={{ fontSize: 11, color: '#64748b', marginTop: -8, marginBottom: 16 }}>
-            <b>Activation source</b> controls where this plan's reps get their <b>activations</b> counted from.
+            <b>Activation source</b> controls where this plan&apos;s reps get their <b>activations</b> counted from.
             {' '}<b>Inherit</b> uses the org default (POS sales). <b>POS sales</b> always counts POS activations.
             {' '}<b>Activation Details report</b> pays activations from the uploaded report and suppresses POS
-            activations for this plan's reps (single source, no double-count).
+            activations for this plan&apos;s reps (single source, no double-count).
             {' '}<b>Accessories and every non-activation rule always pay from POS sales regardless of this
             setting</b> — so ONE plan can pay accessories from POS and activations from the report at the same
             time. Changes nothing until you recalculate.
@@ -1117,7 +1117,7 @@ export default function CommissionPlansPage() {
           Same numbers as the Sales Report and Executive MTD, so the accessory total you see there is what pays.
           Each activation type is its own option — pay BYOD / Tablet / Home Internet differently, and <b>Upgrade</b>
           {' '}separately ($0 by default). The categories are identical for every tenant; each carrier just relabels.
-          Reads this plan's store assignments, so <b>save the plan first</b>. The rates below <b>save with the plan</b>
+          Reads this plan&apos;s store assignments, so <b>save the plan first</b>. The rates below <b>save with the plan</b>
           {' '}(the plan’s Save button); the calculation here is a read-only preview.
         </p>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, margin: '0 0 10px' }}>
@@ -1245,7 +1245,7 @@ export default function CommissionPlansPage() {
               <div style={{ color: 'var(--text3)', marginBottom: 2 }}>…for $/unit rules keyed on</div>
               <select style={sel} value={(gate.config.unit_basis.auto_txn_level_fields || []).join(',')} disabled={gateBusy}
                 onChange={e => saveGate({ ...gate.config, unit_basis: { ...gate.config.unit_basis, auto_txn_level_fields: e.target.value ? e.target.value.split(',') : [] } })}>
-                <option value="tender_type">tender type (the sale's payment method)</option>
+                <option value="tender_type">tender type (the sale&apos;s payment method)</option>
                 <option value="tender_type,trans_type">tender type + transaction type</option>
                 <option value="">nothing — never auto-dedup</option>
               </select>

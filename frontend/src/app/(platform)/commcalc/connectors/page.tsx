@@ -113,7 +113,7 @@ export default function ConnectorsPage() {
           Every vendor portal and the reports it feeds, with live sweep status and per-connector schedule. The data-pipeline registry (framework Phase 2).
         </p>
         <p style={{ color: 'var(--text3)', fontSize: 12, margin: '4px 0 0' }}>
-          One cron drives them all: point pg_cron at <code>POST /api/v1/commcalc/connectors/run-due</code> (header <code>X-Notify-Secret</code>) and it fans out to every connector that's due.
+          One cron drives them all: point pg_cron at <code>POST /api/v1/commcalc/connectors/run-due</code> (header <code>X-Notify-Secret</code>) and it fans out to every connector that&apos;s due.
         </p>
       </div>
       {msg && <div style={{ fontSize: 13, marginBottom: 10 }}>{msg}</div>}

@@ -141,7 +141,7 @@ function NotifySettings({ setMsg, health }: { setMsg: (s: string) => void; healt
     <div style={card}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>WhatsApp / download links</div>
       <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 12 }}>
-        When WhatsApp can only deliver a link (a report sent outside the recipient's 24h window with no
+        When WhatsApp can only deliver a link (a report sent outside the recipient&apos;s 24h window with no
         document-header template), the link is a no-login direct download of the file. Set how long that
         link stays valid.
       </div>
@@ -457,10 +457,10 @@ function SendLog({ log }: { log: LogRow[] }) {
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Recent sends</div>
       <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
         “Status” is only what Meta ACCEPTED. “Delivery” is what actually happened on the handset
-        (delivered/read = confirmed; <b>failed</b> shows Meta's own reason; a WhatsApp row stuck on
+        (delivered/read = confirmed; <b>failed</b> shows Meta&apos;s own reason; a WhatsApp row stuck on
         <b> sent</b> with no delivery was accepted and never confirmed — that is the silent-drop case).
         “Sent as” says whether the recipient got the real file or a download link.
-        “Report” is the report that was exported and sent — the same name the page's own export carries.
+        “Report” is the report that was exported and sent — the same name the page&apos;s own export carries.
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>Delivery</th><th style={th}>Sent as</th><th style={th}>By</th><th style={th}>Error</th></tr></thead>

@@ -82,7 +82,7 @@ export default function AgingRebatePage() {
 
           {rows.length === 0 ? (
             <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
-              No aging devices with a rebate received. (These appear once a device that's still On‑Inventory has a Boost reimbursement recorded.)
+              No aging devices with a rebate received. (These appear once a device that&apos;s still On‑Inventory has a Boost reimbursement recorded.)
             </div>
           ) : (
             <div className="card" style={{ padding: 0, overflow: 'auto' }}>
@@ -115,9 +115,9 @@ export default function AgingRebatePage() {
             </div>
           )}
           <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>
-            "Rebate received" = a Boost reimbursement recorded on a device that's still On‑Inventory. Matched to a sale
+            &quot;Rebate received&quot; = a Boost reimbursement recorded on a device that&apos;s still On‑Inventory. Matched to a sale
             by IMEI (raw_sales serial). <b>REBATE, NO SALE</b> = a rebate came in but no sale for that IMEI is on record — check the
-            rebate day's transactions. Export: Excel / PDF / Print (buttons) · WhatsApp / email (Send).
+            rebate day&apos;s transactions. Export: Excel / PDF / Print (buttons) · WhatsApp / email (Send).
           </p>
         </>
       )}

@@ -102,15 +102,15 @@ export default function DmAccessoryAttributionPage() {
         <ReportExportBar title="DM Accessory-Target Attribution" subtitle={period} sheets={exportSheets} />
       </div>
       <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
-        Each rep's accessory number is their schedule-derived target at the store they worked. A DM's total is
-        the sum of every employee-store row whose store's market is granted to them — a rep who worked stores
-        in two DMs' markets is split per store, never merged, never double-counted.
+        Each rep&apos;s accessory number is their schedule-derived target at the store they worked. A DM&apos;s total is
+        the sum of every employee-store row whose store&apos;s market is granted to them — a rep who worked stores
+        in two DMs&apos; markets is split per store, never merged, never double-counted.
       </p>
 
       {data.caller_scope === 'market' && (
         <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--text3)' }}>
           🔒 Showing your own granted market(s) only. A rep who also works under another DM still appears
-          below (to explain the split) but that other DM's numbers and roster are not shown here.
+          below (to explain the split) but that other DM&apos;s numbers and roster are not shown here.
         </div>
       )}
 
@@ -204,7 +204,7 @@ export default function DmAccessoryAttributionPage() {
 
       {data.warnings?.length > 0 && (
         <div className="card" style={{ padding: 12, fontSize: 12, color: 'var(--text3)' }}>
-          {data.warnings.length} row{data.warnings.length !== 1 ? 's' : ''} couldn't reach the schedule-target
+          {data.warnings.length} row{data.warnings.length !== 1 ? 's' : ''} couldn&apos;t reach the schedule-target
           engine this load and show as $0 — reload to retry ({data.warnings.slice(0, 3).map((w: any) => `${w.employee_name}@${w.store_code}`).join(', ')}{data.warnings.length > 3 ? '…' : ''}).
         </div>
       )}

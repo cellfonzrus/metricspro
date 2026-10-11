@@ -81,7 +81,7 @@ export default function AdjustModal({ unit, flagId, onClose, onDone }: {
           </div>
           {history.length > 0 && (
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>This unit's ledger</div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>This unit&apos;s ledger</div>
               {history.map(h => (
                 <div key={h.id}>{new Date(h.created_at).toLocaleDateString()} · {h.direction} · {LABELS[h.reason] || h.reason} · {h.from_status || '—'} → {h.to_status || '—'}{h.created_by ? ` · ${h.created_by}` : ''}{h.note ? ` — ${h.note}` : ''}</div>
               ))}

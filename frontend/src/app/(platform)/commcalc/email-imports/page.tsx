@@ -722,7 +722,7 @@ export default function EmailImportsPage() {
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Poll a mailbox a vendor (e.g. your {posWord}) emails reports to, and route each attachment to its upload parser.
           Add <strong>more than one mailbox</strong> when reports arrive in different inboxes (e.g. the POS feed at one
-          address, the carrier's reports at another) — each has its own creds, patterns and schedule.
+          address, the carrier&apos;s reports at another) — each has its own creds, patterns and schedule.
           Swept a file but a page shows nothing? <strong>Where are my rows?</strong> traces every ingest (incl. which org it landed in).
         </p>
       </div>

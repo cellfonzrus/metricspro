@@ -568,7 +568,7 @@ export default function SettingsPage() {
           )}
 
           <div style={{ marginTop: 16, background: '#fefce8', border: '1px solid #fde047', borderRadius: 10, padding: '12px 16px', fontSize: 13, color: '#92400e' }}>
-            <strong>📋 Hotsheet upload coming soon.</strong> Once enabled, you'll set the official SRP and promo price per device here, and the discrepancy engine will flag any rebate paid at the wrong price.
+            <strong>📋 Hotsheet upload coming soon.</strong> Once enabled, you&apos;ll set the official SRP and promo price per device here, and the discrepancy engine will flag any rebate paid at the wrong price.
           </div>
         </div>
       )}

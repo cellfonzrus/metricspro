@@ -24785,9 +24785,10 @@ rubber stamp.
   *when effects re-run*. On `commcalc/ma-commission`, `commcalc/commission-ledger`,
   `storeops/payroll`, `accounts/pl` and `closing/*` that decides which period's money a screen shows.
   Not guessed at; see 77.5.
-- **249 `react/no-unescaped-entities`** and **23 `no-unused-expressions`** — genuinely cosmetic
-  (apostrophes in JSX text; the deliberate `set.has(k) ? set.delete(k) : set.add(k)` idiom). Left for
-  budget, not for principle, and registered rather than hidden.
+- ~~**249 `react/no-unescaped-entities`** and **23 `no-unused-expressions`**~~ — left for budget, not
+  for principle, and the only two groups of which that was true. **Both are now ZERO** — paid off in
+  full by the follow-up in **CORE-02.8**, which also corrects the word "cosmetic" used here: the 23
+  unused expressions were not cosmetic and not dead, they were load-bearing.
 - **7 `no-require-imports`** in `scratchpad/prove_plan_match_render.cjs` — a `.cjs` file **must** use
   `require`. This is a case of the rule being wrong for the file, stated here rather than silenced
   with a disable comment.
@@ -24803,6 +24804,10 @@ warnings — over **419** files, pinned as **932** `(rule, file)` entries in
 the parse error and the em-dash rule name. An honest gate that reports 4 more errors than the tree
 admitted to yesterday is the point; they were always there. `eslint-disable` directives went
 **110 → 92**, and PINNED_SUPPRESSIONS is pinned at exactly 92 so the count cannot grow at all.
+
+**MEASURED NOW, after CORE-02.8:** **5645** findings — **5430** errors, **215** warnings — over
+**413** files, pinned as **842** `(rule, file)` entries. `PINNED_TOTAL` is **5645**; suppressions are
+still **92** (CORE-02.8 added none).
 
 ### CORE-02.5 UNUSED VARIABLES THAT ARE CANDIDATE DEFECTS — reported, not deleted
 
@@ -24846,6 +24851,79 @@ is what goes red — the §19.25 lesson about a lock sitting behind the thing it
 Rule (g) is the one that answers the owner's brief directly: **the suppression ceiling is what makes
 "fix the problems" mean fix, rather than comment out.**
 
+### CORE-02.8 THE TWO GROUPS THAT WERE A BUDGET CALL — paid off to zero (2026-10-11, follow-up)
+
+CORE-02.4 registered 5917 findings and was explicit that only two of those groups were held back for
+**budget rather than principle**. This is those two, measured to zero. Nothing else in the register
+was touched: no `no-explicit-any`, no hook rule, no suppression added, no rule downgraded, no
+`globalIgnores` widened.
+
+| rule | before | after | files |
+|---|---|---|---|
+| `react/no-unescaped-entities` | 249 | **0** | 74 |
+| `@typescript-eslint/no-unused-expressions` | 23 | **0** | 16 |
+| **total findings** | 5917 | **5645** | 419 → 413 |
+
+**`no-unescaped-entities` — escaping only, and that is PROVEN, not asserted.** All 249 were `'` (179)
+or `"` (70) in JSX text; no `>` or `}` occurred. Each was replaced with `&apos;` / `&quot;` **at the
+exact line and column ESLint reported**, never by a regex over JSX text — the brief's own warning
+about a tidy-up regex that mangled two files by −91 and −147 lines is why. Two audits back this:
+every one of the 74 files has insertions **equal** to deletions (187 each, so no file gained or lost
+a line), and on every changed line, **reverting the inserted entities reproduces the original line
+byte for byte**, with the length change exactly 5 characters per replacement. Not one character of
+visible copy changed.
+
+> **The trap worth recording: ESLint columns are UTF-16 code units, not code points.** Five findings
+> sat on lines containing an astral emoji (`💵`, `📋`, `📝`), each of which is ONE Python character but
+> TWO UTF-16 units — so indexing the reported column in Python landed one character late, on the `s`
+> of `employee's` rather than the apostrophe. The rewriter **asserted that the character at the
+> reported position was the one the message named** and refused to write any file when it was not,
+> which is how this surfaced instead of shipping five corrupted strings. Index in UTF-16 units.
+
+**`no-unused-expressions` — all 23 read individually, and the brief's two categories did not fit.**
+The brief anticipated *dead code* (delete it) or an *unfinished statement* (report it, never guess).
+Read one by one, **23 of 23 were neither**: every one is a ternary- or `&&`-as-statement whose **both
+branches have real side effects**, so it is working, load-bearing code that the rule objects to on
+the grounds of IDIOM, not effect:
+
+- 20 are `n.has(k) ? n.delete(k) : n.add(k)` — the select-all/toggle behind every multi-select in the
+  app (`src/lib/multiselect.tsx`, `ReportShell`, `commcalc/item-mapping`, `plan-installments`, …).
+  **Deleting these would have broken every one of those toggles.**
+- 2 are `ok ? pass++ : fail++` — how two proof harnesses count their own results.
+- 1 is `onApplied && onApplied()` — a guarded optional callback, typed `onApplied?: () => void`.
+
+So **0 deleted and 0 reported as unfinished**; each was restructured into the equivalent statement
+form `if (cond) a; else b`, which is provably behaviour-identical (the ternary's value was discarded
+at both sites, and a function is never falsy, so `if (onApplied)` ≡ `onApplied &&`). 23 insertions,
+23 deletions — exactly one line per finding. `frontend/scratchpad/prove_entity_picker.mjs` (53/53)
+and `prove_org_append.mjs` (22/22) still pass, which is the direct check that the two counter
+rewrites preserved their meaning.
+
+**No money path's behaviour moved.** Several of these files are money-adjacent — `commcalc/
+plan-installments`, `commission-plans`, `targets/*`, `CoverageWizard`, `accounts/*` — so the standing
+rule applies. Nothing here changes a figure or when an effect re-runs: the entity work is text
+escaping inside JSX text nodes, and the expression work is an if/else transliteration of an
+already-evaluated ternary. No `useEffect`, no dependency array and no arithmetic was touched.
+
+**Register corrected downward, as the ratchet demands.** The gate fails when a count FALLS without
+the register being fixed, so all **90** now-empty entries (74 + 16, exactly the two rules and nothing
+else — verified by grouping the gate's own `- delete:` output by rule) were removed: **932 → 842**
+entries, sum **5917 → 5645**, which equals the measured total. `PINNED_TOTAL` lowered 5917 → 5645 per
+CORE-02.6(h), which says to lower it as the register shrinks. The register's own header carries the
+same numbers so it does not state a stale count.
+
+Proof on the final tree: `npm run typecheck` **0 errors** over 547 files; `npm run lint` **5645**;
+`npm run lint:gate` **OK** (measured 5645 == pinned 5645); `harness_frontend_lint_lock.py`
+**42 passed, 0 failed**.
+
+**Duplicate check (the build gate).** Nothing new was built: no new report, endpoint, query, table,
+function or feed, so there is nothing to register in §16–18 or the lineage registry. This EXTENDS
+CORE-02 — the same gate, the same runner, the same register, the same lock — which is why it is a
+subsection here and not a new `§<MODULE>-NN`. Searched the index for an existing mechanism before
+touching anything: CORE-02 itself is that mechanism and the two groups above are its own named
+leftovers. No second lint path, no second register and no second home for the linter invocation was
+created; `frontend/package.json`'s `lint` script remains the one home, dereferenced by the gate.
+
 ### CORE-02.7 Cross-references
 
 Registers **no table, no endpoint, no metric and no report** — so §16 (by TABLE), §17 (by ENDPOINT)
@@ -24860,3 +24938,4 @@ them would be noise. What it registers is a CI gate, a runner, a register and a 
 - Duplicate check (the build gate): the **existing** `frontend-typecheck` job of #438 / §75 is the pattern this reuses step for step — checkout, `setup-node` 22, `setup-python` 3.11, stdlib lock, `npm ci --ignore-scripts --no-audit --no-fund`, dereferenced script. No sibling workflow, no second lint path, and no second home for the linter invocation was created; `harness_frontend_typecheck_lock.py` is the lock this one is modelled on and is left untouched.
 - Ratchet precedents read before instantiating one: §19.25 / `backend/harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt`.
 - Same class: §75 (which named this gap), §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate).
+- CORE-02.8 (the follow-up) registers no new artefact either: it changes only JSX text escaping in 74 files, a ternary-to-`if/else` transliteration in 16, `frontend/eslint_pending.txt` (932 → 842 entries) and `PINNED_TOTAL` in the lock (5917 → 5645). Still no table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.
