@@ -24868,9 +24868,10 @@ was touched: no `no-explicit-any`, no hook rule, no suppression added, no rule d
 or `"` (70) in JSX text; no `>` or `}` occurred. Each was replaced with `&apos;` / `&quot;` **at the
 exact line and column ESLint reported**, never by a regex over JSX text — the brief's own warning
 about a tidy-up regex that mangled two files by −91 and −147 lines is why. Two audits back this:
-every one of the 74 files has insertions **equal** to deletions (187 each, so no file gained or lost
-a line), and on every changed line, **reverting the inserted entities reproduces the original line
-byte for byte**, with the length change exactly 5 characters per replacement. Not one character of
+in **each** of the 74 files the insertion count **equals** the deletion count, so no file gained or
+lost a single line (187 changed lines in total, carrying all 249 replacements — some lines hold more
+than one); and on every one of those 187 lines, **reverting the inserted entities reproduces the
+original line byte for byte**, with the length change exactly 5 characters per replacement. Not one character of
 visible copy changed.
 
 > **The trap worth recording: ESLint columns are UTF-16 code units, not code points.** Five findings
