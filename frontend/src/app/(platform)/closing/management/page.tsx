@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import StandardFilterBar from '@/components/StandardFilterBar'

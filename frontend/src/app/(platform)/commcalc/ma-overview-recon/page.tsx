@@ -80,7 +80,7 @@ export default function MaOverviewReconPage() {
   const didMount = useRef(false)
   useEffect(() => {
     if (!didMount.current) { didMount.current = true; return }
-    load(filt)  // eslint-disable-line react-hooks/exhaustive-deps
+    load(filt)
   }, [filt])    // eslint-disable-line react-hooks/exhaustive-deps
 
   async function upload(f: File) {

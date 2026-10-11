@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { api, apiUpload } from '@/lib/client'
+import { apiUpload } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 import { sourceLabel } from '@/lib/sourceLabels'

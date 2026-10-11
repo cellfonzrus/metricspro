@@ -10,7 +10,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import TourRunner from '@/components/TourRunner'
 import { Tour, fetchTours, startTour, tourDoneAt } from '@/lib/tours'

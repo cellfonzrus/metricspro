@@ -78,7 +78,6 @@ export default function StoreOpsReportsPage() {
   useEffect(() => {
     if (!rangeReady || !filt.period || !filt.periodTo) return
     load(filt.period, filt.periodTo)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeReady, filt.period, filt.periodTo])
 
   // store_code -> market

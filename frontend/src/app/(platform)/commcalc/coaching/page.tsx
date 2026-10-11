@@ -44,8 +44,8 @@ export default function RepCoachingPage() {
   const repsInScope = Array.from(new Set(marketReps.filter(r => !storeF || r.store === storeF).map(r => r.rep).filter(Boolean))).sort() as string[]
 
   // keep the store/rep selections valid as the market/store scope narrows
-  useEffect(() => { if (storeF && !storesInScope.includes(storeF)) setStoreF('') }, [markets]) // eslint-disable-line
-  useEffect(() => { if (repF && !repsInScope.includes(repF)) setRepF('') }, [markets, storeF]) // eslint-disable-line
+  useEffect(() => { if (storeF && !storesInScope.includes(storeF)) setStoreF('') }, [markets]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (repF && !repsInScope.includes(repF)) setRepF('') }, [markets, storeF]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleMarket = (m: string) => setMarkets(ms => ms.includes(m) ? ms.filter(x => x !== m) : [...ms, m])
 

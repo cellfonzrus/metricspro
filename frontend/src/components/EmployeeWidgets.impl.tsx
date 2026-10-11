@@ -2,7 +2,7 @@
 import { fmt } from '@/lib/client'
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip,
-  CartesianGrid, Cell, ReferenceLine,
+  CartesianGrid, Cell 
 } from 'recharts'
 // Self-contained, self-fetching device lookup (commission-16). Renders its OWN card chrome + search box;
 // money rows are gated server-side (the 'device_commission' DATA_GRANT), so mounting it for every employee

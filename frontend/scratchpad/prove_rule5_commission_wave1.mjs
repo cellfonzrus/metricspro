@@ -24,7 +24,12 @@ function optionsFromRows(rows, acc) {
   return { stores: [...stores].sort(), markets: [...markets].sort(),
     reps: [...reps.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([id, email]) => (email ? { id, label: id, sublabel: email } : { id, label: id })) }
 }
-const empty = () => ({ period: '', periodTo: '', stores: [], markets: [], reps: [] })
+const empty = () => ({ period: '', periodTo: '', stores: [], markets: [], reps: [] });
+// ^ the semicolon is load-bearing: a bare `{ … }` scoping block follows, and without a
+// terminator the TypeScript parser reads `({ period: '', … })` as this arrow's PARAMETER list
+// with the block as its body, so `period: ''` becomes a destructuring rename needing an
+// identifier. Node's parser accepts it, so the file ran green while ESLint could not read it
+// at all — the file reported one parse error instead of being linted.
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // 1) sales-report.tsx — rep-multi AND-composed with the existing market/store multi-select filters.
@@ -191,9 +196,9 @@ const empty = () => ({ period: '', periodTo: '', stores: [], markets: [], reps: 
   for (const r of rows) {
     const p = r.period, st = r.store, pay = r.total_payout
     d.by_period[p] = (d.by_period[p] || 0) + pay; d.total += pay
-    const k = p + ' ' + st; d._ps[k] = (d._ps[k] || 0) + pay
+    const k = p + '\u0000' + st; d._ps[k] = (d._ps[k] || 0) + pay
   }
-  const points = Object.entries(d._ps).map(([k, v]) => { const [p, st] = k.split(' '); return { period: p, store: st, pay: v } })
+  const points = Object.entries(d._ps).map(([k, v]) => { const [p, st] = k.split('\u0000'); return { period: p, store: st, pay: v } })
   ok('comp-trend backend: points are per-(period,store), never collapsed to one store', eq(points, [
     { period: 'May 2026', store: 'A', pay: 100 }, { period: 'June 2026', store: 'B', pay: 60 }]))
   ok('comp-trend backend: by_period still sums per period (backward compat)', eq(d.by_period, { 'May 2026': 100, 'June 2026': 60 }))

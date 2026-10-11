@@ -12,8 +12,8 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import {
-  panel, input, label, btn, btnPrimary, th, cell, fmtMoney,
-  type MarketingOption, type MarketingConfig, type OptionList,
+  panel, input, label, btnPrimary, th, cell, fmtMoney,
+   type MarketingConfig, type OptionList
 } from '@/lib/marketing'
 
 function OptionListEditor({ list, onChanged, highlight }: {

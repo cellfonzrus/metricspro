@@ -42,7 +42,7 @@ export default function StaffingHeatmapPage() {
       if (!r.has_demand) setMsg('No transaction-time data yet for this store/period — demand & required fill in as new time-stamped sales upload (historical rows are date-only). Scheduled & actual are shown now.')
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)); setData(null) } finally { setLoading(false) }
   }
-  useEffect(() => { if (storeCode) load() }, [storeCode, period]) // eslint-disable-line
+  useEffect(() => { if (storeCode) load() }, [storeCode, period]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = VIEWS.find(v => v.k === view)!
   const cells: any[] = data?.grid || []

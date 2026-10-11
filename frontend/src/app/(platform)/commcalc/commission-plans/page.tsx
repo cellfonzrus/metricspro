@@ -334,7 +334,6 @@ export default function CommissionPlansPage() {
   useEffect(() => {
     const t = setTimeout(() => { loadOptions(period) }, 400)
     return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period])
 
   const markets = Array.from(new Set(stores.map(s => (s.market || '').trim()).filter(Boolean))).sort()
@@ -613,7 +612,7 @@ export default function CommissionPlansPage() {
       stored && c.key in stored ? Number(stored[c.key]) || 0 : (c.key === 'upgrade' ? 0 : flat)])))
     setMtdAccPct(stored && 'accessory_pct' in stored ? Number(stored.accessory_pct) || 0 : acc)
     setMtd(null)
-  }, [draft?.id, MTD_CATS.length])   // eslint-disable-line react-hooks/exhaustive-deps — re-seed once the category list arrives
+  }, [draft?.id, MTD_CATS.length])   // eslint-disable-line react-hooks/exhaustive-deps -- re-seed once the category list arrives
 
   // Executive-MTD commission: reads the Exec MTD per-employee numbers over this plan's stores and applies
   // the per-category rates. Needs a SAVED plan (its assignments define the scope). Read-only; changes nothing.

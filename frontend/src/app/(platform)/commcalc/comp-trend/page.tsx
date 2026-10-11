@@ -61,7 +61,7 @@ export default function CompTrendPage() {
     }
     return { stores: [...stores].sort(), markets: [...markets].sort(),
              reps: [...repsM].sort().map(id => ({ id, label: id })) }
-  }, [repsAll])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [repsAll])
   // FIX 4 — PER-MONTH attribution. A store/market filter narrows the MONTHS within each rep (only the
   // months worked at that store/market count), never the whole rep by one collapsed store. Totals re-sum
   // from the narrowed months; a rep with no surviving month drops out. The table, tiles AND export
@@ -93,7 +93,7 @@ export default function CompTrendPage() {
       out.push({ ...r, by_period, total: Math.round(total * 100) / 100, _stores: [...seen].sort() })
     }
     return out.sort((a, b) => (b.total || 0) - (a.total || 0))
-  }, [repsAll, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [repsAll, filt])
   const repFilterActive = isStandardFilterActive(filt)
   const latestRepMonth = repMonths[repMonths.length - 1] || ''
   const repPerMonth = (m: string) => reps.reduce((s: number, r: any) => s + (r.by_period?.[m] || 0), 0)

@@ -10,8 +10,8 @@ import { api } from '@/lib/client'
 import {
   panel, btn, btnPrimary, input, label, th, cell,
   STATUS_COLOR, SEVERITY_COLOR,
-  fmtDate, fmtTime, fmtMoney, relTime,
-  type MarketingEvent, type MarketingConfig,
+  fmtDate, fmtTime, relTime,
+  type MarketingEvent, type MarketingConfig
 } from '@/lib/marketing'
 
 interface Summary {

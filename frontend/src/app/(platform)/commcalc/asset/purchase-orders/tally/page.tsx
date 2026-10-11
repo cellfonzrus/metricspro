@@ -5,7 +5,7 @@
 // commcalc.raw_payment_detail (payment_categories.category='Commission'). Buckets: sold-with-commission /
 // sold-no-commission / unsold.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, fmt } from '@/lib/client'
+import { api } from '@/lib/client'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import ReportShell from '@/components/ReportShell'

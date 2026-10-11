@@ -1,6 +1,5 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
-import Link from 'next/link'
 import { api, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useReportLabels } from '@/lib/report-labels'

@@ -48,7 +48,6 @@ export default function UnsafeLinkGuard() {
       if (!isBlockedNavigation(a.getAttribute('href'))) return
       e.preventDefault()
       e.stopImmediatePropagation()
-      // eslint-disable-next-line no-console
       console.warn('[MetricsPro] Blocked an unsafe link target. If you expected a page here, the ' +
         'configured link is invalid — fix it in the admin screen that owns it.')
     }

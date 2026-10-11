@@ -181,7 +181,6 @@ export default function SchedulePage() {
     setNotice(`${empName || 'This employee'} tapped in at ${store || 'a store'} at ${start} and is waiting — set the end time and save to clock them in.`)
     // strip the query so a refresh/back doesn't reopen the modal.
     try { window.history.replaceState(null, '', window.location.pathname) } catch { /* ignore */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, allEmps.length, wwDow])
 
   // Fetch the hours trend whenever the scope (market/store filter) or the anchor week changes. The

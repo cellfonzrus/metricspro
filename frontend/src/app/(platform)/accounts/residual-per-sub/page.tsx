@@ -132,7 +132,7 @@ export default function ResidualPerSubPage() {
     if (loading || !chartData.length) { setChartImg(''); return }
     const t = setTimeout(() => { captureChartPng(chartWrapRef.current).then(setChartImg).catch(() => setChartImg('')) }, 450)
     return () => clearTimeout(t)
-  }, [chartData, chartSeries, loading])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chartData, chartSeries, loading])
 
   const rowsToShow = filtered ? visibleStores : stores
 

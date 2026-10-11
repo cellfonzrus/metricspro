@@ -33,7 +33,6 @@ export default function CarrierPortalsSection() {
 
   useEffect(() => {
     loadPortals().then(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function loadPortals() {
