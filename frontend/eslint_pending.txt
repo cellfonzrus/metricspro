@@ -23,7 +23,7 @@
 # There is no `--write` flag on the runner, deliberately: a trapdoor that re-pins this file from
 # whatever the tree currently says is how a ratchet becomes a rubber stamp.
 #
-# See index §77. Format: `<count>\t<rule>\t<path>`, paths relative to frontend/.
+# See index §CORE-02. Format: `<count>\t<rule>\t<path>`, paths relative to frontend/.
 2	@next/next/no-html-link-for-pages	src/app/(platform)/commcalc/asset/page.tsx
 1	@next/next/no-html-link-for-pages	src/app/(platform)/hr/compliance/page.tsx
 1	@next/next/no-html-link-for-pages	src/app/error.tsx

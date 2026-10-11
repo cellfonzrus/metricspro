@@ -1238,7 +1238,7 @@ jobs:
         working-directory: frontend
         run: npm run typecheck 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # THE FRONTEND LINT GATE (index §77, owner 2026-10-11: *"Run the code style checker and fix the
+  # THE FRONTEND LINT GATE (index §CORE-02, owner 2026-10-11: *"Run the code style checker and fix the
   # problems"*). `frontend/package.json` declared a `lint` script all along and NOTHING ran it —
   # measured on main: 5953 findings over 422 files, reported by nobody. The same §19.25 class as the
   # type-check hole #438 closed one layer over, and it ships the same way: the lock first (stdlib,
@@ -1259,7 +1259,7 @@ jobs:
         with: { node-version: "22" }
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
-      - name: "Run the frontend lint gate lock (index §77): the linter has ONE home, a workflow runs it with node_modules installed, its path filter covers frontend/**, and the config's rule sets, the ignores, the suppression ceiling and the pinned register cannot be relaxed to reach green"
+      - name: "Run the frontend lint gate lock (index §CORE-02): the linter has ONE home, a workflow runs it with node_modules installed, its path filter covers frontend/**, and the config's rule sets, the ignores, the suppression ceiling and the pinned register cannot be relaxed to reach green"
         working-directory: backend
         run: python3 harness_frontend_lint_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Install the frontend's dependencies

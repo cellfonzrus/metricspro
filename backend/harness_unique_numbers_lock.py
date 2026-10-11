@@ -22,6 +22,16 @@ only shrink: a third file on a grandfathered number fails, and an entry that no 
 until it is removed from the list.
 
 Negative controls (C) plant each kind of collision and require this lock to catch it.
+
+2026-10-11 — THE ID NOW CARRIES ITS MODULE (owner: *"we should assign the numbers with a prefix of
+the module we are working with and update the same in the index and back connection it"*). A new
+section is `§<MODULE>-NN` (`§COMMCALC-01`), so the only ids two concurrent branches can both reach
+for are ids in the SAME module. The three id patterns below therefore match the prefixed shape as
+well, and this file stays the ONE home for "a number that names one thing is claimed once" —
+`harness_index_section_register.py` dereferences `_HEADING` / `_PARA` / `GRANDFATHERED_SECTIONS`
+from here rather than keeping a second copy of them. That is why the checks moved inside `main()`:
+a second caller cannot import a module that runs its own checks and exits at import time.
+
 Stdlib only, no DB. Run: python3 harness_unique_numbers_lock.py
 """
 import collections
@@ -53,9 +63,12 @@ GRANDFATHERED_SECTIONS = {
 }
 
 _MIG = re.compile(r"^(\d+[a-z]?)_.+\.sql$")
-_HEADING = re.compile(r"^#{2,4}\s+(\d+[a-z]?(?:\.\d+[a-z]?)*)\.?\s")
+# An id is either LEGACY numeric (`6p`, `23aa`, `19.32`, `23s.8`) or MODULE-PREFIXED (`COMMCALC-01`,
+# `CORE-01.2`). Both shapes are matched here so a prefixed id cannot be claimed twice either.
+_ID = r"(?:\d+[a-z]*|[A-Z][A-Z0-9]{2,11}-\d{2})(?:\.\d+[a-z]?)*"
+_HEADING = re.compile(r"^#{2,4}\s+§?\s*(" + _ID + r")\.?\s")
 _PARA = re.compile(r"^§(\d+\.\d+[a-z]?)\s+\*\*")
-_TOC = re.compile(r"^\|\s*(\d+[a-z]?(?:\.\d+[a-z]?)?)\s*\|\s*\*\*")
+_TOC = re.compile(r"^\|\s*(" + _ID + r")\s*\|\s*\*\*")
 TOC_LINES = 200  # the table of contents sits at the top of the index
 
 passed = failed = 0
@@ -114,51 +127,56 @@ def section_collisions(lines, grandfathered):
     return problems
 
 
-print("A. migration numbers are unique")
-mig_names = sorted(os.listdir(MIGRATIONS))
-check("the migrations folder was read", len(mig_names) > 400 and "001_core.sql" in mig_names, len(mig_names))
-probs = migration_collisions(mig_names, GRANDFATHERED_MIGRATIONS)
-check("no migration number is claimed twice (outside the grandfathered, already-applied set)", not probs,
-      "\n        " + "\n        ".join(probs))
-check("1030 is the auto-calculation migration alone",
-      [n for n in mig_names if n.startswith("1030_")] == ["1030_auto_calc_on_landing.sql"],
-      [n for n in mig_names if n.startswith("1030_")])
-check("the port-out fraud report migration is 1031",
-      "1031_portout_fraud_report.sql" in mig_names)
+def main() -> int:
+    print("A. migration numbers are unique")
+    mig_names = sorted(os.listdir(MIGRATIONS))
+    check("the migrations folder was read", len(mig_names) > 400 and "001_core.sql" in mig_names, len(mig_names))
+    probs = migration_collisions(mig_names, GRANDFATHERED_MIGRATIONS)
+    check("no migration number is claimed twice (outside the grandfathered, already-applied set)", not probs,
+          "\n        " + "\n        ".join(probs))
+    check("1030 is the auto-calculation migration alone",
+          [n for n in mig_names if n.startswith("1030_")] == ["1030_auto_calc_on_landing.sql"],
+          [n for n in mig_names if n.startswith("1030_")])
+    check("the port-out fraud report migration is 1031",
+          "1031_portout_fraud_report.sql" in mig_names)
 
-print("B. index section numbers are unique")
-with open(INDEX, encoding="utf-8") as f:
-    index_lines = f.read().split("\n")
-probs = section_collisions(index_lines, GRANDFATHERED_SECTIONS)
-check("no index section number is claimed twice (outside the grandfathered set)", not probs,
-      "\n        " + "\n        ".join(probs))
-para = {m.group(1): l for l in index_lines for m in [_PARA.match(l)] if m}
-check("§19.32 is the port-out fraud report", "PORT-OUT" in para.get("19.32", ""), para.get("19.32", "")[:80])
-check("§19.33 is the missing period lock (auto-calculation)", "PERIOD LOCK" in para.get("19.33", ""),
-      para.get("19.33", "")[:80])
+    print("B. index section numbers are unique")
+    with open(INDEX, encoding="utf-8") as f:
+        index_lines = f.read().split("\n")
+    probs = section_collisions(index_lines, GRANDFATHERED_SECTIONS)
+    check("no index section number is claimed twice (outside the grandfathered set)", not probs,
+          "\n        " + "\n        ".join(probs))
+    para = {m.group(1): l for l in index_lines for m in [_PARA.match(l)] if m}
+    check("§19.32 is the port-out fraud report", "PORT-OUT" in para.get("19.32", ""), para.get("19.32", "")[:80])
+    check("§19.33 is the missing period lock (auto-calculation)", "PERIOD LOCK" in para.get("19.33", ""),
+          para.get("19.33", "")[:80])
 
-print("C. negative controls — each planted collision is caught")
-check("control: two new files on one number",
-      migration_collisions(["1040_a.sql", "1040_b.sql"], {}) != [])
-check("control: a letter suffix is its own number (268 / 268b)",
-      migration_collisions(["268_a.sql", "268b_b.sql"], {}) == [])
-check("control: a third file on a grandfathered number",
-      migration_collisions(["223_x.sql", "223_y.sql", "223_z.sql"], {"223": {"223_x.sql", "223_y.sql"}}) != [])
-check("control: a grandfathered entry that no longer collides must be removed",
-      migration_collisions(["223_x.sql"], {"223": {"223_x.sql", "223_y.sql"}}) != [])
-check("control: two `§N.M **` paragraphs with one number",
-      section_collisions(["§19.40 **A**", "§19.40 **B**"], {}) != [])
-check("control: two `###` headings with one number",
-      section_collisions(["### 6x. ONE", "### 6x. TWO"], {}) != [])
-check("control: two table-of-contents rows with one number",
-      section_collisions(["| 41 | **A** | x |", "| 41 | **B** | y |"], {}) != [])
-check("control: distinct numbers pass",
-      section_collisions(["### 6x. ONE", "### 6y. TWO", "§19.40 **A**", "§19.41 **B**"], {}) == [])
-with tempfile.TemporaryDirectory() as d:
-    for n in ("1030_auto_calc_on_landing.sql", "1030_portout_fraud_report.sql"):
-        open(os.path.join(d, n), "w").close()
-    check("control: the 2026-09-28 tree (two 1030s) would have failed",
-          migration_collisions(sorted(os.listdir(d)), {}) != [])
+    print("C. negative controls — each planted collision is caught")
+    check("control: two new files on one number",
+          migration_collisions(["1040_a.sql", "1040_b.sql"], {}) != [])
+    check("control: a letter suffix is its own number (268 / 268b)",
+          migration_collisions(["268_a.sql", "268b_b.sql"], {}) == [])
+    check("control: a third file on a grandfathered number",
+          migration_collisions(["223_x.sql", "223_y.sql", "223_z.sql"], {"223": {"223_x.sql", "223_y.sql"}}) != [])
+    check("control: a grandfathered entry that no longer collides must be removed",
+          migration_collisions(["223_x.sql"], {"223": {"223_x.sql", "223_y.sql"}}) != [])
+    check("control: two `§N.M **` paragraphs with one number",
+          section_collisions(["§19.40 **A**", "§19.40 **B**"], {}) != [])
+    check("control: two `###` headings with one number",
+          section_collisions(["### 6x. ONE", "### 6x. TWO"], {}) != [])
+    check("control: two table-of-contents rows with one number",
+          section_collisions(["| 41 | **A** | x |", "| 41 | **B** | y |"], {}) != [])
+    check("control: distinct numbers pass",
+          section_collisions(["### 6x. ONE", "### 6y. TWO", "§19.40 **A**", "§19.41 **B**"], {}) == [])
+    with tempfile.TemporaryDirectory() as d:
+        for n in ("1030_auto_calc_on_landing.sql", "1030_portout_fraud_report.sql"):
+            open(os.path.join(d, n), "w").close()
+        check("control: the 2026-09-28 tree (two 1030s) would have failed",
+              migration_collisions(sorted(os.listdir(d)), {}) != [])
 
-print(f"\n{passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+    print(f"\n{passed} passed, {failed} failed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
