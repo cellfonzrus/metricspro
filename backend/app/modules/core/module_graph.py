@@ -641,6 +641,9 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/epay_sweep.py': ('_lin',),
             'app/modules/commcalc/inventory_sold_recon.py': ('_dlr',),
             'app/modules/commcalc/ma_recon.py': ('SALES_DISPLAY_SOURCES',),
+            # The portal pull asks the registry whether its TARGET TABLE stores a row's month
+            # (§COMMCALC-04), instead of carrying its own `has_period` flag per report spec.
+            'app/modules/commcalc/report_pull.py': ('_lin',),
             'app/modules/commcalc/router.py': ('_dlr', '_lineage'),
             'app/modules/pos/inventory_integrity_router.py': ('_dlr',),
         },
