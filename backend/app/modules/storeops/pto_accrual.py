@@ -95,7 +95,7 @@ def _parse_date(s: str) -> Optional[date]:
 
 # ── worked hours from shifts — THE one home (storeops/payroll_hours_basis, index §14y) ───────────
 def hours_worked_from_shifts(shifts: List[dict], hours_basis_cfg=None,
-                              emp_by_id=None) -> Dict[str, Dict[str, float]]:
+                              emp_by_id=None, evidence=None) -> Dict[str, Dict[str, float]]:
     """employee_id -> {store_code: hours}. A floater's hours land at the store they actually
     worked (the shift's own store_code), matching /payroll-by-store's attribution.
 
@@ -104,15 +104,33 @@ def hours_worked_from_shifts(shifts: List[dict], hours_basis_cfg=None,
     resolves to the house defaults, which are byte-identical to the `act if act > 0 else sched` this
     replaced."""
     cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
+    # THE DAY'S PUNCHES (owner directive 2026-10-12, index §14y). With no evidence the one home can
+    # only see `shifts.actual_hours` — the dead column — so on a clocked-only org this returned ZERO
+    # hours for every employee, and PTO accrued on nothing while `storeops.timelog` held the
+    # punches. `evidence` is `storeops/payroll_evidence.period_evidence`'s index, read by the two
+    # router call sites (`_pto_gather`, `_payex_gather`); never a punch query in here, which stays
+    # pure.
+    _ph = []
+    if isinstance(evidence, dict) and evidence:
+        # ONE ROW PER SHIFT ROW, IN ORDER, each carrying its share of its DAY's paid hours. A bare
+        # cell reads 0.0 for every day a punch measured — see `payroll_evidence.paid_hours_rows`.
+        # ZIPPED BY POSITION: two shift rows can be the same dict object.
+        from app.modules.storeops import payroll_evidence as _payevid
+        _ph = _payevid.paid_hours_rows({"evidence": evidence, "cfg": cfg}, shifts or [],
+                                       emp_by_id=emp_by_id, cfg=cfg)
     out: Dict[str, Dict[str, float]] = {}
-    for s in shifts or []:
+    for _si, s in enumerate(shifts or []):
         eid = s.get("employee_id")
         store = (s.get("store_code") or "").strip()
         if not eid or not store:
             continue
         # ONE HOME for paid hours (index §14y). Was `act if act > 0 else sched` — the same silent
         # fallback, in a fourth place. `hours_basis_cfg=None` = the house defaults = today.
-        hrs, _b, _ = _hours_basis.resolve_shift_row(s, cfg, (emp_by_id or {}).get(eid))
+        _row = _ph[_si] if _si < len(_ph) else None
+        if _row is not None:
+            hrs = _row["hours"]
+        else:
+            hrs, _b, _ = _hours_basis.resolve_shift_row(s, cfg, (emp_by_id or {}).get(eid))
         out.setdefault(eid, {})
         out[eid][store] = out[eid].get(store, 0.0) + hrs
     return out

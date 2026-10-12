@@ -339,7 +339,17 @@ ALLOWED_REMOVED = {
     f"{MOD}/account/coa.py": {"store_resolver._num_key", "store_resolver.resolve"},
 }
 MONEY_MODULE_DELTA = {
+    # coa.py {wages_by_store, derive_wage_cells, derive_wage_cells_with_basis} (2026-10-12,
+    #   index §14y.1, mig 1076) — THE P&L WAGE LINE NOW READS THE PUNCHES. It was calling
+    #   `payroll_hours_basis.resolve_shift_row` with no evidence, so the one home could only see
+    #   `shifts.actual_hours` — the dead column — and the house org's live `clocked_only` config
+    #   booked $374,733.02 -> $0.00 over Jun–Oct 2026 while the punches sat in `storeops.timelog`.
+    #   The read is the ONE pay-path read (`storeops/payroll_evidence`), the interlock is consulted,
+    #   and a refused period RAISES rather than returning zeros. No resolver or attribution function
+    #   moved: WHICH store money books to is untouched, only HOW MANY HOURS a day is worth, which is
+    #   `payroll_hours_basis`'s decision. Locked by harness_payroll_hours_basis_lock.py §H.
     f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store",
+                               "derive_wage_cells", "derive_wage_cells_with_basis",
                                "store_resolver", "_squash_key", "_lead_num_key"},
                               {"_lcov_mod", "build_inputs.add_comm"}),
     f"{MOD}/account/autocompute.py": (set(), set()),

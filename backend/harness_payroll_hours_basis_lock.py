@@ -28,6 +28,13 @@ THE SIX AXES THIS LOCK FAILS THE BUILD ON
   F. EVERY DECLARED VARIANCE KIND IS EMITTED. A kind in the vocabulary that no code raises is a
      check nobody performs — and two of them (`store_mismatch`, `auto_clockout`) were exactly that
      for a day, which is why this axis exists.
+  H. THE PAY PATH ARRIVES WITH EVIDENCE, AND ASKS THE INTERLOCK (owner directive 2026-10-12).
+     Dereferencing the one home is not enough: four callers reached it with NO punches, so it could
+     only read `shifts.actual_hours` — the dead column — and a clocked-only org booked $0.00 over
+     months whose punches were present ($374,733.02 -> $0.00, Jun–Oct 2026). This axis fails the
+     build if a pay path stops passing evidence, stops consulting the interlock, grows a second
+     punch read, loses the business date a resolver needs for the effective-from floor, or spells
+     that floor's date as a literal instead of reading the config row.
 
 No DB, no network, no app imports — it reads the source. Run:
     cd backend && python3 harness_payroll_hours_basis_lock.py
@@ -408,6 +415,172 @@ ok("G4 the clock report is NOT a pay source until an org switches it on",
    B.resolve_config(None)["clock_feed_is_pay_source"] is False)
 ok("G5 and both halves read the SAME per-org row — one row, one feature",
    V.CONFIG_TABLE == B.CONFIG_TABLE)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+section("H. the pay path reaches the one home WITH EVIDENCE, and asks the interlock")
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+# WHY THIS AXIS EXISTS (owner directive 2026-10-12). Axis B above proved the callers still
+# DEREFERENCE the one home. It did not — and could not — prove they give it anything to work with.
+# Four of them called `resolve_shift_row(shift, cfg, emp)` with NO `cell`, so the only measurement
+# the one home could see was `shifts.actual_hours`: the dead column, 7 of 7,740 live rows. Under
+# `clocked_only` every row therefore resolved `not_measured_unpaid` = ZERO while the punches sat in
+# `storeops.timelog`, and the P&L wage line booked $374,733.02 -> $0.00 over Jun–Oct 2026.
+#
+# A WIRED CALLER IS ONE THAT STILL HAS ITS IMPORT. An un-wired one is one that still has its import
+# AND no evidence — which is why this axis is about the CALL, not the import.
+#
+#   H1  each pay path dereferences `storeops/payroll_evidence` — THE one punch read.
+#   H2  …and actually calls it: `paid_hours_rows` / `period_evidence` / `read_pay_evidence`.
+#   H3  …and CONSULTS THE INTERLOCK, directly or through `refusal()`. A figure published over a
+#       refused period is the defect's second half: nothing stopped the zero.
+#   H4  NO SECOND PUNCH-FETCHING PATH. One module reads `timelog` for a period on the pay path.
+#   H5  the resolvers all KNOW THE DATE, so the effective-from floor cannot be bypassed.
+#   H6  the floor is CONFIG — no date literal in app code (RULE TWO).
+_EVID_HOME = os.path.join(_MODULES, "storeops", "payroll_evidence.py")
+ok("H0 the one punch read exists where the index says it does", os.path.exists(_EVID_HOME),
+   "storeops/payroll_evidence.py is gone — re-pin this axis")
+_EVID_SRC = strip_comments_only(read(_EVID_HOME)) if os.path.exists(_EVID_HOME) else ""
+
+#: THE FOUR THAT WERE WRONG, plus the module that already held the read. Each one PRICES or REPORTS
+#: hours that become money and iterates SHIFT ROWS, so each one needs the day's punches handed to it.
+EVIDENCE_CALLERS = {
+    "account/coa.py": "the P&L wage line (derive_wage_cells_with_basis / wages_by_store)",
+    "commcalc/labour_coverage.py": "the labour-coverage report's paid-hours basis",
+    "storeops/pto_accrual.py": "hours worked, which is what PTO accrues on",
+    "hr/router.py": "HR total comp",
+    "storeops/clock_variance_api.py": "the variance board — it HELD this read before it was shared",
+}
+#: Where the INTERLOCK may be consulted for a module whose own body is pure (it takes rows and
+#: returns numbers, so the I/O and the gate live at its one call site). Named, so "somewhere else"
+#: cannot become "nowhere".
+_INTERLOCK_AT_CALL_SITE = {
+    "storeops/pto_accrual.py": ("storeops/router.py",
+                                "pure: `_pto_gather` / `_payex_gather` read the evidence and carry "
+                                "`hours_interlock` + `hours_refusal` out to the surface"),
+    "commcalc/labour_coverage.py": ("commcalc/router.py",
+                                    "pure report: `load_hours_evidence` reads it and the verdict "
+                                    "arrives as `hours_interlock`, which the banner states"),
+}
+_EVID_FNS = ("paid_hours_rows", "period_evidence", "read_pay_evidence")
+_LOCK_WORDS = ("interlock", "refusal(", "hours_interlock", "EvidenceRefused")
+for rel, why in sorted(EVIDENCE_CALLERS.items()):
+    p = os.path.join(_MODULES, rel)
+    if not os.path.exists(p):
+        FAIL.append(f"H1 {rel} is gone — the pay path changed shape; re-pin this list ({why})")
+        continue
+    code = strip_comments_and_strings(read(p))
+    # THE ALIAS IT WAS IMPORTED UNDER, exactly as axis B does it, so a local function that merely
+    # SHARES a name with one of the shared readers cannot pass for a dereference of it. (Arm-tested
+    # 2026-10-12: a looser `fn in code` test accepted `_LOCAL_paid_hours_rows(` and reported green.)
+    _alias = None
+    for _m in re.finditer(r"payroll_evidence(?:\s+as\s+(\w+))?", code):
+        _alias = _m.group(1) or "payroll_evidence"
+        if _m.group(1):
+            break
+    ok(f"H1 {rel} dereferences the one punch read", _alias is not None, why)
+    ok(f"H2 {rel} actually CALLS it — an import with no call is a caller with no evidence",
+       bool(_alias) and any(f"{_alias}.{fn}" in code for fn in _EVID_FNS),
+       f"alias={_alias}; expected one of {_EVID_FNS}")
+    _here = any(w in code for w in _LOCK_WORDS)
+    _site, _site_why = _INTERLOCK_AT_CALL_SITE.get(rel, (None, None))
+    if not _here and _site:
+        _sp = os.path.join(_MODULES, _site)
+        _here = os.path.exists(_sp) and any(w in strip_comments_and_strings(read(_sp))
+                                            for w in _LOCK_WORDS)
+        ok(f"H3 {rel} has the interlock consulted at its call site ({_site})", _here, _site_why)
+    else:
+        ok(f"H3 {rel} CONSULTS THE INTERLOCK — a refused period is reported, never published",
+           _here, f"expected one of {_LOCK_WORDS}")
+
+# ── H4: ONE punch-fetching path on the pay path ──────────────────────────────────────────────────
+# A DATE-RANGED read of `timelog` is a punch fetch. `storeops/router.py` is excused and NAMED: it
+# owns the time clock itself (clock-in, clock-out, the force-clockout sweep, the Payroll screen's own
+# aggregation) and those reads are the writer side of the table, not a second answer to "what did
+# this period measure". Every OTHER pay-path module must go through `payroll_evidence`.
+_TIMELOG_READ = re.compile(r"table\(\s*(?:\"\"|'timelog'|\"timelog\")\s*\)")
+_PUNCH_READ_EXCUSED = {
+    "storeops/payroll_evidence.py": "IS the one read",
+    "storeops/router.py": "owns the time clock itself — clock-in/out, the sweep, and the Payroll "
+                          "screen's own punch aggregation. Writer side, not a second period read.",
+    "storeops/lunch_deduction.py": "reads punches to compute a BREAK, a different question",
+    "storeops/clockin_evidence.py": "the clock-in evidence board — diagnostics, books nothing",
+    "storeops/face_retention.py": "reads clock_in to age face images; no hours, no money",
+    "hr/letters.py": "reads clock_in for an employment-letter start date; no hours",
+    "vision/router.py": "the open-punch watchdog; reports, never prices",
+    "commcalc/router.py": "a display-only drill-down beside the report, not a pay basis",
+    "closing/ops_chargebacks.py": "missed-closing detection asks only whether ANY punch EXISTS on a "
+                                  "store-day. It reads no hours and prices nothing.",
+    "closing/router.py": "the who-worked list: presence and store, never hours.",
+    "storeops/attention.py": "selects `store_code` alone, to notice a store people are clocking "
+                             "into that is not set up. No hours, no money.",
+    # ⚠ THE ONE REAL SIBLING, EXCUSED IN WRITING AND REPORTED (CLAUDE.md: fixed or explicitly
+    # excused, never silently). Event payroll DOES price hours, and it DOES read punches itself —
+    # but at EVENT-DAY grain, not over a payroll period, and it already goes through the one home's
+    # `measurement_state` for the measurement verdict. Folding it into `payroll_evidence` means
+    # giving that read a period, which is a change to the marketing module's own scope and not part
+    # of wiring the four shift-row callers. It is NAMED here so it cannot be forgotten.
+    "marketing/router.py": "event payroll, at EVENT-DAY grain rather than over a payroll period. "
+                           "It already dereferences payroll_hours_basis.measurement_state for the "
+                           "measurement verdict. FOLLOW-UP: give it payroll_evidence's read too.",
+}
+_second = []
+for p in ALL:
+    rel = os.path.relpath(p, _MODULES).replace(os.sep, "/")
+    if rel in _PUNCH_READ_EXCUSED or not p.startswith(_MODULES):
+        continue
+    src = read(p)
+    if "timelog" in src and _TIMELOG_READ.search(strip_comments_only(src).replace("'timelog'", '""')
+                                                 .replace('"timelog"', '""')):
+        _second.append(rel)
+ok("H4 no pay-path module grows a SECOND punch-fetching path", not _second, _second)
+ok("H4b …and every excuse names a module that still exists, so the list cannot rot",
+   not [r for r in _PUNCH_READ_EXCUSED if not os.path.exists(os.path.join(_MODULES, r))],
+   [r for r in _PUNCH_READ_EXCUSED if not os.path.exists(os.path.join(_MODULES, r))])
+ok("H4c the one read spells its column list ONCE, as a constant the callers cannot narrow",
+   "PUNCH_SELECT" in _EVID_SRC and "auto_clocked_out" in _EVID_SRC)
+
+# ── H5: every resolver KNOWS THE DATE, so the floor cannot be bypassed ───────────────────────────
+_HOME_NOW = read(_HOME)
+for _sig, _what in (("def resolve_day(cell, cfg, employee_row=None, day=None)", "resolve_day"),
+                    ("def resolve_shift_row(shift, cfg, employee_row=None, cell=None, day=None)",
+                     "resolve_shift_row"),
+                    ("def punch_counts_for_pay(punch, cell, cfg, day=None)", "punch_counts_for_pay"),
+                    ("def measurement_state(cell, cfg, day=None)", "measurement_state")):
+    ok(f"H5 {_what} takes the business DATE", _sig in _HOME_NOW,
+       "the effective-from floor is decided from the day; a resolver that cannot be told the day "
+       "cannot honour it")
+ok("H5b the day also TRAVELS IN THE CELL, so a caller cannot forget to pass it",
+   re.search(r'setdefault\(\(eid, day\), \{"day": day', _HOME_NOW) is not None,
+   "build_evidence must stamp the key's own date into the cell")
+ok("H5c the floor is decided in ONE function", "def config_for_day(" in _HOME_NOW)
+# AND EVERY RESOLVER ROUTES THROUGH IT. `resolve_shift_row` / `measurement_state` reach it via
+# `resolve_day`, which is the point — one comparison, not five — so the two that enter the module
+# from outside are the two that must dereference it by name.
+for _fn in ("resolve_day", "punch_counts_for_pay"):
+    _m = re.search(r"\ndef %s\(.*?(?=\ndef )" % _fn, _HOME_NOW, re.S)
+    ok(f"H5c2 {_fn} routes the day through config_for_day",
+       bool(_m) and "config_for_day(" in _m.group(0),
+       "a resolver that compares dates itself is a second home for the floor")
+ok("H5d coverage EXCLUDES pre-floor days, so the interlock cannot refuse a period forever",
+   "pre_effective_from_days" in _HOME_NOW and "day_is_before_floor(day, cfg)" in _HOME_NOW)
+
+# ── H6: RULE TWO — the date is a config row, never a literal in code ─────────────────────────────
+_DATE_LIT = re.compile(r"(?<![0-9])20[0-9][0-9]-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])(?![0-9])")
+_floor_lits = []
+for p in ALL:
+    code = strip_comments_and_strings(read(p))
+    if "clocked_basis_effective_from" in code or "effective_from" in code:
+        _floor_lits += [f"{os.path.relpath(p, _HERE)}: {m.group(0)}" for m in _DATE_LIT.finditer(code)]
+ok("H6 no module that touches the floor spells a DATE — it is a config row (RULE TWO)",
+   not _floor_lits, _floor_lits)
+ok("H6b the field is declared with a None default, so every org ships with NO floor",
+   re.search(r'"clocked_basis_effective_from":\s*None', _HOME_NOW) is not None)
+ok("H6c …and the migration that carries the house org's date exists",
+   os.path.exists(os.path.join(_HERE, "..", "database", "migrations",
+                               "1076_payroll_clocked_basis_effective_from.sql")))
+# NOT VACUOUS: the date search must still catch a literal if somebody writes one.
+ok("H6d …and the date search is not vacuous", bool(_DATE_LIT.search('FLOOR = "2026-10-04"')))
 
 
 print(f"\n{'=' * 78}")

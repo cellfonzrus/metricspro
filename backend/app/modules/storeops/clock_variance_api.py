@@ -43,6 +43,9 @@ from fastapi import APIRouter, Body, Header, HTTPException, Response
 from app.core.database import get_supabase
 from app.modules.storeops import clock_variance as _cv
 from app.modules.storeops import payroll_hours_basis as _hb
+# THE ONE punch/correction read on the pay path. This module used to carry it; it now dereferences
+# it, so the other four pay paths can read the same rows instead of each inventing a query (§14y).
+from app.modules.storeops import payroll_evidence as _payevid
 from app.modules.storeops import payroll_identity as _pid
 from app.modules.storeops import pay_visibility as _payvis
 
@@ -119,10 +122,17 @@ def _load(org_id, lo, hi):
                       "is_active,pay_basis,pay_rate,pay_from_schedule", org_id))
     shifts = take(_range_rows("shifts", "employee_id,shift_date,scheduled_hours,actual_hours,"
                               "store_code,status", org_id, "shift_date", lo, hi))
-    punches = take(_range_rows("timelog", "employee_id,work_date,hours,clock_in,clock_out,"
-                               "store_code,auto_clocked_out", org_id, "work_date", lo, hi))
-    manual = take(_range_rows("manual_hours", "employee_id,work_date,hours,reason",
-                              org_id, "work_date", lo, hi))
+    # ★ THE PUNCH READ IS NOT HERE ANY MORE ★ (owner directive 2026-10-12, index §14y). It is
+    # `storeops/payroll_evidence.read_pay_evidence` — the ONE punch/correction read on the pay path.
+    # It used to live here, and the four other pay paths (the P&L wage line, labour coverage, PTO
+    # accrual, HR total comp) therefore had NO way to get the same rows and reached the one home
+    # with no evidence at all, which on a clocked-only org resolves every day to ZERO. Factoring it
+    # out is what let them dereference it instead of growing a fifth query each. The column lists,
+    # the half-open [lo, hi) range and the per-table degradation are the ones this function used, so
+    # the board reads byte-identically.
+    _pay_rows, _pay_blockers = _payevid.read_pay_evidence(sb(), org_id, lo, hi)
+    blockers.extend(_pay_blockers)
+    punches, manual = _pay_rows["punches"], _pay_rows["manual"]
     feed = take(_range_rows("raw_clock_punch", "employee_raw,feed_login,store_code,store_raw,"
                             "business_date,hours,clock_in,clock_out,excluded",
                             org_id, "business_date", lo, hi))

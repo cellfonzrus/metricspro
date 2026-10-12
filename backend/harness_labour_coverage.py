@@ -590,9 +590,17 @@ ok("G1 expense rows are not mutated", july_exp, before)
 ok("G2 shift rows are not mutated", july_shifts, before_shifts)
 near("G3 the Σ of the input expense rows is untouched",
      sum(float(r["amount"]) for r in july_exp), sum(float(r["amount"]) for r in before))
+# `hours_interlock` ADDED 2026-10-12 (index §14y.1): the paid-hours interlock's VERDICT for this
+# period, carried so the banner can say "paid hours are not safe to compute for this period" rather
+# than rendering a store as measured off evidence the one home refused. It is a verdict, not a
+# figure — and this axis is about DOLLARS, which is why the key list grows here and G4b below still
+# finds nothing that books one.
 ok("G4 the report carries states and evidence only — no key that books a dollar",
    sorted(g_rep.keys()), ["allocated_names", "carried_from", "counts", "detail", "gaps",
-                          "note", "period", "scanned", "states"])
+                          "hours_interlock", "note", "period", "scanned", "states"])
+ok("G4-i …and that verdict key carries no amount of any kind",
+   [k for k in (g_rep.get("hours_interlock") or {}) if "amount" in k or "pay" in k or "wage" in k],
+   [])
 ok("G4a the collision report likewise reports, never nets",
    sorted(g_col.keys()), ["measured", "names", "note", "stores", "total_double_booked", "verdict"])
 ok("G4b …and neither verdict key names a dollar the report could book",
