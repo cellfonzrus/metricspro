@@ -415,7 +415,7 @@ export default function PlanInstallmentsPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Multi-month Commission (sale-triggered)</h1>
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 20px' }}>
         Pay a rep across up to 12 months from ONE sale line — paid-gated on the line staying active &
-        receiving residual ("we pay as we get paid"). Schedules are editable; an edit applies from the next
+        receiving residual (&quot;we pay as we get paid&quot;). Schedules are editable; an edit applies from the next
         Run Calculation onward and never rewrites months already paid. Nothing here changes pay until you Run Calculation.
       </p>
 
@@ -438,7 +438,7 @@ export default function PlanInstallmentsPage() {
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 10 }}>
           <input type="checkbox" checked={!!settings.pay_disabled}
             onChange={e => setSettings({ ...settings, pay_disabled: e.target.checked })} />
-          This tenant intentionally pays <b>no commissions</b> (silences the "unconfigured — refused to pay" guard)
+          This tenant intentionally pays <b>no commissions</b> (silences the &quot;unconfigured — refused to pay&quot; guard)
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 12 }}>
           Carrier-residual visibility:
@@ -459,8 +459,8 @@ export default function PlanInstallmentsPage() {
         <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
           A plan rule keyed on <b>Contract type</b> compares the raw POS value. If your POS leaves Contract
           Type <b>blank</b> (or uses carrier-specific labels), those lines can never match and pay $0. Set
-          this to <b>mapped</b> and the same rule will ALSO match the line's resolved activation bucket
-          (premium / upgrade / BYOD) from this tenant's own classification settings.
+          this to <b>mapped</b> and the same rule will ALSO match the line&apos;s resolved activation bucket
+          (premium / upgrade / BYOD) from this tenant&apos;s own classification settings.
           <b> This can increase pay</b> — it takes effect on the next Run Calculation. Check
           <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Incentive Plans → Plan coverage</a> first.
         </p>
@@ -493,7 +493,7 @@ export default function PlanInstallmentsPage() {
         <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
           A handset/tablet line carries an IMEI and a PRICE; the rate-plan line carries the mobile number
           and the MONTHLY charge. With this on, a promo description like
-          <i> "Galaxy Tab … Promo $279.99, Min $50 tablet plan"</i> can no longer be paid as if $279.99
+          <i> &quot;Galaxy Tab … Promo $279.99, Min $50 tablet plan&quot;</i> can no longer be paid as if $279.99
           were the monthly charge (that paid <b>5% × $279.99 = $14.00</b> per tablet in July 2026). Turning
           it off restores the old behaviour and <b>increases pay</b> on the next Run Calculation.
         </p>
@@ -501,17 +501,17 @@ export default function PlanInstallmentsPage() {
           Multi-month %-of-MRC is paid on:
           <select style={sel} value={settings.installment_mrc_basis || 'plan_line'}
             onChange={e => setSettings({ ...settings, installment_mrc_basis: e.target.value })}>
-            <option value="plan_line">The activation's rate-plan line (default)</option>
+            <option value="plan_line">The activation&apos;s rate-plan line (default)</option>
             <option value="trigger_line">Legacy — whichever line triggered the schedule</option>
           </select>
         </label>
         <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
-          A multi-month installment pays <b>once per activation</b>, as a percentage of that activation's
-          <b> monthly charge</b>. On the default the MRC is read from the sale's rate-plan line — the
+          A multi-month installment pays <b>once per activation</b>, as a percentage of that activation&apos;s
+          <b> monthly charge</b>. On the default the MRC is read from the sale&apos;s rate-plan line — the
           confirmed <a href="#mrc" style={{ color: 'var(--accent)' }}>MRC mapping</a> first, then a
           description that states a monthly amount, then the rate-plan line matcher below. The legacy
           option resolves the MRC from whichever line matched the trigger, which on a POS that stamps the
-          same Contract Type on every line let a <b>handset's price</b> be paid as if it were a monthly
+          same Contract Type on every line let a <b>handset&apos;s price</b> be paid as if it were a monthly
           charge. <b>Switching to legacy can increase pay</b> — it takes effect on the next Run Calculation.
         </p>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
@@ -566,7 +566,7 @@ export default function PlanInstallmentsPage() {
 
       {/* ── Activation-payment matcher (month-1 "paid at activation" config) ─────────────── */}
       <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>What counts as "payment received at activation" (month-1 gate)</div>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>What counts as &quot;payment received at activation&quot; (month-1 gate)</div>
         <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px' }}>
           Used when a schedule sets month-1 to <b>Paid at activation</b>. The AUTHORITATIVE signal is the
           item mapping: an item mapped to the <b>Activation payment</b> category (sales or KPI dimension) on
@@ -635,8 +635,8 @@ export default function PlanInstallmentsPage() {
         </p>
         {catCfg && !catCfg.ready && (
           <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
-            Migration 245 isn't applied yet, so these boxes can't be saved. The engine is already using the
-            defaults below (tablets + SIM excluded).
+            <SetupNotice lead="These boxes cannot be saved yet." detail="245" /> The engine is already using
+            the defaults below (tablets + SIM excluded).
           </div>
         )}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginBottom: 10 }}>
@@ -659,7 +659,7 @@ export default function PlanInstallmentsPage() {
         )}
         {catDraft.unknown === false && (
           <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12, maxWidth: 820 }}>
-            With "Could not be classified" unticked, an activation we cannot categorise pays nothing. It is
+            With &quot;Could not be classified&quot; unticked, an activation we cannot categorise pays nothing. It is
             still reported in the warnings — but consider adding a rule below instead.
           </div>
         )}
@@ -715,11 +715,11 @@ export default function PlanInstallmentsPage() {
 
         {/* how the category is decided — tenant rules first, built-ins as the tail */}
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>How a sale's category is decided</div>
+          <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>How a sale&apos;s category is decided</div>
           <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px', maxWidth: 820 }}>
             Your rules are checked first, then the product catalog, then the POS Department / Category /
-            product wording, then the serial's own shape (an IMEI means a device, an ICCID means a SIM).
-            An activation's category is the <b>strongest</b> signal any of its lines carries, so a tablet
+            product wording, then the serial&apos;s own shape (an IMEI means a device, an ICCID means a SIM).
+            An activation&apos;s category is the <b>strongest</b> signal any of its lines carries, so a tablet
             sold with a SIM kit is a tablet and a case never out-votes the handset.
           </p>
           {catCfg && !catCfg.rules_ready && (
@@ -800,7 +800,7 @@ export default function PlanInstallmentsPage() {
         <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 860 }}>
           Some products are not paid month after month — home internet / FWA is the usual one. Switch a
           category to <b>one-time</b> and its activations leave the monthly chain entirely: they pay the
-          flat amount <b>you type</b>, once, and the schedule's other months stop paying for that
+          flat amount <b>you type</b>, once, and the schedule&apos;s other months stop paying for that
           category. Nothing moves until the next <b>Run Calculation</b>, and every month that stops is
           listed in the warnings with the dollars involved.
         </p>
@@ -812,8 +812,8 @@ export default function PlanInstallmentsPage() {
         </div>
         {payCfg && !payCfg.ready && (
           <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
-            Migration <code>{payCfg.migration}</code> isn't applied yet, so this can't be saved. Every
-            category is on monthly installments — which is exactly today's behaviour.
+            <SetupNotice lead="This cannot be saved yet." detail={payCfg.migration} /> Every category is on
+            monthly installments — which is exactly how it behaves today.
           </div>
         )}
         <div className="table-wrapper" style={{ border: 'none', marginBottom: 10 }}>
@@ -1125,7 +1125,7 @@ export default function PlanInstallmentsPage() {
           const shownKeys = shown.map(c => c.plan)
           const allShownPicked = shown.length > 0 && shown.every(c => pickedCands.has(c.plan))
           const toggleAllShown = () => setPickedCands(p => { const n = new Set(p); if (allShownPicked) shownKeys.forEach(k => n.delete(k)); else shownKeys.forEach(k => n.add(k)); return n })
-          const toggleOne = (k: string) => setPickedCands(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
+          const toggleOne = (k: string) => setPickedCands(p => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n })
           return (
           <>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
@@ -1191,7 +1191,7 @@ export default function PlanInstallmentsPage() {
             </div>
           </>
           )
-        })() : <div style={{ color: 'var(--text3)', fontSize: 13 }}>Scan a period's sales to classify plan lines and prefill their MRC.</div>}
+        })() : <div style={{ color: 'var(--text3)', fontSize: 13 }}>Scan a period&apos;s sales to classify plan lines and prefill their MRC.</div>}
       </div>
 
       {/* ── Preview ────────────────────────────────────────────────────────────────────── */}

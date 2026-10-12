@@ -153,7 +153,7 @@ export default function CoverageWizard(
   const setDec = (k: string, patch: Partial<Decision>) =>
     setDecisions(prev => ({ ...prev, [k]: { ...(prev[k] || { pay: false, matchOn: 'category', kind: 'flat_per_unit', amount: '', pct: '' }), ...patch } }))
   const toggleRep = (rep: string) =>
-    setPickedReps(prev => { const n = new Set(prev); n.has(rep) ? n.delete(rep) : n.add(rep); return n })
+    setPickedReps(prev => { const n = new Set(prev); if (n.has(rep)) n.delete(rep); else n.add(rep); return n })
 
   // distinct reps whose lines fall in the "pay it" groups — recomputed after Apply so their stored row
   // reflects the new rule immediately (union'd with the reps we just attached the plan to).
@@ -245,7 +245,7 @@ export default function CoverageWizard(
         after = Number(u2?.totals?.ext_price || 0)
       } catch { /* keep the pre-apply number if the re-read fails */ }
       setResult({ ok: true, steps, covered: Math.max(0, before - after), stillUnpaid: after })
-      onApplied && onApplied()
+      if (onApplied) onApplied()
     } catch (e: any) {
       setResult({ error: e?.message || String(e), steps })
     } finally { setApplying(false) }
@@ -374,7 +374,7 @@ export default function CoverageWizard(
           {!loading && !result && step === 3 && (
             <div>
               <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
-                No rule in any active plan pays these categories. For each, choose <b>Don't pay</b> or <b>Pay it</b> and type the rate —
+                No rule in any active plan pays these categories. For each, choose <b>Don&apos;t pay</b> or <b>Pay it</b> and type the rate —
                 a rule is queued onto <b>{targetPlan?.name}</b>. You set every amount; a live estimate shows the impact.
               </div>
               {!noRuleGroups.length && <div style={{ fontSize: 13, color: 'var(--text3)' }}>No unpaid categories need a new rule for {wizPeriod}. 🎉</div>}
@@ -392,7 +392,7 @@ export default function CoverageWizard(
                         <span style={{ fontSize: 12, color: 'var(--text2)' }}>{g.lines} lines · {fmt(g.ext_price)} · GP {fmt(g.gp)}</span>
                         <span style={{ flex: 1 }} />
                         <div style={{ display: 'flex', gap: 4 }}>
-                          <button className={d.pay ? 'btn btn-secondary' : 'btn btn-primary'} style={{ padding: '4px 10px' }} onClick={() => setDec(k, { ...d, pay: false })}>Don't pay</button>
+                          <button className={d.pay ? 'btn btn-secondary' : 'btn btn-primary'} style={{ padding: '4px 10px' }} onClick={() => setDec(k, { ...d, pay: false })}>Don&apos;t pay</button>
                           <button className={d.pay ? 'btn btn-primary' : 'btn btn-secondary'} style={{ padding: '4px 10px' }} onClick={() => setDec(k, { ...d, pay: true })}>Pay it</button>
                         </div>
                       </div>

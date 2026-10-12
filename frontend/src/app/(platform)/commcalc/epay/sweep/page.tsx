@@ -207,7 +207,7 @@ export default function EpaySweepAdmin() {
           </select>
         </div>
         <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-          MI/ATU refresh daily, so <strong>Daily</strong> is recommended. Each run replaces the current month's MI data.
+          MI/ATU refresh daily, so <strong>Daily</strong> is recommended. Each run replaces the current month&apos;s MI data.
         </div>
       </div>
 

@@ -178,7 +178,7 @@ export default function DlarSweepAdmin() {
           </select>
         </div>
         <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-          The DLAR refreshes daily on the portal, so <strong>Daily</strong> is recommended. Each run replaces the current month's DLAR + Advocate data.
+          The DLAR refreshes daily on the portal, so <strong>Daily</strong> is recommended. Each run replaces the current month&apos;s DLAR + Advocate data.
         </div>
       </div>
 

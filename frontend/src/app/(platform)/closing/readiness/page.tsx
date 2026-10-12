@@ -78,8 +78,8 @@ export default function ClosingReadinessPage() {
           </div>
 
           <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
-            This page never changes any recon or gate math — it only makes the existing "not loaded yet" /
-            "recon-pending" degrade states visible up front. Fix data gaps via Email Imports (sales/X-report
+            This page never changes any recon or gate math — it only makes the existing &quot;not loaded yet&quot; /
+            &quot;recon-pending&quot; degrade states visible up front. Fix data gaps via Email Imports (sales/X-report
             mailbox rules), StoreOps → Admin → Stores, or Admin → Billing / Modules.
           </p>
         </>

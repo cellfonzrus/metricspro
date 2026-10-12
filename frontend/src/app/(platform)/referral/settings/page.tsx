@@ -50,7 +50,7 @@ export default function ReferralSettingsPage() {
       </div>
       {!cfg.qr_signing_configured && (
         <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14, fontSize: 13 }}>
-          ⚠️ No QR signing secret is configured on the server, so scannable QRs can't be minted yet.
+          ⚠️ No QR signing secret is configured on the server, so scannable QRs can&apos;t be minted yet.
         </div>
       )}
 

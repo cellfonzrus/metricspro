@@ -215,7 +215,7 @@ export default function SalaryAdvancesPage() {
           Per-employee earned salary (clock-in based — the SAME basis as the Payroll Report) vs cash
           paid out of the daily-closing envelope. Cash payments are <b>advances</b>, never a change to
           Payroll itself; only cumulative excess of cash paid over earned posts to the P&L, as
-          "Additional Payroll" below. {periodName}.
+          &quot;Additional Payroll&quot; below. {periodName}.
         </p>
       </div>
 
@@ -343,13 +343,13 @@ export default function SalaryAdvancesPage() {
         <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>
           The excess of cumulative cash paid over cumulative clock-in-derived earnings, through the end
           of {addlPeriod || 'this period'} — the ONLY figure from this page that ever hits the P&L
-          (as its own "Additional Payroll" line, never folded into wages). $0 unless an employee's cash
-          advances have outrun what they've actually earned.
+          (as its own &quot;Additional Payroll&quot; line, never folded into wages). $0 unless an employee&apos;s cash
+          advances have outrun what they&apos;ve actually earned.
         </p>
         {!addl?.available ? (
           <div style={{ fontSize: 12, color: 'var(--text3)' }}><SetupNotice detail="419" /></div>
         ) : addl.cells.length === 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--text3)' }}>$0 — no employee's cash paid exceeds what they've earned.</div>
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}>$0 — no employee&apos;s cash paid exceeds what they&apos;ve earned.</div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -375,8 +375,7 @@ export default function SalaryAdvancesPage() {
       <h2 style={{ fontSize: 17, fontWeight: 700, margin: '4px 0 8px' }}>Advance History</h2>
       {!historyAvailable && (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
-          ℹ️ The Salary Advance ledger isn't set up yet on this tenant (migration 419) — no advances can
-          be recorded or shown until it runs.
+          ℹ️ <SetupNotice lead="The Salary Advance ledger is not switched on yet, so no advances can be recorded or shown." detail="419" />
         </div>
       )}
       {historyAvailable && (

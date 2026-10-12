@@ -321,9 +321,9 @@ export default function DepositReconPage() {
               <input style={{ ...inp, width: 110 }} inputMode="decimal" placeholder="More $ now?" value={supplementalAmt}
                 onChange={e => setSupplementalAmt(e.target.value)} />
               <button className="btn" disabled={depBusy || !supplementalAmt} onClick={saveSupplemental}
-                style={{ background: 'var(--accent)', color: '#fff' }}>I'll deposit more now</button>
+                style={{ background: 'var(--accent)', color: '#fff' }}>I&apos;ll deposit more now</button>
               <button className="btn btn-secondary" onClick={async () => { await saveShortReason(true); }}>Save reason — will deposit more later</button>
-              <button className="btn btn-secondary" onClick={async () => { await saveShortReason(false); }}>Save reason — that's final</button>
+              <button className="btn btn-secondary" onClick={async () => { await saveShortReason(false); }}>Save reason — that&apos;s final</button>
             </div>
           </div>
         </div>

@@ -25,7 +25,7 @@ export default function RepMapPage() {
   const names: string[] = (data.names || []).filter((n: string) =>
     !mapped.has(n.toUpperCase()) && (!search || n.toLowerCase().includes(search.toLowerCase())))
 
-  function toggle(n: string) { setSel(s => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x }) }
+  function toggle(n: string) { setSel(s => { const x = new Set(s); if (x.has(n)) x.delete(n); else x.add(n); return x }) }
 
   async function merge() {
     const aliases = Array.from(sel).filter(n => n !== canonical)
@@ -49,7 +49,7 @@ export default function RepMapPage() {
         <a href="/commcalc/targets/my" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← My Targets</a>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Merge Duplicate Reps</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          The same person can appear under different name spellings (e.g. "Abdul K" vs "Abdul Kakar") across the
+          The same person can appear under different name spellings (e.g. &quot;Abdul K&quot; vs &quot;Abdul Kakar&quot;) across the
           schedule and the DLAR/sales data — which splits them into two rows and breaks their target totals.
           Merge the variants into one canonical name here.
         </p>

@@ -533,7 +533,7 @@ export default function DailyClosingVerify() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✅ DM Closing Verification</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Verify every evening that each store's closing sheet was submitted, confirm the totals, and reconcile against {pos} actual sales.
+            Verify every evening that each store&apos;s closing sheet was submitted, confirm the totals, and reconcile against {pos} actual sales.
           </p>
         </div>
         {!loading && stores.length > 0 && (
@@ -558,7 +558,7 @@ export default function DailyClosingVerify() {
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f) }} />
         </label>
         <a href={GOOGLE_CLOSING_SHEET_URL} target="_blank" rel="noreferrer" className="btn btn-secondary" style={{ fontSize: 13 }}>🔗 Open Google sheet ↗</a>
-        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Export the Google "Envelopes Data" sheet as .xlsx/.csv and upload it here — or open it directly.</span>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Export the Google &quot;Envelopes Data&quot; sheet as .xlsx/.csv and upload it here — or open it directly.</span>
         {upMsg && <span style={{ fontSize: 13 }}>{upMsg}</span>}
       </div>
 

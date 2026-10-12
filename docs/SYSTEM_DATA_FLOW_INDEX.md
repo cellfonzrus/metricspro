@@ -8803,7 +8803,7 @@ pages already branch on are untouched: they still decide WHEN the notice shows; 
 | backend | `MESSAGE_KEYS` + `is_message_key` (same module) — **WHERE**: `detail`, `note`, `error`, `hint`, `message`, `reason`, `setup_note`, `not_ready_note`, `ledger_note`, `save_errors`, `warnings`, `remediation`, `subtitle`, `words`, and any key naming a migration id (`migration`, `sync_migration`, `config_migrations_missing` …). MEASURED from the backend's own setup-hint strings (the lock re-measures every build: `detail`×241, `note`×53, `migration`×24, `error`×23, `hint`×19, …) and deliberately excluding keys a customer's own record carries (`notes`, `label`, `status`, `description` — their hint literals were reworded). `neutralize` reads ONLY those keys' values, on the top-level object and its nested DICTS — **a list outside a message key is data and is never entered**, a bare list / scalar body is never touched, and an untouched payload comes back as the SAME object | where it may be rewritten (coordinator review 2026-09-29: the first cut rewrote every string value — data cells included) |
 | backend | `SetupNoticeMiddleware` (same module), registered in `main.py` **innermost** (before GZip; inner of TenantScope) | a JSON body is parsed ONLY when a message key's value (first 4 KB) carries a marker (`may_carry_hint`: one regex pass over the keys + bounded window checks; >256 message-named keys = rows with e.g. a `note` column → parse, the walk still skips the rows). Measured in the lock (P-series): a 5.6 MB body of 40,000 rows saying "Port-in Migration" / "Miguel" is never `json.loads`'d and returned as the SAME bytes object (~30 ms, about half the endpoint's own JSON encoding of it); the worst case (a `note` column in every row) parses once and returns the same bytes. A rewritten body goes to a non-super-admin; the super admin (`core.router._require_super_admin`) sees it unchanged; the original goes to the server log; a gate fault HIDES; non-JSON / `/openapi.json` / `/docs` / `/redoc` / `/health` pass verbatim |
 | backend | `notify/report_registry.build_payload` → `setup_notice.neutralize` | the one outbound report builder (scheduled / on-demand email + WhatsApp): a report never crosses the HTTP boundary, so it dereferences the same function |
-| frontend | `frontend/src/lib/setupNotice.tsx` — `SETUP_NOTICE` (locked equal to the backend's), `<SetupNotice lead? detail? />`, `setupFailed(action)`, `useSetupDetailVisible()` | every page: the sentence for everyone, `detail` (the migration / table) rendered ONLY for `isPlatformAdmin(user)` |
+| frontend | `frontend/src/lib/setupNotice.tsx` — `SETUP_NOTICE` (locked equal to the backend's), `<SetupNotice lead? detail? />`, `<PlatformDetail detail />` (CORE-02.9), `setupFailed(action)`, `useSetupDetailVisible()` | every page: the sentence for everyone, `detail` (the migration / table) rendered ONLY for `isPlatformAdmin(user)`. `<PlatformDetail>` is the same gate with NO customer sentence — for a page where the feature IS switched on and only an operational route (a scheduler target, a header) is internal; a non-super-admin sees nothing at all |
 
 The customer sentence: *"This feature isn't switched on for your company yet. Contact support to enable it."*
 **Siblings fixed (132 frontend sites / 72 files; 474 backend strings via the boundary):** Display Labels (the owner's
@@ -24785,9 +24785,10 @@ rubber stamp.
   *when effects re-run*. On `commcalc/ma-commission`, `commcalc/commission-ledger`,
   `storeops/payroll`, `accounts/pl` and `closing/*` that decides which period's money a screen shows.
   Not guessed at; see 77.5.
-- **249 `react/no-unescaped-entities`** and **23 `no-unused-expressions`** — genuinely cosmetic
-  (apostrophes in JSX text; the deliberate `set.has(k) ? set.delete(k) : set.add(k)` idiom). Left for
-  budget, not for principle, and registered rather than hidden.
+- ~~**249 `react/no-unescaped-entities`** and **23 `no-unused-expressions`**~~ — left for budget, not
+  for principle, and the only two groups of which that was true. **Both are now ZERO** — paid off in
+  full by the follow-up in **CORE-02.8**, which also corrects the word "cosmetic" used here: the 23
+  unused expressions were not cosmetic and not dead, they were load-bearing.
 - **7 `no-require-imports`** in `scratchpad/prove_plan_match_render.cjs` — a `.cjs` file **must** use
   `require`. This is a case of the rule being wrong for the file, stated here rather than silenced
   with a disable comment.
@@ -24803,6 +24804,10 @@ warnings — over **419** files, pinned as **932** `(rule, file)` entries in
 the parse error and the em-dash rule name. An honest gate that reports 4 more errors than the tree
 admitted to yesterday is the point; they were always there. `eslint-disable` directives went
 **110 → 92**, and PINNED_SUPPRESSIONS is pinned at exactly 92 so the count cannot grow at all.
+
+**MEASURED NOW, after CORE-02.8:** **5645** findings — **5430** errors, **215** warnings — over
+**413** files, pinned as **842** `(rule, file)` entries. `PINNED_TOTAL` is **5645**; suppressions are
+still **92** (CORE-02.8 added none).
 
 ### CORE-02.5 UNUSED VARIABLES THAT ARE CANDIDATE DEFECTS — reported, not deleted
 
@@ -24846,6 +24851,186 @@ is what goes red — the §19.25 lesson about a lock sitting behind the thing it
 Rule (g) is the one that answers the owner's brief directly: **the suppression ceiling is what makes
 "fix the problems" mean fix, rather than comment out.**
 
+### CORE-02.8 THE TWO GROUPS THAT WERE A BUDGET CALL — paid off to zero (2026-10-11, follow-up)
+
+CORE-02.4 registered 5917 findings and was explicit that only two of those groups were held back for
+**budget rather than principle**. This is those two, measured to zero. Nothing else in the register
+was touched: no `no-explicit-any`, no hook rule, no suppression added, no rule downgraded, no
+`globalIgnores` widened.
+
+| rule | before | after | files |
+|---|---|---|---|
+| `react/no-unescaped-entities` | 249 | **0** | 74 |
+| `@typescript-eslint/no-unused-expressions` | 23 | **0** | 16 |
+| **total findings** | 5917 | **5645** | 419 → 413 |
+
+**`no-unescaped-entities` — escaping only, and that is PROVEN, not asserted.** All 249 were `'` (179)
+or `"` (70) in JSX text; no `>` or `}` occurred. Each was replaced with `&apos;` / `&quot;` **at the
+exact line and column ESLint reported**, never by a regex over JSX text — the brief's own warning
+about a tidy-up regex that mangled two files by −91 and −147 lines is why. Two audits back this:
+in **each** of the 74 files the insertion count **equals** the deletion count, so no file gained or
+lost a single line (187 changed lines in total, carrying all 249 replacements — some lines hold more
+than one); and on every one of those 187 lines, **reverting the inserted entities reproduces the
+original line byte for byte**, with the length change exactly 5 characters per replacement. Not one character of
+visible copy changed.
+
+> **The trap worth recording: ESLint columns are UTF-16 code units, not code points.** Five findings
+> sat on lines containing an astral emoji (`💵`, `📋`, `📝`), each of which is ONE Python character but
+> TWO UTF-16 units — so indexing the reported column in Python landed one character late, on the `s`
+> of `employee's` rather than the apostrophe. The rewriter **asserted that the character at the
+> reported position was the one the message named** and refused to write any file when it was not,
+> which is how this surfaced instead of shipping five corrupted strings. Index in UTF-16 units.
+
+**`no-unused-expressions` — all 23 read individually, and the brief's two categories did not fit.**
+The brief anticipated *dead code* (delete it) or an *unfinished statement* (report it, never guess).
+Read one by one, **23 of 23 were neither**: every one is a ternary- or `&&`-as-statement whose **both
+branches have real side effects**, so it is working, load-bearing code that the rule objects to on
+the grounds of IDIOM, not effect:
+
+- 20 are `n.has(k) ? n.delete(k) : n.add(k)` — the select-all/toggle behind every multi-select in the
+  app (`src/lib/multiselect.tsx`, `ReportShell`, `commcalc/item-mapping`, `plan-installments`, …).
+  **Deleting these would have broken every one of those toggles.**
+- 2 are `ok ? pass++ : fail++` — how two proof harnesses count their own results.
+- 1 is `onApplied && onApplied()` — a guarded optional callback, typed `onApplied?: () => void`.
+
+So **0 deleted and 0 reported as unfinished**; each was restructured into the equivalent statement
+form `if (cond) a; else b`, which is provably behaviour-identical (the ternary's value was discarded
+at both sites, and a function is never falsy, so `if (onApplied)` ≡ `onApplied &&`). 23 insertions,
+23 deletions — exactly one line per finding. `frontend/scratchpad/prove_entity_picker.mjs` (53/53)
+and `prove_org_append.mjs` (22/22) still pass, which is the direct check that the two counter
+rewrites preserved their meaning.
+
+**No money path's behaviour moved.** Several of these files are money-adjacent — `commcalc/
+plan-installments`, `commission-plans`, `targets/*`, `CoverageWizard`, `accounts/*` — so the standing
+rule applies. Nothing here changes a figure or when an effect re-runs: the entity work is text
+escaping inside JSX text nodes, and the expression work is an if/else transliteration of an
+already-evaluated ternary. No `useEffect`, no dependency array and no arithmetic was touched.
+
+**Register corrected downward, as the ratchet demands.** The gate fails when a count FALLS without
+the register being fixed, so all **90** now-empty entries (74 + 16, exactly the two rules and nothing
+else — verified by grouping the gate's own `- delete:` output by rule) were removed: **932 → 842**
+entries, sum **5917 → 5645**, which equals the measured total. `PINNED_TOTAL` lowered 5917 → 5645 per
+CORE-02.6(h), which says to lower it as the register shrinks. The register's own header carries the
+same numbers so it does not state a stale count.
+
+Proof on the final tree: `npm run typecheck` **0 errors** over 547 files; `npm run lint` **5645**;
+`npm run lint:gate` **OK** (measured 5645 == pinned 5645); `harness_frontend_lint_lock.py`
+**42 passed, 0 failed**.
+
+**WHAT THIS EXPOSED — an apostrophe was hiding real leaks from the carrier-vocab guard.**
+`harness_carrier_vocab_guard.py` decides "is this line display copy?" in `jsx_prose_line`, and its
+prose-vs-code test `_prose_bad = [<>=;'"`]` **rejects any line containing a raw apostrophe**. So a
+tenant-facing sentence that happened to contain `isn't`, `can't` or `that's` was discarded as CODE
+and never scanned at all. Escaping those apostrophes — which `react/no-unescaped-entities` requires —
+removed the thing that was hiding them, and **5 genuine pre-existing leaks in tenant-facing copy
+became visible for the first time**:
+
+| lock | file:line | what a tenant can read |
+|---|---|---|
+| setup-internals | `commcalc/plan-installments/page.tsx:638` | "Migration 245 isn't applied yet, so these boxes can't be saved." |
+| setup-internals | `commcalc/plan-installments/page.tsx:815` | "Migration {payCfg.migration} isn't applied yet, so this can't be saved." |
+| setup-internals | `storeops/payroll-change-log/page.tsx:195` | "…table isn't set up yet on this tenant (migration 414)" |
+| setup-internals | `storeops/salary-advances/page.tsx:378` | "…ledger isn't set up yet on this tenant (migration 419)" |
+| infra-names | `commcalc/connectors/page.tsx:116` | "point **pg_cron** at POST /api/v1/… and it fans out to every connector that's due." |
+
+These are **NOT regressions** — every one is on `main` today, rendered to tenants; `main` is green only
+because the apostrophe made the sentence unreadable to the guard. Since the whole rule is now at zero
+and the ratchet refuses a new raw apostrophe in JSX text, **this coverage hole is structurally closed
+and stays closed** — which is the lasting value here, over and above the 272 findings.
+
+Their disposal was the owner's call, not a lint job's — each option changes what a tenant-facing
+screen says, or accepts a leak as carried debt (`SETUP_PROSE_DEBT`, 11 existing entries), or opens
+the deliberately-EMPTY `INFRA_FE_ALLOW`. **The owner ruled on 2026-10-12: "Reword the four."** The
+copy was reworded through the one home; see **CORE-02.9** below, which also corrects the
+recommendation put to him about the fifth.
+
+**One design fix WAS made, because it is a defect in the guard and not a copy decision:**
+`jsx_prose_line` **deleted** HTML entities instead of decoding them, so `isn&apos;t` was read as
+`isnt`. That is not what the screen says, and it means a sentence pinned by its own text stops
+matching its pin the moment an apostrophe in it is escaped. Entities are now **decoded** to the
+characters they render as. The deletion was not arbitrary, so the fix separates the two uses rather
+than reversing it: the prose-vs-code gate still reads the entity-**stripped** line (so **no line
+changes visibility** and coverage is unchanged), while what the scans **match on** is the
+**decoded** line. Armed controls **E13–E16** pin all of it, including E15 — decoding before the gate
+would classify escaped prose as code and make it invisible, which would be strictly worse than the
+bug.
+
+**Duplicate check (the build gate).** Nothing new was built: no new report, endpoint, query, table,
+function or feed, so there is nothing to register in §16–18 or the lineage registry. This EXTENDS
+CORE-02 — the same gate, the same runner, the same register, the same lock — which is why it is a
+subsection here and not a new `§<MODULE>-NN`. Searched the index for an existing mechanism before
+touching anything: CORE-02 itself is that mechanism and the two groups above are its own named
+leftovers. No second lint path, no second register and no second home for the linter invocation was
+created; `frontend/package.json`'s `lint` script remains the one home, dereferenced by the gate.
+
+### CORE-02.9 THE FIVE EXPOSED LEAKS — reworded through the one home (owner 2026-10-12)
+
+Owner, on the five sentences CORE-02.8 exposed: *"Reword the four."* (the four setup-internals hits;
+the fifth, `pg_cron`, had been recommended for keeping — see the correction below).
+
+**The class, not the instance.** The general fact that was wrong is not "four screens name a
+migration": it is **a caller that does not dereference the one home**. `lib/setupNotice.tsx` has been
+the ONE home for "this feature's setup is not finished" since §19.36, and each of these pages wrote
+the sentence inline instead. So the repair is wiring, not wording — exactly the §19.18 failure mode
+("a mechanism written, callers left unwired"), and the reason no new copy helper was created.
+
+| file:line | before (what a tenant read) | after |
+|---|---|---|
+| `commcalc/plan-installments/page.tsx:638` | "Migration 245 isn't applied yet, so these boxes can't be saved." | `<SetupNotice lead="These boxes cannot be saved yet." detail="245" />` |
+| `commcalc/plan-installments/page.tsx:815` | "Migration {payCfg.migration} isn't applied yet, so this can't be saved." | `<SetupNotice lead="This cannot be saved yet." detail={payCfg.migration} />` |
+| `storeops/payroll-change-log/page.tsx:195` | "…table isn't set up yet on this tenant (migration 414)" | `<SetupNotice lead="The Payroll Change Log is not switched on yet, so no entries can be recorded or shown." detail="414" />` |
+| `storeops/salary-advances/page.tsx:378` | "…ledger isn't set up yet on this tenant (migration 419)" | `<SetupNotice lead="The Salary Advance ledger is not switched on yet, so no advances can be recorded or shown." detail="419" />` |
+| `storeops/timeclock/page.tsx:302` | "…table isn't set up yet on this tenant (migration 414) — manual-adjustment markers below are unavailable" | `<SetupNotice lead="The Payroll Change Log is not switched on yet, so the manual-adjustment markers below are unavailable." detail="414" />` |
+
+**A FIFTH site, found by looking for the siblings before shipping.** `timeclock/page.tsx:302` renders
+the SAME migration-414 sentence as `payroll-change-log:195` and the guard **never flagged it** —
+`display_copy` does not extract that line's shape, so it was invisible to both the scan and the pin.
+Fixing the four and leaving it is "the same defect wearing a hat", so it was converted too. Note what
+this says about the pin: `SETUP_PROSE_DEBT["…/timeclock/page.tsx"] = 2` is **unchanged**, because its
+two counted hits are at lines 433 and 537; the pin never covered 302. **A pinned count is a ratchet on
+what the scanner can SEE, not an inventory of a file's leaks.**
+
+**THE RECOMMENDATION PUT TO THE OWNER ABOUT `pg_cron` WAS WRONG, and is corrected here.** It was put
+to him as "leave it — the Connectors page is only read by whoever wires up the schedule". That premise
+does not survive checking `rbac.ts`: `{ href: '/commcalc/connectors', module: 'commissions', scopes:
+['all'], tileOnly: true }` — **not** `platformOnly`, so any user with the commissions module can open
+it. The sentence was tenant-facing after all, which is why the guard was right to be red about it, and
+leaving it would also have left the build red. It was reworded on the same principle as the other
+five.
+
+**`<PlatformDetail detail />` — a new export of the EXISTING home, not a new home.** `<SetupNotice>`
+was the wrong instrument here: Connectors **is** switched on, so rendering "This feature isn't
+switched on for your company yet" would have been a false statement to every tenant. The need is
+narrower — *an operational route that only the platform team can act on, on a page tenants also open*
+— and `setupNotice.tsx` is where "who may read an internal name" is already answered. So the file
+gained a second export that dereferences the same `useSetupDetailVisible()` (→ `rbac.isPlatformAdmin`,
+→ `core.router._require_super_admin`): it renders the detail for the super admin and **`null`** for
+everyone else, with no customer sentence. One gate, one file, two shapes — rather than a second
+predicate somewhere else, which is the §19.18 defect this repo has shipped three times.
+
+- tenant copy now: *"One schedule drives them all: every connector below runs by itself when it next falls due."*
+- super admin additionally sees: `[setup: pg_cron -> POST /api/v1/commcalc/connectors/run-due, header X-Notify-Secret]`
+
+**No accommodation was taken.** `SETUP_PROSE_DEBT` gained **no** entry (it still carries its 11 and
+its `timeclock` pin of 2, unchanged) and `INFRA_FE_ALLOW` is still **EMPTY**. Both locks are green on
+their own terms rather than on an excusal, which is the whole point of the two ledgers being
+shrink-only.
+
+**Proof on the final tree.** `harness_carrier_vocab_guard.py` (run as `python3.11` — see
+`harness-local-run-caveats`): **exit 0, 108 PASS**, both the setup-internals and infra-names locks
+reported holding, where the same harness on the parent commit printed `FAIL 4 migration …` and
+`FAIL 1 database / hosting name …`. `npm run typecheck` **0 errors**; `npm run lint:gate` **OK**
+(measured 5645 == pinned 5645, so the rewording introduced no new lint finding and retired none —
+no register or `PINNED_TOTAL` change was needed); `harness_frontend_lint_lock.py` **42/0**;
+`harness_index_section_register.py` and `harness_ci_pipefail_lock.py` both exit 0.
+
+**Duplicate check (the build gate).** Nothing new was built: no report, endpoint, query, table or
+feed, so §16–18 carry nothing new. Searched the index for an existing mechanism before touching
+anything and found §19.36 — which is not merely *a* candidate but *the* home for this exact fact — and
+extended it by one export rather than adding a sibling. The five page edits DELETE inline copy and
+replace it with a dereference of that home; no second copy of the customer sentence exists anywhere
+after this change.
+
 ### CORE-02.7 Cross-references
 
 Registers **no table, no endpoint, no metric and no report** — so §16 (by TABLE), §17 (by ENDPOINT)
@@ -24860,3 +25045,5 @@ them would be noise. What it registers is a CI gate, a runner, a register and a 
 - Duplicate check (the build gate): the **existing** `frontend-typecheck` job of #438 / §75 is the pattern this reuses step for step — checkout, `setup-node` 22, `setup-python` 3.11, stdlib lock, `npm ci --ignore-scripts --no-audit --no-fund`, dereferenced script. No sibling workflow, no second lint path, and no second home for the linter invocation was created; `harness_frontend_typecheck_lock.py` is the lock this one is modelled on and is left untouched.
 - Ratchet precedents read before instantiating one: §19.25 / `backend/harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt`.
 - Same class: §75 (which named this gap), §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate).
+- CORE-02.9 (the owner's rewording ruling, 2026-10-12) registers **one** artefact: `frontend/src/lib/setupNotice.tsx` → `<PlatformDetail detail />`, a second export of the §19.36 home gated by the same `useSetupDetailVisible()`. Its one caller today is `app/(platform)/commcalc/connectors/page.tsx`. Still no table, endpoint, metric or report. Locked by `harness_carrier_vocab_guard.py` §SETUP / §INFRA, which is what fails the build if a page writes an internal name in copy instead of dereferencing this home.
+- CORE-02.8 (the follow-up) registers no new artefact either: it changes only JSX text escaping in 74 files, a ternary-to-`if/else` transliteration in 16, `frontend/eslint_pending.txt` (932 → 842 entries) and `PINNED_TOTAL` in the lock (5917 → 5645). Still no table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.

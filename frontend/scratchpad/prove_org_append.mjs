@@ -47,7 +47,7 @@ function reset() { ACTIVE = null; _sessionOrgId = null; _multiTenant = false }
 function check(name, got, want) {
   const ok = got === want
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}\n        got:  ${got}\n        want: ${want}`)
-  ok ? pass++ : fail++
+  if (ok) pass++; else fail++
 }
 
 // 1. no-param + active-known → APPENDED (the core super-admin fix)
@@ -159,7 +159,7 @@ const need = [
 for (const s of need) {
   const ok = src.includes(s)
   console.log(`${ok ? 'PASS' : 'FAIL'}  source-parity: client.ts contains \`${s.slice(0, 48)}…\``)
-  ok ? pass++ : fail++
+  if (ok) pass++; else fail++
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`)

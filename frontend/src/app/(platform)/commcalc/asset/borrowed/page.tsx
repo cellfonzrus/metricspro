@@ -214,7 +214,7 @@ export default function BorrowedMoneyPage() {
             <button className="btn btn-primary" onClick={addBorrowing}>➕ Add</button>
           </div>
         ) : (
-          <div style={{ fontSize: 13, color: 'var(--text2)' }}>Same-company funds create no inter-store debt, so there's nothing to record here.</div>
+          <div style={{ fontSize: 13, color: 'var(--text2)' }}>Same-company funds create no inter-store debt, so there&apos;s nothing to record here.</div>
         )}
         {msg && <div style={{ fontSize: 13, marginTop: 8 }}>{msg}</div>}
       </div>

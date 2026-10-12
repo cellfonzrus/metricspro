@@ -43,6 +43,7 @@ never extend REVIEWED_EXCEPTIONS as a shortcut. A sentence that names the POS �
   python3 backend/harness_carrier_vocab_guard.py
   python3 backend/harness_carrier_vocab_guard.py --print-pos-vocab   # the derived spellings, as JSON
 """
+import html
 import json
 import os
 import re
@@ -257,14 +258,35 @@ _HTML_ENTITY = re.compile(r"&(?:apos|quot|amp|nbsp|mdash|ndash|rsquo|lsquo|helli
 
 def jsx_prose_line(rel, ln):
     """A .tsx line that is JSX TEXT continuing a paragraph — no operator, no quote, only emphasis tags —
-    is display copy the string/tag extractor cannot see ('No daily B2B feed loaded for {period} yet.')."""
+    is display copy the string/tag extractor cannot see ('No daily B2B feed loaded for {period} yet.').
+
+    AN ENTITY IS THE CHARACTER IT RENDERS AS (defect found 2026-10-11, repaired as a class). Entities
+    used to be DELETED here, not decoded, so `isn&apos;t applied yet` was read as `isnt applied yet`.
+    That is not what the screen says, and it had two consequences: a sentence pinned in
+    SETUP_PROSE_DEBT by its text stopped matching its own pin the moment someone escaped an
+    apostrophe in it (which `react/no-unescaped-entities` requires — see index CORE-02.8), and any
+    vocabulary spanning the entity became unfindable.
+
+    The deletion was not arbitrary: `_prose_bad` rejects a line holding `'` or `"`, so DECODING
+    before that test would classify escaped prose as code and make the line invisible — strictly
+    worse. So the two uses are separated, which is the whole fix: the prose/code test keeps reading
+    the entity-STRIPPED line exactly as before (no line changes visibility), while what the scans
+    MATCH ON is the DECODED line — what a reader actually sees.
+    """
     s = ln.strip()
     if not rel.endswith(".tsx") or s.startswith(("//", "*", "/*", "{/*")):
         return []
-    s = _HTML_ENTITY.sub("", _INLINE_EMPHASIS.sub(" ", s))
-    if " " not in s or _prose_bad.search(s):
+    s = _INLINE_EMPHASIS.sub(" ", s)
+    gate = _HTML_ENTITY.sub("", s)       # decides prose-vs-code — unchanged, so coverage is unchanged
+    if " " not in gate or _prose_bad.search(gate):
         return []
-    return [s]
+    return [_decode_entities(s)]         # what the SCREEN shows — `isn&apos;t` is `isn't`
+
+
+def _decode_entities(text):
+    """`isn&apos;t` → `isn't`. Only the entities `_HTML_ENTITY` already recognises are decoded, so a
+    bare `&` or an unknown entity is left exactly as it was rather than being guessed at."""
+    return _HTML_ENTITY.sub(lambda m: html.unescape(m.group(0)), text)
 
 
 def display_copy(rel, line):
@@ -515,6 +537,23 @@ def extractor_controls():
                split_setup_debt(mk("a.tsx", 0), one)[2] == [("a.tsx", 1, 0)])
     ok &= _ctl("E12 an unpinned file's hit is a real fail, never silent debt",
                len(split_setup_debt(mk("b.tsx", 1), one)[0]) == 1)
+    # AN ENTITY IS THE CHARACTER IT RENDERS AS (defect found 2026-10-11 — see jsx_prose_line).
+    # Entities were DELETED, not decoded, so `isn&apos;t` read as `isnt`: a sentence pinned by its text
+    # stopped matching its pin the moment an apostrophe in it was escaped, which
+    # `react/no-unescaped-entities` requires (index CORE-02.8). E13-E16 are that defect, armed.
+    ok &= _ctl("E13 an &apos; in prose DECODES to the apostrophe the screen shows (not deleted)",
+               jsx_prose_line(page, "            Migration 245 isn&apos;t applied yet, so it cannot be saved.")
+               == ["Migration 245 isn't applied yet, so it cannot be saved."])
+    ok &= _ctl("E14 …and &quot;, &amp; and a numeric entity decode the same way",
+               jsx_prose_line(page, "            Distributor &quot;Weekly&quot; memos &amp; credits &#39;net&#39; of fees")
+               == ["Distributor \"Weekly\" memos & credits 'net' of fees"])
+    # The decode must NOT be applied before the prose/code test: `_prose_bad` rejects a line holding
+    # `'` or `"`, so decoding first would classify escaped prose as CODE and make the line invisible —
+    # strictly LESS coverage than before. E15 pins that the gate still reads the STRIPPED line.
+    ok &= _ctl("E15 a prose line whose only quote comes FROM an entity stays visible (gate reads stripped)",
+               len(jsx_prose_line(page, "            the drawer total is the rep&apos;s own &quot;count&quot; for that day")) == 1)
+    ok &= _ctl("E16 an entity the pattern does not know is left exactly as it was, never guessed at",
+               _decode_entities("fees &unknown; and &apos;this&apos;") == "fees &unknown; and 'this'")
     print("  OK — the display-copy extractor holds." if ok else "  FAIL — the display-copy extractor is not sound.")
     return ok
 

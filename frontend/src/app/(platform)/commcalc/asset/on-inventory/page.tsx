@@ -168,7 +168,7 @@ export default function OnInventoryByStorePage() {
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>On-Inventory by Store</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Unsold On-Inventory devices and $ owed to the Distributor, rolled up per store (spelling variants of the same address are merged — see "also seen as"). Aging buckets match Inventory Aging (&lt;45 / 45–60 WARN / &gt;60 MISSED, from acquired date).
+            Unsold On-Inventory devices and $ owed to the Distributor, rolled up per store (spelling variants of the same address are merged — see &quot;also seen as&quot;). Aging buckets match Inventory Aging (&lt;45 / 45–60 WARN / &gt;60 MISSED, from acquired date).
           </p>
         </div>
         {data && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
@@ -240,7 +240,7 @@ export default function OnInventoryByStorePage() {
           </div>
           {data.totals.unknown_age_count > 0 && (
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: -12, marginBottom: 16 }}>
-              ℹ️ {data.totals.unknown_age_count} device(s) / {fmt(data.totals.unknown_age_owed)} have no usable acquired date — counted in the totals above, see each store's own count below.
+              ℹ️ {data.totals.unknown_age_count} device(s) / {fmt(data.totals.unknown_age_owed)} have no usable acquired date — counted in the totals above, see each store&apos;s own count below.
             </div>
           )}
 

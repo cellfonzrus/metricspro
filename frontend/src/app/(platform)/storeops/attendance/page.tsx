@@ -335,7 +335,7 @@ function AttendanceSettingsPanel({ cfg, available, onSaved, onClose }: { cfg: an
         </label>
         <label style={{ fontSize: 13 }}>Approved time off:
           <select style={{ ...sel, marginLeft: 6 }} value={timeoffMode} onChange={e => setTimeoffMode(e.target.value)}>
-            <option value="label">Label as EXCUSED (show, with a "Hide excused" toggle)</option>
+            <option value="label">Label as EXCUSED (show, with a &quot;Hide excused&quot; toggle)</option>
             <option value="suppress">Suppress entirely (never show)</option>
           </select>
         </label>

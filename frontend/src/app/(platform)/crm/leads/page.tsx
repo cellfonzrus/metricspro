@@ -73,7 +73,7 @@ export default function LeadsPage() {
     })()
   }, [])
 
-  const toggle = (id: string) => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggle = (id: string) => setSel(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const allSelected = rows.length > 0 && sel.size === rows.length
 
   async function bulkAssign() {

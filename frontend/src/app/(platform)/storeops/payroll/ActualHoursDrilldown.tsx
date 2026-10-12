@@ -54,7 +54,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
               <div style={{ marginTop: 10, fontSize: 12 }}>
                 💰 Salaried ({data.pay_basis}) — pay is not hours-derived.
                 {data.salary_derived_pay != null
-                  ? <> This period's pay: <strong>{fmt(data.salary_derived_pay)}</strong>{data.salary_prorated ? ' (prorated for this range)' : ''}.</>
+                  ? <> This period&apos;s pay: <strong>{fmt(data.salary_derived_pay)}</strong>{data.salary_prorated ? ' (prorated for this range)' : ''}.</>
                   : (data.salary_note ? ` ${data.salary_note}` : '')}
               </div>
             )}
@@ -68,7 +68,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
               <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, background: 'var(--surface2)' }}>
                 💰 Salaried ({data.pay_basis}) — pay is <strong>not</strong> derived from these hours.
                 {data.salary_derived_pay != null
-                  ? <> This period's pay: <strong>{fmt(data.salary_derived_pay)}</strong>{data.salary_prorated ? ' (prorated for this range)' : ''}.</>
+                  ? <> This period&apos;s pay: <strong>{fmt(data.salary_derived_pay)}</strong>{data.salary_prorated ? ' (prorated for this range)' : ''}.</>
                   : (data.salary_note ? ` ${data.salary_note}` : '')}
               </div>
             )}

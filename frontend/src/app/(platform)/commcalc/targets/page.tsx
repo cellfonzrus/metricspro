@@ -188,7 +188,7 @@ export default function DailyTargetsPage() {
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Targets</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          {period} · Schedule-weighted daily targets with daily catch-up. Today's target rolls in any shortfall;
+          {period} · Schedule-weighted daily targets with daily catch-up. Today&apos;s target rolls in any shortfall;
           pace spreads the remaining balance over the open days left.
         </p>
       </div>
@@ -358,7 +358,7 @@ export default function DailyTargetsPage() {
 
       {detail && !detail.has_schedule && (
         <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '8px 14px', marginBottom: 16, fontSize: 13, color: '#92400e' }}>
-          ⚠️ No StoreOps schedule loaded for this {scope === 'rep' ? 'rep' : 'store'} this period — targets can't be schedule-weighted, so the full remaining balance is shown under <strong>Pace</strong> and today's target is 0.
+          ⚠️ No StoreOps schedule loaded for this {scope === 'rep' ? 'rep' : 'store'} this period — targets can&apos;t be schedule-weighted, so the full remaining balance is shown under <strong>Pace</strong> and today&apos;s target is 0.
         </div>
       )}
 
@@ -381,7 +381,7 @@ export default function DailyTargetsPage() {
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.achieved_mtd)}</span>
                     <span style={{ color: 'var(--text2)' }}>Need to achieve</span>
                     <span style={{ fontWeight: 600, color: targetState(m.monthly, m.need).color }}>{val(m.unit, m.need)}</span>
-                    <span style={{ color: 'var(--text2)', paddingTop: 6, borderTop: '1px solid var(--border)' }}>Today's target</span>
+                    <span style={{ color: 'var(--text2)', paddingTop: 6, borderTop: '1px solid var(--border)' }}>Today&apos;s target</span>
                     <span style={{ fontWeight: 700, color: 'var(--accent)', paddingTop: 6, borderTop: '1px solid var(--border)' }}>{val(m.unit, m.today_target)}</span>
                     <span style={{ color: 'var(--text2)' }}>Pace / open day</span>
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.pace)}</span>
@@ -413,7 +413,7 @@ export default function DailyTargetsPage() {
               </div>
               {detail.scope === 'rep' && detail.conversion.rep?.below_store && (
                 <div style={{ marginTop: 12, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#b91c1c' }}>
-                  ⚠️ <strong>{detail.rep}</strong>'s conversion ({detail.conversion.rep.rate}%) is below the store ({detail.conversion.store.rate}%) — this rep is pulling the store's productivity down.
+                  ⚠️ <strong>{detail.rep}</strong>&apos;s conversion ({detail.conversion.rep.rate}%) is below the store ({detail.conversion.store.rate}%) — this rep is pulling the store&apos;s productivity down.
                 </div>
               )}
             </div>

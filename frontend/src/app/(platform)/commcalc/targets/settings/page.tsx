@@ -132,7 +132,7 @@ export default function TargetSettingsPage() {
   }
 
   function toggleSel(code: string) {
-    setSelected(s => { const n = new Set(s); n.has(code) ? n.delete(code) : n.add(code); return n })
+    setSelected(s => { const n = new Set(s); if (n.has(code)) n.delete(code); else n.add(code); return n })
   }
   function selectAllFiltered(on: boolean, codes: string[]) {
     setSelected(on ? new Set(codes) : new Set())
@@ -189,7 +189,7 @@ export default function TargetSettingsPage() {
 
       <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: '#1e40af' }}>
         💡 <strong>Activations</strong> = premium + BYOD acts (count). <strong>Upgrades</strong> = upgrade acts (count).
-        <strong> Accessories</strong> = monthly GP ($, seeded from the store's StoreOps monthly target).
+        <strong> Accessories</strong> = monthly GP ($, seeded from the store&apos;s StoreOps monthly target).
         <strong> BYOD %</strong> = share of activations expected to be BYOD (blank = KPI default {byodDefault}%).
         <strong> Financing</strong> = financed units per month (any vendor you map) — this is
         what the <a href="/commcalc/financing" style={{ textDecoration: 'underline' }}>Financing report</a>

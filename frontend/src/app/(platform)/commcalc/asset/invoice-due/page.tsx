@@ -74,7 +74,7 @@ function LockNote() {
   return (
     <div className="card" style={{ padding: 16, background: '#fef3c7', border: '1px solid #fcd34d' }}>
       🔒 <b>Restricted.</b> The Upcoming Invoice Payment Due report shows invoice totals and
-      commission figures — ask an admin to grant <b>"asset_invoice_due"</b> on your role.
+      commission figures — ask an admin to grant <b>&quot;asset_invoice_due&quot;</b> on your role.
     </div>
   )
 }
@@ -307,7 +307,7 @@ export default function InvoiceDuePage() {
                                 </tbody>
                               </table>
                               <div style={{ fontSize: 12, color: 'var(--text2)', background: 'var(--surface)', border: '1px dashed var(--border)', borderRadius: 8, padding: 10 }}>
-                                <b>INFO ONLY — reconciliation footer.</b> This invoice's devices earned{' '}
+                                <b>INFO ONLY — reconciliation footer.</b> This invoice&apos;s devices earned{' '}
                                 <b>{fmt(detail.period_commission_footer.invoice_commission_m1)}</b> of 1st-Month
                                 commission. The WHOLE org earned{' '}
                                 <b>{detail.period_commission_footer.period_total_commission_m1 == null ? '—' : fmt(detail.period_commission_footer.period_total_commission_m1)}</b>{' '}

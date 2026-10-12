@@ -148,7 +148,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   // filter change inherit the default. Never collapses when collapsibleGroups is off (byte-identical).
   const [toggledGroups, setToggledGroups] = useState<Set<string>>(() => new Set())
   const isCollapsed = (g: string) => (collapsibleGroups ? (!!defaultCollapsed !== toggledGroups.has(g)) : false)
-  const toggleGroup = (g: string) => setToggledGroups(s => { const n = new Set(s); n.has(g) ? n.delete(g) : n.add(g); return n })
+  const toggleGroup = (g: string) => setToggledGroups(s => { const n = new Set(s); if (n.has(g)) n.delete(g); else n.add(g); return n })
 
   const monthsAvail = useMemo(() => dateCol
     ? Array.from(new Set(rows.map(r => ymd(dateCol.get(r)).slice(0, 7)).filter(s => /^\d{4}-\d{2}$/.test(s)))).sort()

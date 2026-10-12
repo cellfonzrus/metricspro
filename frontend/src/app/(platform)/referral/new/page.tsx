@@ -44,7 +44,7 @@ export default function NewReferralPage() {
     <div style={{ padding: 20, maxWidth: 720 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>➕ New Referral</h1>
       <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 14 }}>
-        Enter the person doing the referring — we generate a QR they show to their friend. The friend's
+        Enter the person doing the referring — we generate a QR they show to their friend. The friend&apos;s
         details are captured at the counter when the QR is scanned.
       </div>
 

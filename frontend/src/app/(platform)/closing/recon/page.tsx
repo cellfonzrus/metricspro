@@ -120,7 +120,7 @@ export default function ClosingReconPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔎 Closing Reconciliation</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Declared closing vs {pos} daily sales — every day's errors. <b>Block</b> = cash short / credit over (stops the rep closing); <b>Flag</b> = cash over / credit under / count mismatch.
+            Declared closing vs {pos} daily sales — every day&apos;s errors. <b>Block</b> = cash short / credit over (stops the rep closing); <b>Flag</b> = cash over / credit under / count mismatch.
           </p>
         </div>
         <Link href="/closing" className="btn btn-secondary" style={{ fontSize: 13 }}>← Dashboard</Link>

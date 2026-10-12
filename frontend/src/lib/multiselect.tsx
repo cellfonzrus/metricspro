@@ -40,7 +40,7 @@ export function MultiSelect({
 
   function toggle(v: string) {
     const next = new Set(value)
-    next.has(v) ? next.delete(v) : next.add(v)
+    if (next.has(v)) next.delete(v); else next.add(v)
     onChange([...next])
   }
 

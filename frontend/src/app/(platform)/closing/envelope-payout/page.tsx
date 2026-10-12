@@ -154,7 +154,7 @@ export default function EnvelopePayoutPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✉️ Envelope Payout</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             Pay commission, salary, and approved expenses in cash from the envelope. The system picks
-            the fewest envelopes needed for each payment; you confirm what's taken and what's left.
+            the fewest envelopes needed for each payment; you confirm what&apos;s taken and what&apos;s left.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -173,7 +173,7 @@ export default function EnvelopePayoutPage() {
       </div>
 
       {!storeCode ? (
-        <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Pick a store to see what's due.</div>
+        <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Pick a store to see what&apos;s due.</div>
       ) : loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (

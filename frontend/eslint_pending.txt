@@ -2,13 +2,20 @@
 #
 # Owner 2026-10-11, verbatim: *"Run the code style checker and fix the problems"*. `npm run lint` was
 # declared in frontend/package.json and run by NOTHING in CI. Measured on origin/main (567e7050)
-# before anything was changed: 5953 problems (5675 errors, 278 warnings) over 422 files.
+# before anything was changed: 5953 problems (5675 errors, 278 warnings) over 422 files. The gate
+# itself landed at 5917; this register now pins **5645** (5430 errors, 215 warnings) over 413 files.
 #
-# WHY A RATCHET AND NOT A HARD RULE. 4903 of those are `@typescript-eslint/no-explicit-any` and 666
-# are React-Compiler / hook rules whose fixes change RUNTIME BEHAVIOUR — overwhelmingly in commcalc/,
-# storeops/payroll/, closing/ and accounts/ pages, i.e. money paths. Money-touching changes are
-# surfaced for owner approval in this house, so a lint gate does not get to make 5569 of them
-# unasked. The rule that actually stops the bleeding is the one a ratchet gives:
+# PAID OFF SO FAR — the two groups the gate left for budget rather than principle, now ZERO:
+#   · `react/no-unescaped-entities`            249 -> 0  (74 files; escaping only, no wording changed)
+#   · `@typescript-eslint/no-unused-expressions` 23 -> 0  (16 files; ternary/&&-as-statement rewritten
+#                                                          to `if/else`, behaviour-identical)
+#
+# WHY A RATCHET AND NOT A HARD RULE. 4903 of the remainder are `@typescript-eslint/no-explicit-any`
+# and 666 are React-Compiler / hook rules whose fixes change RUNTIME BEHAVIOUR — overwhelmingly in
+# commcalc/, storeops/payroll/, closing/ and accounts/ pages, i.e. money paths. A hook rule decides
+# WHEN AN EFFECT RE-RUNS, which on those screens decides which period's money is shown. Money-touching
+# changes are surfaced for owner approval in this house, so a lint gate does not get to make 5569 of
+# them unasked. The rule that actually stops the bleeding is the one a ratchet gives:
 #
 #   · a finding NOT listed here FAILS THE BUILD — new lint debt cannot land;
 #   · a count that goes UP fails — a file cannot get worse;
@@ -419,22 +426,6 @@
 1	@typescript-eslint/no-explicit-any	src/lib/vision.ts
 1	@typescript-eslint/no-require-imports	harness_nav_subcategories.ts
 6	@typescript-eslint/no-require-imports	scratchpad/prove_plan_match_render.cjs
-3	@typescript-eslint/no-unused-expressions	scratchpad/prove_entity_picker.mjs
-2	@typescript-eslint/no-unused-expressions	scratchpad/prove_org_append.mjs
-1	@typescript-eslint/no-unused-expressions	src/app/(platform)/admin/billing/page.tsx
-2	@typescript-eslint/no-unused-expressions	src/app/(platform)/admin/roles/page.tsx
-2	@typescript-eslint/no-unused-expressions	src/app/(platform)/admin/support/failures/page.tsx
-2	@typescript-eslint/no-unused-expressions	src/app/(platform)/commcalc/_lib/CoverageWizard.tsx
-1	@typescript-eslint/no-unused-expressions	src/app/(platform)/commcalc/commission-plans/page.tsx
-1	@typescript-eslint/no-unused-expressions	src/app/(platform)/commcalc/item-mapping/page.tsx
-1	@typescript-eslint/no-unused-expressions	src/app/(platform)/commcalc/plan-installments/page.tsx
-1	@typescript-eslint/no-unused-expressions	src/app/(platform)/commcalc/targets/rep-map/page.tsx
-1	@typescript-eslint/no-unused-expressions	src/app/(platform)/commcalc/targets/settings/page.tsx
-1	@typescript-eslint/no-unused-expressions	src/app/(platform)/crm/leads/page.tsx
-2	@typescript-eslint/no-unused-expressions	src/app/(platform)/failures/page.tsx
-1	@typescript-eslint/no-unused-expressions	src/app/portal/page.tsx
-1	@typescript-eslint/no-unused-expressions	src/components/ReportShell.tsx
-1	@typescript-eslint/no-unused-expressions	src/lib/multiselect.tsx
 1	@typescript-eslint/no-unused-vars	prove_clock_queue.mjs
 3	@typescript-eslint/no-unused-vars	prove_connector_scope.mjs
 1	@typescript-eslint/no-unused-vars	prove_report_kinds.mjs
@@ -882,77 +873,3 @@
 5	react-hooks/static-components	src/app/(platform)/storeops/reports/page.tsx
 2	react-hooks/static-components	src/app/(platform)/storeops/setup/stores/LeasePanel.tsx
 8	react-hooks/static-components	src/app/(platform)/storeops/visits/[id]/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/accounts/journal/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/accounts/recon/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/admin/security/page.tsx
-4	react/no-unescaped-entities	src/app/(platform)/admin/support/docs/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/closing/deposit-recon/page.tsx
-3	react/no-unescaped-entities	src/app/(platform)/closing/envelope-payout/page.tsx
-8	react/no-unescaped-entities	src/app/(platform)/closing/epay-recon/page.tsx
-4	react/no-unescaped-entities	src/app/(platform)/closing/readiness/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/closing/recon/page.tsx
-15	react/no-unescaped-entities	src/app/(platform)/closing/tender-recon-3way/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/_lib/CoverageWizard.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/accessory-cost-audit/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/accessory-flags/page.tsx
-5	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/aging-rebate/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/borrowed/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/inventory-recon/page.tsx
-3	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/invoice-due/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/missing-phones/page.tsx
-3	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/on-inventory/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/purchase-orders/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/purchase-orders/receiving/page.tsx
-4	react/no-unescaped-entities	src/app/(platform)/commcalc/asset/purchase-orders/tally/page.tsx
-7	react/no-unescaped-entities	src/app/(platform)/commcalc/carrier-mapping/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/chargebacks/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/coaching/page.tsx
-5	react/no-unescaped-entities	src/app/(platform)/commcalc/commission-category-map/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/commission-ledger/page.tsx
-3	react/no-unescaped-entities	src/app/(platform)/commcalc/commission-legs/page.tsx
-4	react/no-unescaped-entities	src/app/(platform)/commcalc/commission-plans/page.tsx
-9	react/no-unescaped-entities	src/app/(platform)/commcalc/commission-structure/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/connectors/page.tsx
-9	react/no-unescaped-entities	src/app/(platform)/commcalc/daily-commission/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/discrepancy/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/dlar/sweep/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/email-imports/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/epay/sweep/page.tsx
-7	react/no-unescaped-entities	src/app/(platform)/commcalc/expenses/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/financing/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/gp-category-map/page.tsx
-9	react/no-unescaped-entities	src/app/(platform)/commcalc/ma-overview-recon/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/page.tsx
-26	react/no-unescaped-entities	src/app/(platform)/commcalc/plan-installments/page.tsx
-4	react/no-unescaped-entities	src/app/(platform)/commcalc/productivity-insights/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/settings/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/target-fields/page.tsx
-6	react/no-unescaped-entities	src/app/(platform)/commcalc/targets/accessories/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/targets/my/page.tsx
-6	react/no-unescaped-entities	src/app/(platform)/commcalc/targets/page.tsx
-4	react/no-unescaped-entities	src/app/(platform)/commcalc/targets/rep-map/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/commcalc/targets/settings/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/commcalc/whatif/page.tsx
-3	react/no-unescaped-entities	src/app/(platform)/hr/letters/page.tsx
-3	react/no-unescaped-entities	src/app/(platform)/notify/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/onboarding/intake/tender-columns-step.tsx
-1	react/no-unescaped-entities	src/app/(platform)/pos/inventory/adjust-modal.tsx
-1	react/no-unescaped-entities	src/app/(platform)/pos/receipts/vendor-paid-card.tsx
-1	react/no-unescaped-entities	src/app/(platform)/referral/approvals/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/referral/new/page.tsx
-1	react/no-unescaped-entities	src/app/(platform)/referral/settings/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/storeops/attendance/page.tsx
-6	react/no-unescaped-entities	src/app/(platform)/storeops/dm-accessory-attribution/page.tsx
-3	react/no-unescaped-entities	src/app/(platform)/storeops/payroll-change-log/page.tsx
-2	react/no-unescaped-entities	src/app/(platform)/storeops/payroll/ActualHoursDrilldown.tsx
-2	react/no-unescaped-entities	src/app/(platform)/storeops/payroll/PayrollChargebacksPanel.tsx
-2	react/no-unescaped-entities	src/app/(platform)/storeops/payroll/PtoAccrualPanel.tsx
-1	react/no-unescaped-entities	src/app/(platform)/storeops/payroll/page.tsx
-9	react/no-unescaped-entities	src/app/(platform)/storeops/reviews/config/page.tsx
-9	react/no-unescaped-entities	src/app/(platform)/storeops/salary-advances/page.tsx
-2	react/no-unescaped-entities	src/app/portal/page.tsx
-4	react/no-unescaped-entities	src/app/r/[token]/page.tsx
-3	react/no-unescaped-entities	src/components/DailyClosingVerify.tsx
-1	react/no-unescaped-entities	src/components/EmployeeWidgets.impl.tsx
-1	react/no-unescaped-entities	src/components/GoogleReviewsCard.tsx
-1	react/no-unescaped-entities	src/components/HelpPanel.tsx

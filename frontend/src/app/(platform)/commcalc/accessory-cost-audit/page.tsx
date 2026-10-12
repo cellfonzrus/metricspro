@@ -184,7 +184,7 @@ export default function AccessoryCostAuditPage() {
 
           {/* ── the options table ──────────────────────────────────────────────────────── */}
           <div className="card" style={{ marginBottom: 14 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>What {period} would have paid — the owner's options</div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>What {period} would have paid — the owner&apos;s options</div>
             <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 8 }}>
               {cnt.matched_lines} matched line(s), <b style={{ color: cnt.suspect_lines ? 'var(--red)' : 'inherit' }}>{cnt.suspect_lines}</b> with an
               unusable cost. Nothing below has been applied — this is what each choice WOULD produce.

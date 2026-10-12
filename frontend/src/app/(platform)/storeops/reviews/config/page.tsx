@@ -124,10 +124,10 @@ export default function GoogleReviewsConfigPage() {
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>⭐ Google Reviews — Settings</h1>
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '0 0 16px' }}>
-        Pulls each store's Google rating from its address via Google Places. Google's API returns only a
+        Pulls each store&apos;s Google rating from its address via Google Places. Google&apos;s API returns only a
         curated subset of reviews (typically ~5) — not the full history.
       </p>
-      {readOnly && <div style={{ ...inp, background: '#fff7e6', marginBottom: 12 }}>You can view this page but don't have permission to save changes here — ask an admin.</div>}
+      {readOnly && <div style={{ ...inp, background: '#fff7e6', marginBottom: 12 }}>You can view this page but don&apos;t have permission to save changes here — ask an admin.</div>}
       {msg && <div style={{ marginBottom: 12, fontSize: 13.5 }}>{msg}</div>}
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -143,9 +143,9 @@ export default function GoogleReviewsConfigPage() {
             <input style={{ ...inp, width: '100%' }} type="text" placeholder='e.g. "wireless store"'
               value={cfg.search_brand || ''} onChange={e => setCfg({ ...cfg, search_brand: e.target.value })} disabled={readOnly} />
             <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3 }}>
-              Prepended to each store's address when looking it up on Google. Without it, a bare address
-              resolves to the <b>postal address</b> (no rating). It doesn't have to match your brand
-              exactly — any business-ish word (e.g. "wireless store") lands on the storefront.
+              Prepended to each store&apos;s address when looking it up on Google. Without it, a bare address
+              resolves to the <b>postal address</b> (no rating). It doesn&apos;t have to match your brand
+              exactly — any business-ish word (e.g. &quot;wireless store&quot;) lands on the storefront.
               Blank keeps address-only lookup.
             </div>
           </div>
@@ -173,8 +173,8 @@ export default function GoogleReviewsConfigPage() {
             <input style={{ ...inp, width: '100%' }} type="number" step="1" min={1} max={365} value={cfg.lookback_days}
               onChange={e => setCfg({ ...cfg, lookback_days: Number(e.target.value) })} disabled={readOnly} />
             <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3 }}>
-              How far back to look for a PAST shift when deciding which store(s)' ratings show for an
-              employee (an employee's rating card, action plans, and any performance table). Forward
+              How far back to look for a PAST shift when deciding which store(s)&apos; ratings show for an
+              employee (an employee&apos;s rating card, action plans, and any performance table). Forward
               window stays 14 days.
             </div>
           </div>
