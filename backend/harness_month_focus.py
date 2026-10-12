@@ -11,7 +11,8 @@ here is what runs in production.
   §E  the due list — every item fires on its cause and clears when it is fixed
   §F  measurement vs failure — None is never zero
   §G  the plays — each fires on a measured number, carries it, and no filler play is ever invented
-  §H  who may declare — dereferenced from `core.scope.roster_reach`, never a fourth copy
+  §H  who may declare — dereferenced from `core.scope.is_market_or_wider`, never a fourth copy
+  §J  the two sides of a spiff — what it pays out, what funds it, and a margin that is DERIVED
   §I  THE UN-WIRE LOCK — this module may not measure, send, or pay; the homes it reads must still be
       dereferenced; and every control here is ARMED against a planted violation
 """
@@ -293,6 +294,61 @@ ck("H6b. a resolved role with no scope recorded IS company-wide — the live con
 ck("H7. THE TIERS ARE NOT COPIED HERE — the module dereferences core.scope and holds no tuple",
    "is_market_or_wider(" in SRC and '"regional"' not in SRC and "'regional'" not in SRC)
 
+# ── §J  THE TWO SIDES OF A SPIFF ──────────────────────────────────────────────────────────────────
+print("\nJ. a spiff states what it pays AND what funds it — and the margin is derived, never stored")
+SP = lambda **kw: {"temp_spiffs": [{"name": "t", "status": "live", "unit": "trade-in", **kw}]}
+
+ck("J1. both sides survive a save, each rounded to the cent and neither inferred from the other",
+   (lambda d: d["temp_spiffs"][0]["rate"] == 5.0 and d["temp_spiffs"][0]["carrier_rate"] == 25.0)(
+       M.normalise_declaration(SP(rate="5", carrier_rate="25.004"))))
+ck("J2. a BLANK carrier rate stays None — 'we have not said what funds it' is not '$0 funds it'",
+   M.normalise_declaration(SP(rate=5))["temp_spiffs"][0]["carrier_rate"] is None
+   and M.normalise_declaration(SP(rate=5, carrier_rate=""))["temp_spiffs"][0]["carrier_rate"] is None)
+ck("J3. a declared $0 carrier rate is a real zero and is NOT the same as blank",
+   M.normalise_declaration(SP(rate=5, carrier_rate=0))["temp_spiffs"][0]["carrier_rate"] == 0.0)
+ck("J4. THE MARGIN IS NOT STORED — the saved row carries the two facts and no third one",
+   "margin_per_unit" not in M.normalise_declaration(SP(rate=5, carrier_rate=25))["temp_spiffs"][0]
+   and "funded" not in M.normalise_declaration(SP(rate=5, carrier_rate=25))["temp_spiffs"][0])
+E1 = M.spiff_economics(M.normalise_declaration(SP(rate=5, carrier_rate=25)))
+ck("J5. the owner's trade-in case: $25 in, $5 out, $20 kept a unit, funded",
+   E1 == [{"name": "t", "status": "live", "unit": "trade-in", "rate": 5.0, "carrier_rate": 25.0,
+           "margin_per_unit": 20.0, "funded": True}], E1)
+ck("J6. one side missing -> margin None and funded None: UNKNOWN, never 'not funded'",
+   (lambda e: e[0]["margin_per_unit"] is None and e[0]["funded"] is None)(
+       M.spiff_economics(M.normalise_declaration(SP(rate=5)))))
+ck("J7. paying out more than the carrier pays in is NEGATIVE and NOT funded — a fact, not a refusal",
+   (lambda e: e[0]["margin_per_unit"] == -5.0 and e[0]["funded"] is False)(
+       M.spiff_economics(M.normalise_declaration(SP(rate=30, carrier_rate=25)))))
+ck("J8. breaking even is FUNDED — the boundary is >=, so $25 in / $25 out raises nothing",
+   (lambda e: e[0]["margin_per_unit"] == 0.0 and e[0]["funded"] is True)(
+       M.spiff_economics(M.normalise_declaration(SP(rate=25, carrier_rate=25)))))
+ck("J9. net_at keeps each leg independent and withholds the kept figure unless both are known",
+   M.net_at(100, 5, 25) == (500.0, 2500.0, 2000.0)
+   and M.net_at(100, 5, None) == (500.0, None, None)
+   and M.net_at(None, 5, 25) == (None, None, None))
+ck("J10. a junk or unnamed spiff is skipped rather than costed",
+   M.spiff_economics({"temp_spiffs": ["x", None, {"name": "   "}]}) == []
+   and M.spiff_economics(None) == [] and M.spiff_economics({}) == [])
+ck("J11. an upside-down spiff RAISES its own item, naming the shortfall per unit",
+   (lambda it: it and it[0]["count"] == 1 and "$5.00" in it[0]["detail"])(
+       [i for i in M.outstanding({"headline": "h", "spiff_initiative": {"pay_type": "a"},
+                                  **SP(rate=30, carrier_rate=25),
+                                  "checkins": [{"week_start": "2026-10-05"}]},
+                                 "2026-10-09", **{**KW, "stores_total": 1, "stores_with_target": 1,
+                                                  "live_spiff_names": ["t"]})
+        if i["key"] == "spiff_costs_more_than_it_earns"]))
+ck("J12. it CLEARS when a rate changes — the item cannot outlive its cause",
+   "spiff_costs_more_than_it_earns" not in keys(
+       {"headline": "h", "spiff_initiative": {"pay_type": "a"}, **SP(rate=5, carrier_rate=25)},
+       "2026-10-09", stores_total=1, stores_with_target=1, live_spiff_names=["t"]))
+ck("J13. an UNSTATED carrier rate raises NO upside-down item — unmeasured is never a failure",
+   "spiff_costs_more_than_it_earns" not in keys(
+       {"headline": "h", "spiff_initiative": {"pay_type": "a"}, **SP(rate=30)},
+       "2026-10-09", stores_total=1, stores_with_target=1, live_spiff_names=["t"]))
+ck("J14. declaring the two rates still pays NOBODY — the reconciliation decides that, not the rates",
+   M.spiff_reconciliation(M.normalise_declaration(SP(rate=5, carrier_rate=25)), [])
+   ["declared_not_live"] == ["t"])
+
 # ── §I  THE UN-WIRE LOCK ──────────────────────────────────────────────────────────────────────────
 print("\nI. the design lock — this module may not measure, send or pay, and stays wired")
 CALLS = {n.func.id for n in ast.walk(TREE) if isinstance(n, ast.Call)
@@ -344,22 +400,37 @@ ck("I7. it measures NOTHING — the plays read `signals`; no feed, no aggregatio
                               "_sales_cell_agg", "carrier_dollar_class", "payment_category")))
 ck("I8. the two knobs have house defaults, so an un-configured tenant behaves as shipped",
    M.DECLARATION_DAYS_DEFAULT == 7 and M.CHECKIN_WEEKDAY_DEFAULT == 0)
+
+# ONE FACT, ONE HOME: the spiff margin is derived HERE and read everywhere else. A screen that
+# subtracts the two rates itself is a second copy, and the two will drift the first time either
+# side grows a cap, a tier or a window.
+ENDPOINT = open(os.path.join(ROOT, "app/modules/commcalc/router.py")).read()
+PAGE_SRC = open(os.path.join(
+    ROOT, "../frontend/src/app/(platform)/commcalc/month-focus/page.tsx")).read()
+_margin_in_page = lambda src: any(
+    t in src.replace(" ", "") for t in ("carrier_rate-", "-s.rate", "-e.rate", "rate-s.carrier"))
+ck("I9. the endpoint SERVES the derivation rather than letting a screen do its own arithmetic",
+   "_mfocus.spiff_economics(" in ENDPOINT)
+ck("I10. the page READS margin_per_unit and subtracts nothing itself",
+   "margin_per_unit" in PAGE_SRC and not _margin_in_page(PAGE_SRC))
 # ARMED: every control above is shown to FAIL on a planted violation, so a lock that has quietly
 # stopped looking at anything cannot pass.
 print("  -- armed: each control fails on a planted violation --")
-ck("I9. (armed) a planted client read would fail I1",
+ck("I11. (armed) a planted client read would fail I1",
    bool({"execute"} & {n.func.attr for n in ast.walk(ast.parse("c.table('x').execute()"))
                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}))
-ck("I10. (armed) a planted send would fail I3", "whatsapp" in "x = whatsapp_send()".lower())
-ck("I11. (armed) a planted pay write would fail I4",
+ck("I12. (armed) a planted send would fail I3", "whatsapp" in "x = whatsapp_send()".lower())
+ck("I13. (armed) a planted pay write would fail I4",
    "payout_config" in ast.unparse(ast.parse("x = c.table('payout_config')")))
-ck("I12. (armed) a planted carrier name would fail I6", "boost" in "BOOST_RATE = 1".lower())
-ck("I13. (armed) a planted feed read would fail I7", "daily_sales_feed" in "t('daily_sales_feed')")
-ck("I14. (armed) dropping the core.scope import would fail I5",
+ck("I14. (armed) a planted carrier name would fail I6", "boost" in "BOOST_RATE = 1".lower())
+ck("I15. (armed) a planted feed read would fail I7", "daily_sales_feed" in "t('daily_sales_feed')")
+ck("I16. (armed) dropping the core.scope import would fail I5",
    not any(isinstance(n, ast.ImportFrom) and n.module == "app.core.scope"
            for n in ast.walk(ast.parse("import calendar"))))
-ck("I15. (armed) a re-copied tier tuple in a caller would fail I5b",
+ck("I17. (armed) a re-copied tier tuple in a caller would fail I5b",
    "'regional'" in "PICK_ANY = ('market', 'region', 'regional', 'all')")
+ck("I18. (armed) a page that subtracted the rates itself would fail I10",
+   _margin_in_page("const m = s.carrier_rate - s.rate"))
 
 print(f"\n{'FAILED: ' + str(len(FAIL)) if FAIL else 'all checks passed'}")
 for f in FAIL:

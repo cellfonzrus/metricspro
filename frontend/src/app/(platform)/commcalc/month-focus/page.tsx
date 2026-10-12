@@ -23,8 +23,13 @@ type Item = { key: string; severity: string; label: string; detail: string; coun
   deep_link: string; deep_link_label: string }
 type Play = { key: string; rank: number; title: string; why: string; move: string
   evidence: Record<string, any>; deep_link: string; also?: string[] }
-type Spiff = { name: string; rate: number | null; unit: string; window_start: string
-  window_end: string; cap: number | null; stores: string[]; status: string; note: string }
+type Spiff = { name: string; rate: number | null; carrier_rate: number | null; unit: string
+  window_start: string; window_end: string; cap: number | null; stores: string[]; status: string
+  note: string }
+// DERIVED by the backend on every read, never stored: `margin_per_unit` is null unless BOTH rates
+// are declared, because "we have not said what funds it" is not "nothing funds it".
+type Econ = { name: string; status: string; unit: string; rate: number | null
+  carrier_rate: number | null; margin_per_unit: number | null; funded: boolean | null }
 type Decl = {
   headline: string; categories: string[]; note: string
   spiff_initiative: { pay_type: string; label: string; rationale: string }
@@ -40,6 +45,7 @@ type Payload = {
   reconciliation: { declared_not_live: string[]; live_not_declared: string[]; matched: string[]
     proposed: string[] }
   live_spiff_names: string[]
+  spiff_economics: Econ[]
   checkins: { weekday: number; days: string[]; current: string | null; confirmed: string[] }
   declaration_window_end: string | null
   targets: { stores_total: number | null; with_saved_target: number | null
@@ -125,7 +131,8 @@ export default function MonthFocusPage() {
   const setSpiff = (i: number, patch: Partial<Spiff>) =>
     setDraft(d => ({ ...d, temp_spiffs: d.temp_spiffs.map((s, j) => (j === i ? { ...s, ...patch } : s)) }))
   const addSpiff = () => setDraft(d => ({ ...d, temp_spiffs: [...d.temp_spiffs,
-    { name: '', rate: null, unit: '', window_start: '', window_end: '', cap: null, stores: [],
+    { name: '', rate: null, carrier_rate: null, unit: '', window_start: '', window_end: '',
+      cap: null, stores: [],
       status: 'proposed', note: '' }] }))
   const dropSpiff = (i: number) =>
     setDraft(d => ({ ...d, temp_spiffs: d.temp_spiffs.filter((_, j) => j !== i) }))
@@ -259,16 +266,23 @@ export default function MonthFocusPage() {
         <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>
           Declaring one here does not pay anybody. The money is the commission settings page — mark a
           spiff <b>approved</b> or <b>live</b> and this page will tell you whether the pay config
-          actually carries it.
+          actually carries it. State both sides — what we pay a person per unit and what the carrier
+          pays us for the same unit — and the margin is worked out for you. Either may be left blank;
+          a blank is never read as zero.
         </div>
         {draft.temp_spiffs.map((s, i) => (
           <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10,
             marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input style={{ ...inp, minWidth: 190 }} disabled={!mayEdit} placeholder="Name"
               value={s.name} onChange={e => setSpiff(i, { name: e.target.value })} />
-            <input style={{ ...inp, width: 100 }} disabled={!mayEdit} placeholder="Rate"
+            <input style={{ ...inp, width: 118 }} disabled={!mayEdit} placeholder="We pay $"
               value={s.rate === null || s.rate === undefined ? '' : String(s.rate)}
               onChange={e => setSpiff(i, { rate: e.target.value === '' ? null : Number(e.target.value) })} />
+            {/* What FUNDS it, beside what it costs. Blank is blank: an unknown carrier rate is never
+                shown or treated as $0. */}
+            <input style={{ ...inp, width: 130 }} disabled={!mayEdit} placeholder="Carrier pays $"
+              value={s.carrier_rate === null || s.carrier_rate === undefined ? '' : String(s.carrier_rate)}
+              onChange={e => setSpiff(i, { carrier_rate: e.target.value === '' ? null : Number(e.target.value) })} />
             <input style={{ ...inp, width: 110 }} disabled={!mayEdit} placeholder="per…"
               value={s.unit} onChange={e => setSpiff(i, { unit: e.target.value })} />
             <input style={{ ...inp, width: 140 }} disabled={!mayEdit} type="date"
@@ -287,6 +301,27 @@ export default function MonthFocusPage() {
             {s.rate === null && (
               <span style={{ fontSize: 12, color: SEV.warning.fg }}>no rate — cannot be costed</span>
             )}
+            {/* The margin, from the backend's own derivation — never recomputed here, so the screen
+                and the due list cannot disagree about whether a spiff pays for itself. */}
+            {(() => {
+              const e = (data?.spiff_economics || []).find(x => x.name === s.name)
+              if (!e || e.margin_per_unit === null) {
+                return s.rate !== null && s.carrier_rate === null
+                  ? <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+                      carrier rate not stated — margin unknown
+                    </span>
+                  : null
+              }
+              const neg = e.margin_per_unit < 0
+              return (
+                <span style={{ fontSize: 12, color: neg ? SEV.warning.fg : 'var(--text2)' }}>
+                  {neg ? 'costs ' : 'keeps '}
+                  ${Math.abs(e.margin_per_unit).toLocaleString(undefined, { minimumFractionDigits: 2,
+                    maximumFractionDigits: 2 })}
+                  {' '}per {s.unit || 'unit'}{neg ? ' out of our own margin' : ''}
+                </span>
+              )
+            })()}
             {mayEdit && <button style={btn} onClick={() => dropSpiff(i)}>Remove</button>}
           </div>
         ))}

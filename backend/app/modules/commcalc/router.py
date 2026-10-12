@@ -27297,6 +27297,9 @@ def _month_focus_payload(client, org_id, period, authorization, *, with_plays=Tr
         "outstanding": due,
         "plays": _mfocus.plays(signals) if with_plays else [],
         "reconciliation": _mfocus.spiff_reconciliation(decl, live),
+        # DERIVED on every read, never stored: what each declared spiff pays out, what the carrier
+        # pays in for the same unit, and the margin between them (None unless BOTH are declared).
+        "spiff_economics": _mfocus.spiff_economics(decl),
         "live_spiff_names": live,
         "checkins": {
             "weekday": weekday,
@@ -27321,7 +27324,7 @@ def _month_focus_payload(client, org_id, period, authorization, *, with_plays=Tr
 
 def _month_focus_gate(client, org_id, authorization):
     """(may_declare, perms). "Market manager or above", decided by `month_focus.may_declare`, which
-    dereferences `app.core.scope.roster_reach` rather than keeping a fourth copy of the scope tiers."""
+    dereferences `app.core.scope.is_market_or_wider` rather than keeping a fourth copy of the tiers."""
     try:
         from app.modules.core.router import _resolve_caller, _uid_from_token
         uid = _uid_from_token(authorization)
