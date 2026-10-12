@@ -179,9 +179,10 @@ def match_metric(label, *, catalog=None, line_map=None):
     if not n:
         return None, BASIS_UNMATCHED
     keys = {str(m.get("key") or "").strip() for m in (catalog or []) if m.get("key")}
-    lm = dict(line_map or {})
-    if lm and any(norm(k) != k for k in lm):
-        lm, _ = _norm_line_map(lm, keys)
+    # ALWAYS re-resolve the map against the catalog, even when it arrives already normalized: an entry
+    # pointing at a category the tenant has since deleted must not be honoured, and skipping this when
+    # the keys merely LOOKED normalized is how it got honoured once (caught by the harness, 2026-10-12).
+    lm, _stale = _norm_line_map(dict(line_map or {}), keys)
     if n in lm:
         return lm[n], BASIS_LINE_MAP
     labels = _catalog_labels(catalog)
