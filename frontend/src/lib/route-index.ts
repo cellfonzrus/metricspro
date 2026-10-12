@@ -381,6 +381,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/vision/settings' },
   { path: '/watchdog' },
   { path: '/watchdog/void-register' },
+  { path: '/watchdog/multi-handset' },
 ]
 
 /** The destinations search may offer: every page except the ones declared pre-auth. The CALLER still

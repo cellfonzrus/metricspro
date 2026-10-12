@@ -602,6 +602,13 @@ export const NAV: NavGroup[] = [
     // about who may see it; the server span-scopes every row through the same get_flags filter.
     { href: '/watchdog', label: 'Management Watchdog', icon: '👀', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/watchdog/void-register', label: 'Void & Return Register', icon: '↩️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // SEVERAL HANDSETS TO ONE BUYER — THE DRILL-DOWN (owner ask 2026-10-12: "we need to have the
+    // drilldown to check who made the sale for how much"). Same group, same module and the same
+    // scopes as the register above, for the same reason: the Fraud area page already shows the
+    // finding, and this shows its LINES, which the findings table has no column for. Byte-identical
+    // scopes mean this changes what is REACHABLE and nothing about who may see it; the endpoint
+    // applies the district-manager span filter before it counts anything.
+    { href: '/watchdog/multi-handset', label: 'Several Handsets To One Buyer', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // FOLLOW UP WITH MANAGERS (owner 2026-10-03, index §47.14). Its home is this group because what
     // it follows up ON is this group's queues: the board rolls the SAME registry
     // (compliance_summary.CATEGORIES) up per manager and queue with an age, which is the one thing

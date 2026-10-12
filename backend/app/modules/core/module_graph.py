@@ -105,6 +105,36 @@ FACTS: dict[str, dict] = {
         },
     },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
+    'multi_handset_one_buyer': {
+        "question": 'Which buyers took more handsets in one day at one store than a family plausibly '
+                    'would — counted ACROSS the receipts the sale was split over, from the LIVE '
+                    'daily sales feed rather than anything uploaded for an evaluation?',
+        "homes": ('app/modules/commcalc/multi_handset_day.py',),
+        "index": ('COMMCALC-05',),
+        "locks": ('harness_multi_handset_day.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50).
+        #
+        # THE SIBLING, NAMED SO NOBODY MERGES THEM. `commcalc/prospect_eval.py` (COMMCALC-03) asks
+        # the SAME question of an UPLOADED carrier statement for a store we do not own. The two are
+        # deliberately separate: that one reads `prospect_feed_row` and the carrier's own account
+        # column weeks after the fact, this one reads the live POS feed the morning after, and
+        # neither feed can answer for the other. The owner drew the line himself ("this would check
+        # the flags for ongoing activation not the test data uploaded for evaluation").
+        #
+        # WHAT IS NOT HERE: no severity, area or label of its own (`flag_registry` owns all three),
+        # no threshold (a `watchdog_rule` config row), and no idea of its own about which line is a
+        # handset — the per-org `box_departments` set is INJECTED by the caller, the same membership
+        # test `router._sales_cell_agg` counts boxes with. §G of the lock fails the build if this
+        # module reads that config itself or defaults it to the house labels.
+        "callers": {
+            # The ONE sweep every watchdog runs on (one cron line, §53). It reads the sales lines
+            # through `_read_sales` — which dereferences `router._open_month_source`, the one home
+            # for "which sales table answers for this period" — injects this org's
+            # `box_departments` and the shared void-token filter, and writes under the detector's
+            # OWN `source` so the commission recalculation's flag pass cannot retire its findings.
+            'app/modules/commcalc/watchdog_router.py': ('_handsets',),
+        },
+    },
     'store_takeover_evaluation': {
         "question": 'What would a store we are considering taking over be worth, from its own MA '
                     'commission / daily-TX / handset-order uploads against OUR average store '
@@ -456,6 +486,7 @@ FACTS: dict[str, dict] = {
             'app/modules/closing/cash_watchdog.py': ('_reg',),
             'app/modules/closing/ops_chargebacks.py': ('_reg',),
             'app/modules/commcalc/flags.py': ('_reg',),
+            'app/modules/commcalc/multi_handset_day.py': ('_reg',),
             'app/modules/commcalc/portout_flags.py': ('_reg',),
             'app/modules/commcalc/router.py': ('flag_registry',),
             'app/modules/commcalc/sale_installment_engine.py': ('_reg',),

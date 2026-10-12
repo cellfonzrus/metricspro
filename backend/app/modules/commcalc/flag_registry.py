@@ -266,6 +266,19 @@ TYPES: dict[str, dict] = {
         "label": "Activation pattern flagged as risky",
         "area": "fraud", "sev": HIGH, "writer": "commcalc/flags.py", "grain": "rep_period",
     },
+    # SEVERAL HANDSETS TO ONE BUYER IN ONE DAY (owner ask 2026-10-12, index COMMCALC-04). Grouped
+    # ACROSS receipts on purpose: 191 of the 501 live cases are split over several sales and a
+    # per-receipt test cannot see them (worst: 16 handsets on 8 receipts, all $0.00). `transaction`
+    # grain would be wrong — the finding IS a SET of transactions, not one. `store_day` is the
+    # honest fit in this registry's existing vocabulary: the case is keyed on the store and the day
+    # and a manager drills into that store-day, with the buyer and the receipt split inside the
+    # evidence. It was first written as a new word, `buyer_day`, and rule D4 rejected it — correctly:
+    # a fifth grain nobody renders is how a shared vocabulary rots.
+    "MULTI_HANDSET_ONE_BUYER": {
+        "label": "Several handsets to one buyer in one day",
+        "area": "fraud", "sev": HIGH, "writer": "commcalc/multi_handset_day.py",
+        "grain": "store_day",
+    },
 
     # ── Port-outs & Churn ───────────────────────────────────────────────────────────────────────
     "PORT_OUT_30DAY": {
@@ -550,6 +563,11 @@ DEFAULT_PARAMS: dict[str, dict] = {
     "RETURN_RATE_HIGH": {"max_share": 0.08, "min_lines": 20},
     "VOID_AFTER_SALE": {},
     "VOID_UNATTRIBUTED": {"min_lines": 1},
+    # How many handsets to ONE buyer at ONE store in ONE day before a human should look. EXCLUSIVE
+    # (3 flags, 2 does not). 2 is the owner's own number for the same question on an uploaded
+    # carrier statement (index COMMCALC-03), kept identical here so one question has one answer
+    # across both feeds; a tenant moves it with a watchdog_rule row, never a code change.
+    "MULTI_HANDSET_ONE_BUYER": {"max_handsets": 2},
 }
 
 

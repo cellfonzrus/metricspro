@@ -513,6 +513,16 @@ on:
       # change to any booking one-home the prospect P&L reads re-runs the proof that the two still
       # agree. The routers it AST-scans are already named by the globs below.
       - "backend/harness_prospect_eval.py"
+      # §COMMCALC-05 — several handsets to one buyer in one day. Named with its home and the two
+      # it dereferences (flag_registry for severity/threshold, the box-department set the box
+      # count uses) so a change to either re-runs this proof.
+      - "backend/harness_multi_handset_day.py"
+      - "backend/app/modules/commcalc/multi_handset_day.py"
+      - "backend/app/modules/commcalc/flag_registry.py"
+      # The ONLY caller: §H of the lock AST-reads it to prove the sweep injects the per-org box
+      # departments and the void filter, writes under the detector's own `source`, and names no
+      # sales table literally. A change here must re-run that proof.
+      - "backend/app/modules/commcalc/watchdog_router.py"
       - "backend/app/modules/commcalc/prospect_eval.py"
       - "backend/app/modules/account/device_cogs.py"
       - "backend/app/modules/account/ma_store_pnl.py"
@@ -1623,6 +1633,26 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_base_url.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+
+
+  # SEVERAL HANDSETS TO ONE BUYER (index COMMCALC-05). Drives the real detector over fixtures shaped
+  # like the live daily sales feed: a plan line carrying a serial is not a handset, a sale split over
+  # eight receipts is ONE case, the threshold is a config row, and §E walks the module's own strings
+  # so no user-facing sentence can call anything fraud. It imports app.modules.commcalc.flag_registry,
+  # which reaches app/core/config.py -> pydantic_settings, so it runs with the backend's dependencies
+  # installed (harness_ci_pipefail_lock enforces exactly this). DB-free.
+  multi-handset-one-buyer-lock:
+    name: Several handsets to one buyer lock (DB-free, the real detector)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the multi-handset lock (a plan is not a handset; one case across eight receipts; the threshold is config; evidence, never a verdict)
+        working-directory: backend
+        run: python3 harness_multi_handset_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
 
   # THE STORE-TAKEOVER EVALUATION PROOF (index COMMCALC-03) drives the real prospect_eval rules over the
