@@ -243,6 +243,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/schematic' },
   { path: '/commcalc/settings' },
   { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
+  { path: '/commcalc/store-takeover', aliases: ['store takeover', 'takeover', 'take over a store', 'evaluate a store', 'store evaluation', 'buy a store', 'acquisition', 'prospect store', 'new store p&l', 'family plans', 'multi line accounts', 'more than 2 lines', 'fraud check'] },
   { path: '/commcalc/store-match' },
   { path: '/commcalc/target-fields' },
   { path: '/commcalc/targets' },

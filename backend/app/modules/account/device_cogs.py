@@ -356,19 +356,17 @@ def _page(client, table, select, eqs=None, page=1000, cap=200000):
     return out
 
 
-def ma_unit_price_map(client, org_id):
-    """{product_name(lower) -> unit cost} from the distributor's handset fulfillment sheet.
+def ma_unit_price_from_rows(rows):
+    """PURE: handset fulfillment rows → {product_name(lower) -> unit cost}.
 
-    ALL dates, deliberately: a device ordered in June and activated in July must still be priced, and
-    the sheet is a price list as much as a purchase log. Unit = Σ(price × qty) / Σ(qty), which is a
-    weighted average when the same model was bought at two prices. Measured spot-checks on luxelink:
-    iPhone 16e $599.99, Galaxy Tab A11+ $279.99, A16 $129.99, TCL Tab 10 $219.99 — and the VidaPay
-    wallet charges (`raw_ma_daily_tx` 'Postpaid Branded MarketPlace') are at EXACTLY those prices, so
-    the two independent sources agree and either could have sourced this.
+    FACTORED OUT of `ma_unit_price_map` below (2026-10-12, §COMMCALC-03) so the takeover evaluation
+    prices a PROSPECT's handsets with this exact arithmetic instead of a second copy of it. The I/O
+    wrapper is the only caller that reads a table; the rule lives here and is proved DB-free
+    (`harness_prospect_eval.py` §D asserts the two agree over one fixture).
     """
     qty, ext = {}, {}
-    for r in _page(client, "raw_ma_fulfillment",
-                   "product_name,number_ordered,price,order_type", {"org_id": org_id}):
+    for r in rows or []:
+        r = r or {}
         if (r.get("order_type") or "").strip().lower() not in _MA_DEVICE_ORDER_TYPES:
             continue
         name = (r.get("product_name") or "").strip().lower()
@@ -383,6 +381,23 @@ def ma_unit_price_map(client, org_id):
     return {k: round(ext[k] / qty[k], 2) for k in qty if qty[k]}
 
 
+def ma_unit_price_map(client, org_id):
+    """{product_name(lower) -> unit cost} from the distributor's handset fulfillment sheet.
+
+    ALL dates, deliberately: a device ordered in June and activated in July must still be priced, and
+    the sheet is a price list as much as a purchase log. Unit = Σ(price × qty) / Σ(qty), which is a
+    weighted average when the same model was bought at two prices. Measured spot-checks on luxelink:
+    iPhone 16e $599.99, Galaxy Tab A11+ $279.99, A16 $129.99, TCL Tab 10 $219.99 — and the VidaPay
+    wallet charges (`raw_ma_daily_tx` 'Postpaid Branded MarketPlace') are at EXACTLY those prices, so
+    the two independent sources agree and either could have sourced this.
+
+    The arithmetic is `ma_unit_price_from_rows` above — this reads the rows and nothing else.
+    """
+    return ma_unit_price_from_rows(_page(
+        client, "raw_ma_fulfillment",
+        "product_name,number_ordered,price,order_type", {"org_id": org_id}))
+
+
 def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
     """Cost of the devices ACTIVATED (= sold) in the period, from the distributor's own records.
 
@@ -395,7 +410,24 @@ def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
     price = ma_unit_price_map(client, org_id)
     rows = _page(client, "raw_ma_commission", "imei,sku,activation_type,merchant_account_id",
                  {"org_id": org_id, "period": period_keys})
+    return ma_sold_cost_from_rows(rows, price, ma_acct_index)
+
+
+def ma_sold_cost_from_rows(rows, price, ma_acct_index=None, skip_imeis=None):
+    """PURE: the body of `_ma_sold_cost` above — commission rows × a price map → device cost.
+
+    FACTORED OUT 2026-10-12 (§COMMCALC-03) so the takeover evaluation costs a PROSPECT's activated
+    devices through this one answer rather than a second copy. `_ma_sold_cost` is now the I/O wrapper
+    and is byte-identical to its pre-factoring self (`harness_prospect_eval.py` §D).
+
+    `skip_imeis` is the ONLY addition, and it is inert for every existing caller (`None` ⇒ the
+    pre-existing behaviour exactly): the takeover report's "take these phones out of profitability"
+    sub-report drops the handsets sitting on a flagged multi-line account, and a dropped line's
+    handset has to leave the COGS side too or its revenue would be measured against a cost that
+    stayed. What was skipped is COUNTED on `meta.skipped_imeis`, never silent.
+    """
     idx = ma_acct_index or {}
+    skip = {str(i).strip() for i in (skip_imeis or ()) if str(i).strip()}
     by_imei = {}
     no_imei = 0
     for r in rows:
@@ -406,9 +438,12 @@ def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
         # first row wins; a repeat of the same IMEI is the SAME physical handset
         by_imei.setdefault(imei, ((r.get("sku") or "").strip(),
                                   str(r.get("merchant_account_id") or "").strip()))
-    cost, priced, unknown_sku, unpriced = 0.0, 0, 0, 0
+    cost, priced, unknown_sku, unpriced, skipped = 0.0, 0, 0, 0, 0
     detail, by_store = {}, {}
     for imei, (sku, acct) in by_imei.items():
+        if imei in skip:
+            skipped += 1
+            continue
         low = sku.lower()
         if not sku or low == _MA_UNKNOWN_SKU:
             unknown_sku += 1
@@ -432,6 +467,7 @@ def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
                  "rows": len(rows), "distinct_imei": len(by_imei), "dedup_dropped": len(rows) - len(by_imei),
                  "priced": priced, "unknown_sku": unknown_sku, "unpriced_sku": unpriced,
                  "rows_without_imei": no_imei, "price_list_skus": len(price),
+                 "skipped_imeis": skipped,
                  "store_mapped_accounts": len(idx)},
     }
 

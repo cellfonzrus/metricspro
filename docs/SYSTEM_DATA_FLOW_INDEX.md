@@ -105,6 +105,7 @@ Primary code homes:
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
 | CORE-03 | **A stored credential is encrypted at rest** | "A UPS Store portal login is about to be typed into this platform — where does the password go, and who can read it? Which other columns in this database are credentials, which of them were plaintext, and what stops the next sweep adding an eleventh one that nobody encrypts?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
+| COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
 
 ---
 
@@ -24669,7 +24670,7 @@ registered section" and adds the module↔section direction it never had.
 115 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
 once), plus §15.1–§15.3, which are where the `notify` module is actually documented, plus the
 `§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §CORE-03, §COMMCALC-01,
-§COMMCALC-02).
+§COMMCALC-02, §COMMCALC-03).
 
 Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
 110 sections cite a backend module path and are checked against it, 12 of those cite four or more
@@ -24876,6 +24877,7 @@ status word rather than a blank that reads as nil.
 | CORE-02 | core |
 | COMMCALC-02 | commcalc |
 | CORE-03 | core |
+| COMMCALC-03 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -25704,3 +25706,191 @@ as open work rather than left implied.
 | is there already a registry of "which column is sensitive"? | NO. The closest was `router._SOURCE_SECRETS`, which answers a DIFFERENT question — *which columns to strip from an API read* — for ONE table | NEW home. `_SOURCE_SECRETS` is left alone: stripping and encrypting are two controls, and collapsing them would weaken the first |
 | is there already a per-table write chokepoint? | YES — `commcalc/router._status_update`, which already took the table name | REUSED. One edit there seals every sweep status write and every portal session patch |
 | is there already a per-table read chokepoint? | PARTLY — the six `_*_cfg` readers and `google_reviews.get_config` were already single readers; `data_source` had eight scattered `select("*")` sites | the six reused as-is; `_ds_rows` added as the one `data_source` read rather than opening the row at eight call sites |
+## §COMMCALC-03. EVALUATE A STORE WE DO NOT OWN YET — its own carrier feeds, our average expenses, its actual rent (owner directive 2026-10-12)
+
+Owner, verbatim: *"need to make a module for evaluating the store sales for the store we need to take
+over, but without creating the actual stores but upload the ma comm, max tx and handset prdering
+data, import the expenses from our average expenses, keep the rent as what the actual rent is for the
+new store and calculate the p&l also need to fillter out the family plans with more than 2 lines from
+these reports for each month to assess if fraud is going on and cjhecking which phones are sold on
+those, create a sub report in that menu to take out those phones from profitability or leave them.
+thisis platform wide but situation at hand is for total, nothing hardocded and everything should be
+clear with analysis"*
+
+**Module:** `backend/app/modules/commcalc/prospect_eval.py` (the one home; pure, DB-free) ·
+`backend/app/modules/commcalc/router.py` (six endpoints) ·
+`frontend/src/app/(platform)/commcalc/store-takeover/page.tsx`
+**Lock:** `backend/harness_prospect_eval.py` — 131 checks, run by `carrier-vocab-guard.yml`
+**Migration:** `1077_store_prospect_eval.sql` (two new tables, five NULL config columns; moves no money)
+**Module-graph fact:** `store_takeover_evaluation` (§50)
+
+### COMMCALC-03.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism before building: `takeover`, `prospect`, `pro forma`,
+`what-if`, `scenario`, `acquisition`, `family plan`, `lines per account`, `multi-line`. **Nothing
+answers this question.** The three near misses, and why each is not it:
+
+| candidate | why it is not this |
+|---|---|
+| the **What-If simulator** (§30.7) projects OUR OWN stores' payout under a changed pay plan — it has no concept of a store whose figures are not already in the books |
+| the **P&L** (§4) computes a statement for a store that EXISTS. A prospect has no `store_mapping` row, deliberately, so no scope of it can be assembled |
+| `raw_dlar_store.family_plan_pct` (§10) is the CARRIER's own store KPI — a percentage, with no account, no line and no device behind it, so it cannot answer "which phones are on that account" |
+
+**What was reused instead of built** — every one of these is dereferenced, not copied:
+
+| the question | the one home the evaluation reads |
+|---|---|
+| which P&L line does MA commission money book to, with what sign | `account/ma_store_pnl.ma_commission_bookings` |
+| which P&L line does MA daily-TX money book to (residual / MDF / month spiff) | `account/ma_store_pnl.ma_tx_bookings` |
+| where does a rebate dollar present (contra-COGS vs income) | `account/ma_store_pnl.rebate_route` |
+| what did a handset cost, and what did the month's activated devices cost | `account/device_cogs.ma_unit_price_from_rows` / `ma_sold_cost_from_rows` (both FACTORED OUT of the existing I/O functions here, which now call them — no behaviour changed) |
+| which P&L line does an expense row book to | `account/coa.route_expense_line` |
+| what is the chart of accounts, and its labels | `account/coa.PL_SPEC` / `PL_SECTION` / `PL_LABEL` |
+| how is a statement assembled from an inputs dict | `account/engine._assemble` |
+| what are a statement's four totals | `account/analysis.pl_totals` |
+| what were a month's effective store expenses | `commcalc/expenses_effective.effective_series` |
+| how is an uploaded sheet read, mapped and shape-corrected | `commcalc/column_mapping` (`load_rules` → `default_mapping` → `map_records` → `split_footer_rows` → `derive_row_periods`), via `router._read_upload_df` |
+| which table does a prospect feed mirror | `commcalc/column_mapping.TABLE_MAP` |
+| how is a period spelled | `account/_period.period_keys` |
+
+§D of the lock is an **AST scan that fails the build** if `prospect_eval.py` ever names a P&L line
+outside its declared coverage vocabulary, reads a carrier money column directly, defines a booking
+function of its own, or imports a database client. That is the anti-un-wiring: a registry written and
+left un-dereferenced has happened three times here (§19.18).
+
+### COMMCALC-03.2 Why a prospect is NOT a store row
+
+The cheap implementation is to create the store, upload its feeds into the live `raw_*` tables and
+read the P&L. The owner forbade it, and the structural reason is worth stating once: a
+`commcalc.store_mapping` row is reachable by **every** live surface — the consolidated P&L, the GP
+report, the expense matrix, the commission engine, payroll, the dashboards and the targets. A store
+we are only *considering* would move the company's real books and real payouts, and would keep moving
+them after we walked away from the deal. There is also no staging database to rehearse it in.
+
+So a prospect is a row in `commcalc.store_prospect`, carrying **no `store_code`** — that absence is
+the safety property, not an omission — and its uploaded rows land in `commcalc.prospect_feed_row`,
+which no live reader reads. The evaluation is computed on demand and persisted nowhere a statement
+can find it. §G of the lock walks the router's prospect functions in the AST and **fails the build**
+if any of them names a `raw_*` table, a store-mapping / alias / roster table or
+`account_statements`, or if a write lands anywhere but the two prospect tables.
+
+### COMMCALC-03.3 ONE landing table, not three
+
+The obvious shape — `prospect_ma_commission`, `prospect_ma_daily_tx`, `prospect_ma_fulfillment` — is
+three sibling derivations of three live tables, which is the duplicate defect these rules already
+forbid: three schemas to keep in step with three live ones forever. `prospect_feed_row` holds **one
+row per uploaded line as JSONB in the live table's own column shape**, so the booking one-homes above
+read a prospect row and a live row identically and there is no translation layer to drift. A new
+prospect feed is an entry in `prospect_eval.FEED_REGISTRY` — whose keys ARE the platform's own report
+keys — never a migration.
+
+The upload replaces **(prospect, feed, period)** only: the slice the file proves it owns, the same
+posture `ingest_slice` gives the live feeds (§2). An identical re-upload replaces its own slice and
+nothing else, so it can never double-count, and another month is never touched.
+
+### COMMCALC-03.4 The family-plan question, answered from the data
+
+**WHICH COLUMN IS THE ACCOUNT is a declared ordered ladder read per ROW**, not a column name in code
+(`prospect_account_key_columns`, house default `['ban','bin']`). The default is MEASURED, not guessed
+— live house platform, LuxeLink August 2026, `raw_ma_commission`, 1,248 rows:
+
+| column | populated | distinct | reading |
+|---|---|---|---|
+| `ban` | 27 rows | 27 | the account number by name, but filled on 2% of this platform's file |
+| `bin` | 1,248 rows | 1,031 | **the account**: max 5 lines on one value |
+| `activation_order` | 1,248 rows | 1,248 | the LINE, not the account |
+
+and **every one of the 163 multi-line `bin` values resolved to ONE store, on ONE day, with
+consecutive activation orders, all `activation_type='Add'`**. That is the signature of a multi-line
+account and nothing else. Live distribution: 860 accounts with one line, 129 with two, 24 with three,
+7 with four, 6 with five — so at the house threshold (more than 2, **exclusive**, as the owner said)
+**37 accounts carrying 130 lines** are flagged for August.
+
+**It is a who-to-look-at list, not a verdict.** A family of four buying four phones on one account on
+one day is a good sale and reads identically in this feed to the thing the owner is worried about. So
+a flagged account carries the evidence a human needs to tell them apart — the lines, the devices and
+their IMEIs, the day span, the processor account, how many are add-a-lines — and **no verdict field
+exists on it**; §B of the lock asserts that.
+
+### COMMCALC-03.5 The sub-report: take the phones out, or leave them
+
+Both scenarios are **always computed** and returned together. A toggle that recomputed one of them
+would mean the two numbers never appear side by side, which is the only way to read what the flagged
+accounts are worth; `exclusion_mode` only names which one the screen opens on.
+
+Excluding a flagged line removes **its handset from COGS too** — `device_cogs.ma_sold_cost_from_rows`
+gained a `skip_imeis` argument (inert for every existing caller: `None` reproduces the pre-factoring
+behaviour exactly) because dropping a line is not enough when the same physical handset also sits on
+a line that was kept. The live feed repeats an IMEI on 17 of 1,248 August rows, so this is not
+hypothetical: without it, excluded revenue would be measured against a cost that stayed. What was
+skipped is counted on `meta.skipped_imeis`, never silent. On live August data the flagged accounts
+carry **3.86% of the carrier-side bottom line**.
+
+### COMMCALC-03.6 "Our average expenses" — and the two ways averaging goes wrong
+
+The average is taken over the last `prospect_expense_basis_months` (default 3) **complete** months,
+through `expenses_effective.effective_series` — the same figures the Expenses sheet and the live P&L
+book, never the raw table. The first draft divided each line's window total by every (store, month)
+cell in the window, and running it over the live house matrix showed that **understates a cost on a
+takeover decision, twice**:
+
+| fault | live evidence | effect |
+|---|---|---|
+| a month whose sheet OMITS a line | May 2026 records no salary line at all (Dm Salary, Employee Salaries, Owner / Mgmt Salaries, Employee Commission: 0 of 25 stores) | Employee Salaries read **$2,371.17**/month against a real **$4,329.96** — a $1,958 hole in the largest controllable cost |
+| a month whose store ROSTER is wider than the line | July 2026 has expense rows for 34 store codes while every line is recorded on 25 | **every one of the 17 lines** divided by 34, understating all of them by 26% |
+
+So the fold is per (line, **month**) first and only then across months: Σ ÷ the stores carrying the
+line THAT month, then the mean over the months the line **appears in**, never over the window. Both
+faults disappear by construction, and §C of the lock carries **armed negative controls** that
+reproduce the pre-fix arithmetic and assert it is wrong, so a regression to it cannot pass. On the
+live matrix the house opex total moved from $10,965.73 to **$14,225.48**.
+
+`months_present` / `months_missing` and `store_coverage` are reported **per line**, so a line the
+window only half-covers is visible rather than quietly smoothed — the house rule that an absence is
+never a finding, applied to an average.
+
+Two figures are always returned on every line and the declared basis
+(`prospect_expense_average_basis`) only picks which one books: what a store that **has** the line
+pays (house default — the store being taken over will pay rent, electric and salaries), or what a
+**typical** store pays once the stores with no such line are counted (live house: Garbage / Waste
+$100.00 on 12 of 25 stores ⇒ $43.76 typical).
+
+**Rent is the one substitution.** The prospect's own `actual_rent_monthly` replaces the averaged rent
+in place, keeping the average it displaced on `replaced_average` so the two can be compared on screen.
+No rent entered ⇒ the average stands and is LABELLED `origin='average'`, never presented as the real
+figure. Several declared rent lines split the entered figure in proportion to our own averages and
+still sum to it exactly.
+
+### COMMCALC-03.7 What this evaluation CANNOT answer, said out loud
+
+The three uploads are the DISTRIBUTOR's view of a store: what the carrier paid, what airtime margin
+it earned, what handsets it bought. They are **not** a point-of-sale feed, so retail device and
+accessory revenue, bill-pay fee income and the store's own cash are not in them. A P&L booking those
+as `0.00` would read as a measurement of zero and would understate the prospect by whatever its
+counter actually takes.
+
+So `coverage()` walks the whole chart and gives every line one of three verdicts — `measured`,
+`not_measured` (with the reason) or `uploaded_feed_missing` (naming the feed that would answer it) —
+and the bottom line is LABELLED a **carrier-side contribution**, not net income. On live August data:
+12 lines measured, 23 not measured. §E of the lock asserts no line nothing can answer is ever
+reported as a measured zero.
+
+### COMMCALC-03.8 Where it is, and what it reads
+
+| surface | path |
+|---|---|
+| the prospect list and its config | `GET /commcalc/prospects` |
+| open / change / drop an evaluation | `POST /commcalc/prospects`, `PUT`/`DELETE /commcalc/prospects/{id}` |
+| upload one feed (live reader + live mapping, prospect destination) | `POST /commcalc/prospects/{id}/upload` |
+| THE evaluation — P&L both ways, the flag list, the coverage | `GET /commcalc/prospects/{id}/evaluation?period=` |
+
+**ONE ASSEMBLY, TWO SURFACES**: the P&L screen and the family-plan sub-report read the same payload
+(the §59.7 pattern), so the two can never disagree about which accounts were flagged or what
+excluding them is worth. The screen is a Management Overview **dashboard tile**, not a sidebar row
+(owner's "cleaner look" ruling) — placed on the hub so it can be found.
+
+Config, all five NULL-seeded on `commcalc.commission_org_config` (RULE TWO — no carrier, tenant or
+product name anywhere in the module): `prospect_account_key_columns`,
+`prospect_family_line_threshold`, `prospect_expense_basis_months`, `prospect_rent_expense_names`,
+`prospect_expense_average_basis`. Every one falls back to its measured house default, so the module
+behaves identically before and after mig 1077 is applied.

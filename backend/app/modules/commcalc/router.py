@@ -48034,3 +48034,472 @@ def _incentive_hours_for_day(client, org_id, store_code, close_date):
     except Exception:
         return {}, []
     return hours, sorted(set(roster))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# STORE TAKEOVER EVALUATION (owner directive 2026-10-12, index §COMMCALC-03, mig 1077)
+#
+# Owner: *"need to make a module for evaluating the store sales for the store we need to take over,
+# but without creating the actual stores but upload the ma comm, max tx and handset prdering data,
+# import the expenses from our average expenses, keep the rent as what the actual rent is for the new
+# store and calculate the p&l also need to fillter out the family plans with more than 2 lines from
+# these reports for each month to assess if fraud is going on and cjhecking which phones are sold on
+# those, create a sub report in that menu to take out those phones from profitability or leave them.
+# thisis platform wide but situation at hand is for total, nothing hardocded and everything should be
+# clear with analysis"*.
+#
+# WHAT IS AND IS NOT TOUCHED. A prospect is `commcalc.store_prospect` and its uploads land in
+# `commcalc.prospect_feed_row` — NOT a store row and NOT a `raw_*` table, so no live P&L, GP report,
+# commission payout, payroll run or target can reach any of it, and walking away from a deal leaves
+# nothing behind. These endpoints write those two tables and nothing else; the evaluation is computed
+# on demand and persisted nowhere. The RULES all live in `commcalc/prospect_eval.py` (pure, index
+# §COMMCALC-03) and every booking is DEREFERENCED from the home that already owns it — see that
+# module's table of homes. Nothing here re-derives a P&L line.
+#
+# THE UPLOAD REUSES THE LIVE PARSER. One reader (`_read_upload_df`), one mapping
+# (`column_mapping.load_rules` else `default_mapping`), one map (`map_records`) and the same
+# feed-shape rules (`split_footer_rows`, `derive_row_periods`) a live upload goes through. The ONLY
+# divergence is the destination row. A second parser for prospect files would be the duplicate
+# defect the house rules forbid, and would drift from the live one within a month.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+from app.modules.commcalc import prospect_eval as _pev   # noqa: E402 — module-foot feature import
+
+
+class ProspectIn(LaxModel):
+    name: str = ""
+    address: str = ""
+    carrier_id: str = ""
+    actual_rent_monthly: Any = None       # None = not entered (reported as such; never a silent 0)
+    expense_basis_months: Any = None
+    family_line_threshold: Any = None
+    exclusion_mode: str = ""
+    status: str = ""
+    notes: str = ""
+
+
+def _prospect_num(v, cast=float):
+    """None/'' → None (not entered), a number → that number. A takeover decision must be able to
+    tell "rent is zero" from "nobody has entered the rent yet"."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    try:
+        return cast(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _prospect_row(client, org_id, prospect_id):
+    rows = (client.schema("commcalc").table("store_prospect").select("*")
+            .eq("org_id", org_id).eq("id", prospect_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "That prospect does not exist for this organisation.")
+    return rows[0]
+
+
+def _prospect_cfg(client, org_id, prospect):
+    """The org's declared rules, with the prospect's own overrides laid over them.
+
+    Two levels, resolved in ONE place: the org row (RULE TWO, house defaults in
+    `prospect_eval.resolve_config`) and then this prospect's own columns, because two prospects can
+    reasonably want different thresholds without that being a tenant-wide decision."""
+    cfg = _pev.load_config(client, org_id)
+    thr = _prospect_num((prospect or {}).get("family_line_threshold"), int)
+    if thr is not None:
+        cfg["family_line_threshold"] = max(0, thr)
+    mo = _prospect_num((prospect or {}).get("expense_basis_months"), int)
+    if mo is not None:
+        cfg["expense_basis_months"] = max(1, mo)
+    return cfg
+
+
+@router.get("/prospects")
+def list_prospects(org_id: str = ORG_ID):
+    """Every store this organisation is evaluating, with how many rows each feed has per period —
+    so the screen can say what is still missing before anybody reads a bottom line."""
+    require_org(org_id)
+    client = sb()
+    try:
+        rows = (client.schema("commcalc").table("store_prospect").select("*")
+                .eq("org_id", org_id).order("created_at", desc=True)
+                .limit(500).execute().data) or []
+    except Exception as e:
+        raise HTTPException(500, f"prospect read failed: {type(e).__name__}: {e}")
+    counts = {}
+    try:
+        for r in _feed_read.read_all(
+                lambda: (client.schema("commcalc").table("prospect_feed_row")
+                         .select("prospect_id,feed_key,period").eq("org_id", org_id))):
+            k = (str(r.get("prospect_id")), str(r.get("feed_key")), str(r.get("period") or ""))
+            counts[k] = counts.get(k, 0) + 1
+    except Exception as e:
+        print(f"WARN prospect feed counts unavailable: {e}")
+    by_prospect = {}
+    for (pid, feed, period), n in counts.items():
+        by_prospect.setdefault(pid, {}).setdefault(period, {})[feed] = n
+    for r in rows:
+        r["feed_rows"] = by_prospect.get(str(r.get("id")), {})
+        r["periods"] = sorted(r["feed_rows"], reverse=True)
+    return {"prospects": rows, "feed_registry": _pev.feed_registry_view(),
+            "config": _pev.load_config(client, org_id),
+            "config_columns_missing": _pev.config_columns_missing(
+                _ct.present_columns(lambda: client.schema("commcalc").table("commission_org_config"),
+                                    lambda q: q.eq("org_id", org_id),
+                                    tuple(c for c, _m in _pev.CONFIG_COLUMNS)))}
+
+
+@router.post("/prospects")
+def create_prospect(body: ProspectIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Open an evaluation. Creates NO store, no mapping row and no alias — a prospect is deliberately
+    unreachable by every live surface until somebody decides to actually onboard it."""
+    require_org(org_id)
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Give the prospect a name so it can be told apart from the others.")
+    row = {"org_id": org_id, "name": name,
+           "address": (body.address or "").strip() or None,
+           "carrier_id": (body.carrier_id or "").strip() or None,
+           "actual_rent_monthly": _prospect_num(body.actual_rent_monthly),
+           "expense_basis_months": _prospect_num(body.expense_basis_months, int),
+           "family_line_threshold": _prospect_num(body.family_line_threshold, int),
+           "exclusion_mode": (body.exclusion_mode or "").strip().lower() or None,
+           "notes": (body.notes or "").strip() or None,
+           "created_by_auth_id": _caller_uid(authorization)}
+    try:
+        out = (sb().schema("commcalc").table("store_prospect").insert(row).execute().data) or []
+    except Exception as e:
+        msg = str(e)
+        if "store_prospect" in msg and "does not exist" in msg:
+            raise HTTPException(503, "Migration 1077 has not been applied yet, so there is nowhere to "
+                                     "save a prospect. Nothing was written.")
+        if "unique" in msg.lower() or "duplicate" in msg.lower():
+            raise HTTPException(400, f"An evaluation named '{name}' is already open. Open that one "
+                                     f"instead of starting a second — two evaluations of one deal "
+                                     f"would drift apart.")
+        raise HTTPException(500, f"prospect save failed: {type(e).__name__}: {e}")
+    return {"prospect": (out or [{}])[0]}
+
+
+@router.put("/prospects/{prospect_id}")
+def update_prospect(prospect_id: str, body: ProspectIn, org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
+    """Change the rent, a threshold, the opening mode, the notes or the status.
+
+    Only the fields the body actually carries are written: a blank rent means "not entered" and an
+    ABSENT rent means "don't touch it", and a screen that sends the whole form must not be able to
+    silently blank a figure somebody typed."""
+    require_org(org_id)
+    client = sb()
+    _prospect_row(client, org_id, prospect_id)
+    sent = (body.model_dump(exclude_unset=True) if hasattr(body, "model_dump")
+            else body.dict(exclude_unset=True))
+    patch = {}
+    if "name" in sent and (body.name or "").strip():
+        patch["name"] = body.name.strip()
+    for k in ("address", "notes"):
+        if k in sent:
+            patch[k] = (getattr(body, k) or "").strip() or None
+    if "actual_rent_monthly" in sent:
+        patch["actual_rent_monthly"] = _prospect_num(body.actual_rent_monthly)
+    if "expense_basis_months" in sent:
+        patch["expense_basis_months"] = _prospect_num(body.expense_basis_months, int)
+    if "family_line_threshold" in sent:
+        patch["family_line_threshold"] = _prospect_num(body.family_line_threshold, int)
+    if "exclusion_mode" in sent:
+        mode = (body.exclusion_mode or "").strip().lower()
+        if mode and mode not in _pev.EXCLUSION_MODES:
+            raise HTTPException(400, f"exclusion_mode must be one of {list(_pev.EXCLUSION_MODES)}.")
+        patch["exclusion_mode"] = mode or None
+    if "status" in sent and (body.status or "").strip():
+        st = body.status.strip().lower()
+        if st not in ("evaluating", "acquired", "passed", "archived"):
+            raise HTTPException(400, "status must be evaluating, acquired, passed or archived.")
+        patch["status"] = st
+    if not patch:
+        return {"prospect": _prospect_row(client, org_id, prospect_id), "changed": []}
+    patch["updated_at"] = column_mapping.now_iso()
+    try:
+        (client.schema("commcalc").table("store_prospect").update(patch)
+         .eq("org_id", org_id).eq("id", prospect_id).execute())
+    except Exception as e:
+        raise HTTPException(500, f"prospect update failed: {type(e).__name__}: {e}")
+    return {"prospect": _prospect_row(client, org_id, prospect_id),
+            "changed": sorted(k for k in patch if k != "updated_at")}
+
+
+@router.delete("/prospects/{prospect_id}")
+def delete_prospect(prospect_id: str, org_id: str = ORG_ID):
+    """Drop an evaluation and its uploaded rows. Nothing live is touched, because nothing live ever
+    referenced it — which is the point of the design. A deal that was passed on is better kept with
+    its figures (status='passed') than deleted."""
+    require_org(org_id)
+    client = sb()
+    _prospect_row(client, org_id, prospect_id)
+    try:
+        (client.schema("commcalc").table("prospect_feed_row").delete()
+         .eq("org_id", org_id).eq("prospect_id", prospect_id).execute())
+        (client.schema("commcalc").table("store_prospect").delete()
+         .eq("org_id", org_id).eq("id", prospect_id).execute())
+    except Exception as e:
+        raise HTTPException(500, f"prospect delete failed: {type(e).__name__}: {e}")
+    return {"deleted": prospect_id}
+
+
+@router.post("/prospects/{prospect_id}/upload")
+async def upload_prospect_feed(prospect_id: str,
+                               feed_key: str = Form(...),
+                               period: str = Form(""),
+                               carrier_id: str = Form(""),
+                               file: UploadFile = File(...),
+                               org_id: str = ORG_ID,
+                               authorization: str = Header(default="")):
+    """Upload one of the prospect's feeds, through the LIVE parser.
+
+    The reader, the column mapping and the feed-shape rules are the live upload's own — see the
+    header of this section. What differs is one line: the mapped rows are written to
+    `prospect_feed_row` instead of the feed's live table, so a prospect file can never reach a live
+    report even by accident.
+
+    SLICE-SCOPED REPLACE, the same posture `ingest_slice` gives the live feeds: the upload replaces
+    only (prospect, feed, period) — the slice the file proves it owns. An identical re-upload
+    replaces its own slice and nothing else, so it can never double-count, and another month's rows
+    are never touched. With no `period` named, each row's period is derived FROM ITS OWN DATE by
+    `column_mapping.derive_row_periods` (the same rule the live path uses), and every period the file
+    turns out to cover is replaced.
+    """
+    require_org(org_id)
+    client = sb()
+    prospect = _prospect_row(client, org_id, prospect_id)
+    feed = (feed_key or "").strip()
+    if feed not in _pev.FEED_REGISTRY:
+        raise HTTPException(400, f"'{feed}' is not a prospect feed. The feeds a takeover evaluation "
+                                 f"reads are {list(_pev.FEED_KEYS)}.")
+    rules = (column_mapping.load_rules(client, org_id, feed, carrier_id or None)
+             or column_mapping.default_mapping(feed, client, org_id))
+    if not rules:
+        raise HTTPException(400, f"No column mapping exists for '{feed}', so the file cannot be read. "
+                                 f"Map its columns on the Column Mapping page first — nothing was written.")
+    contents = await file.read()
+    try:
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+
+    base = {}
+    if period:
+        pm = parse_period(period)
+        base = {"period": period, "period_month": pm["month"], "period_year": pm["year"]}
+    mapped = column_mapping.map_records(df.to_dict("records"), rules, dict(base))
+    # The SAME two shape rules the live ingest applies, in the same order: a grand-total footer row
+    # repeats every numeric column and would double every figure in the evaluation; and with no
+    # period named each row takes the period of its own date rather than the whole file landing
+    # under one label.
+    mapped, footers = column_mapping.split_footer_rows(mapped, feed, dict(base), client, org_id)
+    undated = 0
+    if not period:
+        mapped, stamped = column_mapping.derive_row_periods(mapped, feed, client, org_id)
+        # A row whose own date would not parse is left UNSTAMPED by that one home rather than booked
+        # to a guessed month. It still lands (its dollars are real) under a NULL period, and the
+        # count is reported so a file the reader could only half-date says so.
+        undated = max(0, len(mapped) - stamped)
+    if not mapped:
+        raise HTTPException(400, "That file produced no rows once its header and any total row were "
+                                 "read. Nothing was written, and no existing rows were removed — an "
+                                 "empty file never empties a period.")
+    periods = sorted({str(r.get("period") or "").strip() for r in mapped})
+    batch = str(_uuid_mod.uuid4())
+    rows = [{"org_id": org_id, "prospect_id": prospect_id, "feed_key": feed,
+             "period": str(r.get("period") or "").strip() or None,
+             "period_month": r.get("period_month"), "period_year": r.get("period_year"),
+             "row_index": i, "row": r, "upload_batch": batch,
+             "uploaded_by_auth_id": _caller_uid(authorization)}
+            for i, r in enumerate(mapped)]
+    try:
+        # INSERT FIRST is impossible here without a staging column, so the delete is narrowed to the
+        # exact slice and the insert follows immediately; a failed insert leaves the slice empty and
+        # SAYS so rather than leaving a half-replaced month that reads as a complete one.
+        for p in periods:
+            q = (client.schema("commcalc").table("prospect_feed_row").delete()
+                 .eq("org_id", org_id).eq("prospect_id", prospect_id).eq("feed_key", feed))
+            q = q.is_("period", "null") if not p else q.eq("period", p)
+            q.execute()
+        written = 0
+        for i in range(0, len(rows), 500):
+            chunk = rows[i:i + 500]
+            client.schema("commcalc").table("prospect_feed_row").insert(chunk).execute()
+            written += len(chunk)
+    except Exception as e:
+        msg = str(e)
+        if "prospect_feed_row" in msg and "does not exist" in msg:
+            raise HTTPException(503, "Migration 1077 has not been applied yet, so there is nowhere to "
+                                     "put the uploaded rows. Nothing was written.")
+        raise HTTPException(500, f"prospect upload failed after replacing "
+                                 f"{periods}: {type(e).__name__}: {e}")
+    return {"prospect": prospect.get("name"), "feed_key": feed,
+            "feed_label": _pev.FEED_REGISTRY[feed]["label"],
+            "rows_written": written, "periods_replaced": periods,
+            "footer_rows_dropped": len(footers or ()), "rows_with_no_date": undated,
+            "mapped_from_default_layout": not column_mapping.load_rules(
+                client, org_id, feed, carrier_id or None),
+            "upload_batch": batch,
+            "note": ("These rows are the prospect's own and are read by nothing but this "
+                     "evaluation — no live report, payout or statement can see them.")}
+
+
+def _prospect_feed_rows(client, org_id, prospect_id, period):
+    """{feed_key: [rows]} for one prospect month, each row in its LIVE table's column shape.
+
+    The handset PRICE LIST is read across ALL periods, deliberately and for the same reason
+    `device_cogs.ma_unit_price_map` does: a handset ordered in June and activated in July must still
+    be priced, and the fulfillment sheet is a price list as much as a purchase log."""
+    feeds = {k: [] for k in _pev.FEED_KEYS}
+    rows = _feed_read.read_all(
+        lambda: (client.schema("commcalc").table("prospect_feed_row")
+                 .select("feed_key,period,row")
+                 .eq("org_id", org_id).eq("prospect_id", prospect_id)))
+    wanted = {str(p) for p in _period_keys_for_prospect(period)}
+    for r in rows:
+        feed = str(r.get("feed_key") or "")
+        if feed not in feeds:
+            continue
+        if feed != "ma_marketplace_orders" and str(r.get("period") or "") not in wanted:
+            continue
+        row = r.get("row")
+        if isinstance(row, dict):
+            feeds[feed].append(row)
+    return feeds
+
+
+def _period_keys_for_prospect(period):
+    """Both spellings of a month ('August 2026' and '2026-08'), the platform's one period rule — a
+    prospect's file may be stamped either way and a read that matched one would silently find no rows."""
+    from app.modules.account import _period as _ap
+    try:
+        return list(_ap.period_keys(period))
+    except Exception:
+        return [period]
+
+
+def _prospect_expense_window(client, org_id, cfg, period):
+    """OUR OWN average expenses, read through the ONE carry-forward home.
+
+    The months are the last `expense_basis_months` COMPLETE months before the evaluated one — a month
+    still in progress has a partial sheet and averaging it in would drag every line down by however
+    much of the month is left. `expenses_effective.effective_series` is what supplies each month's
+    rows, which is why the average is over the SAME figures the Expenses sheet and the live P&L book
+    rather than over the raw table."""
+    from app.modules.commcalc.expenses_effective import effective_series
+    try:
+        rows = _feed_read.read_all(
+            lambda: (client.schema("commcalc").table("store_expenses")
+                     .select("store_code,expense_name,expense_type,amount,period,source_key")
+                     .eq("org_id", org_id)))
+    except Exception as e:
+        print(f"WARN prospect expense read failed: {e}")
+        return {}, [], {"error": "our own expense sheet could not be read, so no average was taken"}
+    months = _pev.complete_months([r.get("period") for r in rows], period)[:cfg["expense_basis_months"]]
+    if not months:
+        return {}, [], {"error": "no complete month of our own expenses sits before this one"}
+    series = effective_series(rows, months)
+    by_period = {p: (series.get(p) or {}).get("rows") or [] for p in months}
+    carried = {p: (series.get(p) or {}).get("carried_from") for p in months
+               if (series.get(p) or {}).get("carried_from")}
+    matrix = _pev.average_expense_matrix(by_period, cfg["expense_average_basis"])
+    notes = _pev.expense_window_notes(matrix, months)
+    notes["carried_from"] = carried
+    return matrix, months, notes
+
+
+def _prospect_homes():
+    """THE dereferenced one-homes, gathered in one place so the evaluation books through the very
+    code the live P&L books through. Any copy of a rule here would be the divergence
+    §COMMCALC-03 exists to prevent; `harness_prospect_eval.py` §D fails the build if one appears."""
+    from app.modules.account import (ma_store_pnl as _msp, device_cogs as _dcg, coa as _coa,
+                                     residual_subs as _rsub)
+    return {
+        "ma_commission_bookings": _msp.ma_commission_bookings,
+        "ma_tx_bookings": _msp.ma_tx_bookings,
+        "ma_unit_price_from_rows": _dcg.ma_unit_price_from_rows,
+        "ma_sold_cost_from_rows": _dcg.ma_sold_cost_from_rows,
+        "route_expense_line": _coa.route_expense_line,
+        "accrue_detail": _coa.accrue_detail,
+        "spec": _coa.PL_SPEC,
+        "pl_section": _coa.PL_SECTION,
+        "ma_cfg": _msp.default_config(),
+        "ma_pnl_config": _rsub.default_ma_pnl_config(),
+    }
+
+
+PROSPECT_PL_SECTIONS = [("Revenue", "revenue"), ("Cost of Goods Sold", "cogs"),
+                        ("Operating Expenses", "opex"), ("Other", "other")]
+
+
+@router.get("/prospects/{prospect_id}/evaluation")
+def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID):
+    """THE takeover evaluation for one prospect month — the P&L, the multi-line sub-report, and what
+    the evaluation could not answer.
+
+    ONE ASSEMBLY, TWO SURFACES. The P&L screen and the family-plan sub-report read the same payload,
+    exactly as the peer-comparison screen and the action plan read one assembly (§59.7), so the two
+    can never disagree about which accounts were flagged or what excluding them is worth.
+
+    BOTH exclusion modes are always computed and returned. The owner asked for a sub-report that
+    takes the flagged phones out of profitability "or leaves them"; a toggle that recomputed one of
+    them would mean the two numbers never appear side by side, which is the only way to see what the
+    flagged accounts are actually worth. `default_mode` names which one the screen opens on.
+
+    READ-ONLY, and structurally so: it books nothing, pays nobody, writes no snapshot and touches no
+    live table. The prospect's own uploaded rows are the only thing it reads about the prospect.
+    """
+    require_org(org_id)
+    client = sb()
+    prospect = _prospect_row(client, org_id, prospect_id)
+    cfg = _prospect_cfg(client, org_id, prospect)
+    if not period:
+        # The latest month the prospect's own commission feed actually covers — never today's month,
+        # which would open the report on an empty one.
+        try:
+            seen = [str(r.get("period") or "") for r in (
+                client.schema("commcalc").table("prospect_feed_row").select("period")
+                .eq("org_id", org_id).eq("prospect_id", prospect_id)
+                .eq("feed_key", "ma_commission").limit(5000).execute().data or [])]
+            period = max((p for p in seen if p),
+                         key=lambda p: _pev.period_sort_key(p), default="")
+        except Exception:
+            period = ""
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+
+    try:
+        feeds = _prospect_feed_rows(client, org_id, prospect_id, period)
+    except Exception as e:
+        raise HTTPException(500, f"prospect feed read failed: {type(e).__name__}: {e}")
+    matrix, months, exp_notes = _prospect_expense_window(client, org_id, cfg, period)
+    matrix, rent_meta = _pev.apply_rent_override(
+        matrix, cfg["rent_expense_names"], prospect.get("actual_rent_monthly"))
+
+    homes = _prospect_homes()
+    mode = (prospect.get("exclusion_mode") or _pev.HOUSE_EXCLUSION_MODE)
+    ev = _pev.evaluate(feeds, cfg, homes, matrix, rent_meta, period, mode)
+    ev["expenses"]["window"] = exp_notes
+    ev["expenses"]["months"] = months
+
+    from app.modules.account import engine as _eng, analysis as _an
+    statements = {}
+    for m, sc in ev["scenarios"].items():
+        st = _eng._assemble(sc["inputs"], [], homes["spec"], _prospect_pl_labels(homes),
+                            PROSPECT_PL_SECTIONS, "prospect", set(), True)
+        st["totals"] = _an.pl_totals(st)
+        statements[m] = st
+        sc.pop("inputs", None)          # the raw accumulator is not a payload the screen needs
+    ev["statements"] = statements
+    ev["delta"] = _pev.scenario_delta(statements, _an.pl_totals)
+    ev["prospect"] = prospect
+    return ev
+
+
+def _prospect_pl_labels(homes):
+    """The chart's own labels — `coa.PL_LABEL`, dereferenced. A prospect statement reading different
+    line names from the company's own would be unreconcilable with it on sight."""
+    from app.modules.account import coa as _coa
+    return _coa.PL_LABEL
