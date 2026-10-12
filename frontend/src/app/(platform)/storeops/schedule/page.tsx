@@ -285,7 +285,10 @@ export default function SchedulePage() {
       const a = attribute(e.employee_id || e.id, e.name)
       const b = byKey.get(a.key)
       if (b && !used.has(b.key)) { rows.push(b); used.add(b.key); continue }
-      if (!b && !used.has(a.key)) {
+      // NEVER seed a zero-hour row under the unattributed key: a roster employee whose own identity
+      // does not resolve (no employee_id, and a numeric pk the ambiguity guard refuses to alias)
+      // would otherwise CLAIM that bucket and hide the real unattributed hours behind an empty row.
+      if (!b && a.key !== UNATTRIBUTED_KEY && !used.has(a.key)) {
         rows.push({ key: a.key, employee_id: a.employee_id, name: e.name, hours: 0, shifts: [],
                     stored_names: [], basis: a.basis, binds: a.binds, reason: a.reason })
         used.add(a.key)
