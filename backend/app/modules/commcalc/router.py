@@ -48391,6 +48391,7 @@ def _prospect_homes():
         "ma_unit_price_from_rows": _dcg.ma_unit_price_from_rows,
         "ma_sold_cost_from_rows": _dcg.ma_sold_cost_from_rows,
         "route_expense_line": _coa.route_expense_line,
+        "accrue_detail": _coa.accrue_detail,
         "spec": _coa.PL_SPEC,
         "pl_section": _coa.PL_SECTION,
         "ma_cfg": _msp.default_config(),

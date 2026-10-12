@@ -165,6 +165,7 @@ HOMES = {
     "ma_unit_price_from_rows": DC.ma_unit_price_from_rows,
     "ma_sold_cost_from_rows": DC.ma_sold_cost_from_rows,
     "route_expense_line": COA.route_expense_line,
+    "accrue_detail": COA.accrue_detail,
     "spec": COA.PL_SPEC,
     "pl_section": COA.PL_SECTION,
     "ma_cfg": MSP.default_config(),
@@ -438,7 +439,7 @@ check("it imports no database client and no I/O library",
       not {n.module for n in ast.walk(_tree) if isinstance(n, ast.ImportFrom)} &
       {"requests", "httpx", "psycopg2", "supabase", "pandas"})
 _homes_named = {"ma_commission_bookings", "ma_tx_bookings", "ma_unit_price_from_rows",
-                "ma_sold_cost_from_rows", "route_expense_line"}
+                "ma_sold_cost_from_rows", "route_expense_line", "accrue_detail"}
 check("…and every injected home is actually dereferenced by name in evaluate()",
       _homes_named <= _strings, str(sorted(_homes_named - _strings)))
 for _h in sorted(_homes_named):

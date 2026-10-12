@@ -647,20 +647,26 @@ def empty_inputs(spec):
                 "detail_by_store": {}, "detail_company_wide": {}} for k, *_ in spec}
 
 
-def add_booking(inputs, key, amount, detail_label=None):
+def add_booking(inputs, key, amount, detail_label=None, accrue_detail=None):
     """PURE: coa's `add()` for a prospect — company-wide, because a prospect HAS no store key.
 
-    Deliberately the same incremental 2-dp rounding coa uses, so a prospect's line and the same rows
-    booked through the live P&L agree to the cent rather than to within a rounding drift."""
+    The drill-down dollar is accrued by DEREFERENCING `coa.accrue_detail` (passed in as
+    `accrue_detail`, the one home for that accumulation — index §19.32), never by a second copy of
+    its arithmetic. This file once carried that copy; harness_pl_drill_detail §G5 failed the build
+    for it, correctly, because the identity `Σ detail_by_store + detail_company_wide == detail`
+    holds only while ONE `+=` maintains every grain. A prospect has no canonical store key — it is
+    one store nobody owns yet — so `store_key` is None and the detail lands company-wide, which is
+    the same branch of the same function the live statement takes for an unattributable dollar.
+
+    The money itself uses the same incremental 2-dp rounding coa uses, so a prospect's line and the
+    same rows booked through the live P&L agree to the cent rather than to within a rounding drift.
+    Passing no `accrue_detail` books the amount and skips the drill grain rather than deriving it."""
     amt = round(safe_float(amount), 2)
     if not amt or key not in inputs:
         return
     inputs[key]["company_wide"] = round(inputs[key]["company_wide"] + amt, 2)
-    if detail_label:
-        inputs[key]["detail"][detail_label] = round(
-            inputs[key]["detail"].get(detail_label, 0.0) + amt, 2)
-        cw = inputs[key].setdefault("detail_company_wide", {})
-        cw[detail_label] = round(cw.get(detail_label, 0.0) + amt, 2)
+    if detail_label and accrue_detail is not None:
+        accrue_detail(inputs[key], None, detail_label, amt)
 
 
 # WHICH feed answers which P&L line — the coverage vocabulary. DERIVED from the booking one-homes
@@ -787,22 +793,22 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
         inputs = empty_inputs(homes["spec"])
         booked = set()
         for line, _acct, amt, detail in homes["ma_commission_bookings"](kept, homes.get("ma_cfg")):
-            add_booking(inputs, line, amt, detail)
+            add_booking(inputs, line, amt, detail, homes.get("accrue_detail"))
             if round(safe_float(amt), 2):
                 booked.add(line)
         for line, _acct, amt, detail in homes["ma_tx_bookings"](
                 tx_rows, homes.get("ma_pnl_config"), homes.get("ma_cfg")):
-            add_booking(inputs, line, amt, detail)
+            add_booking(inputs, line, amt, detail, homes.get("accrue_detail"))
             if round(safe_float(amt), 2):
                 booked.add(line)
         sold = homes["ma_sold_cost_from_rows"](
             kept, price, None, drop_imeis if mode == "exclude" else None)
         for sku, amt in (sold.get("detail") or {}).items():
-            add_booking(inputs, "device_cost", amt, sku)
+            add_booking(inputs, "device_cost", amt, sku, homes.get("accrue_detail"))
         if round(safe_float(sold.get("cost")), 2):
             booked.add("device_cost")
         for line, amt, label in exp_bookings:
-            add_booking(inputs, line, amt, label)
+            add_booking(inputs, line, amt, label, homes.get("accrue_detail"))
         cov = coverage(homes["spec"], homes["pl_section"], booked, exp_lines, feeds_present)
         scenarios[mode] = {
             "mode": mode,
