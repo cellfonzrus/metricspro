@@ -316,10 +316,17 @@ def account_groups(rows, columns):
     return {"groups": groups, "unidentified": unidentified, "columns_used": used}
 
 
-def device_of(row):
-    """PURE: the device sold on one line, as (sku, imei). `sku` may be the feed's own
-    'not available' placeholder — reported verbatim rather than cleaned, because the placeholder is
-    itself the finding when it lands on a flagged account."""
+def device_keys_of(row):
+    """PURE: the device sold on one line, as its IDENTITY keys (sku, imei).
+
+    Named `device_keys_of`, not `device_of`: `line_class.device_of` is the ONE device CLASSIFIER
+    ('tablet' | 'watch' | None) and that name is reserved for it by
+    harness_exec_mtd_device_rates_lock. This answers a different question — WHICH handset is on the
+    row, not what KIND it is — so it carries a different name rather than a second meaning for the
+    same one. Nothing here classifies; a caller wanting the kind dereferences line_class.
+
+    `sku` may be the feed's own 'not available' placeholder — reported verbatim rather than cleaned,
+    because the placeholder is itself the finding when it lands on a flagged account."""
     r = row or {}
     return (str(r.get("sku") or "").strip(), str(r.get("imei") or "").strip())
 
@@ -342,7 +349,7 @@ def flag_multi_line_accounts(grouped, threshold):
             continue
         devices, days, stores, adds = {}, set(), set(), 0
         for r in lines:
-            sku, imei = device_of(r)
+            sku, imei = device_keys_of(r)
             label = sku or "(no model on the row)"
             d = devices.setdefault(label, {"sku": sku, "lines": 0, "imeis": []})
             d["lines"] += 1
