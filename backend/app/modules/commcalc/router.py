@@ -14225,8 +14225,8 @@ def _accessory_config_uncached(client, org_id):
             acima = [t for t in (_ac.get("acima_tenders") or []) if t]
     except Exception:
         got = False
-    # TRADE-IN BASIS (mig 1074, owner ruling 2026-10-12; index §COMMCALC-01). Taken off the SAME
-    # whole-row read as everything above (§4b.1), so an un-run 1074 degrades these five to their code
+    # TRADE-IN BASIS (mig 1075, owner ruling 2026-10-12; index §COMMCALC-01). Taken off the SAME
+    # whole-row read as everything above (§4b.1), so an un-run 1075 degrades these five to their code
     # defaults and nothing else — exactly as every other column here behaves. `.get` on the row dict
     # is why: a column the migration has not added is simply absent.
     _ti_basis = (_ac.get("trade_in_basis") or None) if got else None
