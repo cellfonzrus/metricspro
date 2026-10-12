@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PROOF HARNESS — A TARGET FOR A CATEGORY THE BUSINESS DECLARED (index §COMMCALC-01)
+PROOF HARNESS — A TARGET FOR A CATEGORY THE BUSINESS DECLARED (index §COMMCALC-02)
 =================================================================================
 
 Owner directive 2026-10-10: *"the target needs to be set for the gross revenue per day / week /

@@ -1063,7 +1063,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 7 and `'^-@router\.'` = 0 — seven
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
 #
-# RE-PINNED 2026-10-12, 1775 → 1778 (index §COMMCALC-01). Every record above stays. The delta is
+# RE-PINNED 2026-10-12, 1775 → 1778 (index §COMMCALC-02). Every record above stays. The delta is
 # THREE routes and each is named: GET /commcalc/targets/{period}/axis (what is targetable for this
 # tenant), PUT /commcalc/targets/{period}/lines (a target for a DECLARED category, gated on the
 # SAME `_require_target_edit` as the existing built-in save — it widens nobody's access) and

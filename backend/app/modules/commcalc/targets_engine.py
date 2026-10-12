@@ -44,7 +44,7 @@ def name_key(name) -> str:
 
 # Display order; accessories is a dollar amount, the rest are transaction counts.
 #
-# THESE FOUR ARE THE BUILT-INS, NOT THE WHOLE AXIS (owner directive 2026-10-10, §COMMCALC-01).
+# THESE FOUR ARE THE BUILT-INS, NOT THE WHOLE AXIS (owner directive 2026-10-10, §COMMCALC-02).
 # They are the categories the SALES FEED answers, they each have a physical column on
 # commcalc.targets (byod is derived from byod_pct), and they are kept as module constants because
 # two surfaces outside this engine already dereference them by name — the DM visit-priority rule and

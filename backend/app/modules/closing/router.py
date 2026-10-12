@@ -3427,7 +3427,7 @@ def _declared_by_store_day(client, org_id, date_from, date_to, store_code="", ca
     """WHAT WAS DECLARED, PER STORE PER DAY, OVER A RANGE — folded across both physical stores.
 
     THE one home for the ranged question, as `declared()` is for a single store-day. It exists so a
-    caller outside this module (the targets engine's achieved figures, index §COMMCALC-01) can ask
+    caller outside this module (the targets engine's achieved figures, index §COMMCALC-02) can ask
     it without reaching past `metric_catalog` to `daily_closing.counts` and `closing_metric_line`
     itself — which is exactly what `harness_metric_catalog_lock.py` fails the build on.
 

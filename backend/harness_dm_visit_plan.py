@@ -434,7 +434,7 @@ check("H9 the performance numbers come from the Daily Targets summary, the one h
 # H10 ONE carrier deliverable registry — the owner's dropdown reads it, it does not list its own.
 check("H10 the dropdown reads the existing per-carrier KPI registry",
       "carrier_kpi_metric" in rtr_src)
-# It read `_te.CATEGORIES` when written; since §COMMCALC-01 the engine publishes `target_axis`,
+# It read `_te.CATEGORIES` when written; since §COMMCALC-02 the engine publishes `target_axis`,
 # which carries the tenant's DECLARED categories too (key, label and unit), so the dropdown offers
 # a drop-off the admin declared rather than only the four built-ins. Either dereference satisfies
 # the invariant this check exists for — the list is the engine's, not this file's — and the second

@@ -1,6 +1,6 @@
 -- 1074_target_line.sql
 -- ────────────────────────────────────────────────────────────
--- A TARGET FOR A CATEGORY THE BUSINESS DECLARED (owner directive 2026-10-10, index §COMMCALC-01)
+-- A TARGET FOR A CATEGORY THE BUSINESS DECLARED (owner directive 2026-10-10, index §COMMCALC-02)
 --
 -- Owner: "the target needs to be set for the gross revenue per day / week / month or backward
 -- calculate what is needed to reach a certain level ... but i dont wnat them to be hard coded it
@@ -103,7 +103,7 @@ END $$;
 COMMENT ON TABLE commcalc.target_line IS
   'Monthly/weekly/daily target for a DECLARED closing category (mig 1072 catalog). The four '
   'built-in categories keep their columns on commcalc.targets; targets_engine.derive_monthly_by_cat '
-  'is the one reader that folds both. Index §COMMCALC-01.';
+  'is the one reader that folds both. Index §COMMCALC-02.';
 COMMENT ON COLUMN commcalc.target_line.metric_key IS
   'A key from closing/metric_catalog.build(). A built-in category name is refused at save.';
 
