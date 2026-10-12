@@ -711,7 +711,11 @@ check("I6 the report BOOKS nothing and WRITES nothing — no insert, update, ups
 # behind it (1 divergence in 71 live house store strings — the reported defect; 0 in 49 across the
 # other tenants). Everything else in coa.py is still pinned byte-identical.
 import harnesslib as _hl                                                        # noqa: E402
-COA_SANCTIONED = ("build_inputs", "_account_config") + _hl.COA_STORE_IDENTITY_SANCTION
+COA_SANCTIONED = (("build_inputs", "_account_config")
+                  + _hl.COA_STORE_IDENTITY_SANCTION
+                  # §14y.1 (2026-10-12): the P&L wage line now reads the punches. See the sanction's
+                  # own comment in harnesslib for the measurement and why no resolver moved.
+                  + _hl.COA_PAID_HOURS_EVIDENCE_SANCTION)
 try:
     import harnesslib
     base = subprocess.run(["git", "merge-base", "HEAD", "origin/main"],

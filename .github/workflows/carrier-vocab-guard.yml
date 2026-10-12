@@ -501,6 +501,14 @@ on:
       - "frontend/src/app/(platform)/layout.tsx"
       - "backend/app/modules/storeops/clock_variance_api.py"
       - "backend/app/modules/storeops/payroll_hours_basis.py"
+      # index §14y.1 (mig 1074) — THE ONE punch/correction read on the pay path, and the four
+      # callers that used to reach the one home with no evidence at all. Listed for the same reason
+      # as every subject above: the lock's §H is about THESE files, so a change to one of them must
+      # re-run it, and a lock that does not list its own subject skips silently.
+      - "backend/app/modules/storeops/payroll_evidence.py"
+      - "backend/app/modules/storeops/router.py"
+      - "backend/app/modules/commcalc/router.py"
+      - "database/migrations/1074_payroll_clocked_basis_effective_from.sql"
       - "backend/app/modules/storeops/clock_feed.py"
       - "backend/app/modules/storeops/clock_variance.py"
       - "backend/app/modules/storeops/payroll_identity.py"

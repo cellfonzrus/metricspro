@@ -24309,9 +24309,15 @@ def _compute_gp(client, org_id, period, market=""):
         _lc_codes = [s.get('store_code') for s in _lc_stores]
         _lc_active = [s.get('store_code') for s in _lc_stores if s.get('is_active') is not False]
         _lc_month = _lcov.load_shift_hours(client, org_id, period)
+        # THE PUNCH EVIDENCE + THE INTERLOCK (owner directive 2026-10-12, index §14y). ONE read,
+        # `storeops/payroll_evidence.period_evidence`, reached through this report's own loader —
+        # never a punch query here. `None` (a failed read) keeps the pre-2026-10-12 shape.
+        _lc_ev = _lcov.load_hours_evidence(client, org_id, period, _lc_month) or {}
         result['labour_coverage'] = _lcov.labour_coverage(
             _lc_codes, expenses, _lc_month, _lc_names, period,
-            carried_from=_exp_carried_from, active_codes=_lc_active)
+            carried_from=_exp_carried_from, active_codes=_lc_active,
+            hours_basis_cfg=_lc_ev.get('cfg'), evidence=_lc_ev.get('evidence'),
+            hours_interlock=_lc_ev.get('interlock'))
         # Labour booked by BOTH routes: the GP row deducts `rep_pay` (rep_commissions) SEPARATELY
         # from `exp_total`, so a commission-named expense row is the same dollars twice. The owner
         # ruled on 2026-09-08 that rep_commissions is the authoritative route, so the report above

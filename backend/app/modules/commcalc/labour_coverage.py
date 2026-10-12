@@ -190,7 +190,7 @@ def entered_amounts(exp_rows, payroll_names):
     return out
 
 
-def hours_basis_by_code(shifts, hours_basis_cfg=None, emp_by_id=None):
+def hours_basis_by_code(shifts, hours_basis_cfg=None, emp_by_id=None, evidence=None):
     """PURE: {store_code: {'shifts', 'actual_hours', 'scheduled_hours', 'basis', 'bases'}}.
 
     `basis` states which side of the owner's rule this store's month actually resolves to, in THE
@@ -212,8 +212,22 @@ def hours_basis_by_code(shifts, hours_basis_cfg=None, emp_by_id=None):
     """
     cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
     emp_by_id = emp_by_id or {}
+    # THE DAY'S PUNCHES (owner directive 2026-10-12, index §14y). This report used to reach the one
+    # home with NO evidence, so its only possible measurement was `shifts.actual_hours` — the dead
+    # column — and on a clocked-only org every store therefore read `not_measured_unpaid`: a banner
+    # declaring the whole estate unmeasured while the punches sat in `storeops.timelog`. `evidence`
+    # is `storeops/payroll_evidence.period_evidence`'s index, read by `load_shift_hours*`'s caller.
+    _ph = []
+    if isinstance(evidence, dict) and evidence:
+        # ONE ROW PER SHIFT ROW, IN ORDER, each carrying its share of its DAY's paid hours (see
+        # `storeops/payroll_evidence.paid_hours_rows`). A bare cell is NOT enough on a shift-row
+        # loop — it reads 0.0 for every day a punch measured. ZIPPED BY POSITION, never by object
+        # identity: two shift rows can be the same dict, and an identity map pays one share twice.
+        from app.modules.storeops import payroll_evidence as _payevid
+        _ph = _payevid.paid_hours_rows({"evidence": evidence, "cfg": cfg}, shifts or [],
+                                       emp_by_id=emp_by_id, cfg=cfg)
     out = {}
-    for s in (shifts or []):
+    for _si, s in enumerate(shifts or []):
         code = _norm(s.get("store_code"))
         if not code:
             continue
@@ -222,7 +236,12 @@ def hours_basis_by_code(shifts, hours_basis_cfg=None, emp_by_id=None):
         cell["shifts"] += 1
         cell["actual_hours"] += _f(s.get("actual_hours"))
         cell["scheduled_hours"] += _f(s.get("scheduled_hours"))
-        hrs, basis, _detail = _hours_basis.resolve_shift_row(s, cfg, emp_by_id.get(s.get("employee_id")))
+        _row = _ph[_si] if _si < len(_ph) else None
+        if _row is not None:
+            hrs, basis = _row["hours"], _row["basis"]
+        else:
+            hrs, basis, _detail = _hours_basis.resolve_shift_row(
+                s, cfg, emp_by_id.get(s.get("employee_id")))
         cell["paid_hours"] += _f(hrs)
         cell["bases"][basis] = cell["bases"].get(basis, 0) + 1
     for cell in out.values():
@@ -274,7 +293,8 @@ def store_state(code, auth, hours, carried_from, is_active=True):
 
 
 def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
-                    carried_from=None, active_codes=None):
+                    carried_from=None, active_codes=None, hours_basis_cfg=None,
+                    evidence=None, hours_interlock=None):
     """PURE: the whole report. DISPLAY-ONLY — moves no figure.
 
     Returns {'period', 'carried_from', 'scanned', 'states': {code: state},
@@ -294,7 +314,11 @@ def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
     measuring = [n for n in _names(payroll_names) if n not in allocated]
     auth = authoritative_codes(exp_rows, measuring)
     entered = entered_amounts(exp_rows, measuring)
-    hours = hours_basis_by_code(shifts)
+    # THE EVIDENCE AND THE VERDICT (owner directive 2026-10-12, §14y). `hours_basis_cfg` /
+    # `evidence` / `hours_interlock` all come from the ONE read, `payroll_evidence.period_evidence`,
+    # passed in by this report's I/O caller. `None` for all three is the pre-2026-10-12 shape and
+    # resolves to the house defaults, so a direct caller is byte-identical to before.
+    hours = hours_basis_by_code(shifts, hours_basis_cfg, evidence=evidence)
     active = None if active_codes is None else {c for c in (_norm(x) for x in active_codes) if c}
 
     states, detail, counts = {}, {}, {}
@@ -315,10 +339,20 @@ def labour_coverage(store_codes, exp_rows, shifts, payroll_names, period,
             "carried_from": carried_from or None,
         }
     gaps = sorted(c for c in codes if states[c] in UNMEASURED_STATES)
+    # THE INTERLOCK'S REFUSAL IS REPORTED ON THE BANNER, not folded into a state (owner directive
+    # 2026-10-12, §14y). This report's whole job is to say which stores' labour figures are NOT a
+    # measurement; a period whose clocked-only basis the interlock refuses is the same claim at
+    # period grain, so it belongs in the note the reader already reads — and nowhere else, because
+    # this report MOVES NO FIGURE and must not start suppressing one.
+    _lock = hours_interlock if isinstance(hours_interlock, dict) else {}
+    _note = coverage_note(len(codes), counts, carried_from, period, sorted(allocated))
+    if _lock.get("refused") and _lock.get("reason"):
+        _note = " ".join(x for x in (_note, "PAID HOURS ARE NOT SAFE TO COMPUTE FOR THIS PERIOD: "
+                                            + str(_lock["reason"])) if x)
     return {"period": period, "carried_from": carried_from or None,
             "scanned": len(codes), "states": states, "detail": detail,
             "counts": counts, "gaps": gaps, "allocated_names": sorted(allocated),
-            "note": coverage_note(len(codes), counts, carried_from, period, sorted(allocated))}
+            "hours_interlock": _lock or None, "note": _note}
 
 
 def coverage_note(scanned, counts, carried_from, period, allocated=()):
@@ -591,7 +625,10 @@ def load_shift_hours_range(client, org_id, date_from, date_to, with_names=False)
 
     Deliberately NOT a second copy of `coa.wages_by_store`'s employee-joined read: that one exists to
     compute MONEY and must keep its exact shape."""
-    cols = "store_code,scheduled_hours,actual_hours,shift_date,is_deleted"
+    # `employee_id` ADDED 2026-10-12: the evidence index is keyed (employee_id, day), so without it
+    # this read cannot be matched to a punch at all and `hours_basis_by_code` is back to the dead
+    # column. Additive — no existing consumer of these rows reads by position.
+    cols = "employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted"
     if with_names:
         cols += ",employee_name"
     try:
@@ -601,6 +638,30 @@ def load_shift_hours_range(client, org_id, date_from, date_to, with_names=False)
                 .range(0, 19999).execute().data) or []
     except Exception:
         return []
+
+
+def load_hours_evidence(client, org_id, period, shifts):
+    """I/O: this period's punch evidence + the interlock verdict, for `labour_coverage`.
+
+    ONE LINE OF WORK, and deliberately a pass-through: the read itself is
+    `storeops/payroll_evidence.period_evidence` — THE one punch read on the pay path (index §14y) —
+    so this report cannot grow a punch query of its own and then disagree with the money beside it,
+    which is the exact defect `hours_basis_by_code`'s docstring already warns about one layer down.
+
+    Never raises. A failed read comes back as a REFUSAL, which the banner states; it never comes
+    back as "everything measured".
+    """
+    from app.modules.commcalc.expenses_effective import period_sort_key
+    from app.modules.storeops import payroll_evidence as _payevid
+    y, m = period_sort_key(period)
+    if not y or not m:
+        return None
+    nxt = (date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)).isoformat()
+    try:
+        return _payevid.period_evidence(client.schema("storeops"), org_id,
+                                        f"{y:04d}-{m:02d}-01", nxt, shifts or ())
+    except Exception:
+        return None
 
 
 def load_shift_hours(client, org_id, period):

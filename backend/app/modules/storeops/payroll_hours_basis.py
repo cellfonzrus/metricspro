@@ -242,14 +242,57 @@ DEFAULT_CONFIG = {
     "min_punch_coverage_pct": 85.0,
     # Whether the interlock refuses (True) or merely warns. Refusing is the house default.
     "interlock_refuses": True,
+    # ── THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1074) ────────────────────────────
+    #: Owner, verbatim: *"Payroll from clack in should be from Oct 4 th onwards which would be the
+    #: new cycle"*. A business date STRICTLY BEFORE this one resolves exactly as
+    #: `MODE_SCHEDULE_FALLBACK` would, whatever `hours_basis_mode` says — so a recompute of a closed
+    #: month restates nothing. NULL = NO FLOOR, which is every tenant until a row says otherwise,
+    #: so this field ships changing nobody. It is a DATE IN A CONFIG ROW, never a literal in code:
+    #: `database/migrations/1074_payroll_clocked_basis_effective_from.sql` carries the house org's
+    #: 2026-10-04 and no other date appears anywhere in this package (RULE TWO).
+    "clocked_basis_effective_from": None,
 }
+#: ★ THE THREE FIELDS THAT ARE THE CLOCKED-ONLY SWITCH ★, dropped when the pre-floor config is
+#: built so they fall back to the HOUSE DEFAULT (i.e. to what this org did before it switched).
+#:
+#: MEASURED, AND IT IS WHY THIS TUPLE EXISTS. Forcing only `hours_basis_mode` back is NOT enough:
+#: the house org is live on `clocked_only` WITH `pay_from_schedule_default = false`, and
+#: `schedule_fallback` + `pay_from_schedule_default = false` + nothing measured still resolves
+#: `not_measured_unpaid` = ZERO. A floor built on the mode alone therefore left Jun–Sep 2026 at
+#: $0.00 — the exact figure the floor exists to prevent — so the floor restores the whole switch,
+#: not one third of it. `pay_from_schedule_default` and `count_manual_hours` are the other two
+#: thirds; every OTHER field (the tolerances, the thresholds, the auto-clockout policy, the feed)
+#: is the org's own and is honoured unchanged on both sides of the floor.
+_SWITCH_FIELDS = ("hours_basis_mode", "pay_from_schedule_default", "count_manual_hours")
+
+#: Where `resolve_config` stashes the SAME org row resolved in schedule-fallback mode, so a pre-floor
+#: day can be answered byte-identically to that mode WITHOUT re-reading the row — including the
+#: `count_auto_clockout_punches` forcing `resolve_config` applies only in that mode, which a caller
+#: holding only the already-merged dict can no longer reconstruct.
+PRE_FLOOR_KEY = "_pre_floor_config"
 _CONFIG_FIELDS = tuple(DEFAULT_CONFIG.keys())
 _BOOL_FIELDS = ("pay_from_schedule_default", "count_auto_clockout_punches",
                 "count_open_punches", "count_manual_hours", "interlock_refuses",
                 "clock_feed_is_pay_source")
 
 
-def resolve_config(org_row=None):
+def _day(v):
+    """PURE: an ISO 'YYYY-MM-DD' from a date / datetime / string, or None. Comparison of paid-hours
+    dates is STRING comparison on this normal form throughout this module, which is correct for ISO
+    dates and is the same grain `build_evidence` already keys on (`_d`)."""
+    if v is None:
+        return None
+    s = str(getattr(v, "isoformat", lambda: v)())[:10].strip()
+    if len(s) != 10 or s[4] != "-" or s[7] != "-":
+        return None
+    try:
+        int(s[:4]), int(s[5:7]), int(s[8:10])
+    except ValueError:
+        return None
+    return s
+
+
+def resolve_config(org_row=None, _pre_floor=False):
     """Merge a (possibly partial / absent) per-org config row over the house defaults.
 
     Same shape and posture as `salary_expense.resolve_config` and `payroll_expenses
@@ -290,7 +333,66 @@ def resolve_config(org_row=None):
     eff["min_punch_coverage_pct"] = max(0.0, min(100.0, pct))
     if eff["hours_basis_mode"] == MODE_SCHEDULE_FALLBACK:
         eff["count_manual_hours"] = False
+    eff["clocked_basis_effective_from"] = _day(eff.get("clocked_basis_effective_from"))
+    if not _pre_floor:
+        # THE PRE-FLOOR CONFIG, resolved from the SAME ROW with the mode forced to schedule-fallback.
+        # It is built HERE, from the row, and not later from `eff`, because the forcing above is
+        # one-way: once `count_auto_clockout_punches` / `count_manual_hours` have been merged there
+        # is no way to tell an org that SAID False from an org that was defaulted to False. Doing it
+        # from the row keeps a pre-floor day byte-identical to what this org would get in
+        # schedule-fallback mode — which is the whole guarantee the floor exists to give.
+        pre_row = {k: v for k, v in dict(org_row or {}).items() if k not in _SWITCH_FIELDS}
+        pre_row["hours_basis_mode"] = MODE_SCHEDULE_FALLBACK
+        eff[PRE_FLOOR_KEY] = resolve_config(pre_row, _pre_floor=True)
     return eff
+
+
+# ── THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12) ───────────────────────────────────────────
+def effective_from(cfg):
+    """PURE: the ISO date on and after which this org's clocked-only basis applies, or None.
+
+    None means NO FLOOR — the mode applies to every day, which is how every tenant ships.
+    """
+    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    return _day(cfg.get("clocked_basis_effective_from"))
+
+
+def day_is_before_floor(day, cfg):
+    """PURE: is this business date STRICTLY BEFORE this org's clocked-basis floor?
+
+    False when there is no floor, and False when the date is unknown — an UNDATED cell must keep
+    today's answer rather than being silently pushed to one side of a boundary it never named.
+    """
+    floor = effective_from(cfg)
+    d = _day(day)
+    return bool(floor and d and d < floor)
+
+
+def config_for_day(cfg, day):
+    """PURE: THE config that governs ONE business date — the one home for the floor.
+
+    A day on or after the floor (or any day at all when there is no floor) gets `cfg` unchanged, so
+    this is a no-op for every tenant until a row carries a date. A day strictly before the floor
+    gets the SAME org row resolved in `MODE_SCHEDULE_FALLBACK`, which is byte-identically what that
+    day resolves to today.
+
+    EVERY resolver here routes through this function rather than comparing dates itself, so the
+    boundary is decided once. The fallback branch (a hand-built cfg dict that never went through
+    `resolve_config` and therefore carries no `PRE_FLOOR_KEY`) deliberately DROPS the two
+    mode-forced flags before re-resolving, so the forcing applies rather than being frozen at its
+    clocked-only value — the same reasoning as the note in `resolve_config`.
+    """
+    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    if not day_is_before_floor(day, cfg):
+        return cfg
+    pre = cfg.get(PRE_FLOOR_KEY)
+    if isinstance(pre, dict):
+        return pre
+    row = {k: v for k, v in cfg.items()
+           if k in _CONFIG_FIELDS and k not in _SWITCH_FIELDS
+           and k != "count_auto_clockout_punches"}
+    row["hours_basis_mode"] = MODE_SCHEDULE_FALLBACK
+    return resolve_config(row)
 
 
 def basis_pays_hours(basis):
@@ -384,7 +486,14 @@ def build_evidence(shifts=None, punches=None, manual_rows=None, feed_punches=Non
     ev = {}
 
     def cell(eid, day):
-        return ev.setdefault((eid, day), {"scheduled": 0.0, "shift_actual": 0.0,
+        # `"day"` IS THE EVIDENCE KEY'S OWN DATE, written into the cell rather than left only in the
+        # key (owner ruling 2026-10-12, the effective-from floor). The resolvers need the date to
+        # know which side of the floor a day falls on, and a caller that already holds the cell must
+        # not have to remember to pass it a second time — a date a caller can forget is a date that
+        # will be forgotten. `resolve_day(cell, cfg)` therefore keeps its EXACT existing signature
+        # and still knows the day, for every caller that built its evidence here.
+        return ev.setdefault((eid, day), {"day": day,
+                                          "scheduled": 0.0, "shift_actual": 0.0,
                                           "shift_actual_rows": 0, "punch": 0.0, "punch_rows": 0,
                                           "manual": 0.0, "manual_rows": 0, "unusable": []})
 
@@ -584,18 +693,31 @@ def pay_from_schedule(employee_row, cfg):
     return bool(v)
 
 
-def resolve_day(cell, cfg, employee_row=None):
+def resolve_day(cell, cfg, employee_row=None, day=None):
     """PURE: `(hours, basis, detail)` for ONE (employee, business date).
 
     `cell` is one value out of `build_evidence`; `{}` / None means "no shift, no punch, no
     correction", which resolves to NOT_MEASURED_UNPAID with 0 hours — absence is never a zero
     measurement.
 
+    `day` is the BUSINESS DATE, and it decides which side of this org's `clocked_basis_effective_from`
+    floor the answer falls on (owner ruling 2026-10-12). It does not have to be passed: a cell built
+    by `build_evidence` carries its own `"day"`, which is the key's date, so the overwhelming
+    majority of callers need no change at all. An EXPLICIT `day` wins, for the one caller shape that
+    hand-builds a cell from a single row (`resolve_shift_row`) and therefore knows the date before
+    any cell exists. A day on neither — no `day`, no `cell["day"]` — keeps today's answer rather
+    than being assumed onto one side of a boundary it never named.
+
     PRECEDENCE: manager override > correction > the two clock records under this org's declared
     rule > a usable closed punch alone > measured zero > schedule opt-in > unpaid.
     """
-    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
     cell = cell if isinstance(cell, dict) else {}
+    day = _day(day) or _day(cell.get("day"))
+    #: THE FLOOR, APPLIED ONCE, HERE. Every other resolver in this module reaches the answer through
+    #: this function, so no second date comparison exists to drift from this one.
+    cfg_all = cfg if isinstance(cfg, dict) else resolve_config(None)
+    pre_floor = day_is_before_floor(day, cfg_all)
+    cfg = config_for_day(cfg_all, day)
     scheduled = _f(cell.get("scheduled"))
     punch_h, punch_rows, unusable = _apply_punch_policy(cell, cfg)
     feed_rows = list(cell.get("_feed_punches") or ())
@@ -608,9 +730,21 @@ def resolve_day(cell, cfg, employee_row=None):
               "unusable_punches": list(unusable),
               "manual_rows": int(cell.get("manual_rows") or 0),
               "shift_actual_rows": int(cell.get("shift_actual_rows") or 0),
-              "mode": cfg["hours_basis_mode"]}
+              "day": day,
+              # THE FLOOR, IN THE DETAIL, so a reader is never shown a figure resolved on a basis
+              # the org's own mode does not name. `mode` is the mode that ACTUALLY DECIDED this day.
+              "mode": cfg["hours_basis_mode"],
+              "org_mode": cfg_all["hours_basis_mode"],
+              "effective_from": effective_from(cfg_all),
+              "pre_effective_from": pre_floor}
 
     def out(hours, basis):
+        if pre_floor:
+            detail["floor_reason"] = (
+                f"This day ({day}) falls before {detail['effective_from']}, the date this org's "
+                f"clocked-only basis starts from, so it is resolved exactly as it is today — from "
+                f"the schedule when nothing measured it. Recomputing a closed month therefore "
+                f"restates nothing.")
         detail["basis_reason"] = basis_reason(basis)
         detail["pays"] = basis_pays_hours(basis)
         detail["measured"] = basis_is_measurement(basis)
@@ -673,25 +807,46 @@ def resolve_day(cell, cfg, employee_row=None):
 
     # 4. A punch existed but this org does not count it. NOT a measurement, and not silently paid.
     if unusable:
-        if pay_from_schedule(employee_row, cfg) and scheduled > 0:
+        if pay_from_schedule(None if pre_floor else employee_row, cfg) and scheduled > 0:
             # Reported AND paid from the schedule, because that is what the opt-in means — but the
             # unusable punch travels in `detail` so it is never invisible.
             return out(scheduled, SCHEDULE_OPT_IN)
         return out(0.0, PUNCH_UNUSABLE)
 
     # 5. Nothing measured. The owner's button decides, per employee, with an org default.
-    if pay_from_schedule(employee_row, cfg):
+    #    ON A PRE-FLOOR DAY THE BUTTON IS NOT CONSULTED, and that is deliberate: the per-employee
+    #    tick box is the fourth expression of the same clocked-only switch (`_SWITCH_FIELDS` names
+    #    the other three), so honouring an untick on a day before the new cycle started would
+    #    restate a closed month to $0.00 through the one door the floor had left open. A pre-floor
+    #    day is resolved against the org default, which the pre-floor config has already restored
+    #    to the house TRUE — i.e. the schedule, which is what that day paid.
+    if pay_from_schedule(None if pre_floor else employee_row, cfg):
         return out(scheduled, SCHEDULE_OPT_IN)
     return out(0.0, NOT_MEASURED_UNPAID)
 
 
-def resolve_shift_row(shift, cfg, employee_row=None, cell=None):
+def resolve_shift_row(shift, cfg, employee_row=None, cell=None, day=None):
     """PURE: `(hours_this_shift_row_contributes, basis, detail)`.
 
-    THE ONE REPLACEMENT for `hrs = actual_hours or scheduled_hours`. A caller holding only shift
-    rows (`account/coa.derive_wage_cells`, `hr/router`, `pto_accrual`) passes no `cell` and gets
-    that expression's exact arithmetic back, now carrying its basis: `actual_hours > 0` reads
-    `clocked_corrected`, everything else reads `schedule_opt_in` under the shipped default.
+    THE ONE REPLACEMENT for `hrs = actual_hours or scheduled_hours`.
+
+    ⚠ `cell=None` IS EVIDENCE-FREE, AND ON A CLOCKED-ONLY ORG THAT IS WRONG (measured 2026-10-12).
+    With no `cell` this function can only see the shift row, i.e. `shifts.actual_hours` — the DEAD
+    column this whole module exists because of (7 of 7,740 live rows carry it). Under
+    `clocked_only` with no schedule opt-in, every such row therefore resolves `not_measured_unpaid`
+    = ZERO, while the punches that measured those days sit unread in `storeops.timelog`. Replayed
+    over live house shifts on 2026-10-12 the P&L wage line booked $374,733.02 -> $0.00 across
+    Jun–Oct 2026 exactly this way. So a PAY-PATH caller must pass the day's `cell` from
+    `build_evidence` (read it through `storeops/payroll_evidence.period_evidence`, the one home for
+    that read) and must consult `interlock` — `harness_payroll_hours_basis_lock.py` §H fails the
+    build if one stops doing either. `cell=None` remains supported for a caller that genuinely has
+    no punch to offer and reproduces the pre-2026-10-10 arithmetic exactly, which is why it cannot
+    simply be removed.
+
+    `day` is the business date for the floor (owner ruling 2026-10-12). A shift row NAMES its own
+    date in `shift_date`, so this function reads it from the row when the caller passes none — the
+    floor therefore works on this path with no caller change, which matters because these are
+    precisely the callers that hold a row and not a key.
 
     A caller that DOES hold punches passes the day's `cell` from `build_evidence`, and the shift row
     then contributes 0 for a day the punch already measured — the punch is counted at the store the
@@ -699,12 +854,14 @@ def resolve_shift_row(shift, cfg, employee_row=None, cell=None):
     is preserved here rather than restated there.
     """
     cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    day = _day(day) or _day((shift or {}).get("shift_date")) or _day((cell or {}).get("day"))
     if cell is None:
-        cell = {"scheduled": _f((shift or {}).get("scheduled_hours")),
+        cell = {"day": day,
+                "scheduled": _f((shift or {}).get("scheduled_hours")),
                 "shift_actual": max(0.0, _f((shift or {}).get("actual_hours"))),
                 "shift_actual_rows": 1 if _f((shift or {}).get("actual_hours")) > 0 else 0}
-        return resolve_day(cell, cfg, employee_row)
-    hours, basis, detail = resolve_day(cell, cfg, employee_row)
+        return resolve_day(cell, cfg, employee_row, day)
+    hours, basis, detail = resolve_day(cell, cfg, employee_row, day)
     if basis in (CLOCKED, MEASURED_ZERO):
         # The punch is this day's answer and is counted from the punch row itself. This shift row
         # adds nothing — but it still reports the basis, so the reader is never shown a bare 0.
@@ -721,13 +878,21 @@ def resolve_shift_row(shift, cfg, employee_row=None, cell=None):
     return 0.0, basis, detail
 
 
-def punch_counts_for_pay(punch, cell, cfg):
+def punch_counts_for_pay(punch, cell, cfg, day=None):
     """PURE: does THIS closed punch contribute its hours to pay?
 
     It counts iff it is usable AND no correction covers its day (a correction always wins). This is
     `router._punch_counts_for_pay`'s rule, moved here so the precedence is stated once.
+
+    `day` routes through the floor like every other resolver (owner ruling 2026-10-12): a punch on a
+    PRE-floor day is judged under this org's schedule-fallback policy, so an auto-closed punch that
+    is being paid today keeps being paid on a day before the new cycle starts — the floor must not
+    move a closed month's figure in either direction. The date is read from the punch's own
+    `work_date` when the caller passes none.
     """
     cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    day = _day(day) or _day((punch or {}).get("work_date")) or _day((cell or {}).get("day"))
+    cfg = config_for_day(cfg, day)
     ok, _why = punch_usability(punch, cfg)
     if not ok:
         return False
@@ -745,8 +910,13 @@ def punch_counts_for_pay(punch, cell, cfg):
 MEASUREMENT_NONE = "not_measured"
 
 
-def measurement_state(cell, cfg):
+def measurement_state(cell, cfg, day=None):
     """PURE: `(state, measured_hours)` for one (employee, day) — the MEASUREMENT only.
+
+    `day` travels for the floor, exactly as in `resolve_day` (and, as there, a cell from
+    `build_evidence` already carries it). Note that the floor can only change this answer where the
+    MODE changes it — whether a day was measured is not a pay decision — so for most orgs it is a
+    no-op here, and that is correct rather than an omission.
 
     `state` is `CLOCKED`, `CLOCKED_CORRECTED`, `MEASURED_ZERO` or `MEASUREMENT_NONE`, and the
     precedence is `resolve_day`'s own, because it IS `resolve_day` — this function is the same
@@ -761,7 +931,14 @@ def measurement_state(cell, cfg):
     # paid", and answering the first one with the second one's switch would make a corrected day
     # look unmeasured and send the salary rollup back to the schedule.
     cfg["count_manual_hours"] = True
-    hours, basis, _detail = resolve_day(cell, cfg, None)
+    # …AND ON BOTH SIDES OF THE FLOOR. A pre-floor day is answered from `PRE_FLOOR_KEY`, so forcing
+    # the flag only on the outer dict would make a CORRECTED pre-floor day read as unmeasured —
+    # which is the exact defect the paragraph above exists to prevent, reappearing on one side of a
+    # date boundary instead of everywhere.
+    _pre = cfg.get(PRE_FLOOR_KEY)
+    if isinstance(_pre, dict):
+        cfg[PRE_FLOOR_KEY] = {**_pre, "count_manual_hours": True}
+    hours, basis, _detail = resolve_day(cell, cfg, None, day)
     if basis_is_measurement(basis):
         return basis, round(float(hours), 2)
     return MEASUREMENT_NONE, 0.0
@@ -772,9 +949,17 @@ def coverage(evidence, cfg, employee_rows=None):
     """PURE: how much of this period was actually MEASURED, per store-agnostic employee-day grain.
 
     Returns `{scheduled_days, measured_days, measured_pct, unmeasured_days, unusable_punch_days,
-    bases}`. `scheduled_days` counts employee-days that carry a schedule — the denominator a reader
-    means by "did everybody's day get clocked", and the one the owner's Monday correction list works
-    against. A day with a punch but no schedule still counts as measured and is reported in `bases`.
+    bases, pre_effective_from_days}`. `scheduled_days` counts employee-days that carry a schedule —
+    the denominator a reader means by "did everybody's day get clocked", and the one the owner's
+    Monday correction list works against. A day with a punch but no schedule still counts as
+    measured and is reported in `bases`.
+
+    ★ A DAY BEFORE THIS ORG'S `clocked_basis_effective_from` IS NOT COUNTED AT ALL ★ (owner ruling
+    2026-10-12), and it is counted in `pre_effective_from_days` instead so it is never merely
+    missing. Such a day is not paid on a clocked basis, so measuring it against a clocked-coverage
+    threshold would be measuring the wrong thing — and it would be a one-way ratchet: June 2026 has
+    no punches at all, so including those days would hold the interlock below its threshold for a
+    period nobody will ever clock, refusing payroll forever over days the floor already excused.
     """
     cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
     emp_by_id = {(e or {}).get("employee_id"): e for e in (employee_rows or ()) if (e or {}).get("employee_id")}
@@ -783,10 +968,14 @@ def coverage(evidence, cfg, employee_rows=None):
     unmeasured = []
     unusable_days = []
     bases = {}
+    pre_floor_days = 0
     for (eid, day), cell in sorted((evidence or {}).items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1]))):
         if not isinstance(cell, dict):
             continue
-        _h, basis, detail = resolve_day(cell, cfg, emp_by_id.get(eid))
+        if day_is_before_floor(day, cfg):
+            pre_floor_days += 1
+            continue
+        _h, basis, detail = resolve_day(cell, cfg, emp_by_id.get(eid), day)
         bases[basis] = bases.get(basis, 0) + 1
         has_schedule = _f(cell.get("scheduled")) > 0
         if has_schedule:
@@ -802,7 +991,9 @@ def coverage(evidence, cfg, employee_rows=None):
     pct = (measured_sched_days / sched_days * 100.0) if sched_days else 0.0
     return {"scheduled_days": sched_days, "measured_days": measured_sched_days,
             "measured_pct": round(pct, 2), "unmeasured_days": unmeasured,
-            "unusable_punch_days": unusable_days, "bases": bases}
+            "unusable_punch_days": unusable_days, "bases": bases,
+            "pre_effective_from_days": pre_floor_days,
+            "effective_from": effective_from(cfg)}
 
 
 def interlock(cov, cfg):
@@ -828,12 +1019,24 @@ def interlock(cov, cfg):
     thr = float(cfg["min_punch_coverage_pct"])
     base = {"measured_pct": pct, "threshold": thr, "mode": mode,
             "scheduled_days": int(cov.get("scheduled_days") or 0),
-            "measured_days": int(cov.get("measured_days") or 0)}
+            "measured_days": int(cov.get("measured_days") or 0),
+            "effective_from": effective_from(cfg),
+            "pre_effective_from_days": int(cov.get("pre_effective_from_days") or 0)}
     if mode != MODE_CLOCKED_ONLY:
         return {**base, "ok": True, "refused": False,
                 "reason": "This org still pays an unmeasured day from the schedule, so there is no "
                           "clocked-only basis to protect."}
     if int(cov.get("scheduled_days") or 0) == 0:
+        if base["pre_effective_from_days"]:
+            # EVERY scheduled day in this period is before the floor, so this period is not paid on
+            # a clocked basis at all. Refusing it would refuse a closed month forever, over days the
+            # owner's ruling already excused (`coverage` counts them out; this says so out loud).
+            return {**base, "ok": True, "refused": False,
+                    "reason": (f"Every one of this period's {base['pre_effective_from_days']} "
+                               f"employee-days falls before {base['effective_from']}, the date this "
+                               f"org's clocked-only basis starts from, so this period is still paid "
+                               f"exactly as it is today and there is no clocked-only basis to "
+                               f"protect.")}
         return {**base, "ok": True, "refused": False,
                 "reason": "No scheduled employee-days in this period — nothing to measure."}
     if pct >= thr:
@@ -846,6 +1049,10 @@ def interlock(cov, cfg):
               f"have no punch and no correction. Running now would pay those days nothing; that is "
               f"a missing-clock-data defect to fix, not a payroll figure. The uncorrected days are "
               f"listed rather than paid as zero.")
+    if base["pre_effective_from_days"]:
+        reason += (f" A further {base['pre_effective_from_days']} employee-days fall before "
+                   f"{base['effective_from']} and are excluded from this test entirely — they are "
+                   f"still paid exactly as they are today.")
     return {**base, "ok": not bool(cfg["interlock_refuses"]),
             "refused": bool(cfg["interlock_refuses"]), "reason": reason}
 

@@ -23,6 +23,11 @@ SECTIONS
   H. `measurement_state` — the measurement question asked on its own.
   I. Determinism and degradation.
   R. THE REGRESSION: payroll silently computed from the schedule.
+  P. THE 2026-10-12 REGRESSION: a pay path reaching the one home with NO EVIDENCE, and the
+     $374,733.02 -> $0.00 it produced over Jun–Oct 2026 on the live house config.
+  Q. THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1074): the clocked basis starts on a
+     declared date, every day before it keeps today's schedule answer, and coverage + the interlock
+     count only days on or after it.
   O. THE OWNER RULING: the clock report as a PAY SOURCE, pinned to the measured day of 2026-10-09.
   Z. ARMED negative control.
 
@@ -34,6 +39,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.storeops import payroll_hours_basis as B  # noqa: E402
+from app.modules.storeops import payroll_evidence as PE  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -487,17 +493,221 @@ check("O22 …and the override is still a measurement that pays",
 check("O23 every declared rule has an explaining sentence of its own",
       sorted(B.CLOCK_SOURCE_RULES) == sorted(B.CLOCK_RULE_REASONS), True)
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+section("P. THE 2026-10-12 REGRESSION — a pay path reaching the one home with NO EVIDENCE")
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+# THE DEFECT, MEASURED, NOT HYPOTHESISED. `resolve_shift_row(shift, cfg, emp)` with `cell=None` can
+# answer only from the shift row — i.e. from `shifts.actual_hours`, the dead column (7 of 7,740 live
+# rows). FOUR pay paths called it exactly that way: `account/coa` (the P&L wage line),
+# `commcalc/labour_coverage`, `storeops/pto_accrual` and `hr/router`. Under `clocked_only` with
+# `pay_from_schedule_default = false` — which the house org is LIVE on — every such row therefore
+# resolved `not_measured_unpaid` = ZERO, while the punches that measured those days sat in
+# `storeops.timelog`. Replayed over live house shifts on 2026-10-12 the P&L wage line booked
+# $374,733.02 -> $0.00 across Jun–Oct 2026. P1–P4 reproduce that; P5–P8 show the wiring fixing it.
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+_PDAY = "2026-10-09"                     # ON OR AFTER the floor, so the clocked basis applies
+_pshift = shift(day=_PDAY, sched=9.0, act=0.0)
+_ppunch = punch(day=_PDAY, hours=8.5)
+
+# P1-P2  THE DEFECT ITSELF: no evidence, so the punch cannot be seen and the day pays NOTHING.
+check("P1 THE DEFECT — no `cell`: a clocked-only day resolves to ZERO even though a punch exists",
+      B.resolve_shift_row(_pshift, CLOCKED)[:2], (0.0, B.NOT_MEASURED_UNPAID))
+_pev = B.build_evidence(shifts=[_pshift], punches=[_ppunch])
+check("P2 …and the punch WAS there all along: the evidence index holds its 8.5h",
+      B.resolve_day(_pev[("E1", _PDAY)], CLOCKED)[:2], (8.5, B.CLOCKED))
+
+# P3-P4  AT PERIOD GRAIN, which is where the money is. One rep, 20 scheduled days, every one of them
+#        clocked — the shape of a REAL month, not an edge case.
+_pdays = [f"2026-10-{d:02d}" for d in range(6, 26)]
+_pshifts = [shift(day=d, sched=9.0) for d in _pdays]
+_ppunches = [punch(day=d, hours=8.5) for d in _pdays]
+_RATE = 17.0
+check("P3 THE DEFECT at period grain — the wage line prices 20 fully-clocked days at $0.00",
+      round(sum(B.resolve_shift_row(s, CLOCKED)[0] for s in _pshifts) * _RATE, 2), 0.0)
+_pev_m = B.build_evidence(shifts=_pshifts, punches=_ppunches)
+# ★ AND A BARE CELL IS NOT THE FIX ★ — the trap this harness caught while the fix was being written.
+# `resolve_shift_row(..., cell)` returns 0.0 for a day a punch measured, because the Payroll screen
+# counts those hours off the PUNCH row; a shift-row loop never sees a punch row, so the $0.00 simply
+# changes basis. The money is only right when the DAY is resolved once and allocated back, which is
+# `payroll_evidence.paid_hours_rows`.
+check("P4 a bare cell swaps one ZERO for another — `clocked` 0.0 instead of `not_measured` 0.0",
+      [round(sum(B.resolve_shift_row(s, CLOCKED, None,
+                                     _pev_m.get((s["employee_id"], s["shift_date"])))[0]
+                 for s in _pshifts) * _RATE, 2),
+       B.resolve_shift_row(_pshifts[0], CLOCKED, None, _pev_m[("E1", _pdays[0])])[1]],
+      [0.0, B.CLOCKED])
+_prows = PE.paid_hours_rows({"evidence": _pev_m, "cfg": CLOCKED}, _pshifts, cfg=CLOCKED)
+check("P4b …and the day-grain allocation prices the same month at the $2,890.00 the punches measured",
+      round(sum(r["hours"] for r in _prows) * _RATE, 2), 2890.0)
+check("P4c …one row per shift row, in order, each carrying its own day's basis",
+      (len(_prows), _prows[0]["basis"], _prows[0]["date"]), (20, B.CLOCKED, _pdays[0]))
+# AND THE DEFAULT MODE IS UNTOUCHED WHERE NOTHING MEASURED: the allocation changes which hours a day
+# gets, never whose loop they land in.
+_pq_sched = [shift(day=d, sched=9.0) for d in _pdays]
+_pq_rows = PE.paid_hours_rows({"evidence": B.build_evidence(shifts=_pq_sched), "cfg": DEFAULT},
+                              _pq_sched, cfg=DEFAULT)
+check("P4d an UNMEASURED month under the house default is byte-identical to today's 180.0h",
+      (round(sum(r["hours"] for r in _pq_rows), 2),
+       round(sum(B.resolve_shift_row(s, DEFAULT)[0] for s in _pq_sched), 2)), (180.0, 180.0))
+# A TWO-STORE DAY: the day is resolved ONCE and split in the proportions those rows always had.
+_two = [shift(day=_PDAY, sched=4.0), shift(day=_PDAY, sched=5.0)]
+for _r in _two:
+    _r["store_code"] = "A" if _r is _two[0] else "Bb"
+_two_rows = PE.paid_hours_rows({"evidence": B.build_evidence(shifts=_two), "cfg": DEFAULT},
+                               _two, cfg=DEFAULT)
+check("P4e a two-store day splits in its own proportions and foots exactly",
+      ([r["hours"] for r in _two_rows], round(sum(r["hours"] for r in _two_rows), 2)),
+      ([4.0, 5.0], 9.0))
+_two_ev = B.build_evidence(shifts=_two, punches=[dict(punch(day=_PDAY, hours=8.0), store_code="Bb")])
+_two_m = PE.paid_hours_rows({"evidence": _two_ev, "cfg": CLOCKED}, _two, cfg=CLOCKED)
+check("P4f …and a measured two-store day foots to the PUNCH's 8.0h, placed at the punch's store",
+      (round(sum(r["hours"] for r in _two_m), 2), _two_m[0]["store_code"]), (8.0, "Bb"))
+# A PUNCH ON A DAY NO SHIFT COVERS IS NOT FOLDED IN — it is NAMED. Widening four reports' day
+# universe is a separate question, and this fix reports it instead of answering it quietly.
+check("P4g a punch on an unscheduled day is reported, never silently added to a shift-row report",
+      [r["date"] for r in PE.paid_hours_rows({"evidence": B.build_evidence(
+          shifts=[shift(day=_PDAY, sched=9.0)], punches=[punch(day="2026-10-10", hours=7.0)])},
+          [shift(day=_PDAY, sched=9.0)], cfg=CLOCKED)], [_PDAY])
+# A CALLER THAT COULD NOT READ degrades to the evidence-free answer rather than to zero.
+check("P4h no evidence at all degrades to the pre-2026-10-12 arithmetic, not to $0.00",
+      round(sum(r["hours"] for r in PE.paid_hours_rows(None, _pq_sched, cfg=DEFAULT)), 2), 180.0)
+
+# P5-P6  THE INTERLOCK IS THE SECOND HALF. None of the four consulted it, so nothing stopped the
+#        zero from being published. With no punches at all the period is REFUSED, not priced.
+_pcov_none = B.coverage(B.build_evidence(shifts=_pshifts), CLOCKED)
+_plock_none = B.interlock(_pcov_none, CLOCKED)
+check("P5 a clocked-only period with NO punches is REFUSED, never paid as a shortfall",
+      (_plock_none["refused"], _plock_none["measured_pct"]), (True, 0.0))
+check("P6 …and the refusal carries the sentence a caller must report",
+      bool(_plock_none["reason"]) and "below the" in _plock_none["reason"], True)
+_plock_all = B.interlock(B.coverage(_pev_m, CLOCKED), CLOCKED)
+check("P7 a fully-clocked period is NOT refused", (_plock_all["refused"], _plock_all["measured_pct"]),
+      (False, 100.0))
+
+# P8  THE DAY TRAVELS IN THE CELL, so a caller that built its evidence through `build_evidence`
+#     cannot forget to pass it — the API property the floor below depends on.
+check("P8 build_evidence writes the key's own date into the cell",
+      _pev_m[("E1", "2026-10-07")]["day"], "2026-10-07")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+section("Q. THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1074)")
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+# OWNER, VERBATIM: *"Payroll from clack in should be from Oct 4 th onwards which would be the new
+# cycle"*. So the clocked-only basis applies FROM 2026-10-04, and every day BEFORE it keeps today's
+# schedule-based answer — which is what makes a recompute of Jun/Jul/Aug/Sep restate nothing.
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+FLOORED = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
+                            "pay_from_schedule_default": False,
+                            "clocked_basis_effective_from": "2026-10-04"})
+
+check("Q1 the floor ships NULL, so no existing org has one", DEFAULT["clocked_basis_effective_from"], None)
+check("Q2 …and with no floor NO day is before it — the mode applies to every day, as today",
+      [B.day_is_before_floor(d, CLOCKED) for d in ("2020-01-01", "2026-06-15", "2099-12-31")],
+      [False, False, False])
+check("Q3 the boundary is STRICTLY BEFORE: the floor day itself is on the new basis",
+      [B.day_is_before_floor(d, FLOORED)
+       for d in ("2026-10-03", "2026-10-04", "2026-10-05")], [True, False, False])
+check("Q4 an UNDATED day keeps today's answer rather than being assumed onto one side",
+      B.day_is_before_floor(None, FLOORED), False)
+
+# Q5-Q8  THE GUARANTEE: a pre-floor day is BYTE-IDENTICAL to this org's schedule-fallback answer.
+_PRE, _POST = "2026-09-15", "2026-10-15"
+for _lbl, _d, _want in (("Q5 Jun", "2026-06-15", 9.0), ("Q6 Sep", _PRE, 9.0), ("Q7 Oct 3", "2026-10-03", 9.0)):
+    check(f"{_lbl} — a pre-floor unmeasured day still pays its SCHEDULE",
+          B.resolve_shift_row(shift(day=_d, sched=9.0), FLOORED)[:2], (9.0, B.SCHEDULE_OPT_IN))
+check("Q8 …while the same shape ON the new cycle is unpaid and SAYS so",
+      B.resolve_shift_row(shift(day=_POST, sched=9.0), FLOORED)[:2], (0.0, B.NOT_MEASURED_UNPAID))
+
+# Q9  BYTE-IDENTICAL, asserted on the whole detail dict and not just the hours — including the
+#     `count_auto_clockout_punches` forcing `resolve_config` applies ONLY in schedule-fallback mode.
+_FLOOR_ONLY_KEYS = ("effective_from", "pre_effective_from", "floor_reason", "org_mode")
+_d_pre = B.resolve_shift_row(shift(day=_PRE, sched=9.0), FLOORED)[2]
+_d_fb = B.resolve_shift_row(shift(day=_PRE, sched=9.0), DEFAULT)[2]
+check("Q9 a pre-floor day's whole DETAIL equals the house schedule-fallback answer",
+      {k: v for k, v in _d_pre.items() if k not in _FLOOR_ONLY_KEYS},
+      {k: v for k, v in _d_fb.items() if k not in _FLOOR_ONLY_KEYS})
+check("Q10 …including the auto-clockout forcing, which only schedule-fallback mode applies",
+      (FLOORED["count_auto_clockout_punches"],
+       FLOORED[B.PRE_FLOOR_KEY]["count_auto_clockout_punches"]), (False, True))
+check("Q11 …and the manual-hours forcing, the other mode-dependent one",
+      (FLOORED["count_manual_hours"], FLOORED[B.PRE_FLOOR_KEY]["count_manual_hours"]), (True, False))
+
+# Q12-Q13  THE WHOLE SWITCH IS RESTORED, not a third of it. This is the trap the first cut fell into:
+#          forcing only `hours_basis_mode` back leaves `pay_from_schedule_default = false` — the live
+#          house value — and schedule-fallback + no opt-in + nothing measured is STILL $0.00. So
+#          Jun–Sep stayed at zero through the one door the floor had left open.
+check("Q12 the pre-floor config restores pay_from_schedule_default to the house TRUE",
+      (FLOORED["pay_from_schedule_default"],
+       FLOORED[B.PRE_FLOOR_KEY]["pay_from_schedule_default"]), (False, True))
+check("Q13 …and the per-employee tick box does not bite on a pre-floor day either",
+      [B.resolve_shift_row(shift(day=d, sched=9.0), FLOORED,
+                           {"employee_id": "E1", "pay_from_schedule": False})[:2]
+       for d in (_PRE, _POST)],
+      [(9.0, B.SCHEDULE_OPT_IN), (0.0, B.NOT_MEASURED_UNPAID)])
+
+# Q14  A MEASURED pre-floor day is untouched: the floor restores the old BASIS, it does not discard
+#      evidence. A punch that was being paid before the floor existed keeps being paid.
+_q_pre_ev = B.build_evidence(shifts=[shift(day=_PRE, sched=9.0)], punches=[punch(day=_PRE, hours=8.5)])
+check("Q14 a pre-floor day WITH a punch still pays the punch — the floor discards no evidence",
+      B.resolve_day(_q_pre_ev[("E1", _PRE)], FLOORED)[:2], (8.5, B.CLOCKED))
+
+# Q15-Q18  COVERAGE AND THE INTERLOCK COUNT ONLY DAYS ON OR AFTER THE FLOOR. Without this, June
+#          2026 (no punches at all, by construction) would hold the measured share below the
+#          threshold forever and refuse a period the floor had already excused.
+_q_span = ([shift(day=f"2026-09-{d:02d}", sched=9.0) for d in range(1, 29)]
+           + [shift(day=f"2026-10-{d:02d}", sched=9.0) for d in range(6, 26)])
+_q_punches = [punch(day=f"2026-10-{d:02d}", hours=8.5) for d in range(6, 26)]
+_q_cov = B.coverage(B.build_evidence(shifts=_q_span, punches=_q_punches), FLOORED)
+check("Q15 the 28 pre-floor employee-days are EXCLUDED from the coverage denominator",
+      (_q_cov["scheduled_days"], _q_cov["measured_days"]), (20, 20))
+check("Q16 …and COUNTED as excluded, so they are never merely missing",
+      _q_cov["pre_effective_from_days"], 28)
+check("Q17 …so the interlock does not refuse a period the floor already excused",
+      B.interlock(_q_cov, FLOORED)["refused"], False)
+_q_cov_unfloored = B.coverage(B.build_evidence(shifts=_q_span, punches=_q_punches), CLOCKED)
+check("Q18 …and WITHOUT the floor that same period IS refused — the exclusion is doing the work",
+      (B.interlock(_q_cov_unfloored, CLOCKED)["refused"], _q_cov_unfloored["scheduled_days"]),
+      (True, 48))
+_q_all_pre = B.coverage(B.build_evidence(shifts=[shift(day="2026-06-15", sched=9.0)]), FLOORED)
+_q_lock_pre = B.interlock(_q_all_pre, FLOORED)
+check("Q19 a period ENTIRELY before the floor is not refused, and the reason names the date",
+      (_q_lock_pre["refused"], "2026-10-04" in (_q_lock_pre["reason"] or "")), (False, True))
+
+# Q20-Q22  THE DETAIL TELLS THE READER, so a figure is never shown on a basis the org's mode does
+#          not name. And `punch_counts_for_pay` routes through the same floor.
+check("Q20 a pre-floor day's detail names the floor and says which side it fell on",
+      (_d_pre["effective_from"], _d_pre["pre_effective_from"], _d_pre["mode"], _d_pre["org_mode"]),
+      ("2026-10-04", True, B.MODE_SCHEDULE_FALLBACK, B.MODE_CLOCKED_ONLY))
+check("Q21 …and carries a sentence saying a recompute restates nothing",
+      "restates nothing" in (_d_pre.get("floor_reason") or ""), True)
+_q_auto = punch(day=_PRE, hours=9.0, auto=True)
+check("Q22 an AUTO-CLOSED punch on a pre-floor day still counts for pay, as it does today",
+      (B.punch_counts_for_pay(_q_auto, {}, FLOORED),
+       B.punch_counts_for_pay(punch(day=_POST, hours=9.0, auto=True), {}, FLOORED)), (True, False))
+
+# Q23  RULE TWO. No date is spelled in the module; the floor is a config value and nothing else.
+check("Q23 the floor is CONFIG — it is one of the declared config fields, with a None default",
+      ("clocked_basis_effective_from" in B.DEFAULT_CONFIG,
+       B.DEFAULT_CONFIG["clocked_basis_effective_from"]), (True, None))
+check("Q24 a malformed date reads as NO FLOOR rather than as some guessed day",
+      [B.resolve_config({"clocked_basis_effective_from": v})["clocked_basis_effective_from"]
+       for v in ("", "not-a-date", "2026-10", None)], [None, None, None, None])
+
+
 section("Z. ARMED negative control")
 _f0 = len(FAIL)
 check("Z-armed unruled basis", B.basis_pays_hours("invented"), True)
 check("Z-armed clocked-only pays the schedule", one(shifts=[shift()], cfg=CLOCKED)[0], 9.0)
 check("Z-armed interlock passes at 70%", B.interlock(_cov, CLOCKED)["ok"], True)
+check("Z-armed a pre-floor day is unpaid", B.resolve_shift_row(shift(day="2026-09-15"), FLOORED)[0], 0.0)
+check("Z-armed the floor excludes nothing from coverage", _q_cov["scheduled_days"], 48)
 _fired = len(FAIL) - _f0
-if _fired == 3:
+if _fired == 5:
     FAIL[:] = FAIL[:_f0]
-    PASS.append("Z1 negative control fired on all three wrong expectations (the checks are live)")
+    PASS.append("Z1 negative control fired on all five wrong expectations (the checks are live)")
 else:
-    FAIL.append(f"Z1 NEGATIVE CONTROL DID NOT FIRE — {_fired}/3 wrong answers accepted.")
+    FAIL.append(f"Z1 NEGATIVE CONTROL DID NOT FIRE — {_fired}/5 wrong answers accepted.")
 
 print(f"\n{'=' * 78}")
 for f in FAIL:

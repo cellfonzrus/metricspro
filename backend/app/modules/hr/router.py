@@ -26,6 +26,8 @@ from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
 # THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
 from app.modules.storeops import payroll_hours_basis as _hours_basis
+# THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
+from app.modules.storeops import payroll_evidence as _payevid
 
 router = APIRouter(prefix="/hr", tags=["HR"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -251,18 +253,33 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
     _hb_cfg = _hours_basis.load_config(so, org_id)
     _emp_by_id = {e.get("employee_id"): e for e in (emps or []) if e.get("employee_id")}
     _hb_bases = {}
+    _hb_evidence = {}
+    _hb_lock, _hb_refusal = None, None
     if start:
-        shifts = (so.table("shifts").select("employee_id,scheduled_hours,actual_hours")
+        # `shift_date` ADDED 2026-10-12: the evidence index is keyed (employee_id, day), and a row
+        # that does not name its own date can be matched to no punch at all — which is how this
+        # surface came to read `shifts.actual_hours` alone (the dead column: 7 of 7,740 live rows).
+        shifts = (so.table("shifts").select("employee_id,scheduled_hours,actual_hours,shift_date")
                   .eq("org_id", org_id).eq("is_deleted", False)
                   .gte("shift_date", start).lt("shift_date", nxt).execute().data) or []
-        for s in shifts:
-            eid = s.get("employee_id")
+        # THE DAY'S PUNCHES AND THE INTERLOCK (owner directive 2026-10-12, index §14y). ONE read —
+        # `storeops/payroll_evidence.period_evidence`, the same one the P&L wage line uses — so HR
+        # Total Compensation and the P&L cannot disagree about an employee's paid hours. Under
+        # `clocked_only` with no evidence this loop returned ZERO wages for everybody.
+        _hb_res = _payevid.period_evidence(so, org_id, start, nxt, shifts, employee_rows=emps,
+                                           cfg=_hb_cfg)
+        _hb_cfg, _hb_evidence = _hb_res["cfg"], _hb_res["evidence"]
+        _hb_lock, _hb_refusal = _hb_res["interlock"], _payevid.refusal(_hb_res)
+        # ONE ROW PER SHIFT ROW, each carrying its share of its DAY's paid hours (index §14y).
+        # Was `actual_hours or scheduled_hours`, then the one home WITHOUT evidence — which on a
+        # clocked-only org is the same defect in a hat — and a bare cell would read 0.0 for every
+        # day a punch measured, because this loop never sees a punch row.
+        for _r in _payevid.paid_hours_rows(_hb_res, shifts, emp_by_id=_emp_by_id, cfg=_hb_cfg):
+            eid = _r["employee_id"]
             if not eid:
                 continue
-            # ONE HOME for paid hours (index §14y). Was `actual_hours or scheduled_hours`.
-            h, _b, _ = _hours_basis.resolve_shift_row(s, _hb_cfg, _emp_by_id.get(eid))
-            hours_by_eid[eid] = hours_by_eid.get(eid, 0.0) + h
-            _hb_bases[_b] = _hb_bases.get(_b, 0) + 1
+            hours_by_eid[eid] = hours_by_eid.get(eid, 0.0) + _r["hours"]
+            _hb_bases[_r["basis"]] = _hb_bases.get(_r["basis"], 0) + 1
 
     # Commission — rep_commissions for the period, keyed by either name field.
     comm = (cc.table("rep_commissions")
@@ -341,6 +358,18 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
            "totals": {"base_salary": round(tot_w, 2), "commission": round(tot_c, 2),
                       "chargebacks": round(tot_cb, 2), "total_comp": total_comp,
                       "annualized": round(total_comp * 12, 2), "employees": len(rows)}}
+    # THE HOURS-BASIS VERDICT, REPORTED (owner directive 2026-10-12, index §14y). Every `base_salary`
+    # above is hours-derived, so a period whose paid hours the interlock REFUSES has a total comp
+    # that is not a measurement — and it says so rather than publishing the figure as counted.
+    # CLAUDE.md: a defect found in live data is reported, never hidden.
+    out["hours_basis"] = {"bases": _hb_bases, "interlock": _hb_lock, "refusal": _hb_refusal}
+    if _hb_refusal:
+        out["hours_basis_warning"] = _hb_refusal
+        if response is not None:
+            try:
+                response.headers["X-Hours-Basis-Refused"] = "1"
+            except Exception:
+                pass
     # Gate-1 N5 — this endpoint returns a dict (unlike GET /payroll's bare array), so the warning is
     # additive both as a response key AND a header for consistency with the other two salary surfaces.
     if salary_override_failed:
