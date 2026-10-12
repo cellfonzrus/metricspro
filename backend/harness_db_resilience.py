@@ -1075,7 +1075,26 @@ _all_routes = _flatten_routes(real_app.routes)
 # added, NONE removed. The pin was re-taken on a measured, fully-accounted addition; it was never
 # relaxed to make CI green, and the three route names above are what a future reader checks it
 # against.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1778"))
+#
+# RE-PINNED 2026-10-12, 1778 -> 1784 (index COMMCALC-03). Every record above stays. The delta is SIX
+# routes and each is named: GET /commcalc/prospects (the prospect list), POST /commcalc/prospects
+# (create one), PUT /commcalc/prospects/{prospect_id} (edit the rent / threshold / mode), DELETE
+# /commcalc/prospects/{prospect_id} (drop the evaluation and its uploaded rows by FK cascade), POST
+# /commcalc/prospects/{prospect_id}/upload (land a carrier file into prospect_feed_row) and
+# GET /commcalc/prospects/{prospect_id}/evaluation (compute the statement). Two reads compute and
+# never write; the three writes and the delete touch ONLY commcalc.store_prospect and
+# commcalc.prospect_feed_row, which no live report reads, and none of them pays anybody - AST-locked
+# by harness_prospect_eval.py SECTION G, which fails the build if any of them ever writes a live
+# table, a raw_* feed, a store mapping/alias/roster row or an account statement.
+# Verified the same way as every pin above, BEFORE re-pinning: the harness was run on a clean
+# `git worktree` of origin/main and reported 1778 PASS / 138 passed 0 failed, then on this tree and
+# reported 1784, and `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 6 with
+# `'^-@router\.'` = 0 - six added, NONE removed. (The first measurement of this pin was taken by
+# stashing, which does NOT remove committed changes and so compared this tree with itself; the
+# worktree is what settled it.) The pin was re-taken on a measured, fully-accounted addition; it was
+# never relaxed to make CI green, and the six route names above are what a future reader checks it
+# against.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1784"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

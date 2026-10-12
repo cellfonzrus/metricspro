@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, apiUpload, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // STORE TAKEOVER EVALUATION — owner directive 2026-10-12: *"need to make a module for evaluating the
 // store sales for the store we need to take over, but without creating the actual stores but upload
@@ -401,9 +402,12 @@ export default function StoreTakeoverPage() {
 
       {list && Object.keys(list.config_columns_missing || {}).length > 0 &&
         <div className="card" style={{ padding: '10px 14px', marginBottom: 12, background: '#fef3c7', color: '#92400e', fontSize: 13 }}>
-          <b>⚠︎ Migration 1077 has not been applied yet.</b> The evaluation still runs on its house
-          defaults — more than 2 lines on one account, a 3-month expense basis, rent read from the
-          &ldquo;Rent / Lease&rdquo; line — but none of those can be changed per tenant until it is.
+          <b>⚠︎ The per-company settings for this page are not available yet.</b>{' '}
+          <SetupNotice
+            lead={'The evaluation still runs on its built-in defaults \u2014 more than 2 lines on one ' +
+                  'account, a 3-month expense basis, and rent read from the \u201cRent / Lease\u201d line ' +
+                  '\u2014 but none of those can be changed for your company until then.'}
+            detail={Object.values(list.config_columns_missing || {})} />
         </div>}
 
       {/* ── WHICH PROSPECT, WHICH MONTH ─────────────────────────────────────────────────────── */}
@@ -656,7 +660,8 @@ export default function StoreTakeoverPage() {
 
       {pid && !loading && !statement && !data?.error &&
         <div className="card" style={{ padding: '16px', fontSize: 13, color: 'var(--text2)' }}>
-          Nothing to evaluate yet — upload this store&rsquo;s MA Commission Details to begin.
+          Nothing to evaluate yet — upload this store&rsquo;s{' '}
+          {registry.ma_commission?.label || 'carrier commission'} file to begin.
         </div>}
 
       {loading && <div style={{ fontSize: 13, color: 'var(--text3)', padding: 20 }}>Working out the numbers…</div>}

@@ -75,7 +75,14 @@ CREATE TABLE IF NOT EXISTS commcalc.store_prospect (
   exclusion_mode         TEXT,
   status                 TEXT NOT NULL DEFAULT 'evaluating',
   notes                  TEXT,
-  created_by             UUID,
+  -- NAMED WITH THE `_auth_id` SUFFIX DELIBERATELY. The house reserves the bare `created_by` /
+  -- `uploaded_by` for TEXT actor columns, and harness_actor_uid_lock.py resolves a UUID actor
+  -- column BY NAME across the whole repo: declaring the bare name UUID here made five
+  -- pre-existing TEXT writers in core / helpdesk / marketing / pos read as non-UUID literals
+  -- into a UUID column. A UUID actor column carries the suffix (platform_notice
+  -- .created_by_auth_id, restore_drill.recorded_by_auth_id); this one holds `_caller_uid`'s
+  -- auth uid, or NULL when nobody signed in resolves.
+  created_by_auth_id     UUID,
   updated_at             TIMESTAMPTZ DEFAULT NOW(),
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   -- One prospect per name per org. A second row for the same name would be two evaluations of one
@@ -147,7 +154,8 @@ CREATE TABLE IF NOT EXISTS commcalc.prospect_feed_row (
   row_index    INT,
   row          JSONB NOT NULL DEFAULT '{}'::jsonb,
   upload_batch UUID,
-  uploaded_by  UUID,
+  -- `_auth_id` for the same reason as store_prospect.created_by_auth_id above.
+  uploaded_by_auth_id  UUID,
   uploaded_at  TIMESTAMPTZ DEFAULT NOW()
 );
 

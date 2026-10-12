@@ -1025,9 +1025,6 @@ jobs:
       - name: Run the declared-category target proof (the four built-ins byte-identical with a catalog present; a declared category reaches need and pace with no new arithmetic; the backward calculation is honest with no days left - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_declared_axis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the store-takeover evaluation proof (a prospect books through the company's own homes and writes none of them; the average survives a month that omits a line and a month with a wider roster; a line nothing can answer is never a measured zero - index COMMCALC-03)
-        working-directory: backend
-        run: python3 harness_prospect_eval.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1605,6 +1602,25 @@ jobs:
         shell: bash
         run: python3 harness_base_url.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
 
+
+  # THE STORE-TAKEOVER EVALUATION PROOF (index COMMCALC-03) drives the real prospect_eval rules over the
+  # live booking one-homes it dereferences (ma_commission_bookings / ma_tx_bookings, ma_unit_price_from_rows
+  # / ma_sold_cost_from_rows, route_expense_line, PL_SPEC) and AST-scans the prospect endpoints to prove they
+  # write no live table. It reaches app.* through those homes, and app/core/config.py imports
+  # pydantic_settings, so it runs in its OWN job with the backend's dependencies installed - the no-install
+  # job would die with ModuleNotFoundError before check one (harness_ci_pipefail_lock, 2026-10-12). DB-free.
+  store-takeover-eval-proof:
+    name: Store-takeover evaluation proof (DB-free, the real booking homes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-takeover evaluation proof (a prospect books through the company's own homes and writes none of them; the average survives a month that omits a line and a month with a wider roster; a line nothing can answer is never a measured zero - index COMMCALC-03)
+        working-directory: backend
+        run: python3 harness_prospect_eval.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
   # THE INVENTORY-INTEGRITY PROOF (index §11b) drives the REAL engine, landing guard, status writer and /pos endpoints over
   # the in-memory client (harness_intake_fakes) with the anonymised 383-unit regression fixture — it imports the app, so it
   # runs in its own job with the backend's dependencies installed, like the customer-master proof. DB-free.

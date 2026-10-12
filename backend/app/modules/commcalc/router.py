@@ -48133,7 +48133,7 @@ def create_prospect(body: ProspectIn, org_id: str = ORG_ID, authorization: str =
            "family_line_threshold": _prospect_num(body.family_line_threshold, int),
            "exclusion_mode": (body.exclusion_mode or "").strip().lower() or None,
            "notes": (body.notes or "").strip() or None,
-           "created_by": _caller_uid(authorization)}
+           "created_by_auth_id": _caller_uid(authorization)}
     try:
         out = (sb().schema("commcalc").table("store_prospect").insert(row).execute().data) or []
     except Exception as e:
@@ -48281,7 +48281,7 @@ async def upload_prospect_feed(prospect_id: str,
              "period": str(r.get("period") or "").strip() or None,
              "period_month": r.get("period_month"), "period_year": r.get("period_year"),
              "row_index": i, "row": r, "upload_batch": batch,
-             "uploaded_by": _caller_uid(authorization)}
+             "uploaded_by_auth_id": _caller_uid(authorization)}
             for i, r in enumerate(mapped)]
     try:
         # INSERT FIRST is impossible here without a staging column, so the delete is narrowed to the
