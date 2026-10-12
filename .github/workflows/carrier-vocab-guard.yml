@@ -490,6 +490,17 @@ on:
       # for the same §13e reason as the lines above, plus every module wired to the registry: a
       # caller that stops dereferencing it is exactly what this job exists to catch, so a change to
       # one of them must not be able to skip the job.
+      # index §COMMCALC-05 — ONE PULL LOOP, MANY FEEDS. Same §13e reason as the lines above: both
+      # locks name THEMSELVES, plus the loop, the two adapters and the pure parser. The ratchet that
+      # stops a third feed copying the loop can only hold if a change to any of them runs the job.
+      - "backend/harness_portal_report_pull.py"
+      - "backend/harness_pos_report_feed.py"
+      - "backend/app/modules/commcalc/portal_report_pull.py"
+      - "backend/app/modules/commcalc/pos_report_feed.py"
+      - "backend/app/modules/commcalc/pos_report_sweep.py"
+      - "backend/app/modules/commcalc/merchant_portal_sweep.py"
+      - "backend/app/modules/commcalc/merchant_portals.py"
+      - "database/migrations/1078_portal_metric_day.sql"
       - "backend/harness_portal_secret_lock.py"
       - "backend/app/modules/core/portal_secret.py"
       - "backend/app/core/encryption_backfill.py"
@@ -1047,6 +1058,12 @@ jobs:
       - name: Run the declared-category target proof (the four built-ins byte-identical with a catalog present; a declared category reaches need and pace with no new arithmetic; the backward calculation is honest with no days left - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_declared_axis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the portal-pull lock (ONE loop reaches, exports and lands every portal report; a feed is an adapter; a zero-row pull is never delivered; the three sweeps that still drive their own are pinned with reasons and the count may only shrink - index COMMCALC-05)
+        working-directory: backend
+        run: python3 harness_portal_report_pull.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the POS-report feed proof (a report line is matched to a DECLARED category by the tenant's own mapping or its own label; a line two categories could claim resolves to NEITHER; every row carries the basis it was matched on - index COMMCALC-05)
+        working-directory: backend
+        run: python3 harness_pos_report_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
