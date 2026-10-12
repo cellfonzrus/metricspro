@@ -486,6 +486,15 @@ on:
       # the frontend screens the axis lock scans are already named by the globs below.
       - "backend/harness_target_axis_lock.py"
       - "backend/harness_target_declared_axis.py"
+      # index §COMMCALC-03 — EVALUATE A STORE WE DO NOT OWN YET. The lock NAMES ITSELF for the same
+      # §13e reason as the lines above, and names its home plus the three it dereferences, so a
+      # change to any booking one-home the prospect P&L reads re-runs the proof that the two still
+      # agree. The routers it AST-scans are already named by the globs below.
+      - "backend/harness_prospect_eval.py"
+      - "backend/app/modules/commcalc/prospect_eval.py"
+      - "backend/app/modules/account/device_cogs.py"
+      - "backend/app/modules/account/ma_store_pnl.py"
+      - "backend/app/modules/account/coa.py"
       - "backend/app/modules/commcalc/targets_engine.py"
       - "backend/app/modules/commcalc/manager_report_card.py"
       - "frontend/src/lib/target-axis.ts"
@@ -1008,6 +1017,9 @@ jobs:
       - name: Run the declared-category target proof (the four built-ins byte-identical with a catalog present; a declared category reaches need and pace with no new arithmetic; the backward calculation is honest with no days left - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_declared_axis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the store-takeover evaluation proof (a prospect books through the company's own homes and writes none of them; the average survives a month that omits a line and a month with a wider roster; a line nothing can answer is never a measured zero - index COMMCALC-03)
+        working-directory: backend
+        run: python3 harness_prospect_eval.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
