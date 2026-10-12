@@ -40,6 +40,9 @@ type Case = {
   fee_lines: number | null; companion_lines: number
   description: string; coaching_note: string; signal: string[]
 }
+// One handset line with its case's identity folded in — the second export sheet's row. Named so the
+// export columns can be typed; `any` there would let a renamed field through silently.
+type FlatLine = Line & { day: string; store: string; buyer: string }
 type Summary = {
   handset_lines?: number; buyer_days?: number; cases?: number
   handsets_in_cases?: number; split_cases?: number; zero_dollar_cases?: number
@@ -67,20 +70,27 @@ export default function MultiHandsetDrillDownPage() {
   const { period } = usePeriod()
   const [data, setData] = useState<Payload | null>(null)
   const [err, setErr] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loadedPeriod, setLoadedPeriod] = useState<string | null>(null)
   const [onlyNoAcc, setOnlyNoAcc] = useState(false)
   const [open, setOpen] = useState<Record<string, boolean>>({})
 
+  // `loading` is DERIVED from "which period have we actually loaded", not held in its own state.
+  // Writing setLoading(true) in the effect body is a synchronous setState inside an effect, which
+  // cascades a render and which the house lint rejects — and the derived form is simply truer: the
+  // page is loading exactly while the period on screen is not the period in hand.
+  const loading = loadedPeriod !== (period || '')
+
   useEffect(() => {
-    setLoading(true)
-    setErr('')
+    let live = true
     api(`/api/v1/commcalc/watchdog/multi-handset?period=${encodeURIComponent(period || '')}`)
-      .then((d: Payload) => setData(d))
-      .catch(e => { setErr(e?.message || String(e)); setData(null) })
-      .finally(() => setLoading(false))
+      .then((d: Payload) => { if (live) { setData(d); setErr('') } })
+      .catch(e => { if (live) { setErr(e?.message || String(e)); setData(null) } })
+      .finally(() => { if (live) setLoadedPeriod(period || '') })
+    // A period switched twice in quick succession must not let the FIRST answer land second.
+    return () => { live = false }
   }, [period])
 
-  const cases = data?.cases || []
+  const cases = useMemo(() => data?.cases || [], [data])
   const shown = useMemo(
     () => (onlyNoAcc ? cases.filter(c => c.accessory_dollars === 0) : cases),
     [cases, onlyNoAcc])
@@ -118,16 +128,16 @@ export default function MultiHandsetDrillDownPage() {
       {
         name: 'Every handset line',
         columns: [
-          { header: 'Date', get: (r: any) => r.day, type: 'date' },
-          { header: 'Store', get: (r: any) => r.store, role: 'store' },
-          { header: 'Buyer', get: (r: any) => r.buyer },
-          { header: 'Receipt', get: (r: any) => r.receipt },
-          { header: 'Who sold it', get: (r: any) => r.rep || '', role: 'rep' },
-          { header: 'Device', get: (r: any) => r.device || '' },
-          { header: 'Serial', get: (r: any) => r.serial || '' },
-          { header: 'Amount', get: (r: any) => r.amount, money: true, align: 'right' },
+          { header: 'Date', get: (r: FlatLine) => r.day, type: 'date' },
+          { header: 'Store', get: (r: FlatLine) => r.store, role: 'store' },
+          { header: 'Buyer', get: (r: FlatLine) => r.buyer },
+          { header: 'Receipt', get: (r: FlatLine) => r.receipt },
+          { header: 'Who sold it', get: (r: FlatLine) => r.rep || '', role: 'rep' },
+          { header: 'Device', get: (r: FlatLine) => r.device || '' },
+          { header: 'Serial', get: (r: FlatLine) => r.serial || '' },
+          { header: 'Amount', get: (r: FlatLine) => r.amount, money: true, align: 'right' },
         ],
-        rows: shown.flatMap(c => (c.lines || []).map(l => ({
+        rows: shown.flatMap((c): FlatLine[] => (c.lines || []).map(l => ({
           day: c.day, store: c.store,
           buyer: (c.buyer_as_recorded || [])[0] || c.buyer, ...l,
         }))),
