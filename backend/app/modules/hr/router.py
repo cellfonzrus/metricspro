@@ -1110,38 +1110,28 @@ def hr_security_status(authorization: str = Header(default="")):
 
 @router.post("/onboarding/encrypt-existing")
 def onboarding_encrypt_existing(authorization: str = Header(default="")):
-    """One-time (idempotent) backfill: encrypt any sensitive intake values still stored as plaintext,
-    for every employee in the caller's tenant. Admin/HR only. No-op per value if already encrypted or
-    if no key is configured. Safe to run repeatedly."""
+    """Seal any sensitive intake values still stored as plaintext for the caller's tenant. Admin/HR
+    only, idempotent, safe to run repeatedly.
+
+    This BUTTON is no longer the only way these get sealed, and it no longer holds the loop. It calls
+    `encryption_backfill.backfill_intake_sensitive`, which `run_all()` also runs (so
+    ENCRYPTION_BACKFILL_ON_BOOT covers this family too — index §CORE-04). Before that, this endpoint
+    WAS the only path, which is how two employees' bank routing numbers were still readable in plain
+    text on 2026-10-12: nothing was wrong with the code, nobody had pressed the button."""
     org_id, email, role = _require_hr_or_admin(authorization)
     if not crypto.is_enabled():
         raise HTTPException(400, "Field encryption isn't switched on for this server yet — contact support, then run this.")
-    so = _so()
-    sens_keys = [f["key"] for f in _public_intake_fields(org_id) if f.get("sensitive")]
-    if not sens_keys:
-        return {"ok": True, "profiles_scanned": 0, "values_encrypted": 0, "note": "no sensitive fields configured"}
-    profiles = (so.table("employee_onboarding_profile").select("employee_id,intake_data")
-                .eq("org_id", org_id).execute().data) or []
-    scanned, enc_count = 0, 0
-    for p in profiles:
-        data = dict(p.get("intake_data") or {})
-        changed = False
-        for k in sens_keys:
-            v = data.get(k)
-            if v and str(v).strip() and not crypto.is_encrypted(v):
-                data[k] = crypto.encrypt(v)
-                changed = True
-                enc_count += 1
-        scanned += 1
-        if changed:
-            try:
-                so.table("employee_onboarding_profile").update({"intake_data": data}) \
-                    .eq("org_id", org_id).eq("employee_id", p["employee_id"]).execute()
-            except Exception:
-                pass
+    from app.core import encryption_backfill
+    res = encryption_backfill.backfill_intake_sensitive(get_supabase(), org_id=org_id)
+    per_org = (res.get("orgs") or {}).get(org_id) or {}
+    scanned, values = per_org.get("scanned", 0), per_org.get("values", 0)
+    if not per_org.get("keys"):
+        return {"ok": True, "profiles_scanned": 0, "values_encrypted": 0,
+                "note": "no sensitive fields configured"}
     _log_event(org_id, None, "sensitive_backfill_encrypted", actor=email,
-               detail={"by": email, "profiles": scanned, "encrypted": enc_count})
-    return {"ok": True, "profiles_scanned": scanned, "values_encrypted": enc_count}
+               detail={"by": email, "profiles": scanned, "encrypted": values})
+    return {"ok": True, "profiles_scanned": scanned, "values_encrypted": values,
+            **({"error": per_org["error"]} if per_org.get("error") else {})}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

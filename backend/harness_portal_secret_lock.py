@@ -429,8 +429,18 @@ ok("portal_secret.table_schema(" in body and "portal_secret.table_key(" in body,
 leaked = [t for t in ps.TABLES if f'"{t}"' in body or f"'{t}'" in body]
 ok(not leaked, "F4  it spells NO table name of its own (that would be the second copy)",
    f"found {leaked}")
-ok(re.search(r'"portal_secrets":\s*backfill_portal_secrets\(', BACKFILL),
-   "F5  run_all runs it, so ENCRYPTION_BACKFILL_ON_BOOT=1 seals the rows already stored")
+# F5 asked for the literal call `"portal_secrets": backfill_portal_secrets(` in run_all, and §CORE-04
+# removed it: run_all now DERIVES its calls from encryption_backfill.SWEEPS, precisely because a
+# literal list of calls is what falls behind a registry (two families were missing from it, and two
+# bank routing numbers were plaintext in production because of it). The check's INTENT — this sweep
+# is reached by the boot flag, not only by hand — is unchanged and now reads the registry, which is
+# the stronger form: it holds however run_all is written.
+ok(re.search(r'"portal_secrets":\s*\{', BACKFILL)
+   and re.search(r'"sweep":\s*"backfill_portal_secrets"', BACKFILL),
+   "F5  it is a registered family in encryption_backfill.SWEEPS, which run_all iterates — so "
+   "ENCRYPTION_BACKFILL_ON_BOOT=1 seals the rows already stored (index §CORE-04)")
+ok("for name in sorted(SWEEPS)" in BACKFILL,
+   "F5b …and run_all still DERIVES from that registry rather than listing the sweeps")
 ok('.eq("id", row["id"])' not in body,
    "F6  it does not address rows by `id` — eight of the ten tables have no such column")
 res = eb.backfill_portal_secrets(None)

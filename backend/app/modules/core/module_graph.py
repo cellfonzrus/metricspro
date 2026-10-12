@@ -76,6 +76,34 @@ FACTS: dict[str, dict] = {
             'app/core/encryption_backfill.py': ('portal_secret',),
         },
     },
+    # ── §CORE-04 (measured 2026-10-12) — and the rows ALREADY stored ─────────────────────────────
+    'encryption_backfill_coverage': {
+        "question": 'Which encrypted-at-rest column family has a sweep that seals the rows written '
+                    'BEFORE the column became encrypted? "Encrypted on write" and "sealed at rest" '
+                    'used to be two unrelated facts, so every new encrypted column started out half '
+                    'protected and the application could not tell: two employees\' bank routing '
+                    'numbers were readable in production on 2026-10-12 while run_all() claimed to '
+                    'run every sweep. A column whose writes were ALWAYS encrypted owes no sweep and '
+                    'says so in writing (`BORN_SEALED`), proved rather than trusted.',
+        "homes": ('app/core/encryption_backfill.py',),
+        "index": ('CORE-04',),
+        "locks": ('harness_encryption_backfill_coverage.py',),
+        # SNAPSHOT — written BY HAND (§50). These are the modules that import the home, DERIVED from
+        # the import graph. The modules the registry HOLDS TO A SWEEP are a different set and do not
+        # import it (they call `crypto` directly): pos/router.py, pos/receipt_import.py,
+        # vision/router.py and core/portal_secret.py. That set is enforced by the lock's §C coverage
+        # scan, not by an import edge — which is the whole point of the lock: a module can start
+        # encrypting without ever referencing this one.
+        "callers": {
+            # the no-shell route: ENCRYPTION_BACKFILL_ON_BOOT runs run_all once at startup
+            'app/main.py': ('run_all',),
+            # the HR button — the family whose absence WAS the defect; it now calls the shared sweep
+            # instead of holding its own encrypt loop
+            'app/modules/hr/router.py': ('encryption_backfill',),
+            # the shell route for the PIN sweep
+            'app/scripts/backfill_customer_pin_encryption.py': ('backfill_customer_pins',),
+        },
+    },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
     'store_takeover_evaluation': {
         "question": 'What would a store we are considering taking over be worth, from its own MA '
