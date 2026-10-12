@@ -115,8 +115,11 @@ export default function CashReconManagementPage() {
           { header: 'Bill-pay on credit (declared)', get: (r: any) => r.epay_credit_declared, money: true },
           { header: 'Expected in envelope', get: (r: any) => r.cash_pickup, money: true },
           { header: 'DM actually took', get: (r: any) => r.cash_picked_actual ?? '', money: true },
-          { header: 'DM short / over', get: (r: any) =>
-              !r.cash_picked_status ? '' : r.cash_picked_variance == null ? r.cash_picked_status : r.cash_picked_variance },
+          { header: 'DM short / over',
+            get: (r: { cash_picked_status?: string | null; cash_picked_variance?: number | null }) =>
+              !r.cash_picked_status ? ''
+                : r.cash_picked_variance == null ? r.cash_picked_status
+                : r.cash_picked_variance },
           { header: 'Management counted', get: (r: any) => r.mgmt_counted ?? '', money: true },
           { header: 'Mgmt short / over', get: (r: any) => r.mgmt_variance ?? '' },
           { header: `DM verified ${procName}`, get: (r: any) => r.billpay_pickup, money: true },
