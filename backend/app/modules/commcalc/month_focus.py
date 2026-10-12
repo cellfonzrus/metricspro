@@ -221,11 +221,17 @@ def normalise_declaration(payload, *, actor="", now_iso="", existing=None):
         names.add(fold(name))
         status = _s(s.get("status"), 20).lower()
         rate = _num(s.get("rate"))
+        carrier = _num(s.get("carrier_rate"))
         spiffs.append({
             "name": name,
             # A blank rate stays None. A spiff whose rate is unknown is not a $0 spiff — it is a
             # spiff nobody has priced, and `outstanding` says so.
             "rate": None if rate is None else round(rate, 2),
+            # WHAT FUNDS IT, declared beside what it costs. `rate` is what WE pay a person per unit;
+            # `carrier_rate` is what the CARRIER pays US per unit for the same unit. Both are the
+            # tenant's own declaration, both may be blank, and the difference is DERIVED on read
+            # (`spiff_economics`) and never stored — one fact, one home.
+            "carrier_rate": None if carrier is None else round(carrier, 2),
             "unit": _s(s.get("unit"), 40),
             "window_start": _iso_day(s.get("window_start")),
             "window_end": _iso_day(s.get("window_end")),
@@ -360,6 +366,8 @@ def outstanding(decl, today, *, year, month, declaration_days=DECLARATION_DAYS_D
       focus_undeclared        -> write the headline on this module's page
       initiative_unnamed      -> pick the month's spiff initiative there
       spiff_unpriced          -> give the declared spiff a rate there
+      spiff_costs_more_than_it_earns
+                              -> check the two rates there (payout vs what the carrier funds)
       checkin_due             -> confirm this week's check-in there
       targets_unassigned      -> assign targets on the targets page (§5 writes them)
       spiff_declared_not_live -> wire it in the commission settings (or mark it proposed again)
@@ -411,6 +419,24 @@ def outstanding(decl, today, *, year, month, declaration_days=DECLARATION_DAYS_D
             + (f" and {len(unpriced) - 4} more" if len(unpriced) > 4 else "")
             + ", so what it would cost cannot be worked out.",
             len(unpriced), PAGE, "Set the rate"))
+
+    # 2b. A SPIFF THAT PAYS OUT MORE PER UNIT THAN THE CARRIER PAYS IN. Not an opinion and not a
+    #     refusal — management may well choose to fund a push out of its own margin — but it must be
+    #     a stated choice rather than an arithmetic nobody did. Only raised when BOTH sides are
+    #     declared, so an unknown funding rate is never read as $0 funding.
+    upside_down = [e for e in spiff_economics(decl)
+                   if e["margin_per_unit"] is not None and e["margin_per_unit"] < 0]
+    if upside_down:
+        worst = min(upside_down, key=lambda e: e["margin_per_unit"])
+        out.append(_item(
+            "spiff_costs_more_than_it_earns", "warning",
+            "A temporary spiff pays out more per unit than it brings in",
+            ", ".join(e["name"] for e in upside_down[:4])
+            + (f" and {len(upside_down) - 4} more" if len(upside_down) > 4 else "")
+            + f" pay out more than the carrier pays for the same unit — {worst['name']} by "
+              f"${abs(worst['margin_per_unit']):,.2f} a unit. Fine if that is the decision; say so in "
+              f"the note, or change a rate.",
+            len(upside_down), PAGE, "Check the rates"))
 
     # 3. THE WEEKLY CHECK-IN — the owner's Monday reminder, computed rather than sent.
     cur = current_checkin(day, year, month, checkin_weekday)
@@ -480,6 +506,46 @@ def cost_at(units, rate):
     if u is None or r is None:
         return None
     return round(u * r, 2)
+
+
+def net_at(units, rate, carrier_rate):
+    """(paid_out, carrier_in, kept) over `units` units. Each leg is None when its own side is unknown.
+
+    `kept` is None unless BOTH rates are known: a spiff funded by an unknown amount has an unknown
+    margin, and printing the payout as though it were the whole story is the error this exists to
+    stop. Never raises."""
+    out = cost_at(units, rate)
+    inn = cost_at(units, carrier_rate)
+    return out, inn, (None if (out is None or inn is None) else round(inn - out, 2))
+
+
+def spiff_economics(decl):
+    """Per declared spiff: what it pays, what funds it, and the margin — DERIVED, never stored.
+
+    `margin_per_unit` is None unless both sides are declared (see `net_at`). `funded` is True only
+    when the carrier side is at least the payout side, so a spiff that pays out more than it brings
+    in is visible as a FACT rather than as a tone of voice; it is None when either side is blank,
+    because "we do not know" and "it is not funded" are different news.
+    """
+    rows = []
+    for s in ((decl or {}).get("temp_spiffs") or []):
+        if not isinstance(s, dict):
+            continue
+        name = _s(s.get("name"), 120)
+        if not name:
+            continue
+        pay, carrier = _num(s.get("rate")), _num(s.get("carrier_rate"))
+        margin = None if (pay is None or carrier is None) else round(carrier - pay, 2)
+        rows.append({
+            "name": name,
+            "status": _s(s.get("status"), 20).lower() or "proposed",
+            "unit": _s(s.get("unit"), 40),
+            "rate": pay,
+            "carrier_rate": carrier,
+            "margin_per_unit": margin,
+            "funded": None if margin is None else margin >= 0,
+        })
+    return rows
 
 
 def plays(signals):

@@ -329,7 +329,7 @@ export default function PayrollPage() {
       {!isFullCalendarMonth(filt.period || '', filt.periodTo || '') ? (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
           ℹ️ Chargebacks and PTO accrual below are tracked by calendar month ({panelMonthName}) — they
-          don't yet prorate across a custom pay-period range, so they cover the WHOLE month, not just
+          don&apos;t yet prorate across a custom pay-period range, so they cover the WHOLE month, not just
           your selected period ({periodName}).
         </div>
       ) : null}

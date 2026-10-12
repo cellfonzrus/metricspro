@@ -105,7 +105,7 @@ export default function ItemMappingPage() {
     (!catF || (i.category || '') === catF) &&
     (!search || `${i.item_desc || ''} ${i.sku || ''} ${i.device_model || ''}`.toLowerCase().includes(search.toLowerCase())))
   const allPicked = filtered.length > 0 && filtered.every(i => picked.has(i.item_key))
-  const toggle = (k: string) => setPicked(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
+  const toggle = (k: string) => setPicked(p => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n })
   const toggleAll = () => setPicked(p => { const n = new Set(p); if (allPicked) filtered.forEach(i => n.delete(i.item_key)); else filtered.forEach(i => n.add(i.item_key)); return n })
   async function applyBulk() {
     if (picked.size === 0) { setMsg('Select some items first.'); return }

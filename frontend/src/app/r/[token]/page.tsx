@@ -64,7 +64,7 @@ export default function RedeemPage() {
   if (state === 'invalid') return (
     <div style={wrap}><div style={{ ...card, textAlign: 'center' }}>
       <div style={{ fontSize: 40, marginBottom: 8 }}>🔗</div>
-      <h1 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>This referral link isn't valid</h1>
+      <h1 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>This referral link isn&apos;t valid</h1>
       <p style={{ color: '#64748b', fontSize: 14, marginTop: 8 }}>
         It may have already been used or expired. Please ask the store to create a new one.
       </p>
@@ -74,9 +74,9 @@ export default function RedeemPage() {
   if (state === 'done') return (
     <div style={wrap}><div style={{ ...card, textAlign: 'center' }}>
       <div style={{ fontSize: 40, marginBottom: 8 }}>🎉</div>
-      <h1 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Thanks — you're all set!</h1>
+      <h1 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Thanks — you&apos;re all set!</h1>
       <p style={{ color: '#64748b', fontSize: 14, marginTop: 8 }}>
-        Show this screen to the store staff. They'll take it from here.
+        Show this screen to the store staff. They&apos;ll take it from here.
       </p>
     </div></div>
   )
@@ -84,7 +84,7 @@ export default function RedeemPage() {
   return (
     <div style={wrap}><div style={card}>
       <div style={{ fontSize: 34, marginBottom: 4 }}>🎁</div>
-      <h1 style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>You've been referred!</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>You&apos;ve been referred!</h1>
       <p style={{ color: '#64748b', fontSize: 14, marginBottom: 18 }}>
         Fill this in at the counter — it helps us set you up faster (and rewards the friend who sent you).
       </p>

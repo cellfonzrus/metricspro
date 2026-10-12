@@ -144,7 +144,7 @@ export default function MyTargetsPage() {
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>My Targets</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          {period} · Your daily goal, pace to finish, and what's left for the month.
+          {period} · Your daily goal, pace to finish, and what&apos;s left for the month.
         </p>
       </div>
 
@@ -233,7 +233,7 @@ export default function MyTargetsPage() {
                     <span style={{ fontSize: 11, color: 'var(--text3)' }}>{BUILTIN_HINTS[c.key] || ''}</span>
                   </div>
                   <div style={{ textAlign: 'center', marginBottom: 14 }}>
-                    <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Today's Target</div>
+                    <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Today&apos;s Target</div>
                     <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--accent)', lineHeight: 1.1 }}>{val(m.unit, m.today_target)}</div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 7, fontSize: 13, borderTop: '1px solid var(--border)', paddingTop: 10 }}>

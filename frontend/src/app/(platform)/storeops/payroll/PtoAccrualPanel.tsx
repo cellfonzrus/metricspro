@@ -81,7 +81,7 @@ export default function PtoAccrualPanel({ month }: { month: string }) {
         <div style={{ marginTop: 14 }}>
           <p style={{ fontSize: 12, color: 'var(--text2)', marginTop: 0 }}>
             Computes a PTO accrual cost per store for this pay period and hands it to Store Expenses as an
-            ADDITIVE "Paid Leave Accumulated" line — it never changes any wage already computed. Config here
+            ADDITIVE &quot;Paid Leave Accumulated&quot; line — it never changes any wage already computed. Config here
             is the org default; role/employee overrides can be layered via the API (per-role/per-employee
             editor coming later — see docs/handoffs/people.md).
           </p>

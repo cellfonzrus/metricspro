@@ -236,7 +236,7 @@ export default function AccessoryFlagsPage() {
         </table>
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
-        Items are classified on the <a href="/commcalc/item-mapping">Item / Model Mapping</a> page. New items auto-add there as "unclassified" — set their type so they flag correctly.
+        Items are classified on the <a href="/commcalc/item-mapping">Item / Model Mapping</a> page. New items auto-add there as &quot;unclassified&quot; — set their type so they flag correctly.
       </p>
 
       {(receipt || receiptBusy) && <ReceiptModal receipt={receipt} busy={receiptBusy} onClose={() => { setReceipt(null); setReceiptBusy(false) }} />}

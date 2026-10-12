@@ -140,7 +140,7 @@ export default function EpayReconPage() {
         {depCfg && depCfg.anthropic_configured === false && (
           <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
             <input type="checkbox" checked={!!dep.manual_confirmed} onChange={e => setDep(d => ({ ...d, manual_confirmed: e.target.checked }))} />
-            I've verified this slip manually
+            I&apos;ve verified this slip manually
           </label>
         )}
         <button className="btn" disabled={depBusy} onClick={saveDeposit} style={{ background: 'var(--accent)', color: '#fff' }}>{depBusy ? 'Saving…' : 'Save'}</button>
@@ -166,7 +166,7 @@ export default function EpayReconPage() {
               placeholder="Reason for the short deposit…" value={shortReason} onChange={e => setShortReason(e.target.value)} />
             <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
               <button className="btn btn-secondary" onClick={() => closeShortModal(true)}>Save reason — will deposit more (record it on <Link href="/closing/deposit-recon" style={{ color: 'var(--accent)' }}>Cash Deposit Recon</Link>)</button>
-              <button className="btn btn-secondary" onClick={() => closeShortModal(false)}>Save reason — that's final</button>
+              <button className="btn btn-secondary" onClick={() => closeShortModal(false)}>Save reason — that&apos;s final</button>
             </div>
           </div>
         </div>
@@ -249,8 +249,8 @@ export default function EpayReconPage() {
             </div>
           )}
           <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>
-            "Declared" = the ePay‑on‑cash/credit/ACIMA reps entered on the closing sheet. "Sales" = bill‑payment
-            transactions from the sales feed split by tender (best‑effort classifier). "Bank deposited" = the receipts
+            &quot;Declared&quot; = the ePay‑on‑cash/credit/ACIMA reps entered on the closing sheet. &quot;Sales&quot; = bill‑payment
+            transactions from the sales feed split by tender (best‑effort classifier). &quot;Bank deposited&quot; = the receipts
             recorded above. NOT DEPOSITED = declared ePay cash exceeds what hit the bank. Tolerance ±{data?.tolerance ?? 1}.
           </p>
         </>

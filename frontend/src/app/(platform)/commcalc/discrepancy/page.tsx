@@ -262,7 +262,7 @@ export default function DiscrepancyPage() {
 
       {isPhantom && (
         <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: '#6b21a8' }}>
-          These payments don't match any sale or subscriber record. Large items (esp. device reimbursements) are worth investigating — small bounties are often data-coverage gaps from stores whose sales aren't loaded yet.
+          These payments don&apos;t match any sale or subscriber record. Large items (esp. device reimbursements) are worth investigating — small bounties are often data-coverage gaps from stores whose sales aren&apos;t loaded yet.
         </div>
       )}
 

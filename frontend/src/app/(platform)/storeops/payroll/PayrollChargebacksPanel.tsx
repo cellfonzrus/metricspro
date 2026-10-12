@@ -91,7 +91,7 @@ export default function PayrollChargebacksPanel({ month, onDeductions }:
         <div style={{ marginTop: 14 }}>
           <p style={{ fontSize: 12, color: 'var(--text2)', marginTop: 0 }}>
             Missed-closing chargebacks flagged against payroll for {month}, including any overflow
-            commission couldn't fully cover. POST to deduct a pending item from the employee's net pay
+            commission couldn&apos;t fully cover. POST to deduct a pending item from the employee&apos;s net pay
             this period, or WAIVE at any time (even an already-posted item) to cancel the deduction.
             Never auto-applied — a management decision is required either way.
           </p>

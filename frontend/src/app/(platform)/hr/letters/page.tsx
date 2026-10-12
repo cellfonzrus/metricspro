@@ -181,7 +181,7 @@ export default function HRLettersPage() {
             {(editing.escalation_tier === 3 || editing.escalation_tier === 5) && draft.delivery_mode === 'auto' && (
               <div style={{ color: '#b8860b', fontSize: 12, marginBottom: 10 }}>
                 ⚠️ This is a tier-{editing.escalation_tier} disciplinary letter (suspension/termination language).
-                The safe default is "Needs HR approval" — only switch to auto-send if you're sure.
+                The safe default is &quot;Needs HR approval&quot; — only switch to auto-send if you&apos;re sure.
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

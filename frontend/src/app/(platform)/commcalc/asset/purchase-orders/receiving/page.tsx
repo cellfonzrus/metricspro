@@ -153,7 +153,7 @@ export default function ReceivingPage() {
                         </label>
                         <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
                           {imeiText.split('\n').map(s => s.trim()).filter(Boolean).length} of {qty || 0} unit(s) will have a captured serial;
-                          the remainder is still received (tracked at qty-level for aging/tally, at a lower "estimated" match confidence).
+                          the remainder is still received (tracked at qty-level for aging/tally, at a lower &quot;estimated&quot; match confidence).
                         </div>
                         <button className="btn btn-primary" style={{ marginTop: 8 }} disabled={busy} onClick={() => submitReceive(r)}>
                           {busy ? 'Recording…' : 'Record receipt'}

@@ -636,7 +636,7 @@ export default function ExpensesPage() {
       {/* COPY ONE COLUMN → MANY. Opened by the ⧉ button on a store column header. */}
       {copySource && (
         <div className="card" style={{ padding: 12, marginBottom: 16, background: '#eff6ff', borderLeft: '4px solid var(--accent)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13 }}>⧉ Copy <b>{copySource}</b>{(() => { const a = stores.find(s => s.store_code === copySource)?.address; return a ? ` (${a.slice(0, 22)})` : '' })()}'s whole column to:</span>
+          <span style={{ fontSize: 13 }}>⧉ Copy <b>{copySource}</b>{(() => { const a = stores.find(s => s.store_code === copySource)?.address; return a ? ` (${a.slice(0, 22)})` : '' })()}&apos;s whole column to:</span>
           <StorePicker stores={stores} markets={markets} value={copyTargets} onChange={setCopyTargets} exclude={copySource} label="Paste to stores…" />
           <button className="btn btn-primary" onClick={applyCopy} disabled={applyBusy || !copyTargets.length}>
             {applyBusy ? '…' : `Apply to ${copyTargets.length || 0} store${copyTargets.length === 1 ? '' : 's'}`}</button>
@@ -678,8 +678,8 @@ export default function ExpensesPage() {
             {applyBusy ? '…' : `Apply to ${applyTargets.length || 0} month${applyTargets.length === 1 ? '' : 's'}`}</button>
           <button className="btn" onClick={() => setMonthsOpen(false)}>Cancel</button>
           <span style={{ fontSize: 11, color: 'var(--text3)', flexBasis: '100%' }}>
-            🔒 <b>{excludedTokens.join(' & ')}</b>{Object.keys(systemCats).length ? ' + auto/payroll lines' : ''} expenses are never copied. Idempotent (re-running won't double-write).
-            Writing into a <b>closed prior month shifts that month's Gross Profit / P&amp;L</b> — re-run Calculation afterward to refresh it.
+            🔒 <b>{excludedTokens.join(' & ')}</b>{Object.keys(systemCats).length ? ' + auto/payroll lines' : ''} expenses are never copied. Idempotent (re-running won&apos;t double-write).
+            Writing into a <b>closed prior month shifts that month&apos;s Gross Profit / P&amp;L</b> — re-run Calculation afterward to refresh it.
           </span>
         </div>
       )}
@@ -693,14 +693,14 @@ export default function ExpensesPage() {
 
       {carriedFrom && !loading && (
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#eef6ff', borderLeft: '4px solid var(--accent)', fontSize: 13 }}>
-          📋 <b>Carried forward from {carriedFrom}</b> — no expenses entered for {period} yet, so last month's are pre-filled below.
-          Review and <b>Save All</b> to keep them for {period} (they'll carry to next month too).
+          📋 <b>Carried forward from {carriedFrom}</b> — no expenses entered for {period} yet, so last month&apos;s are pre-filled below.
+          Review and <b>Save All</b> to keep them for {period} (they&apos;ll carry to next month too).
         </div>
       )}
       {salaryFrom && !loading && (
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#f0fdf4', borderLeft: '4px solid #16a34a', fontSize: 13 }}>
-          💵 <b>Employee Salaries auto-filled from worked hours</b> for {period} (actual hours where clocked, otherwise scheduled, × each employee's pay rate).
-          Edit any store's figure to override, or hit <b>↻ Salaries from hours</b> to re-pull. Nothing is saved until you <b>Save All</b>.
+          💵 <b>Employee Salaries auto-filled from worked hours</b> for {period} (actual hours where clocked, otherwise scheduled, × each employee&apos;s pay rate).
+          Edit any store&apos;s figure to override, or hit <b>↻ Salaries from hours</b> to re-pull. Nothing is saved until you <b>Save All</b>.
         </div>
       )}
       {commissionFrom && !loading && (

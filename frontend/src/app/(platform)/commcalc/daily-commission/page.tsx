@@ -321,9 +321,9 @@ export default function DailyCommissionPage() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Incentive</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', lineHeight: 1.6 }}>
           What each rep has <b>probably</b> earned this cycle, what has been <b>advanced to them in cash</b>,
-          and what is due now. <b>Accrued is an expected figure, not a payslip</b> — it never changes anyone's
+          and what is due now. <b>Accrued is an expected figure, not a payslip</b> — it never changes anyone&apos;s
           pay, and a recorded advance never reduces what they are owed at month end. Each day is accrued at
-          the <b>tier the rep is currently meeting</b>, so the days add up to the rep report's month-to-date
+          the <b>tier the rep is currently meeting</b>, so the days add up to the rep report&apos;s month-to-date
           number and the whole month restates as attainment moves.
         </p>
       </div>
@@ -355,7 +355,7 @@ export default function DailyCommissionPage() {
         <div className="card" style={{ marginBottom: 14 }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>Accrual settings</div>
           <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 12, lineHeight: 1.6 }}>
-            These are this tenant's settings — they change how the <b>expected</b> numbers are computed and
+            These are this tenant&apos;s settings — they change how the <b>expected</b> numbers are computed and
             shown. They never change what anybody is paid, and saving them writes nothing to any payout.
           </div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
@@ -465,7 +465,7 @@ export default function DailyCommissionPage() {
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10 }}>
             Who may record a cash advance: <b>{(cfg.config?.record_roles || []).join(', ')}</b> (district
-            manager or above, per the owner's rule) — plus any role whose scope spans a market or the whole org.
+            manager or above, per the owner&apos;s rule) — plus any role whose scope spans a market or the whole org.
           </div>
         </div>
       )}
@@ -515,7 +515,7 @@ export default function DailyCommissionPage() {
             <div className="card" style={tile}>
               <div style={tileCap}>Accrued on {to}</div>
               <div style={tileVal}>{fmt(shownTotals.today)}</div>
-              <div style={{ fontSize: 11, color: 'var(--text3)' }}>that day's sales</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>that day&apos;s sales</div>
             </div>
             <div className="card" style={{ ...tile, borderColor: shownTotals.flagged ? 'var(--red)' : 'var(--border)' }}>
               <div style={tileCap}>Over-advanced</div>
@@ -653,8 +653,8 @@ export default function DailyCommissionPage() {
                   {drill.components.mtd.explain}
                   {drill.components.mtd.no_daily_weights && (
                     <div style={{ color: 'var(--amber, #b45309)', marginTop: 6 }}>
-                      Heads-up: no accrued day carries this rep's weight yet, so the whole month-to-date
-                      figure is sitting on this one row. Recompute the month's days to spread it.
+                      Heads-up: no accrued day carries this rep&apos;s weight yet, so the whole month-to-date
+                      figure is sitting on this one row. Recompute the month&apos;s days to spread it.
                     </div>
                   )}
                 </div>
@@ -666,7 +666,7 @@ export default function DailyCommissionPage() {
                     <div style={{ color: 'var(--amber, #b45309)', marginTop: 6 }}>
                       Heads-up: only {drill.components.tier.days_accrued} day(s) of that month were accrued
                       daily, so most of this true-up is simply the part of the month the daily accrual
-                      wasn't running for — not a bonus.
+                      wasn&apos;t running for — not a bonus.
                     </div>
                   )}
                 </div>
@@ -711,7 +711,7 @@ export default function DailyCommissionPage() {
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Recompute a day</div>
             <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10, lineHeight: 1.6 }}>
               The accrual runs automatically every day, right after the sales feed lands. This button
-              re-runs one date by hand — useful when a day's sales arrived late. It is <b>idempotent</b>:
+              re-runs one date by hand — useful when a day&apos;s sales arrived late. It is <b>idempotent</b>:
               re-running a date restates it (and re-allocates the rest of that month to the tier now being
               met), never adds to it, and it is <b>not</b> an incentive recalculation — no payout is touched.
             </div>

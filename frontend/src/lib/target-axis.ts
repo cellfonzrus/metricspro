@@ -4,12 +4,12 @@
 // backward calculate what is needed to reach a certain level ... but i dont wnat them to be hard
 // coded it should be a design effect"*
 //
-// THE DEFECT THIS CLOSES. The list of target categories was hard-coded in SEVEN places on
-// 2026-10-11 — four in the backend, three here — each with its own spelling of the same four
+// THE DEFECT THIS CLOSES. The list of target categories was hard-coded in NINE places on
+// 2026-10-11 — four in the backend, five here — each with its own spelling of the same four
 // labels and units. So a tenant that declared "Package drop-offs" on Settings → Count Fields
 // (mig 1072) could declare it every day and then find nowhere on any screen to set a target for
 // it, because every screen's list ended at `accessories`. Fixing one screen would have been the
-// patchwork the owner banned; seven copies is how they would have drifted anyway.
+// patchwork the owner banned; nine copies is how they would have drifted anyway.
 //
 // WHERE THE FACT LIVES. `backend/app/modules/commcalc/targets_engine.target_axis` is the one home,
 // served by `GET /commcalc/targets/{period}/axis`. This module is the browser's dereference of it,
@@ -101,11 +101,3 @@ export function useTargetAxis(period: string): { cats: TargetCat[]; loaded: bool
 /** The categories whose target is saved as a `commcalc.target_line` row rather than a column — the
  *  ones a settings screen renders in its declared section. */
 export const declaredCats = (cats: TargetCat[]) => cats.filter((c) => c.store === 'line')
-
-/** Format a figure in its category's own unit. Passed the formatters rather than importing them, so
- *  this module stays free of render concerns and a caller keeps its own money formatting. */
-export function catValue(unit: string, n: any, fmtMoney: (v: number) => string,
-                         fmtNum: (v: number, dp?: number) => string): string {
-  const v = Number(n) || 0
-  return unit === 'dollars' ? fmtMoney(v) : fmtNum(v, 1)
-}

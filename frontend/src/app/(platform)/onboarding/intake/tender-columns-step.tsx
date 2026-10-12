@@ -119,7 +119,7 @@ export function TenderColumnsStep({ block, numbers, tie, decisions, setDecisions
       </table>
       {numbers && (
         <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>
-          <div><b>Do the customer's payments add up to the invoice totals?</b> {numbers.tenders.words}.</div>
+          <div><b>Do the customer&apos;s payments add up to the invoice totals?</b> {numbers.tenders.words}.</div>
           <div style={{ ...note, marginTop: 4 }}>
             Σ customer payments {money(numbers.tenders.customer_sum ?? numbers.tenders.sum)} on {num(numbers.tenders.invoices_with_tenders)} invoice(s)
             {!!numbers.tenders.not_customer?.sum && <>{' · '}paid by the vendor / a promotion (lands beside, not part of the invoice total) {money(numbers.tenders.not_customer.sum)} on {num(numbers.tenders.not_customer.invoices)} invoice(s)</>}

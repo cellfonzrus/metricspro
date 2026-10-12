@@ -64,7 +64,7 @@ function ActionPlanBox({ storeCode, plan, onChanged }: { storeCode: string; plan
   if (plan.status === 'required') {
     return (
       <div style={box}>
-        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 6 }}>📝 Action plan needed — {storeCode}'s Google rating is below target</div>
+        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 6 }}>📝 Action plan needed — {storeCode}&apos;s Google rating is below target</div>
         <textarea value={text} onChange={e => setText(e.target.value)} rows={3} placeholder="What will you do to help improve this store's Google rating?"
           style={{ width: '100%', fontSize: 13, padding: 8, borderRadius: 6, border: '1px solid var(--border)', resize: 'vertical' }} />
         <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center' }}>

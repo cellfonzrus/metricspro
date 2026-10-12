@@ -450,7 +450,7 @@ export default function PortalPage() {
     // punch via the photo-only path instead of opening an enroll/verify flow the backend will refuse.
     if (faceEnabled !== true || faceError) { await clockInNoFace(); return }
     await openCamera()
-    setTimeout(() => { registered ? doVerify() : doEnroll() }, 800)
+    setTimeout(() => { if (registered) doVerify(); else doEnroll() }, 800)
   }
 
   async function doEnroll() {
@@ -654,7 +654,7 @@ export default function PortalPage() {
         <div style={{ ...box }} className="card">
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Login not linked to an employee</div>
           <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 16 }}>
-            You're signed in as <b>{user?.email}</b>, but your account isn't linked to an employee record yet. Ask an admin to set your Employee ID in <ScreenLink to="roles_access" />.
+            You&apos;re signed in as <b>{user?.email}</b>, but your account isn&apos;t linked to an employee record yet. Ask an admin to set your Employee ID in <ScreenLink to="roles_access" />.
           </div>
           <button className="btn btn-secondary" onClick={logout}>Log out</button>
         </div>

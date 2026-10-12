@@ -87,9 +87,9 @@ export default function FailureLogsPage() {
     return m
   }, [rows])
 
-  const toggleRow = (id: string) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggleRow = (id: string) => setSel(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const selectGroup = (kind: string, on: boolean) => setSel(s => {
-    const n = new Set(s); for (const r of (rowsByKind[kind] || [])) on ? n.add(r.id) : n.delete(r.id); return n
+    const n = new Set(s); for (const r of (rowsByKind[kind] || [])) { if (on) n.add(r.id); else n.delete(r.id) } return n
   })
   const groupAllSelected = (kind: string) => { const rs = rowsByKind[kind] || []; return rs.length > 0 && rs.every(r => sel.has(r.id)) }
 

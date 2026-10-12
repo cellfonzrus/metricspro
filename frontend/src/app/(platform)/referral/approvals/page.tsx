@@ -28,7 +28,7 @@ export default function ApprovalsPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>✅ Referral Approvals</h1>
       <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 14 }}>
         Referrals whose line is activated and awaiting your sign-off. Open one to set the amount + payout
-        date and approve — you can't approve a referral you created yourself.
+        date and approve — you can&apos;t approve a referral you created yourself.
       </div>
       {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 12 }}>{msg}</div>}
 

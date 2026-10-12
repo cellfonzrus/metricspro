@@ -11,6 +11,7 @@ import { useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import type { ExportColumn } from '@/lib/export'
+import { SetupNotice } from '@/lib/setupNotice'
 import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -164,7 +165,7 @@ export default function PayrollChangeLogPage() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📜 Payroll Change Log</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Every manual change to a rep's scheduled/actual hours — shift edits, manager clock-in
+          Every manual change to a rep&apos;s scheduled/actual hours — shift edits, manager clock-in
           overrides, manual hours adjustments, force clock-outs, and lunch-deduction setting changes —
           who made it, when, and the before → after values. {periodName}. Click a row to jump to the
           Time Clock report for that employee/day.
@@ -192,9 +193,9 @@ export default function PayrollChangeLogPage() {
 
       {!available && (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
-          ℹ️ The Payroll Change Log table isn't set up yet on this tenant (migration 414) — no entries
-          can be recorded or shown until it runs. Every underlying write (shift edits, overrides,
-          manual hours) still works normally; it just isn't logged yet.
+          ℹ️ <SetupNotice lead="The Payroll Change Log is not switched on yet, so no entries can be recorded or shown." detail="414" /> Every
+          underlying write (shift edits, overrides, manual hours) still works normally; it is simply
+          not logged yet.
         </div>
       )}
 

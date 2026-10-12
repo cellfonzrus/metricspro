@@ -103,9 +103,9 @@ export default function SoldTallyPage() {
           </div>
         </div>
         <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
-          "Estimated" rows had no IMEI/serial captured at Receiving — sold status is a qty-level comparison
+          &quot;Estimated&quot; rows had no IMEI/serial captured at Receiving — sold status is a qty-level comparison
           against store/model sales since the receive date, and commission status can never be confirmed by
-          IMEI for those (shown as "unknown — no serial captured"). Capture serials at Receiving for exact
+          IMEI for those (shown as &quot;unknown — no serial captured&quot;). Capture serials at Receiving for exact
           matches.
         </div>
         {!loading && (

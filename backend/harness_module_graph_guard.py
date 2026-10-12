@@ -209,20 +209,24 @@ def _index_sections() -> set:
     except OSError:
         return set()
     out = set()
-    # TWO ID SHAPES. The 112 legacy sections are bare numbers ("19.43", "23s"); every section
-    # allocated since the register shipped (§CORE-01, owner directive 2026-10-11) carries its module
-    # as a prefix ("CORE-01", "COMMCALC-01.3"). This parser knew only the first, so a fact naming a
-    # prefixed section read as "does not resolve" and the first such fact (2026-10-12) could not be
-    # registered at all — the guard was silently closed to the id shape the house had just adopted.
-    NUM = r"[0-9]+[a-z]*(?:\.[0-9]+)?"
-    PREFIXED = r"[A-Z][A-Z_]*-[0-9]+(?:\.[0-9]+)?"
-    ID = f"(?:{PREFIXED}|{NUM})"
-    for m in re.finditer(rf"^#{{1,6}}\s+§?\s*({ID})[.\s]", text, re.M):
+    for m in re.finditer(r"^#{1,6}\s+§?\s*([0-9]+[a-z]*(?:\.[0-9]+)?)[.\s]", text, re.M):
         out.add(m.group(1))
-    for m in re.finditer(rf"^[-*]\s+\*\*§?\s*({ID})[.\s]", text, re.M):
+    for m in re.finditer(r"^[-*]\s+\*\*§?\s*([0-9]+[a-z]*(?:\.[0-9]+)?)[.\s]", text, re.M):
         out.add(m.group(1))
     # §19's gap list writes its subsections as a line-leading "§19.43 **TITLE" rather than a heading
-    for m in re.finditer(rf"^§\s*({ID})\s+\*\*", text, re.M):
+    for m in re.finditer(r"^§\s*([0-9]+[a-z]*(?:\.[0-9]+)?)\s+\*\*", text, re.M):
+        out.add(m.group(1))
+    # THE PREFIXED SCHEME (CORE-01, owner directive 2026-10-11). Bare numbers are FROZEN there and a
+    # new section must be `§<MODULE>-NN`, so every fact written from now on names one of these. This
+    # parser only knew the numeric shape, which made the mandated scheme unresolvable — a fact citing
+    # a perfectly real §CLOSING-01.1 failed E. Found INDEPENDENTLY by the first two facts to use one
+    # (2026-10-12): §CLOSING-01 on claude/management-recon-expected-figure and §COMMCALC-01 here.
+    # This is that branch's wording and regex, taken verbatim rather than kept as a second fix —
+    # two repairs for one fact is the duplicate defect, and whichever lands first the other is a
+    # no-op merge.
+    # That an id is REGISTERED is `harness_index_section_register.py`'s check, not this one's: this
+    # only has to find the heading.
+    for m in re.finditer(r"^#{1,6}\s+§?\s*([A-Z][A-Z0-9]*-[0-9]{2}(?:\.[0-9]+)?)[.\s]", text, re.M):
         out.add(m.group(1))
     return out
 

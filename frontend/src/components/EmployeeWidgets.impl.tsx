@@ -122,7 +122,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
       {on('phone_priority') && (data?.phone_priority?.length > 0) && (
         <Card title="Sell These Phones Today" icon="📱">
           <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
-            These are in the final stretch of their pay window — prioritize selling them so the store doesn't owe the vendor.
+            These are in the final stretch of their pay window — prioritize selling them so the store doesn&apos;t owe the vendor.
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <tbody>

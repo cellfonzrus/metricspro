@@ -53,7 +53,7 @@ export default function VendorPaidCard({ from, to }: { from: string; to: string 
       <div style={{ fontWeight: 700 }}>Lines the vendor pays — print at $0.00 like the register</div>
       <div style={{ color: 'var(--text2)', margin: '4px 0 8px' }}>
         The sales report carries the lines a vendor pays you for (rate-plan rebates, kickers, perks) with their amount; the register prints
-        them at $0.00. Pick the category words those lines sit under — we propose them from your own lines, proven by each invoice's
+        them at $0.00. Pick the category words those lines sit under — we propose them from your own lines, proven by each invoice&apos;s
         vendor-paid tender — then save and rebuild. Phones and accessories are never picked (they have a cost).
       </div>
       <button className="btn btn-secondary" disabled={busy} onClick={load}>{busy ? 'Reading…' : ev ? 'Re-check' : 'Show the proposed words'}</button>

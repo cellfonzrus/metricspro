@@ -241,7 +241,7 @@ export default function GpCategoryMapPage() {
                           <>
                             <div style={{ fontSize: 11.5, color: 'var(--text2)', margin: '6px 0 8px' }}>
                               <b>{rows.length}</b> product{rows.length === 1 ? '' : 's'} · {assigned} assigned individually.
-                              An item's own category always wins over the department rule above.
+                              An item&apos;s own category always wins over the department rule above.
                             </div>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                               <thead>
