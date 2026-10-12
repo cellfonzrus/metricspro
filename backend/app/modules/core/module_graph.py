@@ -647,6 +647,24 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_bt',),
         },
     },
+    'trade_in_basis': {
+        "question": 'Which record says a trade-in happened — the till or the carrier statement — and '
+                    'how many does this rep get paid for?',
+        "homes": ('app/modules/commcalc/trade_in_basis.py',),
+        "index": ('COMMCALC-01',),
+        "locks": ('harness_trade_in_basis.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but see the
+        # caveat recorded in §COMMCALC-01: --bless rewrites a callers block to BARE lines and strips
+        # the per-caller comments from every fact it touches, so this block is hand-written and the
+        # derived edge below was verified by running the guard (not --bless) afterwards.
+        "callers": {
+            # The pay engine. It carried the answer itself — payment-detail rows whose type contained
+            # 'trade' — so a month the carrier had not reimbursed yet paid $0 for trade-ins the stores
+            # really did (Aug 2026: 30 at the till, 0 on the statement). It now resolves the basis,
+            # the declaration and both counts here and keeps no predicate of its own.
+            'app/modules/commcalc/calculator.py': ('_tib',),
+        },
+    },
     'commission_ledger_identity': {
         "question": 'Which ledger row is this, and which period does it book into?',
         "homes": ('app/modules/commcalc/commission_ledger.py',),

@@ -209,12 +209,19 @@ def _index_sections() -> set:
     except OSError:
         return set()
     out = set()
-    for m in re.finditer(r"^#{1,6}\s+§?\s*([0-9]+[a-z]*(?:\.[0-9]+)?)[.\s]", text, re.M):
+    # TWO ID SHAPES. The legacy numeric one (`§19.32`, `§4b`, `§72`) and the `§<MODULE>-NN` scheme
+    # CORE-01 introduced on 2026-10-11 (`§CORE-02`, `§COMMCALC-01`), under which every NEW section is
+    # allocated. This parser read only the numeric shape, so a fact naming a new-scheme section failed
+    # E as "does not resolve" however correctly it was registered — §COMMCALC-01 was the first to hit
+    # it. Both shapes are accepted now; `_SECTION_ID` is the one spelling of "what a section id looks
+    # like" so the three patterns below cannot drift apart.
+    _SECTION_ID = r"(?:[0-9]+[a-z]*(?:\.[0-9]+)?|[A-Z][A-Z0-9_]*-[0-9]+(?:\.[0-9]+)?)"
+    for m in re.finditer(rf"^#{{1,6}}\s+§?\s*({_SECTION_ID})[.\s]", text, re.M):
         out.add(m.group(1))
-    for m in re.finditer(r"^[-*]\s+\*\*§?\s*([0-9]+[a-z]*(?:\.[0-9]+)?)[.\s]", text, re.M):
+    for m in re.finditer(rf"^[-*]\s+\*\*§?\s*({_SECTION_ID})[.\s]", text, re.M):
         out.add(m.group(1))
     # §19's gap list writes its subsections as a line-leading "§19.43 **TITLE" rather than a heading
-    for m in re.finditer(r"^§\s*([0-9]+[a-z]*(?:\.[0-9]+)?)\s+\*\*", text, re.M):
+    for m in re.finditer(rf"^§\s*({_SECTION_ID})\s+\*\*", text, re.M):
         out.add(m.group(1))
     # THE PREFIXED SCHEME (CORE-01, owner directive 2026-10-11). Bare numbers are FROZEN there and a
     # new section must be `§<MODULE>-NN`, so every fact written from now on names one of these. This
@@ -341,6 +348,21 @@ def armed_controls(derived) -> None:
     g = _Graph(copy.deepcopy(base))
     g.FACTS[key]["callers"].pop(sorted(g.FACTS[key]["callers"])[0], None)
     check(_fails(check_snapshot, g, derived), "Z-A a dropped caller must fail check A")
+
+    # Z-ID — the index parser must know BOTH section-id shapes. It read only the numeric one, so a
+    # fact correctly naming a `§<MODULE>-NN` section (the scheme CORE-01 introduced 2026-10-11, under
+    # which every NEW section is allocated) failed E as "does not resolve". Armed both ways: the new
+    # shape must parse, and a made-up id must still NOT, so widening the pattern did not make E
+    # vacuous.
+    _ids = _index_sections()
+    check(any("-" in i for i in _ids),
+          "Z-ID the parser finds at least one §<MODULE>-NN section (CORE-01's scheme)")
+    check("COMMCALC-01" in _ids and "CORE-01" in _ids,
+          "Z-ID1 the sections allocated under that scheme resolve by name")
+    check(all(x in _ids for x in ("19.32", "72")),
+          "Z-ID2 …and the legacy numeric ids still resolve (the widening is additive)")
+    check("NOSUCH-99" not in _ids and "999.9" not in _ids,
+          "Z-ID3 control: an id the index does not carry still does NOT resolve (E is not vacuous)")
 
     # Z-BLESS — the rewriter may never lose a fact. On 2026-10-04 it DID: a fact written with a
     # one-line `"callers": {},` has no closing line of its own, so the span ran on to the NEXT
