@@ -387,6 +387,7 @@ def schedule_hours_trend(
     Hours math (overnight wrap, zero-length guard, deleted excluded) lives in the pure
     schedule_hours module so it is harness-proven offline."""
     from app.modules.storeops import schedule_hours as _sh
+    from app.modules.storeops import payroll_identity as _pid
     from datetime import date as _dd
 
     anchor = (anchor or _dd.today().isoformat())[:10]
@@ -432,12 +433,33 @@ def schedule_hours_trend(
             allowed |= _cscope.market_store_keys(get_supabase(), org_id, m)
         rows = [s for s in rows if str(s.get("store_code") or "").strip().upper() in allowed]
 
-    # Optional employee-name filter.
+    # THE ROSTER — fetched once, and the ONLY source of "who is this shift about" (§STOREOPS-01).
+    # Without it the employee axis would be an inner join on `shifts.employee_name`, a denormalized
+    # copy a rename leaves stale; with it the axis dereferences employee identity and the two totals
+    # (by store, by employee) are one fact out of one row walk.
+    try:
+        _roster = (sb().table("employees").select("id,employee_id,name")
+                   .eq("org_id", org_id).limit(20000).execute().data) or []
+    except Exception:
+        _roster = []
+    _attribute = _pid.build_shift_attributor(_roster)
+
+    # Optional employee filter. Resolved THROUGH the attributor, so a selection still finds a
+    # person whose older shifts carry a previous spelling of their name — and so an employee id
+    # selects them just as well as a name does.
     emps = {e.strip() for e in (employees or "").split(",") if e.strip()}
     if emps:
-        rows = [s for s in rows if (s.get("employee_name") or "").strip() in emps]
+        wanted = set()
+        for sel in emps:
+            a = _attribute(sel, sel)
+            wanted.add(a["key"] if a["binds"] else _pid.person_key(sel))
+        def _row_who(row):
+            a = _attribute(row.get("employee_id"), row.get("employee_name"))
+            return a["key"] if a["binds"] else _pid.person_key(row.get("employee_name"))
+        rows = [r for r in rows if _row_who(r) in wanted]
 
-    out = _sh.hours_trend(rows, anchor=anchor, weeks=weeks, months=months, week_start_dow=week_start_dow)
+    out = _sh.hours_trend(rows, anchor=anchor, employees=_roster, weeks=weeks, months=months,
+                          week_start_dow=week_start_dow)
     out["scope"] = {"markets": mkts, "store_code": store_code or None,
                     "employees": sorted(emps) if emps else None,
                     "rbac_restricted": ks is not None,
@@ -4215,18 +4237,32 @@ def apply_templates(body: WeekStartIn, org_id: str = ORG_ID):
         raise HTTPException(400, "week_start required")
     ws = datetime.fromisoformat(week_start).date()
     we = (ws + timedelta(days=6)).isoformat()
+    from app.modules.storeops import payroll_identity as _pid
     templates = sb().table("shift_templates").select("*").eq("org_id", org_id).execute().data or []
     if not templates:
         raise HTTPException(400, "No templates saved yet — save a week first.")
-    existing = (sb().table("shifts").select("employee_name,shift_date,start_time,store_code")
+    existing = (sb().table("shifts").select("employee_id,employee_name,shift_date,start_time,store_code")
                 .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", week_start).lte("shift_date", we).execute().data) or []
-    seen = {(e.get("employee_name"), str(e.get("shift_date")), e.get("start_time"), e.get("store_code")) for e in existing}
+    # DEDUPE ON THE PERSON, NOT ON THE SPELLING (§STOREOPS-01). This set used to be keyed by
+    # `employee_name` — the denormalized copy — so a template saved AFTER an employee was renamed
+    # never matched that employee's pre-rename shifts and applying it inserted a duplicate day.
+    _tmpl_roster = sb().table("employees").select("id,employee_id,name").eq("org_id", org_id).limit(20000).execute().data or []
+    _tmpl_attr = _pid.build_shift_attributor(_tmpl_roster)
+
+    def _dedupe_key(employee_id, employee_name, day, start, store):
+        a = _tmpl_attr(employee_id, employee_name)
+        who = a["key"] if a["binds"] else f"name:{_pid.person_key(employee_name)}"
+        return (who, str(day), start, store)
+
+    seen = {_dedupe_key(e.get("employee_id"), e.get("employee_name"), e.get("shift_date"),
+                        e.get("start_time"), e.get("store_code")) for e in existing}
     added = skipped_off = 0
     # 2026-07-27 money fix: canonicalize once for the whole batch (not re-fetched per template row).
     _apply_tmpl_employees = sb().table("employees").select("id,employee_id").eq("org_id", org_id).execute().data or []
     for t in templates:
         target = (ws + timedelta(days=int(t.get("weekday") or 0))).isoformat()
-        if (t.get("employee_name"), target, t.get("start_time"), t.get("store_code")) in seen:
+        if _dedupe_key(t.get("employee_id"), t.get("employee_name"), target,
+                       t.get("start_time"), t.get("store_code")) in seen:
             continue
         eid = t.get("employee_id")
         if eid not in (None, ""):

@@ -103,6 +103,7 @@ Primary code homes:
 | CORE-01 | **A section id carries its module** | "What number does my new index section get, who else could be taking it right now, and what happens if two of us take the same one? Which module does a section belong to, which module does nothing document yet, and why are the 111 existing numbers not renumbered?" |
 | COMMCALC-02 | **A category you declare is a category you can set a target for** | "I added drop-offs to the daily closing — where do I set a target for them? What do I need per day and per week to reach my month, and what would it take to hit a number I just made up? Why did the four sales categories exist in nine different lists?" |
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
+| STOREOPS-01 | **A shift's employee name is not an employee identity** | "In the UPS store schedule one employee shows under one name on the store side and another on the employee side — the company side totals 204 hours and the employee side 164. Are there two employee records? Which total is right, where does the gap come from, and what stops the next rename doing it again?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 
 ---
@@ -6813,6 +6814,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.report_kind` setup columns (mig `1028`: `required`, `default_cadence`, `download_url`, `download_steps`, `evidence_table`, `upload_path`, `automation_min_runs`, `automation_window_days`) · `storeops.tenants.documents_setup_done_at` (mig `1028`; every tenant existing at apply time stamped done) · `core.import_feed` rows `kind:<key>` (module `setup`) · `core.job_run` rows `sweep:<table>` | `PUT/POST /commcalc/report-kinds/house` (super admin) · `PUT /commcalc/setup-documents/{key}` (cadence → feed enabled + `auto_derived=false`; skip → `muted_until`) · `setup_documents.ensure_feeds` (registers `kind:` feeds, never overwrites) · `router._sweep_set_status` (job_run per finished sweep) · `setup_documents.payload` (stamps done) | `setup_documents.payload` / `gate` / `automation_proof` / `run_reminders`; the wizard; the layout gate. §39 |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.org_units` / `org_levels` / `org_managers` / `employees` / `stores` (read together by `storeops.router.org_chain_inputs`) | org-hierarchy UI (storeops) | **THE ORG-TREE WALK, one home** — pure `storeops/org_chain.py` (`index_tree` → `district_for` → `managers_at` → `chain_for` → `dm_by_store`/`dm_names`): which district and DM own a store, answered in BULK. Callers: `storeops._dm_for_store` (notify routing), `storeops._managers_above_dm` (escalation), `GET /closing/accountability-chain`'s `dm` cell (§48.7). Lock `harness_org_chain.py` |
+| `storeops.shifts` — **as the SCHEDULED-HOURS fact, on BOTH axes** (§STOREOPS-01) | scheduling UI (storeops) | **THE one derivation of "hours by store" and "hours by employee" is `storeops/schedule_hours.scheduled_axes`** (both axes, one row walk, over the canonical employee key from `payroll_identity.build_shift_attributor`; invariant `sum(by_store) == sum(by_employee) == total`, with an explicit `__unattributed__` bucket so no row is dropped). `hours_trend` dereferences it; the client mirror is `frontend/.../storeops/lib/scheduleAxes.ts`, read by the schedule page's footer, every row total, the double-booking detector, the time-off badge, both copy-week dedupes and `scheduleExport`. **`shifts.employee_name` is a stale COPY of the roster name and is never a key** — locked by `harness_schedule_identity_lock.py` |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
@@ -7072,6 +7074,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `POST /upload-mapped` | `3637` | §2; **§30.17a: a layout whose `TABLE_MAP` target is `commission_ledger` is REFUSED (`_ingest_mapped_df`) — a statement has one lander**; **§32:** form `replace_other_kinds` (confirm deleting another kind's rows in the file's slice — else refused naming the loss); a `target_table` contradicting `column_mapping.TABLE_MAP` is refused |
 | `GET /store-resolution` | `14296` | §13 |
 | `GET /flags/{period}` | `10299` | §15 |
+| `GET /storeops/schedule/hours-trend` (WoW/MoM scheduled hours + drill-down; since §STOREOPS-01 it hands `hours_trend` the ROSTER, groups its employee axis on the canonical employee key, resolves its `employees=` filter through the identity home — so a selection still finds a person whose older shifts carry a previous spelling — and returns an `axes` payload plus an `identity` evidence block (`unattributed_hours`, `name_divergence`, `invariant`)) | `storeops/router.py` (`schedule_hours_trend`) | §STOREOPS-01, §14 |
 | `GET /storeops/payroll` (pay-gated, mig 434 — money keys stripped for callers below market manager; `X-Can-See-Pay-Rates` header) | `storeops/router.py:1390` | §14 |
 | `GET /storeops/payroll-by-store` (pay-gated: `amount` stripped, `hours` kept) | `storeops/router.py:1685` | §14 |
 | `GET /storeops/payroll/actual-hours-detail` (pay-gated: `pay_rate`/salary $ stripped, hours kept) | `storeops/router.py:1960` | §14 |
@@ -7223,6 +7226,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1069) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §70. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
 | **What does a store-day DECLARE, what was it worth, and which employee generated the most of it?** — folded across the two physical stores, with every catalog metric present (zeros and `declared: False`) so "declared nothing" is distinguishable from "has no such category"; a store-level figure is NEVER attributed to a person, and the submitter is never credited with the store's day | `commcalc.closing_count_field_def` (mig `501` + `1072`: `value_kind` / `declared_by` / `unit_price` / `in_revenue`) × `commcalc.daily_closing.counts` + the three physical columns × `commcalc.closing_metric_line` (mig `1072`) × `commcalc.closing_tender_def` (mig `111`, read-only) | ONE home `closing/metric_catalog.py` (`build` / `storage_for` / `declared` / `by_employee` / `gross_revenue` / `employee_revenue` / `revenue_keys` — pure, DB-free) → `GET /closing/metric-catalog`, `GET /closing/declared/{date}`, `PUT /closing/metric-lines`, the closing form and the Count Fields editor; lock `harness_metric_catalog_lock.py` (38) — §76. `gross_revenue` is THE definition of a day's sales, so a target and a payout rule cannot disagree about it |
 | **What does a day's declared categories PAY each employee?** — three shapes only (`per_unit`, `percent_of_amount`, `threshold_pool`); every rule, category, rate, threshold and split is a CONFIG ROW, so no tenant vocabulary reaches the code (asserted over the stripped executable text). A gate that cannot be VERIFIED fails CLOSED, an unresolved input is zero production, and **a pool whose split cannot be measured is returned `unallocated` with a reason rather than split evenly** | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) × the declared store-day above × `storeops.shifts` (actual hours where recorded, else scheduled) | ONE home `commcalc/daily_incentive.py` (`compute_day` / `measure` / `split_pool` — pure) → `GET /commcalc/daily-incentive/{date}`; scope precedence REUSES `management_incentive.resolve_plan`, never a second ladder; screen `/commcalc/incentive-rules`; proof `harness_daily_incentive.py` (83, the owner's six live rules replayed as config) — §76.4. **Computes only — persisting and paying is not this endpoint's** |
+| **How many hours is this store scheduling, and how many is this person scheduled?** — ONE derivation answers both, so the two totals cannot disagree (they did: 208.0h by store against 164.0h by employee, live, one week, ONE employee record, two spellings of her name). A shift's `employee_name` is a copy of the roster name that a rename leaves stale, and it is never a key; hours that name nobody on the roster ride a visible `__unattributed__` bucket rather than being dropped off one axis | `storeops.shifts` × `storeops.employees` (the roster — REQUIRED, never defaulted) | ONE home `storeops/schedule_hours.scheduled_axes` over `storeops/payroll_identity.build_shift_attributor`, mirrored client-side in `storeops/lib/scheduleAxes.ts` → `GET /storeops/schedule/hours-trend` + the Schedule page; proof `harness_schedule_axes.py` (69, incl. the live regression + a negative control) · lock `harness_schedule_identity_lock.py` (58) — §STOREOPS-01 |
 | **What is this store supposed to do — per day, per week, per month — and what do I still need to reach it?** — the axis is ASKED of the tenant (the four built-in sales categories plus every category declared on Count Fields), so a target exists for the thing the business actually sells. A week or day figure is a WINDOW over the one monthly spread, summed at full precision, never a second calculation — so the weeks always add up to the month | `commcalc.targets` (mig `006`, the built-ins' own columns, read byte-for-byte as before) × `commcalc.target_line` (mig `1074`, the declared half) × `storeops.shifts` (the scheduled hours the month is spread over) × the declared store-day above (the ACHIEVED figure for a declared category) | ONE home `commcalc/targets_engine.py` (`target_axis` / `derive_monthly_by_cat` — THE fold over both physical stores — `compute_scope`, `grain_windows`, `merge_declared_actuals`) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/summary` / `/action-plan` / `/report-cards`; locks `harness_target_axis_lock.py` (80) + proof `harness_target_declared_axis.py` (42) — §COMMCALC-02 |
 | **What would it take to reach a number I just named?** — `need`, `per_day`, `per_week` against an ARBITRARY goal, not only the stored target. With no open days left `per_day` is `null`: there is no such rate, and showing the need as a daily figure would state something false. Over-achievement needs zero, never a negative | the `compute_scope` result above (`monthly`, `achieved_mtd`) × the scope's remaining open days | `targets_engine.backward_from_goal` → `GET /commcalc/targets/{period}/backward`. Computed from the SAME scope the calendar renders, so the two cannot disagree — §COMMCALC-02.5 |
 | **What did management declare for this month, and what does it still owe this week?** The focus in a manager's own words, the pay type named as driving the month's spiffs, the temporary spiffs on the table with a status, and the weekly check-ins done; the OUTSTANDING list is COMPUTED from the row + today + live measurements, so an item cannot outlive its cause, and an unmeasured count raises nothing rather than reading as a zero | `commcalc.month_focus` (mig `1065`, the declaration) x `commcalc.targets` (mig `006`, SAVED rows only — a seeded carry-forward is not an assigned target) x `commcalc.payout_config.custom_spiffs` (§6, READ ONLY — the money) x §59's bands / `lagging()` x §60's pay-type options and per-store units | ONE home `commcalc/month_focus.py` (`outstanding` / `spiff_reconciliation` / `spiff_economics` / `plays` / `confirm_checkin` / `may_declare`) → `GET`/`PUT` `/commcalc/month-focus/{period}` + `/checkin`; TWO surfaces over the one due list (the login attention item and the platform banner), neither recomputing it; opens no client, reads no feed and sends on no channel (all AST-locked); module-graph fact `month_focus_declaration`; lock `harness_month_focus.py` — §63. Nothing is paid from the row: a declared spiff is an intent with a status, and the reconciliation reports declared-against-live in BOTH directions. A spiff states what it PAYS and what FUNDS it, and the margin is derived on read, `None` unless both sides are declared — so a spiff paying out more than it earns is a stated fact (`spiff_costs_more_than_it_earns`) rather than an arithmetic nobody did |
@@ -24664,7 +24668,8 @@ registered section" and adds the module↔section direction it never had.
 
 115 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
 once), plus §15.1–§15.3, which are where the `notify` module is actually documented, plus the
-`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §COMMCALC-01, §COMMCALC-02).
+`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §COMMCALC-01, §COMMCALC-02,
+§STOREOPS-01).
 
 Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
 110 sections cite a backend module path and are checked against it, 12 of those cite four or more
@@ -24870,6 +24875,7 @@ status word rather than a blank that reads as nil.
 | CORE-01 | core |
 | CORE-02 | core |
 | COMMCALC-02 | commcalc |
+| STOREOPS-01 | storeops |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -25559,3 +25565,146 @@ four built-ins are byte-identical with a catalog present, a declared category re
 - Same class: §76 (the declaration half), §29.7 (two physical stores one reader), §19.18 (a mechanism
   written and its callers left unwired), §CORE-01 (the section-number race this change's predecessor
   caused).
+
+## §STOREOPS-01. A SHIFT'S EMPLOYEE NAME IS NOT AN EMPLOYEE IDENTITY — and the two axes of scheduled hours are one fact (owner report 2026-10-12)
+
+Owner, verbatim: *"in the ups store schduleing teh one employee hajra sohail is appearing on the store
+side and her other name is appearing on teh other employee side, since hajra cheema was not appearing
+on the employee side i added teh schedule now the schesuelomnt eh companyh side shows 204 hours and
+employee side show 164 fix from teh back end and keep one hajra schdule is the same for both"*.
+
+### STOREOPS-01.1 What was measured, before anything was built
+
+Live, read-only, 2026-10-12, NY LOGISTICS (`ba084e25-…`), UPS centre `7710`:
+
+| Fact | Measured |
+|---|---|
+| Employee records answering to either spelling | **ONE** — `storeops.employees` id 274, `employee_id` `E274`, `name` `Hajra Sohail`, `home_store` `7710`, created 2026-09-26 |
+| `storeops.shifts` rows naming a Hajra | 26 — **21** spelled `Hajra Cheema`, **5** spelled `Hajra Sohail` |
+| `employee_id` on those 26 rows | **`E274` on every single one** |
+| Week of Mon 2026-10-12, as it stood at 19:26 UTC | **208.0h by store · 164.0h by employee** |
+| The gap | **44.0h — exactly the `Hajra Cheema` rows** |
+
+**The premise of two employee records is wrong, and saying so is part of the fix.** There is one
+employee record; the 26 shifts were never split by identity, only by the denormalized `employee_name`
+copy. Nothing needs merging and nothing needs deleting.
+
+The employee figure reproduces the owner's **164** to the hour. The store figure reconstructs to
+**208.0** against his "204": `storeops.shifts` carries no `updated_at`, so a shift edited between
+19:15 (when the week was created) and 19:26 leaves no trace and the exact store total at his instant
+is not recoverable. The COMPOSITION of the gap is certain either way — `harness_schedule_axes.py` §B
+pins it, and §E is a negative control that reproduces the loss so the fixture cannot go vacuous.
+
+### STOREOPS-01.2 The class, not the instance
+
+`storeops.shifts.employee_name` is a **copy** of `storeops.employees.name`, written at insert time
+from the roster. `PATCH /storeops/employees/{emp_id}` updates the roster row **and nothing else** —
+there is no cascade, and `EMP_FIELDS` has never had one. So:
+
+> **Renaming an employee orphans every shift they already have.**
+
+The store axis grouped on `store_code`, a real column, and kept every row. The employee axis was an
+**inner join of that stale copy against the roster's `name`** — string equality — so the orphaned
+rows were counted by store and silently dropped by employee. Two axes over the same rows, one of them
+a join on a copy nobody maintains: the totals differ by exactly the orphaned hours and nothing says
+so. It is not about Hajra, not about this tenant and not about this week; it fires at the next rename
+for the next tenant, and a rename is the ordinary thing a payroll roster does.
+
+The same copy was also the key for the schedule page's double-booking detector, its two copy-week
+dedupes, its 🌴 time-off badge, its export, and `POST /storeops/shift-templates/apply`'s dedupe — so
+after a rename a double-booking went undetected, an approved day off stopped showing, and copying or
+applying a week **inserted a second set of shifts** for the renamed person.
+
+A second, narrower divergence rode along: in "By store" the filter selected on `store_code`, while in
+"By employee" it selected employees by their **`home_store`**. Those are different questions ("worked
+here" vs "based here"), so the same filter could legitimately produce two different totals.
+
+### STOREOPS-01.3 One fact, one home, dereferenced
+
+Two homes, one question each. Both are PURE and DB-free.
+
+| Question | The one home | Who reads it |
+|---|---|---|
+| WHO is this shift about? | `storeops/payroll_identity.build_shift_attributor` — an **extension of the module that already owned** "which employee id is which" (`business_id_alias_map`) and "which spelling is which employee" (`person_key` / `name_tokens` / the one accent fold). Precedence: business `employee_id` → numeric pk that aliases to one (with that map's own ambiguity guard) → a name naming **exactly one** employee → `name_ambiguous` → `unmatched` | `schedule_hours`, `GET /schedule/hours-trend` (rows + the `employees=` filter), `POST /shift-templates/apply`, the client mirror |
+| WHAT do the hours add up to? | `storeops/schedule_hours.scheduled_axes(shifts, employees)` — **both axes from one row walk**, over that canonical key. `hours_trend` dereferences it and emits it as `axes` + an `identity` evidence block | `GET /storeops/schedule/hours-trend`; the schedule page reads the client mirror |
+| the client mirror | `frontend/src/app/(platform)/storeops/lib/scheduleAxes.ts` — `scheduledAxes` / `buildShiftAttributor` / `shiftHours`, line-for-line the same rules including the NFD accent fold | the schedule page's footer, every row total, the double-booking detector, the 🌴 badge, both copy-week dedupes, and `scheduleExport.buildScheduleExport` |
+
+**The contract is an invariant, not a convention:**
+
+```
+sum(by_store) == sum(by_employee, incl. the unattributed bucket) == total
+```
+
+A row that cannot be attributed to a roster employee is **not dropped** — it rides an explicit
+`__unattributed__` bucket carrying its reason and its hours, so the employee axis always equals the
+store axis and *"we do not know whose hours these are"* is a visible answer rather than a missing one.
+The page states the gap on screen if the two ever disagree, instead of showing two confident totals
+for somebody to reconcile by hand.
+
+**A stale spelling is REPORTED, never rewritten behind anybody's back.** `name_divergences` returns
+one entry per (person, stale spelling) with the row count and hours riding on it, the page shows it,
+and `hours_trend` carries it in `identity.name_divergence`. Which spelling is correct is a human
+decision (STOREOPS-01.6), and the hours are right either way.
+
+**`employees` is a REQUIRED keyword on `hours_trend`, deliberately not defaulted.** A caller without
+the roster must say so (`[]`, which puts every row in the visible bucket); a default would let a
+caller fall silently back to the name copy, which is the whole defect.
+
+Live, through the shipped function, after the change (read-only, same minute): the four live weeks at
+7710 read **161/161 · 161/161 · 159/159 · 156/156** store/employee where the employee axis previously
+read 117 · 117 · 115 · 108; one `Hajra Sohail` bucket holding 180.0h over the whole span, zero
+unattributed, and one reported divergence (`Hajra Cheema`, 20 rows, 180.0h).
+
+### STOREOPS-01.4 Scope is decided once
+
+The market/store filter now narrows the **shifts**, and both axes are built from that one scoped row
+set. The employee axis's rows are the **union** of (every roster employee in scope, so a person with
+no hours is still a row you can click to schedule) and (every bucket that actually carries hours,
+including the unattributed one) — the union is what makes a bucket with hours structurally unable to
+be off screen, which is how the 44h went missing in the first place.
+
+### STOREOPS-01.5 Locks, proofs and what is REPORTED not fixed
+
+| | |
+|---|---|
+| Proof | `backend/harness_schedule_axes.py` — **69 checks**. §A the attributor's precedence and its three refusals-to-guess (ambiguous name, numeric id that is someone else's business id, accent fold); §B **the live 208-vs-164 week as a fixture**, to the hour; §C the premise checked (one record, every row already `E274`); §D the invariant on nine shapes (empty roster, overnight, zero-length, soft-deleted, no store code, two stores, nobody matching, the live week, no rows); §E a **negative control** reproducing the old loss; §F a **no-op control** proving a roster whose names all agree is byte-identical; §G the trend report's employee axis, incl. two people sharing a roster name staying two rows; §H `name_divergences`. |
+| Lock | `backend/harness_schedule_identity_lock.py` — **58 checks**, verified RED five ways (the router stops passing the roster; a name key set returns to the page; the invariant stops being asserted; a new unpinned name site appears; the home is renamed away). §A pins **13 name-as-identity sites** across storeops/notify/commcalc/hr and the storeops frontend with a reviewed classification each, and a STALE pin fails too. §B every caller still dereferences a home. §C no second derivation of either axis. §D the invariant and the required roster cannot be defaulted away. |
+| CI | both, plus `harness_schedule_hours.py`, are steps of `carrier-vocab-guard.yml` and name **themselves** in its paths filter alongside their subjects (§13e: a lock behind an allowlist that does not list its own file skips silently on the PR that edits it). |
+| REPORTED, not fixed | (1) `storeops/accountability.aggregate` keys the attendance lens on a NAME. Numerator and denominator read the SAME shift-name copy so a rename cannot distort a rate, but two different people sharing a roster name still merge into one coaching row — changing the key changes a figure a manager has already been shown, so it waits for the owner's word. Pinned `SAME-COPY-BOTH-SIDES`. (2) `commcalc/router._fetch_shifts` canonicalises rep spellings through commcalc's own `_rep_canon_map` — a **second name-canonicalisation home**, for sales-feed rep names, whose output is commission money. Not the scheduled-hours axis; unifying it would move computed rep pay. Pinned `REPORTED-SIBLING` for the owner and the commission agent. (3) `shifts.employee_name` is still written on insert and still never updated on rename. Nothing now DEPENDS on it and the divergence is shown on screen; whether the stored copies are rewritten is the owner-run decision below. |
+| No migration | This change adds no table, no column and no config row. The hours were always recoverable from `employee_id`; only the readers were wrong. |
+
+### STOREOPS-01.6 What is waiting on the owner
+
+**Nothing is required for the hours to be right.** One Hajra, one schedule, both totals equal, on
+deploy — the `employee_id` the rows already carry is what the axes read.
+
+What remains is cosmetic and is the owner's call: **which spelling is her name?** The 21 shift rows
+say `Hajra Cheema`, the roster row says `Hajra Sohail`, and the page now shows both. The instrument is
+a **roster rename or a shift-copy rewrite, never a delete** — the precedent is §13d's owner-run
+runbook, and the same reasoning that left 1598 Mount Ephraim unmerged pending a ROSTER rename. The
+owner-facing one-run SQL is `/mnt/project-files/employee-identity/RUN_hajra_one_name_2026-10-12.sql`;
+it moves no money, no hours and no shift between people.
+
+### STOREOPS-01.7 What was checked for duplication before building
+
+- **§14 / §16–18 for the scheduled-hours mechanism.** `storeops.shifts` already had declared one
+  homes for its OTHER readers: `commcalc/labour_coverage.load_shift_hours_range` (the trading-day
+  fact), `targets_engine.scope_hours_by_day` (Daily Targets' open days) and
+  `coa.derive_wage_cells` (the P&L wage estimate). **None of them has an employee axis** — they are
+  all store-grained — so none was the home for this question and none was duplicated. The employee
+  axis existed only in `schedule_hours` (server) and inline in the page (client), and this change
+  folds the second into a mirror of the first rather than adding a third.
+- **`storeops/payroll_identity.py` for employee identity.** It already answered both halves of the
+  question (`business_id_alias_map`; `person_key`/`name_tokens`/`build_employee_matcher`). It was
+  EXTENDED — `build_shift_attributor` is those facts applied to our own rows — rather than a new
+  matcher being written beside it. The accent fold is still the single `account/store_identity.fold_accents`.
+- **§64 / PR #433's `shared_identity_pairs` + `may_be_one_store` re-keying for the identity shape.**
+  Read first, and deliberately NOT copied: that mechanism exists because two *store* rows genuinely
+  were two records that had to be folded. Here there is one employee record and the rows already
+  point at it, so a pairs table would be a mechanism with nothing to hold — the shape that fits is
+  "dereference the id you already have", which is what shipped.
+- **`payroll_identity.reconcile_employee_identity`** already collapses duplicate `/payroll` ROWS by
+  canonical id. That is the payroll-aggregation side of the same class and was left alone: it is
+  correct, and it now shares the attributor's precedence rules rather than restating them.
+- Same class: §19.18 (a mechanism written and its callers left unwired), §64 (one home for store
+  identity, and the lock that keeps it), §14z (a feed spelling is a proposal, never an attribution).

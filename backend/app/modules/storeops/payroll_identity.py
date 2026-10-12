@@ -191,18 +191,24 @@ MATCH_EPAY_LOGIN = "epay_login"
 MATCH_EPAY_SALESPERSON = "epay_salesperson"
 MATCH_EMPLOYEE_ID = "employee_id"
 MATCH_NAME_PROPOSED = "name_proposed"
+#: OUR OWN denormalized spelling on one of our own rows (`storeops.shifts.employee_name`). Unlike a
+#: carrier/clock FEED spelling this is a copy WE wrote from the roster at insert time, so an exact
+#: one-roster-row hit is a dereference of our own record rather than a guess about a stranger — it
+#: BINDS. It is still the WEAKER basis: `employee_id` is tried first, always.
+MATCH_SHIFT_NAME = "own_name_copy"
 MATCH_NAME_AMBIGUOUS = "name_ambiguous"
 MATCH_UNMATCHED = "unmatched"
 
 ALL_MATCH_BASES = (MATCH_APPROVED_LINK, MATCH_EPAY_LOGIN, MATCH_EPAY_SALESPERSON,
-                   MATCH_EMPLOYEE_ID, MATCH_NAME_PROPOSED, MATCH_NAME_AMBIGUOUS, MATCH_UNMATCHED)
+                   MATCH_EMPLOYEE_ID, MATCH_SHIFT_NAME, MATCH_NAME_PROPOSED, MATCH_NAME_AMBIGUOUS,
+                   MATCH_UNMATCHED)
 
 #: THE ALLOWLIST (the `carrier_dollar_class.component_is_evidence` pattern, index §66). A basis on
 #: which a feed row may actually be ATTRIBUTED to a person. A name proposal is deliberately absent,
 #: and so is anything nobody has ruled on: an unknown basis does NOT bind, because the direction the
 #: next mistake should fall in is "ask a human", never "assume it is them".
 BINDING_MATCH_BASES = (MATCH_APPROVED_LINK, MATCH_EPAY_LOGIN, MATCH_EPAY_SALESPERSON,
-                       MATCH_EMPLOYEE_ID)
+                       MATCH_EMPLOYEE_ID, MATCH_SHIFT_NAME)
 NON_BINDING_MATCH_BASES = tuple(b for b in ALL_MATCH_BASES if b not in BINDING_MATCH_BASES)
 
 MATCH_REASONS = {
@@ -211,7 +217,10 @@ MATCH_REASONS = {
     MATCH_EPAY_LOGIN: "The employee record stores this login (employees.epay_login).",
     MATCH_EPAY_SALESPERSON: "The employee record stores this spelling of the name "
                             "(employees.epay_salesperson).",
-    MATCH_EMPLOYEE_ID: "The feed carried this org's own employee id.",
+    MATCH_EMPLOYEE_ID: "The row carried this org's own employee id.",
+    MATCH_SHIFT_NAME: "The row carries no usable employee id, but the name we ourselves stored on "
+                      "it is exactly one roster employee's name. That is a dereference of our own "
+                      "copy, so it binds — unlike a spelling that arrived from outside.",
     MATCH_NAME_PROPOSED: "The name on this row matches exactly one roster employee by name token. "
                          "That is a PROPOSAL for someone to approve, not an attribution — a person "
                          "is never inferred from a name at runtime.",
@@ -419,3 +428,116 @@ def link_proposals(rows, matcher):
                        "bound": len(bound),
                        "unmatched_hours": round(sum(c["hours"] for c in unmatched.values()), 2),
                        "proposed_hours": round(sum(c["hours"] for c in proposals.values()), 2)}}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# WHICH EMPLOYEE IS THIS SHIFT ABOUT? (owner report 2026-10-12, index §STOREOPS-01)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# THE CLASS, stated once. `storeops.shifts.employee_name` is a COPY of `storeops.employees.name`,
+# written at insert time and never maintained afterwards — `PATCH /storeops/employees/{id}` updates
+# the roster row and nothing else. So RENAMING AN EMPLOYEE ORPHANS EVERY SHIFT THEY ALREADY HAVE,
+# and any surface that groups shifts by that copy loses them, while any surface that groups by
+# `store_code` keeps them. Two axes over the same rows, one of them an inner join on a stale string:
+# the totals disagree by exactly the orphaned hours and nothing says so.
+#
+# Measured live 2026-10-12 (NY LOGISTICS, UPS centre 7710): ONE roster row `E274`, and 26 shift rows
+# under TWO spellings — `Hajra Cheema` (21) and `Hajra Sohail` (5) — every one of them already
+# carrying `employee_id = 'E274'`. The identity was never actually in doubt; only the copy was.
+#
+# THIS IS AN EXTENSION OF THIS MODULE, NOT A SECOND MATCHER. `business_id_alias_map` already owns
+# "which employee id is which" and `person_key` / `name_tokens` already own "which spelling is which
+# employee". `build_shift_attributor` is those two facts applied to our OWN rows, in the same home,
+# so no caller has to decide and no caller may decide differently.
+
+#: What an attribution answer looks like. Every field is always present: a caller never has to know
+#: which basis fired to read the answer.
+def _attribution(key, employee_id, name, basis, *, shift_name=None):
+    return {"key": key, "employee_id": employee_id, "name": name, "basis": basis,
+            "binds": match_is_binding(basis), "reason": match_reason(basis),
+            "shift_name": (str(shift_name or "").strip() or None)}
+
+
+#: The bucket key every unattributable row shares. It is a REAL bucket that carries its hours, never
+#: a drop: an axis that cannot name the person still has to add up.
+UNATTRIBUTED_KEY = "__unattributed__"
+UNATTRIBUTED_LABEL = "Not matched to an employee record"
+
+
+def build_shift_attributor(employees):
+    """`attribute(employee_id, employee_name) -> attribution dict` for one org's own rows.
+
+    `employees` the org's `storeops.employees` rows (`id`, `employee_id`, `name`).
+
+    PRECEDENCE — strongest first, and the first hit wins:
+      1. `employee_id` is a roster business id (`E274`)                 → MATCH_EMPLOYEE_ID
+      2. `employee_id` is the NUMERIC pk that aliases to one            → MATCH_EMPLOYEE_ID
+         (`business_id_alias_map`'s own ambiguity guard applies: a numeric that is itself somebody
+          else's business id is never aliased, so it falls through rather than being guessed)
+      3. no usable id, but `person_key(name)` names exactly one employee → MATCH_SHIFT_NAME
+      4. the name names more than one employee                          → MATCH_NAME_AMBIGUOUS
+      5. nothing names anybody                                          → MATCH_UNMATCHED
+
+    `key` is the canonical BUCKET key — the business employee id when the row binds, and
+    `UNATTRIBUTED_KEY` when it does not, so every row lands in a bucket and no hours disappear.
+    `name` is the ROSTER spelling (the live one), never the row's stale copy; `shift_name` carries
+    what the row itself said so a divergence can be shown rather than silently corrected.
+    """
+    emps = list(employees or ())
+    alias = business_id_alias_map(emps)
+    by_id, by_key = {}, {}
+    for e in emps:
+        biz = str((e or {}).get("employee_id") or "").strip()
+        if not biz:
+            continue
+        by_id[biz] = e
+        k = person_key((e or {}).get("name"))
+        if k:
+            by_key.setdefault(k, set()).add(biz)
+
+    def attribute(employee_id, employee_name):
+        raw = str(employee_id or "").strip()
+        if raw:
+            biz = raw if raw in by_id else alias.get(raw)
+            if biz and biz in by_id:
+                return _attribution(biz, biz, (by_id[biz] or {}).get("name"),
+                                    MATCH_EMPLOYEE_ID, shift_name=employee_name)
+        k = person_key(employee_name)
+        hits = by_key.get(k) or set()
+        if len(hits) == 1:
+            biz = next(iter(hits))
+            return _attribution(biz, biz, (by_id[biz] or {}).get("name"),
+                                MATCH_SHIFT_NAME, shift_name=employee_name)
+        basis = MATCH_NAME_AMBIGUOUS if len(hits) > 1 else MATCH_UNMATCHED
+        label = str(employee_name or "").strip() or raw or UNATTRIBUTED_LABEL
+        return _attribution(UNATTRIBUTED_KEY, None, label, basis, shift_name=employee_name)
+
+    return attribute
+
+
+def name_divergences(rows, attributor):
+    """PURE: the rows whose own `employee_name` copy no longer agrees with the roster spelling.
+
+    REPORTED, never silently rewritten — the whole point of §STOREOPS-01 is that the hours stop
+    depending on the copy, not that the copy gets fixed behind somebody's back. One entry per
+    (employee, stale spelling), carrying how many rows and how many hours ride on it so the size of
+    the divergence is visible before anyone decides which spelling is right.
+
+    `rows` need `employee_id`, `employee_name` and either `hours` or start/end times already summed
+    by the caller — this function only counts what it is given (`hours`, default 0).
+    """
+    out = {}
+    for r in rows or ():
+        a = attributor((r or {}).get("employee_id"), (r or {}).get("employee_name"))
+        if not a["binds"] or not a["shift_name"]:
+            continue
+        if person_key(a["shift_name"]) == person_key(a["name"]):
+            continue
+        cell = out.setdefault((a["key"], a["shift_name"]), {
+            "employee_id": a["employee_id"], "roster_name": a["name"],
+            "stored_name": a["shift_name"], "rows": 0, "hours": 0.0, "basis": a["basis"]})
+        cell["rows"] += 1
+        try:
+            cell["hours"] = round(cell["hours"] + float((r or {}).get("hours") or 0), 2)
+        except (TypeError, ValueError):
+            pass
+    return sorted(out.values(), key=lambda c: (-c["hours"], c["roster_name"] or "", c["stored_name"]))

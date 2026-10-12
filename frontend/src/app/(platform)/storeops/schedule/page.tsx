@@ -5,6 +5,7 @@ import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { buildScheduleExport } from '../lib/scheduleExport'
+import { scheduledAxes, buildShiftAttributor, shiftHours, shiftHrs, UNATTRIBUTED_KEY, type EmployeeBucket } from '../lib/scheduleAxes'
 import { currentPeriodFromSettingsResponse } from '@/lib/pay-period'
 
 interface Shift {
@@ -40,24 +41,10 @@ function dayLabel(date: string) {
   const d = parseLocalDate(date)
   return { dow: d.toLocaleDateString('en-US', { weekday: 'short' }), md: `${d.getMonth() + 1}/${d.getDate()}` }
 }
-// Scheduled hours for one shift, OVERNIGHT-aware: an end that wraps past midnight (end < start,
-// e.g. 18:00→00:30) adds a day; an equal start/end is a zero-length row (0h, never a spurious 24h).
-// Mirrors backend schedule_hours.shift_hours + the _scheduled_end_for_punch overnight guard so the
-// footer total, the trend report, and the stored scheduled_hours all agree.
-function hoursBetween(start: string, end: string) {
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  const s = sh * 60 + sm, e = eh * 60 + em
-  if (!isFinite(s) || !isFinite(e) || e === s) return 0
-  let d = e - s
-  if (d < 0) d += 24 * 60
-  return d / 60
-}
-// Hours for a shift row — recompute from start/end (overnight-safe), falling back to the stored value.
-function shiftHrs(s: { start_time?: string; end_time?: string; scheduled_hours?: number }) {
-  if (s.start_time && s.end_time) return hoursBetween(s.start_time, s.end_time)
-  return s.scheduled_hours || 0
-}
+// Scheduled hours — ONE home (../lib/scheduleAxes, mirroring backend schedule_hours), so the
+// footer total, each row total, the export and the trend report cannot drift apart. The overnight
+// wrap and the zero-length guard live there; this page only re-exports the names it already used.
+const hoursBetween = (start: string, end: string) => shiftHours(start, end)
 
 // Tenant-aware work-week start (storeops.tenants.work_week_start_dow, mig 085 — 0=Mon..6=Sun;
 // e.g. Luxelink=3/Thursday). `mondayOf()` in lib/client.ts is always Monday, so the schedule grid
@@ -205,21 +192,57 @@ export default function SchedulePage() {
   }, [stores])
   const markets = useMemo(() => Array.from(new Set(stores.map(s => s.market).filter(Boolean))).sort(), [stores])
 
+  // ── WHO IS THIS ROW ABOUT — resolved once, dereferenced everywhere (§STOREOPS-01) ─────────────
+  // The roster used to answer it: the widest one we hold, so a shift belonging to somebody outside
+  // the current view still names them instead of falling into "unattributed".
+  const attrRoster = useMemo(() => {
+    const seen = new Set<string>()
+    const out: { id: number; employee_id?: string | null; name: string }[] = []
+    for (const e of [...allEmps, ...employees]) {
+      const k = String(e.employee_id || e.id)
+      if (seen.has(k)) continue
+      seen.add(k)
+      out.push({ id: e.id, employee_id: e.employee_id, name: e.name })
+    }
+    return out
+  }, [allEmps, employees])
+  const attribute = useMemo(() => buildShiftAttributor(attrRoster), [attrRoster])
+  // The "is this the same shift" key, for every copy/apply dedupe on this page. It is the PERSON,
+  // never their spelling: keyed on `employee_name`, a dedupe stopped matching the moment somebody
+  // was renamed and copying a week inserted every one of their shifts a second time.
+  const dedupeWho = (s: { employee_id?: string | number | null; employee_name?: string | null }) => {
+    const a = attribute(s.employee_id, s.employee_name)
+    return a.binds ? a.key : `name:${String(s.employee_name || '').trim()}`
+  }
+
   // Approved time-off → {employee_name: Set(dates off this week)} for the grid (employee view).
   const empById = useMemo(() => Object.fromEntries(employees.map(e => [String(e.id), e.name])), [employees])
-  const offByName = useMemo(() => {
+  // Approved time off, keyed by the PERSON (§STOREOPS-01): a time-off row also carries a
+  // denormalized `employee_name`, so keying the 🌴 badge on that string hid an approved day off
+  // from the grid the moment the employee was renamed. Falls back to the raw spelling only when the
+  // row names nobody on the roster — the same "never drop it silently" rule as the hours axes.
+  const offByEmp = useMemo(() => {
     const m: Record<string, Set<string>> = {}
     for (const t of timeOff) {
       if (String(t.status || '').toLowerCase() !== 'approved') continue
       const name = t.employee_name || empById[String(t.employee_id)]
       if (!name || !t.start_date || !t.end_date) continue
+      const a = attribute(t.employee_id, name)
+      const key = a.binds ? a.key : `name:${name}`
       let cur = t.start_date < weekStart ? weekStart : t.start_date
       const end = t.end_date > weekEnd ? weekEnd : t.end_date
       let guard = 0
-      while (cur <= end && guard++ < 60) { (m[name] ||= new Set()).add(cur); cur = addDays(cur, 1) }
+      while (cur <= end && guard++ < 60) { (m[key] ||= new Set()).add(cur); cur = addDays(cur, 1) }
     }
     return m
-  }, [timeOff, empById, weekStart, weekEnd])
+  }, [timeOff, empById, weekStart, weekEnd, attribute])
+
+  // The off-lookup for a bucket or a raw name — one helper, so no caller re-derives the key.
+  const isOff = (bucket: { key?: string; name?: string } | null | undefined, date: string) => {
+    if (!bucket) return false
+    if (bucket.key && offByEmp[bucket.key]?.has(date)) return true
+    return !!(bucket.name && offByEmp[`name:${bucket.name}`]?.has(date))
+  }
 
   // Multi-market filter: empty selection = all markets (matches the old "All markets" default).
   const selMkt = useMemo(() => new Set(filterMarkets), [filterMarkets])
@@ -235,30 +258,71 @@ export default function SchedulePage() {
     (selMkt.size === 0 || selMkt.has(mktOf[e.home_store])) &&
     (!filterStore || e.home_store === filterStore))
 
-  const shiftsOf = (pred: (s: Shift) => boolean) => shifts.filter(pred)
+  // ── SCOPE IS DECIDED ONCE (§STOREOPS-01) ───────────────────────────────────────────────────────
+  // The market/store filter narrows the SHIFTS, and both axes are then built from that one scoped
+  // row set. It used to narrow the ROWS instead, differently per view: by store code on the store
+  // axis, by the employee's HOME store on the employee axis. Those are two different questions
+  // ("worked here" vs "based here"), which is a second way the two totals could disagree for the
+  // same filter.
+  const scopedShifts = useMemo(() => {
+    const codes = new Set(filteredStores.map(s => s.store_code))
+    return shifts.filter(s => codes.has(s.store_code))
+  }, [shifts, filteredStores])
+
+  // THE ONE DERIVATION of both axes. Everything on this page that needs "hours by store", "hours by
+  // employee", a row's shifts, a day column total or the grand total reads it from here.
+  const axes = useMemo(() => scheduledAxes(scopedShifts, attrRoster), [scopedShifts, attrRoster])
+
+  // Employee-axis rows: every roster employee in scope (so a person with no hours is still a row you
+  // can click to schedule), UNIONED with every bucket that actually carries hours — including the
+  // unattributed one. The union is what makes the two totals equal: a bucket with hours can never be
+  // off-screen, which is exactly how a renamed employee's 44h went missing from this view.
+  const employeeRows = useMemo(() => {
+    const byKey = new Map(axes.byEmployee.map(b => [b.key, b]))
+    const rows: EmployeeBucket[] = []
+    const used = new Set<string>()
+    for (const e of filteredEmps) {
+      const a = attribute(e.employee_id || e.id, e.name)
+      const b = byKey.get(a.key)
+      if (b && !used.has(b.key)) { rows.push(b); used.add(b.key); continue }
+      if (!b && !used.has(a.key)) {
+        rows.push({ key: a.key, employee_id: a.employee_id, name: e.name, hours: 0, shifts: [],
+                    stored_names: [], basis: a.basis, binds: a.binds, reason: a.reason })
+        used.add(a.key)
+      }
+    }
+    for (const b of axes.byEmployee) if (!used.has(b.key) && b.hours > 0) { rows.push(b); used.add(b.key) }
+    return rows
+  }, [axes, filteredEmps, attribute])
 
   // Double-booking: same employee, same day, 2+ shifts across different stores.
   const conflicts = useMemo(() => {
     const byKey: Record<string, Shift[]> = {}
-    for (const s of shifts) { (byKey[`${s.employee_name}|${s.shift_date}`] ||= []).push(s) }
+    // Keyed on the PERSON (§STOREOPS-01), not on the name copy: a double-booking was invisible
+    // whenever the same person's two shifts carried two spellings of their name.
+    for (const s of scopedShifts) {
+      const a = attribute(s.employee_id, s.employee_name)
+      ;(byKey[`${a.key}|${s.shift_date}`] ||= []).push(s)
+    }
     return Object.values(byKey)
       .filter(arr => arr.length > 1 && new Set(arr.map(a => a.store_code)).size > 1)
-      .map(arr => ({ emp: arr[0].employee_name, date: arr[0].shift_date, stores: Array.from(new Set(arr.map(a => a.store_code))) }))
-  }, [shifts])
+      .map(arr => ({ emp: attribute(arr[0].employee_id, arr[0].employee_name).name,
+                     date: arr[0].shift_date, stores: Array.from(new Set(arr.map(a => a.store_code))) }))
+  }, [scopedShifts, attribute])
 
   // By-store coverage gaps: a store that IS being scheduled this week but has a day with nobody on it.
   // Restricting to stores already in rotation keeps closed/out-of-scope stores from being false positives.
   const coverageGaps = useMemo(() => {
     if (view !== 'store') return [] as { store: string; date: string }[]
-    const covered = new Set(shifts.map(s => `${s.store_code}|${s.shift_date}`))
-    const inRotation = new Set(shifts.map(s => s.store_code))
+    const covered = new Set(scopedShifts.map(s => `${s.store_code}|${s.shift_date}`))
+    const inRotation = new Set(scopedShifts.map(s => s.store_code))
     const gaps: { store: string; date: string }[] = []
     for (const st of filteredStores) {
       if (!st.store_code || !inRotation.has(st.store_code)) continue
       for (const d of weekDates) if (!covered.has(`${st.store_code}|${d}`)) gaps.push({ store: st.store_code, date: d })
     }
     return gaps
-  }, [view, shifts, filteredStores, weekDates])
+  }, [view, scopedShifts, filteredStores, weekDates])
 
   function prevWeek() { setWeekStart(w => addDays(w, -7)) }
   function nextWeek() { setWeekStart(w => addDays(w, 7)) }
@@ -276,10 +340,12 @@ export default function SchedulePage() {
       for (let wk = 1; wk <= n; wk++) {
         const ds = addDays(weekStart, wk * 7), de = addDays(ds, 6)
         const existing = await api(`/api/v1/storeops/shifts?week_start=${ds}&week_end=${de}`)
-        const seen = new Set((existing || []).map((s: any) => `${s.employee_name}|${s.shift_date}|${s.start_time}`))
+        // Dedupe on the PERSON, not the spelling (§STOREOPS-01) — keyed on `employee_name` this
+        // skipped nothing for a renamed employee and copied their week in twice.
+        const seen = new Set((existing || []).map((s: any) => `${dedupeWho(s)}|${s.shift_date}|${s.start_time}`))
         for (const sh of shifts) {
           const nd = addDays(sh.shift_date, wk * 7)
-          if (seen.has(`${sh.employee_name}|${nd}|${sh.start_time}`)) continue
+          if (seen.has(`${dedupeWho(sh)}|${nd}|${sh.start_time}`)) continue
           try {
             await api('/api/v1/storeops/shifts', { method: 'POST', body: JSON.stringify({
               employee_id: sh.employee_id, employee_name: sh.employee_name, store_code: sh.store_code,
@@ -303,11 +369,11 @@ export default function SchedulePage() {
     if (!confirm(`Copy ${prev.length} shifts from last week into this week? Existing shifts are kept (duplicates skipped).`)) return
     setBusy(true)
     try {
-      const seen = new Set(shifts.map(s => `${s.employee_name}|${s.shift_date}|${s.start_time}`))
+      const seen = new Set(shifts.map(s => `${dedupeWho(s)}|${s.shift_date}|${s.start_time}`))
       const created: any[] = []; let added = 0
       for (const sh of prev) {
         const nd = addDays(sh.shift_date, 7)
-        if (seen.has(`${sh.employee_name}|${nd}|${sh.start_time}`)) continue
+        if (seen.has(`${dedupeWho(sh)}|${nd}|${sh.start_time}`)) continue
         try {
           const c = await api('/api/v1/storeops/shifts', { method: 'POST', body: JSON.stringify({
             employee_id: sh.employee_id, employee_name: sh.employee_name, store_code: sh.store_code,
@@ -359,8 +425,11 @@ export default function SchedulePage() {
 
   // Edit an existing shift — reuse the modal (store + employee fixed; adjust the times).
   function openEdit(s: Shift) {
-    setNewShift({ start_time: s.start_time, end_time: s.end_time, store_code: s.store_code, employee_name: s.employee_name })
-    setAddModal({ date: s.shift_date, store: s.store_code, emp: s.employee_name, editId: s.id })
+    // Edit the shift under the person's CURRENT name (§STOREOPS-01) — opening it on the stale copy
+    // stored on the row is how somebody ends up re-entering a second schedule for one person.
+    const who = attribute(s.employee_id, s.employee_name).name || s.employee_name
+    setNewShift({ start_time: s.start_time, end_time: s.end_time, store_code: s.store_code, employee_name: who })
+    setAddModal({ date: s.shift_date, store: s.store_code, emp: who, editId: s.id })
   }
 
   async function addShift() {
@@ -383,7 +452,7 @@ export default function SchedulePage() {
     // Same data that draws the 🌴 OFF badge — confirm before scheduling over an employee's own
     // approved time off on this day (the backend now ALLOWS it by default; this is a courtesy
     // check-with-the-manager step, not a hard stop).
-    if (offByName[employee_name]?.has(addModal.date)) {
+    if (isOff({ key: attribute(allEmps.find(e => e.name === employee_name)?.employee_id, employee_name).key, name: employee_name }, addModal.date)) {
       if (!confirm(`${employee_name} has approved time off on ${addModal.date}. Schedule anyway?`)) return
     }
     const emp = allEmps.find(e => e.name === employee_name)
@@ -439,26 +508,49 @@ export default function SchedulePage() {
       weekDates: weekDates.map(d => ({ iso: d, ...dayLabel(d) })),
       filterMarkets,
       filteredStores: filteredStores.map(s => ({ store_code: s.store_code })),
-      filteredEmps: filteredEmps.map(e => ({ name: e.name })),
-      shifts,
+      // The export's employee axis is the SAME union of buckets the grid shows (§STOREOPS-01), so an
+      // emailed schedule cannot total differently from the screen it was sent from.
+      filteredEmps: employeeRows.map(b => ({ name: b.name, key: b.key })),
+      employeeBuckets: employeeRows.map(b => ({ key: b.key, name: b.name, shifts: b.shifts })),
+      byStoreShifts: axes.byStoreShifts,
+      shifts: scopedShifts,
     })
   }
 
   const today = localToday()
-  const rows = view === 'store' ? filteredStores : filteredEmps
+  const rows: (Store | EmployeeBucket)[] = view === 'store' ? filteredStores : employeeRows
 
-  // Footer totals for the CURRENTLY DISPLAYED (filtered) rows — per weekday column + a grand total.
-  // Built from exactly the rows the grid shows, so narrowing the market/store filter narrows the total.
+  // Footer totals — read from the ONE axes derivation, over exactly the rows the grid shows
+  // (§STOREOPS-01). Both views sum the SAME scoped row set, so "By store" and "By employee" cannot
+  // disagree: that disagreement (208h vs 164h, live, 2026-10-12) is the defect this replaced. The
+  // employee view sums its displayed buckets and the store view sums its displayed stores; since
+  // `employeeRows` is a union that can never leave a bucket with hours off-screen, the two agree by
+  // construction rather than by luck.
   const footer = useMemo(() => {
-    const keys = new Set(view === 'store'
-      ? filteredStores.map(s => s.store_code)
-      : filteredEmps.map(e => e.name))
-    const disp = shifts.filter(s => keys.has(view === 'store' ? s.store_code : s.employee_name))
     const perDay: Record<string, number> = {}
     let grand = 0
-    for (const s of disp) { const h = shiftHrs(s); perDay[s.shift_date] = (perDay[s.shift_date] || 0) + h; grand += h }
-    return { perDay, grand }
-  }, [shifts, filteredStores, filteredEmps, view])
+    const add = (list: Shift[]) => {
+      for (const s of list) {
+        const h = shiftHrs(s)
+        perDay[s.shift_date] = (perDay[s.shift_date] || 0) + h
+        grand += h
+      }
+    }
+    if (view === 'store') for (const st of filteredStores) add((axes.byStoreShifts[st.store_code] || []) as Shift[])
+    else for (const b of employeeRows) add(b.shifts as Shift[])
+    return { perDay, grand: Math.round(grand * 100) / 100 }
+  }, [axes, filteredStores, employeeRows, view])
+
+  // The parity statement, on screen. Not a debug aid: if these two ever differ again the page SAYS
+  // so with the number, instead of showing two confident totals and letting somebody reconcile them
+  // by hand. `agrees` is proven for the pure derivation in harness_schedule_axes.py; this is the
+  // same assertion where the user can see it.
+  const parityGap = useMemo(() => {
+    const storeTotal = filteredStores.reduce(
+      (a, st) => a + (axes.byStoreShifts[st.store_code] || []).reduce((x, s) => x + shiftHrs(s), 0), 0)
+    const empTotal = employeeRows.reduce((a, b) => a + b.hours, 0)
+    return Math.round((storeTotal - empTotal) * 100) / 100
+  }, [axes, filteredStores, employeeRows])
 
   // Render the chips of shifts inside one grid cell.
   const Cell = ({ date, cellShifts, onAdd, off }: { date: string; cellShifts: Shift[]; onAdd: () => void; off?: boolean }) => (
@@ -469,7 +561,7 @@ export default function SchedulePage() {
         <div key={s.id} title="Click to edit times" onClick={e => { e.stopPropagation(); openEdit(s) }}
           style={{ background: 'var(--accent2)', borderRadius: 6, padding: '3px 6px', fontSize: 11, color: 'white', position: 'relative', marginBottom: 3, textAlign: 'left' }}>
           <div style={{ fontWeight: 600, paddingRight: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {view === 'store' ? s.employee_name : s.store_code}
+            {view === 'store' ? (attribute(s.employee_id, s.employee_name).name || s.employee_name) : s.store_code}
           </div>
           <div style={{ opacity: 0.85 }}>{s.start_time}–{s.end_time}</div>
           <button onClick={e => { e.stopPropagation(); deleteShift(s.id) }}
@@ -554,6 +646,43 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {/* THE TWO TOTALS AGREE, OR THE PAGE SAYS SO (§STOREOPS-01). Both views now sum the same
+          scoped rows through one derivation, so this can only fire if somebody re-introduces a
+          second derivation — in which case the user sees the gap instead of reconciling two
+          confident numbers by hand. */}
+      {Math.abs(parityGap) >= 0.01 && (
+        <div style={{ background: '#fee2e2', border: '1px solid #ef4444', color: '#991b1b', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
+          ⚠️ The by-store and by-employee totals disagree by <strong>{Math.abs(parityGap).toFixed(1)}h</strong> for
+          this filter. That is a defect, not a setting — please report it; nothing on this screen should
+          be able to produce it.
+        </div>
+      )}
+
+      {/* HOURS THAT NAME NOBODY ARE AN ANSWER, NOT A GAP. They stay in both totals and are named
+          here, so they can be assigned rather than quietly dropped off the employee axis. */}
+      {axes.unattributed.shifts.length > 0 && (
+        <div style={{ background: '#fef3c7', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
+          🧾 <strong>{axes.unattributed.hours.toFixed(1)}h</strong> across {axes.unattributed.shifts.length} shift
+          {axes.unattributed.shifts.length === 1 ? '' : 's'} is not matched to an employee record. It is counted in
+          both totals and listed at the bottom of the By-employee view.
+        </div>
+      )}
+
+      {/* A SPELLING THAT NO LONGER MATCHES THE ROSTER IS A DATA FINDING — reported, never rewritten
+          behind somebody's back. The hours are already correct; which spelling is right is a human
+          decision (see the §STOREOPS-01 runbook). */}
+      {axes.nameDivergence.length > 0 && (
+        <div style={{ background: '#eff6ff', border: '1px solid #3b82f6', color: '#1e3a8a', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
+          ℹ️ Some shifts are stored under an older spelling of an employee&apos;s name — their hours are counted
+          correctly under the employee record either way:{' '}
+          {axes.nameDivergence.slice(0, 4).map((d, i) => (
+            <span key={i}><strong>{d.roster_name}</strong> also appears as “{d.stored_name}” ({d.rows} shift
+              {d.rows === 1 ? '' : 's'}, {d.hours.toFixed(1)}h){i < Math.min(axes.nameDivergence.length, 4) - 1 ? '; ' : ''}</span>
+          ))}
+          {axes.nameDivergence.length > 4 && ` +${axes.nameDivergence.length - 4} more`}
+        </div>
+      )}
+
       {conflicts.length > 0 && (
         <div style={{ background: '#fef3c7', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
           ⚠️ Double-booking detected:{' '}
@@ -604,15 +733,26 @@ export default function SchedulePage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r: any, ri: number) => {
+              {rows.map((row, ri: number) => {
+                const r = row as Store & EmployeeBucket & { role?: string; address?: string }
                 const isStore = view === 'store'
                 const label = isStore ? r.store_code : r.name
-                const sub = isStore ? (r.market || r.address?.substring(0, 22)) : r.role
-                const rowShifts = isStore ? shiftsOf(s => s.store_code === r.store_code) : shiftsOf(s => s.employee_name === r.name)
+                // The sub-line on the employee axis NAMES a divergence instead of hiding it: when
+                // this person's shifts carry a spelling other than their roster name, say so, with
+                // the spelling, so the data finding is visible to the person who can settle it.
+                const otherNames: string[] = isStore ? []
+                  : (r.stored_names || []).filter((n: string) => n && n !== r.name)
+                const sub = isStore ? (r.market || r.address?.substring(0, 22))
+                  : (r.key === UNATTRIBUTED_KEY ? r.reason
+                     : otherNames.length ? `also scheduled as ${otherNames.join(', ')}` : r.role)
+                // Row shifts come from the ONE axes derivation — never a re-filter by name.
+                const rowShifts = (isStore
+                  ? (axes.byStoreShifts[r.store_code] || [])
+                  : (r.shifts || [])) as Shift[]
                 const total = rowShifts.reduce((a, s) => a + shiftHrs(s), 0)
                 const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'
                 return (
-                  <tr key={r.id ?? label} style={{ background: rowBg }}>
+                  <tr key={(isStore ? r.store_code : r.key) ?? label} style={{ background: rowBg }}>
                     <td style={{ padding: '8px 14px', fontWeight: 600, fontSize: 13, borderRight: '1px solid var(--border)', position: 'sticky', left: 0, zIndex: 1, background: rowBg }}>
                       <div>{label}</div>
                       <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{sub}</div>
@@ -620,7 +760,7 @@ export default function SchedulePage() {
                     {weekDates.map(date => (
                       <Cell key={date} date={date}
                         cellShifts={rowShifts.filter(s => s.shift_date === date)}
-                        off={!isStore && (offByName[r.name]?.has(date) ?? false)}
+                        off={!isStore && isOff(r, date)}
                         onAdd={() => openAdd(date, isStore ? { store: r.store_code } : { emp: r.name })} />
                     ))}
                     <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 700, fontSize: 13 }}>{total.toFixed(1)}h</td>
