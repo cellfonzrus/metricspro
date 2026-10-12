@@ -124,6 +124,12 @@ INGEST_TABLES_BY_MODULE = {
         # cash/deposit recon reads. Two tables because they are two GRAINS — summing them
         # double-counts, which is exactly the confusion a lineage edge exists to prevent.
         "merchant_settlement_day", "merchant_settlement_batch",
+        # Back-office POS report portal (owner 2026-10-12, mig 1078). The portal's own account of what
+        # each worker sold, per declared category, per day — pulled by the shared portal loop
+        # (index §COMMCALC-05). It is the PORTAL's claim, landed beside what the reps declared at
+        # closing (commcalc.closing_metric_line, mig 1072) and never merged into it: merging them
+        # would destroy the comparison the feed exists for.
+        "portal_metric_day",
         # Per-line vendor rebate/commission history (mig 1005), landed by the mapped ingest
         # (/commcalc/upload-mapped). A LANDING ZONE: earned_amount is what the carrier owes,
         # collected_amount what it has paid, and no P&L / GP / payout / balance-sheet path reads it
@@ -505,6 +511,9 @@ DATA_DATE_COLUMN_BY_TABLE = {
     # Watched on arrival; add the column here the day one lands (the lock makes that a conscious change).
     EPAY_DAILY: None,
     "merchant_settlement_day": None,
+    # Day-keyed from the first row it ever lands: the report is about a business day, and the pull
+    # deliberately ends YESTERDAY because a day that has not closed is a figure that still moves.
+    "portal_metric_day": "business_date",
     "merchant_settlement_batch": None,
     "pos_builtin_daily_sales": None,
     "raw_sales_product": None,
@@ -622,6 +631,8 @@ NO_MONTH_COLUMN_REASONS = {
     # silence raw_ma_fulfillment kept until the day the stamp was generalised to it.
     EPAY_DAILY: "day-keyed transaction stream — `settlement_date` is its month fact",
     "merchant_settlement_day": "one row per processor business day — `business_date` is its month fact",
+    "portal_metric_day": ("one row per store-day-worker-category — `business_date` is its month fact; "
+                          "a re-pull restates a day on the natural key, it never replaces a period"),
     "merchant_settlement_batch": "one row per processor batch — dated by its own batch day",
     "asset_ledger": "the distributor's unit ledger — `acquired_date` is the row's only month fact",
 }
@@ -777,6 +788,7 @@ FEED_LABEL_BY_TABLE = {
     COMMISSION_PER_DEVICE_FEED: "Per-device rebate history",
     EPAY_DAILY: "Settlement transactions",
     "merchant_settlement_day": "Card settlement by day",
+    "portal_metric_day": "Portal report by category",
     "merchant_settlement_batch": "Card settlement by batch",
     "raw_sales_product": "Sales by product",
     "raw_sales_invoice": "Sales by invoice",

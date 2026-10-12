@@ -39843,6 +39843,23 @@ async def _merchant_portal_scraper(org_id, src_row):
     return await run_in_threadpool(mps.run_merchant_portal_sweep, sb(), org_id, dict(src_row or {}))
 
 
+async def _pos_report_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for a BACK-OFFICE POS REPORT portal (owner 2026-10-12): the daily
+    report of what each worker sold, pulled so it can be checked against what the reps declared at
+    closing.
+
+    Same durable-session posture as every other portal here — a human satisfies the second factor
+    ONCE on the live-login screencast, the authenticated storage_state is persisted, and this
+    scheduled pull rides it; a missing or rejected session raises VidaPayAuthError, which
+    run_data_source turns into an actionable auth_status=needs_2fa prompt rather than a hard error.
+    The portal's address, its report list and its selectors are all declared on the source row, so a
+    source nobody has configured yet refuses with the feed's own setup words instead of pulling
+    nothing and looking healthy."""
+    from app.modules.commcalc import pos_report_sweep as prs
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(prs.run_pos_report_sweep, sb(), org_id, dict(src_row or {}))
+
+
 # processor key → scraper callable (org_id, source_row) -> result dict. VidaPay + Total Access
 # share the same "Master Agent" portal family (vidapaycrm.com); both route through _vidapay_scraper.
 # b2bsoft (wsreports) reuses the identical Playwright session/2FA/proxy path via _b2bsoft_scraper.
@@ -39863,6 +39880,10 @@ _SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scrape
                     "payanywhere": _merchant_portal_scraper,
                     "transfirst": _merchant_portal_scraper,
                     "businesstrack": _merchant_portal_scraper}
+# The POS-report feed's connector KIND is named ONCE, by its module (index §COMMCALC-05) — never
+# re-spelled here, exactly as the supply connector below is not.
+from app.modules.commcalc.pos_report_sweep import CONNECTOR as _POS_REPORT_CONNECTOR  # noqa: E402
+_SOURCE_SCRAPERS[_POS_REPORT_CONNECTOR] = _pos_report_scraper
 # The supply-vendor connector KIND is named ONCE, by its module (supply/portal.SUPPLY_PROCESSOR) — never
 # re-spelled here (index §36; harness_supply_ordering.py §L pins the dereference).
 from app.modules.supply.portal import SUPPLY_PROCESSOR as _SUPPLY_PROCESSOR  # noqa: E402
@@ -41563,10 +41584,13 @@ def _live_pull(client, org_id, src_row):
         from app.modules.supply import portal as _sup
         if _sup.is_supply_source(proc):
             return _sup.catalog_pull_on_page(client, org_id, dict(src_row or {}), page, should_stop)
-        from app.modules.commcalc import merchant_portals as _mp
-        if _mp.is_portal(proc):
-            from app.modules.commcalc import merchant_portal_sweep as _mps
-            return _mps.pull_reports_on_page(client, org_id, dict(src_row or {}), page, should_stop)
+        # ANY portal-report feed (index §COMMCALC-05): the pull registry is asked whether this
+        # connector has an adapter, so a feed added later needs no branch here. This used to ask the
+        # CARD registry (`merchant_portals.is_portal`), which is why the second feed could not have
+        # ridden the live session without editing this line.
+        from app.modules.commcalc import portal_report_pull as _prp
+        if _prp.is_pullable(proc):
+            return _prp.pull_reports_on_page(client, org_id, dict(src_row or {}), page, should_stop)
         return vp._pull_all_reports_on_page(page, client, org_id, sid, carrier_id, mb,
                                             dict(src_row or {}), should_stop=should_stop)
     return _p
