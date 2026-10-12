@@ -988,10 +988,9 @@ FACTS: dict[str, dict] = {
         "callers": {
             # The carry-forward suggestion, the period summary, the calendar and the action plan all
             # walk `target_categories(catalog)` and ask `target_store(cat)` where each target lives.
+            # It also hands the axis to the DM / market-manager report card, which imports nothing
+            # by design (harness_manager_report_card D1) — so the card's items come from here.
             'app/modules/commcalc/router.py': ('_te', 'targets_engine'),
-            # The DM / market-manager report card derives its items from the axis, so a declared
-            # category gets a check-off row rather than being absent from the card.
-            'app/modules/commcalc/manager_report_card.py': ('_target_axis',),
             # The visit-priority dropdown offers the axis as assignable deliverables.
             'app/modules/storevisit/visit_plan_router.py': ('_te',),
         },

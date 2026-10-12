@@ -42,11 +42,24 @@ configuration. Every count below reports `no_target` separately for the same rea
 MET, MISSED, NO_TARGET = "met", "missed", "no_target"
 STATES = (MET, MISSED, NO_TARGET)
 
-# THE TARGET CATEGORIES ARE NOT LISTED HERE. They were, as a tuple of four, and that is precisely
-# why a tenant that declared drop-offs got a report card with no row for the thing it sells:
-# `targets_engine` is the one home for the axis and this module dereferences it. The import is of a
-# PURE module (no I/O, no DB), so the file's promise above is kept.
-from app.modules.commcalc.targets_engine import target_axis as _target_axis
+# THE AXIS IS HANDED IN, like every other fact this module uses. `targets_engine.target_axis` is the
+# one home for "what is targetable", and a tenant that declared drop-offs gets a row for them because
+# its caller passes that axis in as `axis=` — not because this file knows the list. This module
+# imports NOTHING (harness_manager_report_card §D1: every fact is handed in), so the built-in four
+# are spelled below as the default for a caller that hands in no axis, and
+# harness_target_axis_lock.py §A12 FAILS THE BUILD if those four ever differ from
+# `targets_engine.target_axis(None)`. That is the same posture the frontend fallback takes in
+# `lib/target-axis.ts`: a copy that cannot drift, because a check compares it.
+BUILTIN_TARGET_ITEMS = [
+    {"key": "activations", "label": "Activations", "unit": "count",
+     "source": "commcalc.targets vs the period's actuals (targets_engine)"},
+    {"key": "upgrades", "label": "Upgrades", "unit": "count",
+     "source": "commcalc.targets vs the period's actuals (targets_engine)"},
+    {"key": "byod", "label": "BYOD", "unit": "count",
+     "source": "commcalc.targets vs the period's actuals (targets_engine)"},
+    {"key": "accessories", "label": "Accessories", "unit": "money",
+     "source": "commcalc.targets vs the period's actuals (targets_engine)"},
+]
 
 # The items that are NOT target categories. These are this module's own, and they stay declared here.
 NON_TARGET_ITEMS = [
@@ -57,37 +70,43 @@ NON_TARGET_ITEMS = [
 ]
 
 
-def items_for(catalog=None):
-    """THE items for one tenant: its target categories (asked of the engine's axis), then this
-    module's own two. A fourth non-target item is added to NON_TARGET_ITEMS and every card, count
-    and roll-up picks it up; a new TARGET category is added by the admin on Count Fields and picked
-    up here with no code change at all.
+# THE registry: the target items, then this module's own two. `store_items` iterates THIS list when
+# no axis is handed in, so a fifth item added here reaches every card with no other edit.
+ITEMS = [dict(i) for i in BUILTIN_TARGET_ITEMS] + [dict(i) for i in NON_TARGET_ITEMS]
+ITEM_KEYS = tuple(i["key"] for i in ITEMS)
+ITEM_BY_KEY = {i["key"]: i for i in ITEMS}
+TARGET_CATEGORIES = tuple(sorted(i["key"] for i in BUILTIN_TARGET_ITEMS))
+
+
+def items_for(axis=None):
+    """THE items for one tenant: its target categories, then this module's own two.
+
+    `axis` is `targets_engine.target_axis(catalog)` — a list of {key, label, unit, store, source}
+    handed in by the caller, which is how a category the admin declared on Count Fields reaches a
+    report card with no code change at all. None falls back to `ITEMS`, the built-in four plus this
+    module's own, which is what every pre-2026-10 caller already assumed.
 
     `unit` is translated from the engine's vocabulary ('dollars' / 'count') into this module's
     display vocabulary ('money' / 'count'), which is the only thing this file decides about a
     category: a card formats a money figure differently from a tally."""
+    if not axis:
+        return [dict(i) for i in ITEMS]
     out = []
-    for a in _target_axis(catalog):
-        out.append({"key": a["key"], "label": a["label"],
-                    "unit": "money" if a["unit"] == "dollars" else "count",
+    for a in axis:
+        out.append({"key": a["key"], "label": a.get("label") or a["key"],
+                    "unit": "money" if a.get("unit") == "dollars" else "count",
                     "source": ("commcalc.target_line vs what the store declared (targets_engine)"
-                               if a["store"] == "line"
+                               if a.get("store") == "line"
                                else "commcalc.targets vs the period's actuals (targets_engine)")})
     return out + [dict(i) for i in NON_TARGET_ITEMS]
 
 
-def target_keys(catalog=None):
+def target_keys(axis=None):
     """Which of `items_for`'s keys are target categories — the set whose target and achievement come
     out of the summary row's `categories` block."""
-    return {a["key"] for a in _target_axis(catalog)}
-
-
-ITEMS = items_for(None)
-ITEM_KEYS = tuple(i["key"] for i in ITEMS)
-ITEM_BY_KEY = {i["key"]: i for i in ITEMS}
-# Kept as the built-in default for a caller that hands in no catalog. NOT a list of four any more:
-# it is derived from the engine's axis, so it cannot drift from it.
-TARGET_CATEGORIES = tuple(sorted(target_keys(None)))
+    if not axis:
+        return set(TARGET_CATEGORIES)
+    return {a["key"] for a in axis}
 
 
 def _f(v):
@@ -113,11 +132,11 @@ def _state(target, achieved):
     return MET if a >= t else MISSED
 
 
-def store_items(summary_row, peer_item=None, peer_compared=None, catalog=None):
-    """The check-off rows for ONE store, in `items_for(catalog)` order. PURE.
+def store_items(summary_row, peer_item=None, peer_compared=None, axis=None):
+    """The check-off rows for ONE store, in `items_for(axis)` order. PURE.
 
-    `catalog` is closing/metric_catalog.build() output. None gives the four built-in categories,
-    which is what every pre-2026-10 caller already assumed.
+    `axis` is `targets_engine.target_axis(catalog)`, handed in. None gives the four built-in
+    categories, which is what every pre-2026-10 caller already assumed.
 
     `summary_row` is one element of `GET /targets/{period}/summary`'s `stores` list: it already carries
     `categories[cat] = {monthly, achieved_mtd, unit, …}` and a FLAT `conversion = {boxes, billpays,
@@ -140,8 +159,8 @@ def store_items(summary_row, peer_item=None, peer_compared=None, catalog=None):
     cats = row.get("categories") or {}
     conv = row.get("conversion") or {}
     out = []
-    _items = items_for(catalog)
-    _tkeys = target_keys(catalog)
+    _items = items_for(axis)
+    _tkeys = target_keys(axis)
     for item in _items:
         k = item["key"]
         if k in _tkeys:
@@ -211,7 +230,7 @@ def _mgr_label(m):
 
 
 def build(summary_rows, chain_by_store, peer_items=None, aggregate=None, peer_compared=None,
-          catalog=None):
+          axis=None):
     """THE cards. PURE.
 
     `summary_rows`    the `stores` list from `/targets/{period}/summary` (already scope-filtered by
@@ -243,7 +262,7 @@ def build(summary_rows, chain_by_store, peer_items=None, aggregate=None, peer_co
     for r in rows:
         code = str(r.get("store_code") or "").strip()
         ch = chains.get(code.upper()) or {}
-        items = store_items(r, peers.get(code.upper()), code.upper() in compared, catalog=catalog)
+        items = store_items(r, peers.get(code.upper()), code.upper() in compared, axis=axis)
         cell = {"store_code": code, "store": r.get("store") or r.get("address") or code,
                 "market": r.get("market") or None,
                 "district": ((ch.get("district") or {}) or {}).get("name"),
@@ -326,7 +345,7 @@ def build(summary_rows, chain_by_store, peer_items=None, aggregate=None, peer_co
         "store_card_placements": placed,
     }
     return {"dm_cards": dm_cards, "manager_cards": manager_cards,
-            "unassigned": unassigned, "coverage": coverage, "items": items_for(catalog)}
+            "unassigned": unassigned, "coverage": coverage, "items": items_for(axis)}
 
 
 def coverage_note(coverage):

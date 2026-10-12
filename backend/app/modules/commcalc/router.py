@@ -32761,8 +32761,10 @@ async def get_manager_report_cards(period: str, today: str = "",
                           aggregate=targets_engine.aggregate_stores,
                           peer_compared=peer_compared,
                           # The tenant's declared categories, so a card carries a row for the thing
-                          # the store actually sells. Injected, as every other fact on a card is.
-                          catalog=_target_catalog(sb(), org_id))
+                          # the store actually sells. INJECTED, as every other fact on a card is:
+                          # the card module imports nothing, so the axis is read here, from its one
+                          # home, and handed in.
+                          axis=targets_engine.target_axis(_target_catalog(sb(), org_id)))
     note = _mrcard.coverage_note(cards.get('coverage'))
     return {'period': summary.get('period', period), 'today': summary.get('today'),
             **cards,

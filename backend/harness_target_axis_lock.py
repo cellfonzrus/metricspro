@@ -188,13 +188,25 @@ ok(te.CATEGORIES is te.BUILTIN_CATEGORIES and te.UNITS is te.BUILTIN_UNITS,
 # rather than a list that happens to share two words. G1–G2 below are the controls.
 AXIS_DECL = re.compile(
     r"""['"]activations['"].{0,110}?['"]upgrades['"].{0,110}?['"]accessories['"]""", re.S)
+# ONE file other than the engine may spell the four built-ins, and only because it is forbidden to
+# import: commcalc/manager_report_card.py is a PURE module whose own lock (harness_manager_report_card
+# §D1) asserts it imports NOTHING, every fact being handed in by its caller. A tenant's declared
+# categories reach it through `axis=`; the four built-ins are its fallback for a caller that hands in
+# none. A12 below compares that fallback to the engine's axis KEY, LABEL AND UNIT, so it is a copy
+# that cannot drift — the same posture lib/target-axis.ts takes for the same reason (§E).
+AXIS_PINNED = {"backend/app/modules/commcalc/manager_report_card.py":
+               "pure module, imports nothing (harness_manager_report_card D1); pinned to the engine by A12"}
 copies = [rel(p) for p in py_files(APP)
-          if rel(p) != HOME_ENGINE and AXIS_DECL.search(code_only(p))]
+          if rel(p) != HOME_ENGINE and rel(p) not in AXIS_PINNED and AXIS_DECL.search(code_only(p))]
 eq(copies, [], "A9 no backend module re-declares the category axis")
+for _f, _why in AXIS_PINNED.items():
+    ok(os.path.exists(os.path.join(ROOT, _f)),
+       f"A9b the file excused from A9 still exists ({_f}: {_why})")
 
 LABEL_DECL = re.compile(r"""['"]Activations['"]\s*.{0,60}?['"]Upgrades['"]""", re.S)
 label_copies = [rel(p) for p in py_files(APP)
-                if rel(p) != HOME_ENGINE and LABEL_DECL.search(code_only(p))]
+                if rel(p) != HOME_ENGINE and rel(p) not in AXIS_PINNED
+                and LABEL_DECL.search(code_only(p))]
 eq(label_copies, [], "A10 no backend module re-declares the category labels")
 
 COL_DECL = re.compile(r"""['"]activations_monthly['"]\s*.{0,80}?['"]upgrades_monthly['"]""", re.S)
@@ -207,9 +219,17 @@ col_copies = [rel(p) for p in py_files(APP)
               if rel(p) not in (HOME_ENGINE, COL_WRITER) and COL_DECL.search(code_only(p))]
 eq(col_copies, [], "A11 only the engine and the table's own writer name the target columns")
 
-# The report card's own former list is now DERIVED from the axis, so it cannot drift from it.
+# THE DRIFT LOCK on the one pinned copy. The report card cannot import the engine, so it spells the
+# four built-ins; this is what makes that spelling safe. Key, label and unit are all compared, so
+# renaming a label or changing a unit in one home and not the other fails the build here rather than
+# showing a manager a card whose row disagrees with their own Targets screen.
+_mrc_builtin = [(i["key"], i["label"], i["unit"]) for i in mrc.BUILTIN_TARGET_ITEMS]
+_engine_builtin = [(a["key"], a["label"], "money" if a["unit"] == "dollars" else "count")
+                   for a in te.target_axis(None)]
+eq(_mrc_builtin, _engine_builtin,
+   "A12 the report card's pinned built-ins match the engine's axis — key, label and unit")
 eq(tuple(sorted(mrc.TARGET_CATEGORIES)), tuple(sorted(te.BUILTIN_CATEGORIES)),
-   "A12 the report card's target set is the engine's axis")
+   "A12b … and its target set is the engine's category list")
 eq([i["key"] for i in mrc.items_for(None)][:4], list(te.BUILTIN_CATEGORIES),
    "A13 the report card's items open with the engine's axis, in its order")
 _declared_items = [i["key"] for i in mrc.items_for(
