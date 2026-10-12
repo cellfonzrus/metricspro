@@ -794,6 +794,31 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/calculator.py': ('_tib',),
         },
     },
+    'attach_qualifier': {
+        "question": 'Did this SALE earn the line its full declared rate, or the lesser one — and who '
+                    'decides what counts toward the condition?',
+        "homes": ('app/modules/commcalc/attach_qualifier.py',),
+        "index": ('COMMCALC-06',),
+        "locks": ('harness_attach_qualifier.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but see the
+        # caveat recorded in §COMMCALC-01: --bless rewrites a callers block to BARE lines and strips
+        # the per-caller comments from every fact it touches, so this block is hand-written and the
+        # derived edge below was verified by running the guard (not --bless) afterwards.
+        "callers": {
+            # The plan pay engine. Before this, EVERY gate it had could only turn a payment OFF
+            # (`plan_pay_gate` suppresses; `financing_tiers` re-rates from a MONTH's attainment), so no
+            # rule could earn a lesser rate from a fact about the SALE its line belonged to. It now
+            # resolves the condition, both rates and the on-screen sentence here, injects its own
+            # `_rule_matches` and the accessory predicate, and keeps no threshold test of its own.
+            'app/modules/commcalc/commission_engine.py': ('_aq',),
+            # The SAVE path, and it is a caller for a reason worth stating: that path is
+            # DELETE-THEN-INSERT with an explicit column list, so a qualifier column it does not
+            # write back is WIPED the next time anyone saves the plan. It dereferences the measure and
+            # scope allowlists from here rather than retyping them, so the vocabulary cannot drift
+            # between what an admin can save and what the engine will honour.
+            'app/modules/commcalc/router.py': ('_aqm',),
+        },
+    },
     'commission_ledger_identity': {
         "question": 'Which ledger row is this, and which period does it book into?',
         "homes": ('app/modules/commcalc/commission_ledger.py',),

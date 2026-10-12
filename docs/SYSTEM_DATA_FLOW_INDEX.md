@@ -109,6 +109,7 @@ Primary code homes:
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
 | COMMCALC-05 | **Several handsets to one buyer in one day** | "Which buyers walked out with more handsets in one day than a family plausibly would — counted across the separate receipts the sale was split over, from the live till feed rather than a carrier statement weeks later, and with the evidence a manager needs instead of a verdict?" |
+| COMMCALC-06 | **An accessory attach decides which rate a line earns** | "The $25 edge payment is supposed to require $25 of accessories on the same sale, and to drop to the lesser rate when it is not there. Which record says the accessories were sold, what happens when the sale cannot be read, and why could no gate in this engine do this before?" |
 
 ---
 
@@ -24887,6 +24888,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-04 | commcalc |
 | CORE-04 | core |
 | COMMCALC-05 | commcalc |
+| COMMCALC-06 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -26295,3 +26297,95 @@ The standout the signal surfaces: **4 promo iPhones at $0.00 each, one receipt, 
 accessories**, on a port-in multi-line promotion. The other of the two reads like a genuine household
 bundle (a tablet, a home-internet router and a phone), which is exactly why the detector reports and
 does not conclude.
+
+## §COMMCALC-06. AN ACCESSORY ATTACH DECIDES WHICH DECLARED RATE A LINE EARNS (owner directive 2026-10-12)
+
+**Owner, verbatim.** *"Payment for edge on total which is defined as $25 must be accompanied with
+atleast $25 worth of accessories , add this logic in the system not as hard coded but as a logic
+platform wide which might be used by other carriers also , label the commission as $25 acc is must to
+be qualified for $25 commission otherwise the commision falls back to $10 or whatever is paid to
+Chicago market"*
+
+**THE CLASS, not the instance.** The missing thing was not Total's edge payout. It was that **every gate
+in the plan engine could only turn a payment OFF** — `plan_pay_gate` suppresses (scope, exclusion, unit
+dedup, §6f) and `financing_tiers` re-rates from a MONTH's attainment (mig 273). Nothing could say "this
+line earns a LESSER declared rate because of a fact about the SALE it belongs to". That is the
+mechanism, and it is carrier-agnostic.
+
+**HALF THE ASK ALREADY EXISTED, and was reused rather than rebuilt.** *"or whatever is paid to Chicago
+market"* needs nothing new: migration **262** already lets a rule state the market, store or employee it
+applies to — it was built from the owner's own 2026-08-01 report (*"All activations are being paid $10
+flat, this is only for NY employees, but this empluee is in Chicago"*). A tenant either enters that
+market's figure as the fallback, or leaves the fallback NULL and lets that market's own scoped rule pay.
+
+| | |
+|---|---|
+| one home | `backend/app/modules/commcalc/attach_qualifier.py` — PURE, imports nothing from `app` |
+| config | `commcalc.commission_rule` (mig **1079**): `qualifier_min`, `qualifier_measure`, `qualifier_scope`, `qualifier_match_field`, `qualifier_match_op`, `qualifier_match_value`, `qualifier_fallback_amount`, `qualifier_label`. All nullable; a NULL `qualifier_min` is NO condition, so applying 1079 changes nothing |
+| wired at | `commission_engine.preview` — context built ONCE from `valid` (the period's whole validated feed), applied at the single line where `_line_payout` turns a rate into dollars, via `attach_qualifier.rule_view` |
+| save path | `router.save_commission_plan` round-trips all eight columns. That path is DELETE-THEN-INSERT with an explicit column list, so a column not written back is **WIPED on the next plan save** — §19.18 at its most expensive, since what it erases is money policy. Locked by `harness_attach_qualifier.py` §J |
+| lock | `harness_attach_qualifier.py` — 83 checks, DB-free; **6 of them were RED against the un-wired engine** |
+
+**WHAT IS NOT DUPLICATED, and this is the whole design.** *"Is this line an accessory"* is **not answered
+here.** There are already ~8 accessory classifiers in this codebase (§19.42 and the `accessory_definition`
+docstring enumerate them), and the one the money path honours is `plan_pay_gate.accessory_predicate` →
+`accessory_definition.classify`, the map the owner curates by hand on `/commcalc/accessory-definition`.
+It is **INJECTED**. *"Does this line match a rule"* is injected too — `commission_engine._rule_matches`,
+exactly as `financing_tiers.build_context` takes the same callable, so the condition is counted by
+precisely the code that decides what pays. The lock proves this structurally: the module **reads no
+classifying column at all** (only `trans_id`, `ext_price`, `gp`), so a keyword list cannot appear in it.
+
+**MEASURED OVER THE WHOLE SALE, not the rep's share of it.** What the customer bought is not an accident
+of who rang which line, so two reps on one sale read the same verdict.
+
+**AN UNMEASURABLE SALE PAYS THE FULL RATE, AND IS REPORTED.** A row with no `trans_id` has no knowable
+siblings, and an unreadable accessory definition makes the condition unanswerable — neither is "zero
+accessories". Treating unknown as zero would quietly dock a rep on a data defect. Such lines earn the
+full rate, carry `basis = "unmeasured"`, and are counted in the engine's guard. Same posture as
+`payroll_hours_basis` for an undated cell (§14y.1) and the §66 allowlist rule.
+
+**A FLAT FALLBACK CANNOT BE APPLIED TO A PERCENTAGE RULE**, because `_line_payout` prices those off
+`pct`: overwriting `amount` would change nothing while the screen claimed a lesser rate was paid. The
+pairing is **refused and reported** (`basis = "unsupported"`), and that rule keeps paying what it pays.
+
+**THE LABEL IS DERIVED, NEVER WRITTEN.** The owner asked to see *"$25 acc is must to be qualified for $25
+commission"*. Those dollars are one tenant's figures, so `describe()` builds the sentence from the config
+— today it renders *"$25 of accessories is required to qualify for the $25 commission; otherwise $10."*
+and a tenant with other numbers reads their own. RULE TWO holds: no carrier, tenant, product, market or
+dollar figure appears in the code, and the lock scans for them.
+
+**MEASURED ON LIVE DATA before anything moves** (read-only, 2026-10-12, the Total tenant's two $25
+`edge` rules, DISTINCT sales, at a $25 minimum with a $10 fallback). The live `accessory` flag is stamped
+by a classifier this container cannot run, so that tenant's own `department in (Accessories,
+C2Wireless)` declaration stands in and these are therefore a FLOOR:
+
+| month | sales | qualified | short | pays today | with the rule | delta |
+|---|---|---|---|---|---|---|
+| Jul 2026 | 2 | 0 | 2 | $50.00 | $20.00 | −$30.00 |
+| Aug 2026 | 7 | 6 | 1 | $175.00 | $160.00 | −$15.00 |
+| Sep 2026 | 8 | 4 | 4 | $200.00 | $140.00 | −$60.00 |
+| Oct 2026 to date | 2 | 2 | 0 | $50.00 | $50.00 | $0.00 |
+
+**One of those sales carried $24.99 of accessories** — a penny short cost the rep $15 under the rule as
+literally stated. Surfaced for the owner rather than rounded away in code: a tolerance is a config
+decision, not something the engine should invent.
+
+Nothing is switched on. Migration 1079 is **surfaced for owner approval, not applied**, no rule declares
+a qualifier, and no stored payout is touched.
+
+### COMMCALC-06.1 Cross-references
+
+- **§16 (by TABLE):** `commcalc.commission_rule` — eight new columns (mig 1079), read by
+  `attach_qualifier.resolve` and round-tripped by `router.save_commission_plan`.
+- **§17 (by FUNCTION):** `attach_qualifier.resolve` / `build_context` / `verdict` / `rule_view` /
+  `describe`; `commission_engine.preview` (the one caller).
+- **§18 (by QUESTION):** "Did this sale earn the line its full rate, or the lesser one — and who decides
+  what counts toward the condition?" → `attach_qualifier`, dereferencing
+  `plan_pay_gate.accessory_predicate` for the accessory answer and `commission_engine._rule_matches` for
+  the sibling match. Never a classifier of its own.
+- **Siblings checked and NOT duplicated:** `plan_pay_gate` (suppression — a different outcome, and the
+  home for it), `financing_tiers` (re-rating from a month's attainment, not from one sale),
+  `daily_incentive` (§76.4 — declared qualifiers, but it computes only and pays nobody),
+  `management_incentive` (§9 — manager-level qualifier gates), `accessory_definition` (mig 257 — the
+  definition this dereferences).
+- **§6f / §19.42:** the accessory-classifier divergence this deliberately does not add to.

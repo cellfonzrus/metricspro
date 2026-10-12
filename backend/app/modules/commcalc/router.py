@@ -21741,6 +21741,42 @@ def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
                 _ok = _sk in ("store", "market", "employee") and bool(_sv)
                 rules[-1]["applies_scope_kind"] = _sk if _ok else None
                 rules[-1]["applies_scope_value"] = _sv if _ok else None
+            # ATTACH QUALIFIER per-rule settings (mig 1079, §COMMCALC-06). Round-tripped here for
+            # the reason the gate block above states: this save path is DELETE-THEN-INSERT with an
+            # explicit column list, so a declared qualifier that is not written back would be
+            # SILENTLY WIPED the next time anyone saved the plan — the mechanism-written-callers-
+            # unwired defect (§19.18) in its most expensive form, because it erases money policy.
+            # Written only when the caller sent a qualifier AND the columns exist.
+            if _rule_qualifier_cols_present(client) and any(
+                    k in rl for k in ("qualifier_min", "qualifier_measure", "qualifier_scope",
+                                      "qualifier_match_field", "qualifier_match_op",
+                                      "qualifier_match_value", "qualifier_fallback_amount",
+                                      "qualifier_label")):
+                from app.modules.commcalc import attach_qualifier as _aqm
+                _qmin = safe_float(rl.get("qualifier_min")) if rl.get("qualifier_min") not in (
+                    None, "") else None
+                # A minimum of zero or below is NOT a condition — the engine reads it as "no
+                # qualifier" and the mig-1079 CHECK refuses it, so it is stored as NULL rather than
+                # becoming a second spelling of OFF.
+                _on = _qmin is not None and _qmin > 0
+                _meas = str(rl.get("qualifier_measure") or "").strip().lower()
+                _scope = str(rl.get("qualifier_scope") or "").strip().lower()
+                _fb = rl.get("qualifier_fallback_amount")
+                rules[-1]["qualifier_min"] = _qmin if _on else None
+                rules[-1]["qualifier_measure"] = (
+                    _meas if (_on and _meas in _aqm.MEASURES) else None)
+                rules[-1]["qualifier_scope"] = (
+                    _scope if (_on and _scope in _aqm.SCOPES) else None)
+                rules[-1]["qualifier_match_field"] = (
+                    str(rl.get("qualifier_match_field") or "").strip() or None) if _on else None
+                rules[-1]["qualifier_match_op"] = (
+                    str(rl.get("qualifier_match_op") or "").strip().lower() or None) if _on else None
+                rules[-1]["qualifier_match_value"] = (
+                    str(rl.get("qualifier_match_value") or "").strip() or None) if _on else None
+                rules[-1]["qualifier_fallback_amount"] = (
+                    safe_float(_fb) if (_on and _fb not in (None, "")) else None)
+                rules[-1]["qualifier_label"] = (
+                    str(rl.get("qualifier_label") or "").strip() or None) if _on else None
         if rules:
             client.schema('commcalc').table('commission_rule').insert(rules).execute()
 
@@ -21864,6 +21900,7 @@ def _rule_gate_cols_present(client):
 
 
 _RULE_SCOPE_COLS_OK = {}
+_RULE_QUALIFIER_COLS_OK = {}
 
 
 def _rule_scope_cols_present(client):
@@ -21876,6 +21913,21 @@ def _rule_scope_cols_present(client):
         except Exception:
             _RULE_SCOPE_COLS_OK["ok"] = False
     return _RULE_SCOPE_COLS_OK["ok"]
+
+
+def _rule_qualifier_cols_present(client):
+    """True when commcalc.commission_rule carries the mig-1079 attach-qualifier columns (§COMMCALC-06).
+    Probed once per process; False on a pre-1079 database, which then saves exactly as before."""
+    if "ok" not in _RULE_QUALIFIER_COLS_OK:
+        try:
+            (client.schema('commcalc').table('commission_rule')
+             .select('qualifier_min,qualifier_measure,qualifier_scope,qualifier_match_field,'
+                     'qualifier_match_op,qualifier_match_value,qualifier_fallback_amount,'
+                     'qualifier_label').limit(1).execute())
+            _RULE_QUALIFIER_COLS_OK["ok"] = True
+        except Exception:
+            _RULE_QUALIFIER_COLS_OK["ok"] = False
+    return _RULE_QUALIFIER_COLS_OK["ok"]
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
