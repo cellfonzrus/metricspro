@@ -105,6 +105,7 @@ Primary code homes:
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
+| COMMCALC-04 | **Several handsets to one buyer in one day** | "Which buyers walked out with more handsets in one day than a family plausibly would — counted across the separate receipts the sale was split over, from the live till feed rather than a carrier statement weeks later, and with the evidence a manager needs instead of a verdict?" |
 
 ---
 
@@ -24872,6 +24873,7 @@ status word rather than a blank that reads as nil.
 | CORE-02 | core |
 | COMMCALC-02 | commcalc |
 | COMMCALC-03 | commcalc |
+| COMMCALC-04 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -25752,3 +25754,141 @@ product name anywhere in the module): `prospect_account_key_columns`,
 `prospect_family_line_threshold`, `prospect_expense_basis_months`, `prospect_rent_expense_names`,
 `prospect_expense_average_basis`. Every one falls back to its measured house default, so the module
 behaves identically before and after mig 1077 is applied.
+
+---
+
+## §COMMCALC-04. SEVERAL HANDSETS TO ONE BUYER IN ONE DAY — the live feed, counted across the receipts the sale was split over (owner ask 2026-10-12)
+
+Owner: *"add the famimly check to the regular activations also under the flags tile"*, then, deciding
+the feed himself: *"this wooulkd check the flags for ongoing actyivation not the test data uploaded
+for evauluation"* and *"good point , it should be daily sales feed"*.
+
+**One home:** `backend/app/modules/commcalc/multi_handset_day.py` (pure, DB-free).
+**Lock:** `backend/harness_multi_handset_day.py`. **Flag type:** `MULTI_HANDSET_ONE_BUYER`, area
+`fraud`, severity HIGH, grain `store_day`, registered in `flag_registry.TYPES`.
+
+### COMMCALC-04.1 Duplicate check (the build gate)
+
+| Already answers something near it | Why it is not this | What this reuses |
+|---|---|---|
+| `DUPLICATE_IMEI` (§53, fraud) | ONE device on SEVERAL lines — the inverse shape | nothing to share |
+| `RSK_ACTIVATIONS` (§53, fraud) | counts RSK-REGISTER activations per rep: about the till and the salesperson, not the buyer | untouched |
+| §COMMCALC-03 prospect eval | the SAME question on an UPLOADED statement for a store we do not own | deliberately NOT shared — see .2 |
+| `router._sales_cell_agg` box count (§3, mig 218) | counts boxes per cell, not per buyer | **the `box_departments` membership test, injected** |
+| `flag_registry` (§53) | — | severity, area, label, threshold, on/off switch |
+
+New here and nowhere else: grouping handset lines by **(store, day, buyer) ACROSS receipts**, and the
+receipt breakdown inside a case.
+
+### COMMCALC-04.2 Why this and §COMMCALC-03 are two detectors and must stay two
+
+They ask one question of two feeds that cannot answer for each other. §COMMCALC-03 reads
+`prospect_feed_row` — an uploaded carrier statement for a store nobody owns yet — keys on the
+carrier's own account column, and answers weeks late from money already paid. This reads the live
+`commcalc.daily_sales_feed` and answers the morning after, while the handsets are still recoverable.
+The owner drew this line himself. **Merging them would let a prospect's uploaded rows raise live
+operational flags**, which is the one thing §COMMCALC-03's AST lock exists to prevent.
+
+### COMMCALC-04.3 A handset is a BOX-DEPARTMENT line — never a serial number
+
+Measured against production 2026-10-12, the whole feed (151,102 rows):
+
+| Candidate test | Rows | Verdict |
+|---|---|---|
+| `serial_1` present | 24,452 | **WRONG.** Plan lines carry a serial: 1,062 `Total MAX 5G Plan $55`, 435 `Total Wireless Home Internet`, the tablet plans. One phone plus two plans counted as three devices. |
+| `customer_no` present | 21,188 (26%) | **WRONG as a buyer key.** Absent on 59% of serial-bearing rows, and the rows that carry it are mostly `Other Carr. payments` and `System`. A check keyed on it reports a clean bill of health it has not earned. |
+| department ∈ the org's `box_departments` | 9,759 | **RIGHT.** The same membership test the box count uses, so this detector and that store's own box count cannot disagree. |
+
+The set is **injected by the caller**, never read or defaulted inside the module — `harness_multi_handset_day.py` §G
+fails the build if that changes. An undeclared set yields no findings **and says so**, rather than
+falling back to the house Boost-XP labels and reading as "all clear".
+
+### COMMCALC-04.4 Why it groups ACROSS receipts (the measurement that forced the design)
+
+A per-receipt check was the obvious design and the wrong one. On the same live feed:
+
+- **392** receipts carry more than 2 handsets.
+- But **501** buyer-days do, and **191 of those are split across several receipts** — invisible to a
+  per-receipt test.
+- Worst case: **16 handsets over EIGHT separate receipts**, 3248 W Lawrence Ave, 2026-09-18, every
+  line **$0.00**. Also 18 handsets / 3 receipts (2640 Narragansett, 2026-07-02) and 17 handsets /
+  4 receipts at $0.00 (4640-A W Diversey Ave, 2026-07-18).
+- **129 of the 501 cases are entirely $0.00** — promotional activations in volume to one name.
+
+A threshold a till can evade by ringing a second sale is not a threshold.
+
+### COMMCALC-04.5 The buyer key, and what it deliberately cannot do
+
+`(org, store, day, normalised name)`. The name is folded for case and spacing only. Initials,
+nicknames and misspellings are **not** folded — that would invent an identity, and a flag that
+accuses the wrong person is worse than one that misses. The live placeholder values the feed actually
+carries (`No Customer` on 203 device rows, `walk  in`, `BOOST MOBILE`, `Back Order`) are **not
+grouped**: they are counted and reported as unattributable, because fusing hundreds of unrelated
+walk-ins into one case is a worse answer than no answer.
+
+Same day and same store is what makes an exact-name match defensible. The cost is stated on screen,
+not buried: it cannot see one buyer across different days, different stores, or under a differently
+spelled name.
+
+### COMMCALC-04.6 It reports evidence and returns no verdict
+
+Nothing here concludes that fraud happened and no function returns a judgement — `harness_multi_handset_day.py`
+§E walks the module's own strings and fails the build if any user-facing sentence calls something
+fraud, abuse or a scheme. A family of five buying five phones is a good sale and reads identically in
+this feed. So a case carries what a human needs to tell them apart — the handsets and models, the
+receipt split and per-receipt counts, the dollars, whether every line was $0.00, the reps, the day —
+and the coaching note asks for a check (*"Confirm these were one genuine sale and not split to stay
+under a per-sale limit"*), never an accusation.
+
+### COMMCALC-04.7 Where it is
+
+| Thing | Where |
+|---|---|
+| the rules | `commcalc/multi_handset_day.py` — `handset_rows` / `group_by_buyer_day` / `cases` / `findings` |
+| the proof | `harness_multi_handset_day.py` (CI: "Several handsets to one buyer lock") |
+| the type, severity, threshold | `commcalc/flag_registry.py` — `TYPES` + `DEFAULT_PARAMS['MULTI_HANDSET_ONE_BUYER']['max_handsets'] = 2` |
+| the tenant's override | a `commcalc.watchdog_rule` row (no migration — the table already exists) |
+| the board | Flags & Compliance, area `fraud` |
+| the caller (the only one) | `commcalc/watchdog_router.py::_run_for_org` — the one sweep, one cron line |
+| the live sales read | `commcalc/watchdog_router.py::_read_sales` → `router._open_month_source` (§19.16) |
+
+### COMMCALC-04.8 Which sales table it reads, and the sibling that fix closed
+
+The owner named the feed himself on 2026-10-12: *"good point , it should be daily sales feed"* — the
+check must see activations as they happen, not a month-end archive. But `daily_sales_feed` is **not
+named** anywhere in the sweep. `router._open_month_source(client, org_id, period)` is the ONE home for
+"which sales table answers for this period" (§19.16): the OPEN month reads the daily feed, where the
+hourly Sales Transaction Details email lands, a CLOSED month reads the authoritative `raw_sales`, and
+each falls back to the other. A literal table name in the sweep would be a second opinion about which
+feed is live, and §H15 of the lock fails the build if one appears.
+
+`_read_sales` is that dereference, and it is shared by **every** sales-reading surface in the file —
+which is how building this found and fixed a sibling, as the design rule requires:
+
+- **The void sweep** (`_run_for_org`) and **the void register** (`GET /watchdog/voids`) both named
+  `raw_sales` literally. On the month in progress — the only month anybody can still act on — that
+  archive does not exist yet, so both read **zero lines and reported no voids rather than no data**.
+- Every CLOSED month is byte-identical, because the one home returns `raw_sales` first for them. The
+  change is that the open month is looked at at all.
+- The sales rows are now read **once** per sweep and handed to both detectors, so the two can never
+  disagree about what the month contained.
+
+Buyer-name coverage differs between the two tables and is reported, never assumed (measured live
+2026-10-12): `daily_sales_feed` carries a `customer` on **151,102 of 151,102** rows, `raw_sales` on
+**141,758 of 219,375** (65%). Lines with no buyer, or a placeholder like `No Customer`, are counted as
+`unattributable_lines` in the summary rather than dropped silently — a bare empty case list would read
+as "all clear" when it can also mean "nobody recorded who bought these".
+
+### COMMCALC-04.9 The `source` string, and the retirement defect it avoids
+
+`flag_persist.sync` RETIRES every open flag in the period that carries one of the caller's `sources`
+and that the run did not produce. `router._CALC_FLAG_SOURCES` already claims `'sales'` for the
+commission recalculation's own flag pass. The detector's first draft wrote its findings under
+`'sales'`, which would have had **the next recalculation of that month silently resolve every one of
+them away** — the detector would have looked correct and then emptied itself. It owns
+`SOURCE = "multi_handset_watchdog"`, and §H1–H3 of the lock fail the build if that collides with a
+source the commission pass retires.
+
+The POS store spelling goes in `store_address`; `flag_store_resolver.stamp_flags` (mig 285) is the one
+home that turns it into a `store_code` a district manager's board can filter on. A code guessed in the
+detector would be a second store resolver (§64).

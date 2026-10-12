@@ -46,6 +46,7 @@ from app.core.run_secret import verify_notify_secret
 
 from app.modules.commcalc import flag_registry as _reg
 from app.modules.commcalc import void_watchdog as _void
+from app.modules.commcalc import multi_handset_day as _handsets
 from app.modules.closing import cash_watchdog as _cash
 
 router = APIRouter(prefix="/commcalc", tags=["Management Watchdog"])
@@ -166,6 +167,33 @@ def watchdog_area(area: str, period: str = Query(default=""),
     }
 
 
+# ── Which sales table answers for a period: ASKED, never assumed. ───────────────────────────────
+def _read_sales(client, org_id: str, period: str, cols: str):
+    """(rows, table) — this org's sales lines for `period`, from whichever table holds them.
+
+    `router._open_month_source` is the ONE home for the question (index §19.16): the OPEN month reads
+    the daily feed, where the hourly Sales Transaction Details email lands, and a CLOSED month reads
+    the authoritative month-end archive, each falling back to the other. Naming a table here instead
+    would be a second opinion about which feed is live.
+
+    THE DEFECT THIS CLOSES, in both callers at once. Both the void sweep and the void register used
+    to name the month-end archive literally. On the month in progress — the only month anybody can
+    still act on — that archive does not exist yet, so both read zero lines and reported no voids
+    rather than no data. Every CLOSED month is byte-identical, because the one home returns that same
+    archive first for them; the change is that the open month is looked at at all.
+    """
+    from app.modules.commcalc.router import _open_month_source, _pvariants
+
+    def _q(tbl):
+        return (client.schema("commcalc").table(tbl).select(cols)
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(100000)
+                .execute().data) or []
+
+    primary, other = _open_month_source(client, org_id, period)
+    rows = _q(primary)
+    return (rows, primary) if rows else (_q(other), other)
+
+
 # ── The void register: the list that did not exist. ──────────────────────────────────────────────
 @router.get("/watchdog/voids")
 def watchdog_voids(period: str = Query(default=""), authorization: str = Header(default=""),
@@ -182,13 +210,11 @@ def watchdog_voids(period: str = Query(default=""), authorization: str = Header(
     """
     p = _s(period) or _period_now()
     client = get_supabase()
-    from app.modules.commcalc.router import _pvariants
     try:
-        rows = (client.schema("commcalc").table("raw_sales")
-                .select("store,salesperson,ext_price,trans_id,trans_date,product_desc,"
-                        "serial_1,mdn,tender_type,contract_type,voided,trans_type")
-                .eq("org_id", org_id).in_("period", _pvariants(p)).limit(100000)
-                .execute().data) or []
+        rows, _tbl = _read_sales(
+            client, org_id, p,
+            "store,salesperson,ext_price,trans_id,trans_date,product_desc,"
+            "serial_1,mdn,tender_type,contract_type,voided,trans_type")
     except Exception as e:
         raise HTTPException(503, f"sales feed unavailable: {str(e)[:200]}")
 
@@ -248,15 +274,16 @@ def _read_rules(client, org_id):
         return []
 
 
-# ── The tick: one sweep, both watchdogs, one cron line to paste. ────────────────────────────────
+# ── The tick: one sweep, every watchdog, one cron line to paste. ────────────────────────────────
 def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 0) -> dict:
-    """Both detectors for one org, written through `flag_persist` so a manager's ruling survives.
+    """Every detector for one org, written through `flag_persist` so a manager's ruling survives.
 
     Deliberately ONE function for both: a second `run-due` endpoint would mean a second cron line to
     register, and the 2026-10-04 notes already record alert sweeps sitting switched off because their
     `cron.schedule` line was never pasted. One line is one thing to forget.
     """
     from app.modules.commcalc import flag_persist
+    from app.modules.commcalc import flag_store_resolver
     from app.modules.commcalc.router import _pvariants
 
     rules = _read_rules(client, org_id)
@@ -300,26 +327,81 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
     except Exception as e:
         out["cash"] = {"error": str(e)[:300]}
 
+    # ── Sales lines, read ONCE for every sales-reading detector in this sweep, through the one
+    # home for which table answers (`_read_sales` above). The owner named the daily feed for the
+    # multi-handset check on 2026-10-12 ("it should be daily sales feed"); dereferencing that home
+    # is how this gets the feed for the month in progress without a second opinion about it.
+    sales_rows, sales_table, sales_err = [], "", ""
+    try:
+        sales_rows, sales_table = _read_sales(
+            client, org_id, p,
+            "store,salesperson,ext_price,trans_id,trans_date,product_desc,serial_1,"
+            "mdn,voided,trans_type,department,customer")
+    except Exception as e:
+        sales_err = str(e)[:300]
+
     # ── Voids. One period at a time; the sales feed is the biggest table in the schema. ─────────
     try:
-        rows = (client.schema("commcalc").table("raw_sales")
-                .select("store,salesperson,ext_price,trans_id,trans_date,product_desc,serial_1,"
-                        "mdn,voided,trans_type")
-                .eq("org_id", org_id).in_("period", _pvariants(p)).limit(100000)
-                .execute().data) or []
+        if sales_err:
+            raise RuntimeError(sales_err)
         pm, py = _month_year(p)
-        void_flags = _void.calc_void_flags(rows, period=p, period_month=pm, period_year=py,
+        void_flags = _void.calc_void_flags(sales_rows, period=p, period_month=pm, period_year=py,
                                            rules=rules)
         out["voids"] = flag_persist.sync(
             client, org_id, void_flags, periods=_pvariants(p), sources=[_void.SOURCE],
             reason="the void or return rate is back inside the allowed share")
         out["voids"].pop("run_id", None)
-        out["voids"]["sales_lines_read"] = len(rows)
+        out["voids"]["sales_lines_read"] = len(sales_rows)
+        out["voids"]["sales_table"] = sales_table
     except flag_persist.FlagPersistUnavailable as e:
         out["voids"] = {"skipped": "findings cannot be recorded yet",
                       "detail": f"run migration 287 first: {str(e)[:200]}"}
     except Exception as e:
         out["voids"] = {"error": str(e)[:300]}
+
+    # ── Several handsets to one buyer in one day (index §COMMCALC-04). ──────────────────────────
+    #
+    # Two facts are INJECTED rather than decided here, because each already has a home:
+    #   • the box-department set — `router._accessory_config(...)['box_departments']` (mig 218), the
+    #     same membership test the box count uses, so "is this line a handset" has one answer. The
+    #     detector refuses to default it; an org that has declared none gets `box_departments: 0` in
+    #     the result and no finding, which is honest rather than a house-labelled guess.
+    #   • voided and returned lines — `gp_report.is_voided`, the shared void-token set every display
+    #     surface already excludes by. A voided line is not a sale and must not be flagged as one.
+    #     `gp_report.countable_sale_skip_reason` is the fuller one home for "is this a countable
+    #     sale" and is deliberately NOT used: its third rule drops a line with a blank or 'admin'
+    #     rep, which is a PAY question. A handset nobody is credited for was still handed to a
+    #     buyer, so that rule would hide exactly the case this detector exists to raise.
+    try:
+        if sales_err:
+            raise RuntimeError(sales_err)
+        from app.modules.commcalc.gp_report import is_voided
+        from app.modules.commcalc.router import _accessory_config
+        box = _accessory_config(client, org_id).get("box_departments") or set()
+        live = [r for r in sales_rows
+                if not is_voided(r.get("voided"))
+                and str(r.get("trans_type") or "").strip() != "Return"]
+        pm, py = _month_year(p)
+        hs_flags, hs_summary = _handsets.findings(
+            live, box, org_id=org_id, period=p, period_month=pm, period_year=py, rule_rows=rules)
+        # The ONE home that turns a POS store spelling into a store_code a district manager's board
+        # can filter on (mig 285). Visibility only — it writes no amount and no pay field.
+        try:
+            flag_store_resolver.stamp_flags(client, org_id, hs_flags)
+        except Exception as e:
+            print(f"WARN multi-handset store_code unresolved, address kept: {e}")
+        out["multi_handset"] = flag_persist.sync(
+            client, org_id, hs_flags, periods=_pvariants(p), sources=[_handsets.SOURCE],
+            reason="the day no longer shows several handsets to that buyer")
+        out["multi_handset"].pop("run_id", None)
+        out["multi_handset"]["box_departments"] = len(box)
+        out["multi_handset"]["summary"] = hs_summary
+        out["multi_handset"]["sales_table"] = sales_table
+    except flag_persist.FlagPersistUnavailable as e:
+        out["multi_handset"] = {"skipped": "findings cannot be recorded yet",
+                                "detail": f"run migration 287 first: {str(e)[:200]}"}
+    except Exception as e:
+        out["multi_handset"] = {"error": str(e)[:300]}
 
     return out
 
@@ -327,7 +409,7 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
 @router.post("/watchdog/run-now")
 def watchdog_run_now(period: str = Query(default=""), lookback_days: int = Query(default=0),
                      org_id: str = ORG_ID):
-    """Run both watchdogs for ONE org, now. The operator's button and the test entrypoint."""
+    """Run every watchdog for ONE org, now. The operator's button and the test entrypoint."""
     return _run_for_org(get_supabase(), org_id, period=period, lookback_days=lookback_days)
 
 
