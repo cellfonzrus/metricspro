@@ -101,6 +101,7 @@ Primary code homes:
 | 76 | **A category you declare is a category you can be paid on** | "I added a category to the daily closing — why can no incentive rule point at it? Where is it declared that a category carries dollars, or that each employee declares their own? Which employee generated the most revenue today, and how is a daily pool split when nobody's hours were recorded?" |
 | CORE-01 | **A section id carries its module** | "What number does my new index section get, who else could be taking it right now, and what happens if two of us take the same one? Which module does a section belong to, which module does nothing document yet, and why are the 111 existing numbers not renumbered?" |
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
+| COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 
 ---
 
@@ -24527,8 +24528,9 @@ registered section" and adds the module↔section direction it never had.
 
 ### CORE-01.5 THE REGISTER — section → module
 
-113 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
-once), plus §15.1–§15.3, which are where the `notify` module is actually documented.
+115 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
+once), plus §15.1–§15.3, which are where the `notify` module is actually documented, plus the
+`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §COMMCALC-01).
 
 Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
 110 sections cite a backend module path and are checked against it, 12 of those cite four or more
@@ -24655,6 +24657,7 @@ module's documentation.
 | 15.3 | notify |
 | CORE-01 | core |
 | CORE-02 | core |
+| COMMCALC-01 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -25066,3 +25069,145 @@ them would be noise. What it registers is a CI gate, a runner, a register and a 
 - Same class: §75 (which named this gap), §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate).
 - CORE-02.9 (the owner's rewording ruling, 2026-10-12) registers **one** artefact: `frontend/src/lib/setupNotice.tsx` → `<PlatformDetail detail />`, a second export of the §19.36 home gated by the same `useSetupDetailVisible()`. Its one caller today is `app/(platform)/commcalc/connectors/page.tsx`. Still no table, endpoint, metric or report. Locked by `harness_carrier_vocab_guard.py` §SETUP / §INFRA, which is what fails the build if a page writes an internal name in copy instead of dereferencing this home.
 - CORE-02.8 (the follow-up) registers no new artefact either: it changes only JSX text escaping in 74 files, a ternary-to-`if/else` transliteration in 16, `frontend/eslint_pending.txt` (932 → 842 entries) and `PINNED_TOTAL` in the lock (5917 → 5645). Still no table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.
+
+## §COMMCALC-01. WHICH RECORD SAYS A TRADE-IN HAPPENED — the till, declared, with one home (owner ruling 2026-10-12)
+
+Owner, on a decision card asking which record should count: **"Point of sale."** The trade-in spiff
+counts trade-ins **as recorded at the till**, not as recorded on the carrier statement.
+
+His words that started it: *"For boost add trade in as a monthly focus for boost and assign it carrier
+commission we receive at $25 and the pay out commission to employee at $5"*, then *"Yes add as
+additional pay on top of whatever they are getting"*.
+
+### The class, not the instance
+
+`calculator.py` counted `rep['trade_ins']` as **payment-detail rows whose `payment_type` contained
+"trade"**, keyed by `rep_username`, and paid `trade_ins × trade_in_spiff`. Boost only began emitting
+`Trade-In Device Reimbursement` in **September 2026**, so every month before it paid **$0** for
+trade-ins the stores really did.
+
+The general fact that was wrong is not "Boost stopped sending trade-in rows". It is that **a carrier's
+reimbursement record was being read as a record of what the store did.** A trade-in happens at the
+till; whether the carrier later reimburses it, under what name, or at all, is a separate fact that may
+never arrive. Same shape as: a sweep's status is not a record of what it did (§29.12), a distributor's
+claim is not a second receipt, a `component` without its `basis` is not evidence (§66).
+
+### Measured on production, house org, 2026-10-12 (read-only)
+
+POS transactions are DISTINCT `trans_id` under the engine's own void/`Return` filter, at each month's
+own `trade_in_spiff` rate.
+
+| month | rate | till transactions | statement rows | pays today | pays on the till | delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Jun 2026 | $5 | 0 | 0 | $0 | $0 | $0 |
+| Jul 2026 | $5 | 1 | 0 | $0 | $5 | +$5 |
+| Aug 2026 | $5 | **30** | **0** | **$0** | $150 | +$150 |
+| Sep 2026 | $20 | 65 | 50 | $1,000 | $1,300 | +$300 |
+| Oct 2026 | $5 | **53** | **1** | **$5** | $265 | +$260 |
+
+- **August's statement is COMPLETE** — 23,871 rows, 44 payment types — and holds no trade-in type at
+  all. The $0 was not a missing upload; the carrier simply had not started reimbursing.
+- October: 53 till transactions across 10 stores and **12 reps**; the statement's single row belongs to
+  one rep (`suanny`). Top three on the till: Rana Akhtar 13, Mohammad Khalid Ali 12, Mohammed Sami 6.
+- **Unattributable till trade-ins: 0** in every month — no trade-in reached a blank or `admin`
+  salesperson, so nothing is being reported as unowned today.
+- The spec this work was briefed from counted 31 (Aug) and 67 (Sep) from raw rows; the figures above
+  are 30 and 65 because the engine's own `valid` filter drops voids and `Return` lines. The smaller
+  number is the one that pays.
+
+### The design — one fact, one home, dereferenced
+
+| Side | Home | What it answers |
+|---|---|---|
+| code | `backend/app/modules/commcalc/trade_in_basis.py` | the whole question. `resolve_basis` (an ALLOWLIST: `pos` / `carrier` / `higher`, anything else → the house default `pos`), `resolve_declaration` (which departments / categories / product words mean trade-in, **case-folded**), `resolve_carrier_payment_types`, `is_pos_trade_in` (the per-line predicate), `pos_trade_in_txns` (DISTINCT `trans_id`), `is_carrier_trade_in` (the per-row predicate) + `carrier_trade_in_count` (its aggregate), `count_for_pay` → `(count, which_record)`, `unresolved_pos_count` |
+| config | `commcalc.accessory_config` (mig **1074**): `trade_in_basis`, `trade_in_departments`, `trade_in_categories`, `trade_in_keywords`, `trade_in_payment_types` | the org's declaration. Every column nullable with no default, so applying 1074 changes nothing by itself |
+| engine | `commcalc/calculator.py` | dereferences the home and keeps no answer of its own |
+| threading | `router._accessory_config_uncached` → `router` cfg → `calc_rep_commissions` | the same path `acima_tenders`, `setup_fee_keywords` and `line_class_rules` already travel (§4b.1's one whole-row read, so an un-run 1074 degrades these five columns to their code defaults and nothing else) |
+| lock | `backend/harness_trade_in_basis.py`, CI step in `carrier-vocab-guard.yml` | 65 checks; **14 fail against the pre-fix `calculator.py`** |
+
+**House default `pos`.** The ruling is about the mechanism, not about one carrier: the till is where a
+trade-in happens. RULE TWO holds — no carrier, tenant or department name appears in code; the default
+department spelling (`trade in`) is a default, not a branch, and is what the house feed actually
+carries (measured: one spelling, `department` and `category` both exactly `Trade In`, across all 152
+rows ever). Non-Boost carriers never reach this branch: they pay only from Commission Plans / Payout
+Schedules.
+
+**Distinct transactions, never lines.** One trade-in is one transaction and may be many feed line rows.
+The `acima_count` set-comprehension beside the caller exists precisely because summing rows over-paid
+(20 ACIMA line items read as $500). October happens to be one line per transaction; nothing relies on
+that. A line with **no** `trans_id` is counted once under a key of its own rather than dropped — the
+rule `box_count`'s guard settled on (§59.8 §H8).
+
+**Case folding is deliberate.** `box_departments` matching is case-SENSITIVE and §59.8 records that as
+a live defect: a feed spelling a department in another case silently contributes nothing (same class as
+the `b-1115` phantom store, §29.12). This home folds case on both sides so it cannot inherit it. It
+does **not** repair `box_departments`; that moves which lines count as boxes on every tenant and wants
+its own measurement.
+
+**No second resolver.** The POS count runs over each rep's **own already-resolved `rep['sales']` rows**,
+so attribution is the engine's existing `rep_map` (keyed on `salesperson.upper()`), not a new
+salesperson→rep mapping. The carrier side keeps `rep_username` through `pay_by_login`, exactly as
+`comm`/`reimb` do.
+
+**The count travels with its basis** (§66's shape): `calc_rep_commissions` returns `trade_in_basis`,
+`trade_in_paid` and `trade_in_unresolved`, and each rep row carries `trade_in_basis` naming the record
+that paid it. A count whose basis the reader cannot see invites a last-resort placement being read as
+evidence.
+
+**A trade-in whose rep cannot be resolved is REPORTED, never dropped and never paid to nobody.** The
+engine skips a row with a blank or `admin` salesperson, so such a trade-in is money the store earned
+that no rep can be paid for; `unresolved_pos_count` surfaces it instead of letting it vanish into a
+smaller count.
+
+### A defect this work's own harness caught before it shipped
+
+`_fold` first read a declared list as `{str(v).strip().lower() for v in values if str(v).strip()}`.
+**`str(None)` is `'none'`, which is truthy after stripping** — so a NULL element in a config array
+became a department literally named "none", and any feed row whose department was blank-spelled-as-None
+would have been paid as a trade-in. Check **C5** reddened on it; `_fold` now drops `None` and the
+`'none'`/`'null'`/`'nan'`/`'nat'` spellings, and control **I7c** keeps it armed.
+
+### Money posture
+
+Computing is not paying. Migration 1074 is **surfaced for owner approval, not applied**, and applying
+it moves nothing on its own. What moves rep pay is the **next Run Calculation** after this ships, by
+the deltas tabled above — including **September 2026, a month already paid**, which would rise $300.
+**Back-pay for Jun–Oct was offered on the same decision card and NOT chosen**, so no stored row is
+touched here and nothing triggers a recompute. The owner sees the per-rep table before any stored
+payout moves.
+
+### Still open, the owner's to answer
+
+- Whether to recompute Jul–Sep at all, given those months are closed (the deltas are +$5 / +$150 /
+  +$300). Not the same question as back-pay, and not assumed either way.
+- Whether the **$25 carrier side** ever becomes a real statement line. There is no trade-in
+  `compensation_type` anywhere in `raw_comp_report`, so the $25 is a declaration, not an observed
+  payment; once a line exists, the declared figure can be checked against what landed.
+
+### Adjacent gap, same subsystem, NOT built (§63)
+
+`month_focus.spiff_reconciliation` watches only `payout_config.custom_spiffs`, so it cannot see that a
+**built-in** term (`trade_in_spiff`, `acima_spiff`, `byod_flat`…) is live and non-zero — a declared
+month-focus spiff matching a built-in term mis-reports as `declared_not_live`. `payout_structure._term`
+already enumerates the built-in terms and is the home to dereference. Recorded, offered, not built.
+
+### COMMCALC-01.1 Cross-references
+
+- **§16 (by TABLE):** `commcalc.accessory_config` — five new columns (mig 1074), read by
+  `router._accessory_config_uncached` on the one whole-row read; no new table.
+  `commcalc.daily_sales_feed` and `commcalc.raw_payment_detail` are READ, unchanged, by existing paths.
+- **§17 (by ENDPOINT):** none added. `POST /commcalc/run-calculation` (existing) now returns
+  `trade_in_basis`, `trade_in_paid` and `trade_in_unresolved` on its result; no route, no new query.
+- **§18 (by METRIC):** `trade_in_comm` (existing, per rep) now has a declared basis; `trade_in_paid`
+  and `trade_in_unresolved` are new reported figures, not stored columns.
+- **Duplicate check (the build gate):** searched the index before building. `accessory_config` is
+  already the per-org home for "which departments, categories and product words mean X" (mig 208
+  departments/categories/product_keywords, mig 094 `acima_tenders`, mig 217 `setup_fee_keywords`,
+  mig 218 `box_departments`), so the declaration EXTENDS that row rather than taking a new table —
+  a sibling table would be the duplicate defect these rules forbid. The dedupe reuses the
+  `acima_count` / `prem_set` `trans_id` convention. The rep resolver reused is the engine's own
+  `rep_map`. The basis allowlist reuses §66's `component_is_evidence` posture (an unruled value is
+  not evidence). No new feed, so nothing to register in `data_lineage_registry.py` or migration 925.
+- **Same class:** §66 (a count without its basis), §29.12 (a status is not a record of what was done),
+  §19.18 (a mechanism written, callers left unwired — locked here by §G), §59.8 (the case-sensitive
+  department test this home deliberately does not inherit).

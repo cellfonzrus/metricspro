@@ -23,6 +23,7 @@ DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 from app.modules.commcalc import line_class as _lc
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _boost_terms  # THE Boost engine's resolved terms (one home; pure)
+from app.modules.commcalc import trade_in_basis as _tib  # THE trade-in basis (one home; pure)
 
 
 def classify_line(row, rules=None):
@@ -167,6 +168,17 @@ def calc_rep_commissions(
     # Configurable ACIMA-lease tender (mig 094): which Tender Type value(s) mark an ACIMA lease
     # (substring, e.g. 'financing'). Empty → the historical default substring 'acima'.
     _acima_tenders = {str(t).strip().lower() for t in (cfg.get('acima_tenders') or []) if str(t).strip()} or {'acima'}
+    # TRADE-IN BASIS (owner ruling 2026-10-12, decision card "Point of sale"; index §TODO). WHICH
+    # RECORD answers "did a trade-in happen" is now the org's declared fact with ONE home — the till
+    # (`pos`, the house default), the carrier statement (`carrier`, the historic basis), or whichever
+    # shows more (`higher`). The engine used to carry the answer itself: it counted payment-detail
+    # rows whose type contained 'trade', so a month the carrier had not reimbursed yet paid $0 for
+    # trade-ins the stores really did (Jun-Aug 2026 paid $0 against 31 real August trade-ins; Boost
+    # only began emitting the type in September). A carrier's reimbursement record is not a record of
+    # what the store did. Nothing here names a carrier, tenant or department — RULE TWO.
+    _trade_basis = _tib.resolve_basis(cfg.get('trade_in_basis'))
+    _trade_decl = _tib.resolve_declaration(cfg)
+    _trade_pay_types = _tib.resolve_carrier_payment_types(cfg)
 
     def _is_acc(dept, cat, product=''):
         d = (dept or '').strip().lower()
@@ -393,7 +405,10 @@ def calc_rep_commissions(
         # per-rep loop — the SAME path comm/reimb already use (pay_by_login.get(rep['login'])). The old
         # code did rep_map.get(login.upper()), but rep_map is keyed by salesperson NAME, so it ~always
         # missed and trade-in spiff was silently $0 for every rep.
-        if 'trade' in str(p.get('payment_type','')).lower():
+        # THE one predicate for "the statement records a trade-in" (declared token, one home). The
+        # engine groups by login as it goes, so it takes the per-row predicate; the home's own
+        # aggregate dereferences the same function, so there is no second answer to drift from.
+        if _tib.is_carrier_trade_in(p, _trade_pay_types):
             pay_by_login[login]['trades'] += 1
     
     # ── Calculate per rep ─────────────────────────────────────
@@ -460,6 +475,11 @@ def calc_rep_commissions(
         }
 
     comm_rows = []
+    # Every till trade-in that reached SOME rep. What is left over is real money the store earned
+    # that no rep can be paid for (the engine skips a row with a blank / admin `salesperson`), so it
+    # is REPORTED below rather than disappearing into a smaller count — a data defect is never
+    # "fixed" by code that hides it.
+    _trade_resolved_txns = set()
     
     for key, rep in rep_map.items():
         pa = len(rep['prem_set'])
@@ -475,7 +495,16 @@ def calc_rep_commissions(
         # for the accessory-target check above.
         acc_comm     = rep['acc_sales'] * G['acc_rate']
         setup_comm   = rep['setup_fee_sales'] * G['setup_rate']
-        rep['trade_ins'] = pay_by_login.get(rep['login'], {}).get('trades', 0)
+        # THE DECLARED BASIS DECIDES WHICH RECORD PAYS (one home: `trade_in_basis`). The POS count is
+        # DISTINCT trans_id over this rep's OWN already-resolved sales rows — the engine's rep map is
+        # the resolver, so no second salesperson->rep mapping is introduced, and the dedupe mirrors
+        # `acima_count` below (summing lines over-pays; one trade-in is one transaction, many rows).
+        _trade_pos = _tib.pos_trade_in_txns(rep['sales'], _trade_decl)
+        _trade_resolved_txns |= _trade_pos
+        _trade_carrier = pay_by_login.get(rep['login'], {}).get('trades', 0)
+        rep['trade_ins'], _trade_which = _tib.count_for_pay(
+            _trade_basis, len(_trade_pos), _trade_carrier)
+        rep['trade_in_basis'] = _trade_which
         trade_comm   = rep['trade_ins'] * G['trade_in_spiff']
         
         # ACIMA lease spiff — paid PER ACIMA TENDERED. The tender shows up as
@@ -585,9 +614,16 @@ def calc_rep_commissions(
             'calculated_by': 'api_v1',
         })
     
+    # THE COUNT TRAVELS WITH ITS BASIS, and the leftovers travel with it (§66's shape: a number whose
+    # basis the reader cannot see invites a last-resort placement being read as evidence).
+    # `trade_in_unresolved` is till trade-ins that reached no rep — a defect to report, never to hide.
+    _trade_unresolved = _tib.unresolved_pos_count(valid, _trade_resolved_txns, _trade_decl)
     return {
         'commissions': comm_rows,
         'period': period,
         'reps': len(comm_rows),
         'total_payout': sum(r['total_payout'] for r in comm_rows),
+        'trade_in_basis': _trade_basis,
+        'trade_in_paid': sum(r.get('trade_in_comm') or 0 for r in comm_rows),
+        'trade_in_unresolved': _trade_unresolved,
     }
