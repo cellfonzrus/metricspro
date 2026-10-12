@@ -103,6 +103,7 @@ Primary code homes:
 | CORE-01 | **A section id carries its module** | "What number does my new index section get, who else could be taking it right now, and what happens if two of us take the same one? Which module does a section belong to, which module does nothing document yet, and why are the 111 existing numbers not renumbered?" |
 | COMMCALC-02 | **A category you declare is a category you can set a target for** | "I added drop-offs to the daily closing — where do I set a target for them? What do I need per day and per week to reach my month, and what would it take to hit a number I just made up? Why did the four sales categories exist in nine different lists?" |
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
+| COMMCALC-03 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 
 ---
@@ -24664,7 +24665,8 @@ registered section" and adds the module↔section direction it never had.
 
 115 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
 once), plus §15.1–§15.3, which are where the `notify` module is actually documented, plus the
-`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §COMMCALC-01, §COMMCALC-02).
+`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §COMMCALC-01, §COMMCALC-02,
+§COMMCALC-03).
 
 Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
 110 sections cite a backend module path and are checked against it, 12 of those cite four or more
@@ -24870,6 +24872,7 @@ status word rather than a blank that reads as nil.
 | CORE-01 | core |
 | CORE-02 | core |
 | COMMCALC-02 | commcalc |
+| COMMCALC-03 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -25559,3 +25562,95 @@ four built-ins are byte-identical with a catalog present, a declared category re
 - Same class: §76 (the declaration half), §29.7 (two physical stores one reader), §19.18 (a mechanism
   written and its callers left unwired), §CORE-01 (the section-number race this change's predecessor
   caused).
+
+## §COMMCALC-03. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
+
+Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back
+end"*. The upload card showed **"This feature isn't switched on for your company yet. Contact
+support to enable it."** It was switched on. Nothing was ever licensed off.
+
+### §COMMCALC-03.1 The defect, stated once
+
+Every upload of **MA - Marketplace Handset Fulfillment Orders** has been refused since
+**2026-10-06**. `commcalc.upload_trace` carries each attempt, same error every time:
+
+```
+500: Insert failed: {'message': "Could not find the 'period' column of 'raw_ma_fulfillment'
+in the schema cache", 'code': 'PGRST204'} — the existing 0 row(s) were left untouched.
+```
+
+Six refused attempts on one tenant (2026-10-06 ×4, 2026-10-08, 2026-10-12), 0 rows saved each time.
+The last upload that landed was **2026-10-02** — the day before §19.46 shipped.
+
+Two things made it read as a licensing problem rather than a broken write. The API boundary (§19.36)
+rewrites a schema-cache error into the one customer sentence, correctly — a customer must not be
+shown a column name. And the tile's own "newer attempt saved no rows" line was true. So the screen
+said *not switched on* and *saved nothing*, and neither sentence pointed at the actual cause.
+
+### §COMMCALC-03.2 The cause: §19.46 generalised one table too far
+
+§19.46 (`feed_period.day_stamp`) re-stamps `period` / `period_month` / `period_year` on every
+DAY-KEYED feed's rows from the row's own date — the fix that stopped a rolling re-pull filing one
+month's commission under the next. `raw_ma_fulfillment` **is** day keyed (`date_ordered`), and is
+the one landing table on that path that stores **no month columns at all**: its upload mapper has
+always skipped them, and the portal-pull spec says `has_period: false`. The stamp wrote a column the
+table does not have, and PostgREST refused the whole insert.
+
+### §COMMCALC-03.3 The class, not the instance
+
+The general fact that was wrong is not "one feed lost its uploads". It is **"a feed row's month can
+always be written to period columns"**. Whether a landing table STORES a row's month is a schema
+fact that had **no home**, so each write path answered it for itself:
+
+| Path | How it used to answer | Now |
+|---|---|---|
+| manual upload / email sweep (`router._upload_file_impl`) | `has_period = file_type not in ['catalog', 'master_cats']` — a hand-written file-type list | `has_period = _lineage.stores_row_month(table)` |
+| portal sweep (`epay_sweep`) | a `period` stamped into every mapped row's base, unconditionally | `_month_base(spec, …)` — only the columns that table stores |
+| portal pull (`report_pull.apply_column_map`) | a `has_period` flag carried per report spec | `_lin.stores_row_month(target_table)` |
+
+That is §19.18's shape again: the stamp reached the feeds somebody remembered to exclude. The fact
+now lives next to the day-grain fact it travels with —
+`data_lineage_registry.month_columns(table)` / `stores_row_month(table)`, with
+`NO_MONTH_COLUMN_REASONS` carrying a sentence per exception — and all three paths dereference it.
+
+**"Replaced whole" is a different fact from "stores no month", and reading one as the other would be
+worse than the bug.** The upload handler's snapshot branch used to fire on `not has_period`; a
+day-keyed feed that stores no month columns now also answers False there, and that branch DELETES
+the org's entire table. It reads `_lineage.is_snapshot(table)` instead.
+
+### §COMMCALC-03.4 The siblings, found by the lock rather than by hand
+
+`harness_feed_day_grain.py` §M re-measures **every** declaration against the `CREATE TABLE` /
+`ALTER TABLE … ADD COLUMN` statements in `database/migrations/`, so a drifting declaration fails the
+build. Writing it immediately named four more tables carrying the same wrong default, each confirmed
+against the live schema: `raw_epay_daily_tx`, `merchant_settlement_day`, `merchant_settlement_batch`,
+`asset_ledger`. None is reached by the manual-upload handler today — which is exactly the silence
+`raw_ma_fulfillment` kept until the stamp was generalised to it.
+
+### §COMMCALC-03.5 What was checked for duplication before building
+
+- `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `day_keyed_date_columns()` (§19.46) already
+  answer "which column is this row's day". The month-column fact is **added beside it**, in the same
+  registry, not in a new module.
+- `router._table_has_column` asks the live schema per call; it was deliberately not used here — a
+  per-request schema probe on an ingest path answers the same question slower and without a build
+  gate, and the registry is checkable offline against the migrations.
+- `feed_period` stays pure: it is GIVEN the columns, it does not look them up.
+
+### §COMMCALC-03.6 Files, locks and what is NOT in this change
+
+| Thing | Where |
+|---|---|
+| the fact | `commcalc/data_lineage_registry.py` — `MONTH_COLUMNS`, `NO_MONTH_COLUMN_REASONS`, `month_columns()`, `stores_row_month()`, `SNAPSHOT_TABLES`, `is_snapshot()` |
+| the stamp | `commcalc/feed_period.py::day_stamp(rows, column, month_columns=MONTH_COLUMNS)` — default unchanged, so an un-updated caller behaves exactly as before |
+| the three callers | `commcalc/router.py::_upload_file_impl`, `commcalc/epay_sweep.py`, `commcalc/report_pull.py` |
+| the lock | `harness_feed_day_grain.py` §M (M1 re-measures the registry against the migrations; M6/M7 fail the build if any caller keeps its own answer again) |
+| module graph | fact `feed_lineage` (§50) gains `report_pull.py` as a caller |
+
+**No migration.** `raw_ma_fulfillment` is correct as it stands: the order date IS its month fact, and
+adding period columns would create the second copy this house rule forbids. **No data repair:** every
+refused upload left the table untouched, so nothing is wrong in storage — the tenant re-uploads the
+file once this ships.
+
+- Same class: §19.46 (the row-date stamp this corrects), §19.18 (a mechanism written and its callers
+  left unwired), §19.36 (the boundary that made a broken write read as an unlicensed feature).

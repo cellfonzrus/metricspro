@@ -587,6 +587,74 @@ def period_grain_reason(table: str):
     """PURE: why `table` is replaced per PERIOD rather than per day, or None when it is day grain."""
     return PERIOD_GRAIN_REASONS.get(table)
 
+
+# ── WHERE A ROW'S MONTH IS STORED — one home, dereferenced (owner report 2026-10-12) ──────────────
+# THE DEFECT THIS CLOSES. Every upload of the marketplace handset fulfilment report has been REFUSED
+# since 2026-10-06 — "Could not find the 'period' column of 'raw_ma_fulfillment' in the schema cache"
+# (6 refused attempts on one tenant, the newest 2026-10-12; the customer saw only the generic
+# "this feature isn't switched on" sentence the API boundary rewrites such an error into). The
+# day-grain fix of §19.46 (`feed_period.day_stamp`, 2026-10-05) re-stamps `period` / `period_month` /
+# `period_year` on EVERY day-keyed feed's rows from the row's own date. `raw_ma_fulfillment` is day
+# keyed — and is the one landing table that stores NO month columns at all (its upload mapper has
+# always skipped them, and `report_pull`'s spec says `has_period: false`).
+#
+# THE CLASS, not the instance. The general fact that was wrong is not "one feed lost its uploads"; it
+# is **"a feed row's month can always be written to period columns"**. Whether a landing table STORES
+# a row's month is a schema fact that had no home: the upload handler carried a hand-written exclusion
+# list (`file_type not in ['catalog', 'master_cats']`), which is §19.18's shape again — the stamp
+# reached the feeds somebody remembered to exclude. It lives here now, next to the day-grain fact it
+# travels with, and `harness_feed_day_grain.py` §M re-measures every declaration against the CREATE
+# TABLE / ALTER TABLE statements in `database/migrations/`, so a drifting declaration fails the build.
+MONTH_COLUMNS = ("period", "period_month", "period_year")
+
+# A landing table that stores NO month columns, with the reason. Everything else stores all three.
+NO_MONTH_COLUMN_REASONS = {
+    "raw_ma_fulfillment": ("day-keyed order feed — `date_ordered` is the row's only month fact, and "
+                           "the table was created without the period columns its two sibling "
+                           "marketplace feeds carry"),
+    "raw_catalog": "a product snapshot, replaced whole — a catalogue row is not about a month",
+    "raw_categories": "a payment-type → category map, replaced whole — not about a month",
+    "pos_tender_summary": "one row per store close — `close_date` is the row's only month fact",
+    "inventory_value": "a per-store value snapshot keyed by `as_of_date`",
+    # FOUND BY THE LOCK, not by hand (2026-10-12): the §M re-measurement over the migrations named
+    # these four the moment it was written, and each was confirmed against the live schema. None is
+    # reached by the manual-upload handler today, which is exactly why nobody noticed — the same
+    # silence raw_ma_fulfillment kept until the day the stamp was generalised to it.
+    "raw_epay_daily_tx": "day-keyed transaction stream — `settlement_date` is its month fact",
+    "merchant_settlement_day": "one row per processor business day — `business_date` is its month fact",
+    "merchant_settlement_batch": "one row per processor batch — dated by its own batch day",
+    "asset_ledger": "the distributor's unit ledger — `acquired_date` is the row's only month fact",
+}
+
+
+def month_columns(table: str) -> tuple:
+    """PURE: the columns `table` stores a row's month in — () when it stores none.
+
+    THE one home for "may this row be stamped with a period". A caller that keeps its own list of
+    exceptions fails the build (`harness_feed_day_grain.py` §M)."""
+    return () if table in NO_MONTH_COLUMN_REASONS else MONTH_COLUMNS
+
+
+def stores_row_month(table: str) -> bool:
+    """PURE: True when `table` has the period columns a month-keyed read and replace need."""
+    return bool(month_columns(table))
+
+
+def no_month_column_reason(table: str):
+    """PURE: why `table` stores no month, or None when it does."""
+    return NO_MONTH_COLUMN_REASONS.get(table)
+
+
+# A landing table an upload replaces WHOLE for the org (a snapshot of reference data, not a stream of
+# events). Stated here because "no month columns" and "replaced whole" are two different facts, and
+# reading one as the other is how a day-keyed feed would have its entire history deleted by one file.
+SNAPSHOT_TABLES = frozenset({"raw_catalog", "raw_categories"})
+
+
+def is_snapshot(table: str) -> bool:
+    """PURE: True when an upload into `table` replaces the org's whole set."""
+    return table in SNAPSHOT_TABLES
+
 # ── HOW OFTEN EACH WATCHED FEED IS DUE ────────────────────────────────────────────────────────────
 # The default is daily, deliberately: a feed nobody thought about is better watched too keenly than not
 # at all. A slower feed says so here.

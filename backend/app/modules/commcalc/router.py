@@ -1386,6 +1386,10 @@ async def _upload_file_impl(
     rows = df.to_dict('records')
 
     pm = parse_period(period) if period else {'month': 0, 'year': 0}
+    # WHETHER THIS UPLOAD FILES ITS ROWS UNDER A MONTH is a fact about the LANDING TABLE, not a list
+    # of file types (owner report 2026-10-12 — see data_lineage_registry §MONTH). Resolved properly
+    # from the registry once `table` is known, a few lines below; the pre-TABLE_MAP default keeps the
+    # early-returning routes (inventory_aging, the custom imports) byte-identical.
     has_period = file_type not in ['catalog', 'master_cats']
 
     client = sb()
@@ -1603,6 +1607,8 @@ async def _upload_file_impl(
     }
     # Try schema-qualified first, fall back to public prefix
     table = TABLE_MAP[file_type]
+    # ONE home for "does this table store a row's month" — dereferenced, never re-listed here.
+    has_period = _lineage.stores_row_month(table)
     
     # Guard against mislabeling a comp file into the wrong month (which deletes the chosen period
     # then loads foreign data under it — how a month's comp got clobbered). The file's true month
@@ -1813,7 +1819,7 @@ async def _upload_file_impl(
                         "ma_fulfillment": "Date Ordered"}[file_type]
             d10 = _d10(r.get(date_key))
             base = {"org_id": org_id}
-            if d10 and file_type != "ma_fulfillment":
+            if d10 and has_period:
                 td = pd.to_datetime(d10)
                 base.update({"period": td.strftime("%B %Y"), "period_month": td.month, "period_year": td.year})
             if file_type == "ma_commission":
@@ -1957,8 +1963,12 @@ async def _upload_file_impl(
     # payment_detail and comp_report carry a date on every row; raw_dlar_* are ~85% blank on
     # `as_of_date` and therefore byte-identical until that feed starts carrying it.
     day_stamp = None
-    if mapped and has_period and file_type in DATE_KEYED:
-        day_stamp = _feed_period.day_stamp(mapped, DATE_KEYED[file_type])
+    # NOT gated on `has_period`: a day-keyed feed that stores no month columns (raw_ma_fulfillment)
+    # still has to PROVE every row's day before a per-day replace may delete anything. It is stamped
+    # with the columns its table actually has — none, for that feed — and the proof is the same.
+    if mapped and file_type in DATE_KEYED:
+        day_stamp = _feed_period.day_stamp(mapped, DATE_KEYED[file_type],
+                                           month_columns=_lineage.month_columns(table))
         if not day_stamp.stamped:
             DATE_KEYED = {k: v for k, v in DATE_KEYED.items() if k != file_type}
     # Row-count guardrail (user 2026-07-05): BEFORE the delete-and-replace, compare the incoming count
@@ -2115,8 +2125,11 @@ async def _upload_file_impl(
             _replace_scope = (lambda q, _pv=_pvariants(period), _t=table, _k=_upload_kind:
                               _landing.apply_kind_filter(q.eq('org_id', org_id).in_('period', _pv), _t, _k, column_mapping.TABLE_MAP)
                               if _k else q.eq('org_id', org_id).in_('period', _pv))
-        elif not has_period:
+        elif _lineage.is_snapshot(table):
             # Snapshot tables (catalog): the upload replaces the org's whole set.
+            # DELIBERATELY the registry's snapshot fact, not `not has_period`: a day-keyed feed that
+            # stores no month columns (raw_ma_fulfillment) also has `has_period` False, and reading
+            # the one fact as the other would delete its whole history on a file that covered a day.
             _replace_scope = lambda q: q.eq('org_id', org_id)
 
     # ── CROSS-TENANT INGEST GUARD (owner-approved 2026-08-06, migration 280) ────────────────
