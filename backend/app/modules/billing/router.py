@@ -29,6 +29,7 @@ from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 # Reuse the core super-admin gate (token-verified + house-admin bootstrap fallback).
 from app.modules.core.router import _require_super_admin
+from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
 
 router = APIRouter(prefix="/billing", tags=["Billing (Tenants)"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -380,8 +381,20 @@ def summary(authorization: str = Header(default="")):
 from app.modules.billing import platform_costs as _pc
 
 
+_PC_TABLE = "platform_billing_connector"
+
+
 def _pcstore():
-    return sb().schema("storeops").table("platform_billing_connector")
+    return sb().schema("storeops").table(_PC_TABLE)
+
+
+def _pc_rows(q):
+    """THE read of this table: run the query and decrypt the vendor credential (index §CORE-03).
+
+    `credential` is a token we store in order to replay it to a vendor's API, which is the same class
+    of secret as a portal password — so it is encrypted at rest by the same registry, and opened here
+    rather than at each of the three call sites that read it."""
+    return _psec.open_rows(_PC_TABLE, q.execute().data or [])
 
 
 def _pc_out(row: dict) -> dict:
@@ -407,7 +420,7 @@ def platform_providers(authorization: str = Header(default="")):
 def list_platform_connectors(authorization: str = Header(default="")):
     _require_super_admin(authorization)
     try:
-        rows = _pcstore().select("*").order("sort_order").order("provider").execute().data or []
+        rows = _pc_rows(_pcstore().select("*").order("sort_order").order("provider"))
     except Exception:
         return {"ready": False, "connectors": []}
     return {"ready": True, "connectors": [_pc_out(r) for r in rows]}
@@ -439,9 +452,9 @@ def upsert_platform_connector(body: UpsertPlatformConnectorIn, authorization: st
     try:
         cid = body.id
         if cid:
-            _pcstore().update(row).eq("id", cid).execute()
+            _pcstore().update(_psec.seal_row(_PC_TABLE, row)).eq("id", cid).execute()
             return {"ok": True, "id": cid}
-        res = _pcstore().insert(row).execute()
+        res = _pcstore().insert(_psec.seal_row(_PC_TABLE, row)).execute()
         return {"ok": True, "id": (res.data[0]["id"] if res.data else None)}
     except Exception as e:
         raise HTTPException(500, f"save failed: {e} (run migration 090?)")
@@ -472,7 +485,7 @@ def platform_costs_summary(authorization: str = Header(default="")):
     _require_super_admin(authorization)
     client = sb()
     try:
-        rows = _pcstore().select("*").order("sort_order").order("provider").execute().data or []
+        rows = _pc_rows(_pcstore().select("*").order("sort_order").order("provider"))
     except Exception:
         return {"ready": False, "total_monthly": 0, "active_tenants": 0, "cost_per_tenant": 0, "connectors": []}
     total = round(sum((_pc._num(r.get("last_cost")) or 0) for r in rows if r.get("is_enabled", True)), 2)
@@ -490,7 +503,7 @@ async def refresh_platform_costs(body: RefreshPlatformCostsIn = None, authorizat
     body = body or RefreshPlatformCostsIn()
     only = body.id
     try:
-        rows = _pcstore().select("*").execute().data or []
+        rows = _pc_rows(_pcstore().select("*"))
     except Exception as e:
         raise HTTPException(500, f"not ready: {e} (run migration 090?)")
     results = []

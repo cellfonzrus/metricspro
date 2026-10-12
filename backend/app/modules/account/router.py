@@ -9,6 +9,7 @@ from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
+from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
 from app.modules.account import coa, engine, autocompute, report_gates, statement_engine, analysis
 from app.modules.account import _period   # the ONE spelling a month is stored under (index §19.47)
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
@@ -1329,8 +1330,12 @@ def sweep_credit_memos(org_id: str = ORG_ID):
     alongside the invoice sweep is a documented fast-follow."""
     require_org(org_id)
     client = sb()
-    cfg = (client.schema("commcalc").table("vip_sweep_config").select("portal_user,portal_pass")
-           .eq("org_id", org_id).execute().data or [None])[0]
+    # The credential is ENCRYPTED AT REST (index §CORE-03) — read it through the registry, never
+    # straight off the row, or the sweep is handed a ciphertext as its password.
+    cfg = _psec.open_row("vip_sweep_config",
+                         (client.schema("commcalc").table("vip_sweep_config")
+                          .select("portal_user,portal_pass")
+                          .eq("org_id", org_id).execute().data or [None])[0])
     if not cfg or not cfg.get("portal_user") or not cfg.get("portal_pass"):
         raise HTTPException(400, "Distributor portal credentials not set — configure them on the Distributor sweep page first.")
     try:
