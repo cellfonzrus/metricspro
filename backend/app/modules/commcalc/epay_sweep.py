@@ -941,6 +941,22 @@ def _lin_day_keyed():
     from app.modules.commcalc import data_lineage_registry as _lin
     return _lin.day_keyed_date_columns()
 
+def _month_columns_of(spec):
+    """PURE-ish: the month columns THIS spec's landing table stores, from the ONE registry fact
+    (`data_lineage_registry.month_columns`). A table that stores none is never stamped with a period
+    — writing one is what refused every upload of a day-keyed feed that has no such column (2026-10-12,
+    PGRST204). The sweep asks the same question the manual upload asks, in the same place."""
+    from app.modules.commcalc import data_lineage_registry as _lin
+    return _lin.month_columns(str(spec.get("table") or "").split(".")[-1])
+
+
+def _month_base(spec, period, pm, py):
+    """The period half of a mapped row's base, limited to the columns the table actually stores."""
+    cols = _month_columns_of(spec)
+    return {k: v for k, v in (("period", period), ("period_month", pm), ("period_year", py))
+            if k in cols}
+
+
 def _store_day_grain(client, org_id, spec, key, records, target):
     """Store a pull DAY BY DAY, each day replacing only its own data date.
 
@@ -954,9 +970,8 @@ def _store_day_grain(client, org_id, spec, key, records, target):
     — so there is no second spelling of "which column is the date" anywhere on this path."""
     day_key = spec["day_key"]
     _prov = _period_now()
-    rows = spec["map"](records, {"org_id": org_id, "period": _prov[0],
-                                 "period_month": _prov[1], "period_year": _prov[2]})
-    stamp = _feed_period.day_stamp(rows, day_key)
+    rows = spec["map"](records, {"org_id": org_id, **_month_base(spec, *_prov)})
+    stamp = _feed_period.day_stamp(rows, day_key, month_columns=_month_columns_of(spec))
     if not stamp.stamped:
         raise EpayPortalError(
             f"{spec['label']}: {len(records)} row(s) came back but they cannot be filed against a "
@@ -1124,7 +1139,7 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
             period, pm, py = _period_now()
     else:  # "current"
         period, pm, py = _period_now()
-    base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
+    base = {"org_id": org_id, **_month_base(spec, period, pm, py)}
     rows = spec["map"](records, base)
 
     # ── EACH ROW UNDER ITS OWN DAY'S MONTH, REPLACED PER DAY (owner 2026-10-05) ──────────────────
@@ -1132,7 +1147,7 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
     # is a real delete covering every row inserted. Never a per-day delete that could not reach the
     # row it could not read — that asymmetry is exactly how a re-pull duplicates a month.
     if mode == "data" and _day_col and rows:
-        _stamp = _feed_period.day_stamp(rows, _day_col)
+        _stamp = _feed_period.day_stamp(rows, _day_col, month_columns=_month_columns_of(spec))
         if _stamp.stamped:
             return _store_rows_by_day(client, org_id, spec, key, rows, _day_col)
         print(f"WARN epay sweep {key}: {_stamp.get('reason')} — stored under {period}")
