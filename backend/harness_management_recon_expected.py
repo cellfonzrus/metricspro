@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AN ENVELOPE COUNT IS SCORED AGAINST THE ENVELOPE'S EXPECTED FIGURE — DB-free proof (index §75).
+"""AN ENVELOPE COUNT IS SCORED AGAINST THE ENVELOPE'S EXPECTED FIGURE — DB-free proof (index §CLOSING-01).
 
 OWNER, 2026-10-12: *"Build the label fix"* — after asking, 2026-10-10, where the $552 on the
 Management Recon screen came from.

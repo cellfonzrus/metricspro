@@ -285,7 +285,7 @@ check("G6 the board's basis words come from the ONE labeller, served per envelop
 
 head("H. negative controls for the re-expressed F3/F8 locks (2026-10-12)")
 
-# Both were COUNT PINS ("exactly two mentions") until §77 added a legitimate third caller. A count
+# Both were COUNT PINS ("exactly two mentions") until §CLOSING-01 added a legitimate third caller. A count
 # pin fails on honest growth and passes the actual defect, so each was re-expressed to forbid the
 # defect directly — which is only an improvement if it still fires. Proved here on literals.
 _v3 = 'NOT_COMPARABLE = "not_comparable"\n    out["status"] = "not_comparable"\n'

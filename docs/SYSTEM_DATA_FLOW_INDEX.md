@@ -99,7 +99,7 @@ Primary code homes:
 | 74 | **A count of the whole envelope is not comparable with a netted expectation** | "The envelope says $671 and the count says $671, so why does the screen expect $552.50 and call it a declaration? Which of the short and over verdicts on the recon board are measuring two different cashes against each other?" |
 | 75 | **The frontend type check is a CHECK** | "A frontend TypeScript error was invisible to all 49 GitHub checks while the Vercel deploy was red on every head — what compiles the frontend in CI now, where is that gate, why can it not skip silently on tsconfig.json or package.json, and what stops someone reaching green with `strict: false`, `ignoreBuildErrors` or a blanket `@ts-ignore`?" |
 | 76 | **A category you declare is a category you can be paid on** | "I added a category to the daily closing — why can no incentive rule point at it? Where is it declared that a category carries dollars, or that each employee declares their own? Which employee generated the most revenue today, and how is a daily pool split when nobody's hours were recorded?" |
-| 77 | **An envelope count is scored against the envelope's expected figure** | "The Management Recon screen says the DM is $1,975 short and that is exactly the bill-payment cash — what is each count being measured against, who decided that, and which surface that names a DM is doing its own arithmetic instead of asking?" |
+| CLOSING-01 | **An envelope count is scored against the envelope's expected figure** | "The Management Recon screen says the DM is $1,975 short and that is exactly the bill-payment cash — what is each count being measured against, who decided that, and which surface that names a DM is doing its own arithmetic instead of asking?" |
 | CORE-01 | **A section id carries its module** | "What number does my new index section get, who else could be taking it right now, and what happens if two of us take the same one? Which module does a section belong to, which module does nothing document yet, and why are the 111 existing numbers not renumbered?" |
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
 
@@ -24519,7 +24519,7 @@ subject and are the rows most worth a second pair of eyes. The three cross-refer
 gap list, the TOC and the harness audit are `core` because they are index infrastructure, not a
 module's documentation.
 
-## 77. AN ENVELOPE COUNT IS SCORED AGAINST THE ENVELOPE'S EXPECTED FIGURE (owner report 2026-10-12)
+## §CLOSING-01. AN ENVELOPE COUNT IS SCORED AGAINST THE ENVELOPE'S EXPECTED FIGURE (owner report 2026-10-12)
 
 Owner, verbatim: *"Build the label fix"* — after asking on 2026-10-10 where the $552 on the
 Management Recon screen came from (§74).
@@ -24530,7 +24530,7 @@ now computes no variance of its own)
 **Lock:** `backend/harness_management_recon_expected.py` — 41 checks, run by `carrier-vocab-guard.yml`
 **Migration:** none. Every fact this needs is already stored.
 
-### 77.1 Why §74 did not reach this screen
+### CLOSING-01.1 Why §74 did not reach this screen
 
 §74 gated `pickup_actual.row_variance`, which the pickup list and the deposit-accountability board
 read. The Management Recon screen — the screen the owner was actually looking at — reads neither. It
@@ -24546,7 +24546,7 @@ caller wanting a store-day figure must aggregate the ROWS' gated verdicts. That 
 `row_variance` alone could not reach here, and why the aggregation itself had to become a one home
 rather than arithmetic in a router.
 
-### 77.2 Measured on live data (house org, 470 counted store-days, 2026-10-12)
+### CLOSING-01.2 Measured on live data (house org, 470 counted store-days, 2026-10-12)
 
 | | short | over | match | refused |
 |---|---|---|---|---|
@@ -24557,7 +24557,7 @@ rather than arithmetic in a router.
 $90,280.01** of variance that was an artifact of netting and nothing else. B-3PL / 2026-10-02 read
 $1,975.00 short where the envelope's own figures give $118.50 over, and §74's gate refuses even that.
 
-### 77.3 What it reads now
+### CLOSING-01.3 What it reads now
 
 | figure | expected against | decided by |
 |---|---|---|
@@ -24569,7 +24569,7 @@ Management's variance is no longer re-derived at all: `envelope_count` already s
 A count written before that score existed reads **None**, never 0.00 — "it tied out" is not something
 to assert about a count nobody scored (`mgmt_unscored_days`).
 
-### 77.4 A mixed store-day fails closed
+### CLOSING-01.4 A mixed store-day fails closed
 
 If any one of a store-day's counted envelopes is refused by the basis gate, the **day** is refused:
 `variance=None`, `status='not_comparable'`, and the reason is that envelope's own. Summing the
@@ -24578,7 +24578,7 @@ any envelope's — the exact shape of defect this mechanism exists to stop. Both
 returned so the screen can show what was in play, and `dm_not_comparable_days` counts the refusals
 rather than letting them vanish from both buckets.
 
-### 77.5 The label the owner read
+### CLOSING-01.5 The label the owner read
 
 The column read **"DM verified cash"**, tooltipped *"the declared envelope figure"* — which is why
 $552.50 looked like a number somebody had typed. Nobody types it. It now reads **"Expected in
@@ -24586,7 +24586,7 @@ envelope"**, and says it is the declared drawer less bill-payment cash where the
 A refused row carries a neutral *not comparable* marker and the reason, and the export writes the
 status word rather than a blank that reads as nil.
 
-### 77.6 Seams
+### CLOSING-01.6 Seams
 
 - **No money moves.** The pickup variance is display plus a flag; chargebacks key off
   `envelope_count.counted_amount` (§29), untouched.
@@ -24708,7 +24708,7 @@ status word rather than a blank that reads as nil.
 | 72 | closing |
 | 73 | closing |
 | 74 | closing |
-| 77 | closing |
+| CLOSING-01 | closing |
 | 15.1 | notify |
 | 15.2 | notify |
 | 15.3 | notify |

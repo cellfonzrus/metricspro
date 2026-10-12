@@ -242,12 +242,12 @@ def day_accountability(pickup_rows):
             # THE COMPARABLE ROWS' SUBTOTAL, and it says so. It is NOT the day's verdict: this board
             # shows the row counts beside it, so a reader can see "3 short, 1 not comparable" and
             # read the figure for what it is. A surface showing ONE number per store-day must use
-            # `pickup_day_*` below instead — see §77.4.
+            # `pickup_day_*` below instead — see §CLOSING-01.4.
             "pickup_variance_total": round(pickup_variance_total, 2),
             # The day's count of envelopes whose variance cannot be measured — reported beside the
             # total so a clean-looking total is never mistaken for a day with nothing outstanding.
             "pickup_not_comparable_rows": pickup_not_comparable_rows,
-            # THE DAY'S VERDICT, from the ONE home for it (§77). Fails closed: a day with any
+            # THE DAY'S VERDICT, from the ONE home for it (§CLOSING-01). Fails closed: a day with any
             # refused envelope has NO verdict rather than the comparable rows' subtotal wearing the
             # whole day's clothes. Dereferenced rather than re-derived, so this board and the
             # management recon screen can never disagree about one store-day.

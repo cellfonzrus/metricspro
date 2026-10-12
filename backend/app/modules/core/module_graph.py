@@ -386,7 +386,7 @@ FACTS: dict[str, dict] = {
     'cash_count_day_verdict': {
         "question": 'What did this store-day\'s counted envelopes come to, short or over?',
         "homes": ('app/modules/closing/pickup_actual.py',),
-        "index": ('77.1', '77.4'),
+        "index": ('CLOSING-01.1', 'CLOSING-01.4'),
         "locks": ('harness_management_recon_expected.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but CHECK THE
         # DIFF: the rewriter strips hand-written comments out of these `callers` dicts (it dropped
@@ -394,11 +394,11 @@ FACTS: dict[str, dict] = {
         "callers": {
             # The accountability board shows a day's row counts BESIDE its comparable subtotal, and
             # takes the day's VERDICT from this home rather than re-deriving one — so the board and
-            # the management recon screen cannot disagree about a store-day. §77.4.
+            # the management recon screen cannot disagree about a store-day. §CLOSING-01.4.
             'app/modules/closing/deposit_accountability.py': ('_day_variance', '_envelope_opened',
                                                               '_row_variance'),
             # `GET /cash-recon-management`. It used to subtract the whole declared drawer here; it
-            # now computes no variance at all. §77.1.
+            # now computes no variance at all. §CLOSING-01.1.
             'app/modules/closing/router.py': ('_pickup_actual',),
             # NOT a sibling derivation, named so the edge is not an unexplained one: the import graph
             # connects this through `pickup_actual`, but `pickup_totals_by_store_day` answers HOW
