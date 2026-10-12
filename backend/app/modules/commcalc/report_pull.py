@@ -162,7 +162,14 @@ def apply_column_map(rows, spec, org_id, source_id=None, carrier_id=None):
     nothing is lost before the mapping is pinned. Skips all-empty rows."""
     column_map = spec.get("column_map") or {}
     ps = spec.get("param_spec") or {}
-    has_period = ps.get("has_period", True)
+    # WHETHER A ROW IS FILED UNDER A MONTH is a fact about the LANDING TABLE, and it has ONE home
+    # (data_lineage_registry.month_columns). The spec used to carry its own `has_period` copy of it —
+    # correct today for the one report whose table stores no month, and the same second copy that, on
+    # the manual-upload path, refused every handset-fulfilment upload from 2026-10-06 (PGRST204).
+    from app.modules.commcalc import data_lineage_registry as _lin
+    _target = str(spec.get("target_table") or "").split(".")[-1]
+    has_period = (_lin.stores_row_month(_target) if _target
+                  else ps.get("has_period", True))
     date_col = ps.get("date_col")
     period_from = ps.get("period_from") or date_col
     generic = bool(ps.get("generic"))

@@ -43,6 +43,29 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
+    'store_takeover_evaluation': {
+        "question": 'What would a store we are considering taking over be worth, from its own MA '
+                    'commission / daily-TX / handset-order uploads against OUR average store '
+                    'expenses with ITS actual rent — and which of its subscriber accounts carry '
+                    'more lines than one month should?',
+        "homes": ('app/modules/commcalc/prospect_eval.py',),
+        "index": ('COMMCALC-03',),
+        "locks": ('harness_prospect_eval.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        #
+        # NOTE WHAT IS NOT HERE. This home re-derives no booking rule: the evaluation books through
+        # `account/ma_store_pnl` (`ma_commission_bookings` / `ma_tx_bookings` / `rebate_route`),
+        # `account/device_cogs` (`ma_unit_price_from_rows` / `ma_sold_cost_from_rows`),
+        # `account/coa` (`PL_SPEC` / `PL_SECTION` / `route_expense_line`), `account/engine._assemble`,
+        # `account/analysis.pl_totals`, `commcalc/expenses_effective` and `commcalc/column_mapping` —
+        # injected by `router._prospect_homes()` so the prospect P&L and the company P&L cannot
+        # disagree. §D of the lock fails the build if this module grows a rule of its own.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_pev',),
+        },
+    },
     'peer_traffic_band': {
         "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), and how far is '
                     'each one behind the best and the median of its own band?',
@@ -176,6 +199,10 @@ FACTS: dict[str, dict] = {
             # The finance-config screen: it READS the resolved basis and writes the declaration,
             # and has no opinion of its own.
             'app/modules/account/router.py': ('_dc', '_dccfg', '_dcscfg'),
+            # §COMMCALC-03 — the takeover evaluation prices a PROSPECT's handsets through this home's
+            # factored-out pure cores (`ma_unit_price_from_rows` / `ma_sold_cost_from_rows`), so a
+            # prospect's device COGS is the same arithmetic as the company's.
+            'app/modules/commcalc/router.py': ('_dcg',),
             # The BALANCE SHEET and the statement engine import this module for the mig-1041 basis
             # (§42.5), not for the placement — but the import graph connects them, so they are named
             # here rather than left to look like an unexplained edge.
@@ -581,6 +608,9 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/epay_sweep.py': ('_lin',),
             'app/modules/commcalc/inventory_sold_recon.py': ('_dlr',),
             'app/modules/commcalc/ma_recon.py': ('SALES_DISPLAY_SOURCES',),
+            # The portal pull asks the registry whether its TARGET TABLE stores a row's month
+            # (§COMMCALC-04), instead of carrying its own `has_period` flag per report spec.
+            'app/modules/commcalc/report_pull.py': ('_lin',),
             'app/modules/commcalc/router.py': ('_dlr', '_lineage'),
             'app/modules/pos/inventory_integrity_router.py': ('_dlr',),
         },
@@ -598,7 +628,9 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_engine.py': ('_msp',),
             'app/modules/commcalc/commission_received.py': ('ma_commission_components',),
             'app/modules/commcalc/comp_trend.py': ('_msp', '_rs'),
-            'app/modules/commcalc/router.py': ('_MA_LEG_COMPONENTS', '_msp', '_msp_gp', '_msp_ma', '_rs_gp', 'load_store_index'),
+            # §COMMCALC-03 added `_rsub` — `default_ma_pnl_config()` for the takeover evaluation,
+            # so a prospect's MA TX rows book under the SAME resolved config the live P&L books under.
+            'app/modules/commcalc/router.py': ('_MA_LEG_COMPONENTS', '_msp', '_msp_gp', '_msp_ma', '_rs_gp', '_rsub', 'load_store_index'),
             'app/modules/commcalc/whatif.py': ('residual_subs',),
             'app/modules/marketing/router.py': ('_MA_COMPONENTS',),
             'app/modules/payables/engine.py': ('_msp',),
@@ -805,6 +837,9 @@ FACTS: dict[str, dict] = {
             # so merging that code before the migration is applied writes what it wrote before.
             'app/modules/commcalc/installment_engine.py': ('_col',),
             'app/modules/commcalc/router.py': ('_ct',),
+            # §COMMCALC-03 — the prospect config is read any-subset, so this module behaves
+            # identically before and after mig 1077 is applied.
+            'app/modules/commcalc/prospect_eval.py': ('_ct',),
             'app/modules/commcalc/setup_documents.py': ('read_row',),
             'app/modules/commcalc/whatif.py': ('_ct',),
             'app/modules/pos/customer_master.py': ('_ct',),
@@ -880,7 +915,9 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/discrepancy_appeals.py': ('_pd',),
             'app/modules/commcalc/ledger_batch.py': ('_pd',),
             'app/modules/commcalc/ma_recon.py': ('_pd',),
-            'app/modules/commcalc/router.py': ('_pd',),
+            # §COMMCALC-03 added `_ap` — a prospect's uploaded rows may be stamped in either
+            # spelling, so the read asks this home for both rather than matching one.
+            'app/modules/commcalc/router.py': ('_ap', '_pd'),
         },
     },
     'statement_crosscheck_verdict': {
@@ -1004,7 +1041,10 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/account/coa.py': ('effective_expense_rows',),
             'app/modules/commcalc/labour_coverage.py': ('period_sort_key',),
-            'app/modules/commcalc/router.py': ('_expfx',),
+            'app/modules/commcalc/router.py': ('_expfx', 'effective_series'),
+            # §COMMCALC-03 — the takeover evaluation dereferences this home; it never queries
+            # the table or re-derives the rule.
+            'app/modules/commcalc/prospect_eval.py': ('period_sort_key',),
         },
     },
     'gated_detector_verdict': {

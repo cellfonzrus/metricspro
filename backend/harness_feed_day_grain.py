@@ -316,5 +316,139 @@ ok("H5 day_stamp returns the same row objects it was given (no copying surprise)
    (lambda rs: FP.day_stamp(rs, "payment_date") is not None
     and rs[0] is rs[0])([{"payment_date": "2026-01-01"}]))
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# §M  WHERE A ROW'S MONTH IS STORED — the stamp may not write a column the table does not have
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE DEFECT, measured live 2026-10-12. Every upload of the marketplace handset fulfilment report has
+# been REFUSED since 2026-10-06 — six attempts on one tenant, each one logged in commcalc.upload_trace
+# as `500: Insert failed: … Could not find the 'period' column of 'raw_ma_fulfillment' in the schema
+# cache (PGRST204)`, each one saving 0 rows. The customer saw none of that: the API boundary rewrites a
+# schema-cache error into "This feature isn't switched on for your company yet", so a working feature
+# read as an unlicensed one. The last successful upload was 2026-10-02, the day before §19.46 shipped.
+#
+# THE CAUSE is §19.46's own fix, generalised one table too far: `day_stamp` writes `period` /
+# `period_month` / `period_year` onto every DAY-KEYED feed's rows, and `raw_ma_fulfillment` is day
+# keyed (mig 083) while carrying NO month columns at all.
+#
+# THE CLASS: **"a feed row's month can always be written to period columns"** — a schema fact that had
+# no home. The upload handler decided it from a hand-written file-type list (`file_type not in
+# ['catalog', 'master_cats']`), §19.18's shape again. It is now `data_lineage_registry.month_columns`,
+# dereferenced by the stamp and by the handler, and re-measured below against the migrations.
+print("\n§M where a row's month is stored")
+
+_MIGRATIONS = os.path.join(_HERE, "..", "database", "migrations")
+
+
+def _declared_columns(table):
+    """(created, columns) — the column names migrations give `<table>`, and whether a CREATE TABLE for
+    it was found at all. A table with only ALTERs is legacy (created before this directory), so the
+    column set is a floor, not the whole truth, and only a POSITIVE `period` is measurable there."""
+    import re
+    bare = table.split(".")[-1]
+    create = re.compile(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[a-z_]+\.)?" + bare
+                        + r"\s*\(", re.I)
+    addcol = re.compile(r"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:[a-z_]+\.)?" + bare
+                        + r"\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_]+)", re.I)
+    cols, created = set(), False
+    for name in sorted(os.listdir(_MIGRATIONS)):
+        if not name.endswith(".sql"):
+            continue
+        sql = open(os.path.join(_MIGRATIONS, name), encoding="utf-8", errors="ignore").read()
+        for m in create.finditer(sql):
+            created = True
+            depth, i = 1, m.end()
+            while i < len(sql) and depth:
+                depth += (sql[i] == "(") - (sql[i] == ")")
+                i += 1
+            for line in sql[m.end():i - 1].split("\n"):
+                for part in line.split(","):
+                    tok = part.strip().split(" ")[0].strip()
+                    if tok and tok.isidentifier():
+                        cols.add(tok.lower())
+        for m in addcol.finditer(sql):
+            cols.add(m.group(1).lower())
+    return created, cols
+
+
+# M1 — the registry's declaration matches what the migrations actually create, table by table. This is
+# the lock that would have failed the build the day raw_ma_fulfillment became day-keyed.
+_checked = 0
+for _t in sorted(set(LIN.DATA_DATE_COLUMN_BY_TABLE) | set(LIN.NO_MONTH_COLUMN_REASONS)):
+    _created, _cols = _declared_columns(_t)
+    _has = "period" in _cols
+    if not (_created or _has):
+        continue                      # legacy table, created before the migrations directory
+    _checked += 1
+    ok(f"M1 {_t}: registry says it {'stores' if LIN.stores_row_month(_t) else 'stores NO'} month "
+       f"columns, and the migrations {'create' if _has else 'do not create'} `period`",
+       LIN.stores_row_month(_t) == _has)
+ok("M1z the re-measurement actually ran over the migrations (more than a handful of tables)",
+   _checked >= 8)
+
+# M2 — the regression itself: the feed that was refused.
+ok("M2 raw_ma_fulfillment is day keyed", LIN.is_day_keyed("raw_ma_fulfillment"))
+ok("M2a ... and is declared to store NO month columns", LIN.month_columns("raw_ma_fulfillment") == ())
+ok("M2b ... with a reason stated", bool(LIN.no_month_column_reason("raw_ma_fulfillment")))
+_ful = [{"date_ordered": "2026-10-08", "order_number": "351650621", "price": 529.0},
+        {"date_ordered": "2026-09-29", "order_number": "351650622", "price": 149.0}]
+_res = FP.day_stamp(_ful, "date_ordered", month_columns=LIN.month_columns("raw_ma_fulfillment"))
+ok("M3 the stamp still PROVES every row's day (so the per-day replace may delete)", _res.stamped)
+ok("M3a ... and writes no column the table does not have — the PGRST204 insert cannot recur",
+   all(not (set(r) & set(FP.MONTH_COLUMNS)) for r in _ful))
+eq("M3b ... while still reporting the months the file covers",
+   _res.get("months"), [("October 2026", 1), ("September 2026", 1)])
+
+# M4 — a table that DOES store the month is byte-identical to before this change.
+_pay = [{"payment_date": "2026-09-30"}, {"payment_date": "2026-10-01"}]
+_res2 = FP.day_stamp(_pay, "payment_date", month_columns=LIN.month_columns("raw_payment_detail"))
+ok("M4 a month-storing feed is stamped exactly as before", _res2.stamped
+   and _pay[0]["period"] == "September 2026" and _pay[0]["period_month"] == 9
+   and _pay[0]["period_year"] == 2026 and _pay[1]["period"] == "October 2026")
+eq("M4a ... and the default argument is the full triple (an un-updated caller is unchanged)",
+   FP.MONTH_COLUMNS, ("period", "period_month", "period_year"))
+_pay2 = [{"payment_date": "2026-09-30"}]
+FP.day_stamp(_pay2, "payment_date")
+ok("M4b ... proven by calling it the old way", _pay2[0].get("period") == "September 2026")
+
+# M5 — ALL OR NOTHING still wins over the column question: an unprovable day stamps nothing.
+_mixed = [{"date_ordered": "2026-10-08"}, {"date_ordered": ""}]
+_res3 = FP.day_stamp(_mixed, "date_ordered", month_columns=())
+ok("M5 one unreadable day still refuses the whole stamp", not _res3.stamped and _res3.get("unproven") == 1)
+
+# M6 — the un-wiring lock: the handler DEREFERENCES the registry and keeps no list of its own.
+ok("M6 the upload handler asks the registry whether the table stores a month",
+   "has_period = _lineage.stores_row_month(table)" in _upload)
+ok("M6a ... and passes the table's own columns to the stamp",
+   "month_columns=_lineage.month_columns(table)" in _upload)
+ok("M6b ... and no longer decides it from a file-type list",
+   _upload.count("file_type not in ['catalog', 'master_cats']") == 1)   # the pre-TABLE_MAP default only
+ok("M6c the whole-org snapshot replace reads the SNAPSHOT fact, never `not has_period` — a day-keyed "
+   "feed with no month columns must never have its history deleted by one file",
+   "elif _lineage.is_snapshot(table):" in _upload and "elif not has_period:" not in _upload)
+ok("M6d the columns are INJECTED into the stamp, so feed_period keeps no table list of its own",
+   "def day_stamp(rows, column, month_columns=MONTH_COLUMNS):" in _fp_code)
+
+# M7 — THE SIBLINGS. Two other paths write rows into these same landing tables, and both carried
+# their own answer to "is this row filed under a month": the portal sweep stamped a period into every
+# mapped row's base, and the report-pull spec carried a `has_period` flag per report. Each now
+# dereferences the registry, so the feed that was refused cannot be refused by a different door.
+_sweep_code = _code_only(_src(SWEEP))
+ok("M7 the portal sweep's row base carries only the month columns its table stores",
+   "_month_base(spec" in _sweep_code and '"period": period, "period_month": pm, "period_year": py}' not in _sweep_code)
+ok("M7a ... and its day stamp is given the same columns",
+   _sweep_code.count("month_columns=_month_columns_of(spec)") == 2)
+ok("M7b ... read from the registry, not from a list of its own",
+   "_lin.month_columns(" in _sweep_code)
+_pull_code = _code_only(_src("app/modules/commcalc/report_pull.py"))
+ok("M7c the report-pull mapper asks the registry about its TARGET TABLE",
+   "_lin.stores_row_month(_target)" in _pull_code)
+ok("M7d ... and the one spec that said has_period False targets a table the registry agrees stores "
+   "no month, so the live behaviour is unchanged",
+   all(LIN.stores_row_month(str(_sp.get("target_table") or "").split(".")[-1])
+       == bool((_sp.get("param_spec") or {}).get("has_period", True))
+       for _sp in __import__("app.modules.commcalc.report_pull", fromlist=["x"]).DEFAULT_REPORT_SPECS
+       if _sp.get("target_table") in LIN.DATA_DATE_COLUMN_BY_TABLE
+       or _sp.get("target_table") in LIN.NO_MONTH_COLUMN_REASONS))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
