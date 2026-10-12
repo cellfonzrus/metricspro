@@ -104,6 +104,7 @@ Primary code homes:
 | COMMCALC-02 | **A category you declare is a category you can set a target for** | "I added drop-offs to the daily closing — where do I set a target for them? What do I need per day and per week to reach my month, and what would it take to hit a number I just made up? Why did the four sales categories exist in nine different lists?" |
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
 | CORE-03 | **A stored credential is encrypted at rest** | "A UPS Store portal login is about to be typed into this platform — where does the password go, and who can read it? Which other columns in this database are credentials, which of them were plaintext, and what stops the next sweep adding an eleventh one that nobody encrypts?" |
+| CORE-04 | **And the rows ALREADY stored** | "A column became encrypted on write — so what happened to the values written before that? Which encrypted column has a sweep that seals its old rows, which has none, and what stops the fifth encrypted column shipping half protected while every new write looks perfect?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -6651,6 +6652,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) — the daily-incentive rules. `rule_kind` is one of three SHAPES; every rule, category, rate, threshold and split is a ROW (RULE TWO). Assignments reuse the employee-plan scope vocabulary | `PUT /commcalc/incentive-rules` (refuses a rule naming an undeclared category); `DELETE` switches OFF, never destroys | `commcalc/daily_incentive.compute_day` via `GET /commcalc/daily-incentive/{date}`; scope by `management_incentive.resolve_plan` — §76.4 |
 | `commcalc.target_line` (mig `1074`) — a DECLARED category's target for a store-period at one grain. The four BUILT-IN categories keep their columns on `commcalc.targets` (mig `006`) and are read byte-for-byte as before; this is the other physical store and **no caller reads either directly** | `PUT /commcalc/targets/{period}/lines` (same `_require_target_edit` gate as the built-in save; refuses a built-in key, an undeclared key and a negative) | `commcalc/targets_engine.derive_monthly_by_cat` (THE fold) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/backward` / `/summary` / `/action-plan` / `/report-cards`; lock `harness_target_axis_lock.py` — §COMMCALC-02 |
 | *(no table added, and no migration)* — **ten tables ALREADY hold a credential**: `commcalc.vip_sweep_config` / `dlar_sweep_config` / `epay_sweep_config` / `b2b_sweep_config`.`portal_pass`, `ftp_sweep_config` / `email_sweep_config`.`password`, `data_source`.`password` + `totp_secret` + `session_state` + `pending_state` (the last two JSONB), `storeops.google_review_config.api_key`, `storeops.platform_billing_connector.credential`. Every one of them was PLAINTEXT. The columns do not change shape: `crypto`'s stored form is `enc:v1:<token>` and `decrypt` returns an unprefixed value unchanged, so legacy plaintext and new ciphertext coexist in one column indefinitely and **no migration and no backfill window exist** | the registry `core/portal_secret.seal_row` on every write — `commcalc/router._status_update` (THE status/session chokepoint), each sweep-config upsert, `save_data_source`, the google-reviews config PUT, the billing-connector insert/update, `supply/api_credential` | read back through `portal_secret.open_row` — the six `_*_cfg` readers, `_ds_rows` (THE `data_source` read), `storeops/google_reviews.get_config`, `account/router.sweep_credit_memos`, `billing/router._pc_rows`; `core/encryption_backfill.backfill_portal_secrets` seals what was already stored; lock `harness_portal_secret_lock.py` — §CORE-03 |
+| *(no table added, and no migration)* — §CORE-04, the other half: a column encrypted on WRITE still holds whatever was stored before. Measured 2026-10-12 — 84 of 88 sensitive intake values in `storeops.employee_onboarding_profile.intake_data` were sealed and **4 were plain text** (two employees' `dd_routing` / `dd_bank_name`), because sealing them existed only as a manual button and not in `run_all()`. `pos.receipt_imports`.`imei` / `notes` / `parsed` / `raw_ocr` had no sweep at all | `core/encryption_backfill.SWEEPS` — the one home for which encrypted family HAS a sweep; four families, `run_all()` derived from it, each sweep reading its writer's own column declaration | sealed by `backfill_intake_sensitive` (per-tenant, reading HR's `_public_intake_fields`) and `backfill_receipt_imports` (applying `receipt_import.seal_stored_row`); `core.vision_*` columns were BORN encrypted and claim `BORN_SEALED`, proved by AST, not trusted; lock `harness_encryption_backfill_coverage.py` (138) — §CORE-04 |
 | `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1037`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1037` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
 | *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
@@ -6905,6 +6907,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `GET /commcalc/targets/{period}/calendar?grain=week&week_starts=0` — the existing schedule-weighted calendar, plus a `windows` block giving the owner's per-day / per-week / per-month target. A window is a SUM OVER THE CALENDAR already in the response (`targets_engine.grain_windows`), at full precision, never a second calculation — so the weeks always add up to the month. Additive: omitting `grain` returns exactly what it always did (§COMMCALC-02.4).
 - `GET /commcalc/targets/{period}/backward?goal=&metric_key=&scope=&rep=` — **"what do I need to reach X?"**: `need`, `per_day`, `per_week`, per category or for one. The GOAL is a parameter, not the stored target, so an arbitrary level can be asked. Computed from the same `compute_scope` the calendar uses, so the two cannot disagree; with no open days left `per_day` is `null` rather than the need restated as a daily figure (§COMMCALC-02.5).
 - *(no endpoint added)* — §CORE-03 changes nothing a caller can see: the credential columns were ALREADY stripped from every API read (`router._SOURCE_SECRETS`, each `_*_public_cfg`, `google_reviews.public_config`, `billing._pc_out`) and that stays the first line of defence. What changed is what a DATABASE dump holds. `portal_secret.protection_state()` is the one thing a screen may newly ask: `'protected'` once a key is configured, `'unprotected'` without one — so a page taking a portal password can SAY which, rather than let an operator assume (§CORE-03.5).
+- `POST /hr/onboarding/encrypt-existing` (§CORE-04) — unchanged to its caller, but it no longer holds the loop: it calls `encryption_backfill.backfill_intake_sensitive`, which `run_all()` also runs, so the `ENCRYPTION_BACKFILL_ON_BOOT=1` route now covers this family too. Before that it was the ONLY path, which is how two bank routing numbers stayed readable: nothing was wrong with the code, nobody had pressed the button.
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -7230,6 +7233,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **What does a day's declared categories PAY each employee?** — three shapes only (`per_unit`, `percent_of_amount`, `threshold_pool`); every rule, category, rate, threshold and split is a CONFIG ROW, so no tenant vocabulary reaches the code (asserted over the stripped executable text). A gate that cannot be VERIFIED fails CLOSED, an unresolved input is zero production, and **a pool whose split cannot be measured is returned `unallocated` with a reason rather than split evenly** | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) × the declared store-day above × `storeops.shifts` (actual hours where recorded, else scheduled) | ONE home `commcalc/daily_incentive.py` (`compute_day` / `measure` / `split_pool` — pure) → `GET /commcalc/daily-incentive/{date}`; scope precedence REUSES `management_incentive.resolve_plan`, never a second ladder; screen `/commcalc/incentive-rules`; proof `harness_daily_incentive.py` (83, the owner's six live rules replayed as config) — §76.4. **Computes only — persisting and paying is not this endpoint's** |
 | **What is this store supposed to do — per day, per week, per month — and what do I still need to reach it?** — the axis is ASKED of the tenant (the four built-in sales categories plus every category declared on Count Fields), so a target exists for the thing the business actually sells. A week or day figure is a WINDOW over the one monthly spread, summed at full precision, never a second calculation — so the weeks always add up to the month | `commcalc.targets` (mig `006`, the built-ins' own columns, read byte-for-byte as before) × `commcalc.target_line` (mig `1074`, the declared half) × `storeops.shifts` (the scheduled hours the month is spread over) × the declared store-day above (the ACHIEVED figure for a declared category) | ONE home `commcalc/targets_engine.py` (`target_axis` / `derive_monthly_by_cat` — THE fold over both physical stores — `compute_scope`, `grain_windows`, `merge_declared_actuals`) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/summary` / `/action-plan` / `/report-cards`; locks `harness_target_axis_lock.py` (80) + proof `harness_target_declared_axis.py` (42) — §COMMCALC-02 |
 | **Is this stored credential readable by anyone who gets the database?** — not a KPI but the same shape of question, and it had ten different answers. ONE: `core/portal_secret.TABLES` names every column that holds a credential, which primitive opens it (text, or the JSONB `{"enc": …}` envelope), which schema the table is in and which columns address one of its rows. A credential-LOOKING column that is deliberately not encrypted carries its reason in `NOT_A_SECRET` — because an excuse nobody wrote down cannot be told apart from an oversight | the ten tables in §16 above × `app/core/crypto.py` (Fernet, `enc:v1:`) × `database/migrations/**` (what §D of the lock scans) | ONE home `core/portal_secret.py` (`seal_row` / `open_row` / `open_rows` / `secret_columns` / `json_columns` / `table_schema` / `table_key` / `protection_state` / `describe`) → every reader and writer in §16; `core/encryption_backfill.backfill_portal_secrets` (iterating the registry, owning no table list of its own); lock `harness_portal_secret_lock.py` (158) — §CORE-03 |
+| **And what about the rows written BEFORE that column was encrypted?** — a different question from the one above, and it had four separate answers, two of them "nothing". ONE: `core/encryption_backfill.SWEEPS` names every encrypted-at-rest family and the sweep that seals its old rows; `run_all()` is DERIVED from it, so a sweep cannot be forgotten by not being called. A column that was born encrypted owes no sweep and says so in `BORN_SEALED`, with the claim proved by refusing any write to it that skips `encrypt()` | `app/core/crypto.py` × each writer's own column declaration (`portal_secret.SECRET_COLUMNS`, `receipt_import.ENCRYPTED_IMPORT_COLUMNS`, HR's `_public_intake_fields`) | ONE home `core/encryption_backfill.py` (`SWEEPS` / `BORN_SEALED` / `NO_STORED_WRITE` / `run_all`) → the boot flag and the HR button; lock `harness_encryption_backfill_coverage.py` (138) — §CORE-04 |
 | **What would it take to reach a number I just named?** — `need`, `per_day`, `per_week` against an ARBITRARY goal, not only the stored target. With no open days left `per_day` is `null`: there is no such rate, and showing the need as a daily figure would state something false. Over-achievement needs zero, never a negative | the `compute_scope` result above (`monthly`, `achieved_mtd`) × the scope's remaining open days | `targets_engine.backward_from_goal` → `GET /commcalc/targets/{period}/backward`. Computed from the SAME scope the calendar renders, so the two cannot disagree — §COMMCALC-02.5 |
 | **What did management declare for this month, and what does it still owe this week?** The focus in a manager's own words, the pay type named as driving the month's spiffs, the temporary spiffs on the table with a status, and the weekly check-ins done; the OUTSTANDING list is COMPUTED from the row + today + live measurements, so an item cannot outlive its cause, and an unmeasured count raises nothing rather than reading as a zero | `commcalc.month_focus` (mig `1065`, the declaration) x `commcalc.targets` (mig `006`, SAVED rows only — a seeded carry-forward is not an assigned target) x `commcalc.payout_config.custom_spiffs` (§6, READ ONLY — the money) x §59's bands / `lagging()` x §60's pay-type options and per-store units | ONE home `commcalc/month_focus.py` (`outstanding` / `spiff_reconciliation` / `spiff_economics` / `plays` / `confirm_checkin` / `may_declare`) → `GET`/`PUT` `/commcalc/month-focus/{period}` + `/checkin`; TWO surfaces over the one due list (the login attention item and the platform banner), neither recomputing it; opens no client, reads no feed and sends on no channel (all AST-locked); module-graph fact `month_focus_declaration`; lock `harness_month_focus.py` — §63. Nothing is paid from the row: a declared spiff is an intent with a status, and the reconciliation reports declared-against-live in BOTH directions. A spiff states what it PAYS and what FUNDS it, and the margin is derived on read, `None` unless both sides are declared — so a spiff paying out more than it earns is a stated fact (`spiff_costs_more_than_it_earns`) rather than an arithmetic nobody did |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
@@ -24670,8 +24674,8 @@ registered section" and adds the module↔section direction it never had.
 
 115 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
 once), plus §15.1–§15.3, which are where the `notify` module is actually documented, plus the
-`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §CORE-03, §COMMCALC-01,
-§COMMCALC-02, §COMMCALC-03, §COMMCALC-04).
+`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §CORE-03, §CORE-04,
+§COMMCALC-01, §COMMCALC-02, §COMMCALC-03, §COMMCALC-04).
 
 Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
 110 sections cite a backend module path and are checked against it, 12 of those cite four or more
@@ -24880,6 +24884,7 @@ status word rather than a blank that reads as nil.
 | CORE-03 | core |
 | COMMCALC-03 | commcalc |
 | COMMCALC-04 | commcalc |
+| CORE-04 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -25708,6 +25713,115 @@ as open work rather than left implied.
 | is there already a registry of "which column is sensitive"? | NO. The closest was `router._SOURCE_SECRETS`, which answers a DIFFERENT question — *which columns to strip from an API read* — for ONE table | NEW home. `_SOURCE_SECRETS` is left alone: stripping and encrypting are two controls, and collapsing them would weaken the first |
 | is there already a per-table write chokepoint? | YES — `commcalc/router._status_update`, which already took the table name | REUSED. One edit there seals every sweep status write and every portal session patch |
 | is there already a per-table read chokepoint? | PARTLY — the six `_*_cfg` readers and `google_reviews.get_config` were already single readers; `data_source` had eight scattered `select("*")` sites | the six reused as-is; `_ds_rows` added as the one `data_source` read rather than opening the row at eight call sites |
+
+## §CORE-04. AND THE ROWS ALREADY STORED — every encrypted column has a sweep, and `run_all` is derived from the registry (measured 2026-10-12)
+
+§CORE-03 made every stored credential ciphertext **on write**. This section is the other half, and it
+exists because of something found while verifying that one: encrypting on write protects nothing that
+was written before.
+
+**Module:** `backend/app/core/encryption_backfill.py` (the one home: `SWEEPS`, `BORN_SEALED`,
+`NO_STORED_WRITE`, four sweeps, a derived `run_all`) ·
+`backend/app/modules/pos/receipt_import.py` (`seal_stored_row` + the column declarations) ·
+`backend/app/modules/hr/router.py` (the button now calls the sweep)
+**Lock:** `backend/harness_encryption_backfill_coverage.py` — 138 checks, DB-free, its own job in
+`carrier-vocab-guard.yml`
+**Migration:** none. No money moves.
+**Module-graph fact:** `encryption_backfill_coverage` (§50)
+
+### §CORE-04.1 The defect, as measured
+
+The owner said field encryption was already set up. It was — and the production check that confirmed
+it is what found this. Of 88 sensitive employee-intake values in
+`storeops.employee_onboarding_profile.intake_data`, **84 were encrypted and 4 were plain text**: the
+`dd_routing` and `dd_bank_name` of two employees, readable by anyone holding a database dump.
+
+Nothing in the code was wrong. Sealing those values existed only as
+`POST /hr/onboarding/encrypt-existing` — a manual, per-tenant button — and it was **not** in
+`encryption_backfill.run_all()`, the one function whose docstring said it ran *"every backfill
+sweep"*. So `ENCRYPTION_BACKFILL_ON_BOOT=1` could be set, the server could boot indefinitely, and
+those four values would never be touched. Everything written after the key was configured **is**
+correctly encrypted, which is exactly why this looks fine from the application and only shows up if
+you count.
+
+### §CORE-04.2 Name the class, not the instance
+
+The instance is HR intake. The class is that **"encrypted on write" and "sealed at rest" were two
+separate facts with nothing tying them together**, so every newly encrypted column started life half
+protected and no surface could tell. Remembered twice out of four:
+
+| encrypted on write | sweep before this | after |
+|---|---|---|
+| `pos.customers.password` (the carrier PIN) | YES `backfill_customer_pins` | unchanged |
+| the ten credential columns of §CORE-03 | YES `backfill_portal_secrets` | unchanged |
+| `storeops.employee_onboarding_profile.intake_data` | **NO** — a manual button only | `backfill_intake_sensitive`, and the button calls it |
+| `pos.receipt_imports`.`imei` / `notes` / `parsed` / `raw_ocr` | **NO — none at all** | `backfill_receipt_imports` |
+
+The fourth row is the sibling nobody had reported: found by looking for the class rather than fixing
+the instance.
+
+### §CORE-04.3 One fact, one home, dereferenced
+
+`SWEEPS` is the one home for *"which encrypted-at-rest column family has a sweep"*, and `run_all()`
+**iterates it** — it holds no list of calls that can fall behind the registry. A family that raises
+is reported under its own key and the rest still run: one tenant missing a migration must not leave
+another family's PII plaintext.
+
+No sweep spells a column name of its own. Each reads the declaration its WRITER already
+dereferences — `portal_secret.SECRET_COLUMNS` (§CORE-03), `receipt_import.ENCRYPTED_IMPORT_COLUMNS` /
+`..._JSON_COLUMNS` / `IMPORT_BLIND_INDEX_COLUMNS`, and HR's own `_public_intake_fields(org_id)`. So a
+column added to a writer, or a field a tenant newly declares sensitive, is covered with no second
+edit. **Which keys are sensitive is a per-tenant declaration** (`storeops.onboarding_intake_field`),
+read per org, so a field one tenant treats as sensitive is not sealed in a tenant that does not.
+
+`receipt_import.seal_stored_row` is separate from `_encrypt_import_row` for one reason that matters:
+a **blind index must be derived from the plaintext**. The new-row writer always has it; a stored row
+may already be sealed, and indexing that ciphertext writes a token matching nothing. The sealer
+recomputes the index only where the stored IMEI is still readable, and returns `{}` when a row needs
+nothing so the sweep issues no write at all.
+
+### §CORE-04.4 Born encrypted is a claim, and it is proved
+
+`app/modules/vision/router.py` encrypts stored values and owes **no** sweep: migrations 900 / 911
+create those columns as `*_enc` and every writer has always passed through `encrypt()`. Measured
+2026-10-12 — 3 of 3 `core.vision_credential` rows and 1 of 1 `core.vision_edge_agent` row carry the
+`enc:v1:` prefix, with no plaintext row in either.
+
+That claim lives in `BORN_SEALED` with its reason **in writing**, and the lock does not take it on
+trust: §C walks the module's AST and fails the build on any write to one of those columns that is not
+an `encrypt()` call (clearing one to `None` is a revoke, not a plaintext write). The day someone
+writes one in the clear, the exemption stops being true and the build says so.
+
+### §CORE-04.5 Lock — `backend/harness_encryption_backfill_coverage.py` (138 checks)
+
+| | |
+|---|---|
+| §A | `SWEEPS` is well-formed; every sweep it names exists, is callable, takes the sibling shape and no-ops without a key |
+| §B | `run_all` **derives** from `SWEEPS` and hard-calls no sweep |
+| §C | **coverage** — every module under `backend/app` that encrypts a value it STORES is named by a family, claims `BORN_SEALED` (proved, above) or is excused in `NO_STORED_WRITE` with a written reason |
+| §D | no sweep keeps its own copy of a column list |
+| §E | reachable without a shell (the boot flag), and the HR button holds no second loop |
+| §F | the stored-row sealer is idempotent, never indexes ciphertext, returns `{}` when nothing is due |
+| §G | nine negative controls, each proven to see a planted violation |
+| §H | **functional** — a REAL Fernet key over a fake database: the measured regression (a plaintext routing number sealed by `run_all`), idempotence on a second boot, and a raising family not taking the others down |
+
+§C is parsed, not grepped, for a reason worth keeping: `portal_secret.py` discusses `crypto.encrypt`
+four times in prose, and a grep-based scanner counted those as call sites. The same correction
+applies in §D, where a sweep's docstring legitimately names the columns it seals.
+
+Proved RED before shipping: removing the `intake_sensitive` family (the state that left two routing
+numbers plaintext) → 4 failures; putting `run_all` back to its literal list of two calls → 5
+failures.
+
+### §CORE-04.6 What was checked for duplication before building
+
+| asked | found | done |
+|---|---|---|
+| is there already a backfill module? | YES — `app/core/encryption_backfill.py` with `run_all()` and the boot flag | EXTENDED. The two new sweeps are functions in it, in the same shape; no sibling script, no second entry point |
+| is there already a sweep for HR intake? | YES, but only as an ENDPOINT (`POST /hr/onboarding/encrypt-existing`) holding its own loop | MOVED into the module and the endpoint now CALLS it — one implementation, so the button and the boot sweep cannot diverge |
+| is there already a registry of encrypted columns? | YES for credentials — `core/portal_secret.SECRET_COLUMNS` (§CORE-03) — and per-module declarations elsewhere | REUSED, all of them. `SWEEPS` answers a different question (*which family has a sweep*) and dereferences those declarations rather than restating them |
+| is there already a lock on encryption at rest? | YES — `harness_portal_secret_lock.py`, which asks whether a credential COLUMN is registered | its subject is the write path for one family; this lock's subject is whether a family has a sweep at all. Both kept, neither widened |
+
 ## §COMMCALC-03. EVALUATE A STORE WE DO NOT OWN YET — its own carrier feeds, our average expenses, its actual rent (owner directive 2026-10-12)
 
 Owner, verbatim: *"need to make a module for evaluating the store sales for the store we need to take
