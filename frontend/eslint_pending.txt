@@ -339,7 +339,7 @@
 11	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/reviews/config/page.tsx
 5	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/reviews/page.tsx
 25	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/salary-advances/page.tsx
-10	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/schedule/page.tsx
+9	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/schedule/page.tsx
 19	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/setup/employees/page.tsx
 11	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/setup/insurance/ExtractionReview.tsx
 36	@typescript-eslint/no-explicit-any	src/app/(platform)/storeops/setup/insurance/page.tsx

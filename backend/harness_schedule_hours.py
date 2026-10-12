@@ -42,6 +42,21 @@ def S(store, emp, d, start, end, **extra):
     return r
 
 
+def roster_for(rows):
+    """The roster these fixture rows belong to — the SAME `employee_id` convention `S()` writes
+    (`"Ann"` -> `"A"`), so the employee axis resolves by id exactly as live rows do. Passing a roster
+    is mandatory since §STOREOPS-01: the employee axis dereferences employee identity instead of
+    joining on the denormalized `employee_name` copy."""
+    seen, out = set(), []
+    for i, r in enumerate(rows or ()):
+        eid = str(r.get("employee_id") or "").strip()
+        if not eid or eid in seen:
+            continue
+        seen.add(eid)
+        out.append({"id": 1000 + i, "employee_id": eid, "name": r.get("employee_name")})
+    return out
+
+
 # ── A. shift_hours ─────────────────────────────────────────────────────────────────────────────
 section("A. shift_hours (overnight wrap, zero-length, bad input)")
 check("A1 normal 10:00-18:00 = 8h", sh.shift_hours("10:00", "18:00"), 8.0)
@@ -81,7 +96,7 @@ trend_rows = [
     S("S1", "Ann", "2026-08-18", "22:00", "06:00"),   # cur week, 8h overnight
     S("S2", "Bob", "2026-08-17", "09:00", "17:00"),   # cur week, 8h
 ]
-tr = sh.hours_trend(trend_rows, anchor="2026-08-19", weeks=4, months=3, week_start_dow=0)
+tr = sh.hours_trend(trend_rows, anchor="2026-08-19", employees=roster_for(trend_rows), weeks=4, months=3, week_start_dow=0)
 
 section("C. week-over-week buckets + deltas")
 wk = {b["key"]: b for b in tr["weeks"]}
@@ -119,7 +134,7 @@ drop_rows = [
     S("S3", "Cy", "2026-08-10", "08:00", "20:00"),   # prior week 12h
     S("S3", "Cy", "2026-08-17", "10:00", "14:00"),   # cur week 4h  (dropped 8)
 ]
-tr2 = sh.hours_trend(drop_rows, anchor="2026-08-19", weeks=3, months=3)
+tr2 = sh.hours_trend(drop_rows, anchor="2026-08-19", employees=roster_for(drop_rows), weeks=3, months=3)
 check("F5 decreaser absent from increasing", tr2["increasing"]["week"], [])
 
 # min_delta guard — a +0.25h wiggle is below the 0.5 floor, so it is not surfaced as "increasing".
@@ -127,7 +142,7 @@ wiggle = [
     S("S4", "Di", "2026-08-10", "10:00", "18:00"),        # 8h prior
     S("S4", "Di", "2026-08-17", "10:00", "18:15"),        # 8.25h cur (+0.25)
 ]
-tr3 = sh.hours_trend(wiggle, anchor="2026-08-19", weeks=3, months=3)
+tr3 = sh.hours_trend(wiggle, anchor="2026-08-19", employees=roster_for(wiggle), weeks=3, months=3)
 check("F6 sub-0.5h wiggle not flagged", tr3["increasing"]["week"], [])
 
 # ── week_start_dow (tenant work-week alignment, e.g. Luxelink Thursday=3) ────────────────────────
