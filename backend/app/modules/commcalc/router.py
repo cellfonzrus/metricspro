@@ -17,6 +17,7 @@ from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
+from app.modules.core import portal_secret as _psec   # 2026-10-12 — THE registry of which stored columns hold a credential (index §CORE-03; pure)
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
@@ -3254,7 +3255,7 @@ def vip_invoice_detail(vip_id: int, org_id: str = ORG_ID):
 def _vip_cfg(client, org_id):
     rows = client.schema('commcalc').table('vip_sweep_config').select('*') \
         .eq('org_id', org_id).limit(1).execute().data
-    return rows[0] if rows else None
+    return _psec.open_row('vip_sweep_config', rows[0]) if rows else None
 
 
 def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname, minute=0):
@@ -3349,6 +3350,11 @@ def _status_update(client, table, upd, filt):
     `filt` applies the row filter (org_id / id) so every caller keeps its RULE ONE scoping. A failure
     for any reason OTHER than an optional column is re-raised — a real DB error must still surface."""
     row = {k: v for k, v in upd.items() if (table, k) not in _MISSING_STATUS_COLS}
+    # Encrypt at rest whatever THIS table declares a credential (index §CORE-03). This is one of the
+    # two writers that matter: every portal-session patch (`_source_stamp` → session_state /
+    # pending_state) and every sweep status write lands here, so sealing once covers all of them
+    # rather than each caller remembering. A column the registry does not name is untouched.
+    row = _psec.seal_row(table, row)
     try:
         filt(client.schema('commcalc').table(table).update(row)).execute()
         return
@@ -3697,7 +3703,8 @@ async def vip_sweep_put_config(body: VipSweepPutConfigIn, org_id: str = ORG_ID,
     row['next_run_at'] = _vip_next_run(
         merged.get('frequency') or 'weekly', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
-    client.schema('commcalc').table('vip_sweep_config').upsert(row, on_conflict='org_id').execute()
+    client.schema('commcalc').table('vip_sweep_config').upsert(
+        _psec.seal_row('vip_sweep_config', row), on_conflict='org_id').execute()
     return _vip_public_cfg(_vip_cfg(client, org_id), org_id)
 
 
@@ -15274,7 +15281,7 @@ def vip_paygo_payment_detail(vip_payment_id: int, org_id: str = ORG_ID):
 def _dlar_cfg(client, org_id):
     rows = client.schema('commcalc').table('dlar_sweep_config').select('*') \
         .eq('org_id', org_id).limit(1).execute().data
-    return rows[0] if rows else None
+    return _psec.open_row('dlar_sweep_config', rows[0]) if rows else None
 
 
 _DLAR_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
@@ -15379,7 +15386,8 @@ async def dlar_sweep_put_config(body: DlarSweepPutConfigIn, org_id: str = ORG_ID
     row['next_run_at'] = _vip_next_run(
         merged.get('frequency') or 'daily', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
-    client.schema('commcalc').table('dlar_sweep_config').upsert(row, on_conflict='org_id').execute()
+    client.schema('commcalc').table('dlar_sweep_config').upsert(
+        _psec.seal_row('dlar_sweep_config', row), on_conflict='org_id').execute()
     return _dlar_public_cfg(_dlar_cfg(client, org_id), org_id)
 
 
@@ -15426,7 +15434,7 @@ _B2B_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
 def _b2b_cfg(client, org_id):
     rows = client.schema('commcalc').table('b2b_sweep_config').select('*') \
         .eq('org_id', org_id).limit(1).execute().data
-    return rows[0] if rows else None
+    return _psec.open_row('b2b_sweep_config', rows[0]) if rows else None
 
 
 def _b2b_public_cfg(cfg, org_id=None):
@@ -15532,7 +15540,8 @@ def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
     row['next_run_at'] = _vip_next_run(
         merged.get('frequency') or 'daily', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
-    client.schema('commcalc').table('b2b_sweep_config').upsert(row, on_conflict='org_id').execute()
+    client.schema('commcalc').table('b2b_sweep_config').upsert(
+        _psec.seal_row('b2b_sweep_config', row), on_conflict='org_id').execute()
     return _b2b_public_cfg(_b2b_cfg(client, org_id), org_id)
 
 
@@ -15596,7 +15605,7 @@ _EPAY_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
 def _epay_cfg(client, org_id):
     rows = client.schema('commcalc').table('epay_sweep_config').select('*') \
         .eq('org_id', org_id).limit(1).execute().data
-    return rows[0] if rows else None
+    return _psec.open_row('epay_sweep_config', rows[0]) if rows else None
 
 
 def _epay_public_cfg(cfg, org_id=None):
@@ -15739,14 +15748,16 @@ async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID
         merged.get('frequency') or 'daily', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
     try:
-        client.schema('commcalc').table('epay_sweep_config').upsert(row, on_conflict='org_id').execute()
+        client.schema('commcalc').table('epay_sweep_config').upsert(
+            _psec.seal_row('epay_sweep_config', row), on_conflict='org_id').execute()
     except Exception as e:
         # Pre-025 fallback: the sweep_* toggle columns may not exist yet. Drop them and retry so
         # the page keeps saving creds/schedule until migration 025 is run.
         if any(k in str(e) for k in ('sweep_mi', 'sweep_comp', 'sweep_payment')):
             for k in ('sweep_mi', 'sweep_comp', 'sweep_payment'):
                 row.pop(k, None)
-            client.schema('commcalc').table('epay_sweep_config').upsert(row, on_conflict='org_id').execute()
+            client.schema('commcalc').table('epay_sweep_config').upsert(
+            _psec.seal_row('epay_sweep_config', row), on_conflict='org_id').execute()
         else:
             raise
     return _epay_public_cfg(_epay_cfg(client, org_id), org_id)
@@ -37680,7 +37691,7 @@ from app.modules.commcalc import ftp_sweep as _ftp
 
 def _ftp_cfg(client, org_id):
     rows = client.schema('commcalc').table('ftp_sweep_config').select('*').eq('org_id', org_id).limit(1).execute().data or []
-    return rows[0] if rows else None
+    return _psec.open_row('ftp_sweep_config', rows[0]) if rows else None
 
 
 def _ftp_current_period():
@@ -37837,7 +37848,8 @@ def put_ftp_config(body: PutFtpConfigIn, org_id: str = ORG_ID, authorization: st
         row["password"] = body.password
     if body.enabled:
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
-    sb().schema("commcalc").table("ftp_sweep_config").upsert(row, on_conflict="org_id").execute()
+    sb().schema("commcalc").table("ftp_sweep_config").upsert(
+        _psec.seal_row("ftp_sweep_config", row), on_conflict="org_id").execute()
     return {"ok": True}
 
 
@@ -38005,7 +38017,7 @@ def _email_cfg(client, org_id, account='default'):
     except Exception:
         rows = (client.schema('commcalc').table('email_sweep_config').select('*')
                 .eq('org_id', org_id).limit(1).execute().data) or []
-    return rows[0] if rows else None
+    return _psec.open_row('email_sweep_config', rows[0]) if rows else None
 
 
 def _email_accounts(client, org_id):
@@ -38943,11 +38955,13 @@ def put_email_config(body: PutEmailConfigIn, org_id: str = ORG_ID, authorization
                             f"disable/delete it on the other tenant first; otherwise re-save to acknowledge."),
                 "conflicts": enabled_conflicts}
     try:
-        sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id,account").execute()
+        sb().schema("commcalc").table("email_sweep_config").upsert(
+            _psec.seal_row("email_sweep_config", row), on_conflict="org_id,account").execute()
     except Exception:
         # pre-075 fallback: no 'account' column yet → save the single mailbox on org_id
         row.pop("account", None); row.pop("label", None)
-        sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
+        sb().schema("commcalc").table("email_sweep_config").upsert(
+            _psec.seal_row("email_sweep_config", row), on_conflict="org_id").execute()
     resp = {"ok": True, "account": account}
     # Enabling a mailbox self-registers the GLOBAL email-sweep pg_cron job (mig 922) so no one runs SQL by
     # hand. Best-effort + non-fatal: the save already succeeded above; a skipped schedule never fails it.
@@ -39143,10 +39157,12 @@ def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "defaul
            "hour": existing.get("hour") if existing.get("hour") is not None else int(sched.get("hour") or 7),
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     try:
-        client.schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id,account").execute()
+        client.schema("commcalc").table("email_sweep_config").upsert(
+            _psec.seal_row("email_sweep_config", row), on_conflict="org_id,account").execute()
     except Exception:
         row.pop("account", None); row.pop("label", None)
-        client.schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
+        client.schema("commcalc").table("email_sweep_config").upsert(
+            _psec.seal_row("email_sweep_config", row), on_conflict="org_id").execute()
 
     # Seed the report registry so the Data Imports / Connectors page shows the same reports house has.
     # Best-effort + non-destructive: ensure a b2bsoft connector, then INSERT each report_def ON CONFLICT
@@ -39729,8 +39745,9 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = (client.schema('commcalc').table('email_sweep_config').select('*')
-           .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or []
+    due = _psec.open_rows('email_sweep_config',
+                          (client.schema('commcalc').table('email_sweep_config').select('*')
+                           .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or [])
     # Shuffle so a sweep that dies partway (worker kill, OOM, redeploy) rotates WHICH mailbox goes
     # first next tick, instead of the same scan-order victim being starved on every retry — the
     # second mailbox got zero sweeps across repeated partial runs on 2026-09-01 exactly this way.
@@ -39938,6 +39955,18 @@ def _pull_delivered(res):
             except Exception:
                 return True
     return True
+
+
+def _ds_rows(q):
+    """THE data_source read (index §CORE-03): run the built query and decrypt whatever the registry
+    says is a credential on that table — password, totp_secret, and the two browser-session blobs.
+
+    Every caller below holds a query it built itself (one row by id, the due list, the whole tenant's
+    list), so the one thing they must not each decide for themselves is WHICH columns to open. They
+    hand the query here instead. A row written before encryption shipped is legacy plaintext and
+    passes through untouched, so this is safe on mixed data from the first deploy.
+    """
+    return _psec.open_rows("data_source", q.execute().data or [])
 
 
 def _source_stamp(client, sid, org_id, patch, *, success=False):
@@ -40248,8 +40277,8 @@ def list_data_sources(org_id: str = ORG_ID):
     """All of the tenant's payment-processor logins (passwords stripped). ready:false pre-083."""
     require_org(org_id)
     try:
-        rows = (sb().schema("commcalc").table("data_source").select("*")
-                .eq("org_id", org_id).order("created_at").execute().data) or []
+        rows = _ds_rows(sb().schema("commcalc").table("data_source").select("*")
+                        .eq("org_id", org_id).order("created_at"))
     except Exception:
         return {"ready": False, "sources": [], "note": "Run migration 083_total_processor_sources.sql to enable."}
     prows = _crp().load_rows(sb(), org_id)     # one read for the whole list (mig 998)
@@ -40333,11 +40362,12 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
     client = sb()
     try:
         if body.id:
-            client.schema("commcalc").table("data_source").update(row)\
+            client.schema("commcalc").table("data_source").update(_psec.seal_row("data_source", row))\
                 .eq("id", body.id).eq("org_id", org_id).execute()
             return {"ok": True, "id": body.id}
         row["org_id"] = org_id
-        r = client.schema("commcalc").table("data_source").insert(row).execute()
+        r = client.schema("commcalc").table("data_source").insert(
+            _psec.seal_row("data_source", row)).execute()
         return {"ok": True, "id": (r.data or [{}])[0].get("id")}
     except Exception as e:
         raise HTTPException(400, f"Could not save — is migration 083 applied? {e}")
@@ -40420,8 +40450,8 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
     require_browser_service()   # SERVICE_ROLE=api → portal pull launches Chromium; run it on the sweeps worker
     require_org(org_id)
     client = sb()
-    rows = (client.schema("commcalc").table("data_source").select("*")
-            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    rows = _ds_rows(client.schema("commcalc").table("data_source").select("*")
+                    .eq("id", sid).eq("org_id", org_id).limit(1))
     if not rows:
         raise HTTPException(404, "unknown data source")
     src_row = rows[0]
@@ -41046,7 +41076,7 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
              .or_(f"next_run_at.is.null,next_run_at.lte.{now.isoformat()}"))
         if not cron:
             q = q.eq("org_id", org_id)
-        rows = q.execute().data or []
+        rows = _ds_rows(q)
     except Exception as e:
         return {"ok": False, "error": f"data_source not ready (mig 083/084/207?): {e}", "ran": []}
     if cron:
@@ -41255,8 +41285,8 @@ def _do_portal_login(sid: str, org_id: str):
     /data-sources until auth_status flips to needs_2fa / authenticated / error."""
     from app.modules.commcalc import vidapay_sweep as vp
     client = sb()
-    rows = (client.schema("commcalc").table("data_source").select("*")
-            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    rows = _ds_rows(client.schema("commcalc").table("data_source").select("*")
+                    .eq("id", sid).eq("org_id", org_id).limit(1))
     if not rows:
         return
     s = rows[0]
@@ -41349,8 +41379,8 @@ def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id:
     require_browser_service()   # SERVICE_ROLE=api → portal login launches Chromium; run it on the sweeps worker
     require_org(org_id)
     client = sb()
-    rows = (client.schema("commcalc").table("data_source").select("*")
-            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    rows = _ds_rows(client.schema("commcalc").table("data_source").select("*")
+                    .eq("id", sid).eq("org_id", org_id).limit(1))
     if not rows:
         raise HTTPException(404, "unknown data source")
     s = rows[0]
@@ -41391,8 +41421,8 @@ async def data_source_login_verify(sid: str, body: LoginCodeIn, org_id: str = OR
     if not code:
         raise HTTPException(400, "Enter the verification code.")
     client = sb()
-    rows = (client.schema("commcalc").table("data_source").select("*")
-            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    rows = _ds_rows(client.schema("commcalc").table("data_source").select("*")
+                    .eq("id", sid).eq("org_id", org_id).limit(1))
     if not rows:
         raise HTTPException(404, "unknown data source")
     s = rows[0]
@@ -41556,8 +41586,8 @@ def _live_pull_persist(client, org_id, sid):
 
 
 def _live_source_row(client, sid, org_id):
-    rows = (client.schema("commcalc").table("data_source").select("*")
-            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    rows = _ds_rows(client.schema("commcalc").table("data_source").select("*")
+                    .eq("id", sid).eq("org_id", org_id).limit(1))
     if not rows:
         raise HTTPException(404, "unknown data source")
     return rows[0]
@@ -41722,8 +41752,8 @@ def merchant_portal_health(org_id: str = ORG_ID):
     from app.modules.commcalc import portal_session_health as psh
     client = sb()
     try:
-        rows = (client.schema("commcalc").table("data_source").select("*")
-                .eq("org_id", org_id).execute().data) or []
+        rows = _ds_rows(client.schema("commcalc").table("data_source").select("*")
+                        .eq("org_id", org_id))
     except Exception as e:
         return {"ok": False, "error": f"Data-source settings could not be read: {e}", "items": []}
     prows = _crp().load_rows(client, org_id)   # mig 998 — so a closed route reads as route_disabled

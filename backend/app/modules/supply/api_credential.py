@@ -30,6 +30,8 @@ from __future__ import annotations
 import json
 import time
 
+from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
+
 GRANT = "client_credentials"
 # Mint early rather than at the edge: a token that expires mid-request is a failure a human has to
 # read about, and the exchange is cheap.
@@ -181,7 +183,8 @@ async def access_token(client, org_id, login_row, host, *, timeout=30, now=None)
     out["token"] = json.loads(patch["session_state"])["access_token"]
     out["minted"] = True
     try:
-        (client.schema("commcalc").table("data_source").update(patch)
+        (client.schema("commcalc").table("data_source")
+         .update(_psec.seal_row("data_source", patch))
          .eq("org_id", org_id).eq("id", (login_row or {}).get("id")).execute())
     except Exception as e:
         # A token we could not cache is still a token we can USE for this request. Say so rather

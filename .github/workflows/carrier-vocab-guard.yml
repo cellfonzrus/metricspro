@@ -486,6 +486,18 @@ on:
       # the frontend screens the axis lock scans are already named by the globs below.
       - "backend/harness_target_axis_lock.py"
       - "backend/harness_target_declared_axis.py"
+      # index §CORE-03 — WHICH STORED COLUMNS HOLD A CREDENTIAL. The lock names ITSELF and its home
+      # for the same §13e reason as the lines above, plus every module wired to the registry: a
+      # caller that stops dereferencing it is exactly what this job exists to catch, so a change to
+      # one of them must not be able to skip the job.
+      - "backend/harness_portal_secret_lock.py"
+      - "backend/app/modules/core/portal_secret.py"
+      - "backend/app/core/encryption_backfill.py"
+      - "backend/app/core/crypto.py"
+      - "backend/app/modules/storeops/google_reviews.py"
+      - "backend/app/modules/billing/router.py"
+      - "backend/app/modules/supply/api_credential.py"
+      - "database/migrations/**"
       # index §COMMCALC-03 — EVALUATE A STORE WE DO NOT OWN YET. The lock NAMES ITSELF for the same
       # §13e reason as the lines above, and names its home plus the three it dereferences, so a
       # change to any booking one-home the prospect P&L reads re-runs the proof that the two still
@@ -1642,6 +1654,24 @@ jobs:
       - name: Run the store-takeover evaluation proof (a prospect books through the company's own homes and writes none of them; the average survives a month that omits a line and a month with a wider roster; a line nothing can answer is never a measured zero - index COMMCALC-03)
         working-directory: backend
         run: python3 harness_prospect_eval.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+  # THE STORED-CREDENTIAL LOCK (index §CORE-03) reaches `app.core.crypto` → `app.core.config`, which
+  # imports pydantic_settings, and its §A does REAL Fernet round trips rather than asserting over a
+  # stub — so it needs `cryptography` too. Both are in backend/requirements.txt, so it runs in its own
+  # job with them installed, like the proofs above. The pipefail lock caught this on the first push:
+  # the step was in the no-deps `carrier-vocab-guard` job and would have died with ModuleNotFoundError
+  # before check one, reporting nothing while looking like it ran. DB-free either way.
+  stored-credential-lock:
+    name: Stored-credential lock (DB-free, the real encryption)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the stored-credential lock (a portal password, authenticator secret, session blob or vendor API key is ENCRYPTED AT REST; no caller decides for itself which columns are secret; a new credential column in the schema must be registered or excused in writing - index CORE-03)
+        working-directory: backend
+        run: python3 harness_portal_secret_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
   # THE INVENTORY-INTEGRITY PROOF (index §11b) drives the REAL engine, landing guard, status writer and /pos endpoints over
   # the in-memory client (harness_intake_fakes) with the anonymised 383-unit regression fixture — it imports the app, so it
   # runs in its own job with the backend's dependencies installed, like the customer-master proof. DB-free.

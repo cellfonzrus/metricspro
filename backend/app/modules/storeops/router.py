@@ -74,6 +74,7 @@ from app.modules.storeops import face_retention as _fret
 from app.modules.storeops import salary_owed as _owed
 from app.modules.storeops import target_attribution as _dmta
 from app.modules.storeops import attendance_exceptions as _attn
+from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
 
 try:
     from zoneinfo import ZoneInfo
@@ -10390,7 +10391,8 @@ def put_google_reviews_config(body: GoogleReviewsConfigIn, authorization: str = 
     if key:
         row["api_key"] = key
     try:
-        sb().table("google_review_config").upsert(row, on_conflict="org_id").execute()
+        sb().table("google_review_config").upsert(
+            _psec.seal_row("google_review_config", row), on_conflict="org_id").execute()
     except Exception as e:
         if _is_db_permission_error(e):
             raise HTTPException(500, _DB_GRANT_HINT)

@@ -43,6 +43,39 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    'stored_credential_column': {
+        "question": 'Which stored COLUMNS hold a credential — a portal password, an authenticator '
+                    'secret, a live browser session, a vendor API key — and therefore must be '
+                    'ENCRYPTED AT REST? Which primitive opens one (text vs the JSONB envelope), '
+                    'which schema the table is in and which columns address one of its rows are the '
+                    'same fact, read again by the backfill, and live here too (`json_columns`, '
+                    '`table_schema`, `table_key`). A credential-looking column that is deliberately '
+                    'NOT encrypted is part of the same fact and carries its reason in writing '
+                    '(`NOT_A_SECRET`), because an excuse nobody wrote down is indistinguishable '
+                    'from an oversight.',
+        "homes": ('app/modules/core/portal_secret.py',),
+        "index": ('CORE-03',),
+        "locks": ('harness_portal_secret_lock.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            # the six sweep config readers, the status/session write chokepoint, every config upsert,
+            # `_ds_rows` (THE data_source read) and `save_data_source`
+            'app/modules/commcalc/router.py': ('_psec',),
+            # the credit-memo sweep's own portal_pass read — the one credential read that was never
+            # in commcalc/router.py
+            'app/modules/account/router.py': ('_psec',),
+            # the Google Places API key: `get_config` is its ONE reader, the config PUT its writer
+            'app/modules/storeops/google_reviews.py': ('_psec',),
+            'app/modules/storeops/router.py': ('_psec',),
+            # the platform's own vendor API tokens (mig 090) — the sibling §D's migration scan found
+            'app/modules/billing/router.py': ('_psec',),
+            # a minted OAuth token, cached on the login row it came from
+            'app/modules/supply/api_credential.py': ('_psec',),
+            # seals what was already stored, iterating the registry so it owns no table list
+            'app/core/encryption_backfill.py': ('portal_secret',),
+        },
+    },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
     'store_takeover_evaluation': {
         "question": 'What would a store we are considering taking over be worth, from its own MA '
