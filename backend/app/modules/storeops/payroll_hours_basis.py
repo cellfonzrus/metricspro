@@ -242,13 +242,13 @@ DEFAULT_CONFIG = {
     "min_punch_coverage_pct": 85.0,
     # Whether the interlock refuses (True) or merely warns. Refusing is the house default.
     "interlock_refuses": True,
-    # ── THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1074) ────────────────────────────
+    # ── THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1076) ────────────────────────────
     #: Owner, verbatim: *"Payroll from clack in should be from Oct 4 th onwards which would be the
     #: new cycle"*. A business date STRICTLY BEFORE this one resolves exactly as
     #: `MODE_SCHEDULE_FALLBACK` would, whatever `hours_basis_mode` says — so a recompute of a closed
     #: month restates nothing. NULL = NO FLOOR, which is every tenant until a row says otherwise,
     #: so this field ships changing nobody. It is a DATE IN A CONFIG ROW, never a literal in code:
-    #: `database/migrations/1074_payroll_clocked_basis_effective_from.sql` carries the house org's
+    #: `database/migrations/1076_payroll_clocked_basis_effective_from.sql` carries the house org's
     #: 2026-10-04 and no other date appears anywhere in this package (RULE TWO).
     "clocked_basis_effective_from": None,
 }

@@ -578,7 +578,7 @@ ok("H6b the field is declared with a None default, so every org ships with NO fl
    re.search(r'"clocked_basis_effective_from":\s*None', _HOME_NOW) is not None)
 ok("H6c …and the migration that carries the house org's date exists",
    os.path.exists(os.path.join(_HERE, "..", "database", "migrations",
-                               "1074_payroll_clocked_basis_effective_from.sql")))
+                               "1076_payroll_clocked_basis_effective_from.sql")))
 # NOT VACUOUS: the date search must still catch a literal if somebody writes one.
 ok("H6d …and the date search is not vacuous", bool(_DATE_LIT.search('FLOOR = "2026-10-04"')))
 

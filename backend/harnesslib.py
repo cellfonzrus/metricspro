@@ -112,7 +112,7 @@ COA_STORE_IDENTITY_SANCTION = (
     "ambiguous_store_keys", "shared_store_identity_pairs",
 )
 
-#: SANCTIONED 2026-10-12 (index §14y.1, mig 1074, owner ruling *"Payroll from clack in should be
+#: SANCTIONED 2026-10-12 (index §14y.1, mig 1076, owner ruling *"Payroll from clack in should be
 #: from Oct 4 th onwards which would be the new cycle"*). THE P&L WAGE LINE NOW READS THE PUNCHES.
 #:
 #: Why these three functions changed, and why it is a FIX and not a drift. `wages_by_store` called

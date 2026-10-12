@@ -25,7 +25,7 @@ SECTIONS
   R. THE REGRESSION: payroll silently computed from the schedule.
   P. THE 2026-10-12 REGRESSION: a pay path reaching the one home with NO EVIDENCE, and the
      $374,733.02 -> $0.00 it produced over Jun–Oct 2026 on the live house config.
-  Q. THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1074): the clocked basis starts on a
+  Q. THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1076): the clocked basis starts on a
      declared date, every day before it keeps today's schedule answer, and coverage + the interlock
      count only days on or after it.
   O. THE OWNER RULING: the clock report as a PAY SOURCE, pinned to the measured day of 2026-10-09.
@@ -591,7 +591,7 @@ check("P8 build_evidence writes the key's own date into the cell",
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-section("Q. THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1074)")
+section("Q. THE EFFECTIVE-FROM FLOOR (owner ruling 2026-10-12, mig 1076)")
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 # OWNER, VERBATIM: *"Payroll from clack in should be from Oct 4 th onwards which would be the new
 # cycle"*. So the clocked-only basis applies FROM 2026-10-04, and every day BEFORE it keeps today's

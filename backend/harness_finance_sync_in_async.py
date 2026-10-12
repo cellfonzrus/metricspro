@@ -340,7 +340,7 @@ ALLOWED_REMOVED = {
 }
 MONEY_MODULE_DELTA = {
     # coa.py {wages_by_store, derive_wage_cells, derive_wage_cells_with_basis} (2026-10-12,
-    #   index §14y.1, mig 1074) — THE P&L WAGE LINE NOW READS THE PUNCHES. It was calling
+    #   index §14y.1, mig 1076) — THE P&L WAGE LINE NOW READS THE PUNCHES. It was calling
     #   `payroll_hours_basis.resolve_shift_row` with no evidence, so the one home could only see
     #   `shifts.actual_hours` — the dead column — and the house org's live `clocked_only` config
     #   booked $374,733.02 -> $0.00 over Jun–Oct 2026 while the punches sat in `storeops.timelog`.

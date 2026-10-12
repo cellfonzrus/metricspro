@@ -988,7 +988,7 @@ def _shift_actual_contribution(s, manual_days, punch_days, hours_cfg=None):
         # rule, now stated in one place rather than two.
         cell["_raw_punches"] = [{"clock_out": d, "hours": 0.0}]
     # `d` is this row's own business date — it decides which side of this org's
-    # `clocked_basis_effective_from` floor the day falls on (owner ruling 2026-10-12, mig 1074).
+    # `clocked_basis_effective_from` floor the day falls on (owner ruling 2026-10-12, mig 1076).
     hrs, _basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell, d)
     return hrs
 

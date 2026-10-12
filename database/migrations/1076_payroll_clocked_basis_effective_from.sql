@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════════════════════════════════
--- 1074 — THE CLOCKED-BASIS EFFECTIVE-FROM DATE (owner ruling 2026-10-12)
+-- 1076 — THE CLOCKED-BASIS EFFECTIVE-FROM DATE (owner ruling 2026-10-12)
 --
 -- OWNER, VERBATIM: "Payroll from clack in should be from Oct 4 th onwards which would be the new
 --                   cycle"

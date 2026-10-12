@@ -53,7 +53,7 @@ WHAT THIS MODULE IS NOT
 -----------------------
 It makes NO decision. Every verdict in its output comes from `payroll_hours_basis`; this module only
 does I/O and hands the rows over. It holds no tenant, store, employee or carrier name (RULE TWO) and
-no date literal — the effective-from floor is a config row (mig 1074), read by the one home.
+no date literal — the effective-from floor is a config row (mig 1076), read by the one home.
 
 ORG-SCOPED ALWAYS. Every query carries `.eq("org_id", org_id)`; CI enforces it. `client` must already
 be SCHEMA-SCOPED to `storeops` by the caller (`storeops.router.sb()` / `clock_variance_api.sb()` /
