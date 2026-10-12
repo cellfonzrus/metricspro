@@ -486,6 +486,11 @@ on:
       - "backend/harness_envelope_count_basis.py"
       - "backend/app/modules/closing/pickup_actual.py"
       - "backend/app/modules/closing/billpay_netting.py"
+      # index §CLOSING-01 — a store-day's verdict comes from the rows' gated verdicts, never from two sums.
+      # Named for the same §13e reason; pickup_actual.py above is its home and is already named.
+      - "backend/harness_management_recon_expected.py"
+      - "backend/app/modules/closing/deposit_accountability.py"
+      - "frontend/src/app/(platform)/closing/cash-recon-management/page.tsx"
       # index §14y/§14z — THE ONE HOME for paid hours and the clock-report variance / ask / gate
       # (mig 1073). The harness NAMES ITSELF for the same §13e reason as the line above: a lock behind
       # an allowlist that does not list its own file skips silently on the PR that edits it. Its
@@ -570,6 +575,9 @@ on:
       - "backend/app/modules/commcalc/kpi_failing.py"
       - "backend/harness_boost_terms.py"
       - "backend/harness_boost_terms_lock.py"
+      - "backend/harness_trade_in_basis.py"
+      - "backend/app/modules/commcalc/trade_in_basis.py"
+      - "database/migrations/1074_trade_in_basis_config.sql"
       - "backend/app/modules/commcalc/boost_terms.py"
       - "backend/app/modules/commcalc/payout_structure.py"
       - "backend/harness_kpi_vintage.py"
@@ -966,6 +974,9 @@ jobs:
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the store-day envelope-verdict lock (an envelope count is scored against the ENVELOPE'S expected figure, never the whole declared drawer; a store-day's verdict comes from the rows' gated verdicts and fails closed on a mixed day; the recon screen computes no variance of its own — index §CLOSING-01)
+        working-directory: backend
+        run: python3 harness_management_recon_expected.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the org-tree walk lock (ONE home for "which district/DM owns this store", dereferenced by every caller — the storeops resolvers hold no walk of their own; index §48.7)
         working-directory: backend
         run: python3 harness_org_chain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1008,6 +1019,9 @@ jobs:
       - name: Run the Boost payout terms lock (one home for what the Boost config pays; the pay engine AND the employee PDF dereference it; no second copy under backend/app; the handout carries no rate history — index §6p)
         working-directory: backend
         run: python3 harness_boost_terms_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the trade-in basis lock (WHICH RECORD pays the trade-in spiff is the org's declared fact with one home; the till is the house default; distinct transactions never lines; the case-folded declaration; a trade-in whose rep cannot be resolved is reported, never dropped — owner 2026-10-12, index §COMMCALC-01)
+        working-directory: backend
+        run: python3 harness_trade_in_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the Ready App denominator proof (ONE new-activation count = Exec MTD Total Activation less Upgrade less swap; the carrier reconciliation 8/13; the derived rate resolved at score time; house pay byte-identical until the basis column is set — owner 2026-09-27, index §19.31)
         working-directory: backend
         run: python3 harness_ready_app_denominator.py | tee -a "$GITHUB_STEP_SUMMARY"

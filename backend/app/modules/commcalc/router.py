@@ -14225,6 +14225,15 @@ def _accessory_config_uncached(client, org_id):
             acima = [t for t in (_ac.get("acima_tenders") or []) if t]
     except Exception:
         got = False
+    # TRADE-IN BASIS (mig 1074, owner ruling 2026-10-12; index §COMMCALC-01). Taken off the SAME
+    # whole-row read as everything above (§4b.1), so an un-run 1074 degrades these five to their code
+    # defaults and nothing else — exactly as every other column here behaves. `.get` on the row dict
+    # is why: a column the migration has not added is simply absent.
+    _ti_basis = (_ac.get("trade_in_basis") or None) if got else None
+    _ti_depts = [d for d in ((_ac.get("trade_in_departments") or []) if got else []) if d]
+    _ti_cats = [c for c in ((_ac.get("trade_in_categories") or []) if got else []) if c]
+    _ti_kws = [k for k in ((_ac.get("trade_in_keywords") or []) if got else []) if k]
+    _ti_ptypes = [t for t in ((_ac.get("trade_in_payment_types") or []) if got else []) if t]
     if not got:
         # Pre-mig-208 fallback: the legacy flag_rules singleton (serves only whichever org owns the single
         # row — the house). Preserves the exact pre-208 result so nothing regresses until 208 is applied.
@@ -14409,6 +14418,11 @@ def _accessory_config_uncached(client, org_id):
             "products": {k.strip().lower() for k in kws},
             "departments_list": depts, "categories_list": cats, "products_list": kws,
             "acima_tenders_list": acima,
+            "trade_in_basis": _ti_basis,
+            "trade_in_departments_list": _ti_depts,
+            "trade_in_categories_list": _ti_cats,
+            "trade_in_keywords_list": _ti_kws,
+            "trade_in_payment_types_list": _ti_ptypes,
             "box_departments": {b.strip() for b in box_depts},
             "box_departments_list": box_depts,
             "setup_fee_products": {k.strip().lower() for k in setup_kws},
@@ -16724,6 +16738,17 @@ def _calc_inputs(client, org_id, period):
            'accessory_categories': _acfg['categories_list'],
            'accessory_product_keywords': _acfg['products_list'],
            'acima_tenders': _acfg['acima_tenders_list'],
+           # TRADE-IN BASIS reaches the PAY path (owner ruling 2026-10-12, decision card "Point of
+           # sale"; index §COMMCALC-01). The engine used to carry the answer itself — it counted
+           # payment-detail rows whose type contained 'trade', so a month the carrier had not
+           # reimbursed yet paid $0 for trade-ins the stores really did (Aug 2026: 30 at the till,
+           # 0 on the statement, $0 paid). Which record answers the question is now the org's
+           # declared fact with one home: commcalc/trade_in_basis.py.
+           'trade_in_basis': _acfg['trade_in_basis'],
+           'trade_in_departments': _acfg['trade_in_departments_list'],
+           'trade_in_categories': _acfg['trade_in_categories_list'],
+           'trade_in_keywords': _acfg['trade_in_keywords_list'],
+           'trade_in_payment_types': _acfg['trade_in_payment_types_list'],
            # DEVICE SET-UP FEE keywords (mig 217) reach the PAY path for the first time (owner
            # 2026-08-01). calculator.py used to carry the literal 'Device Setup Charge' itself, so a
            # tenant editing this list moved every REPORT and none of their PAY. The code default IS
