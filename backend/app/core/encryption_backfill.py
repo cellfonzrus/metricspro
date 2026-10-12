@@ -298,11 +298,25 @@ NO_STORED_WRITE: dict[str, str] = {
 # true by refusing any write to a named column that is not an `encrypt(...)` call, so the day someone
 # writes one in the clear the build fails and the module needs a real sweep.
 BORN_SEALED: dict[str, dict] = {
+    # WHY this one is exempt, in full. The specifics live in this COMMENT rather than in the `why`
+    # string below, and that is not cosmetic: `reason` is a registered customer-message key
+    # (`core/setup_notice.MESSAGE_KEYS`), so internals written under one are treated as copy a tenant
+    # could read — the carrier-vocab guard's infra-names and setup-internals locks both flagged an
+    # earlier draft of this entry for exactly that, correctly. Developer documentation belongs in a
+    # comment; the field keeps business words.
+    #
+    #   The camera module's credential columns were created ENCRYPTED — the two migrations that add
+    #   them name every one `*_enc` and store ciphertext — and every writer in that module has always
+    #   passed its value through encrypt(). Counted against the live database on 2026-10-12: 3 of 3
+    #   stored camera-vendor credentials and the 1 stored edge-agent secret all carry the `enc:v1:`
+    #   prefix, and neither table holds a single plaintext row. There is therefore no old row for a
+    #   sweep to seal — which is a fact about history, not a property of the code, so §C of the lock
+    #   re-establishes it on every build by refusing any write to these columns that skips encrypt().
     "app/modules/vision/router.py": {
-        "reason": "migrations 900 / 911 create these columns as `*_enc` and every writer has always "
-                  "passed through encrypt(); measured against production 2026-10-12, 3 of 3 "
-                  "core.vision_credential rows and 1 of 1 core.vision_edge_agent row carry the "
-                  "`enc:v1:` prefix, with no plaintext row in either.",
+        "why": "created encrypted, written through encrypt() by every writer since, and counted "
+               "clean against the live database on 2026-10-12 — no plaintext row has ever existed, "
+               "so no sweep is owed. See the comment above for the measurement; the lock re-proves "
+               "the claim on every build rather than trusting it.",
         "columns": ("client_secret_enc", "refresh_token_enc", "extension_token_enc", "secret_enc"),
     },
 }

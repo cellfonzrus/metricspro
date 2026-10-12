@@ -251,8 +251,14 @@ def column_writes_not_encrypted(rel, columns):
 
 
 for rel, spec in sorted(BORN_SEALED.items()):
-    ok(len(spec.get("reason", "").strip()) >= 60,
-       f"C6  {rel}: the born-encrypted claim carries a written, measured reason")
+    # `why`, not `reason`: a value under `reason` is read as a customer message (§19.38/§19.39), so
+    # internals written there fail the carrier-vocab guard — rightly. The measurement lives in a
+    # comment beside the entry; this field says, in business words, why no sweep is owed.
+    ok(len(spec.get("why", "").strip()) >= 60,
+       f"C6  {rel}: the born-encrypted claim carries a written reason")
+    ok("reason" not in spec,
+       f"C7a {rel}: that reason is NOT under a customer-message key (`reason`) — an internal written "
+       f"there reads as tenant copy")
     ok(bool(spec.get("columns")), f"C7  {rel}: names the columns it claims were born encrypted")
     ok(rel in ENCRYPTING, f"C8  {rel}: still encrypts (the entry is still needed)")
     unsealed = column_writes_not_encrypted(rel, set(spec.get("columns") or ()))
