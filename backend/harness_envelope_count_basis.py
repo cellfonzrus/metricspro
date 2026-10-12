@@ -204,9 +204,19 @@ check("F1 `row_variance` goes through the ONE gate and does not score anything i
       "gate_on_basis(" in _PA.split("def row_variance")[1].split("def ")[0])
 check("F2 `count_patch` goes through the SAME gate — the write path cannot acquire its own rule",
       "gate_on_basis(" in _PA.split("def count_patch")[1].split("\ndef ")[0])
-check("F3 the gate is the only place the refused status is produced",
-      _PA.count("NOT_COMPARABLE") == 2,   # the constant's definition, and the one assignment
-      f"found {_PA.count('NOT_COMPARABLE')}")
+# PROSE IS NOT CODE. Both this module's docstrings legitimately quote `status='not_comparable'` when
+# explaining the refusal, so the scan runs on the module with its triple-quoted blocks removed —
+# otherwise the lock fails on documentation, which teaches writers to delete the documentation.
+_PA_CODE = re.sub(r'"""(?:.|\n)*?"""', '""', _PA)
+_nc_literals = re.findall(r"""['"]not_comparable['"]""", _PA_CODE)
+check("F3 the refused status WORD is written exactly once — at the constant. Every other site "
+      "reaches it by name, so a hand-typed second spelling cannot drift",
+      len(_nc_literals) == 1 and 'NOT_COMPARABLE = "not_comparable"' in _PA_CODE,
+      f"found {len(_nc_literals)} literal(s)")
+check("F3b ...and every refusal assigns that NAME rather than a string",
+      not re.search(r"""\[['"]status['"]\]\s*=\s*['"]not_comparable['"]""", _PA_CODE)
+      and re.search(r"""['"]status['"]\s*:\s*NOT_COMPARABLE|\[['"]status['"]\]\s*=\s*NOT_COMPARABLE""",
+                    _PA_CODE) is not None)
 # The scan is on COMPARISONS and MEMBERSHIP, not on any occurrence of the word: `pickup_actual`
 # legitimately uses "declared" as a variance FIELD NAME (`{"declared": ...}`, the expected figure)
 # and names 'pos' in its prose. What must never appear is this module TESTING a basis itself —
@@ -223,10 +233,15 @@ check("F6 the router's basis LABEL dereferences the same resolution the gate use
       "billpay_netting.resolved_basis(" in _RT and "billpay_netting.basis_recorded(" in _RT)
 check("F7 ...and no longer carries its own `if not recorded: b = 'off'` copy",
       'recorded:\n        b = "off"' not in _RT)
-check("F8 BOTH router count_patch call sites name their table through the one home, so the sibling "
-      "cannot be refused for lacking a column",
-      _RT.count("billpay_netting.pickup_amount_basis_for(") == 2,
+check("F8 every router site that hands a basis to the gate names its TABLE through the one home, "
+      "so the sibling cannot be refused for lacking a column",
+      _RT.count("billpay_netting.pickup_amount_basis_for(") >= 2,
       f"found {_RT.count('billpay_netting.pickup_amount_basis_for(')}")
+check("F8b ...and NO site feeds the gate a raw `amount_basis` column, which is what would refuse "
+      "every bill-pay count (the defect the first cut of #439 shipped with)",
+      not re.search(r"""basis\s*=\s*(?:row|p|r)\.get\(["']amount_basis["']\)""", _RT)
+      and not re.search(r"""basis\s*=\s*_basis\b(?!\s*\))""", _RT),
+      "a gate call takes a stored column directly instead of pickup_amount_basis_for(table, ...)")
 check("F9 the board never sums a refused variance into its total (it would be adding None)",
       'vf and vf.get("variance") is not None' in
       open(os.path.join(_HERE, "app/modules/closing/deposit_accountability.py"),
@@ -267,6 +282,30 @@ check("G5 the save message cannot fall through to 'matches' on a refused compari
       "'not_comparable'" in _SRC["board"] and "matches the expected amount" in _SRC["board"])
 check("G6 the board's basis words come from the ONE labeller, served per envelope",
       'env["amount_basis_label"]' in _RT and "pickup_basis_label(" in _RT)
+
+head("H. negative controls for the re-expressed F3/F8 locks (2026-10-12)")
+
+# Both were COUNT PINS ("exactly two mentions") until §77 added a legitimate third caller. A count
+# pin fails on honest growth and passes the actual defect, so each was re-expressed to forbid the
+# defect directly — which is only an improvement if it still fires. Proved here on literals.
+_v3 = 'NOT_COMPARABLE = "not_comparable"\n    out["status"] = "not_comparable"\n'
+check("H1 F3 DOES catch a hand-typed second spelling of the status word",
+      len(re.findall(r"""['"]not_comparable['"]""", _v3)) != 1)
+check("H2 F3b DOES catch the string being assigned instead of the name",
+      re.search(r"""\[['"]status['"]\]\s*=\s*['"]not_comparable['"]""", _v3) is not None)
+_c3 = 'NOT_COMPARABLE = "not_comparable"\n    out["status"] = NOT_COMPARABLE\n'
+check("H3 ...and does NOT fire on the correct form",
+      len(re.findall(r"""['"]not_comparable['"]""", _c3)) == 1
+      and not re.search(r"""\[['"]status['"]\]\s*=\s*['"]not_comparable['"]""", _c3))
+for _v in ('count_patch(x, basis=row.get("amount_basis"))',
+           "count_patch(x, basis=p.get('amount_basis'))",
+           'gate(basis=r.get("amount_basis"))'):
+    check(f"H4 F8b DOES catch a gate call taking the raw column — `{_v[:38]}`",
+          re.search(r"""basis\s*=\s*(?:row|p|r)\.get\(["']amount_basis["']\)""", _v) is not None)
+for _c in ('count_patch(x, basis=billpay_netting.pickup_amount_basis_for(t, row.get("amount_basis")))',
+           'p["amount_basis"] = billpay_netting.pickup_amount_basis_for(table, p.get("amount_basis"))'):
+    check("H5 ...and does NOT fire when the one home is between them",
+          re.search(r"""basis\s*=\s*(?:row|p|r)\.get\(["']amount_basis["']\)""", _c) is None)
 
 print(f"\n{PASS}/{PASS + FAIL} checks passed")
 sys.exit(1 if FAIL else 0)

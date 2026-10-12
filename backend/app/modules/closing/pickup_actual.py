@@ -314,3 +314,63 @@ def count_patch(item, declared=None, counted_at=None, basis=None):
         row["actual_counted_by"] = who
         row["actual_counted_at"] = counted_at
     return {"row": row, "variance": vf, "opened": opened}
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
+# A STORE-DAY'S VERDICT, not a store-day's arithmetic (owner report 2026-10-12, index §75)
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
+# The owner was on the Management Recon screen when he asked where $552 came from. That screen does
+# not show `row_variance` at all: it summed `actual_picked_amount` per store-day and subtracted the
+# WHOLE DECLARED DRAWER (`daily_closing.t_cash`). Under bill-payment netting the bag never holds the
+# drawer — it holds the drawer less the bill-pay cash — so the subtraction returns minus the rep's
+# bill-pay cash on every netted store-day. Measured on the house org 2026-10-12: 278 of the 470
+# counted store-days showed a "shortage" EXACTLY equal to the declared bill-pay cash, $90,280.01 of
+# it, on the one surface that names the DM who did the counting.
+#
+# THE CLASS, not the instance: an envelope count's expected figure is THE ENVELOPE'S expected figure.
+# It is `cash_pickup.amount` with its mig-1039 basis, which is what `row_variance` already reads.
+# A caller that needs a store-day total therefore needs the ROWS' verdicts aggregated, never a fresh
+# subtraction of two sums — because a sum has no basis, and the gate cannot run on it.
+#
+# So this is the one home for "what did this store-day's envelopes come to", and the management
+# screen dereferences it exactly as the pickup list and the accountability board dereference
+# `row_variance`. Nothing new is decided here: the per-row judgement is still `row_variance`'s, and
+# the basis rule is still `billpay_netting`'s.
+
+def day_variance(rows):
+    """PURE: ONE verdict for the counted pickup envelopes of a single store-day, or None when
+    nobody counted any of them (honest absence — never a fake zero, which would read as 100% short).
+
+    Returns {expected, counted, variance, status, reason, comparable, counted_rows,
+    not_comparable_rows}, the same vocabulary `row_variance` returns so a screen renders both the
+    same way.
+
+    FAILS CLOSED ON A MIXED DAY. If ANY counted envelope of the day is refused by the basis gate, the
+    DAY is refused: `variance=None`, `status='not_comparable'`, and the reason is that envelope's.
+    Summing the comparable ones and quietly dropping the rest would publish a number that is neither
+    the day's shortage nor any envelope's — the shape of defect this whole mechanism exists to stop.
+    The expected and counted totals are still returned, so a screen can show what was in play.
+
+    Rows that carry no count are skipped, not zeroed: an uncounted envelope is not a tied-out one.
+    """
+    rs = [r for r in (rows or []) if has_actual(r)]
+    if not rs:
+        return None
+    expected = counted = 0.0
+    refused = []
+    for r in rs:
+        rv = row_variance(r) or {}
+        expected = round(expected + _f(rv.get("declared")), 2)
+        counted = round(counted + _f(rv.get("actual")), 2)
+        if rv.get("comparable") is False:
+            refused.append(rv)
+    out = {"expected": expected, "counted": counted,
+           "counted_rows": len(rs), "not_comparable_rows": len(refused)}
+    if refused:
+        out.update({"variance": None, "status": NOT_COMPARABLE, "comparable": False,
+                    "reason": refused[0].get("reason")})
+        return out
+    cf = count_fields(expected, counted)
+    out.update({"variance": cf["variance"], "status": cf["status"], "comparable": True,
+                "reason": None})
+    return out

@@ -123,6 +123,7 @@ def day_accountability(pickup_rows):
         by_sd.setdefault((code, dday), []).append(r)
 
     from .pickup_actual import row_variance as _row_variance
+    from .pickup_actual import day_variance as _day_variance
     from .pickup_actual import envelope_opened as _envelope_opened
     rows = []
     for (code, dday), rs in sorted(by_sd.items(), key=lambda kv: (kv[0][1], kv[0][0])):
@@ -144,6 +145,9 @@ def day_accountability(pickup_rows):
         # would be the defect; counting it as a match would hide it; so it is counted as itself and
         # REPORTED, which is the §72 posture for a figure that cannot be measured.
         pickup_not_comparable_rows = 0
+        # The verdict is over the envelopes that were actually picked up — an unpicked envelope has
+        # not been counted by anybody, and `day_variance` skips a row with no count regardless.
+        _dv_day = _day_variance([r for r in rs if envelope_state(r) != "unpicked"])
         for r in rs:
             st = envelope_state(r)
             amt = _f(r.get("amount"))
@@ -235,10 +239,21 @@ def day_accountability(pickup_rows):
             # mig 949 — actual-vs-declared day chips (display/flag only; never touches `green`)
             "pickup_short_rows": pickup_short_rows,
             "pickup_over_rows": pickup_over_rows,
+            # THE COMPARABLE ROWS' SUBTOTAL, and it says so. It is NOT the day's verdict: this board
+            # shows the row counts beside it, so a reader can see "3 short, 1 not comparable" and
+            # read the figure for what it is. A surface showing ONE number per store-day must use
+            # `pickup_day_*` below instead — see §77.4.
             "pickup_variance_total": round(pickup_variance_total, 2),
             # The day's count of envelopes whose variance cannot be measured — reported beside the
             # total so a clean-looking total is never mistaken for a day with nothing outstanding.
             "pickup_not_comparable_rows": pickup_not_comparable_rows,
+            # THE DAY'S VERDICT, from the ONE home for it (§77). Fails closed: a day with any
+            # refused envelope has NO verdict rather than the comparable rows' subtotal wearing the
+            # whole day's clothes. Dereferenced rather than re-derived, so this board and the
+            # management recon screen can never disagree about one store-day.
+            "pickup_day_variance": (_dv_day or {}).get("variance"),
+            "pickup_day_status": (_dv_day or {}).get("status"),
+            "pickup_day_reason": (_dv_day or {}).get("reason"),
             "green": green,
             "envelopes": envs,
         })
