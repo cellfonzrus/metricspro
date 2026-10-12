@@ -262,6 +262,13 @@ export default function StoreTakeoverPage() {
   const [list, setList] = useState<ProspectList | null>(null)
   const [pid, setPid] = useState('')
   const [period, setPeriod] = useState('')
+  // The sub-report's filters. Deliberately NOT in the URL or stored: a filtered view that came back
+  // tomorrow and hid rows somebody never chose to hide is how a list stops being trusted.
+  const [fMinLines, setFMinLines] = useState('')
+  const [fSameDay, setFSameDay] = useState(false)
+  const [fAddALine, setFAddALine] = useState(false)
+  const [fAccount, setFAccount] = useState('')
+  const [fDevice, setFDevice] = useState('')
   const [mode, setMode] = useState('')          // '' = open on the prospect's own default
   const [data, setData] = useState<Evaluation | null>(null)
   const [loadedKey, setLoadedKey] = useState('')
@@ -315,7 +322,26 @@ export default function StoreTakeoverPage() {
   const scenario: Scenario | null = data?.scenarios?.[shownMode] || null
   const statement: Statement | null = data?.statements?.[shownMode] || null
   const delta: Delta | null = data?.delta || null
-  const flagged: FlaggedAccount[] = data?.multi_line?.flagged || []
+  const flagged: FlaggedAccount[] = useMemo(
+    () => data?.multi_line?.flagged || [], [data])
+
+  // FILTERS ON THE SUB-REPORT (owner ask 2026-10-12: "need the filters also"). They narrow the LIST
+  // only — never the P&L, and never the keep-vs-exclude figures above it. Those two numbers are what
+  // the flagged accounts are worth in total, and a number that silently followed a filter would
+  // answer a question nobody asked. The row count below the controls says what is being shown.
+  const shownFlagged = useMemo(() => {
+    const min = Number(fMinLines) || 0
+    const needle = fDevice.trim().toLowerCase()
+    const acct = fAccount.trim().toLowerCase()
+    return flagged.filter(r =>
+      (!min || (r.lines || 0) >= min)
+      && (!fSameDay || !!r.same_day)
+      && (!fAddALine || (r.add_a_lines || 0) > 0)
+      && (!acct || String(r.account_key || '').toLowerCase().includes(acct))
+      && (!needle || (r.devices || []).some(d =>
+        String(d.sku || '').toLowerCase().includes(needle)
+        || (d.imeis || []).some(i => String(i).toLowerCase().includes(needle)))))
+  }, [flagged, fMinLines, fSameDay, fAddALine, fAccount, fDevice])
   const mlSummary: Partial<MultiLineSummary> = data?.multi_line?.summary || {}
   const coverage: CoverageLine[] = scenario?.coverage || []
   const covSummary: Partial<CoverageSummary> = scenario?.coverage_summary || {}
@@ -601,13 +627,50 @@ export default function StoreTakeoverPage() {
                       sub="how much of the contribution rests on accounts nobody has cleared"
                       warn={(delta.share_of_bottom_line_at_risk || 0) > 5} />
               </div>}
-            {flagged.length > 0
-              ? <ReportShell title="Accounts over the line threshold"
-                             filename={`takeover-multiline-${data?.period || ''}`}
-                             columns={FLAG_COLS} rows={flagged} compact stickyHeader pinFirst />
-              : <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+            {flagged.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
+                            marginBottom: 10 }}>
+                <input style={{ ...sel, width: 120 }} inputMode="numeric" placeholder="Min lines"
+                       value={fMinLines} onChange={e => setFMinLines(e.target.value)} />
+                <input style={{ ...sel, width: 150 }} placeholder="Account number"
+                       value={fAccount} onChange={e => setFAccount(e.target.value)} />
+                <input style={{ ...sel, width: 190 }} placeholder="Phone model or IMEI"
+                       value={fDevice} onChange={e => setFDevice(e.target.value)} />
+                <label style={{ fontSize: 12.5, display: 'flex', gap: 5, alignItems: 'center' }}>
+                  <input type="checkbox" checked={fSameDay}
+                         onChange={e => setFSameDay(e.target.checked)} />
+                  All lines on one day
+                </label>
+                <label style={{ fontSize: 12.5, display: 'flex', gap: 5, alignItems: 'center' }}>
+                  <input type="checkbox" checked={fAddALine}
+                         onChange={e => setFAddALine(e.target.checked)} />
+                  Has add-a-lines
+                </label>
+                {(fMinLines || fAccount || fDevice || fSameDay || fAddALine) &&
+                  <button className="btn btn-secondary"
+                          onClick={() => { setFMinLines(''); setFAccount(''); setFDevice('')
+                                           setFSameDay(false); setFAddALine(false) }}>
+                    Clear
+                  </button>}
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+                  showing {num(shownFlagged.length)} of {num(flagged.length)}
+                  {shownFlagged.length !== flagged.length
+                    && ' — the figures above are still the full month'}
+                </span>
+              </div>
+            )}
+            {flagged.length === 0
+              ? <div style={{ fontSize: 13, color: 'var(--text2)' }}>
                   No account carried more than {mlSummary.threshold} lines this month.
-                </div>}
+                </div>
+              : shownFlagged.length === 0
+                ? <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+                    None of the {num(flagged.length)} flagged accounts match these filters. Clear them
+                    to see the whole month.
+                  </div>
+                : <ReportShell title="Accounts over the line threshold"
+                               filename={`takeover-multiline-${data?.period || ''}`}
+                               columns={FLAG_COLS} rows={shownFlagged} compact stickyHeader pinFirst />}
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 9 }}>
               Which column names the account is a setting, not a guess — this month it answered on{' '}
               {Object.keys(mlSummary.account_columns_used || {})

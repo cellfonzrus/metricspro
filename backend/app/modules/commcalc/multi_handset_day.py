@@ -49,9 +49,11 @@ Measured against production 2026-10-12, the whole `commcalc.daily_sales_feed` (1
   · `serial_1` is NOT a handset test: PLAN lines carry a serial too (1,062 'Total MAX 5G Plan $55',
     435 'Total Wireless Home Internet', the tablet plans). Keying on it counted one phone plus two
     plans as three devices. This is why the box-department set is dereferenced instead.
-  · `customer` is free text and dirty — 'No Customer' (203 device rows), 'walk  in', 'BOOST MOBILE',
-    'Back Order', inconsistent casing — so it is normalised and the junk values are DROPPED rather
-    than grouped. A hundred unrelated walk-ins are not one buyer.
+  · `customer` is free text and dirty — 203 device rows name nobody at all, and the same placeholder
+    is typed in several casings and spacings — so the name is folded and the placeholders are DROPPED
+    rather than grouped. A hundred unrelated walk-ins are not one buyer. Both the folding and the
+    placeholder test are `pos/customer_identity.py`, the ONE home for them, so the customer master
+    cannot dedupe a name this detector is still grouping on.
 
 The key is therefore (org, store, DAY, normalised name). Same day and same store is what makes an
 exact-name match defensible: it needs no fuzzy matching and invents no identity. The cost is stated
@@ -75,10 +77,11 @@ about. So a case carries the EVIDENCE a human needs to tell them apart — the h
 split, the dollars, the rep(s), the day — and the words stay descriptive. 129 of those 501 cases are
 entirely $0.00, which is a promotional pattern worth a human's eye, not a proven offence.
 """
-import re
 from collections import defaultdict
 
 from app.modules.commcalc import flag_registry as _reg
+# THE one home for "does this bill-to name a person" (placeholder words, per org).
+from app.modules.pos import customer_identity as _cid
 
 #: The flag this module writes. Registered in `flag_registry.TYPES`; nothing here spells its
 #: severity, area or label — `_reg` owns all three.
@@ -101,15 +104,26 @@ THRESHOLD_KEY = "max_handsets"
 #: then silently empty itself. A writer owns its own source string or it does not own its rows.
 SOURCE = "multi_handset_watchdog"
 
-HOUSE_JUNK_BUYERS = ("no customer", "walk in", "cash customer", "boost mobile", "back order",
-                     "n a", "na", "none", "test", "unknown")
+#: THE one home for "this bill-to names nobody" — `pos/customer_identity.py` (index §19.40).
+#:
+#: THIS MODULE USED TO CARRY ITS OWN LIST and that was the duplicate defect the house rules forbid,
+#: caught by harness_customer_master_lock / harness_pos_sales_from_reports_lock on 2026-10-12 before
+#: it shipped. Two answers to "is 'Walk In' a person" drift: the customer master would dedupe a name
+#: this detector was still grouping on, and one of the two lists would gain a word the other never
+#: did. The list also has to be PER ORG — a tenant whose POS writes 'Back Order' or a carrier's own
+#: name into the customer field declares that word in its `customer_identity` config row, which
+#: RULE TWO requires and a tuple in this file could never honour.
+#:
+#: `config` here is that org's resolved config (`customer_identity.resolve_config(row)`), passed in
+#: by the caller like every other fact this module reads. None means the house words.
+HOUSE_PLACEHOLDERS = _cid.HOUSE_PLACEHOLDERS
 
 #: Said out loud on the screen rather than left for someone to discover.
 KEY_CANNOT_ANSWER = (
     "Groups by the buyer's name at one store on one day, so it cannot see the same person buying "
     "across different days, different stores, or under a differently-spelled name.",
-    "Sales recorded with no buyer name, or a placeholder like 'No Customer', are not grouped at "
-    "all — they are counted separately and reported as unattributable.",
+    "Sales recorded with no buyer name, or a placeholder the company has declared (such as a "
+    "walk-in), are not grouped at all — they are counted separately and reported as unattributable.",
     "A handset is a line in this company's own box departments. A line the company has not declared "
     "as a box department is not counted, and plan-only lines never are.",
 )
@@ -120,22 +134,6 @@ def safe_float(v) -> float:
         return float(v or 0)
     except Exception:
         return 0.0
-
-
-def normalise_buyer(raw) -> str:
-    """PURE: a buyer name reduced to letters and single spaces, lowercased. '' when nothing is left.
-
-    Deliberately crude — it folds 'Rene  Hernandez', 'rene hernandez' and 'RENE HERNANDEZ' together
-    and nothing else. It does NOT fold initials, nicknames or misspellings: that would be inventing
-    an identity, and a flag that accuses the wrong person is worse than one that misses.
-    """
-    return re.sub(r"[^a-z]+", " ", str(raw or "").lower()).strip()
-
-
-def is_junk_buyer(name, junk=HOUSE_JUNK_BUYERS) -> bool:
-    """PURE: is this normalised name a placeholder rather than a person?"""
-    n = normalise_buyer(name)
-    return (not n) or n in {normalise_buyer(j) for j in (junk or ())}
 
 
 def handset_rows(rows, box_departments):
@@ -157,10 +155,10 @@ def handset_rows(rows, box_departments):
 def _case_key(row):
     return (str(row.get("store") or "").strip(),
             str(row.get("trans_date") or "")[:10],
-            normalise_buyer(row.get("customer")))
+            _cid.norm_name(row.get("customer")))
 
 
-def group_by_buyer_day(rows, box_departments, junk=HOUSE_JUNK_BUYERS):
+def group_by_buyer_day(rows, box_departments, customer_config=None):
     """PURE: handset lines folded to {(store, day, buyer): [rows]}, plus what could not be grouped.
 
     Returns {"groups": {...}, "unattributable": [rows], "handset_lines": int}. A row whose buyer is
@@ -170,7 +168,7 @@ def group_by_buyer_day(rows, box_departments, junk=HOUSE_JUNK_BUYERS):
     hs = handset_rows(rows, box_departments)
     groups, loose = defaultdict(list), []
     for r in hs:
-        if is_junk_buyer(r.get("customer"), junk):
+        if _cid.is_placeholder(r.get("customer"), customer_config):
             loose.append(r)
             continue
         groups[_case_key(r)].append(r)
@@ -349,7 +347,7 @@ def coaching_note(case) -> str:
 
 
 def findings(rows, box_departments, *, org_id=None, period=None, period_month=None,
-             period_year=None, rule_rows=None, junk=HOUSE_JUNK_BUYERS,
+             period_year=None, rule_rows=None, customer_config=None,
              is_accessory=None, is_fee=None):
     """PURE: watchdog rows for the Flags board, or [] when the tenant has this switched off.
 
@@ -364,7 +362,7 @@ def findings(rows, box_departments, *, org_id=None, period=None, period_month=No
     manager's board can filter on — a code guessed here would be a second store resolver.
     `evidence` is carried for a screen and is NOT a column: `flag_persist._clean` drops it on write.
     """
-    grouped = group_by_buyer_day(rows, box_departments, junk)
+    grouped = group_by_buyer_day(rows, box_departments, customer_config)
     if not _reg.is_enabled(FLAG_TYPE, rule_rows):
         return [], {**summary(grouped, []), "enabled": False}
     thr = _reg.rule_params(FLAG_TYPE, rule_rows).get(THRESHOLD_KEY)

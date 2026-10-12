@@ -282,7 +282,15 @@ def watchdog_multi_handset(period: str = Query(default=""), authorization: str =
     live = [r for r in rows
             if not is_voided(r.get("voided"))
             and _s(r.get("trans_type")) != "Return"]
-    grouped = _handsets.group_by_buyer_day(live, box)
+    # Same org-declared placeholder words as the sweep, through the same I/O home — otherwise the
+    # drill-down and the finding would disagree about who counts as a person.
+    try:
+        from app.modules.pos.receipt_import import identity_config
+        ccfg = identity_config(client, org_id)
+    except Exception as e:
+        print(f"WARN customer-identity config unavailable, house placeholders used: {e}")
+        ccfg = None
+    grouped = _handsets.group_by_buyer_day(live, box, ccfg)
     rules = _read_rules(client, org_id)
     thr = _reg.rule_params(_handsets.FLAG_TYPE, rules).get(_handsets.THRESHOLD_KEY)
     found = _handsets.cases(
@@ -466,13 +474,26 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
         _acc = (lambda r, _a=_acfg: _is_accessory(str(r.get("department") or "").strip(),
                                                   r.get("category"), r.get("product_desc"), _a))
         _fee = (lambda r, _a=_acfg: _is_setup_fee(r.get("product_desc"), _a))
+        # The org's declared placeholder bill-to words, through the EXISTING I/O home for them
+        # (`receipt_import.identity_config` → `pos_settings` → `customer_identity.resolve_config`,
+        # cached per client × org). A tenant whose POS types its own word into the customer field
+        # declares it there and BOTH the customer master and this detector stop treating it as a
+        # person — which is the point of there being one home. Best-effort: the house words on any
+        # read failure, which is what every month before this already used.
+        try:
+            from app.modules.pos.receipt_import import identity_config
+            _ccfg = identity_config(client, org_id)
+        except Exception as e:
+            print(f"WARN customer-identity config unavailable, house placeholders used: {e}")
+            _ccfg = None
+
         live = [r for r in sales_rows
                 if not is_voided(r.get("voided"))
                 and str(r.get("trans_type") or "").strip() != "Return"]
         pm, py = _month_year(p)
         hs_flags, hs_summary = _handsets.findings(
             live, box, org_id=org_id, period=p, period_month=pm, period_year=py, rule_rows=rules,
-            is_accessory=_acc, is_fee=_fee)
+            customer_config=_ccfg, is_accessory=_acc, is_fee=_fee)
         # The ONE home that turns a POS store spelling into a store_code a district manager's board
         # can filter on (mig 285). Visibility only — it writes no amount and no pay field.
         try:

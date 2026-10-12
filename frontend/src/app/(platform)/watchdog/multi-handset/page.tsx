@@ -26,6 +26,7 @@ import { usePeriod } from '@/lib/period-context'
 import PageIntro from '@/components/PageIntro'
 import StatTile from '@/components/StatTile'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 type Line = {
   receipt: string; rep: string | null; device: string | null
@@ -54,6 +55,24 @@ type Payload = {
   period?: string; threshold?: number; enabled?: boolean
   box_departments?: string[]; has_feed?: boolean
   summary?: Summary; cases?: Case[]
+}
+
+// THE accessor for the table below, at module scope so `useTableSort`'s memo is not rebuilt on
+// every render. It returns raw numbers and raw nulls rather than the formatted cell, so an
+// unmeasured accessory figure sinks instead of sorting as a $0.00 that would read as a finding.
+const caseCell = (c: Case, field: string): string | number | null => {
+  switch (field) {
+    case 'day': return c.day || ''
+    case 'store': return c.store || ''
+    case 'buyer': return (c.buyer_as_recorded || [])[0] || c.buyer || ''
+    case 'handsets': return c.handsets
+    case 'receipts': return c.receipt_count
+    case 'dollars': return c.dollars
+    case 'accessories': return c.accessory_dollars
+    case 'fees': return c.fee_lines
+    case 'reps': return (c.reps || []).join(', ')
+    default: return ''
+  }
 }
 
 const th: React.CSSProperties = { padding: '6px 8px' }
@@ -97,6 +116,12 @@ export default function MultiHandsetDrillDownPage() {
 
   const keyOf = (c: Case) => `${c.store}|${c.day}|${c.buyer}`
 
+  // Click-a-header sorting through the ONE comparison home (lib/table-sort via useTableSort) —
+  // owner directive 2026-08-10, locked by harness_table_sort_lock. The default order is the
+  // detector's own (most handsets first) until a header is clicked: `sort === null` passes the rows
+  // through untouched.
+  const sorted = useTableSort(shown, caseCell)
+
   const buildPayload = (): ExportPayload => ({
     title: 'Several handsets to one buyer',
     subtitle: data?.period || period || '',
@@ -123,7 +148,7 @@ export default function MultiHandsetDrillDownPage() {
           { header: 'Who sold', get: (c: Case) => (c.reps || []).join(' / '), role: 'rep' },
           { header: 'Signal', get: (c: Case) => (c.signal || []).join('; ') },
         ],
-        rows: shown,
+        rows: sorted.sorted,   // export in the order the manager sorted them
       },
       {
         name: 'Every handset line',
@@ -137,7 +162,7 @@ export default function MultiHandsetDrillDownPage() {
           { header: 'Serial', get: (r: FlatLine) => r.serial || '' },
           { header: 'Amount', get: (r: FlatLine) => r.amount, money: true, align: 'right' },
         ],
-        rows: shown.flatMap((c): FlatLine[] => (c.lines || []).map(l => ({
+        rows: sorted.sorted.flatMap((c): FlatLine[] => (c.lines || []).map(l => ({
           day: c.day, store: c.store,
           buyer: (c.buyer_as_recorded || [])[0] || c.buyer, ...l,
         }))),
@@ -248,19 +273,19 @@ export default function MultiHandsetDrillDownPage() {
                   <tr style={{ textAlign: 'left', color: 'var(--text2)', fontSize: 11.5,
                                textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                     <th style={th}></th>
-                    <th style={th}>Date</th>
-                    <th style={th}>Store</th>
-                    <th style={th}>Buyer as recorded</th>
-                    <th style={thRight}>Handsets</th>
-                    <th style={thRight}>Receipts</th>
-                    <th style={thRight}>Sold for</th>
-                    <th style={thRight}>Accessories</th>
-                    <th style={thRight}>Fee lines</th>
-                    <th style={th}>Who sold</th>
+                    <SortableTh field="day" sort={sorted.sort} onSort={sorted.toggle} style={th}>Date</SortableTh>
+                    <SortableTh field="store" sort={sorted.sort} onSort={sorted.toggle} style={th}>Store</SortableTh>
+                    <SortableTh field="buyer" sort={sorted.sort} onSort={sorted.toggle} style={th}>Buyer as recorded</SortableTh>
+                    <SortableTh field="handsets" sort={sorted.sort} onSort={sorted.toggle} style={thRight}>Handsets</SortableTh>
+                    <SortableTh field="receipts" sort={sorted.sort} onSort={sorted.toggle} style={thRight}>Receipts</SortableTh>
+                    <SortableTh field="dollars" sort={sorted.sort} onSort={sorted.toggle} style={thRight}>Sold for</SortableTh>
+                    <SortableTh field="accessories" sort={sorted.sort} onSort={sorted.toggle} style={thRight}>Accessories</SortableTh>
+                    <SortableTh field="fees" sort={sorted.sort} onSort={sorted.toggle} style={thRight}>Fee lines</SortableTh>
+                    <SortableTh field="reps" sort={sorted.sort} onSort={sorted.toggle} style={th}>Who sold</SortableTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {shown.map(c => {
+                  {sorted.sorted.map(c => {
                     const k = keyOf(c)
                     const isOpen = !!open[k]
                     return (

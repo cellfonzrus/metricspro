@@ -44,6 +44,14 @@ HOME = home_under_app("multi_handset_one_buyer")
 # re-typing the module path here and letting the two drift.
 HOME_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", HOME)
 
+# LOCKS READ CODE, not comments. This module's docstring deliberately QUOTES the evidence — the plan
+# names, the config it must NOT read — because that is what explains the design. Scanning raw source
+# matched its own explanation and failed on a correct file, exactly the trap harnesslib.py documents,
+# so the shared stripper is dereferenced rather than copied an eleventh time. Defined here, not in
+# §E, because §B and §G both read it.
+SRC = open(HOME_PATH).read()
+CODE = py_code_only(SRC)
+
 PASS, FAIL = [], []
 
 
@@ -98,30 +106,58 @@ check("A8 whitespace in a declared department name does not stop the match",
       len(M.handset_rows([row(department=" BrandedHandset ")], BOX)) == 1)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-section("B. the buyer key: fold casing and spacing, group no placeholder")
+section("B. the buyer key: the ONE placeholder home, dereferenced — never a second word list")
 
-check("B1 casing and double spaces fold to one buyer",
-      M.normalise_buyer("Rene  HERNANDEZ") == M.normalise_buyer("rene hernandez") == "rene hernandez")
-check("B2 punctuation and digits are stripped",
-      M.normalise_buyer("Frank  . Jose 2") == "frank jose")
-for junk in ("No Customer", "walk  in", "BOOST MOBILE", "Back Order", "", "   ", "n/a"):
-    check(f"B3 placeholder not a buyer: {junk!r}", M.is_junk_buyer(junk))
-check("B4 a real name is NOT a placeholder", not M.is_junk_buyer("Rene Hernandez"))
-check("B5 initials are NOT folded into a longer name (no invented identity)",
-      M.normalise_buyer("R Hernandez") != M.normalise_buyer("Rene Hernandez"))
-check("B6 a misspelling is NOT folded either",
-      M.normalise_buyer("Rene Hernandes") != M.normalise_buyer("Rene Hernandez"))
+# THE DEFECT THIS SECTION NOW LOCKS, found by harness_customer_master_lock on 2026-10-12 before it
+# shipped. This module carried its own `HOUSE_JUNK_BUYERS` tuple and its own name folder. That is two
+# answers to "is 'Walk In' a person": the customer master would dedupe a name this detector was still
+# grouping on, and one list would gain a word the other never did. Both now come from
+# `pos/customer_identity.py`, which is also where a tenant's OWN placeholder words live as a config
+# row — which RULE TWO requires and a tuple in a module could never honour.
+import importlib as _il
+CID = _il.import_module("app.modules.pos.customer_identity")
+
+check("B1 the module declares no placeholder word list of its own",
+      "HOUSE_JUNK_BUYERS" not in CODE and "is_junk_buyer" not in CODE,
+      "a second placeholder vocabulary is the duplicate defect the index rules forbid")
+check("B2 it dereferences the one home for both the fold and the test",
+      "_cid.norm_name(" in CODE and "_cid.is_placeholder(" in CODE)
+check("B3 and re-exports the house words rather than re-typing them",
+      M.HOUSE_PLACEHOLDERS is CID.HOUSE_PLACEHOLDERS)
+
+check("B4 casing and double spaces fold to one buyer",
+      CID.norm_name("Rene  HERNANDEZ") == CID.norm_name("rene hernandez") == "rene hernandez")
+for junk in ("No Customer", "walk  in", "", "   ", "n/a", "Unknown"):
+    check(f"B5 placeholder not a buyer: {junk!r}", CID.is_placeholder(junk))
+check("B6 a real name is NOT a placeholder", not CID.is_placeholder("Rene Hernandez"))
+check("B7 initials are NOT folded into a longer name (no invented identity)",
+      CID.norm_name("R Hernandez") != CID.norm_name("Rene Hernandez"))
+check("B8 a misspelling is NOT folded either",
+      CID.norm_name("Rene Hernandes") != CID.norm_name("Rene Hernandez"))
+
+# THE PER-ORG WORD, which is the whole reason this is config and not code. 'Back Order' was measured
+# on a live 10-device receipt; it is NOT a house word, and the tenant declares it.
+check("B9 a word the house does not know is NOT a placeholder by default",
+      not CID.is_placeholder("Back Order"))
+_CFG = CID.resolve_config({"placeholders": ["Back Order"]})
+check("B10 ... and becomes one once the ORG declares it",
+      CID.is_placeholder("Back Order", _CFG))
+check("B11 the detector honours that org config, so the word is dropped not grouped",
+      len(M.group_by_buyer_day([row(customer="Back Order"), row(customer="Back Order")],
+                               BOX, _CFG)["unattributable"]) == 2
+      and len(M.group_by_buyer_day([row(customer="Back Order"), row(customer="Back Order")],
+                                   BOX)["groups"]) == 1)
 
 g = M.group_by_buyer_day([row(customer="No Customer"), row(customer="walk in"),
                           row(customer="Ana Gomez"), row(customer="ANA  GOMEZ")], BOX)
-check("B7 two spellings of one buyer are ONE group", len(g["groups"]) == 1)
-check("B8 placeholders are reported as unattributable, never grouped",
+check("B12 two spellings of one buyer are ONE group", len(g["groups"]) == 1)
+check("B13 placeholders are reported as unattributable, never grouped",
       len(g["unattributable"]) == 2 and g["handset_lines"] == 4)
-check("B9 the same buyer at a DIFFERENT store is a different case",
+check("B14 the same buyer at a DIFFERENT store is a different case",
       len(M.group_by_buyer_day([row(), row(store="other")], BOX)["groups"]) == 2)
-check("B10 the same buyer on a DIFFERENT day is a different case",
+check("B15 the same buyer on a DIFFERENT day is a different case",
       len(M.group_by_buyer_day([row(), row(trans_date="2026-09-19")], BOX)["groups"]) == 2)
-check("B11 a timestamped date folds to its day",
+check("B16 a timestamped date folds to its day",
       len(M.group_by_buyer_day([row(trans_date="2026-09-18T09:00:00Z"),
                                 row(trans_date="2026-09-18")], BOX)["groups"]) == 1)
 
@@ -199,13 +235,6 @@ check("D12 an unknown param key is ignored, never trusted",
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("E. evidence, not a verdict")
 
-SRC = open(HOME_PATH).read()
-# LOCKS READ CODE, not comments. The docstring above deliberately QUOTES the evidence —
-# the plan names, the carrier words, the config this module must NOT read — because that is
-# what explains the design. Scanning raw source matched its own explanation and failed on a
-# correct file, exactly the trap harnesslib.py documents, so the shared stripper is
-# dereferenced rather than copied an eleventh time.
-CODE = py_code_only(SRC)
 check("E1 no case carries a verdict field",
       not ({"verdict", "is_fraud", "fraudulent", "suspicious", "guilty"} & set(cs[0])))
 _words = ("fraud", "abuse", "scheme", "stealing", "theft", "criminal")
@@ -250,8 +279,11 @@ check("F3 the summary says what the key cannot answer",
       len(s_junk["cannot_answer"]) >= 3)
 check("F4 ...including the different-day / different-store limit",
       any("different days" in c for c in s_junk["cannot_answer"]))
+# Worded without naming a particular POS value, deliberately: which words are placeholders is the
+# ORG's declaration (customer_identity config), so a sentence quoting one tenant's spelling would be
+# wrong for the next tenant and would re-introduce the vocabulary this module no longer owns.
 check("F5 ...and that a placeholder buyer is not grouped",
-      any("No Customer" in c for c in s_junk["cannot_answer"]))
+      any("placeholder" in c and "not grouped at all" in c for c in s_junk["cannot_answer"]))
 _, s_split = M.findings(SPLIT, BOX)
 check("F6 the summary counts the split cases separately",
       s_split["split_cases"] == 1)
@@ -357,6 +389,12 @@ check("H15 it names no sales table literally — the one home picks it",
       "a literal sales table name is a second opinion about which feed is live")
 check("H16 and it resolves the store_code through the one home (mig 285)",
       "flag_store_resolver.stamp_flags" in WIRE)
+check("H17 both callers read the org's placeholder words from the ONE I/O home",
+      WIRE.count("identity_config(client, org_id)") >= 2
+      and "pos_settings" not in WIRE,
+      "a private read of the settings table would be a second placeholder config path")
+check("H18 and neither spells a placeholder word itself",
+      not any(w in WIRE.lower() for w in ("walk in", "no customer", "cash customer")))
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("I. what was sold ALONGSIDE — measured, injected, and never turned into a verdict")
