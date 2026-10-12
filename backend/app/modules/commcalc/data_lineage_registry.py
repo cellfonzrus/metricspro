@@ -620,7 +620,7 @@ NO_MONTH_COLUMN_REASONS = {
     # these four the moment it was written, and each was confirmed against the live schema. None is
     # reached by the manual-upload handler today, which is exactly why nobody noticed — the same
     # silence raw_ma_fulfillment kept until the day the stamp was generalised to it.
-    "raw_epay_daily_tx": "day-keyed transaction stream — `settlement_date` is its month fact",
+    EPAY_DAILY: "day-keyed transaction stream — `settlement_date` is its month fact",
     "merchant_settlement_day": "one row per processor business day — `business_date` is its month fact",
     "merchant_settlement_batch": "one row per processor batch — dated by its own batch day",
     "asset_ledger": "the distributor's unit ledger — `acquired_date` is the row's only month fact",
