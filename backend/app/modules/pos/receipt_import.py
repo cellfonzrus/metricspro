@@ -360,6 +360,19 @@ def _match_or_create_customer(client, org_id: str, parsed: dict, note: str | Non
 # crypto is imported LAZILY so this module (and the pure normalize_receipt) stays importable without
 # the app config/pydantic stack — see backend/harness_pos_receipt_parse.py.
 _ENCRYPTED_IMPORT_COLUMNS = ("imei", "notes")
+# The JSONB blobs: a `enc:v1:` string is not valid JSON, so these take crypto.encrypt_json's
+# {"enc": …} envelope rather than the plain prefix. Declared beside the text columns, and READ by
+# both the writer below and the backfill sweep (app/core/encryption_backfill.backfill_receipt_imports)
+# — the sweep spells no column name of its own, so a column added here is sealed on old rows too
+# without anyone editing the sweep. index §CORE-04.
+_ENCRYPTED_IMPORT_JSON_COLUMNS = ("parsed", "raw_ocr")
+# A blind index is derived FROM a plaintext column, so it is declared as that dependency rather than
+# as a column of its own: {index column: (source column, mode)}.
+_IMPORT_BLIND_INDEX_COLUMNS = {"imei_bidx": ("imei", "digits")}
+
+ENCRYPTED_IMPORT_COLUMNS = _ENCRYPTED_IMPORT_COLUMNS
+ENCRYPTED_IMPORT_JSON_COLUMNS = _ENCRYPTED_IMPORT_JSON_COLUMNS
+IMPORT_BLIND_INDEX_COLUMNS = _IMPORT_BLIND_INDEX_COLUMNS
 
 
 def _encrypt_import_row(imp: dict) -> dict:
@@ -367,10 +380,44 @@ def _encrypt_import_row(imp: dict) -> dict:
     are left plaintext. No-op on blank columns; with no key configured crypto passes through."""
     from app.core import crypto
     out = crypto.encrypt_map(imp, _ENCRYPTED_IMPORT_COLUMNS)
-    out["parsed"] = crypto.encrypt_json(imp.get("parsed"))
-    out["raw_ocr"] = crypto.encrypt_json(imp.get("raw_ocr"))
-    out["imei_bidx"] = crypto.blind_index(imp.get("imei"), mode="digits")
+    for col in _ENCRYPTED_IMPORT_JSON_COLUMNS:
+        out[col] = crypto.encrypt_json(imp.get(col))
+    for bidx, (src, mode) in _IMPORT_BLIND_INDEX_COLUMNS.items():
+        out[bidx] = crypto.blind_index(imp.get(src), mode=mode)
     return out
+
+
+def seal_stored_row(row: dict) -> dict:
+    """The patch that seals an ALREADY-STORED import row, or `{}` when nothing on it is plaintext.
+
+    Separate from `_encrypt_import_row` for one reason, and it matters: a BLIND INDEX must be derived
+    from the plaintext. `_encrypt_import_row` runs on a row that is still plaintext in memory, so it
+    can always compute one. A stored row may have a sealed IMEI already, and indexing that ciphertext
+    would write a token that matches nothing — so the index is recomputed only where the stored IMEI
+    is still readable. Nothing already sealed is touched, and a row needing nothing returns `{}` so
+    the sweep issues no write.
+    """
+    from app.core import crypto
+    patch: dict = {}
+    for col in _ENCRYPTED_IMPORT_COLUMNS:
+        v = row.get(col)
+        if isinstance(v, str) and v.strip() and not crypto.is_encrypted(v):
+            patch[col] = crypto.encrypt(v)
+    for col in _ENCRYPTED_IMPORT_JSON_COLUMNS:
+        v = row.get(col)
+        if v is None or (isinstance(v, dict) and set(v.keys()) == {"enc"}):
+            continue
+        sealed = crypto.encrypt_json(v)
+        if isinstance(sealed, dict) and set(sealed.keys()) == {"enc"}:
+            patch[col] = sealed
+    for bidx, (src, mode) in _IMPORT_BLIND_INDEX_COLUMNS.items():
+        plain = row.get(src)
+        if isinstance(plain, str) and plain.strip() and not crypto.is_encrypted(plain) \
+                and not (row.get(bidx) or "").strip():
+            tok = crypto.blind_index(plain, mode=mode)
+            if tok:
+                patch[bidx] = tok
+    return patch
 
 
 def decrypt_receipt_row(row: dict | None) -> dict | None:
