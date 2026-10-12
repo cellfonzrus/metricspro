@@ -35,6 +35,8 @@ from datetime import datetime, timedelta, timezone, date as _date
 
 import requests
 
+from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
+
 DEFAULT_TARGET = 4.7
 TARGET_MIN, TARGET_MAX = 1.0, 5.0
 MIN_FIRST_NAME_LEN = 3          # names shorter than this are skipped entirely — too many false positives
@@ -462,10 +464,13 @@ def trigger_detail_text(rating, target, as_of: str | None = None) -> str:
 # missing migration/row never crashes a caller, per AGENT_CONTRACT §5. ──────────────────────────
 def get_config(client, org_id: str) -> dict:
     try:
+        # api_key is ENCRYPTED AT REST (index §CORE-03). THIS is the only reader of the column,
+        # so opening it here is what makes every caller (the sweep, the masked public config, the
+        # store resolver) see the real key without any of them knowing it was sealed.
         rows = (client.table("google_review_config").select("*").eq("org_id", org_id)
                 .limit(1).execute().data) or []
         if rows:
-            return rows[0]
+            return _psec.open_row("google_review_config", rows[0])
     except Exception:
         pass
     return {"org_id": org_id, "api_key": None, "enabled": False, "target_default": DEFAULT_TARGET,

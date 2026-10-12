@@ -486,6 +486,18 @@ on:
       # the frontend screens the axis lock scans are already named by the globs below.
       - "backend/harness_target_axis_lock.py"
       - "backend/harness_target_declared_axis.py"
+      # index §CORE-03 — WHICH STORED COLUMNS HOLD A CREDENTIAL. The lock names ITSELF and its home
+      # for the same §13e reason as the lines above, plus every module wired to the registry: a
+      # caller that stops dereferencing it is exactly what this job exists to catch, so a change to
+      # one of them must not be able to skip the job.
+      - "backend/harness_portal_secret_lock.py"
+      - "backend/app/modules/core/portal_secret.py"
+      - "backend/app/core/encryption_backfill.py"
+      - "backend/app/core/crypto.py"
+      - "backend/app/modules/storeops/google_reviews.py"
+      - "backend/app/modules/billing/router.py"
+      - "backend/app/modules/supply/api_credential.py"
+      - "database/migrations/**"
       - "backend/app/modules/commcalc/targets_engine.py"
       - "backend/app/modules/commcalc/manager_report_card.py"
       - "frontend/src/lib/target-axis.ts"
@@ -1016,6 +1028,9 @@ jobs:
       - name: Run the declared-category target proof (the four built-ins byte-identical with a catalog present; a declared category reaches need and pace with no new arithmetic; the backward calculation is honest with no days left - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_declared_axis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the stored-credential lock (a portal password, authenticator secret, session blob or vendor API key is ENCRYPTED AT REST; no caller decides for itself which columns are secret; a new credential column in the schema must be registered or excused in writing - index CORE-03)
+        working-directory: backend
+        run: python3 harness_portal_secret_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
