@@ -112,6 +112,32 @@ COA_STORE_IDENTITY_SANCTION = (
     "ambiguous_store_keys", "shared_store_identity_pairs",
 )
 
+#: SANCTIONED 2026-10-12 (index §14y.1, mig 1076, owner ruling *"Payroll from clack in should be
+#: from Oct 4 th onwards which would be the new cycle"*). THE P&L WAGE LINE NOW READS THE PUNCHES.
+#:
+#: Why these three functions changed, and why it is a FIX and not a drift. `wages_by_store` called
+#: `payroll_hours_basis.resolve_shift_row` with NO evidence, so the one home could only answer from
+#: `shifts.actual_hours` — the dead column (7 of 7,740 live rows). Under the house org's live
+#: `clocked_only` + `pay_from_schedule_default = false` config, every shift row therefore resolved
+#: `not_measured_unpaid` = ZERO and the wage line booked $374,733.02 -> $0.00 across Jun–Oct 2026
+#: (measured on live data 2026-10-12) while the punches sat unread in `storeops.timelog`.
+#:
+#: `wages_by_store` now reads the period's punches + corrections through the ONE pay-path read
+#: (`storeops/payroll_evidence.period_evidence`), consults `payroll_hours_basis.interlock`, and
+#: RAISES `EvidenceRefused` rather than returning a dict of zeros when the period may not be paid
+#: from. `derive_wage_cells` / `derive_wage_cells_with_basis` take that evidence and ask the one
+#: home for the DAY's hours, allocated back across that day's shift rows in the proportions those
+#: rows already had.
+#:
+#: ★ EVERY STORE AND COMPANY RESOLVER IN coa.py IS STILL PINNED BYTE-IDENTICAL. ★ Nothing here
+#: changes WHICH store or WHICH company money books to — only HOW MANY HOURS a day is worth, which
+#: is `payroll_hours_basis`'s decision and not coa's. Locked by
+#: `backend/harness_payroll_hours_basis_lock.py` §H (a caller that stops passing evidence, or stops
+#: consulting the interlock, fails the build) and proven by `harness_payroll_hours_basis.py` §P/§Q.
+COA_PAID_HOURS_EVIDENCE_SANCTION = (
+    "wages_by_store", "derive_wage_cells", "derive_wage_cells_with_basis",
+)
+
 
 def coa_movement(base_src, now_src, sanctioned=()):
     """Compare two revisions of coa.py. Returns (removed, changed_outside_sanction, attribution_moved).

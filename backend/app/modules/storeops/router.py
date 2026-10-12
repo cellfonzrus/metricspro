@@ -53,6 +53,8 @@ from app.modules.storeops import salary_expense as _salexp
 # THE ONE HOME for "which hours is this employee paid for on this day, and on what basis" (§14y),
 # and the clock-report variance / Monday ask / Tuesday gate it feeds (§14z).
 from app.modules.storeops import payroll_hours_basis as _hours_basis
+# THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
+from app.modules.storeops import payroll_evidence as _payevid
 from app.modules.storeops import clock_variance as _clockvar
 from app.modules.storeops.payroll_identity import (
     business_id_alias_map as _business_id_alias_map,
@@ -985,7 +987,9 @@ def _shift_actual_contribution(s, manual_days, punch_days, hours_cfg=None):
         # only — which is exactly `_punch_counts_for_pay`'s other half of the same no-double-count
         # rule, now stated in one place rather than two.
         cell["_raw_punches"] = [{"clock_out": d, "hours": 0.0}]
-    hrs, _basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell)
+    # `d` is this row's own business date — it decides which side of this org's
+    # `clocked_basis_effective_from` floor the day falls on (owner ruling 2026-10-12, mig 1076).
+    hrs, _basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell, d)
     return hrs
 
 
@@ -1006,7 +1010,7 @@ def _shift_actual_contribution_with_basis(s, manual_days, punch_days, hours_cfg=
             "shift_actual_rows": 1 if float(s.get("actual_hours") or 0) > 0 else 0}
     if d in punch_days.get(eid, ()) and d not in manual_days.get(eid, ()):
         cell["_raw_punches"] = [{"clock_out": d, "hours": 0.0}]
-    hrs, basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell)
+    hrs, basis, _detail = _hours_basis.resolve_shift_row(s, cfg, None, cell, d)
     return hrs, basis
 
 
@@ -1022,8 +1026,8 @@ def _punch_counts_for_pay(t, manual_days, hours_cfg=None):
     cfg = hours_cfg if isinstance(hours_cfg, dict) else _hours_basis.resolve_config(None)
     eid = t.get("employee_id")
     d = str(t.get("work_date") or "")[:10]
-    cell = {"shift_actual": 1.0 if d in manual_days.get(eid, ()) else 0.0}
-    return _hours_basis.punch_counts_for_pay(t, cell, cfg)
+    cell = {"day": d, "shift_actual": 1.0 if d in manual_days.get(eid, ()) else 0.0}
+    return _hours_basis.punch_counts_for_pay(t, cell, cfg, d)
 
 
 def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
@@ -8720,14 +8724,25 @@ def _pto_gather(org_id: str, period: str):
     period_start, period_end = pto_month_bounds(period)
     ps, pe = period_start.isoformat(), period_end.isoformat()
 
-    employees = (sb().table("employees").select("employee_id,name,home_store,pay_rate,role,is_active")
+    # `pay_from_schedule` (mig 1073) is the owner's per-employee tick box; without it on the roster
+    # `resolve_shift_row` cannot see it and the tick silently does not apply to PTO's hours.
+    employees = (sb().table("employees")
+                 .select("employee_id,name,home_store,pay_rate,role,is_active,pay_from_schedule")
                  .eq("org_id", org_id).execute().data) or []
     emp_by_id = {e["employee_id"]: e for e in employees if e.get("employee_id")}
 
     shifts = (sb().table("shifts").select("employee_id,store_code,scheduled_hours,actual_hours,shift_date")
               .eq("org_id", org_id).eq("is_deleted", False)
               .gte("shift_date", ps).lte("shift_date", pe).execute().data) or []
-    hours_by_emp_store = pto_hours_worked_from_shifts(shifts)
+    # THE DAY'S PUNCHES AND THE INTERLOCK (owner directive 2026-10-12, index §14y). ONE read —
+    # `storeops/payroll_evidence.period_evidence` — never a punch query here. Without it
+    # `hours_worked_from_shifts` saw only `shifts.actual_hours`, the dead column, and PTO accrued on
+    # ZERO hours for a clocked-only org. `pe` is an INCLUSIVE end, so it goes through `day_after`
+    # rather than being compared with `lt` against an exclusive boundary it is not.
+    _pto_ev = _payevid.period_evidence(sb(), org_id, ps, _payevid.day_after(pe), shifts,
+                                       employee_rows=employees)
+    hours_by_emp_store = pto_hours_worked_from_shifts(shifts, _pto_ev["cfg"], emp_by_id,
+                                                      _pto_ev["evidence"])
 
     time_off_raw = (sb().table("time_off_requests").select("employee_id,start_date,end_date,type,status")
                      .eq("org_id", org_id).eq("status", "approved")
@@ -8766,7 +8781,14 @@ def _pto_gather(org_id: str, period: str):
                           home_store_by_employee=home_store, prior_balance_by_employee=prior_balance,
                           employee_names=names)
     org_effective = pto_resolve_effective_config(cfg_rows.get("org"), None, None)
-    return result, {"period_start": ps, "period_end": pe, "org_effective": org_effective}
+    # THE REFUSAL TRAVELS WITH THE NUMBERS, never instead of them being published silently: the
+    # accrual is hours-derived, so a period whose paid hours the interlock refuses has an accrual
+    # that is not a measurement either, and the surface says so (CLAUDE.md — a data defect is
+    # REPORTED, never hidden behind a figure).
+    return result, {"period_start": ps, "period_end": pe, "org_effective": org_effective,
+                    "hours_interlock": _pto_ev["interlock"],
+                    "hours_refusal": _payevid.refusal(_pto_ev),
+                    "hours_blockers": _pto_ev["blockers"]}
 
 
 @router.get("/pto-accrual/{period}")
@@ -8797,7 +8819,14 @@ def get_pto_accrual(period: str, authorization: str = Header(default=""), org_id
             _payvis.strip_pay(list((_e.get("by_store") or {}).values()), fields=("cost",))
     return {"period": period, "mode": meta["org_effective"]["mode"], "rate": meta["org_effective"]["accrual_rate"],
             "stores": stores, "employees": sorted(employees, key=lambda r: r.get("name") or ""),
-            "last_run_at": last_run_at}
+            "last_run_at": last_run_at,
+            # THE HOURS-BASIS VERDICT, ON THE RESPONSE (owner directive 2026-10-12, index §14y.1).
+            # PTO accrues on HOURS, so a period whose paid hours the interlock refuses has an
+            # accrual that is not a measurement either — and it says so rather than rendering a
+            # figure that reads as counted. CLAUDE.md: a data defect is reported, never hidden.
+            "hours_interlock": meta.get("hours_interlock"),
+            "hours_refusal": meta.get("hours_refusal"),
+            "hours_blockers": meta.get("hours_blockers")}
 
 
 def _pto_push_expense_line(org_id: str, period: str, cells: list) -> dict:
@@ -9379,17 +9408,27 @@ def _payex_gather(org_id: str, period: str):
     """Shared fetch+compute for both the read-only GET and the persisting POST /run. Reuses the SAME
     shifts/rate basis pto_accrual.py + /payroll-by-store use (hours = actual if clocked else
     scheduled, wages = hours * pay_rate, attributed to the shift's own store_code)."""
-    employees = (sb().table("employees").select("employee_id,name,home_store,pay_rate")
+    employees = (sb().table("employees").select("employee_id,name,home_store,pay_rate,pay_from_schedule")
                  .eq("org_id", org_id).execute().data) or []
     rates = {e["employee_id"]: float(e.get("pay_rate") or 0) for e in employees if e.get("employee_id")}
     names = {e["employee_id"]: e.get("name") or "" for e in employees if e.get("employee_id")}
+    # `pay_from_schedule` ADDED 2026-10-12: it is the owner's per-employee tick box, and without it
+    # on this roster `resolve_shift_row` cannot see it at all and falls to the org default — i.e.
+    # the tick box silently did not apply to the payroll-expense and payroll-tax figures.
+    emp_by_id = {e["employee_id"]: e for e in employees if e.get("employee_id")}
 
     period_start, period_end = pto_month_bounds(period)      # reuse the same 'YYYY-MM' bounds helper
     ps, pe = period_start.isoformat(), period_end.isoformat()
     shifts = (sb().table("shifts").select("employee_id,store_code,scheduled_hours,actual_hours,shift_date")
               .eq("org_id", org_id).eq("is_deleted", False)
               .gte("shift_date", ps).lte("shift_date", pe).execute().data) or []
-    hours_by_emp_store = pto_hours_worked_from_shifts(shifts)     # reuse the PTO engine's shift reader
+    # THE DAY'S PUNCHES AND THE INTERLOCK (owner directive 2026-10-12, index §14y) — the SAME one
+    # read `_pto_gather` uses, so payroll expenses, payroll tax and PTO cannot disagree about how
+    # many hours were worked. Before this, all three read `shifts.actual_hours` only.
+    _px_ev = _payevid.period_evidence(sb(), org_id, ps, _payevid.day_after(pe), shifts,
+                                      employee_rows=employees)
+    hours_by_emp_store = pto_hours_worked_from_shifts(shifts, _px_ev["cfg"], emp_by_id,
+                                                      _px_ev["evidence"])
 
     tax_org_row = None
     try:
@@ -9432,7 +9471,11 @@ def _payex_gather(org_id: str, period: str):
     cells = payex_rollup_cells(tax_result["stores"], item_result["stores"])
     return {"tax": tax_result, "items": item_result, "cells": cells, "tax_cfg": tax_cfg,
             "wages_by_store": wages_by_store, "headcount_by_store": headcount_by_store,
-            "employee_names": names}
+            "employee_names": names,
+            # REPORTED, never hidden: every figure above is hours-derived, so a refused period's
+            # payroll tax and payroll expenses are not measurements either and must say so.
+            "hours_interlock": _px_ev["interlock"], "hours_refusal": _payevid.refusal(_px_ev),
+            "hours_blockers": _px_ev["blockers"]}
 
 
 @router.get("/payroll-expenses/{period}")
@@ -9487,7 +9530,14 @@ def get_payroll_expenses(period: str, authorization: str = Header(default=""), o
             "gross_cells": gross_cells, "gross_last_run_at": gross_last_run_at,
             "gross_label": sal["config"]["line_label"], "gross_stores": gross_stores,
             "gross_withheld": gross_withheld, "gross_unbound": sal["unbound"],
-            "gross_totals": sal["totals"], "gross_source_error": sal.get("source_error")}
+            "gross_totals": sal["totals"], "gross_source_error": sal.get("source_error"),
+            # THE HOURS-BASIS VERDICT, ON THE RESPONSE (owner directive 2026-10-12, index §14y.1).
+            # Every tax and item figure above is hours-derived, so a period whose paid hours the
+            # interlock refuses has a payroll-tax and payroll-expense figure that is not a
+            # measurement either. It is REPORTED, never hidden behind the number.
+            "hours_interlock": g.get("hours_interlock"),
+            "hours_refusal": g.get("hours_refusal"),
+            "hours_blockers": g.get("hours_blockers")}
 
 
 def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:

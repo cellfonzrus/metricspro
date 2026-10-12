@@ -333,7 +333,13 @@ import harnesslib                                                               
 # question. `harnesslib.COA_STORE_IDENTITY_SANCTION` carries that sanction and the measurement
 # behind it (1 divergence in 71 live house store strings — the reported defect; 0 in 49 across the
 # other tenants). Everything else in coa.py is still pinned byte-identical.
-COA_SANCTIONED = ("build_inputs", "_account_config", "wages_by_store") + harnesslib.COA_STORE_IDENTITY_SANCTION
+COA_SANCTIONED = (("build_inputs", "_account_config")
+                  + harnesslib.COA_STORE_IDENTITY_SANCTION
+                  # §14y.1 (2026-10-12): the P&L wage line now reads the punches — `wages_by_store`
+                  # plus the two pure wage-cell functions it hands the evidence to. See the
+                  # sanction's own comment in harnesslib for the measurement and why no resolver
+                  # moved; `wages_by_store` was already sanctioned here and is carried in that list.
+                  + harnesslib.COA_PAID_HOURS_EVIDENCE_SANCTION)
 _coa_base = _git("show", "%s:%s" % (base or "HEAD", coa_path)).stdout
 _coa_now = open(os.path.join(HERE, "app/modules/account/coa.py"), encoding="utf-8").read()
 if _coa_base.strip():

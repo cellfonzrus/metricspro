@@ -42,6 +42,8 @@ from app.modules.account import device_cogs as _device_cogs
 from app.modules.account import store_identity as _sid
 # THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
 from app.modules.storeops import payroll_hours_basis as _hours_basis
+# THE ONE punch/correction read on the pay path, and the interlock that gates paying from it (§14y).
+from app.modules.storeops import payroll_evidence as _payevid
 # Canonical finance period parser lives in _period; re-exported here so existing
 # `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
 from app.modules.account._period import parse_period  # noqa: F401
@@ -599,7 +601,7 @@ def monthly_salary_equivalent(pay_basis, pay_amount):
     return round(m, 2)
 
 
-def derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg=None):
+def derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg=None, evidence=None):
     """PURE core of wages_by_store (harness: harness_wages_salary_basis.py) → {store_address: wages}
     (key None = company-wide, no attributable store).
 
@@ -623,7 +625,23 @@ def derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg=None):
     # The hours basis config (per org, house defaults = today). Passed in by `wages_by_store`;
     # `None` resolves to the house defaults, so a direct caller is byte-identical to before.
     hours_cfg = _hours_basis.resolve_config(hours_basis_cfg if isinstance(hours_basis_cfg, dict) else None)
+    # THE DAY'S PUNCHES AND CORRECTIONS (owner directive 2026-10-12, index §14y).
+    # Before this, every shift row reached the one home with NO evidence, so the only measurement it
+    # could see was `shifts.actual_hours` — the dead column (7 of 7,740 live rows) — and a
+    # clocked-only org therefore booked `not_measured_unpaid` = $0.00 for a month whose punches were
+    # sitting in `storeops.timelog`: $374,733.02 -> $0.00 over Jun–Oct 2026, measured 2026-10-12.
+    # `evidence` is `storeops/payroll_evidence.period_evidence`'s index, passed in by
+    # `wages_by_store` — the ONE punch read on the pay path, never a second query here.
+    # ONE ROW PER SHIFT ROW, each carrying its share of its DAY's paid hours — see
+    # `payroll_evidence.paid_hours_rows` on why passing a bare cell to `resolve_shift_row` is not
+    # enough on a shift-row loop (it returns 0.0 for a day a punch measured, because the Payroll
+    # screen counts those hours off the punch row and this loop never sees a punch row).
     emp_row_by_id = {e.get("employee_id"): e for e in (emps or []) if e.get("employee_id")}
+    # ZIPPED BY POSITION: `paid_hours_rows` guarantees one row per shift row in order, and two
+    # shift rows can be the same dict object, so an identity map would pay one share twice.
+    _ph = (_payevid.paid_hours_rows({"evidence": evidence, "cfg": hours_cfg}, shifts or [],
+                                    emp_by_id=emp_row_by_id, cfg=hours_cfg)
+           if isinstance(evidence, dict) and evidence else [])
     basis_counts = {}
     rate, home, active, salary = {}, {}, {}, {}
     for e in (emps or []):
@@ -646,13 +664,18 @@ def derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg=None):
             out[addr] = round(out.get(addr, 0.0) + amt, 2)
 
     sal_hours = {}   # eid -> {addr: hours} for salaried allocation
-    for s in (shifts or []):
+    for _si, s in enumerate(shifts or []):
         eid = s.get("employee_id")
         # ONE HOME for paid hours (index §14y, storeops/payroll_hours_basis). This read used to be
         # `actual_hours or scheduled_hours` — the silent `or` that made the P&L's wage line a copy
         # of the schedule on 7,733 of 7,740 live shift rows. The basis now travels with the number
         # and is rolled up into `hours_basis` for the labour-coverage banner to show.
-        hrs, _basis_kind, _ = _hours_basis.resolve_shift_row(s, hours_cfg, emp_row_by_id.get(eid))
+        _row = _ph[_si] if _si < len(_ph) else None
+        if _row is not None:
+            hrs, _basis_kind = _row["hours"], _row["basis"]
+        else:
+            hrs, _basis_kind, _ = _hours_basis.resolve_shift_row(s, hours_cfg,
+                                                                 emp_row_by_id.get(eid))
         basis_counts[_basis_kind] = basis_counts.get(_basis_kind, 0) + 1
         if eid in salary:
             if hrs:
@@ -684,10 +707,10 @@ def derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg=None):
     return out, basis_counts
 
 
-def derive_wage_cells(emps, shifts, code2addr, hours_basis_cfg=None):
+def derive_wage_cells(emps, shifts, code2addr, hours_basis_cfg=None, evidence=None):
     """The wage cells alone — the shape every existing caller reads. See
     `derive_wage_cells_with_basis` for the same computation plus the hours-basis rollup."""
-    cells, _basis = derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg)
+    cells, _basis = derive_wage_cells_with_basis(emps, shifts, code2addr, hours_basis_cfg, evidence)
     return cells
 
 
@@ -714,8 +737,21 @@ def wages_by_store(client, org_id, period):
               .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
               .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
               .range(0, 9999).execute().data) or []
-    # The hours basis is this org's declared one (index §14y) — read once, here, and handed down.
-    return derive_wage_cells(emps, shifts, code2addr, _hours_basis.load_config(so, org_id))
+    # ── THE EVIDENCE, AND THE VERDICT ON IT (owner directive 2026-10-12, index §14y) ───────────
+    # THE ONE punch read on the pay path (`storeops/payroll_evidence`): the day's `timelog` punches
+    # and `manual_hours` corrections for exactly this period, org-scoped, half-open [lo, hi) —
+    # the SAME convention the shifts read above uses, so the two cannot disagree by a day.
+    # Without this the figures below were `shifts.actual_hours`-only, i.e. the dead column, and a
+    # clocked-only org booked $0.00 over months whose punches were present (measured 2026-10-12:
+    # $374,733.02 -> $0.00, Jun–Oct 2026). The INTERLOCK is consulted, and a refusal RAISES rather
+    # than returning a dict of zeros: this function's whole output is money, and a tenant with no
+    # shifts and a tenant whose clock data never arrived must never produce the same cells.
+    _res = _payevid.period_evidence(so, org_id, f"{month}-01", nxt, shifts, employee_rows=emps,
+                                    cfg=_hours_basis.load_config(so, org_id))
+    _ref = _payevid.refusal(_res)
+    if _ref:
+        raise _payevid.EvidenceRefused(_ref)
+    return derive_wage_cells(emps, shifts, code2addr, _res["cfg"], _res["evidence"])
 
 
 def store_code_to_address(client, org_id):
@@ -2074,6 +2110,11 @@ def build_inputs(client, org_id, period):
     # figures, and booking a dollar we cannot prove is un-duplicated is worse than reporting it.
     _grain = acct_cfg.get("payroll_authority_grain", "org")
     _est_added, _est_skipped_cw = {}, 0.0
+    #: THE REFUSAL, carried to the line's note below. `wages_by_store` raises
+    #: `payroll_evidence.EvidenceRefused` when this period's clock evidence may not be paid from
+    #: (index §14y, owner directive 2026-10-12) — the estimate is then NOT booked, and the statement
+    #: SAYS SO instead of carrying a silent $0.00 that reads like a counted figure.
+    _wage_refusal = None
     if has_payroll_gross and _grain == "store":
         try:
             for st, amt in wages_by_store(client, org_id, period).items():
@@ -2084,6 +2125,9 @@ def build_inputs(client, org_id, period):
                     continue                    # unattributable — reported, never booked
                 add("wages", st, amt)
                 _est_added[st] = amt
+        except _payevid.EvidenceRefused as e:
+            _wage_refusal = str(e)
+            _warn("StoreOps hours wages estimate (store grain) REFUSED — clock evidence", e)
         except Exception as e:
             _warn("StoreOps hours wages estimate (store grain) skipped", e)
     if has_payroll_gross:
@@ -2098,6 +2142,9 @@ def build_inputs(client, org_id, period):
         try:
             for st, amt in wages_by_store(client, org_id, period).items():
                 add("wages", st, amt)
+        except _payevid.EvidenceRefused as e:
+            _wage_refusal = str(e)
+            _warn("StoreOps shifts x rate wages estimate REFUSED — clock evidence", e)
         except Exception as e:
             _warn("StoreOps shifts x rate wages estimate skipped", e)
 
@@ -2112,17 +2159,28 @@ def build_inputs(client, org_id, period):
         _lcov = _lcov_mod()
         _cov_stores = (client.schema("storeops").table("stores").select("store_code,is_active")
                        .eq("org_id", org_id).limit(50000).execute().data) or []
+        _cov_shifts = _lcov.load_shift_hours(client, org_id, period)
+        # THE PUNCH EVIDENCE + THE INTERLOCK (owner directive 2026-10-12, §14y) — the SAME one read
+        # `wages_by_store` above used, so the note and the money cannot disagree about what was
+        # measured. DISPLAY-ONLY here: this block still moves no figure.
+        _cov_ev = _lcov.load_hours_evidence(client, org_id, period, _cov_shifts) or {}
         _cov = _lcov.labour_coverage(
-            [s.get("store_code") for s in _cov_stores], exp_rows,
-            _lcov.load_shift_hours(client, org_id, period),
+            [s.get("store_code") for s in _cov_stores], exp_rows, _cov_shifts,
             acct_cfg.get("payroll_expense_names_list") or [], period,
             carried_from=_exp_carried_from,
             active_codes=[s.get("store_code") for s in _cov_stores
-                          if s.get("is_active") is not False])
+                          if s.get("is_active") is not False],
+            hours_basis_cfg=_cov_ev.get("cfg"), evidence=_cov_ev.get("evidence"),
+            hours_interlock=_cov_ev.get("interlock"))
         # Only the NOTE is attached to the line. The full per-store coverage report is served by the
         # GP payload (`labour_coverage`), which is where a reader drills; putting a nested dict on an
         # inputs line would ride into every snapshot for no gain.
         _bits = [b for b in (_cov.get("note"),) if b]
+        if _wage_refusal:
+            # REPORTED, NOT HIDDEN (CLAUDE.md: a defect found in live data is reported, never
+            # "fixed" by writing code that hides it). The wage estimate is absent from this line and
+            # the reader is told exactly why, in the interlock's own sentence.
+            _bits.append("The hours-based wage estimate is NOT included on this line: " + _wage_refusal)
         if _est_added:
             _bits.append(
                 f"{len(_est_added)} store(s) with no payroll figure of their own are shown at their "
