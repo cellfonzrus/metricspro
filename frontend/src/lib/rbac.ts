@@ -557,10 +557,6 @@ export const NAV: NavGroup[] = [
     // management review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // STORE TAKEOVER EVALUATION (owner directive 2026-10-12, index §COMMCALC-03) — a P&L for a store
-    // we do not own yet, from its own uploaded MA feeds against OUR average store expenses with ITS
-    // actual rent, plus the multi-line account sub-report. Scoped 'all' only: a prospect belongs to
-    // nobody's market until a deal closes, and the figures are a company decision.
-    { href: '/commcalc/store-takeover', label: 'Store Takeover Evaluation', icon: '🏷️', module: 'commissions', scopes: ['all'], tileOnly: true },
     // CLOCK VARIANCES (owner directive 2026-10-10, index §14z) — the one management surface that says
     // whether payroll can be run at all this week. Listed here as a tileOnly DUPLICATE of its StoreOps
     // entry, module + scopes byte-identical, so it adds no permission surface (the Reports-directory
@@ -816,6 +812,18 @@ export const NAV: NavGroup[] = [
     // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
     // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
     { href: '/hub/finance', label: 'Finance Dashboard', icon: '💼', module: 'accounts' },
+    // STORE TAKEOVER EVALUATION (owner ask 2026-10-12, index COMMCALC-03) — the P&L of a store we
+    // do not own yet, from its own uploaded MA feeds against OUR average store expenses with ITS
+    // actual rent, plus the multi-line account sub-report. Scoped 'all' only: a prospect belongs to
+    // nobody's market until a deal closes, and the figures are a company decision.
+    // IN THE FINANCE GROUP at the owner's request ("create a tile in the finance dashboard",
+    // 2026-10-12) — it builds a P&L, so Finance is where he looks for it. `module` stays
+    // 'commissions' and `scopes` stays ['all'], so this regrouping is the ZERO-RBAC-CHANGE
+    // operation this file's taxonomy note describes: a group is information architecture, and
+    // canSeeItem gates on item.module, not on the group. Nobody gains or loses access. The Finance
+    // group has NO saved tile layout, so its auto-derived dashboard picks this up as a real tile
+    // item rather than the trailing 'More' catch-all, with no config row freezing that default.
+    { href: '/commcalc/store-takeover', label: 'Store Takeover Evaluation', icon: '🏷️', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/accounts', label: 'Dashboard', icon: '💼', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/trends', label: 'Trends', icon: '📊', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     // Financial Analysis + Cash Flow (finance roadmap Phases 2–5, 2026-09-02): charts/projections/
