@@ -25198,9 +25198,9 @@ own `trade_in_spiff` rate.
 | Side | Home | What it answers |
 |---|---|---|
 | code | `backend/app/modules/commcalc/trade_in_basis.py` | the whole question. `resolve_basis` (an ALLOWLIST: `pos` / `carrier` / `higher`, anything else → the house default `pos`), `resolve_declaration` (which departments / categories / product words mean trade-in, **case-folded**), `resolve_carrier_payment_types`, `is_pos_trade_in` (the per-line predicate), `pos_trade_in_txns` (DISTINCT `trans_id`), `is_carrier_trade_in` (the per-row predicate) + `carrier_trade_in_count` (its aggregate), `count_for_pay` → `(count, which_record)`, `unresolved_pos_count` |
-| config | `commcalc.accessory_config` (mig **1074**): `trade_in_basis`, `trade_in_departments`, `trade_in_categories`, `trade_in_keywords`, `trade_in_payment_types` | the org's declaration. Every column nullable with no default, so applying 1074 changes nothing by itself |
+| config | `commcalc.accessory_config` (mig **1075**): `trade_in_basis`, `trade_in_departments`, `trade_in_categories`, `trade_in_keywords`, `trade_in_payment_types` | the org's declaration. Every column nullable with no default, so applying 1075 changes nothing by itself |
 | engine | `commcalc/calculator.py` | dereferences the home and keeps no answer of its own |
-| threading | `router._accessory_config_uncached` → `router` cfg → `calc_rep_commissions` | the same path `acima_tenders`, `setup_fee_keywords` and `line_class_rules` already travel (§4b.1's one whole-row read, so an un-run 1074 degrades these five columns to their code defaults and nothing else) |
+| threading | `router._accessory_config_uncached` → `router` cfg → `calc_rep_commissions` | the same path `acima_tenders`, `setup_fee_keywords` and `line_class_rules` already travel (§4b.1's one whole-row read, so an un-run 1075 degrades these five columns to their code defaults and nothing else) |
 | lock | `backend/harness_trade_in_basis.py`, CI step in `carrier-vocab-guard.yml` | 65 checks; **14 fail against the pre-fix `calculator.py`** |
 
 **House default `pos`.** The ruling is about the mechanism, not about one carrier: the till is where a
@@ -25247,7 +25247,7 @@ would have been paid as a trade-in. Check **C5** reddened on it; `_fold` now dro
 
 ### Money posture
 
-Computing is not paying. Migration 1074 is **surfaced for owner approval, not applied**, and applying
+Computing is not paying. Migration 1075 is **surfaced for owner approval, not applied**, and applying
 it moves nothing on its own. What moves rep pay is the **next Run Calculation** after this ships, by
 the deltas tabled above — including **September 2026, a month already paid**, which would rise $300.
 **Back-pay for Jun–Oct was offered on the same decision card and NOT chosen**, so no stored row is
@@ -25271,7 +25271,7 @@ already enumerates the built-in terms and is the home to dereference. Recorded, 
 
 ### COMMCALC-01.1 Cross-references
 
-- **§16 (by TABLE):** `commcalc.accessory_config` — five new columns (mig 1074), read by
+- **§16 (by TABLE):** `commcalc.accessory_config` — five new columns (mig 1075), read by
   `router._accessory_config_uncached` on the one whole-row read; no new table.
   `commcalc.daily_sales_feed` and `commcalc.raw_payment_detail` are READ, unchanged, by existing paths.
 - **§17 (by ENDPOINT):** none added. `POST /commcalc/run-calculation` (existing) now returns

@@ -569,7 +569,7 @@ on:
       - "backend/harness_boost_terms_lock.py"
       - "backend/harness_trade_in_basis.py"
       - "backend/app/modules/commcalc/trade_in_basis.py"
-      - "database/migrations/1074_trade_in_basis_config.sql"
+      - "database/migrations/1075_trade_in_basis_config.sql"
       - "backend/app/modules/commcalc/boost_terms.py"
       - "backend/app/modules/commcalc/payout_structure.py"
       - "backend/harness_kpi_vintage.py"

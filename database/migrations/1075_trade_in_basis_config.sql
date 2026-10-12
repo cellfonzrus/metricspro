@@ -1,4 +1,13 @@
--- 1074_trade_in_basis_config.sql
+-- 1075_trade_in_basis_config.sql
+-- RENUMBERED from 1074 on 2026-10-12, before anything ran it. Number 1074 went to
+-- `1074_target_line.sql` (PR #446, still open), which the owner APPLIED to production the same
+-- evening — `commcalc.target_line` exists there, verified read-only. An applied number cannot be
+-- renumbered without lying about what was run; this file had not been applied, so it moved. The two
+-- migrations touch different objects, so nothing in the database conflicts. The CAUSE is that
+-- nothing ALLOCATES a migration number across branches: `harness_unique_numbers_lock` only sees the
+-- files on the branch it runs on, so two agents on two branches cannot collide in a way it can
+-- catch. Reported, not fixed here — it wants its own change, next to the §CORE-01.5 section-id
+-- allocator that solves exactly this problem one directory over.
 -- TRADE-IN BASIS — "which record says a trade-in happened" becomes a DECLARED per-org fact.
 --
 -- Owner ruling 2026-10-12 (decision card, option "Point of sale"): the trade-in spiff counts
