@@ -25988,3 +25988,55 @@ source the commission pass retires.
 The POS store spelling goes in `store_address`; `flag_store_resolver.stamp_flags` (mig 285) is the one
 home that turns it into a `store_code` a district manager's board can filter on. A code guessed in the
 detector would be a second store resolver (§64).
+
+### COMMCALC-05.10 The drill-down, and what was sold alongside
+
+Owner, 2026-10-12: *"for all these flagged activations with more than one phone sold we need to have
+the drilldown to check who made the sale for how much, if no accessories are sold with the sale and no
+activation fee it is definletly leaning towards fraud"*.
+
+| Thing | Where |
+|---|---|
+| the drill-down | `GET /commcalc/watchdog/multi-handset` — per case: every handset line's rep, amount, device, serial, receipt |
+| accessory dollars on the same receipts | `router._is_accessory`, INJECTED |
+| set-up / activation fee lines | `router._is_setup_fee` (mig 217 keyword list), INJECTED |
+
+**Why an endpoint and not a column.** `flag_persist._ROW_FIELDS` is the set of columns the findings
+table holds and a per-line breakdown is not one of them — the evidence dict is dropped on write by
+design. The board keeps the one-line finding a manager scans; the drill-down answers "show me the
+lines" from the feed at read time, through the same `_read_sales` one home, so the two cannot disagree
+about what the month contained. It applies the district-manager span filter BEFORE counting.
+
+**Both companion predicates are injected, over the SAME `accessory_config` row `box_departments` comes
+from.** One declaration therefore answers "is this a handset", "is this an accessory" and "is this a
+fee", so the three readings cannot disagree about one line. There are about eight divergent accessory
+classifiers in this codebase (see `accessory_definition.py`); picking a different one here would have
+made the drill-down disagree with the Sales Report's own accessory dollars. A fee is not counted as an
+accessory — the Sales Report's rule, kept so both numbers mean here what they mean everywhere else.
+
+**Not measured is not zero.** With no predicate supplied the signals are `None` and the sentence
+asserts nothing about them. Only a real look that found nothing yields `0.0`, which is when the
+coaching note changes to *"Nothing was sold alongside these handsets … pull the receipts and the
+buyer's ID before the return window closes."* §I4–I6 of the lock fail the build if an unmeasured run
+can ever render as "none sold" — otherwise an unconfigured tenant reads as a chain full of fraud.
+
+**THE OWNER'S RULE WAS MEASURED BEFORE IT WAS BUILT, AND HIS CONJUNCTION DOES NOT FIRE.** On live
+October 2026, across both tenants with sales (17 flagged cases):
+
+| | house org | the other tenant |
+|---|---|---|
+| flagged cases | 4 | 13 |
+| **no accessory on the sale** | 0 | **2** |
+| no set-up/activation fee | 0 | 0 |
+| **neither accessory nor fee** | **0** | **0** |
+
+A set-up or activation fee is present on every flagged case — the house org bills one per handset —
+so "no activation fee" discriminates nothing on this data, and the AND of the owner's two conditions
+would have shown him an empty screen. **Accessory dollars alone are the signal**: they narrow 17 cases
+to 2. Both numbers are reported and neither is turned into a verdict; `signal` on each case lists which
+of the two is absent, as a filter.
+
+The standout the signal surfaces: **4 promo iPhones at $0.00 each, one receipt, one rep, no
+accessories**, on a port-in multi-line promotion. The other of the two reads like a genuine household
+bundle (a tablet, a home-internet router and a phone), which is exactly why the detector reports and
+does not conclude.

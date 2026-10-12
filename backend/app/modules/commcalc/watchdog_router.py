@@ -234,6 +234,85 @@ def watchdog_voids(period: str = Query(default=""), authorization: str = Header(
     return s
 
 
+# ── The drill-down: who sold it, for how much, and what was sold alongside. ─────────────────────
+@router.get("/watchdog/multi-handset")
+def watchdog_multi_handset(period: str = Query(default=""), authorization: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    """Every flagged buyer-day with its LINES — the rep, the amount, the device, the receipt — plus
+    the accessory dollars and fee lines that were on the same sale.
+
+    OWNER ASK 2026-10-12, verbatim: *"for all these flagged activations with more than one phone sold
+    we need to have the drilldown to check who made the sale for how much, if no accessories are sold
+    with the sale and no activation fee it is definletly leaning towards fraud"*.
+
+    WHY AN ENDPOINT AND NOT A COLUMN. `flag_persist._ROW_FIELDS` is the set of columns the findings
+    table holds, and a per-line breakdown is not one of them — the evidence dict is dropped on write
+    by design. So the board keeps the one-line finding a manager scans, and this answers "show me the
+    lines" from the feed, live, at read time. It is the same shape as `/watchdog/voids` above and goes
+    through the same `_read_sales` one home, so the drill-down and the finding cannot disagree about
+    what the month contained.
+
+    THE OWNER'S RULE, REPORTED AND NOT ENFORCED. `signal` names which of the two companion signals
+    are absent. It is a filter, not a verdict: measured on live October 2026, a set-up or activation
+    fee is present on 16 of 17 flagged cases (the house org bills one per handset), so the fee alone
+    barely discriminates, while only 2 of 17 carry no accessory at all. The numbers are given; the
+    call is the manager's.
+    """
+    p = _s(period) or _period_now()
+    client = get_supabase()
+    try:
+        rows, tbl = _read_sales(
+            client, org_id, p,
+            "store,salesperson,ext_price,trans_id,trans_date,product_desc,serial_1,"
+            "mdn,voided,trans_type,department,category,customer")
+    except Exception as e:
+        raise HTTPException(503, f"sales feed unavailable: {str(e)[:200]}")
+
+    # The SAME district-manager span filter the findings use, applied BEFORE anything is counted, so
+    # a market manager's drill-down can never show a store their flag queue hides.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, None, r.get("store"))]
+
+    from app.modules.commcalc.gp_report import is_voided
+    from app.modules.commcalc.router import _accessory_config, _is_accessory, _is_setup_fee
+    _acfg = _accessory_config(client, org_id)
+    box = _acfg.get("box_departments") or set()
+    live = [r for r in rows
+            if not is_voided(r.get("voided"))
+            and _s(r.get("trans_type")) != "Return"]
+    grouped = _handsets.group_by_buyer_day(live, box)
+    rules = _read_rules(client, org_id)
+    thr = _reg.rule_params(_handsets.FLAG_TYPE, rules).get(_handsets.THRESHOLD_KEY)
+    found = _handsets.cases(
+        grouped, thr,
+        is_accessory=(lambda r, _a=_acfg: _is_accessory(_s(r.get("department")), r.get("category"),
+                                                        r.get("product_desc"), _a)),
+        is_fee=(lambda r, _a=_acfg: _is_setup_fee(r.get("product_desc"), _a)))
+
+    out = []
+    for c in found:
+        missing = []
+        if c.get("accessory_dollars") == 0:
+            missing.append("no accessories")
+        if c.get("fee_lines") == 0:
+            missing.append("no set-up or activation fee")
+        out.append({**c,
+                    "description": _handsets.describe(c),
+                    "coaching_note": _handsets.coaching_note(c),
+                    "signal": missing})
+    return {"org_id": org_id, "period": p, "as_of": _now(),
+            "threshold": thr, "enabled": _reg.is_enabled(_handsets.FLAG_TYPE, rules),
+            "box_departments": sorted(box),
+            "sales_table": tbl,
+            # The feed genuinely carrying nothing for this period is NOT "no cases" — it is
+            # "not reported", and a screen must be able to say which.
+            "has_feed": bool(rows),
+            "summary": _handsets.summary(grouped, found),
+            "cases": out}
+
+
 # ── The config surface: thresholds are rows, never code (RULE TWO). ─────────────────────────────
 @router.get("/watchdog/rules")
 def watchdog_rules(org_id: str = ORG_ID):
@@ -335,8 +414,10 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
     try:
         sales_rows, sales_table = _read_sales(
             client, org_id, p,
+            # `category` is here for the accessory predicate, which reads department OR category:
+            # a feed that spells accessories only in Category (measured live) is invisible without it.
             "store,salesperson,ext_price,trans_id,trans_date,product_desc,serial_1,"
-            "mdn,voided,trans_type,department,customer")
+            "mdn,voided,trans_type,department,category,customer")
     except Exception as e:
         sales_err = str(e)[:300]
 
@@ -376,14 +457,22 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
         if sales_err:
             raise RuntimeError(sales_err)
         from app.modules.commcalc.gp_report import is_voided
-        from app.modules.commcalc.router import _accessory_config
-        box = _accessory_config(client, org_id).get("box_departments") or set()
+        from app.modules.commcalc.router import _accessory_config, _is_accessory, _is_setup_fee
+        _acfg = _accessory_config(client, org_id)
+        box = _acfg.get("box_departments") or set()
+        # The owner's two companion signals (2026-10-12), each through its EXISTING owner-owned home
+        # over the SAME config row `box` came from — so "handset", "accessory" and "fee" are three
+        # readings of one declaration and cannot disagree about the same line.
+        _acc = (lambda r, _a=_acfg: _is_accessory(str(r.get("department") or "").strip(),
+                                                  r.get("category"), r.get("product_desc"), _a))
+        _fee = (lambda r, _a=_acfg: _is_setup_fee(r.get("product_desc"), _a))
         live = [r for r in sales_rows
                 if not is_voided(r.get("voided"))
                 and str(r.get("trans_type") or "").strip() != "Return"]
         pm, py = _month_year(p)
         hs_flags, hs_summary = _handsets.findings(
-            live, box, org_id=org_id, period=p, period_month=pm, period_year=py, rule_rows=rules)
+            live, box, org_id=org_id, period=p, period_month=pm, period_year=py, rule_rows=rules,
+            is_accessory=_acc, is_fee=_fee)
         # The ONE home that turns a POS store spelling into a store_code a district manager's board
         # can filter on (mig 285). Visibility only — it writes no amount and no pay field.
         try:

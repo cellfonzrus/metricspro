@@ -174,14 +174,65 @@ def group_by_buyer_day(rows, box_departments, junk=HOUSE_JUNK_BUYERS):
             loose.append(r)
             continue
         groups[_case_key(r)].append(r)
-    return {"groups": dict(groups), "unattributable": loose, "handset_lines": len(hs)}
+    # EVERY line of the period indexed by receipt, handsets included, so `cases` can look at what
+    # ELSE was on a flagged sale without a second read of the feed. The handset set is a subset of
+    # this, which is what makes "the accessories on the same receipt" answerable from one read.
+    by_receipt = defaultdict(list)
+    for r in (rows or ()):
+        tid = str((r or {}).get("trans_id") or "").strip()
+        if tid:
+            by_receipt[tid].append(r)
+    return {"groups": dict(groups), "unattributable": loose, "handset_lines": len(hs),
+            "by_receipt": dict(by_receipt)}
 
 
-def cases(grouped, threshold):
+def _companions(grouped, receipt_ids, handset_lines, is_accessory, is_fee):
+    """PURE: what ELSE was on the flagged receipts — accessory dollars, fee lines, the rest.
+
+    `None` where a predicate was not supplied: a surface must be able to tell "nothing was sold
+    alongside" from "nobody measured". A measured zero is 0.0 and reads as the real finding it is.
+    """
+    by_receipt = grouped.get("by_receipt") or {}
+    handset_ids = {id(r) for r in handset_lines}
+    others = [r for tid in receipt_ids for r in by_receipt.get(tid, ())
+              if id(r) not in handset_ids]
+    out = {"companion_lines": len(others)}
+    if is_fee is None:
+        out["fee_lines"] = None
+    else:
+        out["fee_lines"] = sum(1 for r in others if is_fee(r))
+    if is_accessory is None:
+        out["accessory_dollars"] = None
+        out["accessory_lines"] = None
+    else:
+        # A fee is NOT an accessory — the Sales Report's own rule, kept so the two numbers here mean
+        # exactly what they mean on every other screen.
+        acc = [r for r in others
+               if not (is_fee is not None and is_fee(r)) and is_accessory(r)]
+        out["accessory_dollars"] = round(sum(safe_float(r.get("ext_price")) for r in acc), 2)
+        out["accessory_lines"] = len(acc)
+    return out
+
+
+def cases(grouped, threshold, *, is_accessory=None, is_fee=None):
     """PURE: the buyer-days carrying MORE THAN `threshold` handsets, with their evidence.
 
     Evidence only — there is no verdict field, by design (see the module docstring). Sorted by
     handset count descending, then by the key, so the list is stable between runs.
+
+    THE TWO COMPANION SIGNALS (owner 2026-10-12: *"if no accessories are sold with the sale and no
+    activation fee it is definletly leaning towards fraud"*). `is_accessory(row)` and `is_fee(row)`
+    are INJECTED predicates, never decided here, because both already have an owner-owned home:
+    `router._is_accessory` and `router._is_setup_fee` over the same `accessory_config` row this
+    detector already takes `box_departments` from. One config row answers "handset", "accessory" and
+    "fee", so the three can never disagree about the same line. Passing neither leaves the signals
+    `None` — "not measured", which is NOT the same as "none were sold", and the summary says so.
+
+    MEASURED ON LIVE OCTOBER 2026 BEFORE THIS SHIPPED, because the owner's rule needed testing
+    rather than coding: a set-up/activation fee is present on 16 of the 17 flagged cases (the house
+    org bills one per handset), so "no fee" barely discriminates. ACCESSORY DOLLARS DO: only 2 of 17
+    cases carry none, and one of those is 4 handsets at $0.00 with no accessory at all. Both signals
+    are reported; neither is turned into a verdict.
     """
     thr = max(0, int(threshold or 0))
     out = []
@@ -212,6 +263,17 @@ def cases(grouped, threshold):
             "devices": [{"model": m, **v} for m, v in sorted(devices.items())],
             "reps": sorted({str(r.get("salesperson") or "").strip()
                             for r in lines if str(r.get("salesperson") or "").strip()}),
+            # THE DRILL-DOWN the owner asked for: one entry per handset line — who sold it, for how
+            # much, which device, on which receipt. The order is the order the lines were read.
+            "lines": [{
+                "receipt": str(r.get("trans_id") or "").strip(),
+                "rep": str(r.get("salesperson") or "").strip() or None,
+                "device": str(r.get("product_desc") or "").strip() or None,
+                "serial": str(r.get("serial_1") or "").strip() or None,
+                "amount": round(safe_float(r.get("ext_price")), 2),
+                "department": str(r.get("department") or "").strip() or None,
+            } for r in lines],
+            **_companions(grouped, sorted(receipts), lines, is_accessory, is_fee),
         })
     out.sort(key=lambda c: (-c["handsets"], c["store"], c["day"], c["buyer"]))
     return out
@@ -227,6 +289,16 @@ def summary(grouped, found):
         "split_cases": sum(1 for c in found if c["split_across_receipts"]),
         "zero_dollar_cases": sum(1 for c in found if c["all_zero_dollars"]),
         "unattributable_lines": len(grouped.get("unattributable") or []),
+        # The owner's signal, counted: cases with NO accessory alongside, and cases with neither an
+        # accessory nor a fee. `None` where the predicates were not injected — not measured, which a
+        # screen must be able to tell apart from "none found".
+        "cases_no_accessory": (None if any(c.get("accessory_dollars") is None for c in found)
+                               else sum(1 for c in found if c["accessory_dollars"] == 0)),
+        "cases_no_accessory_no_fee": (
+            None if any(c.get("accessory_dollars") is None or c.get("fee_lines") is None
+                        for c in found)
+            else sum(1 for c in found
+                     if c["accessory_dollars"] == 0 and c["fee_lines"] == 0)),
         "cannot_answer": list(KEY_CANNOT_ANSWER),
     }
 
@@ -238,11 +310,38 @@ def describe(case) -> str:
     where = f"on {r} separate receipts" if r > 1 else "on one receipt"
     money = "every line at $0.00" if case["all_zero_dollars"] else f"${case['dollars']:,.2f} in total"
     name = (case["buyer_as_recorded"] or [case["buyer"]])[0]
-    return f"{bit} to {name} {where} at {case['store']} on {case['day']}, {money}."
+    return (f"{bit} to {name} {where} at {case['store']} on {case['day']}, {money}"
+            f"{_companion_phrase(case)}.")
+
+
+def _companion_phrase(case) -> str:
+    """PURE: the clause naming what was sold alongside, or '' when nothing was measured.
+
+    Says "no accessories" only when accessories were actually LOOKED FOR and none were found. An
+    unmeasured signal produces no clause at all, because a sentence that omits a signal is honest
+    and a sentence that asserts its absence would not be.
+    """
+    acc, fee = case.get("accessory_dollars"), case.get("fee_lines")
+    parts = []
+    if acc is not None:
+        parts.append("no accessories on the sale" if acc == 0 else f"${acc:,.2f} of accessories")
+    if fee is not None:
+        parts.append("no set-up or activation fee" if not fee else f"{fee} fee line"
+                     + ("s" if fee != 1 else ""))
+    return (", with " + " and ".join(parts)) if parts else ""
 
 
 def coaching_note(case) -> str:
-    """PURE: what to actually DO about it — a check to perform, not an accusation to repeat."""
+    """PURE: what to actually DO about it — a check to perform, not an accusation to repeat.
+
+    The owner's own reading (2026-10-12) is that handsets with no accessory and no fee alongside are
+    the ones to look at first, so when BOTH were measured and BOTH are absent the note says to pull
+    the paperwork. It still asks for a check; it does not announce a conclusion.
+    """
+    if case.get("accessory_dollars") == 0 and case.get("fee_lines") == 0:
+        return ("Nothing was sold alongside these handsets — no accessories and no set-up or "
+                "activation fee. Pull the receipts and the buyer's ID before the return window "
+                "closes.")
     if case["split_across_receipts"]:
         return ("Confirm these were one genuine sale and not split to stay under a per-sale limit, "
                 "and check the buyer's ID against the activations.")
@@ -250,7 +349,8 @@ def coaching_note(case) -> str:
 
 
 def findings(rows, box_departments, *, org_id=None, period=None, period_month=None,
-             period_year=None, rule_rows=None, junk=HOUSE_JUNK_BUYERS):
+             period_year=None, rule_rows=None, junk=HOUSE_JUNK_BUYERS,
+             is_accessory=None, is_fee=None):
     """PURE: watchdog rows for the Flags board, or [] when the tenant has this switched off.
 
     `rule_rows` is this org's `commcalc.watchdog_rule` rows, read by the caller — the threshold and
@@ -268,7 +368,7 @@ def findings(rows, box_departments, *, org_id=None, period=None, period_month=No
     if not _reg.is_enabled(FLAG_TYPE, rule_rows):
         return [], {**summary(grouped, []), "enabled": False}
     thr = _reg.rule_params(FLAG_TYPE, rule_rows).get(THRESHOLD_KEY)
-    found = cases(grouped, thr)
+    found = cases(grouped, thr, is_accessory=is_accessory, is_fee=is_fee)
     out = []
     for c in found:
         models = [d["model"] for d in (c.get("devices") or [])]
@@ -281,6 +381,12 @@ def findings(rows, box_departments, *, org_id=None, period=None, period_month=No
             "store_address": c["store"],
             "transaction_date": c["day"],
             "amount": c["dollars"],
+            # The accessory dollars reach the flags table through `customer_plan`, the only free text
+            # column left on the row. Spelled as a sentence rather than a bare number so the board
+            # cannot render it as money that moved: it is a measurement about the sale, not a booking.
+            "customer_plan": (None if c.get("accessory_dollars") is None else
+                              f"accessories ${c['accessory_dollars']:,.2f} / "
+                              f"{c.get('fee_lines') if c.get('fee_lines') is not None else '?'} fee lines"),
             "epay_salesperson": (c["reps"][0] if len(c["reps"]) == 1 else None),
             "imei": (serials[0] if len(serials) == 1 else None),
             "phone_model": (models[0] if len(models) == 1 else None),

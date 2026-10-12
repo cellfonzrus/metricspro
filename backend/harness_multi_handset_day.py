@@ -359,6 +359,93 @@ check("H16 and it resolves the store_code through the one home (mig 285)",
       "flag_store_resolver.stamp_flags" in WIRE)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("I. what was sold ALONGSIDE — measured, injected, and never turned into a verdict")
+
+# Owner, 2026-10-12: "if no accessories are sold with the sale and no activation fee it is
+# definletly leaning towards fraud". So the two signals are measured per case. They are INJECTED
+# predicates: `router._is_accessory` and `router._is_setup_fee` over the same `accessory_config` row
+# `box_departments` comes from, so one declaration answers all three questions about a line.
+def _ln(dept, tid, desc, amt, cust="Rene Hernandez", rep="alice", cat="", day="2026-08-01"):
+    return {"department": dept, "store": "1 Main", "trans_date": day, "customer": cust,
+            "trans_id": tid, "product_desc": desc, "serial_1": "", "ext_price": amt,
+            "salesperson": rep, "category": cat}
+
+_BARE = [_ln("BOX", "R1", "Phone A", 0.0), _ln("BOX", "R1", "Phone B", 0.0),
+         _ln("BOX", "R2", "Phone C", 0.0)]
+_RICH = _BARE + [_ln("ACC", "R1", "Screen Protector", 29.99, cat="Accessory"),
+                 _ln("FEE", "R2", "Device Setup Charge", 35.00)]
+_ACC = lambda r: r.get("department") == "ACC" or r.get("category") == "Accessory"
+_FEE = lambda r: "setup charge" in str(r.get("product_desc") or "").lower()
+
+_bare = M.cases(M.group_by_buyer_day(_BARE, {"BOX"}), 2, is_accessory=_ACC, is_fee=_FEE)[0]
+_rich = M.cases(M.group_by_buyer_day(_RICH, {"BOX"}), 2, is_accessory=_ACC, is_fee=_FEE)[0]
+_unmeasured = M.cases(M.group_by_buyer_day(_RICH, {"BOX"}), 2)[0]
+
+check("I1 accessory dollars on the SAME receipts are measured",
+      _rich["accessory_dollars"] == 29.99 and _rich["accessory_lines"] == 1)
+check("I2 fee lines on the same receipts are counted", _rich["fee_lines"] == 1)
+check("I3 a sale with nothing alongside reads a MEASURED zero, not None",
+      _bare["accessory_dollars"] == 0.0 and _bare["fee_lines"] == 0)
+
+# THE DISTINCTION THE WHOLE SIGNAL DEPENDS ON. "No accessories were sold" and "nobody looked for
+# accessories" must never render the same, or an unconfigured tenant reads as a store full of fraud.
+check("I4 WITHOUT the predicates the signals are None — not measured, not zero",
+      _unmeasured["accessory_dollars"] is None and _unmeasured["fee_lines"] is None
+      and _unmeasured["accessory_lines"] is None)
+check("I5 and the sentence then asserts nothing about them",
+      "accessor" not in M.describe(_unmeasured).lower()
+      and "fee" not in M.describe(_unmeasured).lower())
+check("I6 the summary counts cannot be faked from an unmeasured run",
+      M.summary(M.group_by_buyer_day(_RICH, {"BOX"}), [_unmeasured])["cases_no_accessory"] is None)
+check("I7 but ARE counted when measured",
+      M.summary(M.group_by_buyer_day(_BARE, {"BOX"}), [_bare])["cases_no_accessory"] == 1
+      and M.summary(M.group_by_buyer_day(_BARE, {"BOX"}),
+                    [_bare])["cases_no_accessory_no_fee"] == 1)
+
+# A fee is not an accessory. The Sales Report's own rule, kept so these two numbers mean on this
+# screen exactly what they mean on every other one.
+_FEEACC = [_ln("BOX", "R1", "Phone A", 0.0), _ln("BOX", "R1", "Phone B", 0.0),
+           _ln("BOX", "R1", "Phone C", 0.0), _ln("ACC", "R1", "Device Setup Charge", 35.00,
+                                                 cat="Accessory")]
+_fa = M.cases(M.group_by_buyer_day(_FEEACC, {"BOX"}), 2, is_accessory=_ACC, is_fee=_FEE)[0]
+check("I8 a line that is BOTH a fee and accessory-classified counts as the fee only",
+      _fa["fee_lines"] == 1 and _fa["accessory_dollars"] == 0.0)
+
+check("I9 the handsets themselves are never counted as their own companions",
+      _bare["companion_lines"] == 0 and _rich["companion_lines"] == 2)
+
+# The owner's two signals absent is the note that leads with the paperwork; it still asks for a
+# check and still never names a conclusion.
+_note = M.coaching_note(_bare)
+check("I10 both signals absent changes the coaching note", "Pull the receipts" in _note)
+check("I11 and that note still accuses nobody",
+      not any(w in _note.lower() for w in ("fraud", "abuse", "scheme", "steal", "theft")))
+check("I12 nor does the sentence, when both are absent",
+      not any(w in M.describe(_bare).lower()
+              for w in ("fraud", "abuse", "scheme", "steal", "theft")))
+
+# THE DRILL-DOWN the owner asked for, per line.
+_dl = _rich["lines"]
+check("I13 every handset line is listed, one entry each", len(_dl) == 3)
+check("I14 each names who sold it, for how much, which device and which receipt",
+      all(set(("receipt", "rep", "device", "amount", "department")) <= set(d) for d in _dl)
+      and _dl[0]["rep"] == "alice" and _dl[0]["receipt"] == "R1")
+
+# The read endpoint that serves it.
+check("I15 the drill-down endpoint exists and is a READ",
+      '@router.get("/watchdog/multi-handset")' in WIRE)
+check("I16 it applies the district-manager span filter BEFORE counting",
+      "scope_keyset(" in WIRE and "in_keyset(" in WIRE)
+check("I17 it injects the same two predicates as the sweep",
+      WIRE.count("_is_accessory(") >= 2 and WIRE.count("_is_setup_fee(") >= 2)
+check("I18 it reads sales through the same one home as the sweep",
+      WIRE.count("_read_sales(") >= 3)
+check("I19 an empty feed is reported as 'not reported', never as no cases",
+      '"has_feed"' in WIRE)
+check("I20 and the endpoint states no verdict of its own",
+      not any(w in WIRE.lower() for w in ("= \"fraud\"", "is_fraud", "verdict")))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
 if FAIL:
