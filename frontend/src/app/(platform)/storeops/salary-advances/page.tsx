@@ -375,8 +375,7 @@ export default function SalaryAdvancesPage() {
       <h2 style={{ fontSize: 17, fontWeight: 700, margin: '4px 0 8px' }}>Advance History</h2>
       {!historyAvailable && (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
-          ℹ️ The Salary Advance ledger isn&apos;t set up yet on this tenant (migration 419) — no advances can
-          be recorded or shown until it runs.
+          ℹ️ <SetupNotice lead="The Salary Advance ledger is not switched on yet, so no advances can be recorded or shown." detail="419" />
         </div>
       )}
       {historyAvailable && (

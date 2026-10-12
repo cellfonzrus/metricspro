@@ -299,7 +299,7 @@ export default function TimeClockAdminPage() {
 
       {!changeLogAvailable && (
         <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
-          ℹ️ The Payroll Change Log table isn&apos;t set up yet on this tenant (migration 414) — manual-adjustment markers below are unavailable until it runs; punches load normally.
+          ℹ️ <SetupNotice lead="The Payroll Change Log is not switched on yet, so the manual-adjustment markers below are unavailable." detail="414" /> Punches load normally.
         </div>
       )}
 

@@ -8803,7 +8803,7 @@ pages already branch on are untouched: they still decide WHEN the notice shows; 
 | backend | `MESSAGE_KEYS` + `is_message_key` (same module) — **WHERE**: `detail`, `note`, `error`, `hint`, `message`, `reason`, `setup_note`, `not_ready_note`, `ledger_note`, `save_errors`, `warnings`, `remediation`, `subtitle`, `words`, and any key naming a migration id (`migration`, `sync_migration`, `config_migrations_missing` …). MEASURED from the backend's own setup-hint strings (the lock re-measures every build: `detail`×241, `note`×53, `migration`×24, `error`×23, `hint`×19, …) and deliberately excluding keys a customer's own record carries (`notes`, `label`, `status`, `description` — their hint literals were reworded). `neutralize` reads ONLY those keys' values, on the top-level object and its nested DICTS — **a list outside a message key is data and is never entered**, a bare list / scalar body is never touched, and an untouched payload comes back as the SAME object | where it may be rewritten (coordinator review 2026-09-29: the first cut rewrote every string value — data cells included) |
 | backend | `SetupNoticeMiddleware` (same module), registered in `main.py` **innermost** (before GZip; inner of TenantScope) | a JSON body is parsed ONLY when a message key's value (first 4 KB) carries a marker (`may_carry_hint`: one regex pass over the keys + bounded window checks; >256 message-named keys = rows with e.g. a `note` column → parse, the walk still skips the rows). Measured in the lock (P-series): a 5.6 MB body of 40,000 rows saying "Port-in Migration" / "Miguel" is never `json.loads`'d and returned as the SAME bytes object (~30 ms, about half the endpoint's own JSON encoding of it); the worst case (a `note` column in every row) parses once and returns the same bytes. A rewritten body goes to a non-super-admin; the super admin (`core.router._require_super_admin`) sees it unchanged; the original goes to the server log; a gate fault HIDES; non-JSON / `/openapi.json` / `/docs` / `/redoc` / `/health` pass verbatim |
 | backend | `notify/report_registry.build_payload` → `setup_notice.neutralize` | the one outbound report builder (scheduled / on-demand email + WhatsApp): a report never crosses the HTTP boundary, so it dereferences the same function |
-| frontend | `frontend/src/lib/setupNotice.tsx` — `SETUP_NOTICE` (locked equal to the backend's), `<SetupNotice lead? detail? />`, `setupFailed(action)`, `useSetupDetailVisible()` | every page: the sentence for everyone, `detail` (the migration / table) rendered ONLY for `isPlatformAdmin(user)` |
+| frontend | `frontend/src/lib/setupNotice.tsx` — `SETUP_NOTICE` (locked equal to the backend's), `<SetupNotice lead? detail? />`, `<PlatformDetail detail />` (CORE-02.9), `setupFailed(action)`, `useSetupDetailVisible()` | every page: the sentence for everyone, `detail` (the migration / table) rendered ONLY for `isPlatformAdmin(user)`. `<PlatformDetail>` is the same gate with NO customer sentence — for a page where the feature IS switched on and only an operational route (a scheduler target, a header) is internal; a non-super-admin sees nothing at all |
 
 The customer sentence: *"This feature isn't switched on for your company yet. Contact support to enable it."*
 **Siblings fixed (132 frontend sites / 72 files; 474 backend strings via the boundary):** Display Labels (the owner's
@@ -24938,20 +24938,11 @@ because the apostrophe made the sentence unreadable to the guard. Since the whol
 and the ratchet refuses a new raw apostrophe in JSX text, **this coverage hole is structurally closed
 and stays closed** — which is the lasting value here, over and above the 272 findings.
 
-They are **left exactly as they are, and reported** rather than disposed of, because every available
-disposal is someone else's call:
-- **Fixing the copy** (`<SetupNotice detail=… />` / `sourceLabel()`) changes what a tenant-facing
-  screen displays. A lint job does not get to rewrite product copy.
-- **`SETUP_PROSE_DEBT`** is the house's shrink-only ledger and there IS precedent — the existing 11
-  entries are pre-existing hits registered when the 2026-10-01 widening exposed them. Pinning 4 more
-  is defensible, but it accepts a leak as carried debt, and the owner's standing position is that a
-  temporary accommodation is not a fix.
-- **`INFRA_FE_ALLOW` is deliberately EMPTY**, and `pg_cron` in tenant copy has no excuse. Making it
-  the first entry to reach a green build is the cheap way out the register rules already forbid.
-
-**So the carrier-vocab guard is RED on this branch and the PR was NOT merged.** The lint work itself
-is complete and green on every gate that owns it (lint 5645, `lint:gate` OK, typecheck 0,
-lint lock 42/42); the one open question is the disposition of those 5 sentences.
+Their disposal was the owner's call, not a lint job's — each option changes what a tenant-facing
+screen says, or accepts a leak as carried debt (`SETUP_PROSE_DEBT`, 11 existing entries), or opens
+the deliberately-EMPTY `INFRA_FE_ALLOW`. **The owner ruled on 2026-10-12: "Reword the four."** The
+copy was reworded through the one home; see **CORE-02.9** below, which also corrects the
+recommendation put to him about the fifth.
 
 **One design fix WAS made, because it is a defect in the guard and not a copy decision:**
 `jsx_prose_line` **deleted** HTML entities instead of decoding them, so `isn&apos;t` was read as
@@ -24972,6 +24963,74 @@ touching anything: CORE-02 itself is that mechanism and the two groups above are
 leftovers. No second lint path, no second register and no second home for the linter invocation was
 created; `frontend/package.json`'s `lint` script remains the one home, dereferenced by the gate.
 
+### CORE-02.9 THE FIVE EXPOSED LEAKS — reworded through the one home (owner 2026-10-12)
+
+Owner, on the five sentences CORE-02.8 exposed: *"Reword the four."* (the four setup-internals hits;
+the fifth, `pg_cron`, had been recommended for keeping — see the correction below).
+
+**The class, not the instance.** The general fact that was wrong is not "four screens name a
+migration": it is **a caller that does not dereference the one home**. `lib/setupNotice.tsx` has been
+the ONE home for "this feature's setup is not finished" since §19.36, and each of these pages wrote
+the sentence inline instead. So the repair is wiring, not wording — exactly the §19.18 failure mode
+("a mechanism written, callers left unwired"), and the reason no new copy helper was created.
+
+| file:line | before (what a tenant read) | after |
+|---|---|---|
+| `commcalc/plan-installments/page.tsx:638` | "Migration 245 isn't applied yet, so these boxes can't be saved." | `<SetupNotice lead="These boxes cannot be saved yet." detail="245" />` |
+| `commcalc/plan-installments/page.tsx:815` | "Migration {payCfg.migration} isn't applied yet, so this can't be saved." | `<SetupNotice lead="This cannot be saved yet." detail={payCfg.migration} />` |
+| `storeops/payroll-change-log/page.tsx:195` | "…table isn't set up yet on this tenant (migration 414)" | `<SetupNotice lead="The Payroll Change Log is not switched on yet, so no entries can be recorded or shown." detail="414" />` |
+| `storeops/salary-advances/page.tsx:378` | "…ledger isn't set up yet on this tenant (migration 419)" | `<SetupNotice lead="The Salary Advance ledger is not switched on yet, so no advances can be recorded or shown." detail="419" />` |
+| `storeops/timeclock/page.tsx:302` | "…table isn't set up yet on this tenant (migration 414) — manual-adjustment markers below are unavailable" | `<SetupNotice lead="The Payroll Change Log is not switched on yet, so the manual-adjustment markers below are unavailable." detail="414" />` |
+
+**A FIFTH site, found by looking for the siblings before shipping.** `timeclock/page.tsx:302` renders
+the SAME migration-414 sentence as `payroll-change-log:195` and the guard **never flagged it** —
+`display_copy` does not extract that line's shape, so it was invisible to both the scan and the pin.
+Fixing the four and leaving it is "the same defect wearing a hat", so it was converted too. Note what
+this says about the pin: `SETUP_PROSE_DEBT["…/timeclock/page.tsx"] = 2` is **unchanged**, because its
+two counted hits are at lines 433 and 537; the pin never covered 302. **A pinned count is a ratchet on
+what the scanner can SEE, not an inventory of a file's leaks.**
+
+**THE RECOMMENDATION PUT TO THE OWNER ABOUT `pg_cron` WAS WRONG, and is corrected here.** It was put
+to him as "leave it — the Connectors page is only read by whoever wires up the schedule". That premise
+does not survive checking `rbac.ts`: `{ href: '/commcalc/connectors', module: 'commissions', scopes:
+['all'], tileOnly: true }` — **not** `platformOnly`, so any user with the commissions module can open
+it. The sentence was tenant-facing after all, which is why the guard was right to be red about it, and
+leaving it would also have left the build red. It was reworded on the same principle as the other
+five.
+
+**`<PlatformDetail detail />` — a new export of the EXISTING home, not a new home.** `<SetupNotice>`
+was the wrong instrument here: Connectors **is** switched on, so rendering "This feature isn't
+switched on for your company yet" would have been a false statement to every tenant. The need is
+narrower — *an operational route that only the platform team can act on, on a page tenants also open*
+— and `setupNotice.tsx` is where "who may read an internal name" is already answered. So the file
+gained a second export that dereferences the same `useSetupDetailVisible()` (→ `rbac.isPlatformAdmin`,
+→ `core.router._require_super_admin`): it renders the detail for the super admin and **`null`** for
+everyone else, with no customer sentence. One gate, one file, two shapes — rather than a second
+predicate somewhere else, which is the §19.18 defect this repo has shipped three times.
+
+- tenant copy now: *"One schedule drives them all: every connector below runs by itself when it next falls due."*
+- super admin additionally sees: `[setup: pg_cron -> POST /api/v1/commcalc/connectors/run-due, header X-Notify-Secret]`
+
+**No accommodation was taken.** `SETUP_PROSE_DEBT` gained **no** entry (it still carries its 11 and
+its `timeclock` pin of 2, unchanged) and `INFRA_FE_ALLOW` is still **EMPTY**. Both locks are green on
+their own terms rather than on an excusal, which is the whole point of the two ledgers being
+shrink-only.
+
+**Proof on the final tree.** `harness_carrier_vocab_guard.py` (run as `python3.11` — see
+`harness-local-run-caveats`): **exit 0, 108 PASS**, both the setup-internals and infra-names locks
+reported holding, where the same harness on the parent commit printed `FAIL 4 migration …` and
+`FAIL 1 database / hosting name …`. `npm run typecheck` **0 errors**; `npm run lint:gate` **OK**
+(measured 5645 == pinned 5645, so the rewording introduced no new lint finding and retired none —
+no register or `PINNED_TOTAL` change was needed); `harness_frontend_lint_lock.py` **42/0**;
+`harness_index_section_register.py` and `harness_ci_pipefail_lock.py` both exit 0.
+
+**Duplicate check (the build gate).** Nothing new was built: no report, endpoint, query, table or
+feed, so §16–18 carry nothing new. Searched the index for an existing mechanism before touching
+anything and found §19.36 — which is not merely *a* candidate but *the* home for this exact fact — and
+extended it by one export rather than adding a sibling. The five page edits DELETE inline copy and
+replace it with a dereference of that home; no second copy of the customer sentence exists anywhere
+after this change.
+
 ### CORE-02.7 Cross-references
 
 Registers **no table, no endpoint, no metric and no report** — so §16 (by TABLE), §17 (by ENDPOINT)
@@ -24986,4 +25045,5 @@ them would be noise. What it registers is a CI gate, a runner, a register and a 
 - Duplicate check (the build gate): the **existing** `frontend-typecheck` job of #438 / §75 is the pattern this reuses step for step — checkout, `setup-node` 22, `setup-python` 3.11, stdlib lock, `npm ci --ignore-scripts --no-audit --no-fund`, dereferenced script. No sibling workflow, no second lint path, and no second home for the linter invocation was created; `harness_frontend_typecheck_lock.py` is the lock this one is modelled on and is left untouched.
 - Ratchet precedents read before instantiating one: §19.25 / `backend/harness_unrun_pending.txt` + `PINNED_MAX`, and `frontend/table_sort_pending.txt`.
 - Same class: §75 (which named this gap), §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate).
+- CORE-02.9 (the owner's rewording ruling, 2026-10-12) registers **one** artefact: `frontend/src/lib/setupNotice.tsx` → `<PlatformDetail detail />`, a second export of the §19.36 home gated by the same `useSetupDetailVisible()`. Its one caller today is `app/(platform)/commcalc/connectors/page.tsx`. Still no table, endpoint, metric or report. Locked by `harness_carrier_vocab_guard.py` §SETUP / §INFRA, which is what fails the build if a page writes an internal name in copy instead of dereferencing this home.
 - CORE-02.8 (the follow-up) registers no new artefact either: it changes only JSX text escaping in 74 files, a ternary-to-`if/else` transliteration in 16, `frontend/eslint_pending.txt` (932 → 842 entries) and `PINNED_TOTAL` in the lock (5917 → 5645). Still no table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.

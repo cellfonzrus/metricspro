@@ -28,6 +28,22 @@ export function useSetupDetailVisible(): boolean {
   return isPlatformAdmin(user)
 }
 
+/** A purely TECHNICAL note for the platform team on a page a tenant can also open — the route to point a
+ *  scheduler at, the header a job sends. It is NOT a setup notice: the feature IS switched on, so there is
+ *  no customer sentence to show and a non-super-admin sees nothing at all. Same gate as `SetupNotice`, so
+ *  "who may read an internal name" stays one answer in one file. */
+export function PlatformDetail({ detail, style }: {
+  detail: string
+  style?: CSSProperties
+}) {
+  if (!useSetupDetailVisible()) return null
+  return (
+    <span style={style} title="Visible to the platform team only">
+      <code style={{ fontSize: '0.85em', opacity: 0.75 }}>[setup: {detail}]</code>
+    </span>
+  )
+}
+
 /** The notice, inline. `detail` (a migration file / number, a table) renders only for the platform super
  *  admin; everyone else sees the sentence alone. `lead` is the page's own customer-meaningful consequence
  *  ("Showing the built-in defaults.") placed before the sentence. */

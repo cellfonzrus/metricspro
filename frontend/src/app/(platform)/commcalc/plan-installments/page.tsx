@@ -635,8 +635,8 @@ export default function PlanInstallmentsPage() {
         </p>
         {catCfg && !catCfg.ready && (
           <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
-            Migration 245 isn&apos;t applied yet, so these boxes can&apos;t be saved. The engine is already using the
-            defaults below (tablets + SIM excluded).
+            <SetupNotice lead="These boxes cannot be saved yet." detail="245" /> The engine is already using
+            the defaults below (tablets + SIM excluded).
           </div>
         )}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginBottom: 10 }}>
@@ -812,8 +812,8 @@ export default function PlanInstallmentsPage() {
         </div>
         {payCfg && !payCfg.ready && (
           <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
-            Migration <code>{payCfg.migration}</code> isn&apos;t applied yet, so this can&apos;t be saved. Every
-            category is on monthly installments — which is exactly today&apos;s behaviour.
+            <SetupNotice lead="This cannot be saved yet." detail={payCfg.migration} /> Every category is on
+            monthly installments — which is exactly how it behaves today.
           </div>
         )}
         <div className="table-wrapper" style={{ border: 'none', marginBottom: 10 }}>

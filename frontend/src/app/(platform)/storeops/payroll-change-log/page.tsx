@@ -11,6 +11,7 @@ import { useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import type { ExportColumn } from '@/lib/export'
+import { SetupNotice } from '@/lib/setupNotice'
 import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -192,9 +193,9 @@ export default function PayrollChangeLogPage() {
 
       {!available && (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
-          ℹ️ The Payroll Change Log table isn&apos;t set up yet on this tenant (migration 414) — no entries
-          can be recorded or shown until it runs. Every underlying write (shift edits, overrides,
-          manual hours) still works normally; it just isn&apos;t logged yet.
+          ℹ️ <SetupNotice lead="The Payroll Change Log is not switched on yet, so no entries can be recorded or shown." detail="414" /> Every
+          underlying write (shift edits, overrides, manual hours) still works normally; it is simply
+          not logged yet.
         </div>
       )}
 
