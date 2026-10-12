@@ -193,6 +193,27 @@ def storage_for(metric):
 
 # ── The reader: one day, both stores, one answer ──────────────────────────────────────────────────
 
+# ── WHICH NUMBER IS THIS METRIC'S FIGURE ──────────────────────────────────────────────────────────
+# A metric declared in money is answered by its MONEY; one declared as a tally is answered by its
+# UNITS — even when the tally also earns (two mailbox rentals are "2", not "$360"). Every surface
+# that asks "how much of this happened" needs that rule, so it lives here once: the targets engine
+# dereferences `figure_unit` for a target's unit and `closing/router._declared_by_day` dereferences
+# `figure_of` for the achieved number. A second copy would let a target be set in units and
+# measured in dollars, which is the divergence this module exists to prevent.
+
+def figure_unit(value_kind) -> str:
+    """'dollars' or 'count' — which kind of number answers this metric."""
+    return "dollars" if _key(value_kind).lower() in ("amount", "both") else "count"
+
+
+def figure_of(entry) -> float:
+    """The figure from a `declared()` entry, in the metric's own unit. Zero, never None, so a day
+    nobody declared reads as zero achieved rather than as missing."""
+    e = entry or {}
+    v = e.get("amount") if figure_unit(e.get("value_kind")) == "dollars" else e.get("units")
+    return 0 if v is None else v
+
+
 def _blank(metric):
     return {"key": metric["key"], "label": metric["label"], "units": 0, "amount": 0.0,
             "value_kind": metric["value_kind"], "declared_by": metric["declared_by"],

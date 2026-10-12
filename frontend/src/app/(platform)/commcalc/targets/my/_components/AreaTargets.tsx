@@ -20,22 +20,30 @@ import { useMemo, useState } from 'react'
 import { api, ORG_ID, fmt, fmtN } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { useTargetAxis } from '@/lib/target-axis'
 
-const CATS = [
-  { key: 'activations', label: 'Activations', unit: 'count' },
-  { key: 'upgrades', label: 'Upgrades', unit: 'count' },
-  { key: 'byod', label: 'BYOD', unit: 'count' },
-  { key: 'accessories', label: 'Accessories', unit: 'dollars' },
-] as const
+// NEITHER THE CATEGORY LIST NOR THE EDITABLE FIELDS ARE SPELLED HERE. Both are derived from the
+// tenant's own axis (lib/target-axis), which names where each category's target physically lives:
+// a built-in's goes in its column on commcalc.targets (saved by `PUT /targets/{period}`, exactly as
+// before), a declared category's goes in a commcalc.target_line row (`PUT /targets/{period}/lines`).
+// The drill-down remains a second DOORWAY to those rows, never a second definition of them.
+type EditField = { key: string; label: string; cat?: string; line?: boolean }
 
-// Target Settings columns, in the same order and with the same meaning as that page — the drill-down
-// is a second doorway to the same rows, not a second definition of them.
-const EDIT_FIELDS = [
-  { key: 'activations_monthly', label: 'Activations' },
-  { key: 'upgrades_monthly', label: 'Upgrades' },
-  { key: 'accessories_monthly', label: 'Accessories $' },
-  { key: 'byod_pct', label: 'BYOD %' },
-] as const
+function editFieldsFor(cats: readonly { key: string; label: string; unit: string; store: string }[]): EditField[] {
+  const out: EditField[] = []
+  for (const c of cats) {
+    if (c.store === 'column') {
+      out.push({ key: `${c.key}_monthly`, label: c.unit === 'dollars' ? `${c.label} $` : c.label, cat: c.key })
+    } else if (c.store === 'line') {
+      // Prefixed so a declared key can never collide with a column name on the draft or the row.
+      out.push({ key: `line__${c.key}`, label: c.label, cat: c.key, line: true })
+    }
+  }
+  // BYOD is derived from activations × byod_pct, so what is editable is the PERCENTAGE, not a count.
+  // It is appended last, as Target Settings has always shown it.
+  if (cats.some(c => c.key === 'byod')) out.push({ key: 'byod_pct', label: 'BYOD %' })
+  return out
+}
 
 const val = (unit: string, n: any) => (unit === 'dollars' ? fmt(Number(n) || 0) : fmtN(Number(n) || 0, 1))
 const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)', fontWeight: 700 }
@@ -55,6 +63,8 @@ type Props = {
 }
 
 export default function AreaTargets({ period, stores, collective, scope, filterBar, onSaved }: Props) {
+  const { cats: CATS } = useTargetAxis(period)
+  const EDIT_FIELDS = useMemo(() => editFieldsFor(CATS), [CATS])
   const [draft, setDraft] = useState<Record<string, Record<string, string>>>({})
   const [saving, setSaving] = useState('')
   const [msg, setMsg] = useState('')
@@ -71,14 +81,28 @@ export default function AreaTargets({ period, stores, collective, scope, filterB
     const code = row.store_code
     const d = draft[code] || {}
     const body: any = { store_code: code }
+    const lines: Record<string, number> = {}
     for (const f of EDIT_FIELDS) {
       const raw = d[f.key]
+      if (f.line) {
+        // A declared category is only sent when it was actually edited: an untouched field must not
+        // write a row, because an absent row and a zero mean the same thing and writing one anyway
+        // would turn "no target" into a target of 0 across every store on the screen.
+        if (raw !== undefined && raw !== '') lines[String(f.cat)] = Number(raw)
+        continue
+      }
       body[f.key] = raw === undefined || raw === '' ? (row[f.key] ?? (f.key === 'byod_pct' ? '' : 0)) : Number(raw)
     }
     setSaving(code); setMsg('')
     try {
       await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}`,
         { method: 'PUT', body: JSON.stringify(body) })
+      // The declared half, on the route that owns it. Same permission and same store span — the
+      // backend gate is literally the same function — so this adds a write, not an access path.
+      if (Object.keys(lines).length) {
+        await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/lines?org_id=${ORG_ID}`,
+          { method: 'PUT', body: JSON.stringify({ store_code: code, lines, grain: 'month' }) })
+      }
       setMsg(`Saved ${row.address || code}.`)
       setDraft(p => { const n = { ...p }; delete n[code]; return n })
       onSaved?.()
@@ -250,7 +274,9 @@ export default function AreaTargets({ period, stores, collective, scope, filterB
                       <td key={f.key} style={{ ...td, textAlign: 'right' }}>
                         <input type="number" min={0} style={numInp} disabled={!mine}
                           aria-label={`${s.address || code} — ${f.label}`}
-                          value={d[f.key] ?? (s[f.key] ?? '')}
+                          value={d[f.key] ?? (f.line
+                            ? ((s.categories || {})[String(f.cat)]?.monthly ?? '')
+                            : (s[f.key] ?? ''))}
                           onChange={e => set(code, f.key, e.target.value)} />
                       </td>
                     ))}

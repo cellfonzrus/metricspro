@@ -203,8 +203,8 @@ def visit_priority_options(org_id: str = ORG_ID):
     """THE DROPDOWN the owner asked for — "options to assign other deliverables … carrier specific".
 
     It is not a list this module keeps. It is two existing registries, read:
-      • the Daily Targets categories (`commcalc/targets_engine.CATEGORIES`) — activations, upgrades,
-        BYOD, accessory $;
+      • the Daily Targets categories (`commcalc/targets_engine.target_axis`) — activations,
+        upgrades, BYOD, accessory $, PLUS every category this tenant declared on Count Fields;
       • this org's KPI metric registry (`commcalc.carrier_kpi_metric`, mig 060) for ITS OWN carrier
         plus the carrier-neutral default set. A tenant whose carrier has an extra deliverable adds it
         on the KPI-metrics screen it already has, and it appears here with no code change.
@@ -216,17 +216,24 @@ def visit_priority_options(org_id: str = ORG_ID):
     client = sb()
     cid = _org_carrier_id(client, org_id)
     opts = []
+    # THE AXIS IS ASKED, WITH THE TENANT'S CATALOG. `target_axis` carries the key, the label the
+    # admin typed and the unit, so a declared category ("Package drop-offs") becomes assignable here
+    # the day it is declared — and the label is no longer this module's guess from the key.
     try:
         from app.modules.commcalc import targets_engine as _te
-        cats = list(_te.CATEGORIES)
-        units = dict(_te.UNITS)
+        from app.modules.closing.router import _metric_catalog as _mc
+        try:
+            _cat = _mc(client, org_id) or []
+        except Exception:
+            _cat = []
+        axis = _te.target_axis(_cat)
     except Exception:
-        cats, units = [], {}
-    for c in cats:
-        opts.append({"basis": "target_category", "metric_key": c,
-                     "label": c.replace("_", " ").title(),
-                     "unit": units.get(c), "group": "Daily Targets",
-                     "source": "commcalc/targets_engine.CATEGORIES"})
+        axis = []
+    for a in axis:
+        opts.append({"basis": "target_category", "metric_key": a["key"],
+                     "label": a["label"],
+                     "unit": a["unit"], "group": "Daily Targets",
+                     "source": "commcalc/targets_engine.target_axis"})
     opts.append({"basis": "kpi_all", "metric_key": "", "label": "KPI attainment (all metrics)",
                  "unit": "percent", "group": "KPI",
                  "source": "mean of commcalc.carrier_kpi_metric active metrics"})

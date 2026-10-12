@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SETUP_NOTICE } from '@/lib/setupNotice'
+import { useTargetAxis, declaredCats } from '@/lib/target-axis'
 
 interface TargetRow {
   store_code: string
@@ -16,6 +17,10 @@ interface TargetRow {
   accessories_monthly: number
   byod_pct: number | null
   notes?: string | null
+  // DECLARED-CATEGORY TARGETS, keyed by metric_key. They live in commcalc.target_line rows rather
+  // than columns (mig 1074), because a tenant that sells drop-offs cannot be given a schema change
+  // — RULE TWO. Loaded from the targets GET and saved by `PUT /targets/{period}/lines`.
+  lines?: Record<string, number>
   // FINANCING (owner directive 2026-08-04: "assignable target for each store in target area").
   // Held on its OWN row in commcalc.financing_target and saved by its own endpoint, so this column can
   // never break the save of the four targets that were already here.
@@ -28,6 +33,12 @@ interface TargetRow {
 
 export default function TargetSettingsPage() {
   const { period } = usePeriod()
+  // THE DECLARED HALF OF THE AXIS. Every category the admin added on Settings → Count Fields gets a
+  // column here, so the page named "Target Settings" can actually set a target for the thing the
+  // business sells. Empty for a tenant that declared nothing, which is why this page is unchanged
+  // for every existing tenant.
+  const { cats: axisCats } = useTargetAxis(period)
+  const declared = declaredCats(axisCats)
   // Active-carrier lens: name financing vendors generically for a dual-carrier tenant.
   const [rows, setRows] = useState<TargetRow[]>([])
   const [byodDefault, setByodDefault] = useState(35)
@@ -76,6 +87,14 @@ export default function TargetSettingsPage() {
     setRows(rs => rs.map(r => r.store_code === code ? { ...r, [field]: value } : r))
   }
 
+  // A declared category's target lives on the row's `lines` map rather than in a column, so it gets
+  // its own setter instead of `update`'s `keyof TargetRow` field name.
+  function updateLine(code: string, key: string, value: number | '') {
+    setRows(rs => rs.map(r => r.store_code === code
+      ? { ...r, lines: { ...(r.lines || {}), [key]: (value === '' ? 0 : value) } }
+      : r))
+  }
+
   async function putTarget(row: TargetRow) {
     await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}`, {
       method: 'PUT',
@@ -104,10 +123,24 @@ export default function TargetSettingsPage() {
     })
   }
 
+  // The declared categories for one store, on the route that owns them. Same permission and store
+  // span as putTarget — it is literally the same backend gate — so this adds a write, not an access
+  // path. A store with nothing declared makes no call at all.
+  async function putLines(row: TargetRow) {
+    if (!declared.length) return
+    const lines: Record<string, number> = {}
+    for (const c of declared) lines[c.key] = Number((row.lines || {})[c.key]) || 0
+    await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/lines?org_id=${ORG_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify({ store_code: row.store_code, lines, grain: 'month' }),
+    })
+  }
+
   async function save(row: TargetRow) {
     setSavingCode(row.store_code)
     try {
       await putTarget(row)
+      await putLines(row)
       await putFinancing(row)
       setRows(rs => rs.map(r => r.store_code === row.store_code ? { ...r, _seeded: false } : r))
       setSavedCode(row.store_code)
@@ -256,7 +289,11 @@ export default function TargetSettingsPage() {
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
                 <th style={th}><input type="checkbox" checked={filtered.length > 0 && filtered.every(r => selected.has(r.store_code))} onChange={e => selectAllFiltered(e.target.checked, filteredCodes)} /></th>
-                {['Store', 'Activations /mo', 'Upgrades /mo', 'Accessories $/mo', 'BYOD %', 'BYOD target', 'Financing /mo', ''].map(h => (
+                {['Store', 'Activations /mo', 'Upgrades /mo', 'Accessories $/mo', 'BYOD %', 'BYOD target',
+                  // The admin's own label for each declared category, with its unit, inserted
+                  // before Financing so the four built-ins keep the positions people know.
+                  ...declared.map(c => `${c.label} ${c.unit === 'dollars' ? '$/mo' : '/mo'}`),
+                  'Financing /mo', ''].map(h => (
                   <th key={h} style={th}>{h}</th>
                 ))}
               </tr>
@@ -307,6 +344,20 @@ export default function TargetSettingsPage() {
                       onChange={e => update(r.store_code, 'byod_pct', e.target.value === '' ? ('' as any) : (parseFloat(e.target.value) || 0))} />
                   </td>
                   <td style={{ ...td, color: 'var(--text2)' }}>{byodCount(r)} acts</td>
+                  {/* One cell per DECLARED category. Blank means no target, which is not the same
+                      thing as a target of zero — so an untouched field is left blank rather than
+                      being shown (and saved) as 0. */}
+                  {declared.map(c => (
+                    <td key={c.key} style={td}>
+                      <input className="input" type="number" min="0"
+                        step={c.unit === 'dollars' ? '0.01' : '1'}
+                        style={{ width: c.unit === 'dollars' ? 110 : 90 }}
+                        aria-label={`${r.address || r.store_code} — ${c.label}`}
+                        value={(r.lines || {})[c.key] ?? ''}
+                        onChange={e => updateLine(r.store_code, c.key,
+                          e.target.value === '' ? '' : (parseFloat(e.target.value) || 0))} />
+                    </td>
+                  ))}
                   <td style={td}>
                     {r._financingReady === false ? (
                       <span style={{ fontSize: 11, color: 'var(--text3)' }} title={SETUP_NOTICE}>—</span>

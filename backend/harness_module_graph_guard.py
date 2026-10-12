@@ -209,12 +209,20 @@ def _index_sections() -> set:
     except OSError:
         return set()
     out = set()
-    for m in re.finditer(r"^#{1,6}\s+§?\s*([0-9]+[a-z]*(?:\.[0-9]+)?)[.\s]", text, re.M):
+    # TWO ID SHAPES. The 112 legacy sections are bare numbers ("19.43", "23s"); every section
+    # allocated since the register shipped (§CORE-01, owner directive 2026-10-11) carries its module
+    # as a prefix ("CORE-01", "COMMCALC-01.3"). This parser knew only the first, so a fact naming a
+    # prefixed section read as "does not resolve" and the first such fact (2026-10-12) could not be
+    # registered at all — the guard was silently closed to the id shape the house had just adopted.
+    NUM = r"[0-9]+[a-z]*(?:\.[0-9]+)?"
+    PREFIXED = r"[A-Z][A-Z_]*-[0-9]+(?:\.[0-9]+)?"
+    ID = f"(?:{PREFIXED}|{NUM})"
+    for m in re.finditer(rf"^#{{1,6}}\s+§?\s*({ID})[.\s]", text, re.M):
         out.add(m.group(1))
-    for m in re.finditer(r"^[-*]\s+\*\*§?\s*([0-9]+[a-z]*(?:\.[0-9]+)?)[.\s]", text, re.M):
+    for m in re.finditer(rf"^[-*]\s+\*\*§?\s*({ID})[.\s]", text, re.M):
         out.add(m.group(1))
     # §19's gap list writes its subsections as a line-leading "§19.43 **TITLE" rather than a heading
-    for m in re.finditer(r"^§\s*([0-9]+[a-z]*(?:\.[0-9]+)?)\s+\*\*", text, re.M):
+    for m in re.finditer(rf"^§\s*({ID})\s+\*\*", text, re.M):
         out.add(m.group(1))
     return out
 
@@ -222,6 +230,10 @@ def _index_sections() -> set:
 def check_index(graph, sections=None) -> None:
     sections = _index_sections() if sections is None else sections
     check(len(sections) > 50, "E the index yielded no sections — the parser or the file moved")
+    # Controls on the parser itself: it must see BOTH id shapes, and must not invent either.
+    check("1" in sections and "19.43" in sections, "E the parser still sees a bare-numeric section")
+    check(any("-" in x for x in sections), "E the parser sees a module-prefixed section")
+    check("99" not in sections, "E the parser does not invent a section that is not there")
     for key in sorted(graph.FACTS):
         refs = graph.FACTS[key]["index"]
         check(bool(refs), f"E[{key}] names no index section")

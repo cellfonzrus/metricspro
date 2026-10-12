@@ -1062,7 +1062,20 @@ _all_routes = _flatten_routes(real_app.routes)
 # anybody. Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 7 and `'^-@router\.'` = 0 — seven
 # added, NONE removed — so the pin was re-taken on a known addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1775"))
+#
+# RE-PINNED 2026-10-12, 1775 → 1778 (index §COMMCALC-01). Every record above stays. The delta is
+# THREE routes and each is named: GET /commcalc/targets/{period}/axis (what is targetable for this
+# tenant), PUT /commcalc/targets/{period}/lines (a target for a DECLARED category, gated on the
+# SAME `_require_target_edit` as the existing built-in save — it widens nobody's access) and
+# GET /commcalc/targets/{period}/backward (what is still needed to reach a goal). Two reads compute
+# and never write; the one write stores an admin's own target figure and pays nobody.
+# Verified the same way as every pin above, BEFORE re-pinning: the harness was run on the stashed
+# base tree and reported 1775, then on this tree and reported 1778, and
+# `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 3 with `'^-@router\.'` = 0 — three
+# added, NONE removed. The pin was re-taken on a measured, fully-accounted addition; it was never
+# relaxed to make CI green, and the three route names above are what a future reader checks it
+# against.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1778"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

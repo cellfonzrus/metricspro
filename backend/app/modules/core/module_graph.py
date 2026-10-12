@@ -223,6 +223,11 @@ FACTS: dict[str, dict] = {
             # The rule editor and the day calculation reach the catalog through the closing home's
             # `_metric_catalog`, never by building one.
             'app/modules/commcalc/router.py': ('_mc',),
+            # §COMMCALC-01 — the targets engine dereferences `figure_unit` for a declared category's
+            # UNIT, while closing/router dereferences `figure_of` for its ACHIEVED figure. Two copies
+            # of that one rule would let a target be SET in units and MEASURED in dollars, so it
+            # belongs to this question rather than being a fact of its own.
+            'app/modules/commcalc/targets_engine.py': ('_figure_unit',),
         },
     },
     'daily_incentive_shapes': {
@@ -970,6 +975,25 @@ FACTS: dict[str, dict] = {
             'app/modules/account/coa.py': ('_lcov',),
             'app/modules/commcalc/gp_report.py': ('_lcov',),
             'app/modules/commcalc/router.py': ('_labour', '_lcov'),
+        },
+    },
+    'target_axis': {
+        "question": 'What is this tenant actually targetable ON — with what label, in what unit, and '
+                    'is its target a column on commcalc.targets or a commcalc.target_line row?',
+        "homes": ('app/modules/commcalc/targets_engine.py',),
+        "index": ('COMMCALC-01',),
+        "locks": ('harness_target_axis_lock.py', 'harness_target_declared_axis.py'),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        "callers": {
+            # The carry-forward suggestion, the period summary, the calendar and the action plan all
+            # walk `target_categories(catalog)` and ask `target_store(cat)` where each target lives.
+            'app/modules/commcalc/router.py': ('_te', 'targets_engine'),
+            # The DM / market-manager report card derives its items from the axis, so a declared
+            # category gets a check-off row rather than being absent from the card.
+            'app/modules/commcalc/manager_report_card.py': ('_target_axis',),
+            # The visit-priority dropdown offers the axis as assignable deliverables.
+            'app/modules/storevisit/visit_plan_router.py': ('_te',),
         },
     },
 }

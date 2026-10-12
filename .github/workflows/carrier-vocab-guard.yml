@@ -480,6 +480,15 @@ on:
       - "backend/app/modules/closing/metric_catalog.py"
       - "backend/app/modules/closing/count_config.py"
       - "backend/app/modules/commcalc/daily_incentive.py"
+      # index §COMMCALC-01 — the TARGET AXIS: one answer to what is targetable, and a target for a
+      # category the business declared. Both harnesses NAME THEMSELVES for the same §13e reason as
+      # the lines above; the engine and the report card are their own subjects, and the routers and
+      # the frontend screens the axis lock scans are already named by the globs below.
+      - "backend/harness_target_axis_lock.py"
+      - "backend/harness_target_declared_axis.py"
+      - "backend/app/modules/commcalc/targets_engine.py"
+      - "backend/app/modules/commcalc/manager_report_card.py"
+      - "frontend/src/lib/target-axis.ts"
       # index §74 — the envelope-count basis gate. The lock names its OWN subjects, because a job
       # behind an allowlist that does not name them skips silently (the §13e lesson). The two
       # routers and deposit_accountability.py are already named here and below.
@@ -982,6 +991,12 @@ jobs:
       - name: Run the declared-metric catalog lock (ONE home for what a business declares daily; no second copy of the vocabulary, no caller reaching past it - index 72)
         working-directory: backend
         run: python3 harness_metric_catalog_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the target-axis lock (ONE answer to what is targetable; no ninth copy of the category list, every fold call carries the tenant's catalog, a week is a WINDOW over the month - index COMMCALC-01)
+        working-directory: backend
+        run: python3 harness_target_axis_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the declared-category target proof (the four built-ins byte-identical with a catalog present; a declared category reaches need and pace with no new arithmetic; the backward calculation is honest with no days left - index COMMCALC-01)
+        working-directory: backend
+        run: python3 harness_target_declared_axis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"

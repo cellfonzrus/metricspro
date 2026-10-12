@@ -10,6 +10,7 @@ import {
 // intentionally shared out of the commcalc route tree (see its header comment).
 import DeviceHistoryLookup from '@/app/(platform)/commcalc/device-history/DeviceHistoryLookup'
 import { targetState } from '@/lib/target-state'
+import { useTargetAxis } from '@/lib/target-axis'
 import ScreenLink from '@/components/ScreenLink'
 
 // Shared employee widget grid — rendered by BOTH the admin /employee dashboard (pick-anyone) and the
@@ -96,6 +97,9 @@ function Progress({ pct, color = 'var(--accent)' }: { pct: number; color?: strin
 }
 
 export default function EmployeeWidgets({ data, coach, repTargets }: { data: any; coach: any; repTargets: any }) {
+  // The tenant's target axis for this period, so "My Targets" shows every category the rep is
+  // actually measured on rather than the four sales ones.
+  const { cats: targetCats } = useTargetAxis(String(data?.period || ''))
   const w = data?.widgets || {}
   const on = (k: string) => !!w[k]
   const c = data?.commission || null
@@ -259,7 +263,10 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
         <Card title="My Targets" icon="🎯" right={repTargets?.scheduled_hours_total != null ? <span style={{ fontSize: 11, color: 'var(--text3)' }}>{fmtN(repTargets.scheduled_hours_total)}h sched</span> : null}>
           {repTargets?.categories ? (
             <div style={{ display: 'grid', gap: 12 }}>
-              {[['activations', 'Activations'], ['upgrades', 'Upgrades'], ['byod', 'BYOD'], ['accessories', 'Accessories']].map(([k, lbl]) => {
+              {/* The axis, not a list of four. A rep whose store declared a category sees it here
+                  with the words the admin typed; the hook falls back to the built-ins, so this
+                  renders identically for a tenant that declared nothing. */}
+              {targetCats.map(({ key: k, label: lbl }) => {
                 const m = repTargets.categories[k]; if (!m) return null
                 const money = m.unit !== 'count'
                 const v = (x: any) => x == null ? '—' : money ? fmt(x) : fmtN(x, 1)
