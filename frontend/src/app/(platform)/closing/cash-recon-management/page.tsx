@@ -113,8 +113,13 @@ export default function CashReconManagementPage() {
           { header: 'Credit declared', get: (r: any) => r.credit_declared, money: true },
           { header: 'Bill-pay on cash (declared)', get: (r: any) => r.epay_cash_declared, money: true },
           { header: 'Bill-pay on credit (declared)', get: (r: any) => r.epay_credit_declared, money: true },
-          { header: 'DM verified cash', get: (r: any) => r.cash_pickup, money: true },
+          { header: 'Expected in envelope', get: (r: any) => r.cash_pickup, money: true },
           { header: 'DM actually took', get: (r: any) => r.cash_picked_actual ?? '', money: true },
+          { header: 'DM short / over',
+            get: (r: { cash_picked_status?: string | null; cash_picked_variance?: number | null }) =>
+              !r.cash_picked_status ? ''
+                : r.cash_picked_variance == null ? r.cash_picked_status
+                : r.cash_picked_variance },
           { header: 'Management counted', get: (r: any) => r.mgmt_counted ?? '', money: true },
           { header: 'Mgmt short / over', get: (r: any) => r.mgmt_variance ?? '' },
           { header: `DM verified ${procName}`, get: (r: any) => r.billpay_pickup, money: true },
@@ -205,8 +210,10 @@ export default function CashReconManagementPage() {
               <Stat label="Cash declared" value={fmt(t.cash_declared || 0)} accent />
               <Stat label="Credit declared" value={fmt(t.credit_declared || 0)} />
               <Stat label="Bill-pay declared" value={fmt(t.epay_declared || 0)} />
-              <Stat label="DM verified cash" value={fmt(t.cash_pickup || 0)}
-                sub={t.cash_picked_actual ? `${fmt(t.cash_picked_actual)} actually taken` : 'declared at pickup'} />
+              <Stat label="Expected in envelopes" value={fmt(t.cash_pickup || 0)}
+                sub={t.cash_picked_actual
+                  ? `${fmt(t.cash_picked_actual)} actually taken${t.dm_not_comparable_days ? ` · ${t.dm_not_comparable_days} not comparable` : ''}`
+                  : 'snapshotted at pickup'} />
               <Stat label={`DM verified ${procName}`} value={fmt(t.billpay_pickup || 0)} />
               {/* MANAGEMENT'S OWN COUNT — fed from commcalc.envelope_count (mig 936), the count the
                   envelope report already captures with counted_by/counted_at. No second entry box:
@@ -246,10 +253,10 @@ export default function CashReconManagementPage() {
                   <SortableTh field="credit_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Credit declared</SortableTh>
                   <SortableTh field="epay_cash_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Bill-pay on cash</SortableTh>
                   <SortableTh field="epay_credit_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Bill-pay on credit</SortableTh>
-                  <SortableTh field="cash_pickup" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="The pickup the DM confirmed — the declared envelope figure">DM verified cash</SortableTh>
+                  <SortableTh field="cash_pickup" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="What this envelope is expected to hold, snapshotted when the DM confirmed the pickup. Nobody types it: it is the declared drawer, less bill-payment cash where the tenant nets it out.">Expected in envelope</SortableTh>
                   <SortableTh field="cash_picked_actual" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="What the DM recorded actually taking out of the envelope. Blank = not recorded.">DM actually took</SortableTh>
                   <SortableTh field="mgmt_counted" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Management's own count of the envelope, from the envelope report. Blank = not counted yet.">Management counted</SortableTh>
-                  <SortableTh field="mgmt_variance" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Management counted minus cash declared. Negative = short.">Mgmt short / over</SortableTh>
+                  <SortableTh field="mgmt_variance" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="The variance management's own count recorded, against the figure it was counted against. Negative = short. Blank = counted before the score was stored, so there is none to show.">Mgmt short / over</SortableTh>
                   <SortableTh field="billpay_pickup" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>{`DM verified ${procName}`}</SortableTh>
                   <SortableTh field="pos_cash" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>POS cash</SortableTh>
                   <SortableTh field="pos_card" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>POS card</SortableTh>
@@ -275,8 +282,12 @@ export default function CashReconManagementPage() {
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.cash_pickup)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}
                           title={r.cash_picked_actual == null ? 'The DM did not record an actual count at pickup'
-                            : `${r.cash_picked_variance > 0 ? '+' : ''}${fmt(r.cash_picked_variance)} vs declared`}>
-                        {r.cash_picked_actual == null ? '—' : fmt(r.cash_picked_actual)}</td>
+                            : r.cash_picked_comparable === false ? `Not comparable with the expected figure: ${r.cash_picked_reason || ''}`
+                            : `${r.cash_picked_variance > 0 ? '+' : ''}${fmt(r.cash_picked_variance)} against the ${fmt(r.cash_picked_expected ?? 0)} expected in the envelope`}>
+                        {r.cash_picked_actual == null ? '—' : fmt(r.cash_picked_actual)}
+                        {r.cash_picked_comparable === false
+                          ? <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 4 }}>not comparable</span>
+                          : null}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}
                           title={r.mgmt_counted == null ? 'Nobody has counted this envelope yet (envelope report)' : undefined}>
                         {r.mgmt_counted == null ? '—' : fmt(r.mgmt_counted)}</td>

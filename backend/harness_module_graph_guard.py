@@ -220,10 +220,9 @@ def _index_sections() -> set:
     # new section must be `§<MODULE>-NN`, so every fact written from now on names one of these. This
     # parser only knew the numeric shape, which made the mandated scheme unresolvable — a fact citing
     # a perfectly real §CLOSING-01.1 failed E. Found INDEPENDENTLY by the first two facts to use one
-    # (2026-10-12): §CLOSING-01 on claude/management-recon-expected-figure and §COMMCALC-01 here.
-    # This is that branch's wording and regex, taken verbatim rather than kept as a second fix —
-    # two repairs for one fact is the duplicate defect, and whichever lands first the other is a
-    # no-op merge.
+    # (2026-10-12): §CLOSING-01 on claude/management-recon-expected-figure (#444, now on main) and
+    # §COMMCALC-01 here. The regex below is #444's, taken verbatim rather than kept as a second fix —
+    # two repairs for one fact is the duplicate defect — so this merge changes only the comment.
     # That an id is REGISTERED is `harness_index_section_register.py`'s check, not this one's: this
     # only has to find the heading.
     for m in re.finditer(r"^#{1,6}\s+§?\s*([A-Z][A-Z0-9]*-[0-9]{2}(?:\.[0-9]+)?)[.\s]", text, re.M):
@@ -367,6 +366,22 @@ def armed_controls(derived) -> None:
               "        },\n"
               "    },\n"
               "}\n")
+    # Z-PREFIX — the id parser learned the §<MODULE>-NN scheme (CORE-01) on 2026-10-12, because a
+    # fact citing a real §CLOSING-01.1 could not resolve. A parser extension with no control is just
+    # a looser regex, so it is proved to find the mandated shapes and to refuse the near-misses.
+    _pfx = r"^#{1,6}\s+§?\s*([A-Z][A-Z0-9]*-[0-9]{2}(?:\.[0-9]+)?)[.\s]"
+    _hits = lambda t: set(m.group(1) for m in re.finditer(_pfx, t, re.M))
+    check(_hits("## §CLOSING-01. TITLE\n") == {"CLOSING-01"},
+          "Z-PREFIX1 control: a prefixed SECTION heading resolves")
+    check(_hits("### CLOSING-01.4 A mixed day\n") == {"CLOSING-01.4"},
+          "Z-PREFIX2 control: a prefixed SUBSECTION heading resolves")
+    check(_hits("Some prose mentioning CLOSING-01 mid-sentence.\n") == set(),
+          "Z-PREFIX3 control: prose does NOT invent a section — only a heading counts")
+    check(_hits("## §CLOSING-1. TITLE\n") == set(),
+          "Z-PREFIX4 control: a one-digit number is NOT the scheme (CORE-01.2 says two digits)")
+    check(_hits("## §closing-01. TITLE\n") == set(),
+          "Z-PREFIX5 control: a lower-case prefix is NOT the scheme")
+
     _naive = re.compile(r'(    %r: \{.*?"callers": \{).*?(\n        \},)' % 'first', re.S)
     check(_naive.search(_synth) is not None and "'second'" in _naive.search(_synth).group(0),
           "Z-BLESS0 control: the OLD span really did swallow the next fact")
