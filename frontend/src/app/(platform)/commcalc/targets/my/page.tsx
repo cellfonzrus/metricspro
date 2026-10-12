@@ -8,13 +8,11 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import AreaTargets from './_components/AreaTargets'
 import { LinkedText } from '@/components/ScreenLink'
+import { useTargetAxis, BUILTIN_HINTS } from '@/lib/target-axis'
 
-const CATS = [
-  { key: 'activations', label: 'Activations', unit: 'count', hint: 'premium + BYOD' },
-  { key: 'upgrades', label: 'Upgrades', unit: 'count', hint: 'device upgrades' },
-  { key: 'byod', label: 'BYOD', unit: 'count', hint: 'KPI target' },
-  { key: 'accessories', label: 'Accessories', unit: 'dollars', hint: 'GP' },
-] as const
+// THE CATEGORY LIST IS NOT HERE — see lib/target-axis. The four built-ins' hint text lives there
+// too (BUILTIN_HINTS); a declared category has no hint, because the admin's own label IS the
+// explanation.
 
 function val(unit: string, n: number) {
   return unit === 'dollars' ? fmt(n || 0) : fmtN(n || 0, 1)
@@ -23,6 +21,7 @@ function val(unit: string, n: number) {
 import { targetState } from '@/lib/target-state'
 export default function MyTargetsPage() {
   const { period } = usePeriod()
+  const { cats: CATS } = useTargetAxis(period)
   const [stores, setStores] = useState<any[]>([])
   const [storeCode, setStoreCode] = useState('')
   const [reps, setReps] = useState<string[]>([])
@@ -231,7 +230,7 @@ export default function MyTargetsPage() {
                 <div key={c.key} className="card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
                     <span style={{ fontWeight: 700, fontSize: 15 }}>{c.label}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>{c.hint}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>{BUILTIN_HINTS[c.key] || ''}</span>
                   </div>
                   <div style={{ textAlign: 'center', marginBottom: 14 }}>
                     <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Today&apos;s Target</div>

@@ -226,7 +226,11 @@ def _index_sections() -> set:
     # THE PREFIXED SCHEME (CORE-01, owner directive 2026-10-11). Bare numbers are FROZEN there and a
     # new section must be `§<MODULE>-NN`, so every fact written from now on names one of these. This
     # parser only knew the numeric shape, which made the mandated scheme unresolvable — a fact citing
-    # a perfectly real §CLOSING-01.1 failed E. Found by the first fact to use it (2026-10-12).
+    # a perfectly real §CLOSING-01.1 failed E. Found INDEPENDENTLY by the first two facts to use one
+    # (2026-10-12): §CLOSING-01 on claude/management-recon-expected-figure (#444, now on main) and
+    # §COMMCALC-02 here (this branch asked for COMMCALC-01 first; #447 merged that id, so it moved).
+    # The regex below is #444's, taken verbatim rather than kept as a second fix — two repairs for
+    # one fact is the duplicate defect — so merging it changed only the comment.
     # That an id is REGISTERED is `harness_index_section_register.py`'s check, not this one's: this
     # only has to find the heading.
     for m in re.finditer(r"^#{1,6}\s+§?\s*([A-Z][A-Z0-9]*-[0-9]{2}(?:\.[0-9]+)?)[.\s]", text, re.M):
@@ -237,6 +241,10 @@ def _index_sections() -> set:
 def check_index(graph, sections=None) -> None:
     sections = _index_sections() if sections is None else sections
     check(len(sections) > 50, "E the index yielded no sections — the parser or the file moved")
+    # Controls on the parser itself: it must see BOTH id shapes, and must not invent either.
+    check("1" in sections and "19.43" in sections, "E the parser still sees a bare-numeric section")
+    check(any("-" in x for x in sections), "E the parser sees a module-prefixed section")
+    check("99" not in sections, "E the parser does not invent a section that is not there")
     for key in sorted(graph.FACTS):
         refs = graph.FACTS[key]["index"]
         check(bool(refs), f"E[{key}] names no index section")

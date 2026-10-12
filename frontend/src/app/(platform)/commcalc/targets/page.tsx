@@ -6,15 +6,12 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import ScreenLink, { LinkedText } from '@/components/ScreenLink'
+import { useTargetAxis } from '@/lib/target-axis'
 
-const CATS = [
-  { key: 'activations', label: 'Activations', unit: 'count' },
-  { key: 'upgrades', label: 'Upgrades', unit: 'count' },
-  { key: 'byod', label: 'BYOD', unit: 'count' },
-  { key: 'accessories', label: 'Accessories', unit: 'dollars' },
-] as const
-
-type CatKey = typeof CATS[number]['key']
+// THE CATEGORY LIST IS NOT HERE. It is asked of the tenant's own axis (lib/target-axis), so a
+// category the admin declared on Count Fields gets a column on this table the day it is declared.
+// `harness_target_axis_lock.py` fails the build on a screen that grows its own list again.
+type CatKey = string
 
 function val(unit: string, n: number) {
   return unit === 'dollars' ? fmt(n || 0) : fmtN(n || 0, 1)
@@ -48,6 +45,8 @@ function convColor(c?: ConvT) {
 import { targetState } from '@/lib/target-state'
 export default function DailyTargetsPage() {
   const { period } = usePeriod()
+  // The tenant's own target axis — the four built-ins plus every category it declared.
+  const { cats: CATS } = useTargetAxis(period)
   const [summary, setSummary] = useState<any[]>([])
   const [loadingSum, setLoadingSum] = useState(true)
   const [storeCode, setStoreCode] = useState('')
@@ -120,7 +119,9 @@ export default function DailyTargetsPage() {
     if (!detail) return { title: 'Daily Targets', filename: 'daily-targets', sheets: [] }
     const who = scope === 'rep' && detail.rep ? detail.rep : (summary.find(s => s.store_code === storeCode)?.address || storeCode)
     const rows: any[] = CATS.map(c => {
-      const m = detail.categories[c.key]
+      // A category the payload does not carry (an older response, or one declared since this page
+      // loaded) reads as zeros in its own unit rather than throwing.
+      const m = detail.categories[c.key] || { unit: c.unit }
       return { category: c.label, today: val(m.unit, m.today_target), pace: val(m.unit, m.pace),
         need: val(m.unit, m.need), monthly: val(m.unit, m.monthly), achieved: val(m.unit, m.achieved_mtd) }
     })
@@ -423,6 +424,11 @@ export default function DailyTargetsPage() {
           {scope === 'store' && (() => {
             const storeReps = (summary.find(s => s.store_code === storeCode)?.reps || []) as any[]
             if (!storeReps.length) return null
+            // BYOD is folded into activations on a per-rep row and carries no flat field of its
+            // own, so a column for it would always read zero. The filter is on what the payload
+            // actually answers, not on a list of category names.
+            const repCats = CATS.filter(c => c.source === 'sales_feed'
+              && storeReps.some(r => r[c.key] !== undefined))
             return (
               <div className="card" style={{ padding: 0, marginBottom: 24, overflowX: 'auto' }}>
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
@@ -431,7 +437,10 @@ export default function DailyTargetsPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                      {['Rep', 'Activations', 'Upgrades', 'Accessories', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                      {/* The per-rep columns are the axis's FEED-sourced categories, asked rather
+                          than listed. Declarations are a store fact — nobody types a drop-off per
+                          rep — so a declared category correctly has no column here. */}
+                      {['Rep', ...repCats.map(c => c.label), 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -441,9 +450,11 @@ export default function DailyTargetsPage() {
                           <span style={{ fontWeight: 600 }}>{rp.rep}</span>
                           {rp.below_store && rp.conversion?.billpays > 0 && <span style={{ color: '#dc2626', fontSize: 11 }}> · ⚠️ below store</span>}
                         </td>
-                        <td style={td}>{fmtN(rp.activations, 0)}</td>
-                        <td style={td}>{fmtN(rp.upgrades, 0)}</td>
-                        <td style={td}>{fmt(rp.accessories)}</td>
+                        {repCats.map(c => (
+                          <td key={c.key} style={td}>
+                            {c.unit === 'dollars' ? fmt(rp[c.key] || 0) : fmtN(rp[c.key] || 0, 0)}
+                          </td>
+                        ))}
                         <td style={{ ...td, fontWeight: 600, color: convColor(rp.conversion) }}>
                           {rp.conversion?.billpays > 0 ? `${rp.conversion.rate}%` : '—'}
                         </td>

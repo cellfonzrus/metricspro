@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
+import { BUILTIN_CATS } from '@/lib/target-axis'
 import { api, ORG_ID, localToday } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
@@ -34,7 +35,11 @@ import ScreenLink from '@/components/ScreenLink'
 const tile: React.CSSProperties = { flex: '1 1 150px', minWidth: 140, padding: 12, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '7px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }
 const td: React.CSSProperties = { padding: '7px 9px', borderBottom: '1px solid var(--border)', fontSize: 13 }
-const CAT_LABEL: Record<string, string> = { activations: 'Activations', upgrades: 'Upgrades', byod: 'BYOD', accessories: 'Accessories' }
+// The labels are DEREFERENCED from the target axis's one home, not spelled here. A declared
+// category arrives with the words the admin typed, which is why this falls back to capitalising the
+// key only for something the axis does not know at all.
+const CAT_LABEL: Record<string, string> = Object.fromEntries(
+  BUILTIN_CATS.map(c => [c.key, c.label]))
 const cap = (s: string) => CAT_LABEL[s] || (s.charAt(0).toUpperCase() + s.slice(1))
 
 export default function TeamSnapshot({ period, token, unitId, today }:

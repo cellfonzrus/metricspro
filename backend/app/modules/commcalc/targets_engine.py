@@ -19,6 +19,10 @@ import re
 from datetime import date, timedelta
 
 from app.modules.commcalc.calculator import safe_float
+# WHICH NUMBER ANSWERS A DECLARED CATEGORY is one fact with one home. `metric_catalog` is
+# pure (no imports of its own, no I/O), so dereferencing it keeps this engine pure too — and
+# keeps a target's UNIT and its ACHIEVED figure reading the same rule.
+from app.modules.closing.metric_catalog import figure_unit as _figure_unit
 
 
 def name_key(name) -> str:
@@ -39,8 +43,157 @@ def name_key(name) -> str:
     return " ".join(sorted(toks))
 
 # Display order; accessories is a dollar amount, the rest are transaction counts.
-CATEGORIES = ['activations', 'upgrades', 'byod', 'accessories']
-UNITS = {'activations': 'count', 'upgrades': 'count', 'byod': 'count', 'accessories': 'dollars'}
+#
+# THESE FOUR ARE THE BUILT-INS, NOT THE WHOLE AXIS (owner directive 2026-10-10, §COMMCALC-02).
+# They are the categories the SALES FEED answers, they each have a physical column on
+# commcalc.targets (byod is derived from byod_pct), and they are kept as module constants because
+# two surfaces outside this engine already dereference them by name — the DM visit-priority rule and
+# GET /storevisit/visit-priority-options (§47.17). A tenant that sells services rather than
+# activations declares its own categories on Daily Closing -> Count Fields, and those arrive through
+# `target_categories()` / `target_units()` below. NEVER re-list these four anywhere else: ask this module.
+BUILTIN_CATEGORIES = ['activations', 'upgrades', 'byod', 'accessories']
+BUILTIN_UNITS = {'activations': 'count', 'upgrades': 'count', 'byod': 'count',
+                 'accessories': 'dollars'}
+
+# Back-compatible aliases. Existing dereferencers read these; they are the BUILT-IN axis, so a
+# caller that wants the tenant's real axis calls `target_categories(catalog)` instead.
+CATEGORIES = BUILTIN_CATEGORIES
+UNITS = BUILTIN_UNITS
+
+# Which fact answers a category's ACHIEVED figure. The built-ins come from the processed sales feed
+# (_compute_feed_actuals_py); a declared category comes from the store-day declarations that
+# closing/metric_catalog.py folds. A surface that guesses the source would read a drop-off count off
+# the sales feed and get a silent zero, which is why the source travels WITH the category.
+SOURCE_SALES_FEED = 'sales_feed'
+SOURCE_DECLARED = 'declared'
+
+# The grains a target can be set at. The engine has always been monthly, spread over scheduled days;
+# `week` and `day` are windows OVER that same arithmetic, never a second calculation of it.
+GRAINS = ('day', 'week', 'month')
+
+# ── WHERE A BUILT-IN'S TARGET PHYSICALLY LIVES ───────────────────────────────────────────────────
+# One home for the column names, because three surfaces need them and each kept its own list: the
+# fold below, the carry-forward suggestion in commcalc/router, and the settings screen. `byod` is
+# absent on purpose — it has no column of its own, it is DERIVED from activations x byod_pct, and
+# listing it here would invite a caller to look for a column that does not exist. A DECLARED
+# category is absent too: its target is a commcalc.target_line row (mig 1074), which is what
+# `target_store` answers.
+BUILTIN_TARGET_COLUMN = {
+    'activations': 'activations_monthly',
+    'upgrades': 'upgrades_monthly',
+    'accessories': 'accessories_monthly',
+}
+
+
+def target_store(cat: str) -> str:
+    """Which physical store holds this category's target: 'column' on commcalc.targets, 'derived'
+    (byod, from activations x byod_pct), or 'line' (a commcalc.target_line row).
+
+    TWO PHYSICAL STORES, ONE READER. A caller that needs to WRITE a target asks this instead of
+    guessing from the category name, so adding a declared category never needs a schema change and
+    never writes a built-in to the wrong store."""
+    if cat in BUILTIN_TARGET_COLUMN:
+        return 'column'
+    if cat in BUILTIN_UNITS:
+        return 'derived'
+    return 'line'
+
+
+def target_categories(catalog: list[dict] | None = None) -> list[str]:
+    """The target axis for THIS tenant: the four built-ins, then every declared category that
+    carries revenue. ONE answer, so a target screen, a report card and a payout rule cannot
+    disagree about what is targetable.
+
+    `catalog` is closing/metric_catalog.build() output. Passing None gives the built-ins alone,
+    which is what every pre-2026-10 caller already assumed."""
+    out = list(BUILTIN_CATEGORIES)
+    for m in (catalog or []):
+        key = (m or {}).get('key')
+        if not key or key in out:
+            continue
+        # Only a revenue-bearing metric is a sales target. A category declared purely as a tally
+        # (how many drop-offs) is still targetable because its units are the thing being targeted —
+        # what it must NOT do is silently become a dollar figure, which `units()` decides.
+        out.append(key)
+    return out
+
+
+def target_units(catalog: list[dict] | None = None) -> dict:
+    """The unit per category — 'count' or 'dollars'. A declared category's unit is the one the
+    admin chose on Count Fields (`value_kind`), never inferred here: a category measured in both
+    is targeted on its MONEY, because that is the figure a target conversation is about."""
+    out = dict(BUILTIN_UNITS)
+    for m in (catalog or []):
+        key = (m or {}).get('key')
+        if not key or key in out:
+            continue
+        out[key] = _figure_unit((m or {}).get('value_kind'))
+    return out
+
+
+# The words a person reads for a built-in category. Three surfaces kept their own copy of this map
+# (the action-plan router, the manager report card, the targets screen), so a declared category
+# showed up on one of them as a raw key. It lives here with the axis it labels.
+BUILTIN_LABELS = {
+    'activations': 'Activations',
+    'upgrades': 'Upgrades',
+    'byod': 'BYOD',
+    'accessories': 'Accessories',
+}
+
+
+def target_labels(catalog: list[dict] | None = None) -> dict:
+    """The label per category. A DECLARED category is labelled with the words the admin typed on
+    Count Fields — never a key prettified by a surface, because the admin's own wording is the
+    thing a manager will recognise. Falls back to the key only when a catalog entry carries no
+    label at all."""
+    out = dict(BUILTIN_LABELS)
+    for m in (catalog or []):
+        key = (m or {}).get('key')
+        if not key or key in out:
+            continue
+        out[key] = str((m or {}).get('label') or '').strip() or key
+    return out
+
+
+def target_axis(catalog: list[dict] | None = None) -> list[dict]:
+    """The whole axis as a surface wants it: [{key, label, unit, store, source}] in order.
+
+    ONE call, so a screen, a report card and a payout-rule dropdown cannot disagree about what is
+    targetable, what it is called or what unit it is in. Every consumer that used to keep its own
+    list of four categories reads this instead."""
+    _u, _l = target_units(catalog), target_labels(catalog)
+    return [{'key': c, 'label': _l.get(c, c), 'unit': _u.get(c, 'count'),
+             'store': target_store(c), 'source': source_of(c, catalog)}
+            for c in target_categories(catalog)]
+
+
+def _axis_of_scope(scope_result: dict | None) -> list[str]:
+    """The category axis a compute_scope result already carries, in its own order. Reading it back
+    is how a downstream consumer avoids keeping a second list of categories."""
+    cats = ((scope_result or {}).get('categories') or {})
+    return list(cats.keys())
+
+
+def _axis_of_rows(rows: list[dict]) -> tuple[list[str], dict]:
+    """The union of the category axes a set of store rows carry, built in first-seen order, with
+    each category's unit as the rows themselves reported it. Two stores on different catalogs (a
+    tenant mid-rollout) therefore aggregate over the union rather than over whichever came first."""
+    axis: list[str] = []
+    units_seen: dict = {}
+    for r in (rows or []):
+        for cat, m in ((r or {}).get('categories') or {}).items():
+            if cat not in units_seen:
+                axis.append(cat)
+            # A later row never overwrites a unit already seen: the first answer wins, so the
+            # aggregate's unit is stable regardless of store order.
+            units_seen.setdefault(cat, ((m or {}).get('unit') or 'count'))
+    return axis, units_seen
+
+
+def source_of(cat: str, catalog: list[dict] | None = None) -> str:
+    """Which fact answers this category's achieved figure."""
+    return SOURCE_SALES_FEED if cat in BUILTIN_UNITS else SOURCE_DECLARED
 
 # Conversion = boxes sold ÷ bill-payments (walk-ins), as a %. A ratio measured against a
 # fixed threshold (not a catch-up category), computed separately per store and per rep.
@@ -59,7 +212,18 @@ def _as_date(v):
         return None
 
 
-def achieved_for_cat(cat: str, prem: float, byod: float, upg: float, acc: float) -> float:
+def achieved_for_cat(cat: str, prem: float, byod: float, upg: float, acc: float,
+                     declared: dict | None = None) -> float:
+    """What this category actually ACHIEVED on a day.
+
+    The four built-ins are answered from the sales feed exactly as they always were — the four
+    branches below are byte-for-byte the original, so no wireless tenant's number moves. A DECLARED
+    category is answered from `declared`, the store-day figures closing/metric_catalog folds; the
+    value is already in the category's own unit (units for a count metric, dollars for a money one),
+    because the catalog decided that when the admin declared it.
+
+    `declared` is keyword-last and defaults to None, so every existing positional caller is
+    unchanged. An unknown category still returns 0.0 — never a guess."""
     if cat == 'activations':
         return prem + byod
     if cat == 'byod':
@@ -68,6 +232,8 @@ def achieved_for_cat(cat: str, prem: float, byod: float, upg: float, acc: float)
         return upg
     if cat == 'accessories':
         return acc
+    if declared:
+        return safe_float(declared.get(cat))
     return 0.0
 
 
@@ -117,6 +283,41 @@ def scope_actuals_by_day(actuals: list[dict], store_code: str, rep_name: str | N
         agg['setup'] += safe_float(a.get('setup_fee'))
         agg['box'] += safe_float(a.get('box_count'))
         agg['billpay'] += safe_float(a.get('billpay_count'))
+    return out
+
+
+def merge_declared_actuals(actuals_by_day: dict, declared_by_day: dict | None) -> dict:
+    """Attach what the store DECLARED each day to that day's sales actuals, on the `declared` key.
+
+    THE MERGE LIVES HERE, not in the router. A declared category's achievement arrives from a
+    different source than the sales feed — reps type it on Submit Daily Closing, and
+    closing/router._declared_by_day is its one reader — but it has to reach exactly the same
+    per-day arithmetic as a sale, or the catch-up shortfall and the pace would be computed from the
+    feed alone and a drop-off target would never register progress. Doing the merge in each caller
+    is how three callers would come to disagree about what a day with declarations but no sales
+    means.
+
+    A day that was DECLARED but had no feed sale still counts: it gets a zero sales row carrying the
+    declarations, because for a UPS-store tenant that is a completely ordinary trading day, not a
+    missing one. `declared_by_day` is keyed by date STRING (as the closing reader returns it); the
+    actuals are keyed by `date`, and this is the one place that reconciles the two.
+
+    Non-destructive: the input dict is not mutated, so a caller can still read the pure feed
+    figures (conversion, box counts) off its own copy."""
+    out = {d: dict(v) for d, v in (actuals_by_day or {}).items()}
+    for key, vals in (declared_by_day or {}).items():
+        d = _as_date(key)
+        if not d or not vals:
+            continue
+        row = out.get(d)
+        if row is None:
+            row = {'prem': 0.0, 'byod': 0.0, 'upg': 0.0, 'acc': 0.0,
+                   'setup': 0.0, 'box': 0.0, 'billpay': 0.0}
+            out[d] = row
+        merged = dict(row.get('declared') or {})
+        for k, v in vals.items():
+            merged[k] = safe_float(merged.get(k)) + safe_float(v)
+        row['declared'] = merged
     return out
 
 
@@ -203,6 +404,7 @@ def compute_scope(
     today: date,
     round_counts: bool = False,
     month_end: date | None = None,
+    catalog: list[dict] | None = None,
 ):
     """Compute per-category target numbers + a day-by-day calendar for one scope.
 
@@ -227,15 +429,22 @@ def compute_scope(
         a = actuals_by_day.get(d)
         if not a:
             return 0.0
-        return achieved_for_cat(cat, a['prem'], a['byod'], a['upg'], a['acc'])
+        return achieved_for_cat(cat, a['prem'], a['byod'], a['upg'], a['acc'],
+                                a.get('declared'))
+
+    # The tenant's own axis and units, resolved ONCE per call. `_unit` is asked rather than read off
+    # a module constant, so a declared money category rounds like money and a declared tally rounds
+    # like a count.
+    _axis = target_categories(catalog)
+    _units = target_units(catalog)
 
     def maybe_round(cat: str, v: float) -> float:
-        if round_counts and UNITS.get(cat) == 'count':
+        if round_counts and _units.get(cat) == 'count':
             return round(v, 1)
         return round(v, 2)
 
     categories = {}
-    for cat in CATEGORIES:
+    for cat in _axis:
         monthly = float(monthly_by_cat.get(cat, 0) or 0)
         cum_base_yday = sum(base_for(cat, d) for d in open_days if d < today)
         cum_ach_yday = sum(achieved_on(cat, d) for d in open_days if d < today)
@@ -260,7 +469,7 @@ def compute_scope(
         pace = (need / days_left) if days_left > 0 else need
 
         categories[cat] = {
-            'unit': UNITS[cat],
+            'unit': _units[cat],
             'monthly': maybe_round(cat, monthly),
             'achieved_mtd': maybe_round(cat, achieved_mtd),
             'need': maybe_round(cat, need),
@@ -293,10 +502,18 @@ def compute_scope(
             'projected': d in projected,  # estimated from the weekly pattern, not yet scheduled
             'cats': {},
         }
-        for cat in CATEGORIES:
+        for cat in _axis:
+            _b = base_for(cat, d)
+            _a = achieved_on(cat, d)
             row['cats'][cat] = {
-                'base': round(base_for(cat, d), 2),
-                'achieved': round(achieved_on(cat, d), 2) if has_actual else None,
+                'base': round(_b, 2),
+                'achieved': round(_a, 2) if has_actual else None,
+                # FULL PRECISION, for summing only. A week window that added up the DISPLAYED
+                # per-day figures drifted 0.15 off a 600 monthly target over 31 days, so the weeks
+                # on screen would not have added up to the month — the exact disagreement
+                # grain_windows exists to make impossible. Rounding happens once, per window.
+                'base_raw': _b,
+                'achieved_raw': _a if has_actual else None,
             }
         calendar.append(row)
 
@@ -317,20 +534,164 @@ def compute_scope(
     }
 
 
-def derive_monthly_by_cat(target_row: dict, byod_pct_default: float) -> dict:
-    """Build the monthly target dict from a commcalc.targets row.
-    BYOD target = activations_monthly * byod_pct/100 (KPI-derived; row override wins)."""
-    activations = safe_float((target_row or {}).get('activations_monthly'))
-    upgrades = safe_float((target_row or {}).get('upgrades_monthly'))
-    accessories = safe_float((target_row or {}).get('accessories_monthly'))
-    byod_pct = (target_row or {}).get('byod_pct')
+def derive_monthly_by_cat(target_row: dict, byod_pct_default: float,
+                          target_lines: list[dict] | None = None,
+                          catalog: list[dict] | None = None) -> dict:
+    """Build the monthly target dict. THE ONE FOLD from stored rows to a per-category target.
+
+    TWO PHYSICAL STORES, ONE READER — the same shape as closing/metric_catalog.storage_for and the
+    envelope_report.is_modern_row precedent (§29.7). The four built-ins keep living in their own
+    columns on commcalc.targets, read byte-for-byte as before, so no existing tenant's target moves
+    and no migration is needed to keep them working. A DECLARED category's target lives in a row of
+    commcalc.target_line (mig 1074). No caller reads either store directly: everything downstream —
+    compute_scope's per-day base, the catch-up shortfall, `need` and `pace` — consumes this dict and
+    therefore works for a declared category the day it is declared, with no new arithmetic.
+
+    BYOD target = activations_monthly * byod_pct/100 (KPI-derived; row override wins).
+
+    `target_lines` are the month-grain rows for ONE store and period. A category with no row targets
+    0, which reads as "no target set" rather than as a guess."""
+    _row = target_row or {}
+    # The column names are DEREFERENCED from BUILTIN_TARGET_COLUMN, not spelled here: this fold and
+    # the carry-forward writer must agree about which column holds which category, and a second
+    # spelling is how they would stop agreeing.
+    activations = safe_float(_row.get(BUILTIN_TARGET_COLUMN['activations']))
+    upgrades = safe_float(_row.get(BUILTIN_TARGET_COLUMN['upgrades']))
+    accessories = safe_float(_row.get(BUILTIN_TARGET_COLUMN['accessories']))
+    byod_pct = _row.get('byod_pct')
     byod_pct = safe_float(byod_pct) if byod_pct is not None else safe_float(byod_pct_default)
-    return {
+    out = {
         'activations': activations,
         'upgrades': upgrades,
         'byod': activations * byod_pct / 100.0,
         'accessories': accessories,
     }
+    # The declared half. A row naming a built-in is IGNORED rather than allowed to override the
+    # column: two homes for one number is the defect this fold exists to prevent, and the writer
+    # refuses such a row at save so one can only arrive by hand.
+    by_key = {}
+    for r in (target_lines or []):
+        key = (r or {}).get('metric_key')
+        if not key or key in BUILTIN_UNITS:
+            continue
+        by_key[key] = safe_float((r or {}).get('target_value'))
+    for cat in target_categories(catalog):
+        if cat in out:
+            continue
+        out[cat] = by_key.get(cat, 0.0)
+    return out
+
+
+def grain_windows(scope_result: dict, grain: str = 'week', week_starts: int = 0) -> list[dict]:
+    """Roll a compute_scope result up into day / week / month windows.
+
+    THE OWNER ASKED FOR TARGETS PER DAY, WEEK AND MONTH. There is exactly one piece of arithmetic
+    in this engine and it is monthly, spread over the scope's scheduled hours. A week target is
+    therefore a WINDOW over that same spread — the sum of the per-day bases of the days in the week
+    — and never a second calculation that could disagree with the month. That is the whole reason
+    this reads `scope_result['calendar']` instead of recomputing anything: a second derivation of
+    "what should this week be" is the duplicate defect, and it would drift the first time the
+    schedule changed.
+
+    Each window carries, per category: `base` (what the schedule says this window is worth),
+    `achieved` (summed over the days that have actuals), `need` (what is still owed on the MONTH
+    after this window — asked of the month figure, because a month's shortfall is not a property of
+    a week) and `remaining` (base not yet achieved inside the window, floored at zero).
+
+    `week_starts` is 0 for Monday through 6 for Sunday, matching date.weekday(). A retail week that
+    starts on Sunday is a tenant preference, not a fact about arithmetic, so it is a parameter with
+    a default rather than a constant somebody has to patch.
+
+    Days the scope is not scheduled are absent from the calendar, so a window with no scheduled days
+    is returned with zero base rather than omitted — "nothing was planned this week" is an answer,
+    and dropping the row would read as "this week does not exist"."""
+    if grain not in GRAINS:
+        raise ValueError(f"grain must be one of {GRAINS}, got {grain!r}")
+    calendar = list((scope_result or {}).get('calendar') or [])
+    cats = ((scope_result or {}).get('categories') or {})
+    axis = _axis_of_scope(scope_result)
+
+    def key_of(d: date):
+        if grain == 'day':
+            return d
+        if grain == 'month':
+            return (d.year, d.month)
+        # The window's own first day, so the label is a real date rather than an ISO week number
+        # nobody reads off a calendar.
+        return d - timedelta(days=(d.weekday() - week_starts) % 7)
+
+    buckets: dict = {}
+    order: list = []
+    for row in calendar:
+        d = _as_date(row.get('date'))
+        if d is None:
+            continue
+        k = key_of(d)
+        if k not in buckets:
+            buckets[k] = {'days': [], 'cats': {c: {'base': 0.0, 'achieved': 0.0,
+                                                   'has_actual': False} for c in axis}}
+            order.append(k)
+        b = buckets[k]
+        b['days'].append(d)
+        for c in axis:
+            cell = (row.get('cats') or {}).get(c) or {}
+            # Sum at full precision (see base_raw in compute_scope), round once per window below.
+            b['cats'][c]['base'] += safe_float(cell.get('base_raw', cell.get('base')))
+            ach = cell.get('achieved')
+            if ach is not None:
+                b['cats'][c]['achieved'] += safe_float(cell.get('achieved_raw', ach))
+                b['cats'][c]['has_actual'] = True
+
+    out = []
+    for k in order:
+        b = buckets[k]
+        days = sorted(b['days'])
+        win = {
+            'grain': grain,
+            'start': days[0].isoformat(),
+            'end': days[-1].isoformat(),
+            'open_days': len(days),
+            'cats': {},
+        }
+        for c in axis:
+            cell = b['cats'][c]
+            base = round(cell['base'], 2)
+            ach = round(cell['achieved'], 2) if cell['has_actual'] else None
+            win['cats'][c] = {
+                'unit': (cats.get(c) or {}).get('unit', 'count'),
+                'base': base,
+                'achieved': ach,
+                'remaining': round(max(0.0, base - (ach or 0.0)), 2),
+                # The month's outstanding need, carried onto the window so a weekly screen can say
+                # "this week is worth 140 and the month still owes 577" without doing its own sum.
+                'month_need': (cats.get(c) or {}).get('need', 0.0),
+            }
+        out.append(win)
+    return out
+
+
+def backward_from_goal(goal: float, achieved: float, open_days_left: int,
+                       open_days_per_week: float = 0.0) -> dict:
+    """"What do I need to reach X?" — the owner's backward calculation, stated once.
+
+    `goal` is the figure being aimed at, which is NOT always the stored target: the owner asked to
+    be able to ask the question of an arbitrary level ("what would it take to hit 1,200?"). So the
+    goal is a parameter and the stored target is just the usual value passed in.
+
+    Returns `need` (what is still owed), `per_day` and `per_week` (the flat rate that closes it over
+    the days actually left). With no open days left, `per_day` is None rather than the need itself or
+    an infinity: the honest answer to "what per day do I need with no days remaining" is that there
+    is no such rate, and a caller showing the need as a daily figure would be stating something
+    false. Over-achievement returns a need of 0 and rates of 0, never a negative."""
+    need = max(0.0, safe_float(goal) - safe_float(achieved))
+    days = int(open_days_left or 0)
+    per_day = round(need / days, 2) if days > 0 else None
+    per_week = None
+    if per_day is not None and (open_days_per_week or 0) > 0:
+        per_week = round(per_day * safe_float(open_days_per_week), 2)
+    return {'goal': round(safe_float(goal), 2), 'achieved': round(safe_float(achieved), 2),
+            'need': round(need, 2), 'open_days_left': days,
+            'per_day': per_day, 'per_week': per_week}
 
 
 def reps_in_scope(shifts: list[dict], actuals: list[dict], store_code: str) -> list[str]:
@@ -382,7 +743,10 @@ def build_action_items(scope_result: dict, conversion: dict | None,
     if include_categories:
         cats = scope_result.get('categories', {}) or {}
         open_days_total = scope_result.get('open_days_total', 0) or 0
-        for cat in CATEGORIES:
+        # The axis comes off the scope result itself, never from a list kept here: compute_scope
+        # already resolved this tenant's categories, so re-listing them would be the second copy
+        # the lock fails the build on — and would silently skip every declared category.
+        for cat in _axis_of_scope(scope_result):
             m = cats.get(cat)
             if not m:
                 continue
@@ -498,8 +862,11 @@ def aggregate_stores(store_rows: list[dict]) -> dict:
     """
     rows = list(store_rows or [])
     cats: dict = {}
-    for cat in CATEGORIES:
-        acc = {'unit': UNITS[cat], 'monthly': 0.0, 'achieved_mtd': 0.0, 'need': 0.0,
+    # Same reasoning as build_action_items: the axis is whatever the store rows carry, in the order
+    # compute_scope produced, so an aggregate cannot omit a category the stores reported.
+    _agg_axis, _agg_units = _axis_of_rows(rows)
+    for cat in _agg_axis:
+        acc = {'unit': _agg_units.get(cat, 'count'), 'monthly': 0.0, 'achieved_mtd': 0.0, 'need': 0.0,
                'today_target': 0.0, 'pace': 0.0, 'base_today': 0.0, 'setup_fee_mtd': 0.0,
                'stores_with_target': 0, 'stores_on_track': 0}
         for r in rows:

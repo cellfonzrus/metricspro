@@ -3396,17 +3396,107 @@ def _metric_catalog(client, org_id, *, include_inactive=False, with_tenders=True
     return _metrics.build(cdefs, tender_defs=tdefs)
 
 
-def _metric_lines(client, org_id, store_code, close_date):
-    """`closing_metric_line` rows for one store-day. [] before mig 1072 is applied, so every caller
-    degrades to the mig-501 behaviour instead of failing."""
+def _metric_lines(client, org_id, store_code, close_date, date_to=None, limit=None):
+    """`closing_metric_line` rows for one store-day — or for a DATE RANGE when `date_to` is given.
+
+    THE ONE READ of this table, and `harness_metric_catalog_lock.py` §B1 pins the count of query
+    sites so it stays that way. The range form exists because the ranged fold below needs every
+    store's lines for a month in ONE query (a per-store loop over thirty stores would be the N+1
+    read that tempts a caller to query the table itself); it is a parameter here rather than a
+    second reader for exactly that reason.
+
+    [] before mig 1072 is applied, so every caller degrades to the mig-501 behaviour instead of
+    failing."""
     try:
         q = (client.schema("commcalc").table("closing_metric_line").select("*")
-             .eq("org_id", org_id).eq("close_date", str(close_date)))
+             .eq("org_id", org_id))
+        if date_to is None:
+            q = q.eq("close_date", str(close_date))
+        else:
+            q = q.gte("close_date", str(close_date)).lte("close_date", str(date_to))
         if store_code:
             q = q.eq("store_code", str(store_code))
+        if limit:
+            q = q.limit(int(limit))
         return q.execute().data or []
     except Exception:
         return []
+
+
+def _declared_by_store_day(client, org_id, date_from, date_to, store_code="", catalog=None):
+    """WHAT WAS DECLARED, PER STORE PER DAY, OVER A RANGE — folded across both physical stores.
+
+    THE one home for the ranged question, as `declared()` is for a single store-day. It exists so a
+    caller outside this module (the targets engine's achieved figures, index §COMMCALC-02) can ask
+    it without reaching past `metric_catalog` to `daily_closing.counts` and `closing_metric_line`
+    itself — which is exactly what `harness_metric_catalog_lock.py` fails the build on.
+
+    Returns {store_code: {date_string: {metric_key: value}}}. `store_code` narrows the read to one
+    store; omitting it answers for EVERY store on the range in the same two queries, which is why a
+    period screen looping thirty stores does not make thirty round trips — the N+1 read is the
+    reason a caller would otherwise be tempted to query the tables itself.
+
+    The value is the metric's own unit — units for a count metric, dollars for a money one —
+    because `metric_catalog.figure_of` is dereferenced for it rather than decided here.
+
+    Degrades to {} on any failure, so a surface that asks before mig 1072/1074 are applied behaves
+    as it did before rather than failing."""
+    try:
+        cat = catalog if catalog is not None else _metric_catalog(client, org_id)
+        if not cat:
+            return {}
+        rows_q = (client.schema("commcalc").table("daily_closing").select("*")
+                  .eq("org_id", org_id)
+                  .gte("close_date", str(date_from)).lte("close_date", str(date_to)))
+        if store_code:
+            rows_q = rows_q.eq("store_code", str(store_code))
+        rows = rows_q.limit(20000).execute().data or []
+        # DEREFERENCED, not re-queried: `_metric_lines` is the one read of closing_metric_line, and
+        # its range form is what makes this a single query for every store on the period.
+        lines = _metric_lines(client, org_id, store_code, date_from,
+                              date_to=date_to, limit=50000)
+    except Exception:
+        return {}
+
+    def _skey(r):
+        return str((r or {}).get("store_code") or "").strip()
+
+    def _dkey(r):
+        return str((r or {}).get("close_date") or "")[:10]
+
+    lines_by: dict = {}
+    for ln in lines:
+        lines_by.setdefault((_skey(ln), _dkey(ln)), []).append(ln)
+    rows_by: dict = {}
+    for r in rows:
+        rows_by[(_skey(r), _dkey(r))] = r
+
+    out: dict = {}
+    # A store-day with metric LINES but no closing row still counts: the lines are a real declaration.
+    for key in set(rows_by) | set(lines_by):
+        store, day = key
+        if not day:
+            continue
+        folded = _metrics.declared(cat, rows_by.get(key), lines_by.get(key)) or {}
+        # WHICH NUMBER ANSWERS "how much of this happened" IS NOT DECIDED HERE. It is one fact with
+        # one home — `metric_catalog.figure_of` — and this fold dereferences it, as the targets
+        # engine dereferences `figure_unit` for the same metric's unit. Deciding it inline here
+        # would let a target be SET in units and MEASURED in dollars.
+        out.setdefault(store, {})[day] = {k: _metrics.figure_of(c) for k, c in folded.items()}
+    return out
+
+
+def _declared_by_day(client, org_id, store_code, date_from, date_to, catalog=None):
+    """One store's declarations per day: {date_string: {metric_key: value}}.
+
+    A DEREFERENCE of _declared_by_store_day, not a second reader — the store-keyed form above is
+    the one that touches the tables, and this is the shape a single-store caller wants. Store codes
+    are compared after stripping only: case is NOT folded here, because the house compares store
+    codes that way everywhere else (see coa._norm_store) and quietly folding it in one reader is how
+    one surface would start finding a store the rest of the system does not."""
+    by_store = _declared_by_store_day(client, org_id, date_from, date_to,
+                                      store_code=store_code, catalog=catalog)
+    return by_store.get(str(store_code or "").strip()) or {}
 
 
 @router.get("/metric-catalog")

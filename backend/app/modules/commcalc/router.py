@@ -31304,16 +31304,27 @@ def _prior_period(period: str) -> str:
     return f"{_MONTH_NAMES[m - 1]} {y}"
 
 
-def _carry_forward_map(client, org_id, period, stores):
+def _carry_forward_map(client, org_id, period, stores, catalog=None):
     """Per store_code (UPPER): the suggested next-month target derived from the prior period —
     carry each category forward, or ×1.10 when the store achieved that category's prior target.
-    basis[cat] ∈ 'stretch' | 'carry' | 'new' (no prior target to work from)."""
+    basis[cat] ∈ 'stretch' | 'carry' | 'new' (no prior target to work from).
+
+    THE AXIS IS ASKED, NOT LISTED. This function used to carry its own `(cat, col)` tuple list —
+    one of seven copies of the target category axis found on 2026-10-11 — so a tenant that declared
+    drop-offs got a carry-forward suggestion for everything EXCEPT the category it actually sells.
+    It now walks `targets_engine.target_categories(catalog)` and asks `target_store(cat)` where each
+    one's target physically lives, so the same stretch/carry rule reaches a declared category the
+    day it is declared. Declared suggestions come back under `lines` (keyed by metric_key) because
+    they have no column to be written into; `byod` is skipped because it is derived from
+    activations × byod_pct, exactly as before."""
     prior = _prior_period(period)
     prows = (client.schema('commcalc').table('targets')
              .select('*').eq('org_id', org_id).in_('period', _pvariants(prior)).execute().data) or []
     prior_by_code = {str(r.get('store_code', '')).upper(): r for r in prows}
     byod_prior = _byod_pct_default(client, prior, org_id)
     p_actuals = _fetch_actuals(client, org_id, prior)
+    # The prior month's declared targets and declared achievement, read once for every store.
+    p_lines_by_store = _target_lines_by_store(_target_lines(client, org_id, prior))
     out = {}
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
@@ -31321,12 +31332,16 @@ def _carry_forward_map(client, org_id, period, stores):
             continue
         cu = code.upper()
         ptrow = prior_by_code.get(cu)
+        _acc_col = targets_engine.BUILTIN_TARGET_COLUMN['accessories']
         p_monthly = targets_engine.derive_monthly_by_cat(
-            ptrow if ptrow else {'accessories_monthly': safe_float(s.get('monthly_target'))}, byod_prior)
+            ptrow if ptrow else {_acc_col: safe_float(s.get('monthly_target'))}, byod_prior,
+            target_lines=_lines_for(p_lines_by_store, code), catalog=catalog)
         achieved = targets_engine.scope_achieved_mtd(p_actuals, code, None, None)  # whole prior month
-        res, basis = {}, {}
-        for cat, col in (('activations', 'activations_monthly'), ('upgrades', 'upgrades_monthly'),
-                         ('accessories', 'accessories_monthly')):
+        res, basis, lines = {}, {}, {}
+        for cat in targets_engine.target_categories(catalog):
+            store = targets_engine.target_store(cat)
+            if store == 'derived':      # byod rides activations × byod_pct; it has no target of its own
+                continue
             tgt = safe_float(p_monthly.get(cat))
             got = safe_float(achieved.get(cat))
             if tgt > 0 and got >= tgt:
@@ -31335,9 +31350,17 @@ def _carry_forward_map(client, org_id, period, stores):
                 val, basis[cat] = tgt, 'carry'
             else:
                 val, basis[cat] = tgt, 'new'
-            res[col] = round(val) if cat != 'accessories' else round(val, 2)
+            # Money rounds to the cent, a tally to a whole unit — asked of the category's unit
+            # rather than special-casing the one category that happens to be money today.
+            _dollars = targets_engine.target_units(catalog).get(cat) == 'dollars'
+            val = round(val, 2) if _dollars else round(val)
+            if store == 'column':
+                res[targets_engine.BUILTIN_TARGET_COLUMN[cat]] = val
+            else:
+                lines[cat] = val
         res['byod_pct'] = ptrow.get('byod_pct') if ptrow else None
         res['basis'] = basis
+        res['lines'] = lines
         out[cu] = res
     return {'prior_period': prior, 'by_code': out}
 
@@ -31395,6 +31418,97 @@ def _require_target_edit(authorization: str, org_id: str, store_code: str = ""):
                                  f"the stores assigned to you.")
 
 
+# ── THE TARGET AXIS (index §COMMCALC-02, mig 1074) ────────────────────────────────────────────────
+# "What can this business set a target on." The four built-in categories are the sales feed's;
+# anything else is a category the admin declared on Daily Closing -> Count Fields (mig 1072). Both
+# arrive through targets_engine.target_categories, which is the ONE axis — a surface that lists
+# categories here would be the eighth copy harness_target_axis_lock.py fails the build on.
+
+def _target_catalog(client, org_id):
+    """This tenant's declared-metric catalog, for the target axis.
+
+    DEREFERENCED, never rebuilt: closing/router._metric_catalog is the single construction site and
+    harness_metric_catalog_lock.py fails the build on a second one. The import is lazy for the same
+    reason the other closing imports in this file are — it avoids a commcalc<->closing cycle.
+
+    Returns [] on any failure, which is deliberate: before mig 1074/1072 are applied, or if the
+    catalog cannot be read, the target axis degrades to exactly the four built-ins and every
+    existing tenant behaves as it did before. A target screen that 500s because a new table is
+    missing would be a worse answer than the old one."""
+    try:
+        from app.modules.closing.router import _metric_catalog as _mc
+        return _mc(client, org_id) or []
+    except Exception:
+        return []
+
+
+def _declared_by_store_day_for_targets(client, org_id, date_from, date_to, catalog=None):
+    """Every store's declarations per day over a range — DEREFERENCED from the closing module, in
+    ONE read, for a screen that loops stores. Lazy import and {} on failure, as its siblings."""
+    try:
+        from app.modules.closing.router import _declared_by_store_day as _dbsd
+        return _dbsd(client, org_id, date_from, date_to, catalog=catalog) or {}
+    except Exception:
+        return {}
+
+
+def _lines_for(by_store: dict, code: str) -> list:
+    """This store's target_line rows out of the period-wide map.
+
+    Store codes are matched as the house matches them everywhere — stripped, and ALSO tried
+    upper-cased, because a target saved as 'kedzie' has to resolve when the roster hands us
+    'Kedzie'. That is the same case-only mismatch that used to render the targets drill-down as
+    silent zeros (see the store_code match in the drill-down above); it is tried as a FALLBACK, so a
+    code that matches exactly still wins and nothing is folded away."""
+    c = str(code or "").strip()
+    return (by_store or {}).get(c) or (by_store or {}).get(c.upper()) or []
+
+
+def _declared_for(by_store: dict, code: str) -> dict:
+    """This store's declarations out of the period-wide map, matched as _lines_for matches."""
+    c = str(code or "").strip()
+    return (by_store or {}).get(c) or (by_store or {}).get(c.upper()) or {}
+
+
+def _declared_by_day_for_targets(client, org_id, store_code, date_from, date_to, catalog=None):
+    """What one store declared per day over a range — DEREFERENCED from the closing module.
+
+    closing/router._declared_by_day is the one reader of a declaration across both physical stores
+    (daily_closing.counts and closing_metric_line, mig 1072). This wrapper exists only to keep the
+    import lazy, exactly as _target_catalog does, and to degrade to {} so a target screen still
+    renders if the closing module or the new tables are unavailable."""
+    try:
+        from app.modules.closing.router import _declared_by_day as _dbd
+        return _dbd(client, org_id, store_code, date_from, date_to, catalog=catalog) or {}
+    except Exception:
+        return {}
+
+
+def _target_lines(client, org_id, period, store_code: str = "", grain: str = "month"):
+    """commcalc.target_line rows for a period (optionally one store), at one grain.
+
+    [] before mig 1074 is applied, so the fold sees no declared targets and the built-ins answer
+    alone — the same degradation posture as _metric_catalog's reader."""
+    try:
+        q = (client.schema("commcalc").table("target_line").select("*")
+             .eq("org_id", org_id).eq("period", str(period)))
+        if store_code:
+            q = q.eq("store_code", str(store_code))
+        if grain:
+            q = q.eq("grain", str(grain))
+        return q.limit(5000).execute().data or []
+    except Exception:
+        return []
+
+
+def _target_lines_by_store(rows) -> dict:
+    """Group target_line rows by store_code, so one read serves every store on a period screen."""
+    out: dict = {}
+    for r in (rows or []):
+        out.setdefault(str((r or {}).get("store_code") or ""), []).append(r)
+    return out
+
+
 @router.get("/targets/{period}")
 def get_targets(period: str, include_inactive: bool = False,
                       authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -31424,8 +31538,12 @@ def get_targets(period: str, include_inactive: bool = False,
     # Only pull last month's actuals for the carry-forward when at least one store still needs seeding.
     need_seed = any((str(s.get('store_code', '') or '').strip().upper() or None) not in by_code
                     for s in stores if str(s.get('store_code', '') or '').strip())
-    cf = (_carry_forward_map(client, org_id, period, stores) if need_seed
+    catalog = _target_catalog(client, org_id)
+    cf = (_carry_forward_map(client, org_id, period, stores, catalog=catalog) if need_seed
           else {'by_code': {}, 'prior_period': _prior_period(period)})
+    # THE DECLARED HALF of each store's target, read once for the whole period. A store with no rows
+    # gets {} — which this page renders as blank, meaning "no target", never as a target of zero.
+    tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, period))
     out = []
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
@@ -31452,13 +31570,24 @@ def get_targets(period: str, include_inactive: bool = False,
                 'is_active': _store_active(s),
                 '_seeded': True, '_seed_basis': cfrow.get('basis'), '_prior_period': cf['prior_period'],
             }
+        # Saved declared targets for this store, keyed by metric_key. A seeded (unsaved) row carries
+        # the carry-forward's suggestion for them too, so a first save preserves what the page was
+        # showing rather than writing zeros — the same posture the built-in columns already had.
+        _saved = {str((ln or {}).get('metric_key') or ''): safe_float((ln or {}).get('target_value'))
+                  for ln in _lines_for(tlines_by_store, code)}
+        if not existing:
+            for k, v in (cf['by_code'].get(code.upper(), {}).get('lines') or {}).items():
+                _saved.setdefault(k, safe_float(v))
+        row['lines'] = _saved
         out.append(row)
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
     if ks is not None:
         out = [r for r in out if in_keyset(ks, r.get('store_code'), r.get('address'))]
-    return {'period': period, 'byod_pct_default': byod_def, 'targets': out}
+    return {'period': period, 'byod_pct_default': byod_def, 'targets': out,
+            # The axis this page should render columns for — asked, so the page keeps no list.
+            'axis': targets_engine.target_axis(catalog)}
 
 
 class SaveTargetIn(LaxModel):
@@ -31531,7 +31660,8 @@ def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = Non
     _roster_all = _storeops_roster(client, org_id, include_inactive=True)
     stores = [s for s in _roster_all if _store_active(s)]
     inactive_skipped = len(_roster_all) - len(stores)
-    cf = _carry_forward_map(client, org_id, period, stores)
+    cf = _carry_forward_map(client, org_id, period, stores,
+                            catalog=_target_catalog(client, org_id))
     prior = cf['prior_period']
     written, skipped = [], 0
     try:
@@ -31609,13 +31739,167 @@ def _period_or_400(period, what="period"):
     return f"{_calendar.month_name[mo]} {yr}"
 
 
+# ── THE TARGET AXIS, AND A TARGET FOR A CATEGORY THE BUSINESS DECLARED (index §COMMCALC-02) ──────
+# Owner 2026-10-10: *"the target needs to be set for the gross revenue per day / week / month or
+# backward calculate what is needed to reach a certain level ... but i dont wnat them to be hard
+# coded it should be a design effect"*
+#
+# Three routes, none of which carries a category list: the axis is ASKED of
+# `targets_engine.target_axis` with this tenant's declared catalog, so a screen, a report card and a
+# payout-rule dropdown cannot disagree about what is targetable.
+
+@router.get("/targets/{period}/axis")
+def get_target_axis(period: str, org_id: str = ORG_ID):
+    """WHAT IS TARGETABLE FOR THIS TENANT — the one list every target surface reads.
+
+    Returns [{key, label, unit, store, source}]: the four built-in sales categories, then every
+    category the admin declared on Count Fields (mig 1072). `store` says where a target physically
+    lives ('column' on commcalc.targets, 'derived' for BYOD, 'line' in commcalc.target_line) and
+    `source` whether its achievement comes from the sales feed or from what a rep declared.
+
+    This route exists because the list was hard-coded in SEVEN places on 2026-10-11 — four backend,
+    three frontend — which is why a UPS-store tenant could declare drop-offs on the closing screen
+    and then find nowhere to set a target for them. `harness_target_axis_lock.py` fails the build on
+    an eighth copy."""
+    require_org(org_id)
+    client = sb()
+    catalog = _target_catalog(client, org_id)
+    return {'period': period, 'axis': targets_engine.target_axis(catalog),
+            'grains': list(targets_engine.GRAINS),
+            # True once the tenant has declared anything, so a screen can hide the declared section
+            # entirely rather than rendering an empty one.
+            'has_declared': any(a['store'] == 'line' for a in targets_engine.target_axis(catalog))}
+
+
+class SaveTargetLinesIn(LaxModel):
+    store_code: Any = None
+    # {metric_key: target_value}. A key absent from the map is left alone; an explicit 0 clears the
+    # target, which is how "no target" is said.
+    lines: Any = None
+    grain: Any = None
+    updated_by: Any = None
+
+
+@router.put("/targets/{period}/lines")
+def save_target_lines(period: str, body: SaveTargetLinesIn,
+                      authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Set targets for DECLARED categories on one store-period.
+
+    Gated on exactly the same 'Target Settings' permission and store span as `PUT /targets/{period}`
+    — `_require_target_edit` — so this widens nobody's access.
+
+    A BUILT-IN CATEGORY KEY IS REFUSED, with a 400 naming it. Activations, upgrades, BYOD and
+    accessories live in their own columns on commcalc.targets and are saved by that endpoint; a row
+    here naming one would be a second home for one number, and the fold would then have to pick a
+    winner. The engine ignores such a row defensively too, but refusing it at the door is what keeps
+    the two stores from ever disagreeing. A key the tenant has not declared is refused the same way:
+    a target for a category nobody declares would never be measured.
+
+    Rejects a target below zero (the migration's CHECK says the same, stated here so the caller gets
+    a sentence instead of a database error)."""
+    client = sb()
+    code = str(body.store_code or '').strip()
+    if not code:
+        raise HTTPException(400, "store_code required")
+    _require_target_edit(authorization, org_id, code)
+    grain = str(body.grain or 'month').strip().lower()
+    if grain not in targets_engine.GRAINS:
+        raise HTTPException(400, f"grain must be one of {', '.join(targets_engine.GRAINS)}.")
+    lines = body.lines if isinstance(body.lines, dict) else {}
+    if not lines:
+        raise HTTPException(400, "lines required: {metric_key: target_value}")
+
+    catalog = _target_catalog(client, org_id)
+    axis = {a['key']: a for a in targets_engine.target_axis(catalog)}
+    rows, uid = [], (body.updated_by or _caller_uid(authorization))
+    for key, val in lines.items():
+        k = str(key or '').strip()
+        entry = axis.get(k)
+        if not entry:
+            raise HTTPException(400, f"'{k}' is not a category this tenant declares. Add it on "
+                                     f"Settings → Count Fields first, then set its target here.")
+        if entry['store'] != 'line':
+            raise HTTPException(400, f"'{entry['label']}' is a built-in sales category — set its "
+                                     f"target on the Target Settings row, not here. Saving it in "
+                                     f"two places is how the two figures would stop agreeing.")
+        v = safe_float(val)
+        if v < 0:
+            raise HTTPException(400, f"'{entry['label']}' target cannot be negative.")
+        rows.append({'org_id': org_id, 'store_code': code, 'period': period,
+                     'metric_key': k, 'grain': grain, 'target_value': v, 'updated_by': uid})
+
+    try:
+        r = (client.schema('commcalc').table('target_line')
+             .upsert(rows, on_conflict='org_id,store_code,period,metric_key,grain').execute())
+    except Exception as e:
+        # Mig 1074 not applied yet is the one failure a person can act on, so it says so rather than
+        # surfacing a raw PostgREST message.
+        raise HTTPException(503, "Declared-category targets need migration 1074 "
+                                 f"(commcalc.target_line) applied first. Underlying error: {e}")
+    return {'period': period, 'store_code': code, 'grain': grain,
+            'saved': r.data if r.data else rows}
+
+
+@router.get("/targets/{period}/backward")
+def get_target_backward(period: str, store_code: str, metric_key: str = "",
+                        goal: float = 0, scope: str = "store", rep: str = "", today: str = "",
+                        authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """"WHAT DO I NEED TO REACH X?" — the owner's backward calculation, per day and per week.
+
+    `goal` is a parameter, not the stored target, because the owner asked to be able to put the
+    question to an ARBITRARY level ("what would it take to hit 1,200?"). Omitting it (or passing 0)
+    asks the question of the target that is actually set.
+
+    `metric_key` omitted answers for every category on the axis at once, which is what a screen
+    wants; naming one answers for that one.
+
+    THERE IS NO SECOND ARITHMETIC HERE. The scope is computed by the same
+    `targets_engine.compute_scope` the calendar uses, and the answer is
+    `targets_engine.backward_from_goal` over its figures — so this route cannot disagree with the
+    calendar about what is still owed. With no open days left `per_day` is null rather than the need
+    itself: there is no such rate, and printing the need as a daily figure would state something
+    false."""
+    calc = get_target_calendar(period=period, store_code=store_code, scope=scope, rep=rep,
+                               today=today, authorization=authorization, org_id=org_id)
+    cats = calc.get('categories') or {}
+    keys = [str(metric_key).strip()] if str(metric_key or '').strip() else list(cats.keys())
+    # Open days still ahead, including today — the same denominator `pace` spreads over.
+    _cal = calc.get('calendar') or []
+    days_left = sum(1 for d in _cal if not d.get('is_past'))
+    # How many open days a typical week holds for this scope, so `per_week` is this store's week and
+    # not a notional seven.
+    weeks = targets_engine.grain_windows(calc, grain='week') or []
+    per_week_days = (len(_cal) / len(weeks)) if weeks else 0.0
+
+    out = {}
+    for k in keys:
+        c = cats.get(k) or {}
+        g = safe_float(goal) if safe_float(goal) > 0 else safe_float(c.get('monthly'))
+        out[k] = targets_engine.backward_from_goal(g, safe_float(c.get('achieved_mtd')),
+                                                   days_left, open_days_per_week=per_week_days)
+        out[k]['unit'] = c.get('unit')
+        out[k]['is_stored_target'] = not (safe_float(goal) > 0)
+    return {'period': calc.get('period', period), 'store_code': store_code, 'scope': scope,
+            'rep': calc.get('rep'), 'today': calc.get('today'),
+            'open_days_left': days_left, 'open_days_per_week': round(per_week_days, 2),
+            'by_category': out}
+
+
 @router.get("/targets/{period}/calendar")
 def get_target_calendar(
     period: str, store_code: str, scope: str = "store",
-    rep: str = "", today: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID,
+    rep: str = "", today: str = "", grain: str = "", week_starts: int = 0,
+    authorization: str = Header(default=""), org_id: str = ORG_ID,
 ):
     """Schedule-weighted daily targets + catch-up + pace + day-by-day calendar
     for a single store (scope=store) or a single rep within it (scope=rep).
+
+    `grain` ('day' | 'week' | 'month') adds a `windows` block: the owner's per-day / per-week /
+    per-month target. It is a WINDOW over the day-by-day calendar already in this response, summed
+    at full precision by `targets_engine.grain_windows` — NEVER a second calculation, which would
+    drift from the month the first time the schedule changed. `week_starts` is 0 for Monday through
+    6 for Sunday, because a retail week starting on Sunday is a tenant preference rather than a fact
+    about arithmetic.
 
     Accepts either period spelling ('July 2026' or '2026-07'); unparseable -> clean 400."""
     client = sb()
@@ -31646,8 +31930,15 @@ def get_target_calendar(
                  .select('store_code,monthly_target').eq('org_id', org_id).limit(2000).execute().data) or []
         srow = [r for r in srows if str(r.get('store_code') or '').strip().upper() == sc_up][:1]
         if srow:
-            target_row = {'accessories_monthly': safe_float(srow[0].get('monthly_target'))}
-    monthly = targets_engine.derive_monthly_by_cat(target_row, byod_def)
+            target_row = {targets_engine.BUILTIN_TARGET_COLUMN['accessories']:
+                          safe_float(srow[0].get('monthly_target'))}
+    # THE TENANT'S OWN AXIS. The catalog and the declared targets are read here and handed to the
+    # one fold; a tenant with neither (or one on a database where mig 1074 is not yet applied) gets
+    # exactly the four built-ins and behaves as it did before.
+    catalog = _target_catalog(client, org_id)
+    tlines = _target_lines(client, org_id, cperiod, store_code=store_code)
+    monthly = targets_engine.derive_monthly_by_cat(target_row, byod_def,
+                                                   target_lines=tlines, catalog=catalog)
 
     shifts = _fetch_shifts(client, start, end, org_id)
     actuals = _fetch_actuals(client, org_id, cperiod)
@@ -31655,6 +31946,15 @@ def get_target_calendar(
 
     hours_by_day = targets_engine.scope_hours_by_day(shifts, store_code, rep_arg)
     actuals_by_day = targets_engine.scope_actuals_by_day(actuals, store_code, rep_arg)
+    # WHAT THE STORE DECLARED, folded into the same per-day arithmetic as a sale. The closing module
+    # is the one reader of a declaration (harness_metric_catalog_lock), and targets_engine owns the
+    # merge, so this line is a dereference of both rather than a third opinion. Declarations are a
+    # STORE fact — nobody types them per rep — so a rep scope reads the store's figures unprorated;
+    # the rep-share proration below then applies to the target, not to what was declared.
+    if catalog:
+        actuals_by_day = targets_engine.merge_declared_actuals(
+            actuals_by_day, _declared_by_day_for_targets(client, org_id, store_code, start,
+                                                         end - _timedelta(days=1), catalog))
     month_end = end - _timedelta(days=1)
 
     # Employee target PRORATION (#10/#11): a rep's monthly target = the store monthly × the rep's
@@ -31670,12 +31970,21 @@ def get_target_calendar(
         monthly = {c: round((v or 0) * rep_share, 2) for c, v in monthly.items()}
 
     result = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
-                                          round_counts=True, month_end=month_end)
+                                          round_counts=True, month_end=month_end,
+                                          catalog=catalog)
     result.update({
         'period': period, 'scope': scope, 'store_code': store_code,
         'rep': rep_arg, 'monthly_targets': monthly, 'rep_share': round(rep_share, 4),
         'reps': targets_engine.reps_in_scope(shifts, actuals, store_code),
+        'grains': list(targets_engine.GRAINS),
     })
+    _g = str(grain or '').strip().lower()
+    if _g:
+        if _g not in targets_engine.GRAINS:
+            raise HTTPException(400, f"grain must be one of {', '.join(targets_engine.GRAINS)}.")
+        result['grain'] = _g
+        result['windows'] = targets_engine.grain_windows(result, grain=_g,
+                                                         week_starts=int(week_starts or 0))
     # Conversion (boxes ÷ bill-payments). Always include the store rate; for a rep scope
     # also include the rep's rate + whether it's dragging the store down.
     store_conv = targets_engine.scope_conversion(actuals, store_code, None, today)
@@ -31968,6 +32277,16 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     rep_sel = {x.upper() for x in _as_filter_list(reps)}
     applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
 
+    # THE TENANT'S OWN AXIS, read ONCE for the whole loop: the declared catalog, every store's
+    # declared targets, and what each store declared per day. Three reads for the period rather than
+    # three per store — which is why the closing reader answers for all stores at once (see
+    # closing/router._declared_by_store_day). A tenant with no declared categories gets [] / {} and
+    # the loop computes exactly the four built-ins, as it did before.
+    catalog = _target_catalog(client, org_id)
+    tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, cperiod))
+    declared_by_store = (_declared_by_store_day_for_targets(
+        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {{}})
+
     out = []
     for s in roster:
         code = str(s.get('store_code', '') or '').strip()
@@ -31982,14 +32301,19 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             continue
         trow = tgt_by_code.get(code.upper())
         if not trow:
-            trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
-        monthly = targets_engine.derive_monthly_by_cat(trow, byod_def)
+            trow = {targets_engine.BUILTIN_TARGET_COLUMN['accessories']:
+                    safe_float(s.get('monthly_target'))}
+        monthly = targets_engine.derive_monthly_by_cat(
+            trow, byod_def, target_lines=_lines_for(tlines_by_store, code), catalog=catalog)
         if sum(monthly.values()) <= 0 and not include_untargeted:
             continue
         hours_by_day = targets_engine.scope_hours_by_day(shifts, code, None)
-        actuals_by_day = targets_engine.scope_actuals_by_day(actuals, code, None)
+        actuals_by_day = targets_engine.merge_declared_actuals(
+            targets_engine.scope_actuals_by_day(actuals, code, None),
+            _declared_for(declared_by_store, code))
         res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
-                                           round_counts=True, month_end=end - _timedelta(days=1))
+                                           round_counts=True, month_end=end - _timedelta(days=1),
+                                           catalog=catalog)
         # Untargeted store (only reachable via include_untargeted): keep it only when it has real
         # achieved actuals — else it's just noise. Targeted stores always pass.
         if sum(monthly.values()) <= 0:
@@ -32366,7 +32690,8 @@ def assign_accessory_target_plan(period: str, body: Optional[AssignAccessoryTarg
         try:
             seed = (_carry_forward_map(client, org_id, cperiod,
                                        [s for s in roster
-                                        if str(s.get('store_code') or '').strip().upper() in codes])
+                                        if str(s.get('store_code') or '').strip().upper() in codes],
+                                       catalog=_target_catalog(client, org_id))
                     or {}).get('by_code', {}) or {}
         except Exception as e:
             print(f"WARN accessory target assign carry-forward failed: {e}")
@@ -32459,7 +32784,12 @@ async def get_manager_report_cards(period: str, today: str = "",
 
     cards = _mrcard.build(rows, chain, peer_items=peer_items,
                           aggregate=targets_engine.aggregate_stores,
-                          peer_compared=peer_compared)
+                          peer_compared=peer_compared,
+                          # The tenant's declared categories, so a card carries a row for the thing
+                          # the store actually sells. INJECTED, as every other fact on a card is:
+                          # the card module imports nothing, so the axis is read here, from its one
+                          # home, and handed in.
+                          axis=targets_engine.target_axis(_target_catalog(sb(), org_id)))
     note = _mrcard.coverage_note(cards.get('coverage'))
     return {'period': summary.get('period', period), 'today': summary.get('today'),
             **cards,
@@ -32475,8 +32805,9 @@ async def get_manager_report_cards(period: str, today: str = "",
 # the paid score cannot drift. "Mirrors" was the old comment, and a mirror is what went wrong.
 # This name is kept as the alias every existing caller already uses.
 ACTION_KPI_DEFS = [tuple(d) for d in _kpi_failing.BUILTIN_KPI_DEFS]
-_AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
-                 'byod': 'BYOD', 'accessories': 'Accessories'}
+# DEREFERENCED, not spelled here. These four labels used to exist in three modules; the engine owns
+# them now, beside the axis they label (targets_engine.BUILTIN_LABELS).
+_AP_CAT_LABEL = targets_engine.BUILTIN_LABELS
 _KPI_DEFAULT_CARRIER = '00000000-0000-0000-0000-000000000000'  # nil carrier_id = the org default set
 
 
@@ -36564,6 +36895,16 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     out = []
     tot_crit = tot_warn = 0
     tot_at_risk = 0.0
+    # THE TENANT'S OWN AXIS, read ONCE for the whole loop: the declared catalog, every store's
+    # declared targets, and what each store declared per day. Three reads for the period rather than
+    # three per store — which is why the closing reader answers for all stores at once (see
+    # closing/router._declared_by_store_day). A tenant with no declared categories gets [] / {} and
+    # the loop computes exactly the four built-ins, as it did before.
+    catalog = _target_catalog(client, org_id)
+    tlines_by_store = _target_lines_by_store(_target_lines(client, org_id, period))
+    declared_by_store = (_declared_by_store_day_for_targets(
+        client, org_id, start, end - _timedelta(days=1), catalog) if catalog else {{}})
+
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
@@ -36574,14 +36915,19 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             continue   # outside the signed-in manager's span
         trow = by_code.get(code.upper())
         if not trow:
-            trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
-        monthly = targets_engine.derive_monthly_by_cat(trow, byod_def)
+            trow = {targets_engine.BUILTIN_TARGET_COLUMN['accessories']:
+                    safe_float(s.get('monthly_target'))}
+        monthly = targets_engine.derive_monthly_by_cat(
+            trow, byod_def, target_lines=_lines_for(tlines_by_store, code), catalog=catalog)
         if sum(monthly.values()) <= 0:
             continue
         hours_by_day = targets_engine.scope_hours_by_day(shifts, code, None)
-        actuals_by_day = targets_engine.scope_actuals_by_day(actuals, code, None)
+        actuals_by_day = targets_engine.merge_declared_actuals(
+            targets_engine.scope_actuals_by_day(actuals, code, None),
+            _declared_for(declared_by_store, code))
         res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
-                                           round_counts=True, month_end=month_end)
+                                           round_counts=True, month_end=month_end,
+                                           catalog=catalog)
         store_conv = targets_engine.scope_conversion(actuals, code, None, today)
         store_items = targets_engine.build_action_items(res, store_conv, include_categories=True)
         # THE PEER GAP, dereferenced — the item is built in `peer_comparison`, keyed on the store code
@@ -36594,11 +36940,14 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
 
         # Target-vs-achieved metrics per category (what's expected vs what they're doing).
         metrics = []
-        for cat in targets_engine.CATEGORIES:
+        # The axis AND the labels are asked of the engine, so a declared category appears here with
+        # the words the admin typed rather than not at all.
+        _ax_labels = targets_engine.target_labels(catalog)
+        for cat in targets_engine.target_categories(catalog):
             m = res['categories'].get(cat) or {}
             if (m.get('monthly') or 0) <= 0:
                 continue
-            metrics.append({'cat': cat, 'label': _AP_CAT_LABEL.get(cat, cat),
+            metrics.append({'cat': cat, 'label': _ax_labels.get(cat, cat),
                             'unit': m.get('unit', 'count'), 'target': m.get('monthly', 0),
                             'achieved': m.get('achieved_mtd', 0), 'need': m.get('need', 0),
                             'pace': m.get('pace', 0), 'today_target': m.get('today_target', 0),
