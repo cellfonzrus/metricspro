@@ -49,7 +49,7 @@ FACTS: dict[str, dict] = {
                     'would — counted ACROSS the receipts the sale was split over, from the LIVE '
                     'daily sales feed rather than anything uploaded for an evaluation?',
         "homes": ('app/modules/commcalc/multi_handset_day.py',),
-        "index": ('COMMCALC-04',),
+        "index": ('COMMCALC-05',),
         "locks": ('harness_multi_handset_day.py',),
         # SNAPSHOT — written BY HAND, never blessed (§50).
         #
@@ -639,6 +639,9 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/epay_sweep.py': ('_lin',),
             'app/modules/commcalc/inventory_sold_recon.py': ('_dlr',),
             'app/modules/commcalc/ma_recon.py': ('SALES_DISPLAY_SOURCES',),
+            # The portal pull asks the registry whether its TARGET TABLE stores a row's month
+            # (§COMMCALC-04), instead of carrying its own `has_period` flag per report spec.
+            'app/modules/commcalc/report_pull.py': ('_lin',),
             'app/modules/commcalc/router.py': ('_dlr', '_lineage'),
             'app/modules/pos/inventory_integrity_router.py': ('_dlr',),
         },

@@ -45,7 +45,12 @@ import calendar
 # The period spelling every commcalc table stores and every reader's `_pvariants` expands from.
 PERIOD_FORMAT = "%B %Y"
 
+# The month columns a row is stamped with, in order. WHICH tables actually store them is the
+# registry's fact (`data_lineage_registry.month_columns`), passed in — this module stays pure.
+MONTH_COLUMNS = ("period", "period_month", "period_year")
+
 __all__ = ["period_of_day", "period_label", "month_spread", "day_values", "day_stamp",
+           "MONTH_COLUMNS",
            "DayStampResult", "OPEN", "CLOSED", "UNKNOWN", "period_month_year",
            "month_state", "archive_due", "month_days",
            "END_EXCLUSIVE", "END_INCLUSIVE", "END_BOUNDARY_DEFAULT", "request_window"]
@@ -127,13 +132,20 @@ class DayStampResult(dict):
         return bool(self.get("stamped"))
 
 
-def day_stamp(rows, column):
+def day_stamp(rows, column, month_columns=MONTH_COLUMNS):
     """PURE: stamp `period` / `period_month` / `period_year` on each row from its OWN `column` date.
 
     All or nothing. When any row's date cannot be read the rows are left EXACTLY as the caller mapped
     them and `stamped` is False with a `reason` — the caller then keeps its (org, period) replace,
     which is a real delete, rather than a per-day replace that could not cover the row it could not
     read. Mutates `rows` in place only on success, and returns the same objects either way.
+
+    `month_columns` is WHICH columns the landing table stores a row's month in — the caller
+    dereferences `data_lineage_registry.month_columns(table)` for it, never a list of its own. A
+    table that stores NONE (a day-keyed feed whose date column is its only month fact) is still
+    stamped=True with its real `months`: the per-day replace that keeps a re-pull idempotent is
+    exactly right for it, and writing a column it does not have is what refused every upload of the
+    marketplace handset fulfilment report from 2026-10-06 (PGRST204, see the registry's §MONTH note).
     """
     rows = list(rows or [])
     if not rows:
@@ -155,11 +167,12 @@ def day_stamp(rows, column):
             reason=(f"{unproven:,} of {len(rows):,} row(s) carry no readable {column}, so a per-day "
                     f"replace could not cover them — filed under the selected period instead"))
     counts = {}
+    cols = tuple(month_columns or ())
     for r, got in zip(rows, resolved):
         label, mo, yr = got
-        r["period"] = label
-        r["period_month"] = mo
-        r["period_year"] = yr
+        for col, val in zip(MONTH_COLUMNS, (label, mo, yr)):
+            if col in cols:
+                r[col] = val
         counts[(yr, mo)] = counts.get((yr, mo), 0) + 1
     months = [(period_label(m, y), n) for (y, m), n in sorted(counts.items(), reverse=True)]
     return DayStampResult(stamped=True, rows=len(rows), unproven=0, months=months, reason=None)

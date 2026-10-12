@@ -103,9 +103,10 @@ Primary code homes:
 | CORE-01 | **A section id carries its module** | "What number does my new index section get, who else could be taking it right now, and what happens if two of us take the same one? Which module does a section belong to, which module does nothing document yet, and why are the 111 existing numbers not renumbered?" |
 | COMMCALC-02 | **A category you declare is a category you can set a target for** | "I added drop-offs to the daily closing — where do I set a target for them? What do I need per day and per week to reach my month, and what would it take to hit a number I just made up? Why did the four sales categories exist in nine different lists?" |
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
+| COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
-| COMMCALC-04 | **Several handsets to one buyer in one day** | "Which buyers walked out with more handsets in one day than a family plausibly would — counted across the separate receipts the sale was split over, from the live till feed rather than a carrier statement weeks later, and with the evidence a manager needs instead of a verdict?" |
+| COMMCALC-05 | **Several handsets to one buyer in one day** | "Which buyers walked out with more handsets in one day than a family plausibly would — counted across the separate receipts the sale was split over, from the live till feed rather than a carrier statement weeks later, and with the evidence a manager needs instead of a verdict?" |
 
 ---
 
@@ -24666,7 +24667,8 @@ registered section" and adds the module↔section direction it never had.
 
 115 rows: the 110 top-level `##` sections (§23s is grandfathered as two headings and registers
 once), plus §15.1–§15.3, which are where the `notify` module is actually documented, plus the
-`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §COMMCALC-01, §COMMCALC-02).
+`§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §COMMCALC-01, §COMMCALC-02,
+§COMMCALC-03, §COMMCALC-04).
 
 Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
 110 sections cite a backend module path and are checked against it, 12 of those cite four or more
@@ -24874,6 +24876,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-02 | commcalc |
 | COMMCALC-03 | commcalc |
 | COMMCALC-04 | commcalc |
+| COMMCALC-05 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -25757,7 +25760,100 @@ behaves identically before and after mig 1077 is applied.
 
 ---
 
-## §COMMCALC-04. SEVERAL HANDSETS TO ONE BUYER IN ONE DAY — the live feed, counted across the receipts the sale was split over (owner ask 2026-10-12)
+## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
+
+Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back
+end"*. The upload card showed **"This feature isn't switched on for your company yet. Contact
+support to enable it."** It was switched on. Nothing was ever licensed off.
+
+### §COMMCALC-04.1 The defect, stated once
+
+Every upload of **MA - Marketplace Handset Fulfillment Orders** has been refused since
+**2026-10-06**. `commcalc.upload_trace` carries each attempt, same error every time:
+
+```
+500: Insert failed: {'message': "Could not find the 'period' column of 'raw_ma_fulfillment'
+in the schema cache", 'code': 'PGRST204'} — the existing 0 row(s) were left untouched.
+```
+
+Six refused attempts on one tenant (2026-10-06 ×4, 2026-10-08, 2026-10-12), 0 rows saved each time.
+The last upload that landed was **2026-10-02** — the day before §19.46 shipped.
+
+Two things made it read as a licensing problem rather than a broken write. The API boundary (§19.36)
+rewrites a schema-cache error into the one customer sentence, correctly — a customer must not be
+shown a column name. And the tile's own "newer attempt saved no rows" line was true. So the screen
+said *not switched on* and *saved nothing*, and neither sentence pointed at the actual cause.
+
+### §COMMCALC-04.2 The cause: §19.46 generalised one table too far
+
+§19.46 (`feed_period.day_stamp`) re-stamps `period` / `period_month` / `period_year` on every
+DAY-KEYED feed's rows from the row's own date — the fix that stopped a rolling re-pull filing one
+month's commission under the next. `raw_ma_fulfillment` **is** day keyed (`date_ordered`), and is
+the one landing table on that path that stores **no month columns at all**: its upload mapper has
+always skipped them, and the portal-pull spec says `has_period: false`. The stamp wrote a column the
+table does not have, and PostgREST refused the whole insert.
+
+### §COMMCALC-04.3 The class, not the instance
+
+The general fact that was wrong is not "one feed lost its uploads". It is **"a feed row's month can
+always be written to period columns"**. Whether a landing table STORES a row's month is a schema
+fact that had **no home**, so each write path answered it for itself:
+
+| Path | How it used to answer | Now |
+|---|---|---|
+| manual upload / email sweep (`router._upload_file_impl`) | `has_period = file_type not in ['catalog', 'master_cats']` — a hand-written file-type list | `has_period = _lineage.stores_row_month(table)` |
+| portal sweep (`epay_sweep`) | a `period` stamped into every mapped row's base, unconditionally | `_month_base(spec, …)` — only the columns that table stores |
+| portal pull (`report_pull.apply_column_map`) | a `has_period` flag carried per report spec | `_lin.stores_row_month(target_table)` |
+
+That is §19.18's shape again: the stamp reached the feeds somebody remembered to exclude. The fact
+now lives next to the day-grain fact it travels with —
+`data_lineage_registry.month_columns(table)` / `stores_row_month(table)`, with
+`NO_MONTH_COLUMN_REASONS` carrying a sentence per exception — and all three paths dereference it.
+
+**"Replaced whole" is a different fact from "stores no month", and reading one as the other would be
+worse than the bug.** The upload handler's snapshot branch used to fire on `not has_period`; a
+day-keyed feed that stores no month columns now also answers False there, and that branch DELETES
+the org's entire table. It reads `_lineage.is_snapshot(table)` instead.
+
+### §COMMCALC-04.4 The siblings, found by the lock rather than by hand
+
+`harness_feed_day_grain.py` §M re-measures **every** declaration against the `CREATE TABLE` /
+`ALTER TABLE … ADD COLUMN` statements in `database/migrations/`, so a drifting declaration fails the
+build. Writing it immediately named four more tables carrying the same wrong default, each confirmed
+against the live schema: `raw_epay_daily_tx`, `merchant_settlement_day`, `merchant_settlement_batch`,
+`asset_ledger`. None is reached by the manual-upload handler today — which is exactly the silence
+`raw_ma_fulfillment` kept until the stamp was generalised to it.
+
+### §COMMCALC-04.5 What was checked for duplication before building
+
+- `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE` / `day_keyed_date_columns()` (§19.46) already
+  answer "which column is this row's day". The month-column fact is **added beside it**, in the same
+  registry, not in a new module.
+- `router._table_has_column` asks the live schema per call; it was deliberately not used here — a
+  per-request schema probe on an ingest path answers the same question slower and without a build
+  gate, and the registry is checkable offline against the migrations.
+- `feed_period` stays pure: it is GIVEN the columns, it does not look them up.
+
+### §COMMCALC-04.6 Files, locks and what is NOT in this change
+
+| Thing | Where |
+|---|---|
+| the fact | `commcalc/data_lineage_registry.py` — `MONTH_COLUMNS`, `NO_MONTH_COLUMN_REASONS`, `month_columns()`, `stores_row_month()`, `SNAPSHOT_TABLES`, `is_snapshot()` |
+| the stamp | `commcalc/feed_period.py::day_stamp(rows, column, month_columns=MONTH_COLUMNS)` — default unchanged, so an un-updated caller behaves exactly as before |
+| the three callers | `commcalc/router.py::_upload_file_impl`, `commcalc/epay_sweep.py`, `commcalc/report_pull.py` |
+| the lock | `harness_feed_day_grain.py` §M (M1 re-measures the registry against the migrations; M6/M7 fail the build if any caller keeps its own answer again) |
+| module graph | fact `feed_lineage` (§50) gains `report_pull.py` as a caller |
+
+**No migration.** `raw_ma_fulfillment` is correct as it stands: the order date IS its month fact, and
+adding period columns would create the second copy this house rule forbids. **No data repair:** every
+refused upload left the table untouched, so nothing is wrong in storage — the tenant re-uploads the
+file once this ships.
+
+- Same class: §19.46 (the row-date stamp this corrects), §19.18 (a mechanism written and its callers
+  left unwired), §19.36 (the boundary that made a broken write read as an unlicensed feature).
+
+
+## §COMMCALC-05. SEVERAL HANDSETS TO ONE BUYER IN ONE DAY — the live feed, counted across the receipts the sale was split over (owner ask 2026-10-12)
 
 Owner: *"add the famimly check to the regular activations also under the flags tile"*, then, deciding
 the feed himself: *"this wooulkd check the flags for ongoing actyivation not the test data uploaded
@@ -25767,7 +25863,7 @@ for evauluation"* and *"good point , it should be daily sales feed"*.
 **Lock:** `backend/harness_multi_handset_day.py`. **Flag type:** `MULTI_HANDSET_ONE_BUYER`, area
 `fraud`, severity HIGH, grain `store_day`, registered in `flag_registry.TYPES`.
 
-### COMMCALC-04.1 Duplicate check (the build gate)
+### COMMCALC-05.1 Duplicate check (the build gate)
 
 | Already answers something near it | Why it is not this | What this reuses |
 |---|---|---|
@@ -25780,7 +25876,7 @@ for evauluation"* and *"good point , it should be daily sales feed"*.
 New here and nowhere else: grouping handset lines by **(store, day, buyer) ACROSS receipts**, and the
 receipt breakdown inside a case.
 
-### COMMCALC-04.2 Why this and §COMMCALC-03 are two detectors and must stay two
+### COMMCALC-05.2 Why this and §COMMCALC-03 are two detectors and must stay two
 
 They ask one question of two feeds that cannot answer for each other. §COMMCALC-03 reads
 `prospect_feed_row` — an uploaded carrier statement for a store nobody owns yet — keys on the
@@ -25789,7 +25885,7 @@ carrier's own account column, and answers weeks late from money already paid. Th
 The owner drew this line himself. **Merging them would let a prospect's uploaded rows raise live
 operational flags**, which is the one thing §COMMCALC-03's AST lock exists to prevent.
 
-### COMMCALC-04.3 A handset is a BOX-DEPARTMENT line — never a serial number
+### COMMCALC-05.3 A handset is a BOX-DEPARTMENT line — never a serial number
 
 Measured against production 2026-10-12, the whole feed (151,102 rows):
 
@@ -25803,7 +25899,7 @@ The set is **injected by the caller**, never read or defaulted inside the module
 fails the build if that changes. An undeclared set yields no findings **and says so**, rather than
 falling back to the house Boost-XP labels and reading as "all clear".
 
-### COMMCALC-04.4 Why it groups ACROSS receipts (the measurement that forced the design)
+### COMMCALC-05.4 Why it groups ACROSS receipts (the measurement that forced the design)
 
 A per-receipt check was the obvious design and the wrong one. On the same live feed:
 
@@ -25817,7 +25913,7 @@ A per-receipt check was the obvious design and the wrong one. On the same live f
 
 A threshold a till can evade by ringing a second sale is not a threshold.
 
-### COMMCALC-04.5 The buyer key, and what it deliberately cannot do
+### COMMCALC-05.5 The buyer key, and what it deliberately cannot do
 
 `(org, store, day, normalised name)`. The name is folded for case and spacing only. Initials,
 nicknames and misspellings are **not** folded — that would invent an identity, and a flag that
@@ -25830,7 +25926,7 @@ Same day and same store is what makes an exact-name match defensible. The cost i
 not buried: it cannot see one buyer across different days, different stores, or under a differently
 spelled name.
 
-### COMMCALC-04.6 It reports evidence and returns no verdict
+### COMMCALC-05.6 It reports evidence and returns no verdict
 
 Nothing here concludes that fraud happened and no function returns a judgement — `harness_multi_handset_day.py`
 §E walks the module's own strings and fails the build if any user-facing sentence calls something
@@ -25840,7 +25936,7 @@ receipt split and per-receipt counts, the dollars, whether every line was $0.00,
 and the coaching note asks for a check (*"Confirm these were one genuine sale and not split to stay
 under a per-sale limit"*), never an accusation.
 
-### COMMCALC-04.7 Where it is
+### COMMCALC-05.7 Where it is
 
 | Thing | Where |
 |---|---|
@@ -25852,7 +25948,7 @@ under a per-sale limit"*), never an accusation.
 | the caller (the only one) | `commcalc/watchdog_router.py::_run_for_org` — the one sweep, one cron line |
 | the live sales read | `commcalc/watchdog_router.py::_read_sales` → `router._open_month_source` (§19.16) |
 
-### COMMCALC-04.8 Which sales table it reads, and the sibling that fix closed
+### COMMCALC-05.8 Which sales table it reads, and the sibling that fix closed
 
 The owner named the feed himself on 2026-10-12: *"good point , it should be daily sales feed"* — the
 check must see activations as they happen, not a month-end archive. But `daily_sales_feed` is **not
@@ -25879,7 +25975,7 @@ Buyer-name coverage differs between the two tables and is reported, never assume
 `unattributable_lines` in the summary rather than dropped silently — a bare empty case list would read
 as "all clear" when it can also mean "nobody recorded who bought these".
 
-### COMMCALC-04.9 The `source` string, and the retirement defect it avoids
+### COMMCALC-05.9 The `source` string, and the retirement defect it avoids
 
 `flag_persist.sync` RETIRES every open flag in the period that carries one of the caller's `sources`
 and that the run did not produce. `router._CALC_FLAG_SOURCES` already claims `'sales'` for the

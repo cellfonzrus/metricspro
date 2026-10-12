@@ -359,7 +359,7 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
     except Exception as e:
         out["voids"] = {"error": str(e)[:300]}
 
-    # ── Several handsets to one buyer in one day (index §COMMCALC-04). ──────────────────────────
+    # ── Several handsets to one buyer in one day (index §COMMCALC-05). ──────────────────────────
     #
     # Two facts are INJECTED rather than decided here, because each already has a home:
     #   • the box-department set — `router._accessory_config(...)['box_departments']` (mig 218), the

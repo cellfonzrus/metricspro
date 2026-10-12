@@ -1,6 +1,6 @@
 """
 SEVERAL HANDSETS TO ONE CUSTOMER IN ONE DAY — the ONE home (owner ask 2026-10-12, index
-§COMMCALC-04).
+§COMMCALC-05).
 
 Owner: *"add the famimly check to the regular activations also under the flags tile"* /
 *"this wooulkd check the flags for ongoing actyivation not the test data uploaded for evauluation"*.

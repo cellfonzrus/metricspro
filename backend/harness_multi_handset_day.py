@@ -1,5 +1,5 @@
 """
-PROOF — SEVERAL HANDSETS TO ONE BUYER IN ONE DAY (owner ask 2026-10-12, index §COMMCALC-04).
+PROOF — SEVERAL HANDSETS TO ONE BUYER IN ONE DAY (owner ask 2026-10-12, index §COMMCALC-05).
 
 DB-free. Drives the real `commcalc/multi_handset_day.py` over fixtures shaped like the live
 `commcalc.daily_sales_feed`, and locks the design decisions that measurement forced:
