@@ -383,6 +383,30 @@ FACTS: dict[str, dict] = {
             'app/modules/closing/router.py': ('billpay_netting',),
         },
     },
+    'cash_count_day_verdict': {
+        "question": 'What did this store-day\'s counted envelopes come to, short or over?',
+        "homes": ('app/modules/closing/pickup_actual.py',),
+        "index": ('CLOSING-01.1', 'CLOSING-01.4'),
+        "locks": ('harness_management_recon_expected.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but CHECK THE
+        # DIFF: the rewriter strips hand-written comments out of these `callers` dicts (it dropped
+        # 119 lines of them on 2026-10-12), so this entry was written by hand.
+        "callers": {
+            # The accountability board shows a day's row counts BESIDE its comparable subtotal, and
+            # takes the day's VERDICT from this home rather than re-deriving one — so the board and
+            # the management recon screen cannot disagree about a store-day. §CLOSING-01.4.
+            'app/modules/closing/deposit_accountability.py': ('_day_variance', '_envelope_opened',
+                                                              '_row_variance'),
+            # `GET /cash-recon-management`. It used to subtract the whole declared drawer here; it
+            # now computes no variance at all. §CLOSING-01.1.
+            'app/modules/closing/router.py': ('_pickup_actual',),
+            # NOT a sibling derivation, named so the edge is not an unexplained one: the import graph
+            # connects this through `pickup_actual`, but `pickup_totals_by_store_day` answers HOW
+            # MUCH MONEY MOVED on a store-day, not whether its envelopes were short — a different
+            # question with a different home.
+            'app/modules/closing/billpay_pickup.py': ('_outflow',),
+        },
+    },
     'cash_count_correction_trail': {
         "question": 'Was this management cash figure changed, from what, and by whom?',
         "homes": ('app/modules/closing/count_revision.py',),

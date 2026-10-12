@@ -8133,40 +8133,84 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     #   · MANAGEMENT's later count      = `commcalc.envelope_count.counted_amount` (mig 936,
     #     counted_by/counted_at, and the envelope_short chargeback keys off it)
     # Both are NULL when nobody recorded one — never coerced to 0.0, which would read as 100% short.
-    def _actual_sums(table):
+    # THE EXPECTED FIGURE IS THE ENVELOPE'S, AND IT CARRIES A BASIS (owner report 2026-10-12, §75).
+    # This screen used to sum `actual_picked_amount` here and subtract the whole declared drawer in
+    # the row builder below. Under bill-payment netting the bag holds the drawer LESS the bill-pay
+    # cash, so that subtraction returned minus the rep's bill-pay cash — 278 of 470 counted
+    # store-days, $90,280.01, on the one surface that names a DM. So the rows are kept and handed to
+    # `pickup_actual.day_variance`, the same one home the pickup list and the accountability board
+    # dereference; no variance is computed in this function.
+    def _pickup_rows(table):
         try:
             prs = (client.schema("commcalc").table(table)
-                   .select("store_code,close_date,actual_picked_amount,picked_up")
+                   .select("store_code,close_date,amount,actual_picked_amount,"
+                           "amount_basis,picked_up")
                    .eq("org_id", org_id).gte("close_date", start).lte("close_date", end)
                    .limit(100000).execute().data) or []
-        except Exception:
+        except Exception as _e:
+            print(f"WARN cash_recon_management {table} read failed: {_e}")
             return {}
         outm = {}
         for p in prs:
-            if not p.get("picked_up") or not _pickup_actual.has_actual(p):
+            if not p.get("picked_up"):
                 continue
             k = ((p.get("store_code") or "").strip() or "?", str(p.get("close_date") or "")[:10])
-            outm[k] = round(outm.get(k, 0.0) + _f(p.get("actual_picked_amount")), 2)
+            # `amount_basis` exists on cash_pickup ONLY (mig 1039); the sibling's rows are netted by
+            # construction and `pickup_amount_basis_for` is the one home for that fact.
+            p = dict(p)
+            p["amount_basis"] = billpay_netting.pickup_amount_basis_for(table, p.get("amount_basis"))
+            outm.setdefault(k, []).append(p)
         return outm
-    cash_actual = _actual_sums("cash_pickup")
-    billpay_actual = _actual_sums("billpay_pickup")
+    cash_rows = _pickup_rows("cash_pickup")
+    billpay_rows = _pickup_rows("billpay_pickup")
+
+    def _actual_total(rowmap):
+        """The counted total per store-day — the figure the screen displays beside the expected one.
+        `day_variance` owns the VERDICT; this is only its `counted` leg, kept for the rows with a
+        count and absent (never 0.0) for the rest."""
+        outm = {}
+        for k, rs in rowmap.items():
+            dv = _pickup_actual.day_variance(rs)
+            if dv is not None:
+                outm[k] = dv["counted"]
+        return outm
+    cash_actual = _actual_total(cash_rows)
+    billpay_actual = _actual_total(billpay_rows)
+    cash_day_variance = {k: _pickup_actual.day_variance(rs) for k, rs in cash_rows.items()}
+    cash_day_variance = {k: v for k, v in cash_day_variance.items() if v is not None}
 
     # Management's count joins through daily_closing.id (envelope_count keys on closing_row_id).
     _row_to_sd = {}
     for (code, dday), slot in decl.items():
         for _rid in slot["_ids"]:
             _row_to_sd[str(_rid)] = (code, dday)
-    mgmt_counted = {}
+    # MANAGEMENT'S COUNT IS SCORED AGAINST WHAT IT WAS SCORED AGAINST (§75). `envelope_count`
+    # STORES `expected_amount`, `variance` and `status` at count time (mig 936), on the basis the
+    # counter chose (mig 1036 — which cash the envelope holds). So this screen READS that record
+    # rather than recomputing the variance against the whole drawer, which under netting, or under
+    # any basis but total_cash, is a different question than the one the counter answered.
+    mgmt_counted, mgmt_recorded = {}, {}
     try:
         _ec = (client.schema("commcalc").table("envelope_count")
-               .select("closing_row_id,counted_amount").eq("org_id", org_id)
-               .limit(100000).execute().data) or []
+               .select("closing_row_id,counted_amount,expected_amount,variance,status")
+               .eq("org_id", org_id).limit(100000).execute().data) or []
         for c in _ec:
             if c.get("counted_amount") is None:
                 continue
             k = _row_to_sd.get(str(c.get("closing_row_id")))
-            if k:
-                mgmt_counted[k] = round(mgmt_counted.get(k, 0.0) + _f(c.get("counted_amount")), 2)
+            if not k:
+                continue
+            mgmt_counted[k] = round(mgmt_counted.get(k, 0.0) + _f(c.get("counted_amount")), 2)
+            m = mgmt_recorded.setdefault(k, {"expected": 0.0, "variance": 0.0, "rows": 0,
+                                             "unscored_rows": 0})
+            m["rows"] += 1
+            m["expected"] = round(m["expected"] + _f(c.get("expected_amount")), 2)
+            # A count written before the variance was stored carries None. It is NOT zeroed: that
+            # would publish "it tied out" about a count nobody scored.
+            if c.get("variance") is None:
+                m["unscored_rows"] += 1
+            else:
+                m["variance"] = round(m["variance"] + _f(c.get("variance")), 2)
     except Exception as _e:
         print(f"WARN cash_recon_management envelope_count read failed: {_e}")
 
@@ -8245,17 +8289,30 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
         tw = _tw_by_key.get((code, dday)) or {}
         _ca = cash_actual.get((code, dday))
         _mc = mgmt_counted.get((code, dday))
+        _dv = cash_day_variance.get((code, dday))
+        _mr_rec = mgmt_recorded.get((code, dday))
         out.append({
             "store_code": code, "store_name": meta.get("address") or code,
             "market": meta.get("market"), "day": dday,
             "reps": sorted(slot["_reps"]),
             # The DM's own count at pickup and MANAGEMENT's later count, each None when nobody
-            # recorded one. The variances are against the DECLARED cash, the same base the rest of
-            # this row reconciles to; short is negative, over positive.
+            # recorded one. NEITHER VARIANCE IS COMPUTED HERE (§75): each envelope is scored against
+            # ITS OWN expected figure by the home that owns that judgement — `pickup_actual`'s basis
+            # gate for the DM's count, `envelope_count`'s stored record for management's. Scoring
+            # either against `slot["cash"]`, the whole declared drawer, is the defect this replaced:
+            # the bag does not hold the drawer once bill-pay cash is netted out of it.
             "cash_picked_actual": _ca,
-            "cash_picked_variance": (round(_ca - slot["cash"], 2) if _ca is not None else None),
+            "cash_picked_expected": (_dv["expected"] if _dv else None),
+            "cash_picked_variance": (_dv["variance"] if _dv else None),
+            "cash_picked_status": (_dv["status"] if _dv else None),
+            "cash_picked_reason": (_dv["reason"] if _dv else None),
+            "cash_picked_comparable": (_dv["comparable"] if _dv else None),
             "mgmt_counted": _mc,
-            "mgmt_variance": (round(_mc - slot["cash"], 2) if _mc is not None else None),
+            "mgmt_expected": (_mr_rec["expected"] if _mr_rec else None),
+            # None where no stored score exists for any of the day's counts — an honest absence, not
+            # a zero, and not a fresh subtraction against a base the counter never used.
+            "mgmt_variance": ((_mr_rec["variance"] if not _mr_rec["unscored_rows"] else None)
+                              if _mr_rec else None),
             "billpay_picked_actual": billpay_actual.get((code, dday)),
             "cash_declared": slot["cash"], "credit_declared": slot["credit"],
             "epay_cash_declared": slot["epay_cash"], "epay_credit_declared": slot["epay_credit"],
@@ -8299,6 +8356,13 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
                  and r["cash_picked_variance"] < -abs(_f(tolerance))]
     _dm_over = [r for r in out if r["cash_picked_variance"] is not None
                 and r["cash_picked_variance"] > abs(_f(tolerance))]
+    # A REFUSED DAY IS REPORTED, NOT ABSENT (§75). Both buckets above already skip a None variance,
+    # so a basis-refused store-day would otherwise vanish from this summary and read as "nothing to
+    # see" — the same silence #439's `pickup_not_comparable_rows` exists to break. It is counted, and
+    # NEVER added to either amount: there is no defensible dollar to add.
+    _dm_nc = [r for r in out if r["cash_picked_comparable"] is False]
+    _mgmt_unscored = [r for r in out if r["mgmt_counted"] is not None
+                      and r["mgmt_variance"] is None]
     return {"start": start, "end": end, "rows": out, "billpay_source": billpay_source,
             "tender_basis": tender_basis_info(client, org_id),
             "sales_source": sales_source,
@@ -8332,6 +8396,8 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
                        "dm_over_days": len(_dm_over),
                        "dm_short_amount": round(sum(r["cash_picked_variance"] for r in _dm_short), 2),
                        "dm_over_amount": round(sum(r["cash_picked_variance"] for r in _dm_over), 2),
+                       "dm_not_comparable_days": len(_dm_nc),
+                       "mgmt_unscored_days": len(_mgmt_unscored),
                        "mismatched_store_days": mismatches,
                        "three_way_mismatched": sum(1 for r in out
                                                    if r["three_way_status"] == "mismatch")},
