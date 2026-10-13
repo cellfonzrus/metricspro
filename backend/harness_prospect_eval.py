@@ -49,6 +49,7 @@ WHAT THIS PROVES, in the order the house rules ask for it:
     writes only the two prospect tables, and that no `raw_*`, store-mapping or statement table is
     written anywhere in it.
 """
+import inspect
 import ast
 import os
 import sys
@@ -692,6 +693,47 @@ check("J10 …and publishes the basis on the payload, so the screen can state it
       'ev["period_basis"]' in _rtext)
 check("J11 the retired single-feed rule is GONE from the endpoint",
       '.eq("feed_key", "ma_commission")' not in _section)
+
+# §J12-J20 A MONTH THAT HAS NOT ENDED IS NOT THE MONTH TO OPEN ON (owner report 2026-10-13, second).
+# "the latest month the feed covers" opened the report on its EMPTIEST month: on 13 October the
+# prospect's commission feed held 3 October rows against 5,495 over eight months, so the statement,
+# the per-store columns and the break-even all rendered off 0.05% of the data and read as broken.
+# A part-month is a fact about the CALENDAR — no row-count threshold is guessed anywhere below.
+from datetime import date as _date                                     # noqa: E402
+_OCT13 = _date(2026, 10, 13)
+_EIGHT = ["March 2026", "April 2026", "May 2026", "June 2026", "July 2026", "August 2026",
+          "September 2026", "October 2026"]
+check("J12 the live case: eight months ending in an unfinished October opens on September",
+      _dp({"ma_commission": _EIGHT}, today=_OCT13)["period"] == "September 2026")
+check("J13 …and the basis says the later month exists and why it was not used",
+      "October 2026" in _dp({"ma_commission": _EIGHT}, today=_OCT13)["basis"]
+      and "not finished" in _dp({"ma_commission": _EIGHT}, today=_OCT13)["basis"])
+check("J14 …and the unfinished month is named on the payload, not only in prose",
+      _dp({"ma_commission": _EIGHT}, today=_OCT13)["in_progress"] == "October 2026")
+check("J15 …and it is STILL offered in the picker — skipped is not hidden",
+      "October 2026" in _dp({"ma_commission": _EIGHT}, today=_OCT13)["months_available"])
+check("J16 a month that HAS ended is opened on normally",
+      _dp({"ma_commission": ["August 2026", "September 2026"]}, today=_OCT13)["period"]
+      == "September 2026")
+check("J17 when the ONLY month is the unfinished one the report still opens on it",
+      _dp({"ma_commission": ["October 2026"]}, today=_OCT13)["period"] == "October 2026")
+check("J18 …and says the figures are a part-month rather than implying a whole one",
+      "part-month" in _dp({"ma_commission": ["October 2026"]}, today=_OCT13)["basis"])
+check("J19 a FUTURE month is not opened on either — only a month that has ended",
+      _dp({"ma_commission": ["September 2026", "December 2026"]}, today=_OCT13)["period"]
+      == "September 2026")
+check("J20 the no-commission fallback skips the unfinished month too",
+      _dp({"ma_daily_tx": _EIGHT}, today=_OCT13)["period"] == "September 2026")
+check("J21 with no date supplied the answer is byte-identical to the old rule",
+      _dp({"ma_commission": _EIGHT})["period"] == "October 2026"
+      and _dp({"ma_commission": _EIGHT})["in_progress"] is None)
+check("J22 the endpoint SUPPLIES the date — a pure home cannot read the clock itself",
+      "today=" in _section and "default_period(by_feed, today=" in _section)
+check("J23 the one home reads no clock of its own",
+      "datetime" not in (inspect.getsource(P.default_period) or ""))
+check("J24 a month with rows is never skipped for being small — only for being unfinished",
+      _dp({"ma_commission": ["August 2026", "September 2026"]}, today=_date(2026, 10, 1))["period"]
+      == "September 2026")
 
 # ── §K WHAT A FILE ACTUALLY PUT IN THE TABLE ──────────────────────────────────────────────────────
 # `rows_written: 66,388` read as success on a file whose rows carried nothing but a date.

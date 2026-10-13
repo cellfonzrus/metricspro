@@ -326,6 +326,18 @@ const HANDSET_MONTH_COLS: ExportColumn[] = [
   { header: 'Units', get: (r: HandsetMonth) => r.units, align: 'right' },
   { header: 'Cost', get: (r: HandsetMonth) => r.cost, money: true },
 ]
+// ── THE P&L AS A MATRIX: a LINE down the side, a STORE across the top (owner ask 2026-10-13:
+// "it shoudl ahve 8 columns for each seaporate store"). Every cell is read from THAT store's own
+// statement, which the server assembled with the same builder as the whole-prospect one — so a
+// column never disagrees with the report above it, and the columns add across to "All stores".
+interface MatrixRow {
+  section: string
+  label: string
+  key: string
+  kind: 'line' | 'total' | 'count'
+  cells: Record<string, number | null>
+  all: number | null
+}
 interface StoreRow {
   label: string; account: string | null; revenue: number; cogs: number; contribution: number
   activations: number; needed: number | null; perBox: number | null
@@ -475,6 +487,83 @@ export default function StoreTakeoverPage() {
       }
     }).sort((a, b) => (b.contribution || 0) - (a.contribution || 0))
   }, [data?.store_scenarios, shownMode])
+
+  // The columns ARE the stores, in the order the store index names them, with the whole prospect
+  // last. Built with useMemo because a column list that is rebuilt every render re-mounts the table.
+  const matrixStores = useMemo(() => {
+    const blocks = data?.store_scenarios || {}
+    return Object.keys(blocks)
+      .map(k => ({ key: k, label: blocks[k].store?.label || k }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [data?.store_scenarios])
+
+  // One row per P&L line the WHOLE-prospect statement carries (its own line vocabulary and order —
+  // this screen invents no line), then the subtotals, the activated-line count and the two
+  // break-even figures. Nothing is summed here: `all` is the whole statement's own figure, so if a
+  // store's dollars were missed the row will visibly not add up rather than being quietly balanced.
+  const matrixRows = useMemo<MatrixRow[]>(() => {
+    const blocks = data?.store_scenarios || {}
+    const keys = matrixStores.map(s => s.key)
+    const lineOf = (st: Statement | undefined, k: string) =>
+      (st?.sections || []).flatMap(sec => sec.lines || []).find(l => l.key === k)?.amount ?? null
+    const out: MatrixRow[] = []
+    for (const sec of (statement?.sections || [])) {
+      for (const ln of (sec.lines || [])) {
+        const cells: Record<string, number | null> = {}
+        let any = false
+        for (const k of keys) {
+          const v = lineOf(blocks[k]?.statements?.[shownMode], ln.key)
+          cells[k] = v
+          if (v) any = true
+        }
+        if (!ln.amount && !any) continue
+        out.push({ section: sec.name, label: ln.label, key: ln.key, kind: 'line', cells,
+                   all: ln.amount ?? null })
+      }
+    }
+    const totalRow = (label: string, pick: (t: Statement['totals']) => number) => {
+      const cells: Record<string, number | null> = {}
+      for (const k of keys) {
+        const t = blocks[k]?.statements?.[shownMode]?.totals
+        cells[k] = t ? pick(t) : null
+      }
+      return { section: 'Totals', label, key: 'total:' + label, kind: 'total' as const, cells,
+               all: statement?.totals ? pick(statement.totals) : null }
+    }
+    out.push(totalRow('Carrier revenue', t => t.revenue))
+    out.push(totalRow('Device cost', t => t.cogs))
+    out.push(totalRow('Gross profit', t => t.gross_profit))
+    out.push(totalRow('Expenses', t => t.expenses))
+    out.push(totalRow('Carrier-side contribution', t => t.net_income))
+    const actCells: Record<string, number | null> = {}
+    for (const k of keys) actCells[k] = blocks[k]?.scenarios?.[shownMode]?.activations ?? null
+    out.push({ section: 'Totals', label: 'Activated lines', key: 'total:activations', kind: 'count',
+               cells: actCells, all: scenario?.activations ?? null })
+    const beRow = (label: string, pick: (b: BreakEven) => number | null) => {
+      const cells: Record<string, number | null> = {}
+      for (const k of keys) {
+        const b = blocks[k]?.break_even?.[shownMode]
+        cells[k] = b ? pick(b) : null
+      }
+      return { section: 'Break-even', label, key: 'be:' + label, kind: 'total' as const, cells,
+               all: breakEven ? pick(breakEven) : null }
+    }
+    out.push(beRow('Must sell in accessories', b => b.needed))
+    out.push(beRow('Accessories per box needed', b => b.per_activation))
+    return out
+  }, [statement, data?.store_scenarios, matrixStores, shownMode, scenario?.activations, breakEven])
+
+  const MATRIX_COLS = useMemo<ExportColumn[]>(() => ([
+    { header: 'P&L line', get: (r: MatrixRow) => r.label, field: 'line' },
+    { header: 'Section', get: (r: MatrixRow) => r.section, field: 'section' },
+    ...matrixStores.map(st => ({
+      header: st.label,
+      field: 'store:' + st.key,
+      get: (r: MatrixRow) => r.cells[st.key],
+      money: true,
+    })),
+    { header: 'All stores', get: (r: MatrixRow) => r.all, money: true, field: 'all' },
+  ]), [matrixStores])
 
   const expRows = useMemo<ExpenseCell[]>(() => {
     const m = data?.expenses?.matrix
@@ -917,6 +1006,26 @@ export default function StoreTakeoverPage() {
                   {breakEven.basis}. {breakEven.per_activation_basis}.
                 </div>
               </>}
+        </div>}
+
+      {/* ── THE P&L WITH A COLUMN PER STORE ──────────────────────────────────────────────────── */}
+      {pid && !loading && statement && matrixStores.length > 0 &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            The P&amp;L, a column per store &mdash; {matrixStores.length} store
+            {matrixStores.length === 1 ? '' : 's'} named by the uploaded sheets
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+            Every line is a line of <b>your own chart of accounts</b>, and every cell is read from
+            that store&rsquo;s own statement &mdash; nothing on this screen is re-added, so the
+            columns adding across to <b>All stores</b> is a check, not an arrangement. The expense
+            lines sit under <b>All stores</b> only: our average is already <b>one</b> store&rsquo;s
+            worth of rent, salaries and utilities, so charging it to each column would make every
+            store look profitable. The accessory target at the bottom of each column IS figured
+            against that full single-store expense.
+          </div>
+          <ReportShell title="" filename={`takeover-pl-by-store-${data?.period || ''}`}
+                       columns={MATRIX_COLS} rows={matrixRows} compact stickyHeader />
         </div>}
 
       {/* ── A COLUMN PER STORE, from the uploads ─────────────────────────────────────────────── */}
