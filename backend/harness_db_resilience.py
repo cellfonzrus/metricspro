@@ -1122,7 +1122,21 @@ _all_routes = _flatten_routes(real_app.routes)
 # tree and reported 1787, and `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 2 with
 # `'^-@router\.'` = 0 — two added, NONE removed. The pin was re-taken on a measured, fully-accounted
 # addition; it was never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1787"))
+# RE-PINNED 2026-10-13, 1787 -> 1788 (index §29.14). Every record above stays. The delta is ONE
+# route and it is named: POST /closing/row/{row_id}/refile — a manager moving a closing to the store
+# it belongs to, with every row keyed to it (owner 2026-10-13: "also the manager should be able to go
+# in and move the wrong closing tor trh cioreect store"). It is permission-gated to the same
+# `_can_mgmt_review` as POST /row/{id}/release, it decides nothing itself (the pure
+# `closing/closing_refile.plan` rules every table and REFUSES rather than writing a duplicate, a
+# move under settled money, or a half-move), and it touches no money column, no feed and no roster
+# row — harness_closing_refile.py §F locks that wiring and §F10-F14 lock migration 1081 to four
+# nullable audit columns.
+# Verified the same way as every pin above, BEFORE re-pinning: the harness was run on a clean
+# `git worktree` of origin/main (7812e11) and reported 1787 PASS / 138 passed 0 failed, then on this
+# tree and reported 1788, and `git diff origin/main -- backend/app | grep -c '^+@router\.'` = 1 with
+# `'^-@router\.'` = 0 — one added, NONE removed. The pin was re-taken on a measured, fully-accounted
+# addition; it was never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1788"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
