@@ -866,8 +866,9 @@ for _k in ("revenue", "cogs", "net_income"):
 check("N2 both stores get a column",
       sorted(b["store"]["label"] for b in _EV["store_scenarios"].values())
       == ["3706 Third Ave", "516 8th Ave"])
-check("N3 a store column carries NO share of our average expenses, and says so",
-      all(b["expenses_included"] is False for b in _EV["store_scenarios"].values()))
+check("N3 every store column carries the expense, and says which basis",
+      all(b["expenses_included"] is True and b.get("expenses_basis")
+          for b in _EV["store_scenarios"].values()))
 check("N4 activations are counted per store and sum to the whole",
       sum(b["scenarios"]["keep"]["activations"] for b in _EV["store_scenarios"].values())
       == _EV["scenarios"]["keep"]["activations"] == 4)
@@ -876,6 +877,48 @@ check("N5 both exclusion modes exist on every store column, as on the whole",
           for b in _EV["store_scenarios"].values()))
 check("N6 ONE booking path builds the whole and every column",
       _pcode.count("def _book(") == 1 and _pcode.count('homes["ma_commission_bookings"](') == 1)
+
+# §N7-N14 THE EXPENSE IN EVERY COLUMN, AND THE NET INCOME LINE (owner directive 2026-10-13: "add teh
+# expenses in teh expenses line and give ,e teh final p&l nunmber to see if teh store is profitable
+# aor loss"). Our average expense figure is ALREADY one store's worth (§COMMCALC-03.6), so the owner
+# chose between the only two honest readings: split it across the sites (divides a per-store cost by
+# seven and makes every column look profitable — refused) or charge each column the WHOLE of it, so
+# the column answers "could THIS site stand on its own?". The second ships, and these checks hold
+# BOTH halves of the consequence: what must still tie, and what must deliberately NOT.
+_EXPM = {"rent": {"expense_name": "Rent", "amount": 6000.0, "source_key": "rent"},
+         "wages": {"expense_name": "Salaries", "amount": 4000.0, "source_key": "salaries"}}
+_EVX = P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026")
+_wholeX = _tot(_EVX["scenarios"]["keep"]["inputs"])
+_colsX = [_tot(b["scenarios"]["keep"]["inputs"]) for b in _EVX["store_scenarios"].values()]
+check("N7 the fixture has an expense to charge at all",
+      round(_wholeX["expenses"], 2) == 10000.0, str(_wholeX["expenses"]))
+check("N8 EVERY column is charged the WHOLE single-store expense, not a share of it",
+      all(round(c["expenses"], 2) == round(_wholeX["expenses"], 2) for c in _colsX),
+      str([round(c["expenses"], 2) for c in _colsX]))
+check("N9 …so the expense row deliberately does NOT add across",
+      round(sum(c["expenses"] for c in _colsX), 2)
+      == round(_wholeX["expenses"] * len(_colsX), 2) != round(_wholeX["expenses"], 2))
+check("N10 the store's OWN money still ties — revenue and device cost add across",
+      all(round(sum(c[k] for c in _colsX), 2) == round(_wholeX[k], 2)
+          for k in ("revenue", "cogs")))
+check("N11 activations still tie",
+      sum(b["scenarios"]["keep"]["activations"] for b in _EVX["store_scenarios"].values())
+      == _EVX["scenarios"]["keep"]["activations"])
+check("N12 the net-income gap is EXACTLY the extra copies of the one-store expense — nothing is lost",
+      round(_wholeX["net_income"] - sum(c["net_income"] for c in _colsX), 2)
+      == round(_wholeX["expenses"] * (len(_colsX) - 1), 2),
+      f'gap {round(_wholeX["net_income"] - sum(c["net_income"] for c in _colsX), 2)}')
+check("N13 a column's net income is its own revenue less its own costs less the full expense",
+      all(round(c["net_income"], 2) == round(c["revenue"] - c["cogs"] - c["expenses"], 2)
+          for c in _colsX))
+check("N14 the basis is ONE sentence in ONE place, and it warns that those rows do not add",
+      _pcode.count("STORE_EXPENSE_BASIS = (") == 1
+      and "do not add across" in P.STORE_EXPENSE_BASIS
+      and all(b["expenses_basis"] == P.STORE_EXPENSE_BASIS
+              for b in _EVX["store_scenarios"].values()))
+check("N15 the break-even under a column now reads the SAME expense its own statement carries",
+      all(round(_tot(b["scenarios"]["keep"]["inputs"])["expenses"], 2)
+          == round(_wholeX["expenses"], 2) for b in _EVX["store_scenarios"].values()))
 
 # ── §O WHAT THE COUNTER MUST SELL (owner ask 2026-10-13) ─────────────────────────────────────────
 _be = P.accessory_break_even({"revenue": 50000.0, "cogs": 8000.0, "expenses": 14000.0,

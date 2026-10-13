@@ -119,6 +119,13 @@ FEED_REGISTRY = {
 }
 FEED_KEYS = tuple(FEED_REGISTRY)
 
+# WHAT A STORE'S COLUMN IS CHARGED, in one sentence, in ONE place — the payload carries it and the
+# screen prints it, so the reader of a column is never left to assume (owner directive 2026-10-13).
+STORE_EXPENSE_BASIS = (
+    "the FULL average monthly expense of one of our own stores, charged to this store in full — so "
+    "the column answers whether this site could stand on its own. The expense and net-income rows "
+    "therefore do not add across to the all-stores column; revenue, device cost and activations do.")
+
 
 # ── WHAT A FILE ACTUALLY PUT IN THE TABLE ─────────────────────────────────────────────────────────
 # OWNER REPORT 2026-10-13: "i just uploaded handset info monthwise and also all the others" — and the
@@ -1062,15 +1069,25 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
                  for mode in EXCLUSION_MODES}
 
     # ── THE COLUMNS, one per store the uploads name ────────────────────────────────────────────────
-    # WHY A STORE'S COLUMN CARRIES NO EXPENSES. The expense side of this evaluation is OUR OWN stores'
-    # average monthly cost (§COMMCALC-03.6) — one store's worth of rent, salaries and utilities. It is
-    # already the right figure for ONE site, so splitting it across a prospect's seven sites would
-    # divide a per-store cost by seven and make every column look profitable. Nor can it be repeated
-    # on each column, which would multiply the chain's cost sevenfold against the whole-prospect
-    # statement above it. So a column is the store's CARRIER-SIDE contribution, `expenses_included`
-    # says `false` on every one of them, and the expense comparison stays where it is honest: on the
-    # whole-prospect statement, and in the break-even block, which is per store BY DESIGN because
-    # that is the question the owner asked ("the store will be in loss with just commission income").
+    # EVERY COLUMN CARRIES THE FULL SINGLE-STORE EXPENSE (owner directive 2026-10-13: "add teh
+    # expenses in teh expenses line and give ,e teh final p&l nunmber to see if teh store is
+    # profitable aor loss"). The expense side of this evaluation is OUR OWN stores' average monthly
+    # cost (§COMMCALC-03.6) — ALREADY one store's worth of rent, salaries and utilities. So there are
+    # only two honest things to do with it, and the owner has chosen between them:
+    #
+    #   · SPLIT it across the prospect's sites — divides a per-store cost by seven and makes every
+    #     column look profitable. Refused; it answers no question anyone asked.
+    #   · CHARGE EACH COLUMN THE WHOLE of it — the column then answers "could THIS site stand on its
+    #     own?", which is the takeover question, and it is the SAME basis the per-store break-even
+    #     has used since §COMMCALC-03.14 (each store's accessory target is figured against the full
+    #     single-store expense). This is what ships.
+    #
+    # THE CONSEQUENCE, STATED RATHER THAN HIDDEN: the expense and net-income rows therefore do NOT
+    # add across to the whole-prospect column — seven columns carry seven copies of a one-store cost
+    # on purpose. Revenue, device cost and activations still do add, because those are the store's
+    # own money. `expenses_included` and `expenses_basis` say which it is on every column, the screen
+    # prints it, and `harness_prospect_eval.py` §N holds BOTH halves: the lines that must tie still
+    # tie, and the two that must not are asserted not to.
     stores = store_index(feeds, homes["account_store_index"]) if homes.get(
         "account_store_index") else {}
     split = rows_by_store(feeds, set(stores)) if stores else {}
@@ -1080,10 +1097,11 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
             "store": stores.get(key) or {"account": None, "address": None, "name": None,
                                          "label": key, "has_address": False,
                                          "feeds": sorted(k for k, v in per.items() if v)},
-            "expenses_included": False,
+            "expenses_included": True,
+            "expenses_basis": STORE_EXPENSE_BASIS,
             "scenarios": {mode: _book(mode, per.get("ma_commission") or [],
                                       per.get("ma_daily_tx") or [],
-                                      per.get("ma_marketplace_orders") or [], ())
+                                      per.get("ma_marketplace_orders") or [], exp_bookings)
                           for mode in EXCLUSION_MODES},
         }
     return {

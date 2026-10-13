@@ -302,7 +302,7 @@ const STORE_COLS: ExportColumn[] = [
   { header: 'Account', get: (r: StoreRow) => r.account || '—' },
   { header: 'Carrier revenue', get: (r: StoreRow) => r.revenue, money: true },
   { header: 'Device cost', get: (r: StoreRow) => r.cogs, money: true },
-  { header: 'Carrier-side contribution', get: (r: StoreRow) => r.contribution, money: true },
+  { header: 'Profit or loss on measured revenue', get: (r: StoreRow) => r.contribution, money: true },
   { header: 'Activated lines', get: (r: StoreRow) => r.activations, align: 'right' },
   { header: 'Must sell in accessories', get: (r: StoreRow) => r.needed, money: true },
   { header: 'Accessories per box needed', get: (r: StoreRow) => r.perBox, money: true },
@@ -534,7 +534,10 @@ export default function StoreTakeoverPage() {
     out.push(totalRow('Device cost', t => t.cogs))
     out.push(totalRow('Gross profit', t => t.gross_profit))
     out.push(totalRow('Expenses', t => t.expenses))
-    out.push(totalRow('Carrier-side contribution', t => t.net_income))
+    // THE LINE HE ASKED FOR. With the full single-store expense now charged to every column
+    // (owner directive 2026-10-13) this row is each store's profit or loss, not a contribution —
+    // still on CARRIER revenue only, which §COMMCALC-03.7 says out loud and the label keeps saying.
+    out.push(totalRow('Profit or loss on measured revenue', t => t.net_income))
     const actCells: Record<string, number | null> = {}
     for (const k of keys) actCells[k] = blocks[k]?.scenarios?.[shownMode]?.activations ?? null
     out.push({ section: 'Totals', label: 'Activated lines', key: 'total:activations', kind: 'count',
@@ -811,8 +814,8 @@ export default function StoreTakeoverPage() {
             <Tile label="Gross profit" value={money(statement.totals?.gross_profit)} />
             <Tile label="Our average expenses" value={money(statement.totals?.expenses)}
                   sub={(data?.expenses?.months || []).join(', ') || 'no basis months'} />
-            <Tile label="Carrier-side contribution" value={money(statement.totals?.net_income)}
-                  sub="NOT net income — see what is not measured" warn />
+            <Tile label="Profit or loss on measured revenue" value={money(statement.totals?.net_income)}
+                  sub="carrier revenue less device cost less our average expenses — accessory and bill-payment revenue are in NO takeover feed, so a real month is better than this by whatever the counter sells" warn />
           </div>
 
           {/* The honesty statement, above the numbers rather than under them. */}
@@ -1017,12 +1020,14 @@ export default function StoreTakeoverPage() {
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
             Every line is a line of <b>your own chart of accounts</b>, and every cell is read from
-            that store&rsquo;s own statement &mdash; nothing on this screen is re-added, so the
-            columns adding across to <b>All stores</b> is a check, not an arrangement. The expense
-            lines sit under <b>All stores</b> only: our average is already <b>one</b> store&rsquo;s
-            worth of rent, salaries and utilities, so charging it to each column would make every
-            store look profitable. The accessory target at the bottom of each column IS figured
-            against that full single-store expense.
+            that store&rsquo;s own statement &mdash; nothing on this screen is re-added.
+            {' '}<b>Each column is charged the full average monthly expense of one of our own
+            stores</b>, so its bottom line answers whether that site could stand on its own.
+            {' '}<b>Revenue, device cost and activated lines add across to All stores; the expense
+            and net-income rows do not</b> &mdash; {matrixStores.length} columns carry
+            {' '}{matrixStores.length} copies of a one-store cost, on purpose. Splitting that cost
+            across the sites instead would divide a per-store figure by {matrixStores.length} and
+            make every column look profitable.
           </div>
           <ReportShell title="" filename={`takeover-pl-by-store-${data?.period || ''}`}
                        columns={MATRIX_COLS} rows={matrixRows} compact stickyHeader />
@@ -1037,11 +1042,10 @@ export default function StoreTakeoverPage() {
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
             Picked up from the files, not typed in: the sheets carry the dealer&rsquo;s account on
-            every row and the handset orders carry its address. These columns add up to the statement
-            above. They carry <b>no share of our average expenses</b> &mdash; that average is already
-            one store&rsquo;s worth of rent, salaries and utilities, so splitting it across several
-            sites would make every column look profitable. Each store&rsquo;s accessory target below
-            is figured against the full single-store expense.
+            every row and the handset orders carry its address. Revenue and device cost add up to the
+            statement above; net income does not, because <b>each store is charged the full average
+            monthly expense of one of our own stores</b> rather than a share of it &mdash; that is
+            what makes the figure an answer to &ldquo;could this site stand on its own&rdquo;.
           </div>
           <ReportShell title="" filename={`takeover-stores-${data?.period || ''}`}
                        columns={STORE_COLS} rows={storeRows} compact stickyHeader totals />
