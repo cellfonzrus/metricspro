@@ -84,16 +84,23 @@ FACTS: dict[str, dict] = {
                     'protected and the application could not tell: two employees\' bank routing '
                     'numbers were readable in production on 2026-10-12 while run_all() claimed to '
                     'run every sweep. A column whose writes were ALWAYS encrypted owes no sweep and '
-                    'says so in writing (`BORN_SEALED`), proved rather than trusted.',
+                    'says so in writing (`BORN_SEALED`), proved rather than trusted. And — the '
+                    'second half, measured 2026-10-13 — WHAT sealing a family means is the '
+                    'WRITER\'s to say, declared per family as `sealer` and APPLIED by the sweep: '
+                    'every sweep read its writer\'s list of WHICH columns and then inlined its own '
+                    '`crypto.encrypt`, which agreed by luck for a text column and did NOT for a '
+                    'JSONB one, so the credential registry\'s JSONB half was skipped on every boot '
+                    'and three live portal sessions stayed readable.',
         "homes": ('app/core/encryption_backfill.py',),
         "index": ('CORE-04',),
         "locks": ('harness_encryption_backfill_coverage.py',),
         # SNAPSHOT — written BY HAND (§50). These are the modules that import the home, DERIVED from
-        # the import graph. The modules the registry HOLDS TO A SWEEP are a different set and do not
-        # import it (they call `crypto` directly): pos/router.py, pos/receipt_import.py,
-        # vision/router.py and core/portal_secret.py. That set is enforced by the lock's §C coverage
-        # scan, not by an import edge — which is the whole point of the lock: a module can start
-        # encrypting without ever referencing this one.
+        # the import graph. The modules the registry HOLDS TO A SWEEP are a different set: the home
+        # now imports THEM (each family's `sealer`), which is the opposite direction and does not
+        # make them callers. `vision/router.py` is held to no sweep at all — it claims BORN_SEALED.
+        # That set is enforced by the lock's §C coverage scan and §I sealer wiring, not by an import
+        # edge — which is the whole point of the lock: a module can start encrypting without ever
+        # referencing this one.
         "callers": {
             # the no-shell route: ENCRYPTION_BACKFILL_ON_BOOT runs run_all once at startup
             'app/main.py': ('run_all',),

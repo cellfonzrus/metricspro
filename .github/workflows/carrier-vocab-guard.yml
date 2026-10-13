@@ -516,7 +516,10 @@ on:
       # index §CORE-04 — AND THE ROWS ALREADY STORED. Same §13e reason: the coverage lock names
       # ITSELF, the registry's home (encryption_backfill, already above) and every module it holds to
       # a sweep or to a born-encrypted claim, so a module that starts encrypting a stored value
-      # cannot land without this job running.
+      # cannot land without this job running. Since §CORE-04.7 the lock ALSO holds each family to its
+      # writer-side `sealer`, and all four sealer modules are the same files already listed below
+      # (pos/router, hr/router, pos/receipt_import, core/portal_secret above) — a NEW family's sealer
+      # module must be added here too, or §I can un-wire without this job running.
       - "backend/harness_encryption_backfill_coverage.py"
       - "backend/app/modules/pos/receipt_import.py"
       - "backend/app/modules/pos/router.py"

@@ -1899,6 +1899,22 @@ def _intake_fields(org_id, active_only=True):
     return [r for r in rows if r.get("is_active", True)] if active_only else rows
 
 
+def seal_intake_value(val):
+    """THE one home for "what sealing one sensitive intake value means" (index §CORE-04).
+
+    PUBLIC because it has two callers that must not drift: the intake SAVE path below, which seals a
+    value as it arrives, and `core.encryption_backfill.backfill_intake_sensitive`, which seals the
+    values stored before the key existed. Those were two inlined `crypto.encrypt` calls agreeing by
+    coincidence. The same half-dereference on the portal sweep did not agree — a JSONB credential
+    column needs a different primitive, the sweep only understood text, and three live portal
+    sessions stayed readable through every boot (found 2026-10-13).
+
+    Blank stays blank, and `crypto.encrypt` passes an already-sealed value through, so this is safe
+    on a value read back from storage as well as on one just typed.
+    """
+    return crypto.encrypt(val) if val else val
+
+
 def _public_intake_fields(org_id):
     """Field definitions safe to render in a portal (no internal flags)."""
     return [{"key": f["key"], "label": f["label"], "section": f.get("section") or "personal",
@@ -2093,7 +2109,7 @@ def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
         if f.get("sensitive"):
             # Sensitive PII (SSN/bank/A-Number): store ENCRYPTED, and never propagate it onto the
             # employees table (it stays only in intake_data, as ciphertext). Blank stays blank.
-            stored[k] = crypto.encrypt(val) if val else val
+            stored[k] = seal_intake_value(val)
             continue
         stored[k] = val
         col = f.get("propagate_to")

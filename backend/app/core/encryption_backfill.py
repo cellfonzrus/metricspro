@@ -38,9 +38,16 @@ _PAGE = 500
 
 def backfill_customer_pins(client, *, dry_run: bool = False, page: int = _PAGE) -> dict:
     """Encrypt existing plaintext carrier PINs in pos.customers.password. Narrow id+password select
-    (never bulk-reads the customer book). Returns {scanned, sealed, enabled}."""
+    (never bulk-reads the customer book). Returns {scanned, sealed, enabled}.
+
+    HOW a stored PIN is sealed is `pos.router.seal_customer_pin` — the same function the three
+    writers call — not a `crypto.encrypt` of our own. It agreed by luck while there was one text
+    column and one primitive; the portal sweep's identical half-dereference did not agree, and left
+    every stored browser session readable. See that sweep's comment.
+    """
     if not crypto.is_enabled():
         return {"scanned": 0, "sealed": 0, "enabled": False}
+    from app.modules.pos import router as pos_router
     tbl = client.schema("pos").table("customers")
     scanned = sealed = 0
     offset = 0
@@ -52,11 +59,14 @@ def backfill_customer_pins(client, *, dry_run: bool = False, page: int = _PAGE) 
         for row in rows:
             scanned += 1
             pin = row.get("password")
-            if not pin or crypto.is_encrypted(pin):
+            if not pin:
                 continue
+            fresh = pos_router.seal_customer_pin({"password": pin}).get("password")
+            if fresh == pin:
+                continue            # already sealed — the primitive passes ciphertext through
             sealed += 1
             if not dry_run:
-                tbl.update({"password": crypto.encrypt(pin)}).eq("id", row["id"]).execute()
+                tbl.update({"password": fresh}).eq("id", row["id"]).execute()
         offset += len(rows)
         if len(rows) < page:
             break
@@ -67,20 +77,28 @@ def backfill_portal_secrets(client, *, dry_run: bool = False, page: int = _PAGE)
     """Encrypt the portal credentials, API keys and authenticator secrets already stored in plain
     text, for EVERY table the credential registry names (index §CORE-03).
 
-    This sweep has no table list of its own on purpose. It reads
-    `app.modules.core.portal_secret.SECRET_COLUMNS` — the same fact the readers and writers
-    dereference — so a sweep that registers a new credential column tomorrow is backfilled by this
-    function without anyone editing it. A copy of the list here would be exactly the second home the
-    registry exists to prevent.
+    This sweep has no table list of its own on purpose, AND no sealing logic of its own. It reads
+    `portal_secret.SECRET_COLUMNS` for WHICH columns hold a credential, and calls
+    `portal_secret.seal_row` for WHAT sealing one means — both the same facts the readers and
+    writers dereference. So a sweep that registers a new credential column tomorrow, in either the
+    text half or the JSONB half, is backfilled by this function without anyone editing it.
+
+    Reading the registry for WHICH while deciding HOW here is what broke it once (see the comment at
+    the patch below): a JSONB credential column needs a different primitive, this sweep did not ask,
+    and three live portal sessions stayed in plain text through every boot. One half-dereference is
+    still a second home.
 
     Nothing here is required for correctness: `crypto.decrypt` returns an unprefixed value unchanged,
     so a plaintext row reads fine forever. This is how the OLD rows stop being readable from a
-    database dump. Idempotent (an already-sealed value is skipped) and paged, so re-running it — on
-    every boot while ENCRYPTION_BACKFILL_ON_BOOT is set, or on several replicas at once — is safe.
+    database dump. Idempotent (an already-sealed value is passed through by both primitives, so the
+    diff is empty) and paged, so re-running it — on every boot while ENCRYPTION_BACKFILL_ON_BOOT is
+    set, or on several replicas at once — is safe.
 
-    Returns {tables: {<table>: {scanned, sealed, columns, error?}}, sealed, enabled}. A table whose
-    migration is not applied in this tenant's database is reported as an error and SKIPPED, never
-    raised: one tenant missing mig 411 must not stop the other eight tables being sealed.
+    Returns {tables: {<table>: {scanned, sealed, columns, sealed_columns, error?}}, sealed, enabled}.
+    `sealed_columns` names which columns actually changed, so an operator reading the boot log can
+    see the JSONB half was reached and not assume it. A table whose migration is not applied in this
+    tenant's database is reported as an error and SKIPPED, never raised: one tenant missing mig 411
+    must not stop the other eight tables being sealed.
     """
     from app.modules.core import portal_secret
     if not crypto.is_enabled():
@@ -90,7 +108,9 @@ def backfill_portal_secrets(client, *, dry_run: bool = False, page: int = _PAGE)
     for table, cols in sorted(portal_secret.SECRET_COLUMNS.items()):
         schema = portal_secret.table_schema(table)
         key = portal_secret.table_key(table)
-        res = {"scanned": 0, "sealed": 0, "columns": list(cols), "key": list(key)}
+        res = {"scanned": 0, "sealed": 0, "columns": list(cols), "key": list(key),
+               # always present, so a reader never has to tell "sealed nothing" from "did not look"
+               "sealed_columns": []}
         try:
             # The registry says where the table is AND how to address one of its rows. Only
             # data_source has a surrogate `id`; the eight config tables are keyed on the tenant (and
@@ -106,12 +126,26 @@ def backfill_portal_secrets(client, *, dry_run: bool = False, page: int = _PAGE)
                     break
                 for row in rows:
                     res["scanned"] += 1
-                    patch = {c: crypto.encrypt(row[c]) for c in cols
-                             if isinstance(row.get(c), str) and row[c]
-                             and not crypto.is_encrypted(row[c])}
+                    # WHAT SEALING A ROW OF THIS TABLE MEANS is portal_secret's to answer, not this
+                    # sweep's. `seal_row` is the same function the WRITE path calls
+                    # (router.save_data_source), and it knows what this sweep used to get wrong: a
+                    # registered JSONB column takes crypto.encrypt_json's {"enc": …} envelope,
+                    # because `enc:v1:<token>` is not valid JSON. This sweep built its own patch and
+                    # type-guarded on `isinstance(v, str)`, so a JSONB column — which comes back
+                    # from the client as a dict — was SKIPPED on every boot, silently and forever.
+                    # Measured in production 2026-10-13: three stored browser sessions, carrying
+                    # live portal cookies, still in plain text after the sweep had run. Reading the
+                    # registry for WHICH columns while deciding HOW ourselves was the second home.
+                    #
+                    # Both primitives pass an already-sealed value through unchanged, so the diff
+                    # below is empty on the second boot and this stays idempotent.
+                    sealed_row = portal_secret.seal_row(table, row)
+                    patch = {c: sealed_row[c] for c in cols
+                             if c in sealed_row and sealed_row[c] != row.get(c)}
                     if not patch:
                         continue
                     res["sealed"] += 1
+                    res["sealed_columns"] = sorted(set(res["sealed_columns"]) | set(patch))
                     total += 1
                     if not dry_run:
                         q = _tbl().update(patch)
@@ -191,8 +225,14 @@ def backfill_intake_sensitive(client, *, org_id: str | None = None, dry_run: boo
                     changed = False
                     for k in keys:
                         v = data.get(k)
-                        if v and str(v).strip() and not crypto.is_encrypted(v):
-                            data[k] = crypto.encrypt(v)
+                        if not v or not str(v).strip():
+                            continue
+                        # HOW a sensitive intake value is sealed is HR's `seal_intake_value` — the
+                        # same function the intake SAVE path calls — not a crypto.encrypt of our
+                        # own. See backfill_portal_secrets for what a half-dereference cost.
+                        fresh = hr_router.seal_intake_value(v)
+                        if fresh != v:
+                            data[k] = fresh
                             changed = True
                             res["values"] += 1
                     if not changed:
@@ -258,36 +298,63 @@ def backfill_receipt_imports(client, *, dry_run: bool = False, page: int = _PAGE
 #           every module it finds to appear here (or in NO_STORED_WRITE below, with a reason).
 #   stores  what is sealed, for a human reading a failure.
 #   sweep   the function in THIS module that seals the rows written before the column was encrypted.
+#   sealer  the WRITER-SIDE function that answers "what does sealing a row of this family MEAN", as
+#           `module.function`. The sweep APPLIES it and holds no primitive of its own.
+#
+#           This field exists because of what its absence cost (2026-10-13). Every sweep already
+#           read its writer's declaration of WHICH columns hold a secret — the registry, the column
+#           tuples, the per-tenant sensitive-field list — and every sweep then decided HOW to seal
+#           them itself, with an inlined `crypto.encrypt`. Three of the four agreed with their
+#           writer by luck, because one text column takes one primitive. `backfill_portal_secrets`
+#           did not: a registered JSONB credential column needs crypto.encrypt_json's {"enc": …}
+#           envelope, the sweep's patch type-guarded on `isinstance(v, str)`, and a JSONB column
+#           comes back from the client as a dict. So it was SKIPPED on every single boot. Measured
+#           in production: three `commcalc.data_source.session_state` blobs — live portal session
+#           cookies, a stolen session being a stolen login — still in plain text long after
+#           ENCRYPTION_BACKFILL_ON_BOOT had run and reported success.
+#
+#           Reading a registry for WHICH while deciding HOW yourself is a HALF-dereference, and a
+#           half-dereference is a whole second home. §I of the lock holds every sweep to its sealer
+#           and fails the build on an encrypt call anywhere in this module.
 SWEEPS: dict[str, dict] = {
     "customer_pins": {
-        "writer": "app/modules/pos/router.py",                    # _seal_customer_pin
+        "writer": "app/modules/pos/router.py",
         "stores": ("pos.customers.password (the carrier account PIN)",),
         "sweep": "backfill_customer_pins",
+        "sealer": "app.modules.pos.router.seal_customer_pin",
     },
     "portal_secrets": {
-        "writer": "app/modules/core/portal_secret.py",            # seal_row, index §CORE-03
+        "writer": "app/modules/core/portal_secret.py",            # index §CORE-03
         "stores": ("every column portal_secret.SECRET_COLUMNS names (ten tables)",),
         "sweep": "backfill_portal_secrets",
+        "sealer": "app.modules.core.portal_secret.seal_row",
     },
     "intake_sensitive": {
         "writer": "app/modules/hr/router.py",                     # the intake save + the HR button
         "stores": ("storeops.employee_onboarding_profile.intake_data"
                    " (the keys the tenant declares sensitive)",),
         "sweep": "backfill_intake_sensitive",
+        "sealer": "app.modules.hr.router.seal_intake_value",
     },
     "receipt_imports": {
         "writer": "app/modules/pos/receipt_import.py",            # _encrypt_import_row
         "stores": ("pos.receipt_imports.imei / notes / parsed / raw_ocr + imei_bidx",),
         "sweep": "backfill_receipt_imports",
+        "sealer": "app.modules.pos.receipt_import.seal_stored_row",
     },
 }
 
 # Modules that call an encrypt helper but store NOTHING of their own, each with its written reason.
 # §C of the coverage harness reads this; an unexplained module fails the build rather than being
 # assumed harmless.
+# THIS MODULE IS NO LONGER IN HERE, and its absence is the signal. It used to be excused with "the
+# sweeps themselves encrypt, which is the point" — and that excuse was the defect in one sentence: a
+# sweep holding its own primitive is a second home for "what sealing this family means". Every sweep
+# now applies the sealer its family's WRITER uses (portal_secret.seal_row,
+# pos.router.seal_customer_pin, hr.router.seal_intake_value, receipt_import.seal_stored_row), so no
+# encrypt call is left here to excuse and §C's staleness check removes the entry on its own. If one
+# ever comes back, the build fails for the right reason.
 NO_STORED_WRITE: dict[str, str] = {
-    "app/core/encryption_backfill.py":
-        "this module — the sweeps themselves encrypt, which is the point; it owns the registry.",
     "app/core/crypto.py":
         "the primitive itself. encrypt_map / encrypt_json call encrypt; crypto stores no row and "
         "knows no table.",
