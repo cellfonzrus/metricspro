@@ -48542,6 +48542,9 @@ def _prospect_homes():
         "accrue_detail": _coa.accrue_detail,
         "spec": _coa.PL_SPEC,
         "pl_section": _coa.PL_SECTION,
+        # ACCOUNT → STORE, the mig-314 home, injected PURE (never `load_store_index`, which would
+        # read OUR fulfilment table): a prospect's stores come from the prospect's OWN uploaded rows.
+        "account_store_index": _msp.account_store_index,
         "ma_cfg": _msp.default_config(),
         "ma_pnl_config": _rsub.default_ma_pnl_config(),
     }
@@ -48613,15 +48616,40 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     ev["expenses"]["months"] = months
 
     from app.modules.account import engine as _eng, analysis as _an
-    statements = {}
-    for m, sc in ev["scenarios"].items():
-        st = _eng._assemble(sc["inputs"], [], homes["spec"], _prospect_pl_labels(homes),
+
+    def _assemble(inputs):
+        st = _eng._assemble(inputs, [], homes["spec"], _prospect_pl_labels(homes),
                             PROSPECT_PL_SECTIONS, "prospect", set(), True)
         st["totals"] = _an.pl_totals(st)
-        statements[m] = st
+        return st
+
+    statements = {}
+    for m, sc in ev["scenarios"].items():
+        statements[m] = _assemble(sc["inputs"])
         sc.pop("inputs", None)          # the raw accumulator is not a payload the screen needs
     ev["statements"] = statements
     ev["delta"] = _pev.scenario_delta(statements, _an.pl_totals)
+    # The fraud block's money comes off the two statements already assembled — never a third sum.
+    ev["fraud"] = _pev.fraud_exposure(ev["multi_line"]["summary"],
+                                      ev["multi_line"]["flagged"], ev["delta"])
+
+    # ── A COLUMN PER STORE, and the break-even under each ─────────────────────────────────────────
+    # Each column is assembled by the SAME `_assemble` the whole-prospect statement uses, so a column
+    # and the total cannot be built by two different builders. The break-even is per store because
+    # that is the question: what this counter must take for THIS site to work.
+    for key, blk in (ev.get("store_scenarios") or {}).items():
+        blk["statements"] = {}
+        for m, sc in blk["scenarios"].items():
+            blk["statements"][m] = _assemble(sc["inputs"])
+            sc.pop("inputs", None)
+        blk["delta"] = _pev.scenario_delta(blk["statements"], _an.pl_totals)
+        blk["break_even"] = {
+            m: _pev.accessory_break_even(blk["statements"][m],
+                                         blk["scenarios"][m].get("activations"), _an.pl_totals)
+            for m in blk["statements"]}
+    # …and for the whole prospect, which is the one that carries our average expenses.
+    ev["break_even"] = {m: _pev.accessory_break_even(
+        statements[m], ev["scenarios"][m].get("activations"), _an.pl_totals) for m in statements}
     ev["prospect"] = prospect
     ev["period_basis"] = period_basis        # why the report opened on this month — stated, never implied
     return ev

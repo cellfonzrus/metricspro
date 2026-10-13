@@ -703,7 +703,12 @@ FACTS: dict[str, dict] = {
             # The takeover evaluation asks the registry which columns hold a row's MONTH, so its
             # "what did this file actually put in the table" measurement cannot drift from the
             # platform's own answer (`prospect_eval.substance`, owner report 2026-10-13).
-            'app/modules/commcalc/prospect_eval.py': ('MONTH_COLUMNS',),
+            'app/modules/commcalc/prospect_eval.py': ('MONTH_COLUMNS', 'store_account_column'),
+            # WHICH COLUMN NAMES THE DEALER ACCOUNT on each master-agent feed. Three hand-written
+            # copies of that fact lived in this file, once per booking function, until the
+            # store-takeover evaluation needed the same answer to split a prospect's uploads by
+            # store (2026-10-13). Declared once in the registry, dereferenced here.
+            'app/modules/account/ma_store_pnl.py': ('_MA_DAILY_TX_TABLE', '_store_col'),
             # The portal pull asks the registry whether its TARGET TABLE stores a row's month
             # (§COMMCALC-04), instead of carrying its own `has_period` flag per report spec.
             'app/modules/commcalc/report_pull.py': ('_lin',),
