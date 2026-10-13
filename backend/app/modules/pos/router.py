@@ -906,7 +906,19 @@ def _clean_customer(body: dict) -> dict:
 # vault; the PIN did not. Seal it as application-layer ciphertext ('enc:v1:') on every write and open
 # it only on the single-record edit fetch. crypto.encrypt is idempotent and a no-op without a key, so
 # this is safe to run before the backfill and on already-sealed values.
-def _seal_customer_pin(d: dict) -> dict:
+def seal_customer_pin(d: dict) -> dict:
+    """THE one home for "what sealing a stored carrier PIN means" (index §CORE-04).
+
+    PUBLIC, and not for tidiness: `core.encryption_backfill.backfill_customer_pins` calls it too, so
+    the sweep that seals the OLD rows and the writers that seal the NEW ones cannot disagree about
+    the primitive. The sweep used to call `crypto.encrypt` itself. That agreed with this function by
+    luck — one text column, one primitive — and the identical half-dereference on the portal sweep
+    did NOT agree, because a JSONB column needs a different primitive: three live portal sessions
+    sat in plain text through every boot (found 2026-10-13). Reading a registry for WHICH columns
+    while deciding HOW to seal them yourself is the second home, whether or not it has bitten yet.
+
+    `crypto.encrypt` passes an already-sealed value through, so this is safe to call on a stored row.
+    """
     if d.get("password"):
         from app.core import crypto
         d = dict(d)
@@ -1157,7 +1169,7 @@ def create_customer(body: dict, org_id: str = ORG_ID):
     if not (ins.get("first_name") or ins.get("last_name") or ins.get("company_name")):
         raise HTTPException(400, "a name is required")
     ins["org_id"] = org_id
-    r = sb().schema("pos").table("customers").insert(_seal_customer_pin(ins)).execute()
+    r = sb().schema("pos").table("customers").insert(seal_customer_pin(ins)).execute()
     return {"customer": _open_customer_pin((r.data or [{}])[0])}
 
 
@@ -1166,7 +1178,7 @@ def update_customer(customer_id: str, body: dict, org_id: str = ORG_ID):
     upd = _clean_customer(body)
     if not upd:
         raise HTTPException(400, "nothing to update")
-    r = (sb().schema("pos").table("customers").update(_seal_customer_pin(upd))
+    r = (sb().schema("pos").table("customers").update(seal_customer_pin(upd))
          .eq("org_id", org_id).eq("id", customer_id).execute())
     if not r.data:
         raise HTTPException(404, "not found")
@@ -2697,7 +2709,7 @@ def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
         seen = {k for r in existing for k in
                 (_digits(r.get("phone_primary")), (r.get("email") or "").strip().lower()) if k}
         for i, row in enumerate(rows):
-            p = _seal_customer_pin(_clean_customer(row))
+            p = seal_customer_pin(_clean_customer(row))
             key = _digits(p.get("phone_primary")) or (p.get("email") or "").strip().lower()
             if key and key in seen:
                 skipped.append({"index": i, "message": "duplicate (phone/email already exists)"})

@@ -6656,7 +6656,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) — the daily-incentive rules. `rule_kind` is one of three SHAPES; every rule, category, rate, threshold and split is a ROW (RULE TWO). Assignments reuse the employee-plan scope vocabulary | `PUT /commcalc/incentive-rules` (refuses a rule naming an undeclared category); `DELETE` switches OFF, never destroys | `commcalc/daily_incentive.compute_day` via `GET /commcalc/daily-incentive/{date}`; scope by `management_incentive.resolve_plan` — §76.4 |
 | `commcalc.target_line` (mig `1074`) — a DECLARED category's target for a store-period at one grain. The four BUILT-IN categories keep their columns on `commcalc.targets` (mig `006`) and are read byte-for-byte as before; this is the other physical store and **no caller reads either directly** | `PUT /commcalc/targets/{period}/lines` (same `_require_target_edit` gate as the built-in save; refuses a built-in key, an undeclared key and a negative) | `commcalc/targets_engine.derive_monthly_by_cat` (THE fold) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/backward` / `/summary` / `/action-plan` / `/report-cards`; lock `harness_target_axis_lock.py` — §COMMCALC-02 |
 | *(no table added, and no migration)* — **ten tables ALREADY hold a credential**: `commcalc.vip_sweep_config` / `dlar_sweep_config` / `epay_sweep_config` / `b2b_sweep_config`.`portal_pass`, `ftp_sweep_config` / `email_sweep_config`.`password`, `data_source`.`password` + `totp_secret` + `session_state` + `pending_state` (the last two JSONB), `storeops.google_review_config.api_key`, `storeops.platform_billing_connector.credential`. Every one of them was PLAINTEXT. The columns do not change shape: `crypto`'s stored form is `enc:v1:<token>` and `decrypt` returns an unprefixed value unchanged, so legacy plaintext and new ciphertext coexist in one column indefinitely and **no migration and no backfill window exist** | the registry `core/portal_secret.seal_row` on every write — `commcalc/router._status_update` (THE status/session chokepoint), each sweep-config upsert, `save_data_source`, the google-reviews config PUT, the billing-connector insert/update, `supply/api_credential` | read back through `portal_secret.open_row` — the six `_*_cfg` readers, `_ds_rows` (THE `data_source` read), `storeops/google_reviews.get_config`, `account/router.sweep_credit_memos`, `billing/router._pc_rows`; `core/encryption_backfill.backfill_portal_secrets` seals what was already stored; lock `harness_portal_secret_lock.py` — §CORE-03 |
-| *(no table added, and no migration)* — §CORE-04, the other half: a column encrypted on WRITE still holds whatever was stored before. Measured 2026-10-12 — 84 of 88 sensitive intake values in `storeops.employee_onboarding_profile.intake_data` were sealed and **4 were plain text** (two employees' `dd_routing` / `dd_bank_name`), because sealing them existed only as a manual button and not in `run_all()`. `pos.receipt_imports`.`imei` / `notes` / `parsed` / `raw_ocr` had no sweep at all | `core/encryption_backfill.SWEEPS` — the one home for which encrypted family HAS a sweep; four families, `run_all()` derived from it, each sweep reading its writer's own column declaration | sealed by `backfill_intake_sensitive` (per-tenant, reading HR's `_public_intake_fields`) and `backfill_receipt_imports` (applying `receipt_import.seal_stored_row`); `core.vision_*` columns were BORN encrypted and claim `BORN_SEALED`, proved by AST, not trusted; lock `harness_encryption_backfill_coverage.py` (138) — §CORE-04 |
+| *(no table added, and no migration)* — §CORE-04, the other half: a column encrypted on WRITE still holds whatever was stored before. Measured 2026-10-12 — 84 of 88 sensitive intake values in `storeops.employee_onboarding_profile.intake_data` were sealed and **4 were plain text** (two employees' `dd_routing` / `dd_bank_name`), because sealing them existed only as a manual button and not in `run_all()`. `pos.receipt_imports`.`imei` / `notes` / `parsed` / `raw_ocr` had no sweep at all | `core/encryption_backfill.SWEEPS` — the one home for which encrypted family HAS a sweep; four families, `run_all()` derived from it, each sweep reading its writer's own column declaration AND applying its writer's own `sealer` (§CORE-04.7, 2026-10-13 — reading WHICH columns while inlining HOW to seal them skipped the registry's JSONB half on every boot and left three live portal sessions readable) | sealed by `backfill_intake_sensitive` (per-tenant, reading HR's `_public_intake_fields`) and `backfill_receipt_imports` (applying `receipt_import.seal_stored_row`); `core.vision_*` columns were BORN encrypted and claim `BORN_SEALED`, proved by AST, not trusted; lock `harness_encryption_backfill_coverage.py` (175) — §CORE-04 |
 | `commcalc.daily_closing` (mig `029`) — `dedup_key` now comes from ONE home, `closing/dedup_key.for_row`, whose `SQL_EXPR` is the same formula in SQL; the partial unique index no longer stops protecting a RELEASED row (mig `1037`) | `closing/router.create_row` (dereferencing `dedup_key.for_row`); mig `1037` recompute (ambiguous groups left alone) | index `daily_closing_one_active_per_rep_day`; `GET /closing/duplicates` — §29.11 |
 | *(no table added)* — the §19.38 lock DERIVES its table / view / schema vocabulary from every `CREATE` in `database/migrations` + `commcalc/data_lineage_registry.all_ingest_tables()`, and its env-var vocabulary from `core/config.Settings` + the code's env reads; a feed's plain name for the UI is `frontend/src/lib/sourceLabels.ts` (`sourceLabel`), every key of which must be a registered table (IW3) | — | `harness_carrier_vocab_guard.infra_registry` / `infra_regex` (§19.38) |
 | `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.36): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
@@ -7240,7 +7240,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **What does a day's declared categories PAY each employee?** — three shapes only (`per_unit`, `percent_of_amount`, `threshold_pool`); every rule, category, rate, threshold and split is a CONFIG ROW, so no tenant vocabulary reaches the code (asserted over the stripped executable text). A gate that cannot be VERIFIED fails CLOSED, an unresolved input is zero production, and **a pool whose split cannot be measured is returned `unallocated` with a reason rather than split evenly** | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) × the declared store-day above × `storeops.shifts` (actual hours where recorded, else scheduled) | ONE home `commcalc/daily_incentive.py` (`compute_day` / `measure` / `split_pool` — pure) → `GET /commcalc/daily-incentive/{date}`; scope precedence REUSES `management_incentive.resolve_plan`, never a second ladder; screen `/commcalc/incentive-rules`; proof `harness_daily_incentive.py` (83, the owner's six live rules replayed as config) — §76.4. **Computes only — persisting and paying is not this endpoint's** |
 | **What is this store supposed to do — per day, per week, per month — and what do I still need to reach it?** — the axis is ASKED of the tenant (the four built-in sales categories plus every category declared on Count Fields), so a target exists for the thing the business actually sells. A week or day figure is a WINDOW over the one monthly spread, summed at full precision, never a second calculation — so the weeks always add up to the month | `commcalc.targets` (mig `006`, the built-ins' own columns, read byte-for-byte as before) × `commcalc.target_line` (mig `1074`, the declared half) × `storeops.shifts` (the scheduled hours the month is spread over) × the declared store-day above (the ACHIEVED figure for a declared category) | ONE home `commcalc/targets_engine.py` (`target_axis` / `derive_monthly_by_cat` — THE fold over both physical stores — `compute_scope`, `grain_windows`, `merge_declared_actuals`) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/summary` / `/action-plan` / `/report-cards`; locks `harness_target_axis_lock.py` (80) + proof `harness_target_declared_axis.py` (42) — §COMMCALC-02 |
 | **Is this stored credential readable by anyone who gets the database?** — not a KPI but the same shape of question, and it had ten different answers. ONE: `core/portal_secret.TABLES` names every column that holds a credential, which primitive opens it (text, or the JSONB `{"enc": …}` envelope), which schema the table is in and which columns address one of its rows. A credential-LOOKING column that is deliberately not encrypted carries its reason in `NOT_A_SECRET` — because an excuse nobody wrote down cannot be told apart from an oversight | the ten tables in §16 above × `app/core/crypto.py` (Fernet, `enc:v1:`) × `database/migrations/**` (what §D of the lock scans) | ONE home `core/portal_secret.py` (`seal_row` / `open_row` / `open_rows` / `secret_columns` / `json_columns` / `table_schema` / `table_key` / `protection_state` / `describe`) → every reader and writer in §16; `core/encryption_backfill.backfill_portal_secrets` (iterating the registry, owning no table list of its own); lock `harness_portal_secret_lock.py` (158) — §CORE-03 |
-| **And what about the rows written BEFORE that column was encrypted?** — a different question from the one above, and it had four separate answers, two of them "nothing". ONE: `core/encryption_backfill.SWEEPS` names every encrypted-at-rest family and the sweep that seals its old rows; `run_all()` is DERIVED from it, so a sweep cannot be forgotten by not being called. A column that was born encrypted owes no sweep and says so in `BORN_SEALED`, with the claim proved by refusing any write to it that skips `encrypt()` | `app/core/crypto.py` × each writer's own column declaration (`portal_secret.SECRET_COLUMNS`, `receipt_import.ENCRYPTED_IMPORT_COLUMNS`, HR's `_public_intake_fields`) | ONE home `core/encryption_backfill.py` (`SWEEPS` / `BORN_SEALED` / `NO_STORED_WRITE` / `run_all`) → the boot flag and the HR button; lock `harness_encryption_backfill_coverage.py` (138) — §CORE-04 |
+| **And what about the rows written BEFORE that column was encrypted?** — a different question from the one above, and it had four separate answers, two of them "nothing". ONE: `core/encryption_backfill.SWEEPS` names every encrypted-at-rest family and the sweep that seals its old rows; `run_all()` is DERIVED from it, so a sweep cannot be forgotten by not being called. A column that was born encrypted owes no sweep and says so in `BORN_SEALED`, with the claim proved by refusing any write to it that skips `encrypt()` | `app/core/crypto.py` × each writer's own column declaration (`portal_secret.SECRET_COLUMNS`, `receipt_import.ENCRYPTED_IMPORT_COLUMNS`, HR's `_public_intake_fields`) × each family's own `sealer` — `portal_secret.seal_row`, `pos.router.seal_customer_pin`, `hr.router.seal_intake_value`, `receipt_import.seal_stored_row` (§CORE-04.7) | ONE home `core/encryption_backfill.py` (`SWEEPS` / `BORN_SEALED` / `NO_STORED_WRITE` / `run_all`) → the boot flag and the HR button; lock `harness_encryption_backfill_coverage.py` (175) — §CORE-04 |
 | **What would it take to reach a number I just named?** — `need`, `per_day`, `per_week` against an ARBITRARY goal, not only the stored target. With no open days left `per_day` is `null`: there is no such rate, and showing the need as a daily figure would state something false. Over-achievement needs zero, never a negative | the `compute_scope` result above (`monthly`, `achieved_mtd`) × the scope's remaining open days | `targets_engine.backward_from_goal` → `GET /commcalc/targets/{period}/backward`. Computed from the SAME scope the calendar renders, so the two cannot disagree — §COMMCALC-02.5 |
 | **What did management declare for this month, and what does it still owe this week?** The focus in a manager's own words, the pay type named as driving the month's spiffs, the temporary spiffs on the table with a status, and the weekly check-ins done; the OUTSTANDING list is COMPUTED from the row + today + live measurements, so an item cannot outlive its cause, and an unmeasured count raises nothing rather than reading as a zero | `commcalc.month_focus` (mig `1065`, the declaration) x `commcalc.targets` (mig `006`, SAVED rows only — a seeded carry-forward is not an assigned target) x `commcalc.payout_config.custom_spiffs` (§6, READ ONLY — the money) x §59's bands / `lagging()` x §60's pay-type options and per-store units | ONE home `commcalc/month_focus.py` (`outstanding` / `spiff_reconciliation` / `spiff_economics` / `plays` / `confirm_checkin` / `may_declare`) → `GET`/`PUT` `/commcalc/month-focus/{period}` + `/checkin`; TWO surfaces over the one due list (the login attention item and the platform banner), neither recomputing it; opens no client, reads no feed and sends on no channel (all AST-locked); module-graph fact `month_focus_declaration`; lock `harness_month_focus.py` — §63. Nothing is paid from the row: a declared spiff is an intent with a status, and the reconciliation reports declared-against-live in BOTH directions. A spiff states what it PAYS and what FUNDS it, and the margin is derived on read, `None` unless both sides are declared — so a spiff paying out more than it earns is a stated fact (`spiff_costs_more_than_it_earns`) rather than an arithmetic nobody did |
 | **Did the carrier actually PAY the device reimbursement the distributor claims it was paid?** — per store per month; the two directions in separate buckets and never netted; an absence reported with its reason and `difference = None`; and a shortfall against a month whose statement arrived SHORT withheld as `not_measured` rather than flagged, because a floor proves only the direction it points | `commcalc.raw_comp_report` (classified through the org's own `carrier_category_map`) × `commcalc.asset_ledger.reimbursement` / `reimbursement_date` | ONE home `commcalc/device_reimb_recon.py` → `GET /commcalc/device-reimbursement-recon`; flags `DEVICE_REIMB_CLAIMED_NOT_PAID` / `DEVICE_REIMB_NOT_MEASURED` on the existing board; lock `harness_device_reimb_recon.py` (117) — §19.53. Live 2026-10-08: the owner's $7,583.96 vs $7,999.93 at one store reproduces to the cent ($415.97), and **zero** of the eight months can confirm a shortfall because every one of them is missing statement days — $287,367.64 withheld and named |
@@ -25817,7 +25817,7 @@ was written before.
 `NO_STORED_WRITE`, four sweeps, a derived `run_all`) ·
 `backend/app/modules/pos/receipt_import.py` (`seal_stored_row` + the column declarations) ·
 `backend/app/modules/hr/router.py` (the button now calls the sweep)
-**Lock:** `backend/harness_encryption_backfill_coverage.py` — 138 checks, DB-free, its own job in
+**Lock:** `backend/harness_encryption_backfill_coverage.py` — 175 checks, DB-free, its own job in
 `carrier-vocab-guard.yml`
 **Migration:** none. No money moves.
 **Module-graph fact:** `encryption_backfill_coverage` (§50)
@@ -25885,7 +25885,7 @@ trust: §C walks the module's AST and fails the build on any write to one of tho
 an `encrypt()` call (clearing one to `None` is a revoke, not a plaintext write). The day someone
 writes one in the clear, the exemption stops being true and the build says so.
 
-### §CORE-04.5 Lock — `backend/harness_encryption_backfill_coverage.py` (138 checks)
+### §CORE-04.5 Lock — `backend/harness_encryption_backfill_coverage.py` (175 checks)
 
 | | |
 |---|---|
@@ -25897,14 +25897,7 @@ writes one in the clear, the exemption stops being true and the build says so.
 | §F | the stored-row sealer is idempotent, never indexes ciphertext, returns `{}` when nothing is due |
 | §G | nine negative controls, each proven to see a planted violation |
 | §H | **functional** — a REAL Fernet key over a fake database: the measured regression (a plaintext routing number sealed by `run_all`), idempotence on a second boot, and a raising family not taking the others down |
-
-§C is parsed, not grepped, for a reason worth keeping: `portal_secret.py` discusses `crypto.encrypt`
-four times in prose, and a grep-based scanner counted those as call sites. The same correction
-applies in §D, where a sweep's docstring legitimately names the columns it seals.
-
-Proved RED before shipping: removing the `intake_sensitive` family (the state that left two routing
-numbers plaintext) → 4 failures; putting `run_all` back to its literal list of two calls → 5
-failures.
+| §I | **the sealer wiring** (added 2026-10-13, §CORE-04.7) — every family declares a public `sealer`, every sweep CALLS it, this module makes no `encrypt` call of its own, no sweep type-guards values by shape, and the second measured regression is reproduced functionally: a plaintext JSONB credential column sealed into the `{'enc': …}` envelope and read back byte for byte |
 
 ### §CORE-04.6 What was checked for duplication before building
 
@@ -25914,6 +25907,81 @@ failures.
 | is there already a sweep for HR intake? | YES, but only as an ENDPOINT (`POST /hr/onboarding/encrypt-existing`) holding its own loop | MOVED into the module and the endpoint now CALLS it — one implementation, so the button and the boot sweep cannot diverge |
 | is there already a registry of encrypted columns? | YES for credentials — `core/portal_secret.SECRET_COLUMNS` (§CORE-03) — and per-module declarations elsewhere | REUSED, all of them. `SWEEPS` answers a different question (*which family has a sweep*) and dereferences those declarations rather than restating them |
 | is there already a lock on encryption at rest? | YES — `harness_portal_secret_lock.py`, which asks whether a credential COLUMN is registered | its subject is the write path for one family; this lock's subject is whether a family has a sweep at all. Both kept, neither widened |
+
+§C is parsed, not grepped, for a reason worth keeping: `portal_secret.py` discusses `crypto.encrypt`
+four times in prose, and a grep-based scanner counted those as call sites. The same correction
+applies in §D, where a sweep's docstring legitimately names the columns it seals.
+
+Proved RED before shipping: removing the `intake_sensitive` family (the state that left two routing
+numbers plaintext) → 4 failures; putting `run_all` back to its literal list of two calls → 5
+failures.
+
+
+### §CORE-04.7 The half-dereference — WHICH columns was read, HOW to seal them was not (measured 2026-10-13)
+
+Verifying §CORE-03 and §CORE-04 against production is what found this, the same way §CORE-04 itself
+was found: the sweep had run, reported success, and left a whole class of credential readable.
+
+**Measured.** After `ENCRYPTION_BACKFILL_ON_BOOT=1` and a redeploy, 180 of 180 sensitive intake
+values were sealed and 6 of 7 portal passwords were sealed — and **0 of 3 stored browser sessions
+were**. `commcalc.data_source.session_state` is a registered credential column (§CORE-03 registers
+it precisely because *a stolen session is a stolen login*), and it held live portal cookies in plain
+text.
+
+**Why, and it is not a typo.** `backfill_portal_secrets` built its patch itself:
+
+```python
+patch = {c: crypto.encrypt(row[c]) for c in cols
+         if isinstance(row.get(c), str) and row[c] and not crypto.is_encrypted(row[c])}
+```
+
+A JSONB column comes back from the client as a **dict**, so `isinstance(..., str)` was False and the
+column was skipped — on that boot and on every future boot, silently, while the sweep counted the
+row as needing nothing. `portal_secret.seal_row`, which the WRITE path calls, knows the distinction:
+`enc:v1:<token>` is not valid JSON, so a JSONB column takes `crypto.encrypt_json`'s `{"enc": …}`
+envelope instead. The registry's own comment had even anticipated getting this wrong — and predicted
+it would be *loud*, "a 400 from Postgres the first time a portal login tried to save its session".
+It was not loud. The sweep never wrote at all.
+
+**Name the class.** §CORE-04.3 above says *"No sweep spells a column name of its own"*, and that was
+true. It is also only half of what a sweep needs to know. Every sweep read its writer's declaration
+of **WHICH** columns hold a secret, and every sweep then decided **HOW** to seal them itself with an
+inlined `crypto.encrypt`. Three of the four agreed with their writer **by luck** — one text column
+takes one primitive, so there was nothing to disagree about. The fourth had two primitives and
+disagreed. **Reading a registry for WHICH while deciding HOW yourself is a half-dereference, and a
+half-dereference is a whole second home.** Which of the four it bites is decided by how many
+primitives the family happens to need, not by how carefully the sweep was written.
+
+**Find the siblings.** All four were the same shape, so all four were fixed in this change — not
+only the one that had bitten:
+
+| family | sealer it now APPLIES | was |
+|---|---|---|
+| `portal_secrets` | `portal_secret.seal_row` | its own patch, text-only — **the defect** |
+| `customer_pins` | `pos.router.seal_customer_pin` (made public for this) | its own `crypto.encrypt`, agreeing by luck |
+| `intake_sensitive` | `hr.router.seal_intake_value` (new — the save path inlined it too) | its own `crypto.encrypt`, agreeing by luck |
+| `receipt_imports` | `receipt_import.seal_stored_row` | already correct; it is the shape the others now take |
+
+`receipt_imports` was already right, which is the useful part: the fix is not a new pattern, it is
+the pattern one sweep already had, applied to the other three.
+
+**One fact, one home, dereferenced.** `SWEEPS` gains a `sealer` field — the writer-side function
+that answers *"what does sealing a row of this family mean"*, as `module.function`. The sweep
+APPLIES it and holds no primitive. Every sealer is **public**, because having a second caller is the
+point; a leading underscore on a name two subsystems share is a lie about its blast radius.
+
+**Locked so it cannot un-wire.** §I is a ratchet, not a repair: it asserts `encryption_backfill.py`
+makes **no `encrypt` call at all**, so the next sweep cannot be written the old way and still pass.
+Proved red both ways — reverting the sweep to the old comprehension fails 7 checks, three of them
+the functional regression (the session blob stays readable, `sealed_columns` loses `session_state`).
+`app/core/encryption_backfill.py` was consequently **removed** from `NO_STORED_WRITE`, whose excuse
+for it had been *"the sweeps themselves encrypt, which is the point"* — that sentence was the defect
+stated as a design principle, and §C's own staleness check removed it.
+
+**Still true after this, and reported rather than fixed:** one `data_source` row (the V Accessorize
+admin credential) carried a plaintext password, every other row being sealed — consistent with its
+having been written after that boot's sweep, not with a sweep defect. Re-saving the row seals it,
+and the next boot now catches it.
 
 ## §COMMCALC-03. EVALUATE A STORE WE DO NOT OWN YET — its own carrier feeds, our average expenses, its actual rent (owner directive 2026-10-12)
 

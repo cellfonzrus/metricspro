@@ -35,6 +35,7 @@ import ast
 import os
 import re
 import sys
+import json as _json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(HERE, "app")
@@ -519,6 +520,160 @@ ok(bool(_bs) and column_writes_not_encrypted(_bs, {"status"}),
 ok("for name in sorted(SWEEPS)" not in
    RUN_ALL.replace("for name in sorted(SWEEPS)", "for name in ['customer_pins']"),
    "G8  B1 would catch run_all going back to a literal list of families")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§I  a sweep APPLIES its family's sealer — it holds no primitive of its own")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE SECOND MEASURED DEFECT, 2026-10-13, and the reason this section exists.
+#
+# §D above proves no sweep carries its own copy of a column LIST. That is only half the fact. Every
+# sweep also has to answer "what does sealing one of these values MEAN", and every sweep used to
+# answer it with an inlined `crypto.encrypt`. Three agreed with their writer by luck, because one
+# text column takes one primitive. `backfill_portal_secrets` did not: a registered JSONB credential
+# column needs crypto.encrypt_json's {"enc": …} envelope, its patch comprehension type-guarded on
+# `isinstance(v, str)`, and a JSONB column comes back from the client as a DICT. So the JSONB half
+# of the credential registry was skipped on every boot, silently, forever — and the sweep reported
+# success. Measured in production: three `commcalc.data_source.session_state` blobs (live portal
+# session cookies) still in plain text long after ENCRYPTION_BACKFILL_ON_BOOT had run.
+#
+# Reading a registry for WHICH while deciding HOW yourself is a HALF-dereference, and a
+# half-dereference is a whole second home. So: each family DECLARES its writer-side sealer, each
+# sweep must reference it, and this module may not contain an encrypt call at all.
+for fam, spec in sorted(SWEEPS.items()):
+    ok(bool(spec.get("sealer")),
+       f"I0  {fam}: declares the writer-side `sealer` that says what sealing this family means")
+
+def _sealer_parts(dotted):
+    """'app.modules.pos.router.seal_customer_pin' → ('app/modules/pos/router.py', 'seal_customer_pin')."""
+    mod, _, fn = (dotted or "").rpartition(".")
+    return mod.replace(".", "/") + ".py", fn
+
+for fam, spec in sorted(SWEEPS.items()):
+    rel, fn = _sealer_parts(spec.get("sealer"))
+    path = os.path.join(HERE, rel)
+    ok(os.path.exists(path), f"I1  {fam}: sealer module {rel} is a real file")
+    src = read(path)
+    ok(bool(src) and bool(_func_src(src, fn)),
+       f"I1b {fam}: sealer {fn} is actually defined there (a dotted path nobody checks is a comment)")
+    ok(not fn.startswith("_"),
+       f"I1c {fam}: the sealer is PUBLIC — it has a second caller, so a private name misleads")
+    # The sweep must APPLY it. Docstring stripped: prose naming the sealer is not wiring.
+    code = _func_code(BACKFILL_SRC, spec.get("sweep", ""))
+    ok(f"{fn}(" in code,
+       f"I2  {spec.get('sweep')}: CALLS {fn} rather than re-implementing it",
+       "this is the half-dereference that left every stored browser session readable")
+
+# THE RATCHET. Not "the portal sweep is fixed" — no sweep in this module may hold a primitive at all,
+# so the next sweep cannot be written the old way and pass.
+ok("app/core/encryption_backfill.py" not in ENCRYPTING,
+   "I3  this module makes NO encrypt call of its own — every sweep applies its family's sealer",
+   f"found {ENCRYPTING.get('app/core/encryption_backfill.py')}")
+ok("app/core/encryption_backfill.py" not in NO_STORED_WRITE,
+   "I3b …and it is not excused in NO_STORED_WRITE either (that excuse WAS the defect, in writing)")
+# The two primitives differ by column TYPE, which is the distinction the old patch could not see.
+# A sweep that reconstructs that decision is back where it started, whichever way it spells it.
+def _exec_text(code):
+    """`code` with COMMENTS and STRINGS removed — what it runs, not what it says about itself.
+
+    `_func_code` above strips the DOCSTRING, which is enough for a scan looking for a column name.
+    It is not enough here: the fixed sweep carries a comment explaining that the old patch
+    type-guarded on `isinstance(v, str)`, and a scan that reads prose reports the explanation of the
+    fix as the fix's own violation — which this check did, first run. Second time this exact trap has
+    been hit in this repo (see harness_portal_report_pull.executable_text, §COMMCALC-07), so it is
+    written down rather than re-discovered.
+    """
+    import io
+    import tokenize
+    out = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(code).readline):
+            if tok.type in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            out.append(tok.string)
+    except Exception:                               # noqa: BLE001 — a fragment may not tokenize
+        return code
+    return " ".join(out)
+
+
+for fam, spec in sorted(SWEEPS.items()):
+    code = _exec_text(_func_code(BACKFILL_SRC, spec.get("sweep", "")))
+    ok(not re.search(r"isinstance\s*\([^)]*\bstr\b", code),
+       f"I4  {spec.get('sweep')}: does not type-guard values by shape — deciding text-vs-JSONB here "
+       "is exactly what the sealer is for")
+
+if _key:
+    # ── FUNCTIONAL: the regression, with a real key and a fake database ───────────────────────────
+    # A data_source row as production actually held it: a sealed password (so the old sweep looked
+    # like it had worked) and a session_state dict in the clear. The cookie values are invented; the
+    # SHAPE is the one that was measured.
+    ds = {"id": "src-1", "password": "portal-pass-plain", "totp_secret": None,
+          "session_state": {"cookies": [{"name": "SESSIONID", "value": "abc123"}],
+                            "origins": []},
+          "pending_state": None}
+    store = {"data_source": [dict(ds)], "employee_onboarding_profile": []}
+    from app.modules.hr import router as _hr2
+    _real2 = _hr2._public_intake_fields
+    _hr2._public_intake_fields = lambda _org: []
+    try:
+        res = _eb.run_all(_Client(store))
+    finally:
+        _hr2._public_intake_fields = _real2
+    row = store["data_source"][0]
+    ok(isinstance(row["session_state"], dict) and set(row["session_state"]) == {"enc"},
+       "I5  run_all SEALS a JSONB credential column into the {'enc': …} envelope — THE regression; "
+       "before this the sweep skipped it on every boot and still reported success")
+    ok(_crypto.is_encrypted(row["password"]),
+       "I6  …and the text column in the same row is sealed by the same one call")
+    ok("SESSIONID" not in _json.dumps(row["session_state"]),
+       "I7  …so the stored session cookie is no longer readable from a database dump")
+    from app.modules.core import portal_secret as _ps2
+    opened = _ps2.open_row("data_source", dict(row))
+    eq(opened["session_state"], ds["session_state"],
+       "I8  …and THE data_source read gets the original session back, byte for byte")
+    eq(opened["password"], ds["password"], "I9  …and the password round-trips too")
+    fam = res["portal_secrets"]["tables"]["data_source"]
+    eq(sorted(fam.get("sealed_columns", [])), ["password", "session_state"],
+       "I10 the result NAMES the columns it sealed, so an operator can see the JSONB half was "
+       "reached instead of assuming it")
+    _hr2._public_intake_fields = lambda _org: []
+    try:
+        again = _eb.run_all(_Client(store))
+    finally:
+        _hr2._public_intake_fields = _real2
+    eq(again["portal_secrets"]["tables"]["data_source"]["sealed"], 0,
+       "I11 a second boot seals nothing — encrypt_json passes an {'enc': …} value through, so the "
+       "diff is empty and this is safe on every boot and across replicas")
+
+# ── negative controls: both new scanners must see a planted violation ─────────────────────────────
+# The anchor is a literal, and I12 exists because a literal goes stale: renaming the local variable
+# silently turned this control into a no-op once, and I12 is what said so.
+_ANCHOR = "portal_secret.seal_row(table, row)"
+_planted = BACKFILL_SRC.replace(_ANCHOR, "{c: crypto.encrypt(row[c]) for c in cols}")
+ok(_planted != BACKFILL_SRC,
+   "I12 the control actually patched the source (if this fails, the anchor went stale and I13/I14 "
+   f"are proving nothing — re-point it at the real call, not {_ANCHOR!r})")
+_names = set()
+for _n in ast.walk(ast.parse(_planted)):
+    if isinstance(_n, ast.Call):
+        _f = _n.func
+        _nm = _f.attr if isinstance(_f, ast.Attribute) else (_f.id if isinstance(_f, ast.Name) else "")
+        if _nm in ("encrypt", "encrypt_map", "encrypt_json"):
+            _names.add(_nm)
+ok("encrypt" in _names,
+   "I13 I3's scanner WOULD catch a sweep going back to its own crypto.encrypt")
+_dropped = _func_code(_planted, "backfill_portal_secrets")
+ok("seal_row(" not in _dropped,
+   "I14 …and I2 would catch the same sweep no longer calling its family's sealer")
+_prose = "def f():\n    \"\"\"explains crypto.encrypt in a docstring.\"\"\"\n    return 1\n"
+_pn = {getattr(n.func, 'attr', getattr(n.func, 'id', '')) for n in ast.walk(ast.parse(_prose))
+       if isinstance(n, ast.Call)}
+ok("encrypt" not in _pn,
+   "I15 …and neither scanner is fooled by the word appearing in prose (the §C false positive)")
+ok("isinstance" not in _exec_text("x = 1  # isinstance(v, str) explained in a comment\n"),
+   "I16 _exec_text drops COMMENTS, so I4 cannot report the comment explaining the fix as the "
+   "violation (it did, first run)")
+ok("isinstance" in _exec_text("if isinstance(v, str):\n    pass\n"),
+   "I17 …while still seeing the real guard, so the scan is not simply blind")
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
