@@ -59,6 +59,11 @@ from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc.commission_ledger import month_leg_of
 from app.modules.account import residual_subs as _rs
 from app.core import column_tolerant as _ct      # the ONE reading rule for a config row (§4b.1)
+# WHICH COLUMN NAMES THE DEALER ACCOUNT on each master-agent feed. Dereferenced, never spelled here:
+# the three spellings used to be hand-written once per booking function below, and the takeover
+# evaluation needed the same answer to split a prospect's uploads by store. One fact, one home.
+from app.modules.commcalc.data_lineage_registry import (store_account_column as _store_col,
+                                                        MA_DAILY_TX as _MA_DAILY_TX_TABLE)
 
 # ── comm-sheet component → P&L head (moved verbatim from coa.build_inputs' inline map so the pure
 # booking function below is the ONE place the routing lives; coa imports it). Owner rulings
@@ -241,7 +246,7 @@ def account_store_index(fulfillment_rows, override_rows=None):
     derived, ambiguous = {}, set()
     for r in fulfillment_rows or []:
         r = r or {}
-        acct = str(r.get("tspid") or "").strip()
+        acct = str(r.get(_store_col("raw_ma_fulfillment")) or "").strip()
         addr = str(r.get("business_address") or "").strip()
         if not acct or not addr:
             continue
@@ -254,7 +259,7 @@ def account_store_index(fulfillment_rows, override_rows=None):
         derived.pop(a, None)
     for r in override_rows or []:
         r = r or {}
-        acct = str(r.get("account_id") or "").strip()
+        acct = str(r.get(_store_col(_MA_DAILY_TX_TABLE)) or "").strip()
         addr = str(r.get("store_address") or "").strip()
         if acct and addr:
             derived[acct] = addr
@@ -336,7 +341,8 @@ def ma_commission_bookings(rows, cfg=None):
     out = []
     for r in rows or []:
         r = r or {}
-        acct = (str(r.get("merchant_account_id") or "").strip() or None) if attribute else None
+        acct = (str(r.get(_store_col("raw_ma_commission")) or "").strip()
+                or None) if attribute else None
         for c in _rs._MA_COMPONENTS:
             if c == "wallet_funding":
                 # Balance sheet clearing (owner ruling 2026-08-10) — settlement is entity-level
@@ -384,7 +390,8 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
     out = []
     for r in rows or []:
         r = r or {}
-        acct = (str(r.get("account_id") or "").strip() or None) if attribute else None
+        acct = (str(r.get(_store_col(_MA_DAILY_TX_TABLE)) or "").strip()
+                or None) if attribute else None
         out.append((disc_line, acct, safe_float(r.get("merchant_discount")), None))
         prod = str(r.get("product_name") or "")
         if match(r.get("product_name"), r.get("order_type")):
@@ -827,7 +834,7 @@ def ma_payout_attribution(rows, activation_orders=None, store_index=None, activa
         amt = -safe_float(r.get("retail_cost"))
         fam["rows"] += 1
         fam["amount"] += amt
-        store = idx.get(str(r.get("account_id") or "").strip())
+        store = idx.get(str(r.get(_store_col(_MA_DAILY_TX_TABLE)) or "").strip())
         if store:
             fam["stores"].add(store)
             fam["store_resolved_rows"] += 1
@@ -1065,7 +1072,8 @@ def ma_earned_month_ladder(rows, cfg=None, store_index=None, leg_cfg=None):
     out = _empty_ladder(BASIS_EARNED)
     for r in rows or []:
         r = r or {}
-        store = idx.get(str(r.get("merchant_account_id") or "").strip(), "") if attribute else ""
+        store = idx.get(str(r.get(_store_col("raw_ma_commission")) or "").strip(),
+                        "") if attribute else ""
         for c in SPIFF_COMPONENTS:
             amt = -safe_float(r.get(c))
             if not amt:

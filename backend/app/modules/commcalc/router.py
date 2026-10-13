@@ -48317,6 +48317,52 @@ async def upload_prospect_feed(prospect_id: str,
                                file: UploadFile = File(...),
                                org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
+    """THIN TRACED WRAPPER around the prospect upload — the real work is `_upload_prospect_feed_impl`.
+
+    OWNER REPORT 2026-10-13: a prospect upload that fails left NO RECORD ANYWHERE, so a refused file
+    and a loaded file looked identical to the person who pressed the button, and two people in one day
+    believed they had uploaded feeds that were never there.
+
+    THE CLASS, not the instance. "Did this ingest happen, and what did it do" has ONE home —
+    `_write_upload_trace`, the owner's debug-first surface — and this endpoint was a writing ingest
+    that did not dereference it. It does now, in a `finally`, exactly as `upload_file` does: a parse
+    error, a wrong-feed refusal, a crash and a clean load all land a row, so the trace can never again
+    be the one place the story is missing. `source='prospect-upload'` keeps a prospect's attempt
+    distinguishable from a live one at a glance, and the prospect is named in the note because
+    `upload_trace` has no prospect column (deliberately — no migration to carry a diagnostic).
+
+    Every OTHER writing upload endpoint that still does not trace is declared and counted in
+    `harness_upload_trace_coverage.py`, whose register may only shrink, so this fix cannot be
+    the instance it started as.
+    """
+    import time as _t_pu
+    _t0 = _t_pu.monotonic()
+    _res = None
+    _err = None
+    try:
+        _res = await _upload_prospect_feed_impl(prospect_id, feed_key, period, carrier_id,
+                                                file, org_id, authorization)
+        return {k: v for k, v in _res.items() if k != "_trace"} if isinstance(_res, dict) else _res
+    except HTTPException as he:
+        _err = f"{getattr(he, 'status_code', 500)}: {str(he.detail)[:400]}"
+        raise
+    except Exception as e:
+        _err = str(e)[:400]
+        raise
+    finally:
+        _r = _res if isinstance(_res, dict) else {}
+        _note = " · ".join(str(x) for x in (
+            f"prospect {prospect_id}", _r.get("prospect"), _r.get("substance_note")) if x)
+        _write_upload_trace(
+            org_id, source="prospect-upload", filename=getattr(file, "filename", None),
+            upload_type=(feed_key or "").strip(), period=period,
+            result={**_r, "saved": _r.get("rows_written"), "note": _note},
+            duration_ms=int((_t_pu.monotonic() - _t0) * 1000), error=_err)
+
+
+
+async def _upload_prospect_feed_impl(prospect_id, feed_key, period, carrier_id,
+                                     file, org_id, authorization):
     """Upload one of the prospect's feeds, through the LIVE parser.
 
     The reader, the column mapping and the feed-shape rules are the live upload's own — see the
@@ -48399,6 +48445,8 @@ async def upload_prospect_feed(prospect_id: str,
                                      "put the uploaded rows. Nothing was written.")
         raise HTTPException(500, f"prospect upload failed after replacing "
                                  f"{periods}: {type(e).__name__}: {e}")
+    sub = _pev.substance(mapped)
+    sub_note = _pev.substance_note(sub, _pev.FEED_REGISTRY[feed]["label"])
     return {"prospect": prospect.get("name"), "feed_key": feed,
             "feed_label": _pev.FEED_REGISTRY[feed]["label"],
             "rows_written": written, "periods_replaced": periods,
@@ -48406,6 +48454,11 @@ async def upload_prospect_feed(prospect_id: str,
             "mapped_from_default_layout": not column_mapping.load_rules(
                 client, org_id, feed, carrier_id or None),
             "upload_batch": batch,
+            "substance": sub,
+            "rows_answering_nothing": sub["empty"],
+            "substance_note": sub_note,
+            "_trace": {"rows_in": len(mapped) + len(footers or ()),
+                       "target_table": "prospect_feed_row", "periods": periods},
             "note": ("These rows are the prospect's own and are read by nothing but this "
                      "evaluation — no live report, payout or statement can see them.")}
 
@@ -48489,6 +48542,9 @@ def _prospect_homes():
         "accrue_detail": _coa.accrue_detail,
         "spec": _coa.PL_SPEC,
         "pl_section": _coa.PL_SECTION,
+        # ACCOUNT → STORE, the mig-314 home, injected PURE (never `load_store_index`, which would
+        # read OUR fulfilment table): a prospect's stores come from the prospect's OWN uploaded rows.
+        "account_store_index": _msp.account_store_index,
         "ma_cfg": _msp.default_config(),
         "ma_pnl_config": _rsub.default_ma_pnl_config(),
     }
@@ -48519,21 +48575,31 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     client = sb()
     prospect = _prospect_row(client, org_id, prospect_id)
     cfg = _prospect_cfg(client, org_id, prospect)
+    # WHICH MONTH THE REPORT OPENS ON — resolved in the one home (`_pev.default_period`), from
+    # EVERY feed the prospect has rows for rather than from the commission feed alone. Reading one
+    # feed is what left a prospect carrying seven months of handset orders staring at an empty
+    # October: the fallback was today's month, which no uploaded row covers (owner report
+    # 2026-10-13). Commission still leads where it has rows.
+    period_basis = None
     if not period:
-        # The latest month the prospect's own commission feed actually covers — never today's month,
-        # which would open the report on an empty one.
         try:
-            seen = [str(r.get("period") or "") for r in (
-                client.schema("commcalc").table("prospect_feed_row").select("period")
-                .eq("org_id", org_id).eq("prospect_id", prospect_id)
-                .eq("feed_key", "ma_commission").limit(5000).execute().data or [])]
-            period = max((p for p in seen if p),
-                         key=lambda p: _pev.period_sort_key(p), default="")
+            seen = _feed_read.read_all(
+                lambda: (client.schema("commcalc").table("prospect_feed_row")
+                         .select("feed_key,period")
+                         .eq("org_id", org_id).eq("prospect_id", prospect_id)))
         except Exception:
-            period = ""
+            seen = []
+        by_feed = {}
+        for r in seen or []:
+            by_feed.setdefault(str(r.get("feed_key") or ""), []).append(r.get("period"))
+        chosen = _pev.default_period(by_feed)
+        period, period_basis = chosen["period"], chosen
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
+        period_basis = {"period": period, "from_feed": None, "months_available": [],
+                        "basis": ("no uploaded row names a month, so this is the current month — "
+                                  "upload a feed, or check its column mapping if one is loaded")}
 
     try:
         feeds = _prospect_feed_rows(client, org_id, prospect_id, period)
@@ -48550,16 +48616,42 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     ev["expenses"]["months"] = months
 
     from app.modules.account import engine as _eng, analysis as _an
-    statements = {}
-    for m, sc in ev["scenarios"].items():
-        st = _eng._assemble(sc["inputs"], [], homes["spec"], _prospect_pl_labels(homes),
+
+    def _assemble(inputs):
+        st = _eng._assemble(inputs, [], homes["spec"], _prospect_pl_labels(homes),
                             PROSPECT_PL_SECTIONS, "prospect", set(), True)
         st["totals"] = _an.pl_totals(st)
-        statements[m] = st
+        return st
+
+    statements = {}
+    for m, sc in ev["scenarios"].items():
+        statements[m] = _assemble(sc["inputs"])
         sc.pop("inputs", None)          # the raw accumulator is not a payload the screen needs
     ev["statements"] = statements
     ev["delta"] = _pev.scenario_delta(statements, _an.pl_totals)
+    # The fraud block's money comes off the two statements already assembled — never a third sum.
+    ev["fraud"] = _pev.fraud_exposure(ev["multi_line"]["summary"],
+                                      ev["multi_line"]["flagged"], ev["delta"])
+
+    # ── A COLUMN PER STORE, and the break-even under each ─────────────────────────────────────────
+    # Each column is assembled by the SAME `_assemble` the whole-prospect statement uses, so a column
+    # and the total cannot be built by two different builders. The break-even is per store because
+    # that is the question: what this counter must take for THIS site to work.
+    for key, blk in (ev.get("store_scenarios") or {}).items():
+        blk["statements"] = {}
+        for m, sc in blk["scenarios"].items():
+            blk["statements"][m] = _assemble(sc["inputs"])
+            sc.pop("inputs", None)
+        blk["delta"] = _pev.scenario_delta(blk["statements"], _an.pl_totals)
+        blk["break_even"] = {
+            m: _pev.accessory_break_even(blk["statements"][m],
+                                         blk["scenarios"][m].get("activations"), _an.pl_totals)
+            for m in blk["statements"]}
+    # …and for the whole prospect, which is the one that carries our average expenses.
+    ev["break_even"] = {m: _pev.accessory_break_even(
+        statements[m], ev["scenarios"][m].get("activations"), _an.pl_totals) for m in statements}
     ev["prospect"] = prospect
+    ev["period_basis"] = period_basis        # why the report opened on this month — stated, never implied
     return ev
 
 

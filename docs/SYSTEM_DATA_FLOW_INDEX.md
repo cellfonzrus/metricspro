@@ -26099,6 +26099,206 @@ behaves identically before and after mig 1077 is applied.
 
 ---
 
+### COMMCALC-03.9 An upload that failed left no record anywhere (owner report 2026-10-13)
+
+Owner, verbatim: *"jose was not able to uloasd the filres"*, and an hour later *"i just upladed
+handset infor monthwise and also all teptherg but it does nto show me any link for a report"*. Both
+reduced to one fact, and it was not the fact either of them described.
+
+**Measured in production before anything was built.** Two tables, each written BEFORE parsing, agree
+that nothing a person uploaded reached the API that day: `commcalc.upload_trace` (written in a
+`finally`, so a wrong file, a parse error, a crash and a refused duplicate all land a row) and
+`core.import_batches` (the bytes are claimed before they are read). Jose was signed in at 18:05 UTC
+and his `market_manager` role carries `permissions.scope = 'all'` plus the `commissions` module, so
+RBAC was not hiding the tile. That pair is the triage table, and it is now written down so nobody
+re-derives it:
+
+| `upload_trace` | `core.import_batches` | what it means |
+|---|---|---|
+| present, `status='error'` | present | the importer refused it — read `error` verbatim |
+| **absent** | **absent** | the request never reached the API (browser, auth, CORS, gateway 502/413) |
+| absent | present, stuck `parsing` | died between the claim and the trace (rare) |
+
+**THE CLASS, not the instance.** "Did this ingest happen, and what did it do" has ONE home —
+`commcalc/router._write_upload_trace`, the owner's debug-first surface — and the prospect upload was a
+writing ingest that did not dereference it. Fixing only that endpoint is the patchwork CLAUDE.md
+forbids, so the general fact is enforced: `harness_upload_trace_coverage.py` (34 checks, run by the
+store-takeover job) scans the router, DERIVES which upload endpoints write rows from the call graph
+rather than from a name list, and fails the build when a writing upload endpoint is silent and
+unregistered. **Six siblings are still silent** and are declared with a reason each
+(`upload_mapped`, `commission_ledger_import`, `onboarding_intake_analyze`,
+`onboarding_intake_commit`, `import_product_mrc`, `ma_overview_upload_report`); the register may only
+shrink, and `PINNED_MAX` must EQUAL the measured count, so a slack pin cannot stop the ratchet. Two
+of them trace through a helper the scan cannot follow — the scan resolves writers inside
+`commcalc/router.py` only, and that limit is stated in the lock rather than implied, which is why a
+register line for an endpoint the scan calls read-only also fails the build.
+
+The prospect upload is now a thin traced wrapper over `_upload_prospect_feed_impl`, the posture
+`upload_file` already had, tracing under `source='prospect-upload'` with the prospect named in the
+note (no migration: `upload_trace` carries no prospect column, and a diagnostic does not justify
+mutating the schema).
+
+### COMMCALC-03.10 A row count is not a measure of what a file answered
+
+The same report, second half. `rows_written: 66,388` was reported for "empire" and read as success.
+What had actually landed was 66,388 rows of ONE feed — the commission and daily-TX feeds had never
+been uploaded at all — and the marketplace export lists **twenty order types** while carrying a
+ship-to, a cost and a date on the handset orders ALONE: of 68,000 rows scanned, **897 carry a store
+and 798 are branded-handset orders**, and 3,103 carry no date. Seven Empire stores are in there
+(TSPIDs 169291/169292/169335/169336/169441/169442/169445), which is what makes a per-store report
+possible at all — and `raw_ma_commission.merchant_account_id`, `raw_ma_daily_tx.account_id` and
+`raw_ma_fulfillment.tspid` are the SAME identifier space (verified on live house data: 170074,
+170083, 170084 appear in both feeds), so one key joins all three.
+
+`prospect_eval.substance(rows)` measures it, and deliberately knows nothing about any feed: it asks
+only whether a mapped row carries a value outside the period columns, and those columns are read from
+`data_lineage_registry.MONTH_COLUMNS` — the one home — never from a list kept beside it. So it cannot
+drift from a feed's real shape and it is right about a feed that does not exist yet.
+`substance_note` returns **None** when nothing is wrong (an absence is never a finding), names the
+column mapping as the thing to check when EVERY row is hollow, and the screen stops calling such an
+upload a success.
+
+### COMMCALC-03.11 Which month the report opens on, from every feed
+
+The actual cause of the blank screen, and a third instance of the same shape. The default period was
+`max(period)` over the **commission feed alone**; with no commission rows it fell through to *today's
+month*, which no uploaded row covers, so seven months of uploaded handset orders were filtered out of
+the read and the report was empty on data sitting in the table.
+
+`prospect_eval.default_period(periods_by_feed)` is the one home. Commission still LEADS where it has
+rows — it is where the P&L's revenue comes from, so opening on a month with money in it is the useful
+default — otherwise the latest month ANY feed names wins, and a month only the other feeds name beats
+a month nothing names. It ALWAYS returns a stated `basis` (and names the commission gap when that is
+why), every month with rows in `months_available`, and `""` rather than a guess when no row names a
+month. The endpoint publishes the basis on the payload and the screen prints it, so the month the
+report opened on is never implied. §J of the lock fails the build if the retired single-feed read
+reappears.
+
+
+### COMMCALC-03.12 Which column names the store — one home, and FOUR copies rewired to it
+
+A distributor feed carries no store code. It carries the dealer's **processor account**, and the three
+master-agent feeds each spell it differently: `raw_ma_commission.merchant_account_id`,
+`raw_ma_daily_tx.account_id`, `raw_ma_fulfillment.tspid`. They are ONE identifier space, verified on
+live house data (170074 / 170083 / 170084 appear in both the commission and the fulfilment feed),
+which is what lets one key join all three.
+
+Those spellings were hand-written inline — three times in `account/ma_store_pnl.py`, once per booking
+function, and a fourth time in `prospect_eval.flag_multi_line_accounts`, which §L of the lock caught
+the moment it was written. §19.18's shape exactly: one fact, four copies, nothing holding them
+together. The fact is now declared once in
+`data_lineage_registry.STORE_ACCOUNT_COLUMN_BY_TABLE` / `store_account_column(table)` — the registry
+that already owns per-table column facts — and **every reader dereferences it, including the three
+that were already there**. `None` is a declaration: the table names no dealer account, so its money
+is booked company-wide rather than guessed onto a store. §L3 fails the build if any of the three
+spellings reappears outside the registry; `harness_ma_store_pnl.py` holds at its pre-change result
+(37 passed / 2 failed, both pre-existing on `main` and unrelated), so the live booking path is
+byte-identical.
+
+### COMMCALC-03.13 A column per store, from the uploads (owner ask 2026-10-13)
+
+Owner, verbatim: *"it shoud automatically pick up the store names from teh uploaded sheets … similarly
+the c P&l will also be displayed in columns based ont eh stores infor uploaed"*.
+
+**Nothing new resolves a store.** `account/ma_store_pnl.account_store_index` is already the pure
+answer to "which store is this processor account": it reads the dealer's own fulfilment rows (account
+plus ship-to on every order line) and **drops** an account seen at two different addresses rather than
+mis-attributing it — the phantom-store lesson the house has already paid for. It is injected pure
+(never `load_store_index`, which would read OUR fulfilment table) so a prospect's stores come from the
+prospect's own rows. Live "empire": **7 stores**, TSPIDs 169291 / 169292 / 169335 / 169336 / 169441 /
+169442 / 169445.
+
+`store_index` adds only what a prospect needs: the display **name** (`business_name`, beside the
+address), and the accounts that appear **only** in the commission or transaction feed — those have no
+address because no handset was ever shipped to them, and dropping them would silently move their money
+out of the per-store view, so they are kept and labelled by account number with `has_address` saying
+which is which. A prospect's addresses are deliberately NOT collapsed onto our canonical store
+spellings: they are not our stores, and resolving them through `coa.store_resolver` is how a prospect
+starts appearing in the company's own rollups.
+
+**ONE booking path builds the whole and every column.** `evaluate`'s inner `_book` is called once for
+the prospect and once per store, and each column is assembled by the same `_assemble` the
+whole-prospect statement uses — a second loop over a store's rows is exactly how the columns would stop
+summing to the total, which is the only thing that makes a per-store view trustworthy. §N1 asserts
+revenue, COGS and net income tie, and §N4 that activations do.
+
+**A store's column carries no share of our average expenses, and says so** (`expenses_included:
+false`). That average is already ONE store's worth of rent, salaries and utilities (§COMMCALC-03.6):
+splitting it across seven sites would divide a per-store cost by seven and make every column look
+profitable, and repeating it on each would multiply the chain's cost sevenfold against the statement
+above. So a column is the store's carrier-side contribution, and the expense comparison stays where it
+is honest — on the whole-prospect statement and in the break-even block, which is per store by design.
+A row naming no store lands under `UNATTRIBUTED_STORE`, a label and never a store, which is what keeps
+the columns summing to the whole.
+
+### COMMCALC-03.14 What the counter has to sell for this store to work
+
+Owner, verbatim: *"Since no pos data is being loaded, the system should calculate … how much
+accessories have to sold … that will be gross expnses less teh gross revenue = total loss = break even
+needed by selling accessories , then deivde teh number with the total actiavations done for tehat store
+in a particlua month to get teh APB needed to be profiavle"*.
+
+This **turns the evaluation's own limit into the answer**. §COMMCALC-03.7 already says out loud that
+the three uploads are the distributor's view and carry no retail accessory revenue, so those lines read
+`not_measured` rather than zero. His question is the right one to ask of exactly that gap: not what the
+counter took — nothing here can know — but **what it would have to take**. So
+`accessory_break_even` is a REQUIREMENT, never a measurement, and every field name says so.
+
+The arithmetic is not re-derived: revenue, COGS and expenses come from `analysis.pl_totals` injected —
+the one home for a statement's totals, the same figures the dashboard reads — so this block can never
+disagree with the statement printed above it. The shortfall is taken off the statement's own
+`net_income` rather than re-summed from the sections, which is what keeps it tied. Handset cost is
+inside it (the default the owner was told about): a store that must buy phones to earn the commission
+carries that cost either way.
+
+Two refusals, both load-bearing. **A store already in profit gets `needed: None`, not `0.00`** — a
+zero target reads as "sell nothing", the opposite of true — with `already_profitable` saying so. And
+**no activations means `per_activation: None`, never a division and never a zero**, with
+`per_activation_basis` stating that the commission feed records no box to divide by.
+`activation_count` counts one per line on `activation_order`, the identifier `line_id` already uses
+(measured 1,248 distinct over 1,248 rows); a row with no identifier still counts as a line, because it
+is a line the feed named badly, not a line that did not happen.
+
+### COMMCALC-03.15 The accounts at the bottom, and the number underneath them
+
+Owner, verbatim: *"hightlight the 3 lines plus deemed fraud at the bottim of the report imn nunmber of
+those accounts and below that subtract the inform received from those accoutns to assess a real
+number of there is any fraud going on"*.
+
+Two figures in the order he asked for them: how many accounts, then the same report with their money
+taken out. The second is why the evaluation already computes BOTH exclusion modes side by side
+(§COMMCALC-03.5), so `fraud_exposure` **names that pair as the fraud read** rather than computing a
+third answer — the money comes off the two assembled statements through `scenario_delta`, injected.
+`net_without_them` and `moved` are `None` when no delta is supplied; not measured is never shown as
+zero.
+
+Banded by line count from the data, never a fixed list, because "3 lines" and "nine lines on one
+account" are not one finding and a single count hides the difference. The whole file is reported
+beside it so a count has a denominator.
+
+**`deemed_fraud` is deliberately not a field.** That is not a style preference: it is the lesson
+§COMMCALC-05 paid for on live data, where a legitimate household bundle and a four-handset $0.00 promo
+run are indistinguishable until a human opens the receipts. What is returned is a count, the money, and
+the report without the money; the word belongs to the person reading it. §P6 fails the build if a field
+here claims fraud.
+
+### COMMCALC-03.16 What handsets this store ordered
+
+Owner, verbatim: *"it does nto show me any link for a report to asses teh handsets ordered"*. There was
+no such report: the fulfilment feed was read only as a PRICE LIST (`ma_unit_price_from_rows`), which is
+what it is for costing an activated line, and nothing showed the orders themselves.
+
+**Measured first, and it changes what the report may claim.** Over 68,000 live rows the export lists
+**twenty order types** and carries a ship-to, a cost and a date on the handset orders ALONE: 798 rows
+are branded-handset orders, 897 carry any store, 3,103 carry no date. So `handset_orders` reports what
+carries a price, **counts what does not beside it, and names the order types it set aside** with the
+reason — an absence stated, never smoothed into a total as zero. `number_ordered` is units and `price`
+is the unit price, multiplied the way the live device-costing home multiplies them, so the extended
+cost here and the COGS on the statement cannot disagree. A priced row with no unit count is one unit,
+not none. Broken out by model, by store (reading as its address, through `store_index`) and by month,
+across every month uploaded, because a handset ordered in one month is often activated in the next.
+
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back

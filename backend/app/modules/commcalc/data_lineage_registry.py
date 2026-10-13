@@ -605,6 +605,37 @@ def period_grain_reason(table: str):
 # reached the feeds somebody remembered to exclude. It lives here now, next to the day-grain fact it
 # travels with, and `harness_feed_day_grain.py` §M re-measures every declaration against the CREATE
 # TABLE / ALTER TABLE statements in `database/migrations/`, so a drifting declaration fails the build.
+# ── WHICH COLUMN NAMES THE STORE ──────────────────────────────────────────────────────────────────
+# A distributor feed does not carry a store code. It carries the dealer's PROCESSOR ACCOUNT, and the
+# three master-agent feeds each spell that account in a different column: the commission sheet says
+# `merchant_account_id`, the daily-transaction sheet says `account_id`, the fulfilment sheet says
+# `tspid`. They are ONE identifier space, verified on live house data (170074 / 170083 / 170084 all
+# appear in both the commission and the fulfilment feed), which is what lets one key join all three.
+#
+# WHY IT LIVES HERE. Those three spellings were hand-written inline in `account/ma_store_pnl.py`, once
+# per booking function — the §19.18 shape, three copies of one fact with nothing holding them
+# together. The store-takeover evaluation needed the same answer to split a prospect's uploads by
+# store, and a fourth copy is how the house ends up with two reports disagreeing about which store a
+# dollar belongs to. So the fact is declared once and every reader dereferences it, including the
+# three that were already there. Locked by `harness_prospect_eval.py` §L.
+#
+# `None` is a DECLARATION, not a gap: the table carries no column naming a dealer account, so money
+# from it is booked company-wide rather than guessed onto a store.
+STORE_ACCOUNT_COLUMN_BY_TABLE = {
+    "raw_ma_commission": "merchant_account_id",
+    MA_DAILY_TX: "account_id",
+    "raw_ma_fulfillment": "tspid",
+}
+
+
+def store_account_column(table: str):
+    """PURE: the column `table` names the dealer's processor account in, or None when it has none.
+
+    THE one home for "which column is the store on this feed". A caller spelling one of these column
+    names itself is a second copy of a fact that has already changed once."""
+    return STORE_ACCOUNT_COLUMN_BY_TABLE.get(table)
+
+
 MONTH_COLUMNS = ("period", "period_month", "period_year")
 
 # A landing table that stores NO month columns, with the reason. Everything else stores all three.

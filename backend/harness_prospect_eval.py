@@ -56,6 +56,7 @@ import sys
 sys.path.insert(0, ".")
 
 from app.modules.core.module_graph import home_under_app        # noqa: E402
+from harnesslib import py_code_only                              # noqa: E402  (locks read CODE)
 from app.modules.commcalc import prospect_eval as P            # noqa: E402
 from app.modules.account import coa as COA                      # noqa: E402
 from app.modules.account import device_cogs as DC               # noqa: E402
@@ -574,7 +575,8 @@ _section = _rtext[_rtext.index(_marker):]
 # The section's own functions, taken from the WHOLE file's AST by name (re-parsing a text slice
 # would mean re-indenting it, and an indented slice is not the code that runs).
 _PROSPECT_FUNCS = {"list_prospects", "create_prospect", "update_prospect", "delete_prospect",
-                   "upload_prospect_feed", "prospect_evaluation", "_prospect_row", "_prospect_cfg",
+                   "upload_prospect_feed", "_upload_prospect_feed_impl",
+                   "prospect_evaluation", "_prospect_row", "_prospect_cfg",
                    "_prospect_feed_rows", "_prospect_expense_window", "_prospect_homes",
                    "_prospect_num", "_prospect_pl_labels", "_period_keys_for_prospect"}
 _rtree = ast.parse(_rtext)
@@ -638,8 +640,14 @@ check("every WRITE in the feature lands on a prospect table and nothing else",
       _writes <= {"store_prospect", "prospect_feed_row"}, str(sorted(_writes)))
 check("the evaluation endpoint itself writes nothing at all",
       not _written_in([n for n in _nodes if n.name == "prospect_evaluation"]))
+# The upload is a THIN TRACED WRAPPER since 2026-10-13 (a prospect upload that failed left no record
+# anywhere — see harness_upload_trace_coverage.py), so the write lives in the impl and the wrapper
+# must write nothing at all. Both halves are asserted: the impl's one table, and the wrapper's none.
 check("…and the upload writes only the one prospect landing table",
-      _written_in([n for n in _nodes if n.name == "upload_prospect_feed"]) == {"prospect_feed_row"})
+      _written_in([n for n in _nodes if n.name == "_upload_prospect_feed_impl"])
+      == {"prospect_feed_row"})
+check("…and its traced wrapper writes nothing itself",
+      not _written_in([n for n in _nodes if n.name == "upload_prospect_feed"]))
 check("the uploaded rows are read NOWHERE else in the router",
       _rtext.count("prospect_feed_row") == _section.count("prospect_feed_row"))
 check("the migration this needs is the one the section's errors name",
@@ -651,6 +659,258 @@ check("the upload reuses the live reader, mapping and shape rules rather than a 
                                   "column_mapping.derive_row_periods")))
 check("the statement is assembled by the finance engine, not by a builder of its own",
       "_eng._assemble" in _section and "_an.pl_totals" in _section)
+
+# ── §J WHICH MONTH THE REPORT OPENS ON (owner report 2026-10-13) ──────────────────────────────────
+# He had uploaded seven months of handset orders and the report was blank: the default month came
+# from the COMMISSION feed alone and fell through to today's month, which no uploaded row covers.
+_dp = P.default_period
+check("J1 the commission feed leads where it has rows",
+      _dp({"ma_commission": ["July 2026", "August 2026"],
+           "ma_marketplace_orders": ["September 2026"]})["period"] == "August 2026")
+check("J2 a feed-less commission does NOT fall through to nothing",
+      _dp({"ma_marketplace_orders": ["March 2026", "September 2026", "May 2026"]})["period"]
+      == "September 2026")
+check("J3 …and it says WHY, naming the commission gap rather than implying the month is complete",
+      "commission feed has no rows" in _dp({"ma_marketplace_orders": ["May 2026"]})["basis"])
+check("J4 a prospect with no rows at all names no month",
+      _dp({})["period"] == "" and "no uploaded row" in _dp({})["basis"])
+check("J5 every month with rows is offered, not just the one chosen",
+      _dp({"ma_commission": ["July 2026"], "ma_daily_tx": ["April 2026"]})["months_available"]
+      == ["April 2026", "July 2026"])
+check("J6 months sort by the platform's own period order, not alphabetically",
+      _dp({"ma_daily_tx": ["April 2026", "September 2026", "December 2026"]})["period"]
+      == "December 2026")
+check("J7 a blank or None period is not a month",
+      _dp({"ma_daily_tx": [None, "", "  "]})["period"] == "")
+check("J8 the basis is ALWAYS stated — no path returns a month with no reason",
+      all(_dp(x).get("basis") for x in ({}, {"ma_commission": ["July 2026"]},
+                                        {"ma_daily_tx": ["July 2026"]},
+                                        {"ma_daily_tx": [None]})))
+check("J9 the endpoint dereferences this home rather than resolving the month itself",
+      "_pev.default_period(" in _section)
+check("J10 …and publishes the basis on the payload, so the screen can state it",
+      'ev["period_basis"]' in _rtext)
+check("J11 the retired single-feed rule is GONE from the endpoint",
+      '.eq("feed_key", "ma_commission")' not in _section)
+
+# ── §K WHAT A FILE ACTUALLY PUT IN THE TABLE ──────────────────────────────────────────────────────
+# `rows_written: 66,388` read as success on a file whose rows carried nothing but a date.
+check("K1 a row carrying only its period counts as empty",
+      P.substance([{"period": "x", "period_month": 1, "period_year": 2026}])["empty"] == 1)
+check("K2 a row carrying a value counts as carrying data",
+      P.substance([{"period": "x", "price": 1.0}])["carrying_data"] == 1)
+check("K3 an empty amount is not data — the wrong-layout shape maps zeros and blanks",
+      P.substance([{"period": "x", "price": 0.0, "tspid": "", "city": None}])["empty"] == 1)
+check("K4 dated and undated are counted separately from empty",
+      P.substance([{"price": 1.0}, {"period": "x", "price": 2.0}]) ==
+      {"rows": 2, "empty": 0, "carrying_data": 2, "dated": 1, "undated": 1})
+check("K5 no note when every row carries data",
+      P.substance_note(P.substance([{"period": "x", "price": 1.0}]), "F") is None)
+check("K6 a wholly hollow file names the column mapping as the thing to check",
+      "column mapping" in (P.substance_note(P.substance([{"period": "x"}]), "F") or ""))
+check("K7 a partly hollow file says how many rows the evaluation can see",
+      "1 of the 2" in (P.substance_note(
+          P.substance([{"period": "x"}, {"period": "x", "price": 1.0}]), "F") or ""))
+check("K8 an empty file is measured as nothing, never reported as a problem",
+      P.substance([])["rows"] == 0 and P.substance_note(P.substance([]), "F") is None)
+_pcode = py_code_only(open(_SRC).read())
+check("K9 the period columns come from the ONE home, not a list kept here",
+      "MONTH_COLUMNS" in _pcode and "data_lineage_registry" in _pcode
+      and "'period_month'" not in _pcode and '"period_month"' not in _pcode)
+check("K10 the upload reports the substance, not only the row count",
+      "_pev.substance(" in _section and '"rows_answering_nothing"' in _section)
+
+
+# ── §L WHICH COLUMN NAMES THE STORE — one home, and the live readers wired to it ──────────────────
+from app.modules.commcalc import data_lineage_registry as DLR                 # noqa: E402
+_MSPSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "app", "modules", "account", "ma_store_pnl.py")
+_msp_code = py_code_only(open(_MSPSRC).read())
+check("L1 the registry declares the store column for all three master-agent feeds",
+      (DLR.store_account_column("raw_ma_commission"), DLR.store_account_column("raw_ma_daily_tx"),
+       DLR.store_account_column("raw_ma_fulfillment"))
+      == ("merchant_account_id", "account_id", "tspid"))
+check("L2 a table with no dealer account declares None rather than guessing",
+      DLR.store_account_column("raw_sales") is None)
+check("L3 THE LIVE READERS ARE WIRED TO IT — no spelling left in ma_store_pnl",
+      'r.get("merchant_account_id")' not in _msp_code
+      and 'r.get("account_id")' not in _msp_code
+      and 'r.get("tspid")' not in _msp_code)
+check("L4 …and it dereferences the registry rather than keeping a copy",
+      "store_account_column" in _msp_code)
+check("L5 the prospect split spells no store column of its own",
+      '"merchant_account_id"' not in _pcode and '"account_id"' not in _pcode
+      and '"tspid"' not in _pcode)
+
+# ── §M THE PROSPECT'S OWN STORES, from its own uploads ───────────────────────────────────────────
+_FUL = [{"tspid": "169335", "business_address": "516 8th Ave", "business_name": "Empire Cellular LLC"},
+        {"tspid": "169336", "business_address": "3706 Third Ave", "business_name": "Empire Cellular LLC"}]
+_FEEDS = {"ma_marketplace_orders": _FUL,
+          "ma_commission": [{"merchant_account_id": "169335"}, {"merchant_account_id": "169999"},
+                            {"merchant_account_id": ""}]}
+_SI = P.store_index(_FEEDS, MSP.account_store_index)
+check("M1 a store is named by the ADDRESS the uploads carry, not by an account number",
+      _SI["169335"]["label"] == "516 8th Ave" and _SI["169335"]["name"] == "Empire Cellular LLC")
+check("M2 an account seen only in the commission feed is KEPT, labelled by its number",
+      _SI["169999"]["label"] == "account 169999" and _SI["169999"]["has_address"] is False)
+check("M3 …and which feeds each store appears in is reported",
+      _SI["169335"]["feeds"] == ["ma_commission", "ma_marketplace_orders"])
+check("M4 a blank account is not a store",
+      "" not in _SI and len(_SI) == 3 - 1 + 1 - 1 + 1)
+check("M5 the account→store resolver is the mig-314 home, not a matcher of its own",
+      "account_store_index" in _pcode and "store_resolver" not in _pcode)
+check("M6 an account at TWO addresses is dropped from the map by that home, not mis-attributed",
+      P.store_index({"ma_marketplace_orders": [
+          {"tspid": "9", "business_address": "A St", "business_name": "X"},
+          {"tspid": "9", "business_address": "B St", "business_name": "X"}],
+          "ma_commission": [{"merchant_account_id": "9"}]}, MSP.account_store_index
+      )["9"]["has_address"] is False)
+_RBS = P.rows_by_store(_FEEDS, set(_SI))
+check("M7 a row naming no store lands under the UNATTRIBUTED label, never dropped",
+      len(_RBS[P.UNATTRIBUTED_STORE]["ma_commission"]) == 1)
+check("M8 every uploaded row is accounted for — the split loses none",
+      sum(len(v) for d in _RBS.values() for v in d.values())
+      == sum(len(v) for v in _FEEDS.values()))
+check("M9 the unattributed label reads as a label, never as a store code",
+      "(" in P.UNATTRIBUTED_STORE and "no store" in P.UNATTRIBUTED_STORE)
+
+# ── §N THE COLUMNS SUM TO THE WHOLE (the only thing that makes a per-store view trustworthy) ─────
+_PFEEDS = {
+    "ma_marketplace_orders": [
+        {**_FUL[0], "price": 529.0, "number_ordered": 2.0, "product_name": "iPhone 13",
+         "order_type": "Branded Handset", "period": "May 2026"},
+        {**_FUL[1], "price": 599.99, "number_ordered": 1.0, "product_name": "iPhone 16e",
+         "order_type": "Branded Handset", "period": "May 2026"}],
+    "ma_commission": [
+        {"merchant_account_id": "169335", "activation_order": "A1", "bin": "B1",
+         "device_margin": -100.0, "fees": -20.0, "sku": "iPhone 13"},
+        {"merchant_account_id": "169335", "activation_order": "A2", "bin": "B1",
+         "device_margin": -100.0, "sku": "iPhone 13"},
+        {"merchant_account_id": "169335", "activation_order": "A3", "bin": "B1",
+         "device_margin": -100.0, "sku": "iPhone 13"},
+        {"merchant_account_id": "169336", "activation_order": "A4", "bin": "B9",
+         "device_margin": -250.0, "sku": "iPhone 16e"}],
+    "ma_daily_tx": [
+        {"account_id": "169335", "merchant_discount": 30.0, "retail_cost": 0.0,
+         "order_type": "x", "product_name": "y"},
+        {"account_id": "169336", "merchant_discount": 15.0, "retail_cost": 0.0,
+         "order_type": "x", "product_name": "y"}]}
+_HOMES2 = dict(_HOMES) if "_HOMES" in dir() else None
+_homes_full = {"ma_commission_bookings": MSP.ma_commission_bookings,
+               "ma_tx_bookings": MSP.ma_tx_bookings,
+               "ma_unit_price_from_rows": DC.ma_unit_price_from_rows,
+               "ma_sold_cost_from_rows": DC.ma_sold_cost_from_rows,
+               "route_expense_line": COA.route_expense_line, "accrue_detail": COA.accrue_detail,
+               "spec": COA.PL_SPEC, "pl_section": COA.PL_SECTION,
+               "account_store_index": MSP.account_store_index,
+               "ma_cfg": MSP.default_config(), "ma_pnl_config": RS.default_ma_pnl_config()}
+_EV = P.evaluate(_PFEEDS, P.default_config(), _homes_full, {}, {}, "May 2026")
+
+
+def _tot(inputs):
+    st = ENG._assemble(inputs, [], COA.PL_SPEC, COA.PL_LABEL,
+                       [("Revenue", "revenue"), ("Cost of Goods Sold", "cogs"),
+                        ("Operating Expenses", "opex"), ("Other", "other")],
+                       "prospect", set(), True)
+    return AN.pl_totals(st)
+
+
+_whole = _tot(_EV["scenarios"]["keep"]["inputs"])
+_cols = [_tot(b["scenarios"]["keep"]["inputs"]) for b in _EV["store_scenarios"].values()]
+for _k in ("revenue", "cogs", "net_income"):
+    check(f"N1 the per-store columns sum to the whole prospect's {_k}",
+          round(sum(c[_k] for c in _cols), 2) == round(_whole[_k], 2),
+          f"columns {round(sum(c[_k] for c in _cols), 2)} vs whole {round(_whole[_k], 2)}")
+check("N2 both stores get a column",
+      sorted(b["store"]["label"] for b in _EV["store_scenarios"].values())
+      == ["3706 Third Ave", "516 8th Ave"])
+check("N3 a store column carries NO share of our average expenses, and says so",
+      all(b["expenses_included"] is False for b in _EV["store_scenarios"].values()))
+check("N4 activations are counted per store and sum to the whole",
+      sum(b["scenarios"]["keep"]["activations"] for b in _EV["store_scenarios"].values())
+      == _EV["scenarios"]["keep"]["activations"] == 4)
+check("N5 both exclusion modes exist on every store column, as on the whole",
+      all(sorted(b["scenarios"]) == sorted(P.EXCLUSION_MODES)
+          for b in _EV["store_scenarios"].values()))
+check("N6 ONE booking path builds the whole and every column",
+      _pcode.count("def _book(") == 1 and _pcode.count('homes["ma_commission_bookings"](') == 1)
+
+# ── §O WHAT THE COUNTER MUST SELL (owner ask 2026-10-13) ─────────────────────────────────────────
+_be = P.accessory_break_even({"revenue": 50000.0, "cogs": 8000.0, "expenses": 14000.0,
+                              "net_income": -12000.0}, 200)
+check("O1 the shortfall is gross expenses less gross revenue, off the statement's own net income",
+      _be["needed"] == 12000.0)
+check("O2 the per-box rate is that shortfall over the month's activated lines",
+      _be["per_activation"] == 60.0)
+check("O3 a store already in profit gets NO target, not a target of zero",
+      P.accessory_break_even({"net_income": 5000.0}, 200)["needed"] is None
+      and P.accessory_break_even({"net_income": 5000.0}, 200)["already_profitable"] is True)
+check("O4 no activations means no per-box rate — never a division, never a zero",
+      P.accessory_break_even({"net_income": -1000.0}, 0)["per_activation"] is None
+      and P.accessory_break_even({"net_income": -1000.0}, 0)["needed"] == 1000.0)
+check("O5 …and it says why it is not divisible",
+      "no box count" in P.accessory_break_even({"net_income": -1.0}, 0)["per_activation_basis"])
+check("O6 the basis is stated on every answer",
+      all(P.accessory_break_even(x, n)["basis"] for x, n in
+          (({"net_income": -1.0}, 1), ({"net_income": 1.0}, 0), ({}, 0))))
+check("O7 it is a REQUIREMENT, never presented as measured accessory revenue",
+      "needed" in _be and "accessory_revenue" not in _be and "must take" in _be["basis"])
+check("O8 the totals come from the ONE home when one is injected, not re-summed",
+      P.accessory_break_even({"totals": 1}, 1, lambda _p: {"net_income": -8.0})["needed"] == 8.0)
+check("O9 activations count one per line on the identifier line_id already uses",
+      P.activation_count([{"activation_order": "1"}, {"activation_order": "1"},
+                          {"activation_order": "2"}, {}]) == 3)
+check("O10 a line with no identifier still counts as a line",
+      P.activation_count([{}, {}]) == 2)
+
+# ── §P THE ACCOUNTS AT THE BOTTOM, AND THE NUMBER UNDERNEATH ─────────────────────────────────────
+_fx = P.fraud_exposure({"threshold": 2, "flagged_accounts": 3, "flagged_lines": 11,
+                        "accounts": 1031, "lines": 1248},
+                       [{"lines": 3}, {"lines": 3}, {"lines": 5}],
+                       {"net_income": {"keep": -12000.0, "exclude": -9500.0, "delta": 2500.0},
+                        "share_of_bottom_line_at_risk": 20.83})
+check("P1 the count of flagged accounts and their lines is reported",
+      _fx["accounts"] == 3 and _fx["lines"] == 11)
+check("P2 banded by line count, from the data — 3 lines and 5 lines are not one finding",
+      _fx["bands"] == {"3": 2, "5": 1} and _fx["worst_account_lines"] == 5)
+check("P3 the whole file is beside it, so a count has a denominator",
+      _fx["accounts_in_file"] == 1031 and _fx["lines_in_file"] == 1248)
+check("P4 the bottom line WITH and WITHOUT their money, and what moved",
+      (_fx["net_with_them"], _fx["net_without_them"], _fx["moved"]) == (-12000.0, -9500.0, 2500.0))
+check("P5 with no delta supplied the money reads as NOT MEASURED, never as zero",
+      P.fraud_exposure({"flagged_accounts": 1}, [{"lines": 3}])["net_without_them"] is None)
+check("P6 it is evidence, not a verdict — no field claims fraud",
+      "deemed_fraud" not in _fx and "fraud" not in str(sorted(_fx))
+      and "not a verdict" in _fx["reading"])
+check("P7 the money comes off the two assembled statements, never a third sum",
+      "_pev.fraud_exposure(" in _section and 'ev["delta"]' in _rtext)
+
+# ── §Q WHAT HANDSETS THIS STORE ORDERED ──────────────────────────────────────────────────────────
+_ho = P.handset_orders(_PFEEDS["ma_marketplace_orders"], _SI)
+check("Q1 extended cost is unit price times units, the live costing home's own arithmetic",
+      _ho["totals"]["cost"] == round(529.0 * 2 + 599.99, 2))
+check("Q2 broken out by model, by store and by month",
+      len(_ho["models"]) == 2 and len(_ho["by_store"]) == 2 and len(_ho["by_month"]) == 1)
+check("Q3 a store reads as its address, not an account number",
+      sorted(x["store"] for x in _ho["by_store"]) == ["3706 Third Ave", "516 8th Ave"])
+_aside = P.handset_orders([{"price": 0.0, "order_type": "Postpaid Residual Order"},
+                           {"price": 0.0, "order_type": "Sales Order"},
+                           {"tspid": "169335", "price": 10.0, "number_ordered": 1.0,
+                            "product_name": "m", "order_type": "Branded Handset"}], _SI)
+check("Q4 a row with no price is SET ASIDE and counted, never folded in as zero",
+      _aside["set_aside"]["rows"] == 2 and _aside["totals"]["cost"] == 10.0)
+check("Q5 …and the order types it set aside are named",
+      set(_aside["set_aside"]["order_types"]) == {"Postpaid Residual Order", "Sales Order"})
+check("Q6 the reason it set them aside is stated, not implied",
+      "only on the physical handset orders" in _aside["set_aside"]["reason"])
+check("Q7 a priced row with no unit count is ONE unit, not none",
+      P.handset_orders([{"price": 100.0, "product_name": "m"}], {})["totals"]["units"] == 1.0)
+check("Q8 the price-list reading is unchanged — this report costs orders, it does not price lines",
+      "ma_unit_price_from_rows" in _pcode)
+check("Q9 an empty feed produces an empty report, never a crash or a zero claim",
+      P.handset_orders([], {})["totals"]["orders"] == 0
+      and P.handset_orders(None, None)["totals"]["cost"] == 0.0)
+
 
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")

@@ -129,6 +129,7 @@ interface Scenario {
   device_cost_meta: Record<string, number | string>
   commission_lines_kept: number
   commission_lines_dropped: number
+  activations?: number
   coverage: CoverageLine[]
   coverage_summary: CoverageSummary
   measured_lines: string[]
@@ -154,13 +155,61 @@ interface Evaluation {
   feeds_present?: string[]
   feeds_missing?: string[]
   rows_by_feed?: Record<string, number>
+  period_basis?: { period?: string; basis?: string; from_feed?: string | null; months_available?: string[] }
   multi_line?: { summary: MultiLineSummary; flagged: FlaggedAccount[]; flagged_line_ids: string[]; flagged_imeis: string[] }
   expenses?: { matrix: Record<string, ExpenseCell>; rent: RentMeta; months?: string[]; window?: ExpenseWindow }
   default_mode?: string
   scenarios?: Record<string, Scenario>
   statements?: Record<string, Statement>
   delta?: Delta
+  stores?: Record<string, ProspectStore>
+  store_scenarios?: Record<string, StoreBlock>
+  handset_orders?: HandsetOrders
+  fraud?: FraudExposure
+  break_even?: Record<string, BreakEven>
   error?: string
+}
+interface ProspectStore {
+  account: string | null; address: string | null; name: string | null
+  label: string; has_address: boolean; feeds: string[]
+}
+interface BreakEven {
+  revenue: number; cost_of_goods: number; expenses: number; net_income: number
+  activations: number
+  needed: number | null
+  per_activation: number | null
+  already_profitable: boolean
+  basis: string
+  per_activation_basis: string
+}
+interface StoreBlock {
+  store: ProspectStore
+  expenses_included: boolean
+  scenarios: Record<string, Scenario>
+  statements?: Record<string, Statement>
+  delta?: Delta
+  break_even?: Record<string, BreakEven>
+}
+interface HandsetModel { model: string; orders: number; units: number; cost: number; unit_price_low: number; unit_price_high: number }
+interface HandsetStore { store: string; account: string | null; orders: number; units: number; cost: number }
+interface HandsetMonth { month: string; orders: number; units: number; cost: number }
+interface HandsetOrders {
+  models: HandsetModel[]
+  by_store: HandsetStore[]
+  by_month: HandsetMonth[]
+  totals: { rows: number; priced_rows: number; orders: number; units: number; cost: number; models: number; stores: number }
+  set_aside: { rows: number; order_types: Record<string, number>; reason: string }
+}
+interface FraudExposure {
+  threshold: number; accounts: number; lines: number
+  accounts_in_file: number; lines_in_file: number
+  bands: Record<string, number>
+  worst_account_lines: number
+  net_with_them: number | null
+  net_without_them: number | null
+  moved: number | null
+  share_of_bottom_line: number | null
+  reading: string
 }
 interface ProspectList {
   prospects?: Prospect[]
@@ -174,6 +223,8 @@ interface UploadResult {
   periods_replaced: string[]
   footer_rows_dropped: number
   rows_with_no_date: number
+  rows_answering_nothing?: number
+  substance_note?: string | null
 }
 interface PlRow { section: string; label: string; amount: number; key: string }
 
@@ -242,6 +293,43 @@ const FLAG_COLS: ExportColumn[] = [
     get: (r: FlaggedAccount) => (r.devices || []).flatMap(d => d.imeis || []).join(' '),
   },
 ]
+
+// ── THE NEW TABLES (owner ask 2026-10-13) ────────────────────────────────────────────────────────
+// Every one goes through ReportShell, which is the platform's ONE sorted/exportable table (owner
+// directive 2026-08-10, locked by harness_table_sort_lock) — never a hand-rolled <table>.
+const STORE_COLS: ExportColumn[] = [
+  { header: 'Store', get: (r: StoreRow) => r.label },
+  { header: 'Account', get: (r: StoreRow) => r.account || '—' },
+  { header: 'Carrier revenue', get: (r: StoreRow) => r.revenue, money: true },
+  { header: 'Device cost', get: (r: StoreRow) => r.cogs, money: true },
+  { header: 'Carrier-side contribution', get: (r: StoreRow) => r.contribution, money: true },
+  { header: 'Activated lines', get: (r: StoreRow) => r.activations, align: 'right' },
+  { header: 'Must sell in accessories', get: (r: StoreRow) => r.needed, money: true },
+  { header: 'Accessories per box needed', get: (r: StoreRow) => r.perBox, money: true },
+]
+const HANDSET_MODEL_COLS: ExportColumn[] = [
+  { header: 'Model', get: (r: HandsetModel) => r.model },
+  { header: 'Orders', get: (r: HandsetModel) => r.orders, align: 'right' },
+  { header: 'Units', get: (r: HandsetModel) => r.units, align: 'right' },
+  { header: 'Cost', get: (r: HandsetModel) => r.cost, money: true },
+  { header: 'Unit price', get: (r: HandsetModel) => (r.unit_price_low === r.unit_price_high ? money(r.unit_price_low) : `${money(r.unit_price_low)} – ${money(r.unit_price_high)}`), align: 'right' },
+]
+const HANDSET_STORE_COLS: ExportColumn[] = [
+  { header: 'Store', get: (r: HandsetStore) => r.store },
+  { header: 'Orders', get: (r: HandsetStore) => r.orders, align: 'right' },
+  { header: 'Units', get: (r: HandsetStore) => r.units, align: 'right' },
+  { header: 'Cost', get: (r: HandsetStore) => r.cost, money: true },
+]
+const HANDSET_MONTH_COLS: ExportColumn[] = [
+  { header: 'Month', get: (r: HandsetMonth) => r.month },
+  { header: 'Orders', get: (r: HandsetMonth) => r.orders, align: 'right' },
+  { header: 'Units', get: (r: HandsetMonth) => r.units, align: 'right' },
+  { header: 'Cost', get: (r: HandsetMonth) => r.cost, money: true },
+]
+interface StoreRow {
+  label: string; account: string | null; revenue: number; cogs: number; contribution: number
+  activations: number; needed: number | null; perBox: number | null
+}
 const EXP_COLS: ExportColumn[] = [
   { header: 'Expense line', get: (r: ExpenseCell) => r.expense_name },
   { header: 'Booked', get: (r: ExpenseCell) => r.amount, money: true },
@@ -321,6 +409,9 @@ export default function StoreTakeoverPage() {
   const shownMode = mode || data?.default_mode || 'keep'
   const scenario: Scenario | null = data?.scenarios?.[shownMode] || null
   const statement: Statement | null = data?.statements?.[shownMode] || null
+  const breakEven: BreakEven | null = data?.break_even?.[shownMode] || null
+  const handsets: HandsetOrders | null = data?.handset_orders || null
+  const fraud: FraudExposure | null = data?.fraud || null
   const delta: Delta | null = data?.delta || null
   const flagged: FlaggedAccount[] = useMemo(
     () => data?.multi_line?.flagged || [], [data])
@@ -363,6 +454,28 @@ export default function StoreTakeoverPage() {
     return out
   }, [statement])
 
+  // A ROW PER STORE, built from the per-store statements the server assembled with the SAME builder
+  // as the whole-prospect statement. Nothing is re-summed here: a figure the screen computes is a
+  // figure that can disagree with the report above it.
+  const storeRows = useMemo<StoreRow[]>(() => {
+    const blocks = data?.store_scenarios || {}
+    return Object.keys(blocks).map(k => {
+      const b = blocks[k]
+      const t = b.statements?.[shownMode]?.totals
+      const be = b.break_even?.[shownMode]
+      return {
+        label: b.store?.label || k,
+        account: b.store?.account || null,
+        revenue: t?.revenue ?? 0,
+        cogs: t?.cogs ?? 0,
+        contribution: t?.net_income ?? 0,
+        activations: b.scenarios?.[shownMode]?.activations ?? 0,
+        needed: be?.needed ?? null,
+        perBox: be?.per_activation ?? null,
+      }
+    }).sort((a, b) => (b.contribution || 0) - (a.contribution || 0))
+  }, [data?.store_scenarios, shownMode])
+
   const expRows = useMemo<ExpenseCell[]>(() => {
     const m = data?.expenses?.matrix
     if (!m) return []
@@ -390,11 +503,13 @@ export default function StoreTakeoverPage() {
     if (period) form.append('period', period)
     try {
       const r: UploadResult = await apiUpload(`/api/v1/commcalc/prospects/${pid}/upload${orgParam1()}`, form)
+      const hollow = (r.rows_answering_nothing || 0) > 0 && (r.rows_answering_nothing || 0) === (r.rows_written || 0)
       setMsg({
-        ok: true,
+        ok: !hollow,
         text: `${r.feed_label}: ${(r.rows_written || 0).toLocaleString()} rows read into ${(r.periods_replaced || []).join(', ') || 'no month'}`
           + (r.footer_rows_dropped ? ` · ${r.footer_rows_dropped} total row(s) dropped` : '')
-          + (r.rows_with_no_date ? ` · ${r.rows_with_no_date} row(s) had no readable date` : ''),
+          + (r.rows_with_no_date ? ` · ${r.rows_with_no_date} row(s) had no readable date` : '')
+          + (r.substance_note ? ` — ${r.substance_note}` : ''),
       })
       loadList(); load()
     } catch (e) {
@@ -547,6 +662,32 @@ export default function StoreTakeoverPage() {
                   <b>{money(Math.abs((rentMeta.entered || 0) - rentMeta.replaced_average))}</b> a month.
                 </div>}
             </div>
+          </div>
+          {/* WHAT IS ACTUALLY IN THE TABLE — a row per feed, uploaded or not. The missing-feed
+              sentence below was already here and was not enough: it does not say how MANY rows a
+              present feed landed, so a feed read with the wrong column layout (66,388 rows that
+              answer nothing — owner report 2026-10-13) read as a feed that worked. */}
+          <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>What has been uploaded</div>
+            {Object.keys(registry).map(k => {
+              const n = (data?.rows_by_feed || {})[k]
+              const has = (n || 0) > 0
+              return (
+                <div key={k} style={{ fontSize: 12, display: 'flex', gap: 8, padding: '2px 0' }}>
+                  <span style={{ color: has ? 'var(--ok, #15803d)' : '#b45309' }}>{has ? '✓' : '○'}</span>
+                  <span style={{ flex: 1 }}>{registry[k]?.label || k}</span>
+                  <b style={{ color: has ? 'var(--text1)' : '#b45309' }}>
+                    {has ? `${(n || 0).toLocaleString()} rows this month` : 'nothing uploaded'}
+                  </b>
+                </div>
+              )
+            })}
+            {data?.period_basis?.basis &&
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                Showing <b>{data?.period}</b> — {data.period_basis.basis}.
+                {(data.period_basis.months_available || []).length > 1 &&
+                  ` Months with uploaded rows: ${(data.period_basis.months_available || []).join(', ')}.`}
+              </div>}
           </div>
           {(data?.feeds_missing || []).length > 0 &&
             <div style={{ fontSize: 12, color: '#92400e', marginTop: 10 }}>
@@ -720,6 +861,167 @@ export default function StoreTakeoverPage() {
                          columns={EXP_COLS} rows={expRows} compact stickyHeader totals />
           </div>
         </>}
+
+      {/* ── WHAT THE COUNTER HAS TO SELL (owner ask 2026-10-13) ──────────────────────────────── */}
+      {pid && !loading && statement && breakEven &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            What this store has to sell in accessories
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+            No point-of-sale feed comes with a takeover pack, so nothing here can measure what the
+            counter took. This is what it would have to take.
+          </div>
+          {breakEven.already_profitable
+            ? <div style={{ fontSize: 13 }}>
+                On the carrier money alone this store already clears{' '}
+                <b>{money(breakEven.net_income)}</b> a month against our average expenses, so it does
+                not need accessory revenue to break even. No target is shown, because a target of
+                zero would read as &ldquo;sell nothing&rdquo;.
+              </div>
+            : <>
+                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>Gross revenue</div>
+                    <div style={{ fontSize: 15 }}>{money(breakEven.revenue)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>Less device cost</div>
+                    <div style={{ fontSize: 15 }}>{money(breakEven.cost_of_goods)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>Less expenses</div>
+                    <div style={{ fontSize: 15 }}>{money(breakEven.expenses)}</div>
+                  </div>
+                  <div style={{ borderLeft: '1px solid var(--line)', paddingLeft: 24 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>Shortfall to break even</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#b91c1c' }}>
+                      {money(breakEven.needed)}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>Over activated lines</div>
+                    <div style={{ fontSize: 15 }}>{num(breakEven.activations)}</div>
+                  </div>
+                  <div style={{ borderLeft: '1px solid var(--line)', paddingLeft: 24 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                      Accessories per box needed
+                    </div>
+                    <div style={{ fontSize: 24, fontWeight: 700 }}>
+                      {breakEven.per_activation === null ? 'not divisible'
+                        : money(breakEven.per_activation)}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>
+                  {breakEven.basis}. {breakEven.per_activation_basis}.
+                </div>
+              </>}
+        </div>}
+
+      {/* ── A COLUMN PER STORE, from the uploads ─────────────────────────────────────────────── */}
+      {pid && !loading && statement && storeRows.length > 0 &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            Store by store &mdash; {storeRows.length} store{storeRows.length === 1 ? '' : 's'} named
+            by the uploaded sheets
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+            Picked up from the files, not typed in: the sheets carry the dealer&rsquo;s account on
+            every row and the handset orders carry its address. These columns add up to the statement
+            above. They carry <b>no share of our average expenses</b> &mdash; that average is already
+            one store&rsquo;s worth of rent, salaries and utilities, so splitting it across several
+            sites would make every column look profitable. Each store&rsquo;s accessory target below
+            is figured against the full single-store expense.
+          </div>
+          <ReportShell title="" filename={`takeover-stores-${data?.period || ''}`}
+                       columns={STORE_COLS} rows={storeRows} compact stickyHeader totals />
+        </div>}
+
+      {/* ── THE HANDSETS ORDERED ─────────────────────────────────────────────────────────────── */}
+      {pid && !loading && handsets && handsets.totals.rows > 0 &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            Handsets ordered &mdash; {num(handsets.totals.orders)} orders,{' '}
+            {num(handsets.totals.units)} units, {money(handsets.totals.cost)}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+            Across every month uploaded, because a handset ordered in one month is often activated in
+            the next.
+            {handsets.set_aside.rows > 0 &&
+              <> {' '}<b>{num(handsets.set_aside.rows)}</b> of {num(handsets.totals.rows)} rows
+              carry no unit price and are set aside rather than counted as zero
+              ({Object.keys(handsets.set_aside.order_types).slice(0, 6).join(', ')}
+              {Object.keys(handsets.set_aside.order_types).length > 6 ? ', …' : ''}).</>}
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, margin: '10px 0 4px' }}>By model</div>
+          <ReportShell title="" filename={`takeover-handsets-models-${data?.period || ''}`}
+                       columns={HANDSET_MODEL_COLS} rows={handsets.models} compact stickyHeader totals />
+          <div style={{ fontSize: 12, fontWeight: 600, margin: '14px 0 4px' }}>By store</div>
+          <ReportShell title="" filename={`takeover-handsets-stores-${data?.period || ''}`}
+                       columns={HANDSET_STORE_COLS} rows={handsets.by_store} compact stickyHeader totals />
+          <div style={{ fontSize: 12, fontWeight: 600, margin: '14px 0 4px' }}>By month</div>
+          <ReportShell title="" filename={`takeover-handsets-months-${data?.period || ''}`}
+                       columns={HANDSET_MONTH_COLS} rows={handsets.by_month} compact stickyHeader totals />
+        </div>}
+
+      {/* ── THE ACCOUNTS AT THE BOTTOM, AND THE NUMBER UNDERNEATH THEM ───────────────────────── */}
+      {pid && !loading && statement && fraud && fraud.accounts > 0 &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14,
+                                       borderLeft: '3px solid #b45309' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            Accounts carrying more than {fraud.threshold} lines in this month
+          </div>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 10,
+                        alignItems: 'flex-end' }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>Accounts</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{num(fraud.accounts)}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                of {num(fraud.accounts_in_file)} in the file
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>Lines on them</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{num(fraud.lines)}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                of {num(fraud.lines_in_file)} activated
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>Worst single account</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{num(fraud.worst_account_lines)}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>lines</div>
+            </div>
+            <div style={{ borderLeft: '1px solid var(--line)', paddingLeft: 24 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>Bottom line with them</div>
+              <div style={{ fontSize: 15 }}>{money(fraud.net_with_them ?? undefined)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                Bottom line with their money taken out
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>
+                {money(fraud.net_without_them ?? undefined)}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                {fraud.moved === null ? 'not measured'
+                  : `${money(Math.abs(fraud.moved))} moves`}
+                {fraud.share_of_bottom_line !== null
+                  ? ` · ${pct(fraud.share_of_bottom_line)} of the bottom line`
+                  : ''}
+              </div>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, marginTop: 10 }}>
+            {Object.keys(fraud.bands).map(k => (
+              <span key={k} style={{ marginRight: 14 }}>
+                <b>{num(fraud.bands[k])}</b> account{fraud.bands[k] === 1 ? '' : 's'} with {k} lines
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>{fraud.reading}</div>
+        </div>}
 
       {pid && !loading && !statement && !data?.error &&
         <div className="card" style={{ padding: '16px', fontSize: 13, color: 'var(--text2)' }}>

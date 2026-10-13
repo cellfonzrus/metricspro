@@ -120,6 +120,187 @@ FEED_REGISTRY = {
 FEED_KEYS = tuple(FEED_REGISTRY)
 
 
+# ── WHAT A FILE ACTUALLY PUT IN THE TABLE ─────────────────────────────────────────────────────────
+# OWNER REPORT 2026-10-13: "i just uploaded handset info monthwise and also all the others" — and the
+# evaluation was blank. The upload had reported `rows_written: 66,388` and that read as success. What
+# had actually landed was 66,388 rows of one feed (the other two were never uploaded at all), and of
+# the rows that did land only 897 carried a store and 798 a price: the marketplace export lists twenty
+# order types and carries a ship-to, a cost and a date on the handset orders ALONE.
+#
+# THE CLASS, not the instance. A count of rows written is not a measure of what a file answered. A
+# row that mapped nothing but its own period columns occupies the table and answers no question, and
+# a surface reporting only the total cannot tell a good file from a file read with the wrong layout.
+# So every prospect upload reports its SUBSTANCE, and the screen shows it next to the total.
+#
+# Deliberately feed-AGNOSTIC: it asks only whether a mapped row carries any value at all outside the
+# period columns, and those columns come from `data_lineage_registry.MONTH_COLUMNS` — the one home for
+# "which columns hold a row's month" — never from a list kept here. No per-feed column knowledge, so
+# it cannot drift from a feed's real shape, and it is right about a feed that does not exist yet.
+# ── WHICH MONTH THE REPORT OPENS ON ───────────────────────────────────────────────────────────────
+# OWNER REPORT 2026-10-13, same report as `substance` above: the handset months HAD been uploaded
+# (March to September 2026) and the evaluation still showed nothing.
+#
+# THE CLASS: "which month does this prospect cover" was derived from ONE feed. The default period was
+# the latest month the COMMISSION feed named, and with no commission rows it fell through to today's
+# month — a month no uploaded feed covers — so every uploaded row was filtered out of the read and
+# the screen was blank on data that was sitting in the table. A prospect with only two of the three
+# feeds is the ordinary case while a pack is being assembled, and that is exactly when the report
+# must still show what it has.
+#
+# The rule is now: the latest month ANY of the prospect's feeds names. Commission still LEADS where
+# it has rows, because it is the feed the P&L's revenue comes from and opening on a month with money
+# in it is the useful default; a month only the other feeds name is better than a month nothing names.
+# ── THE PROSPECT'S OWN STORES, FROM ITS OWN UPLOADS ───────────────────────────────────────────────
+# OWNER ASK 2026-10-13, verbatim: *"it shoud automatically pick up the store names from teh uploaded
+# sheets ... similarly the c P&l will also be displayed in columns based ont eh stores infor uploaed"*.
+#
+# NOTHING NEW RESOLVES A STORE HERE. `account/ma_store_pnl.account_store_index` is already THE pure
+# answer to "which store is this processor account" — it reads the dealer's own fulfilment rows
+# (account + ship-to on every order line) and DROPS an account seen at two different addresses rather
+# than mis-attributing it, the phantom-store lesson the house already paid for. It is injected and
+# dereferenced, so a prospect and a live store are resolved by one function.
+#
+# What is added is only what a prospect needs and a live store does not:
+#   • the display NAME, which the fulfilment feed carries beside the address (`business_name`);
+#   • the accounts that appear ONLY in the commission or transaction feed. Those have no address
+#     because no handset was ever shipped to them, and dropping them would silently move their money
+#     out of the per-store view. They are kept, labelled by their account number, and `has_address`
+#     says which is which.
+# A prospect's addresses are deliberately NOT collapsed onto our canonical store spellings: they are
+# not our stores, and resolving them through `coa.store_resolver` is how a prospect would start
+# appearing in the company's own rollups.
+def store_index(feeds, account_store_index):
+    """PURE: the prospect's stores → `{account: {account, address, name, has_address, feeds}}`.
+
+    `account_store_index` is `ma_store_pnl.account_store_index` injected (the one home for
+    account → store). `feeds` is the same `{feed_key: [rows]}` `evaluate` takes."""
+    ful = list((feeds or {}).get("ma_marketplace_orders") or [])
+    derived = account_store_index(ful) or {}
+    names, out = {}, {}
+    for r in ful:
+        r = r or {}
+        acct = str(r.get(_store_column("ma_marketplace_orders")) or "").strip()
+        nm = str(r.get("business_name") or "").strip()
+        if acct and nm and acct not in names:
+            names[acct] = nm
+    for feed_key in FEED_KEYS:
+        col = _store_column(feed_key)
+        if not col:
+            continue
+        for r in (feeds or {}).get(feed_key) or []:
+            acct = str((r or {}).get(col) or "").strip()
+            if not acct:
+                continue
+            row = out.setdefault(acct, {"account": acct, "address": derived.get(acct),
+                                        "name": names.get(acct), "feeds": []})
+            if feed_key not in row["feeds"]:
+                row["feeds"].append(feed_key)
+    for acct, row in out.items():
+        row["has_address"] = bool(row["address"])
+        row["label"] = row["address"] or f"account {acct}"
+        row["feeds"] = [k for k in FEED_KEYS if k in row["feeds"]]
+    return out
+
+
+def rows_by_store(feeds, accounts=None):
+    """PURE: `{account: {feed_key: [rows]}}` — each feed's rows split by its own store column.
+
+    A row whose store column is blank is NOT dropped and NOT guessed onto a store: it lands under
+    `UNATTRIBUTED_STORE`, so the per-store columns always sum back to the whole-prospect figures and
+    a feed that names no store is visible as itself. That is the same posture the live per-store P&L
+    takes with an account it cannot resolve (booked company-wide, never mis-attributed)."""
+    want = set(accounts) if accounts is not None else None
+    out = {}
+    for feed_key in FEED_KEYS:
+        col = _store_column(feed_key)
+        for r in (feeds or {}).get(feed_key) or []:
+            acct = str((r or {}).get(col) or "").strip() if col else ""
+            key = acct or UNATTRIBUTED_STORE
+            if want is not None and acct and acct not in want:
+                key = UNATTRIBUTED_STORE
+            out.setdefault(key, {k: [] for k in FEED_KEYS})[feed_key].append(r)
+    return out
+
+
+# A row the feed names no store on. A LABEL, never a store: it keeps the per-store columns summing to
+# the whole, which is the only way a reader can tell "this store earned nothing" from "this money
+# belongs to no store named in the file".
+UNATTRIBUTED_STORE = "(no store named on the row)"
+
+
+def default_period(periods_by_feed, leading_feed="ma_commission"):
+    """PURE: the month a prospect's report should open on, and why.
+
+    `periods_by_feed` {feed_key: [period strings]} — whatever each feed's rows are stamped with.
+    Returns `{period, basis, from_feed, months_available}`; `period` is "" only when no feed names a
+    single month, and `basis` always says which rule chose it so the screen can state it."""
+    by_feed = {}
+    for k, ps in (periods_by_feed or {}).items():
+        months = sorted({str(p).strip() for p in (ps or []) if str(p or "").strip()},
+                        key=period_sort_key)
+        if months:
+            by_feed[k] = months
+    every = sorted({m for ms in by_feed.values() for m in ms}, key=period_sort_key)
+    if not every:
+        return {"period": "", "basis": "no uploaded row names a month", "from_feed": None,
+                "months_available": []}
+    if by_feed.get(leading_feed):
+        return {"period": by_feed[leading_feed][-1],
+                "basis": "the latest month the commission feed covers", "from_feed": leading_feed,
+                "months_available": every}
+    src = next((k for k, ms in sorted(by_feed.items()) if ms and ms[-1] == every[-1]), None)
+    return {"period": every[-1],
+            "basis": ("the latest month any uploaded feed covers — the commission feed has no rows "
+                      "yet, so the P&L's revenue lines will read as not uploaded"),
+            "from_feed": src, "months_available": every}
+
+
+def substance(rows):
+    """PURE: what a mapped file actually put in the table.
+
+    `rows` are the mapped dicts, exactly as they are about to be written. Returns
+    `{rows, empty, carrying_data, dated, undated}` where `empty` counts rows that carry nothing but
+    their own period stamp — the shape a file read with the wrong column layout produces.
+
+    `dated` counts rows that ended up with a period. It is NOT the same question as `empty`: a row can
+    carry a date and nothing else, or carry money and no readable date, and both are worth saying."""
+    from app.modules.commcalc.data_lineage_registry import MONTH_COLUMNS
+    month = set(MONTH_COLUMNS)
+    n = empty = dated = 0
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        n += 1
+        if str(r.get("period") or "").strip():
+            dated += 1
+        if not any(k not in month and v not in (None, "", 0, 0.0) for k, v in r.items()):
+            empty += 1
+    return {"rows": n, "empty": empty, "carrying_data": n - empty,
+            "dated": dated, "undated": n - dated}
+
+
+def substance_note(sub, feed_label):
+    """PURE: the one sentence a screen shows when a file landed rows that answer nothing. None when
+    every row carries data — an absence is reported, never a finding invented."""
+    sub = sub or {}
+    n, empty = int(sub.get("rows") or 0), int(sub.get("empty") or 0)
+    if not n or not empty:
+        return None
+    if empty == n:
+        return (f"Every one of the {n:,} rows read from this file carries nothing but a date. "
+                f"That is what a file read with the wrong column layout looks like — check the "
+                f"column mapping for '{feed_label}' before reading anything into the evaluation.")
+    return (f"{empty:,} of the {n:,} rows read from this file carry nothing but a date, so "
+            f"{n - empty:,} rows are what the evaluation can actually see.")
+
+
+def _store_column(feed_key):
+    """PURE: the column `feed_key`'s rows name the dealer account in — the registry's answer, through
+    this module's own `live_table_of`, so neither the table nor the column is spelled twice."""
+    from app.modules.commcalc.data_lineage_registry import store_account_column
+    return store_account_column(live_table_of(feed_key))
+
+
 def live_table_of(feed_key):
     """PURE: the live table whose column shape this prospect feed mirrors, read from the ONE home of
     that fact (`column_mapping.TABLE_MAP`). None when the key is not a prospect feed."""
@@ -358,7 +539,9 @@ def flag_multi_line_accounts(grouped, threshold):
             day = str((r or {}).get("tx_date") or "").strip()
             if day:
                 days.add(day)
-            acct = str((r or {}).get("merchant_account_id") or "").strip()
+            # The store column is DEREFERENCED, not spelled. This line was a fourth hand-written
+            # copy of the fact (found by §L of the lock the moment it was written, 2026-10-13).
+            acct = str((r or {}).get(_store_column("ma_commission")) or "").strip()
             if acct:
                 stores.add(acct)
             if str((r or {}).get("activation_type") or "").strip().lower() == "add":
@@ -794,9 +977,13 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
     exp_bookings = expense_bookings(expense_matrix or {}, homes["route_expense_line"])
     exp_lines = {line for line, _amt, _lbl in exp_bookings}
 
-    scenarios = {}
-    for mode in EXCLUSION_MODES:
-        kept, dropped = split_rows(comm_rows, drop_ids if mode == "exclude" else ())
+    # ONE BOOKING PATH, used for the whole prospect and for each of its stores. Factored out when the
+    # per-store columns were added (owner ask 2026-10-13): a second loop over a store's own rows is
+    # how the columns would stop summing to the total, which is the only thing that makes a per-store
+    # view trustworthy. `expenses` is passed in because our average expense matrix is a WHOLE-PROSPECT
+    # figure — see `store_scenarios` for why a store's column carries no share of it.
+    def _book(mode, c_rows, t_rows, f_rows, expenses):
+        kept, dropped = split_rows(c_rows, drop_ids if mode == "exclude" else ())
         inputs = empty_inputs(homes["spec"])
         booked = set()
         for line, _acct, amt, detail in homes["ma_commission_bookings"](kept, homes.get("ma_cfg")):
@@ -804,29 +991,63 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
             if round(safe_float(amt), 2):
                 booked.add(line)
         for line, _acct, amt, detail in homes["ma_tx_bookings"](
-                tx_rows, homes.get("ma_pnl_config"), homes.get("ma_cfg")):
+                t_rows, homes.get("ma_pnl_config"), homes.get("ma_cfg")):
             add_booking(inputs, line, amt, detail, homes.get("accrue_detail"))
             if round(safe_float(amt), 2):
                 booked.add(line)
+        # The PRICE LIST stays the whole prospect's (`price`), deliberately: a handset ordered by one
+        # store and activated in another must still be costed, exactly as the live device-costing home
+        # reads the fulfilment sheet as a price list across periods.
         sold = homes["ma_sold_cost_from_rows"](
             kept, price, None, drop_imeis if mode == "exclude" else None)
         for sku, amt in (sold.get("detail") or {}).items():
             add_booking(inputs, "device_cost", amt, sku, homes.get("accrue_detail"))
         if round(safe_float(sold.get("cost")), 2):
             booked.add("device_cost")
-        for line, amt, label in exp_bookings:
+        for line, amt, label in expenses:
             add_booking(inputs, line, amt, label, homes.get("accrue_detail"))
-        cov = coverage(homes["spec"], homes["pl_section"], booked, exp_lines, feeds_present)
-        scenarios[mode] = {
+        cov = coverage(homes["spec"], homes["pl_section"], booked,
+                       {l for l, _a, _lb in expenses}, feeds_present)
+        return {
             "mode": mode,
             "inputs": inputs,
             "device_cost": round(safe_float(sold.get("cost")), 2),
             "device_cost_meta": sold.get("meta") or {},
             "commission_lines_kept": len(kept),
             "commission_lines_dropped": len(dropped),
+            "activations": activation_count(kept),
             "coverage": cov,
             "coverage_summary": coverage_summary(cov),
-            "measured_lines": sorted(booked | exp_lines),
+            "measured_lines": sorted(booked | {l for l, _a, _lb in expenses}),
+        }
+
+    scenarios = {mode: _book(mode, comm_rows, tx_rows, ful_rows, exp_bookings)
+                 for mode in EXCLUSION_MODES}
+
+    # ── THE COLUMNS, one per store the uploads name ────────────────────────────────────────────────
+    # WHY A STORE'S COLUMN CARRIES NO EXPENSES. The expense side of this evaluation is OUR OWN stores'
+    # average monthly cost (§COMMCALC-03.6) — one store's worth of rent, salaries and utilities. It is
+    # already the right figure for ONE site, so splitting it across a prospect's seven sites would
+    # divide a per-store cost by seven and make every column look profitable. Nor can it be repeated
+    # on each column, which would multiply the chain's cost sevenfold against the whole-prospect
+    # statement above it. So a column is the store's CARRIER-SIDE contribution, `expenses_included`
+    # says `false` on every one of them, and the expense comparison stays where it is honest: on the
+    # whole-prospect statement, and in the break-even block, which is per store BY DESIGN because
+    # that is the question the owner asked ("the store will be in loss with just commission income").
+    stores = store_index(feeds, homes["account_store_index"]) if homes.get(
+        "account_store_index") else {}
+    split = rows_by_store(feeds, set(stores)) if stores else {}
+    store_scenarios = {}
+    for key, per in sorted(split.items()):
+        store_scenarios[key] = {
+            "store": stores.get(key) or {"account": None, "address": None, "name": None,
+                                         "label": key, "has_address": False,
+                                         "feeds": sorted(k for k, v in per.items() if v)},
+            "expenses_included": False,
+            "scenarios": {mode: _book(mode, per.get("ma_commission") or [],
+                                      per.get("ma_daily_tx") or [],
+                                      per.get("ma_marketplace_orders") or [], ())
+                          for mode in EXCLUSION_MODES},
         }
     return {
         "period": period,
@@ -844,7 +1065,222 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
                                   for l, a, lb in exp_bookings]},
         "default_mode": exclusion_mode if exclusion_mode in EXCLUSION_MODES else HOUSE_EXCLUSION_MODE,
         "scenarios": scenarios,
+        "stores": stores,
+        "store_scenarios": store_scenarios,
+        "handset_orders": handset_orders(ful_rows, stores),
+        "fraud": fraud_exposure(summary, flagged),      # the delta is folded in by the caller
     }
+
+
+# ── WHAT HANDSETS THIS STORE ORDERED ──────────────────────────────────────────────────────────────
+# OWNER ASK 2026-10-13, verbatim: *"i just upladed handset infor monthwise and also all teptherg but
+# it does nto show me any link for a report to asses teh handsets ordered"*. There was no such report:
+# the fulfilment feed was read only as a PRICE LIST (`ma_unit_price_from_rows`), which is what it is
+# for costing an activated line, and nothing showed the orders themselves.
+#
+# MEASURED FIRST, and it changes what the report can claim. The export lists **twenty order types**
+# over 68,000 live rows and carries a ship-to, a cost and a date on the handset orders ALONE: 798 of
+# those rows are branded-handset orders, 897 carry any store, and 3,103 carry no date. So this does
+# not pretend the whole file is handset orders. It reports what carries a price, counts what does not
+# beside it, and names the order types it set aside — an absence stated, never smoothed away.
+#
+# `number_ordered` is UNITS and `price` is the UNIT price: the live device-costing home multiplies the
+# two the same way, so the extended cost here and the COGS on the statement cannot disagree.
+def handset_orders(ful_rows, store_index_rows=None):
+    """PURE: the prospect's handset orders → `{models, by_store, by_month, totals, set_aside}`.
+
+    `ful_rows` the `ma_marketplace_orders` rows · `store_index_rows` `store_index`'s output, so a
+    store reads as its address rather than an account number. Rows carrying no price are counted in
+    `set_aside` with their order types, never folded into a total as zero."""
+    col = _store_column("ma_marketplace_orders")
+    idx = store_index_rows or {}
+    models, by_store, by_month = {}, {}, {}
+    set_aside, aside_types = 0, {}
+    units = cost = 0.0
+    priced = 0
+    for r in ful_rows or []:
+        r = r or {}
+        price = safe_float(r.get("price"))
+        qty = safe_float(r.get("number_ordered"))
+        otype = str(r.get("order_type") or "").strip() or "(no order type)"
+        if not price:
+            set_aside += 1
+            aside_types[otype] = aside_types.get(otype, 0) + 1
+            continue
+        priced += 1
+        n = qty if qty else 1.0          # a priced row with no unit count is one unit, not none
+        ext = round(price * n, 2)
+        units += n
+        cost += ext
+        model = str(r.get("product_name") or "").strip() or "(no model named)"
+        m = models.setdefault(model, {"model": model, "orders": 0, "units": 0.0, "cost": 0.0,
+                                      "unit_price_low": price, "unit_price_high": price})
+        m["orders"] += 1
+        m["units"] += n
+        m["cost"] = round(m["cost"] + ext, 2)
+        m["unit_price_low"] = min(m["unit_price_low"], price)
+        m["unit_price_high"] = max(m["unit_price_high"], price)
+        acct = str(r.get(col) or "").strip() if col else ""
+        label = (idx.get(acct) or {}).get("label") or (f"account {acct}" if acct
+                                                       else UNATTRIBUTED_STORE)
+        st = by_store.setdefault(label, {"store": label, "account": acct or None,
+                                         "orders": 0, "units": 0.0, "cost": 0.0})
+        st["orders"] += 1
+        st["units"] += n
+        st["cost"] = round(st["cost"] + ext, 2)
+        month = str(r.get("period") or "").strip() or "(no month on the row)"
+        mo = by_month.setdefault(month, {"month": month, "orders": 0, "units": 0.0, "cost": 0.0})
+        mo["orders"] += 1
+        mo["units"] += n
+        mo["cost"] = round(mo["cost"] + ext, 2)
+    return {
+        "models": sorted(models.values(), key=lambda x: (-x["cost"], x["model"])),
+        "by_store": sorted(by_store.values(), key=lambda x: (-x["cost"], x["store"])),
+        "by_month": sorted(by_month.values(),
+                           key=lambda x: period_sort_key(x["month"]) if x["month"][0].isalpha()
+                           or x["month"][0].isdigit() else (0, 0)),
+        "totals": {"rows": len(ful_rows or ()), "priced_rows": priced, "orders": priced,
+                   "units": round(units, 2), "cost": round(cost, 2),
+                   "models": len(models), "stores": len(by_store)},
+        "set_aside": {
+            "rows": set_aside,
+            "order_types": {k: aside_types[k] for k in sorted(aside_types,
+                                                              key=lambda k: -aside_types[k])},
+            "reason": ("rows carrying no unit price. The marketplace export lists every order type "
+                       "the dealer's account saw — residuals, spiffs, promos, fees — and carries a "
+                       "cost only on the physical handset orders. They are counted here rather than "
+                       "folded into the totals as zero."),
+        },
+    }
+
+
+# ── THE ACCOUNTS AT THE BOTTOM OF THE REPORT, AND THE NUMBER UNDERNEATH THEM ──────────────────────
+# OWNER ASK 2026-10-13, verbatim: *"hightlight the 3 lines plus deemed fraud at the bottim of the
+# report imn nunmber of those accounts and below that subtract the inform received from those
+# accoutns to assess a real number of there is any fraud going on"*.
+#
+# Two figures, and the ORDER he asked for them in: how many accounts, then the same report with their
+# money taken out. The second is why the evaluation already computes BOTH exclusion modes side by
+# side (§COMMCALC-03.5) — this names the pair as the fraud read rather than computing a third answer.
+#
+# BANDED BY LINE COUNT, because "3 lines" and "nine lines on one account" are not the same finding
+# and a single count hides the difference. The bands come from the DATA, never from a fixed list, so
+# a file whose worst account carries sixteen lines shows a sixteen band.
+#
+# IT IS EVIDENCE, NOT A VERDICT, and that is not a style preference — it is the lesson the live
+# multi-handset flag already paid for: on real data a legitimate household bundle and a four-handset
+# $0.00 promo run look identical until a human opens the receipts. So `deemed_fraud` is **not** a
+# field here. What is returned is a count, the money, and the report with the money removed; the word
+# the owner used belongs to the person who reads it.
+def fraud_exposure(summary, flagged, delta=None):
+    """PURE: the accounts carrying more lines than the threshold allows, and what they are worth.
+
+    `summary` `multi_line_summary`'s output · `flagged` `flag_multi_line_accounts`'s output ·
+    `delta`   `scenario_delta`'s output, injected, so the money comes off the two statements already
+              assembled rather than from a sum taken here.
+
+    `bands` is `{lines_on_the_account: accounts}` over the flagged accounts only. `net_without_them`
+    and `moved` are None when no delta is supplied — not measured is never shown as zero."""
+    bands = {}
+    for a in flagged or ():
+        n = int(a.get("lines") or 0)
+        bands[n] = bands.get(n, 0) + 1
+    d = (delta or {}).get("net_income") or {}
+    keep = d.get("keep")
+    exc = d.get("exclude")
+    return {
+        "threshold": int((summary or {}).get("threshold") or 0),
+        "accounts": int((summary or {}).get("flagged_accounts") or 0),
+        "lines": int((summary or {}).get("flagged_lines") or 0),
+        "accounts_in_file": int((summary or {}).get("accounts") or 0),
+        "lines_in_file": int((summary or {}).get("lines") or 0),
+        "bands": {str(k): bands[k] for k in sorted(bands)},
+        "worst_account_lines": max(bands) if bands else 0,
+        "net_with_them": (round(safe_float(keep), 2) if keep is not None else None),
+        "net_without_them": (round(safe_float(exc), 2) if exc is not None else None),
+        "moved": (round(safe_float(d.get("delta")), 2) if d.get("delta") is not None else None),
+        "share_of_bottom_line": (delta or {}).get("share_of_bottom_line_at_risk"),
+        "reading": ("A count and a number, not a verdict. An account carrying several lines in one "
+                    "month is as often a family or a small business as it is a fraud, and on live "
+                    "data the two are indistinguishable until someone opens the receipts. The "
+                    "figure to act on is what the bottom line becomes without them."),
+    }
+
+
+# ── WHAT THE COUNTER HAS TO SELL FOR THIS STORE TO WORK ───────────────────────────────────────────
+# OWNER ASK 2026-10-13, verbatim: *"Since no pos data is being loaded, the system should calculate
+# e ow much accessories ahve to sold at teh botomt of teh sheet as teh stroe will be in loss with
+# just commission income , that will be gross expnses less teh gross revenue = total loss = break
+# even needed by selling accessories , then deivde teh number with the total actiavations done for
+# tehat store in a particlua month to get teh APB needed to be profiavle"*.
+#
+# This TURNS THE EVALUATION'S OWN LIMIT INTO THE ANSWER. §COMMCALC-03.7 already says out loud that
+# the three uploads are the distributor's view and carry no retail accessory revenue, so those lines
+# read `not_measured` rather than zero. The owner's question is the right one to ask of exactly that
+# gap: not "what did the counter take" — nothing here can know — but **"what would it have to take"**.
+# So this is a REQUIREMENT, never a measurement, and every field name says so.
+#
+# THE ARITHMETIC IS NOT RE-DERIVED. Revenue, COGS and expenses come from `analysis.pl_totals` — the
+# one home for a statement's totals, the same figures the dashboard and every finance surface read —
+# injected, so this block can never disagree with the statement printed above it. Rounding is the
+# platform's 2-dp `safe_float` + round, never a second convention.
+#
+# HIS CONJUNCTION, STATED AS HE GAVE IT: gross expenses less gross revenue. On this statement that is
+# (expenses + COGS) − revenue, i.e. the negated net income, and taking it off `net_income` rather than
+# re-summing the sections is what keeps it tied to the statement. Handset cost is INSIDE it (the
+# default he was told about): a store that must buy phones to earn the commission is carrying that
+# cost whether or not a phone is sold at a profit.
+#
+# A STORE ALREADY IN PROFIT IS NOT GIVEN A TARGET OF ZERO. `needed` is None, not 0.00, and
+# `already_profitable` says so — a 0.00 target reads as "sell nothing", which is the opposite of true.
+def accessory_break_even(totals, activations, pl_totals=None):
+    """PURE: what accessory revenue this store must take to break even, and the per-box rate.
+
+    `totals`      a `pl_totals` payload dict, OR an assembled statement when `pl_totals` is injected.
+    `activations` the count of activated lines for the month — the denominator, the boxes the store
+                  actually put out. 0 or None ⇒ `per_activation` is None, never a division.
+
+    Returns `{revenue, cost_of_goods, expenses, net_income, needed, per_activation, activations,
+    already_profitable, basis}`. `needed` is None when the store is already in profit."""
+    t = pl_totals(totals) if pl_totals is not None else (totals or {})
+    rev = round(safe_float(t.get("revenue")), 2)
+    cogs = round(safe_float(t.get("cogs")), 2)
+    exp = round(safe_float(t.get("expenses")), 2)
+    net = round(safe_float(t.get("net_income")), 2)
+    n = int(activations or 0)
+    profitable = net >= 0
+    needed = None if profitable else round(-net, 2)
+    per = (round(needed / n, 2) if (needed is not None and n > 0) else None)
+    return {
+        "revenue": rev, "cost_of_goods": cogs, "expenses": exp, "net_income": net,
+        "activations": n,
+        "needed": needed,
+        "per_activation": per,
+        "already_profitable": profitable,
+        "basis": ("gross expenses (operating expenses plus cost of goods) less gross revenue, taken "
+                  "off the statement's own net income — what the counter must take in accessory "
+                  "revenue, which no uploaded feed can measure, for this store to break even"),
+        "per_activation_basis": ("that shortfall divided by the activated lines the commission feed "
+                                 "records for the month — the accessory dollars per box this store "
+                                 "has to hit" if n > 0 else
+                                 "not divisible — the commission feed records no activated line for "
+                                 "this month, so there is no box count to divide by"),
+    }
+
+
+def activation_count(comm_rows):
+    """PURE: activated lines for the month — one per commission row, counted on the row identifier
+    `line_id` already uses (`activation_order`, measured 1,248 distinct over 1,248 rows: one per
+    line). A row with no identifier still counts as a line; it is a line the feed named badly, not a
+    line that did not happen."""
+    seen, blank = set(), 0
+    for r in comm_rows or []:
+        k = line_id(r or {})
+        if k:
+            seen.add(k)
+        else:
+            blank += 1
+    return len(seen) + blank
 
 
 def scenario_delta(statements, pl_totals):
