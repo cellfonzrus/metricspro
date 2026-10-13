@@ -104,6 +104,50 @@ FACTS: dict[str, dict] = {
             'app/scripts/backfill_customer_pin_encryption.py': ('backfill_customer_pins',),
         },
     },
+    # ── §COMMCALC-07 (owner directive 2026-10-12) — one pull loop, many feeds ───────────────────
+    'portal_report_pull': {
+        "question": 'Which code reaches a report on a portal we are logged into, presses its export '
+                    'control and lands the file? It used to be whichever sweep needed it: the loop '
+                    'and the feed were one lump inside merchant_portal_sweep.py, bound to card '
+                    'settlement by three hard-coded calls, so a second feed on the same machinery '
+                    'could only be built by copying the calibration ladder, the export words, the '
+                    'honest-failure wording and the cold-session restore. A feed is now an ADAPTER '
+                    '(four functions) and the loop is written once; three older sweeps still drive '
+                    'their own and are PINNED with reasons in the lock, a count that may only shrink.',
+        "homes": ('app/modules/commcalc/portal_report_pull.py',),
+        "index": ('COMMCALC-07',),
+        "locks": ('harness_portal_report_pull.py',),
+        # SNAPSHOT — written BY HAND (§50): the modules that IMPORT the home, derived from the import
+        # graph. The adapters import it for its helpers and are resolved BY it through the registry,
+        # which is a runtime edge the import graph cannot see and the lock's §A proves instead.
+        "callers": {
+            # the card feed imports the moved names under their old spellings, which is what keeps
+            # every one of its callers reading the same code it always did
+            'app/modules/commcalc/merchant_portal_sweep.py': (
+                'DEFAULT_WINDOW_DAYS', 'MAX_WINDOW_DAYS', 'date_range', 'make_pull_fn', 'next_expiry',
+                'prp', 'pull_reports_on_page', 'session_ttl_hint', 'window_days'),
+            'app/modules/commcalc/pos_report_sweep.py': ('prp',),
+            # the live session's dispatch and the scheduled cron both ask the registry
+            'app/modules/commcalc/router.py': ('_prp',),
+        },
+    },
+    'pos_report_declared_metric': {
+        "question": 'What does an external POS report line MEAN in this tenant\'s own declared '
+                    'vocabulary, and may that meaning be read as the tenant\'s word? The owner asked '
+                    'for the portal\'s daily report to be checked against what the reps declare, and '
+                    'the two name the same things differently. Spelling the categories in code would '
+                    'break for the next tenant and is what he explicitly forbade; resolving a line to '
+                    'the closest-looking category would produce a comparison that reads as evidence '
+                    'and is not. So the match is a stated ladder and every row carries its BASIS: '
+                    'only a declared mapping or the category\'s own label counts as the tenant\'s '
+                    'word, and a line two categories could claim resolves to neither.',
+        "homes": ('app/modules/commcalc/pos_report_feed.py',),
+        "index": ('COMMCALC-07',),
+        "locks": ('harness_pos_report_feed.py',),
+        "callers": {
+            'app/modules/commcalc/pos_report_sweep.py': ('feed',),
+        },
+    },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
     'multi_handset_one_buyer': {
         "question": 'Which buyers took more handsets in one day at one store than a family plausibly '
