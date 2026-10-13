@@ -48642,7 +48642,10 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
         by_feed = {}
         for r in seen or []:
             by_feed.setdefault(str(r.get("feed_key") or ""), []).append(r.get("period"))
-        chosen = _pev.default_period(by_feed)
+        # The caller supplies the date; `default_period` reads no clock (it is pure). Without it a
+        # month still in progress wins on recency alone and the whole report renders off a
+        # part-month — 3 of 5,495 commission rows on 13 October (owner report 2026-10-13).
+        chosen = _pev.default_period(by_feed, today=datetime.now(timezone.utc).date())
         period, period_basis = chosen["period"], chosen
     if not period:
         n = datetime.now(timezone.utc)

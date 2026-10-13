@@ -26375,6 +26375,57 @@ cost here and the COGS on the statement cannot disagree. A priced row with no un
 not none. Broken out by model, by store (reading as its address, through `store_index`) and by month,
 across every month uploaded, because a handset ordered in one month is often activated in the next.
 
+### COMMCALC-03.17 A month that has not ended is not the month to open on (owner report 2026-10-13)
+
+Owner, verbatim: *"i uploaded all files, it is not givening the p&l for each in columns"*. Everything
+was uploaded and the data was right: 5,495 commission rows over eight months, naming **7** dealer
+accounts. The report opened on **October 2026**, which held **3 of those 5,495 rows** — 0.05% —
+because it was the 13th of October and the statement had barely started. The P&L, the per-store
+columns and the break-even all rendered off a part-month and read as broken.
+
+§COMMCALC-03.11 had replaced "today's month" with "the latest month the feed covers", which fixed a
+blank report and introduced this one. **Recency is not coverage.** The rule now opens on the latest
+month that has ENDED, and says so:
+
+- A part-month is a fact about the CALENDAR, so no row-count threshold is guessed anywhere —
+  a month is skipped only because it has not finished. `harness_prospect_eval.py` §J24 fails the
+  build on a month skipped for being small.
+- The unfinished month is NAMED (`in_progress`) and stays in the picker. Skipped is not hidden.
+- When the ONLY month with rows is the current one, the report still opens on it and the basis says
+  *"these figures are a part-month"* — a report that opens on nothing is the defect this replaced.
+- A FUTURE month (a mis-stamped row) is not opened on either: the test is "has ended", not "is not
+  this month".
+- `default_period` stays PURE and reads no clock; the endpoint supplies `today`. §J22 asserts the
+  endpoint passes it and §J23 that the home has no `datetime` of its own. With no date supplied the
+  answer is byte-identical to the old rule (§J21), which is what keeps §J1–J11 unchanged.
+
+### COMMCALC-03.18 The P&L with a column per store (owner ask 2026-10-13)
+
+Owner, verbatim: *"it shoudl ahve 8 columns for each seaporate store"*. §COMMCALC-03.13 gave a table
+with **a row per store** — the same figures, the wrong axis for reading a P&L. He wants the lines
+down the side and the stores across the top, which is how the finance P&L reads.
+
+**No server change, and no new arithmetic.** The per-store statements are already assembled by the
+same builder as the whole-prospect one (§COMMCALC-03.13), so the matrix is a transposition of data
+already returned:
+
+- The ROWS are the whole-prospect statement's own lines, in its own order — the screen invents no
+  line and names no account.
+- Each CELL is read from that store's own statement by line `key`. Nothing is summed on the screen,
+  so **the columns adding across to "All stores" is a check, not an arrangement**: if a store's
+  dollars were missed, the row visibly fails to add rather than being quietly balanced.
+- Then the subtotals (carrier revenue, device cost, gross profit, expenses, carrier-side
+  contribution), the activated-line count, and the two break-even figures per column.
+- The expense lines sit under **All stores** only, for the §COMMCALC-03.13 reason: our average is
+  already ONE store's worth of rent, salaries and utilities, so charging it to each column would
+  make every store look profitable. Each column's accessory target IS figured against the full
+  single-store expense (§COMMCALC-03.14).
+- Through `ReportShell` with a dynamic `ExportColumn[]`, so it sorts, filters and exports like every
+  other table (owner directive 2026-08-10, locked by `harness_table_sort_lock`).
+
+The row-per-store table stays: it sorts by contribution and answers "which site is carrying this
+deal", which a matrix does not.
+
 
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 

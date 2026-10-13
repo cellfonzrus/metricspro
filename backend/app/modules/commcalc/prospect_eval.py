@@ -228,12 +228,24 @@ def rows_by_store(feeds, accounts=None):
 UNATTRIBUTED_STORE = "(no store named on the row)"
 
 
-def default_period(periods_by_feed, leading_feed="ma_commission"):
+def default_period(periods_by_feed, leading_feed="ma_commission", today=None):
     """PURE: the month a prospect's report should open on, and why.
 
     `periods_by_feed` {feed_key: [period strings]} — whatever each feed's rows are stamped with.
-    Returns `{period, basis, from_feed, months_available}`; `period` is "" only when no feed names a
-    single month, and `basis` always says which rule chose it so the screen can state it."""
+    Returns `{period, basis, from_feed, months_available, in_progress}`; `period` is "" only when no
+    feed names a single month, and `basis` always says which rule chose it so the screen can state it.
+
+    A MONTH THAT HAS NOT ENDED IS NOT THE MONTH TO OPEN ON (owner report 2026-10-13). The rule was
+    "the latest month the feed covers", and recency alone opened the report on its EMPTIEST month:
+    on 13 October the prospect's commission feed held 3 October rows against 5,495 over eight
+    months, so the statement, the per-store columns and the break-even all rendered off 0.05% of the
+    data and read as broken. A part-month is a fact about the calendar, not a judgement about the
+    data, so no threshold is guessed here: a month is skipped only when it has not finished yet.
+
+    `today` is the caller's date (purity: this module reads no clock). Omitted, no month counts as in
+    progress and the answer is byte-identical to the old rule — which is what keeps every existing
+    caller and the §J checks unchanged. `in_progress` names the later, unfinished month that was
+    skipped, so the screen can say it is there and the picker can still reach it."""
     by_feed = {}
     for k, ps in (periods_by_feed or {}).items():
         months = sorted({str(p).strip() for p in (ps or []) if str(p or "").strip()},
@@ -243,16 +255,41 @@ def default_period(periods_by_feed, leading_feed="ma_commission"):
     every = sorted({m for ms in by_feed.values() for m in ms}, key=period_sort_key)
     if not every:
         return {"period": "", "basis": "no uploaded row names a month", "from_feed": None,
-                "months_available": []}
+                "months_available": [], "in_progress": None}
+
+    now = (today.year, today.month) if today is not None else None
+
+    def _pick(months):
+        """(month to open on, the later unfinished month it skipped). The latest month that has
+        ENDED; the latest month outright when none has, because a report must still open."""
+        if now is None:
+            return months[-1], None
+        ended = [m for m in months if period_sort_key(m) < now]
+        if ended:
+            later = [m for m in months if period_sort_key(m) >= now]
+            return ended[-1], (later[-1] if later else None)
+        return months[-1], None
+
     if by_feed.get(leading_feed):
-        return {"period": by_feed[leading_feed][-1],
-                "basis": "the latest month the commission feed covers", "from_feed": leading_feed,
-                "months_available": every}
-    src = next((k for k, ms in sorted(by_feed.items()) if ms and ms[-1] == every[-1]), None)
-    return {"period": every[-1],
-            "basis": ("the latest month any uploaded feed covers — the commission feed has no rows "
-                      "yet, so the P&L's revenue lines will read as not uploaded"),
-            "from_feed": src, "months_available": every}
+        period, skipped = _pick(by_feed[leading_feed])
+        if skipped:
+            basis = (f"the latest COMPLETE month the commission feed covers — {skipped} has started "
+                     f"but is not finished, so opening on it would read a part-month as the whole")
+        elif now is not None and period_sort_key(period) >= now:
+            basis = ("the only month the commission feed covers is the current one, which is not "
+                     "finished — these figures are a part-month")
+        else:
+            basis = "the latest month the commission feed covers"
+        return {"period": period, "basis": basis, "from_feed": leading_feed,
+                "months_available": every, "in_progress": skipped}
+
+    period, skipped = _pick(every)
+    src = next((k for k, ms in sorted(by_feed.items()) if ms and ms[-1] == period), None)
+    tail = (f" {skipped} has started but is not finished, so it is not opened on." if skipped else "")
+    return {"period": period,
+            "basis": ("the latest complete month any uploaded feed covers — the commission feed has "
+                      "no rows yet, so the P&L's revenue lines will read as not uploaded." + tail),
+            "from_feed": src, "months_available": every, "in_progress": skipped}
 
 
 def substance(rows):
