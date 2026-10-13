@@ -2732,7 +2732,12 @@ def refile_closing_row(row_id: str, payload: RefileClosingRowIn = None,
         # says the trail is missing rather than silently dropping it.
         for k in ("refiled_from_store_code", "refiled_at", "refiled_by", "refile_note"):
             patch.pop(k, None)
-        plan["audit_columns_missing"] = "run migration 1081 to record who re-filed this closing"
+        # The hint goes under `note` — a MESSAGE key — so the setup-notice boundary replaces it with
+        # the one customer sentence for a tenant and shows the detail only to the platform team
+        # (§19.36). A technical hint under a data key is never read by the boundary and would reach
+        # a manager raw; harness_carrier_vocab_guard.py fails the build on exactly that.
+        plan["audit_columns_missing"] = True
+        plan["note"] = "run migration 1081 to record who re-filed this closing"
         try:
             r = (client.schema("commcalc").table("daily_closing").update(patch)
                  .eq("org_id", org_id).eq("id", row_id).execute())
