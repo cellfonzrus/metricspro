@@ -14,6 +14,21 @@ import { setupFailed } from '@/lib/setupNotice'
 // grant — DMs excluded). Shows the 3-try close-attempt log: every value a rep entered before a close
 // was accepted, with the true POS variance the rep never saw. Reads GET /api/v1/closing/attempts.
 
+// THE SHAPE THE RE-FILE ENDPOINT ANSWERS WITH (index §29.14). Typed rather than `any` because the
+// eslint register pins this file's `no-explicit-any` count and it may only shrink — and because the
+// plan is the thing the manager reads before committing, so a renamed field should fail the build.
+type RefileMove = { table: string; match: string; count: number; store_columns: string[] }
+type RefileReview = { table: string; count: number; message: string }
+type RefilePlan = {
+  ok: boolean
+  from_store_code: string
+  to_store_code: string
+  close_date: string
+  moves: RefileMove[]
+  review: RefileReview[]
+  moved?: { table: string; rows: number }[]
+}
+
 export default function ClosingManagementPage() {
   const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const [mode, setMode] = useState<'date' | 'period'>('period')
@@ -46,7 +61,7 @@ export default function ClosingManagementPage() {
   // per row, `refPlan` the dry-run answer the manager reads BEFORE committing — the server decides
   // everything (closing/closing_refile), this screen only shows the plan and the refusal.
   const [refTo, setRefTo] = useState<Record<string, string>>({})
-  const [refPlan, setRefPlan] = useState<Record<string, any>>({})
+  const [refPlan, setRefPlan] = useState<Record<string, RefilePlan | null>>({})
 
   function load() {
     setLoading(true); setErr('')
@@ -82,18 +97,18 @@ export default function ClosingManagementPage() {
   // Two steps on purpose. A move is hard to eyeball (a store-day carries up to seven satellite
   // tables), so the manager sees exactly what will move — or why it cannot — and then confirms.
   // `dry_run` writes nothing at all; the server refuses with the same sentence either way.
-  async function refile(g: any, key: string, commit: boolean) {
+  async function refile(g: { row_id?: string }, key: string, commit: boolean) {
     const to = (refTo[key] || '').trim()
     if (!g.row_id) { setRelMsg(m => ({ ...m, [key]: '❌ ' + setupFailed('No matching closing record for this row') })); return }
     if (!to) { setRelMsg(m => ({ ...m, [key]: '❌ Pick the store this closing belongs to.' })); return }
     setRelBusy(b => ({ ...b, [key]: true })); setRelMsg(m => ({ ...m, [key]: '' }))
     try {
-      const r: any = await api(`/api/v1/closing/row/${g.row_id}/refile`, {
+      const r = await api(`/api/v1/closing/row/${g.row_id}/refile`, {
         method: 'POST', body: JSON.stringify({ store_code: to, dry_run: !commit }),
-      })
+      }) as RefilePlan
       if (commit) {
-        const moved = (r?.moved || []).reduce((a: number, m: any) => a + (m.rows || 0), 0)
-        const review = (r?.review || []).map((x: any) => x.message).join(' ')
+        const moved = (r?.moved || []).reduce((a, m) => a + (m.rows || 0), 0)
+        const review = (r?.review || []).map(x => x.message).join(' ')
         setRefPlan(p => ({ ...p, [key]: null }))
         setRelMsg(m => ({ ...m, [key]: `✅ Moved to ${r?.to_store_code}${moved ? ` — ${moved} linked record${moved > 1 ? 's' : ''} moved with it` : ''}.${review ? ' ' + review : ''}` }))
         load()
@@ -101,9 +116,9 @@ export default function ClosingManagementPage() {
         setRefPlan(p => ({ ...p, [key]: r }))
         setRelMsg(m => ({ ...m, [key]: '' }))
       }
-    } catch (e: any) {
+    } catch (e) {
       setRefPlan(p => ({ ...p, [key]: null }))
-      setRelMsg(m => ({ ...m, [key]: '❌ ' + (e?.message || e) }))
+      setRelMsg(m => ({ ...m, [key]: '❌ ' + ((e instanceof Error && e.message) || String(e)) }))
     } finally { setRelBusy(b => ({ ...b, [key]: false })) }
   }
 
@@ -215,10 +230,10 @@ export default function ClosingManagementPage() {
                 {refPlan[key]?.ok && (
                   <div style={{ fontSize: 11, padding: '0 14px 10px', color: 'var(--text2)' }}>
                     Moving this closing to <b>{refPlan[key].to_store_code}</b>
-                    {(refPlan[key].moves || []).length
-                      ? <> also moves {(refPlan[key].moves || []).map((m: any) => `${m.count} × ${m.table.split('.').pop().replace(/_/g, ' ')}`).join(', ')}.</>
+                    {(refPlan[key]?.moves || []).length
+                      ? <> also moves {(refPlan[key]?.moves || []).map(m => `${m.count} × ${m.table.replace(/^.*\./, '').replace(/_/g, ' ')}`).join(', ')}.</>
                       : <> moves nothing else — no cash pickup, expense or count is recorded against this store-day.</>}
-                    {(refPlan[key].review || []).map((r: any, i: number) => <div key={i} style={{ color: '#92400e' }}>⚠ {r.message}</div>)}
+                    {(refPlan[key]?.review || []).map((rv, i) => <div key={i} style={{ color: '#92400e' }}>⚠ {rv.message}</div>)}
                     <div style={{ marginTop: 6 }}>
                       <button className="btn" style={{ fontSize: 11, padding: '3px 8px' }}
                         disabled={relBusy[key]}
