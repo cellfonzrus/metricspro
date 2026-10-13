@@ -7166,6 +7166,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store), `POST /closing/derive-range` (retroactive backfill, `start=`/`end=`/`dry_run=`, bounded by `MAX_DERIVE_BACKFILL_DAYS`); the PUT takes `store_codes[]` (the Store Setup multi-select) as well as one `store_code`, fanning out through the single `_closing_source_write_one` | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`/`derive_closing_range`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
 | `GET/PUT /closing/grain-config` (**HOW MANY closings one store-day takes** — `store_day` (house default: whoever closes first owns the day, a second person is refused and told who holds it) or `rep_day` (an envelope per rep); org default + per-store override, the PUT gated to the 'closing' settings area and taking `store_codes[]` as well as one `store_code`, fanning out through the single `_closing_grain_write_one`) | `closing/router.py` (`get_closing_grain_config`/`put_closing_grain_config`; ONE read `_closing_grain_rows`, ONE resolver `_closing_grain`/`_closing_grain_map`); pure `closing/closing_grain.py`; mig `1080`; **no screen yet** | §29.13 |
+| `POST /closing/row/{row_id}/refile` (**move a closing to the store it belongs to**, with every row keyed to it — `dry_run` returns the plan and writes nothing; refuses when the destination store-day is already closed, when money is settled against the day, or when a one-per-store-day satellite already stands at the destination) | `closing/router.py` (`refile_closing_row`, `_refile_satellite`); pure registry `closing/closing_refile.py`; mig `1081` (audit columns only); gate `_can_mgmt_review` (the release gate, DMs excluded) | §29.14 |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
@@ -7283,6 +7284,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
 | **Where does THIS store's daily closing come from — a rep typing it, or the sales feed?** (and therefore: is a store with no closing row a person who didn't submit, or a derivation that didn't run?) | `commcalc.closing_source_config` (mig `1035`): `store_code IS NULL` = the org default, a row per store = the override; house default `rep_entry` | ONE registry `closing/closing_source.py` (`resolve`, `expects_rep_submission`, `is_derived`, `derivable`, `derive_row`, `plan_day` — pure); ONE read `closing/router._closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, dereferenced by the submit endpoint, `closing_stores`, `_run_closing_missing_alerts` and `attention_providers._p_closing_stale_stores`; lock `harness_closing_source_lock.py`, proofs `harness_closing_source.py` + `harness_closing_source_sweep.py` + `harness_closing_source_multistore.py` (§19.39) |
 | **How many daily closings does ONE STORE-DAY take — and is a second person's submit a duplicate?** (before 2026-10-13 the answer was carried in the dedup key as "only if the same REP closed it", so two reps declared one day's cash twice and nothing noticed: Nostrand / 2026-10-10, $370 against a POS day of $140) | `commcalc.closing_grain_config` (mig `1080`): `store_code IS NULL` = the org default, a row per store = the override; house default `store_day` | ONE registry `closing/closing_grain.py` (`resolve`, `blocks_other_reps`, `key_omits_employee` — pure); ONE read `closing/router._closing_grain_rows`, ONE resolver `_closing_grain`/`_closing_grain_map`, dereferenced by `create_row` (refusal `store_day_already_closed`), by `dedup_key.for_row` (so the EXISTING unique index enforces it) and by the closing-sheet upload `_ingest_dataframe` (skips + reports); the derive sweep is excused and the excuse is locked; lock `harness_closing_store_day_grain.py` (§29.13) |
+| **A closing was filed against the WRONG store — what has to move with it, and when must the move be refused?** (before 2026-10-13 the only repair was hand-written SQL that moved `daily_closing` alone and left fifteen other store-day-keyed tables behind) | no new table — the ruling is CODE: `closing/closing_refile.TABLES` (FOLLOWS / STAYS / BLOCKS / REVIEW), re-derived from the migrations by its harness so an unclassified table fails the build; audit columns `daily_closing.refiled_*` (mig `1081`) | ONE registry `closing/closing_refile.py` (`plan`, `classify`, `store_patch` — pure), ONE endpoint `closing/router.refile_closing_row` (`POST /closing/row/{id}/refile`), dereferencing `closing_grain` for *is the destination already closed* and `dedup_key.for_row` for the new key; lock `harness_closing_refile.py` (§29.14) |
 | **Did the server actually STORE what an employee-row Save sent?** (vs a 2xx whose gate dropped a field) | the endpoint's reply: `update_employee`'s `UPDATE … RETURNING` row + `pay_fields_ignored`; the lunch / face configs' saved columns | `frontend/src/lib/rowSave.ts::notPersisted` (`NOT_SAVED_KEYS`, `sameStoredValue`) over each slice's `echo` in `lib/employeeRowSlices.ts`, applied by `runRowSave`; lock `harness_row_save_lock.py` §8, proof `prove_row_save.mjs` §V (§19.37) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
@@ -15122,6 +15124,81 @@ assertion *"two reps at one store on one day are two keys, by design"* **was** t
   no-sale shift or a late feed, so the honest shape is a non-blocking management flag. Not built here.
 - The Store Setup screen has no control for the grain yet — the endpoints above are the whole surface, so switching a
   tenant to `rep_day` is an API call today.
+
+
+### 29.14 A MANAGER MOVES A CLOSING TO THE RIGHT STORE (owner 2026-10-13)
+
+Owner, verbatim: *"also the manager should be able to go in and move the wrong closing tor trh cioreect store"* — asked
+immediately after he ran a hand-written SQL runbook to move one misfiled closing (`Nostrand` → `531 Utica`,
+2026-10-10, Rana Bilal, the §29.13 incident) and watched its safety block abort with
+`ABORT: Utica already has 1 closing(s) for 2026-10-10. Moving this one there would make a duplicate.` — because the day
+had meanwhile been re-entered by hand at the destination. **Both halves of that are the requirement:** the move belongs
+on the screen, and it must REFUSE rather than create the duplicate it exists to undo.
+
+**DUPLICATE CHECK (build gate).** Searched §29.1–29.13 (every closing surface), §16–18 for an existing
+"change a closing's store" path, §64 (`account/store_identity` — the ONE home for *which store is this address*) and
+§29.11 (`dedup_key`). **Nothing moves a closing between stores today**: `PUT /closing/row/{id}` exists but is the
+amounts editor and sets no store column, `POST /row/{id}/release` unlocks a row for a corrected resubmit at the SAME
+store, and the store-identity merge (§64) retires a store CODE for everybody rather than re-filing one row. So this is
+a new mechanism, and it REUSES rather than re-derives: the permission gate is `_can_mgmt_review(_caller_perms(...))`
+(the release gate, DMs excluded), the destination identity comes from the same `commcalc.store_mapping` roster
+`create_row` resolves a submit through, "is the destination already closed" is `closing/closing_grain` (§29.13), and
+the new key is `closing/dedup_key.for_row` (§29.11). No second index, no second resolver, no second dedup spelling.
+
+**THE CLASS, NOT THE INSTANCE.** "Rana Bilal's 2026-10-10 closing is at the wrong store" is the instance. The general
+fact that was missing: **a closing's store was immutable to the platform, while a rep picking the wrong store is an
+ordinary mistake** — so every repair was hand-written SQL, per incident, by whoever was asked. And a closing's store
+is not carried by the closing alone: **fifteen tables in the schema carry both `close_date` and `store_code`**, so SQL
+that moves one and forgets the rest leaves a *half-moved store-day*, which is worse than an unmoved one.
+
+**THE HOME: `backend/app/modules/closing/closing_refile.py`** (PURE, DB-free). `TABLES` is the registry of every table
+carrying both columns, each with a ruling and its reason:
+
+| Disposition | Tables | Why |
+|---|---|---|
+| **FOLLOWS** (re-keyed with the closing) | `cash_pickup`, `billpay_pickup`, `closing_expense`, `closing_metric_line`, `envelope_count`, `envelope_withdrawal`, `cash_count_revision` | they are part of THIS rep's store-day — the cash the DM collected, the bill-pay cash, what was paid out of the envelope, the declared counts, the count, the corrections. Leaving them behind IS the half-move |
+| **STAYS** | `closing_attempt`, `raw_epay_daily_tx` | the attempt log records what was ATTEMPTED and he really did attempt it at the old store (the §64 posture); the ePay feed is the carrier's, keyed to where the transactions happened, and we never rewrite it |
+| **BLOCKS** (refuse, 409, nothing written) | `bank_deposit`, `closing_deposit_adjustment`, `closing_mgmt_review` | money is already settled against the store-day; re-filing underneath a banked figure would restate it with nothing saying so. The refusal names the table, the count and what to clear |
+| **REVIEW** (reported, never moved, never deleted) | `daily_closing_verification`, `daily_closing_verification_audit` | a DM verified the store-day against the closings it then held; after the move it covers a different set, so a human has to re-check it. 715 live rows makes blocking unusable and silence dishonest |
+
+`plan()` is the whole decision and is pure: the subject row, the destination, the grain, the destination's existing
+closings and the satellite counts go in; `{ok, refusals, moves, review, stays, closing_patch}` comes out. **`ok: false`
+means nothing may be written** — which is the behaviour the runbook's abort had, kept.
+
+**REFUSES** (409, nothing changed): the destination store-day is already closed (`closing_grain.blocks_other_reps` —
+so a manager cannot create the very duplicate §29.13 stops; a RELEASED row does not block, because releasing is how a
+manager says *this one is being corrected*); money settled downstream; a one-per-store-day satellite already standing
+at the destination for this person (`cash_pickup` / `billpay_pickup` / `closing_metric_line` are `UNIQUE (org,
+close_date, store_code, employee_name)`, so this is a sentence instead of a 500); any registered table that could not
+be READ — *"the query failed"* is never read as *"no rows"*, which is how a move lands under a settled deposit.
+
+**ENDPOINT:** `POST /closing/row/{row_id}/refile` — body `{store_code | sfid, note?, refiled_by?, dry_run?}`, gated to
+`_can_mgmt_review` (the release gate; a DM cannot re-file). `dry_run: true` returns the identical plan and writes
+nothing, which is what the screen shows before the manager confirms. The satellites are written **before** the closing,
+so a failure leaves the store-day whole and retryable. The closing then takes the destination's `store_code` /
+`store_address` / `sfid`, a `dedup_key` recomposed at the destination's grain, and the audit columns.
+
+**THE SCREEN:** Management Review (`/closing/management`) — a `Move to store…` picker (the same roster the filter
+bar uses, so a store code is picked and never typed) beside the existing `Release for correction` button, then
+`Check move`, which shows what will move with it (or the refusal), and only then `Confirm move`. Two steps on purpose:
+a store-day can carry seven satellite tables and that is not something a manager can eyeball.
+
+**MIGRATION `1081`** (additive, idempotent, no money): `refiled_from_store_code`, `refiled_at`, `refiled_by`,
+`refile_note` on `commcalc.daily_closing` + a partial index. It is a TRAIL, not a gate — without it the move still
+works and the response says the trail is missing (`audit_columns_missing`), because a repair that cannot be
+distinguished from the mistake never happening is the thing worth fixing.
+
+**LOCK:** `backend/harness_closing_refile.py`, **101 checks**, its own CI job (`closing-refile-lock`). It
+**re-derives the table list FROM THE MIGRATIONS** and fails the build if any table carrying `close_date` +
+`store_code` is unclassified — so a new such table cannot quietly join the schema and be forgotten by the move. It
+also drives the REAL endpoint against the shared `harness_intake_fakes.FakeDB`, reproduces the abort Sanjot hit, and
+fails if the router stops dereferencing the registry, the grain or the dedup key, if the satellites stop moving first,
+if a second copy of the disposition vocabulary appears, or if migration 1081 stops being additive. Six negative
+controls.
+
+**OPEN — reported, not fixed.** The destination-shortage finding of §29.13 still stands ($230 declared against
+$447.29 POS cash at Utica on 2026-10-10): a re-file moves a store, never a figure, and it deliberately does not
+"reconcile" the day it lands on.
 
 
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)

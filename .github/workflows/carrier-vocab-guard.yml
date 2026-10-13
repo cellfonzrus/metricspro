@@ -240,6 +240,9 @@ on:
       - "backend/harness_closing_store_day_grain.py"
       - "backend/app/modules/closing/closing_grain.py"
       - "database/migrations/1080_closing_grain_config.sql"
+      - "backend/harness_closing_refile.py"
+      - "backend/app/modules/closing/closing_refile.py"
+      - "database/migrations/1081_closing_refile_audit.sql"
       - "backend/harness_report_kind_lock.py"
       - "backend/harness_connector_scope_lock.py"
       - "backend/app/modules/commcalc/connector_registry.py"
@@ -1635,6 +1638,25 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_store_day_grain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE RE-FILE LOCK (index §29.14) proves that moving a closing to the right store moves everything keyed to it, and
+  # refuses rather than creating the duplicate it exists to undo. It RE-DERIVES the table list from the migrations, so
+  # a new table carrying both close_date and store_code FAILS THIS BUILD until somebody rules on it. It also drives
+  # the real endpoint against the shared in-memory client, so it needs the backend's dependencies — same reason as the
+  # job above. DB-free.
+  closing-refile-lock:
+    name: Closing re-file lock (a closing moves whole, or not at all)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the re-file lock (every store-day-keyed table is classified; the move refuses a duplicate, settled money and a half-move — index §29.14)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_refile.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE UNFINISHED-DAY LOCK (index §29.12) imports the real closing router (closing_resume,
   # _log_attempt, _closing_summary_for_date), so it needs the backend's dependencies and its own job

@@ -40,6 +40,7 @@ from . import closing_source as _closing_src
 from . import closing_grain as _grain_src
 from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 from . import metric_catalog as _metrics
+from . import closing_refile as _refile
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -2558,6 +2559,190 @@ def release_closing_row(row_id: str, payload: ReleaseClosingRowIn = None, author
     if not r.data:
         raise HTTPException(404, "row not found")
     return {"ok": True, "row_id": row_id, "released": released, **upd}
+
+
+# ── Re-file a closing against the right store (owner 2026-10-13, index §29.14) ──────────────────
+class RefileClosingRowIn(LaxModel):
+    store_code: Any = None
+    sfid: Any = None
+    note: Any = None
+    refiled_by: Any = None
+    dry_run: Any = False
+
+
+def _refile_satellite(client, org_id: str, table: str, spec: dict, *, store_code, close_date,
+                      employee_name, closing_row_id, columns: str = "id"):
+    """Read ONE registered satellite's rows for a store-day, the way its own key says to. Returns
+    `(rows, unreadable)` — a failed read is reported as unreadable rather than as "no rows", because
+    `closing_refile.plan` refuses a move it cannot prove safe (a table whose migration is not applied
+    yet reads as unreadable, and that is the correct answer, not an empty set)."""
+    schema, tname = table.split(".", 1)
+    try:
+        q = client.schema(schema).table(tname).select(columns).eq("org_id", org_id)
+        match = spec.get("match")
+        if match == _refile.MATCH_ROW_ID:
+            q = q.eq("closing_row_id", closing_row_id)
+        else:
+            q = q.eq("close_date", close_date).eq("store_code", store_code)
+            if match == _refile.MATCH_STORE_DAY_REP and (employee_name or "").strip():
+                q = q.ilike("employee_name", (employee_name or "").strip())
+        return (q.limit(5000).execute().data or []), False
+    except Exception:
+        return [], True
+
+
+@router.post("/row/{row_id}/refile")
+def refile_closing_row(row_id: str, payload: RefileClosingRowIn = None,
+                       authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """MOVE A CLOSING TO THE STORE IT BELONGS TO — with everything keyed to it (index §29.14).
+
+    OWNER, 2026-10-13: *"also the manager should be able to go in and move the wrong closing tor trh
+    cioreect store"*. Before this, a rep who picked the wrong store could only be repaired by
+    hand-written SQL, and that SQL moved `daily_closing` alone while thirteen other tables kept the
+    old store — a half-moved store-day, which is worse than an unmoved one.
+
+    WHAT MOVES, WHAT STAYS AND WHAT BLOCKS IS NOT DECIDED HERE. `closing/closing_refile` is the one
+    home for it, and `harness_closing_refile.py` re-derives the table list from the migrations and
+    fails the build if a (close_date, store_code) table is not classified. This endpoint reads the
+    rows, asks for the plan, and applies it — or applies NOTHING and returns every reason why.
+
+    REFUSES (409, nothing changed) when: the destination store-day is already closed (dereferencing
+    `closing/closing_grain` — the same question `create_row` asks, so a manager cannot create the very
+    duplicate PR #458 stops); money has already been settled against the store-day (a bank deposit, a
+    deposit adjustment, a management review decision); a one-per-store-day satellite already exists at
+    the destination for this person; or any registered table could not be read.
+
+    `dry_run: true` returns the identical plan WITHOUT writing, which is what the screen shows the
+    manager before they confirm. Gated to the same management-review permission as
+    POST /row/{id}/release (DMs excluded)."""
+    require_org(org_id)
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Re-filing a closing is permission-restricted (not available to DMs).")
+    payload = payload or RefileClosingRowIn()
+    dry = bool(payload.dry_run)
+
+    got = (client.schema("commcalc").table("daily_closing")
+           .select("id,store_code,store_address,store_name,sfid,employee_name,close_date,period,"
+                   "released_at,t_cash,t_credit,envelope_picture")
+           .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
+    if not got:
+        raise HTTPException(404, "That closing could not be found.")
+    subject = got[0]
+    day = str(subject.get("close_date") or "")
+
+    # ── The destination, resolved through the SAME roster `create_row` resolves a submit through, so
+    #    a re-filed row carries the same store identity a correctly filed one would (store_code,
+    #    canonical address and salesforce id) rather than a bare code typed on a screen.
+    want_code = str(payload.store_code or "").strip()
+    want_sfid = str(payload.sfid or "").strip()
+    destination = {"store_code": want_code, "sfid": want_sfid}
+    try:
+        sm = (client.schema("commcalc").table("store_mapping")
+              .select("salesforce_id,store_code,store_address").eq("org_id", org_id)
+              .limit(20000).execute().data) or []
+    except Exception:
+        sm = []
+    hit = {}
+    if want_sfid:
+        hit = next((r for r in sm if str(r.get("salesforce_id") or "").strip() == want_sfid), {})
+    if not hit and want_code:
+        hit = next((r for r in sm if str(r.get("store_code") or "").strip().lower() == want_code.lower()), {})
+    if hit:
+        destination = {"store_code": (hit.get("store_code") or want_code).strip(),
+                       "store_address": hit.get("store_address"),
+                       "store_name": hit.get("store_address"),
+                       "sfid": (hit.get("salesforce_id") or want_sfid).strip() or None}
+
+    dest_code = destination.get("store_code") or ""
+    grain = _closing_grain(client, org_id, dest_code) if dest_code else _grain_src.HOUSE_DEFAULT
+    dest_closings = []
+    if dest_code:
+        try:
+            dest_closings = (client.schema("commcalc").table("daily_closing")
+                             .select("id,employee_name,released_at,submitted_at")
+                             .eq("org_id", org_id).eq("close_date", day).eq("store_code", dest_code)
+                             .limit(500).execute().data) or []
+        except Exception:
+            dest_closings = []
+
+    # ── Every registered satellite, counted at the SOURCE and (where the table takes one row per
+    #    store-day per person) at the DESTINATION, so a clash is refused before anything is written.
+    sats, rows_by_table = {}, {}
+    for table, spec in _refile.TABLES.items():
+        if spec["disposition"] == _refile.SUBJECT or not spec.get("match"):
+            continue
+        rows, bad = _refile_satellite(client, org_id, table, spec, store_code=subject.get("store_code"),
+                                      close_date=day, employee_name=subject.get("employee_name"),
+                                      closing_row_id=row_id)
+        rows_by_table[table] = rows
+        entry = {"count": len(rows), "unreadable": bad}
+        if spec.get("destination_unique") and dest_code:
+            drows, dbad = _refile_satellite(client, org_id, table, spec, store_code=dest_code,
+                                            close_date=day, employee_name=subject.get("employee_name"),
+                                            closing_row_id=None)
+            entry["destination_conflicts"] = len(drows)
+            entry["unreadable"] = bool(bad or dbad)
+        sats[table] = entry
+
+    plan = _refile.plan(subject=subject, destination=destination, grain=grain,
+                        destination_closings=dest_closings, satellites=sats)
+    plan["row_id"] = row_id
+    plan["employee_name"] = subject.get("employee_name")
+    plan["dry_run"] = dry
+    if not plan["ok"]:
+        raise HTTPException(409, {"error": "refile_refused", "refusals": plan["refusals"],
+                                  "plan": plan})
+    if dry:
+        return plan
+
+    by = str(payload.refiled_by or "").strip() or "management"
+    note = str(payload.note or "").strip() or None
+    # The satellites FIRST. If one of them fails the closing has not moved yet, so the store-day is
+    # still whole and the manager can retry — the other order would leave a moved closing with its
+    # cash pickup behind it.
+    moved = []
+    for mv in plan["moves"]:
+        table, spec = mv["table"], _refile.TABLES[mv["table"]]
+        schema, tname = table.split(".", 1)
+        patch = {c: _refile.store_patch(destination).get(c) for c in spec["store_columns"]}
+        ids = [r.get("id") for r in rows_by_table.get(table, []) if r.get("id")]
+        if not ids:
+            continue
+        try:
+            (client.schema(schema).table(tname).update(patch)
+             .eq("org_id", org_id).in_("id", ids).execute())
+            moved.append({"table": table, "rows": len(ids)})
+        except Exception as e:
+            raise HTTPException(500, f"{table} could not be moved ({str(e)[:200]}). The closing "
+                                     f"itself has NOT been moved; nothing is half-done.")
+
+    patch = dict(plan["closing_patch"])
+    # The dedup key is RECOMPOSED at the destination's grain by its one home — never spelled here —
+    # so the mig-502 unique index protects the new store-day exactly as it protects a fresh submit.
+    nk = _dedup.for_row(org_id, patch.get("store_code"), subject.get("employee_name"), day, grain=grain)
+    patch["dedup_key"] = nk or None
+    patch.update({"refiled_from_store_code": subject.get("store_code"), "refiled_at": _now(),
+                  "refiled_by": by, "refile_note": note})
+    try:
+        r = (client.schema("commcalc").table("daily_closing").update(patch)
+             .eq("org_id", org_id).eq("id", row_id).execute())
+    except Exception as e:
+        # The audit columns are migration 1081. Without them the move still happens, and the response
+        # says the trail is missing rather than silently dropping it.
+        for k in ("refiled_from_store_code", "refiled_at", "refiled_by", "refile_note"):
+            patch.pop(k, None)
+        plan["audit_columns_missing"] = "run migration 1081 to record who re-filed this closing"
+        try:
+            r = (client.schema("commcalc").table("daily_closing").update(patch)
+                 .eq("org_id", org_id).eq("id", row_id).execute())
+        except Exception:
+            raise HTTPException(500, f"The closing could not be moved ({str(e)[:200]}).")
+    if not r.data:
+        raise HTTPException(404, "row not found")
+    plan["moved"] = moved
+    plan["row"] = r.data[0]
+    return plan
 
 
 @router.get("/duplicates")

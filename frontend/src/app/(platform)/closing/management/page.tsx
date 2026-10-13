@@ -41,6 +41,12 @@ export default function ClosingManagementPage() {
   const marketOptions = useMemo(() => marketsFromStores(roster), [roster])
   const [relBusy, setRelBusy] = useState<Record<string, boolean>>({})
   const [relMsg, setRelMsg] = useState<Record<string, string>>({})
+  // RE-FILE A CLOSING TO THE RIGHT STORE (owner 2026-10-13, index §29.14): "the manager should be
+  // able to go in and move the wrong closing tor trh cioreect store". `refTo` is the store picked
+  // per row, `refPlan` the dry-run answer the manager reads BEFORE committing — the server decides
+  // everything (closing/closing_refile), this screen only shows the plan and the refusal.
+  const [refTo, setRefTo] = useState<Record<string, string>>({})
+  const [refPlan, setRefPlan] = useState<Record<string, any>>({})
 
   function load() {
     setLoading(true); setErr('')
@@ -71,6 +77,34 @@ export default function ClosingManagementPage() {
       load()
     } catch (e: any) { setRelMsg(m => ({ ...m, [key]: '❌ ' + (e?.message || e) })) }
     finally { setRelBusy(b => ({ ...b, [key]: false })) }
+  }
+
+  // Two steps on purpose. A move is hard to eyeball (a store-day carries up to seven satellite
+  // tables), so the manager sees exactly what will move — or why it cannot — and then confirms.
+  // `dry_run` writes nothing at all; the server refuses with the same sentence either way.
+  async function refile(g: any, key: string, commit: boolean) {
+    const to = (refTo[key] || '').trim()
+    if (!g.row_id) { setRelMsg(m => ({ ...m, [key]: '❌ ' + setupFailed('No matching closing record for this row') })); return }
+    if (!to) { setRelMsg(m => ({ ...m, [key]: '❌ Pick the store this closing belongs to.' })); return }
+    setRelBusy(b => ({ ...b, [key]: true })); setRelMsg(m => ({ ...m, [key]: '' }))
+    try {
+      const r: any = await api(`/api/v1/closing/row/${g.row_id}/refile`, {
+        method: 'POST', body: JSON.stringify({ store_code: to, dry_run: !commit }),
+      })
+      if (commit) {
+        const moved = (r?.moved || []).reduce((a: number, m: any) => a + (m.rows || 0), 0)
+        const review = (r?.review || []).map((x: any) => x.message).join(' ')
+        setRefPlan(p => ({ ...p, [key]: null }))
+        setRelMsg(m => ({ ...m, [key]: `✅ Moved to ${r?.to_store_code}${moved ? ` — ${moved} linked record${moved > 1 ? 's' : ''} moved with it` : ''}.${review ? ' ' + review : ''}` }))
+        load()
+      } else {
+        setRefPlan(p => ({ ...p, [key]: r }))
+        setRelMsg(m => ({ ...m, [key]: '' }))
+      }
+    } catch (e: any) {
+      setRefPlan(p => ({ ...p, [key]: null }))
+      setRelMsg(m => ({ ...m, [key]: '❌ ' + (e?.message || e) }))
+    } finally { setRelBusy(b => ({ ...b, [key]: false })) }
   }
 
   const groups: any[] = data?.groups || []
@@ -160,10 +194,42 @@ export default function ClosingManagementPage() {
                       title={g.row_id ? undefined : setupFailed('No matching closing record for this row')}>
                       {relBusy[key] ? '⏳' : g.released_at ? '🔒 Re-lock' : '🔓 Release for correction'}
                     </button>
+                    {/* MOVE IT TO THE RIGHT STORE (index §29.14). The destination list is the same
+                        roster the filter bar uses, so a manager picks and never types a store code. */}
+                    <select value={refTo[key] || ''} aria-label="Move this closing to"
+                      onClick={e => e.stopPropagation()}
+                      onChange={e => { e.stopPropagation(); const v = e.target.value; setRefTo(t => ({ ...t, [key]: v })); setRefPlan(p => ({ ...p, [key]: null })) }}
+                      style={{ fontSize: 11, padding: '3px 6px', maxWidth: 190 }}>
+                      <option value="">Move to store…</option>
+                      {roster.filter(o => o.id !== g.store_code).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                    </select>
+                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
+                      disabled={!g.row_id || !refTo[key] || relBusy[key]}
+                      onClick={e => { e.stopPropagation(); refile(g, key, false) }}>
+                      {relBusy[key] ? '⏳' : 'Check move'}
+                    </button>
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{isOpen ? '▲ hide tries' : '▼ show tries'}</span>
                   </div>
                 </div>
                 {relMsg[key] && <div style={{ fontSize: 11, padding: '0 14px 8px', color: relMsg[key].startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{relMsg[key]}</div>}
+                {refPlan[key]?.ok && (
+                  <div style={{ fontSize: 11, padding: '0 14px 10px', color: 'var(--text2)' }}>
+                    Moving this closing to <b>{refPlan[key].to_store_code}</b>
+                    {(refPlan[key].moves || []).length
+                      ? <> also moves {(refPlan[key].moves || []).map((m: any) => `${m.count} × ${m.table.split('.').pop().replace(/_/g, ' ')}`).join(', ')}.</>
+                      : <> moves nothing else — no cash pickup, expense or count is recorded against this store-day.</>}
+                    {(refPlan[key].review || []).map((r: any, i: number) => <div key={i} style={{ color: '#92400e' }}>⚠ {r.message}</div>)}
+                    <div style={{ marginTop: 6 }}>
+                      <button className="btn" style={{ fontSize: 11, padding: '3px 8px' }}
+                        disabled={relBusy[key]}
+                        onClick={e => { e.stopPropagation(); refile(g, key, true) }}>
+                        {relBusy[key] ? '⏳ moving…' : `Confirm move to ${refPlan[key].to_store_code}`}
+                      </button>
+                      <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px', marginLeft: 6 }}
+                        onClick={e => { e.stopPropagation(); setRefPlan(p => ({ ...p, [key]: null })) }}>Cancel</button>
+                    </div>
+                  </div>
+                )}
                 {isOpen && (
                   <div style={{ borderTop: '1px solid var(--border)', padding: '10px 14px' }}>
                     <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
