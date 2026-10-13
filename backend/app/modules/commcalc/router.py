@@ -4734,8 +4734,17 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     auto_calc = (_auto_calc.landed(client, org_id, table=table,
                                    periods=sorted({m.get("period") for m in mapped if m.get("period")}) or [period],
                                    source=trace_source, filename=fname, rows=saved) if saved else None)
+    # WHY nothing landed (owner report 2026-10-13), through the ONE home. This core SAVES ZERO rather
+    # than refusing — an automated sweep is allowed to hand it an empty day — so the reason is
+    # REPORTED rather than raised, and `saved: 0` stops being a receipt with no cause. No feed is
+    # named: the candidates are the report keys this tenant actually has mappings for.
+    no_rows = (column_mapping.no_rows_diagnosis(
+        [str(c) for c in getattr(df, "columns", [])], rules, len(df.index), saved, footer_rows,
+        column_mapping.candidate_rules(client, org_id, carrier_id or None, exclude=report_key))
+        if not saved else None)
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
             "auto_calc": auto_calc,
+            "no_rows_reason": (no_rows or {}).get("reason"), "no_rows_note": (no_rows or {}).get("sentence"),
             "rules_used": len(rules), "used_defaults": used_defaults, "mapped": len(mapped),
             "footer_rows_skipped": footer_rows, "undated_rows": undated_rows,
             # The clock feed's own receipt: the trailer tie-out, whether the filename's claimed day
@@ -11195,8 +11204,15 @@ async def commission_import_commit(
                                    periods=sorted({m.get("period") for m in mapped if m.get("period")}) or [period],
                                    source="import-wizard", filename=getattr(file, "filename", None), rows=saved)
                  if saved else None)
+    # Same answer as the /upload-mapped core, from the same one home — this endpoint runs its own
+    # copy of the pipeline, so it dereferences the diagnosis itself rather than inheriting one.
+    no_rows = (column_mapping.no_rows_diagnosis(
+        [str(c) for c in getattr(df, "columns", [])], rules, len(df.index), saved, 0,
+        column_mapping.candidate_rules(client, org_id, carrier_id or None, exclude=report_key))
+        if not saved else None)
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
             "mapped": len(mapped), "new_categories": created, "template_rows": persisted,
+            "no_rows_reason": (no_rows or {}).get("reason"), "no_rows_note": (no_rows or {}).get("sentence"),
             "auto_calc": auto_calc}
 
 
@@ -48423,7 +48439,9 @@ async def _upload_prospect_feed_impl(prospect_id, feed_key, period, carrier_id,
     if period:
         pm = parse_period(period)
         base = {"period": period, "period_month": pm["month"], "period_year": pm["year"]}
-    mapped = column_mapping.map_records(df.to_dict("records"), rules, dict(base))
+    records = df.to_dict("records")
+    headers = [str(c) for c in getattr(df, "columns", [])]
+    mapped = column_mapping.map_records(records, rules, dict(base))
     # The SAME two shape rules the live ingest applies, in the same order: a grand-total footer row
     # repeats every numeric column and would double every figure in the evaluation; and with no
     # period named each row takes the period of its own date rather than the whole file landing
@@ -48437,9 +48455,17 @@ async def _upload_prospect_feed_impl(prospect_id, feed_key, period, carrier_id,
         # count is reported so a file the reader could only half-date says so.
         undated = max(0, len(mapped) - stamped)
     if not mapped:
-        raise HTTPException(400, "That file produced no rows once its header and any total row were "
-                                 "read. Nothing was written, and no existing rows were removed — an "
-                                 "empty file never empties a period.")
+        # WHY, not just THAT (owner report 2026-10-13). The one home names the stage that emptied the
+        # file, and — because the prospect page offers a feed PICKER — the feed whose columns the file
+        # actually carries, which is the answer whenever the wrong slot was used. The candidate rules
+        # come from the SAME mapping source this upload read its own from, so a tenant that remapped a
+        # feed is diagnosed against its own mapping, not a built-in layout.
+        _cand = column_mapping.candidate_rules(client, org_id, carrier_id or None, exclude=feed,
+                                               keys=list(_pev.FEED_KEYS))
+        _dx = column_mapping.no_rows_diagnosis(
+            headers, rules, len(records), 0, len(footers), _cand,
+            labels={_k: (_v.get("label") or _k) for _k, _v in _pev.FEED_REGISTRY.items()})
+        raise HTTPException(400, (_dx or {}).get("sentence") or "That file produced no rows.")
     periods = sorted({str(r.get("period") or "").strip() for r in mapped})
     batch = str(_uuid_mod.uuid4())
     rows = [{"org_id": org_id, "prospect_id": prospect_id, "feed_key": feed,
