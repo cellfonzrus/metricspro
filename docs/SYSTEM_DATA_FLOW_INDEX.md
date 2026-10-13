@@ -26503,6 +26503,44 @@ already returned:
 The row-per-store table stays: it sorts by contribution and answers "which site is carrying this
 deal", which a matrix does not.
 
+### COMMCALC-03.19 The expense in every column, and the profit-or-loss line (owner directive 2026-10-13)
+
+Owner, verbatim: *"add teh expenses in teh expenses line and give ,e teh final p&l nunmber to see if
+teh store is profitable aor loss, give me the net income line calcculated"*.
+
+§COMMCALC-03.13 had left every store column carrying **no** expenses, with the reasoning stated
+there. The owner has now ruled on it, and the ruling is sound, because our average expense figure is
+**already one store's worth** of rent, salaries and utilities (§COMMCALC-03.6) — so there were only
+ever two honest things to do with it:
+
+| | What it does | Verdict |
+|---|---|---|
+| **Split** it across the prospect's sites | divides a per-store cost by seven; every column looks profitable | refused — it answers no question anyone asked |
+| **Charge each column the whole of it** | the column answers *"could THIS site stand on its own?"* | **ships** — and it is the basis the per-store break-even has used since §COMMCALC-03.14 |
+
+**The consequence is stated, not hidden.** Revenue, device cost and activated lines still add across
+to the all-stores column, because those are the store's own money. **The expense and net-income rows
+deliberately do not** — seven columns carry seven copies of a one-store cost on purpose. The screen
+prints that in the panel above the table, and `prospect_eval.STORE_EXPENSE_BASIS` is the ONE sentence
+saying it, carried on every column as `expenses_basis` so a reader of a column is never left to
+assume.
+
+**One phrase for the bottom line, everywhere on the screen.** With expenses charged, the figure is
+the P&L bottom line, so "carrier-side contribution" became misleading; but calling it net income
+would overstate it, because a takeover pack carries **no accessory and no bill-payment feed**
+(§COMMCALC-03.7). Both labels are now **"profit or loss on measured revenue"**, on the summary tile,
+in the matrix and in the row-per-store table, with the tile's subtitle saying a real month is better
+than this figure by whatever the counter sells — which is exactly what §COMMCALC-03.14's accessory
+target quantifies. The screen no longer says "NOT net income" in one place and "net income" in
+another.
+
+**Locked** by `harness_prospect_eval.py` §N7–N15 (224 passed / 0 failed), which holds BOTH halves:
+N8 every column is charged the whole expense and not a share; N9 the expense row therefore does not
+add across; N10/N11 revenue, device cost and activations still tie; **N12 the net-income gap is
+exactly the extra copies of the one-store expense, so nothing is lost or invented**; N13 a column's
+bottom line is its own revenue less its own costs less the full expense; N14 the basis is one
+sentence in one place and warns that those rows do not add.
+
 
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
