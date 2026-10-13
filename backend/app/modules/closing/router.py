@@ -37,6 +37,7 @@ from . import submit_refusal as _refusal
 from . import dedup_key as _dedup
 from . import unfinished_day as _unfinished
 from . import closing_source as _closing_src
+from . import closing_grain as _grain_src
 from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 from . import metric_catalog as _metrics
 
@@ -343,11 +344,41 @@ def _ingest_dataframe(client, org_id: str, df) -> dict:
     # Idempotent: wipe sheet-sourced rows for the covered dates, keep manual rows, then insert.
     (client.schema("commcalc").table("daily_closing").delete()
      .eq("org_id", org_id).eq("source", "sheet_upload").in_("close_date", sorted(dates)).execute())
-    for i in range(0, len(rows), 500):
-        client.schema("commcalc").table("daily_closing").insert(rows[i:i + 500]).execute()
 
-    unresolved = sum(1 for r in rows if not r["store_code"])
-    return {"rows_saved": len(rows), "dates": sorted(dates), "unresolved_stores": unresolved}
+    # ── HOW MANY CLOSINGS ONE STORE-DAY TAKES (owner bug report 2026-10-13) — the SIBLING PATH.
+    #    This is the second writer of `commcalc.daily_closing`, and it set no dedup key at all, so a
+    #    file could do by upload exactly what the submit form did by hand: put a second declaration
+    #    of one store-day's cash beside the first, with no index and no guard in the way. It asks the
+    #    SAME registry the submit endpoint asks (`closing/closing_grain`, one config read for the
+    #    whole file) and SKIPS + REPORTS a row the day is already closed for — never silently, and
+    #    never by merging two people's money, which would be a figure nobody declared.
+    grain_of = _closing_grain_map(client, org_id, {r["store_code"] for r in rows if r["store_code"]})
+    try:
+        held = (client.schema("commcalc").table("daily_closing")
+                .select("close_date,store_code,employee_name")
+                .eq("org_id", org_id).in_("close_date", sorted(dates)).execute().data) or []
+    except Exception:
+        held = []
+    taken = {(str(h.get("close_date")), str(h.get("store_code") or "").strip()): h.get("employee_name")
+             for h in held if str(h.get("store_code") or "").strip()}
+    keep, skipped = [], []
+    for r in rows:
+        code = str(r["store_code"] or "").strip()
+        key = (r["close_date"], code)
+        if code and _grain_src.blocks_other_reps(grain_of.get(code)) and key in taken:
+            skipped.append({"close_date": r["close_date"], "store_code": code,
+                            "employee_name": r["employee_name"],
+                            "already_closed_by": taken[key] or None})
+            continue
+        keep.append(r)
+        if code:
+            taken.setdefault(key, r["employee_name"])
+    for i in range(0, len(keep), 500):
+        client.schema("commcalc").table("daily_closing").insert(keep[i:i + 500]).execute()
+
+    unresolved = sum(1 for r in keep if not r["store_code"])
+    return {"rows_saved": len(keep), "dates": sorted(dates), "unresolved_stores": unresolved,
+            "skipped_already_closed": skipped}
 
 
 # ── Available dates (for the picker) ──────────────────────────────────────────────────────
@@ -2160,16 +2191,42 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
     #    SQL by the migration that builds the index (it had drifted: Python folded a STRIPPED name,
     #    SQL folded the raw one, so a name stored with a stray space produced two different keys for
     #    one person and the index could not see the duplicate).
+    #    ── HOW MANY CLOSINGS ONE STORE-DAY TAKES (owner bug report 2026-10-13, mig 1080) ──────────
+    #    Dereference `closing/closing_grain`; never assume the rep belongs in the question. At the
+    #    house default — ONE closing per store-day — a SECOND PERSON closing a day somebody already
+    #    closed is refused and told who holds it, which is the defect reported: Nostrand / 2026-10-10
+    #    took three accepted closings ($230 + $140 + $0) against a POS day of $140, because the key,
+    #    the index and this guard all carried the employee and so saw no duplicate at all. Nothing is
+    #    re-derived here: the same registry composes `dedup_key` below, so the pre-insert guard and
+    #    the database index cannot disagree about what a duplicate is.
     _dupe_store, _dupe_emp = body.get("store_code"), (body.get("employee_name") or "").strip()
+    _grain_here = _closing_grain(client, org_id, _dupe_store)
+    _store_day_grain = _grain_src.blocks_other_reps(_grain_here)
     _update_id = None
     try:
-        _existing = (client.schema("commcalc").table("daily_closing")
-                     .select("id,released_at,correction_count")
-                     .eq("org_id", org_id).eq("close_date", d).eq("store_code", _dupe_store)
-                     .ilike("employee_name", _dupe_emp)
-                     .order("submitted_at").execute().data) or []
+        _dupe_q = (client.schema("commcalc").table("daily_closing")
+                   .select("id,released_at,correction_count,employee_name")
+                   .eq("org_id", org_id).eq("close_date", d).eq("store_code", _dupe_store))
+        if not _store_day_grain:
+            _dupe_q = _dupe_q.ilike("employee_name", _dupe_emp)
+        _day_rows = (_dupe_q.order("submitted_at").execute().data) or []
     except Exception:
-        _existing = []
+        _day_rows = []
+    _mine = [r for r in _day_rows
+             if (r.get("employee_name") or "").strip().lower() == _dupe_emp.lower()]
+    _mine_ids = {id(r) for r in _mine}
+    _theirs = [r for r in _day_rows if id(r) not in _mine_ids]
+    # Somebody else already closed this store-day and no manager has released it. REFUSED, with the
+    # holder named — a rep turned away without being told by whom resubmits instead of asking.
+    if _store_day_grain and _theirs and not any(r.get("released_at") for r in _theirs):
+        _holder = _theirs[0].get("employee_name")
+        _refuse(client, org_id, d, body, "store_day_already_closed",
+                detail=_grain_src.refusal_detail(_dupe_store, d, _holder),
+                message_suffix=_grain_src.refusal_suffix(_holder))
+    # The correction target. Own row first; otherwise, at store-day grain, a row a manager RELEASED
+    # — the release says "this store-day was closed by the wrong person, let the right one redo it",
+    # so the resubmit UPDATES that same row (never a second insert) and carries the new name onto it.
+    _existing = _mine or ([r for r in _theirs if r.get("released_at")] if _store_day_grain else [])
     if len(_existing) > 1 and not any(r.get("released_at") for r in _existing):
         _refuse(client, org_id, d, body, "duplicate_multiple",
                 detail=f"{len(_existing)} existing rows for {_dupe_emp} at {_dupe_store} on {d}")
@@ -2184,7 +2241,7 @@ async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = H
         body["released_at"] = None
         body["released_by"] = None
         body.pop("submitted_at", None)   # keep the ORIGINAL submitted_at on a corrected resubmit
-    body["dedup_key"] = _dedup.for_row(org_id, _dupe_store, _dupe_emp, d)
+    body["dedup_key"] = _dedup.for_row(org_id, _dupe_store, _dupe_emp, d, grain=_grain_here)
     # ── Activation-count fields (mig 501). Configured tenants send `counts: {field_key: value}` for
     #    every field on their axis; standard field_keys still write the physical column (backward-compat
     #    with the rollup dashboard + sheet-upload ingestion), custom ones go to daily_closing.counts
@@ -9463,7 +9520,8 @@ def _real_attempt_count(client, org_id, d, store_code, emp_name) -> int:
     return sum(1 for r in rows if _refusal.is_real_try(r))
 
 
-def _refuse(client, org_id, d, body, code, detail="", tenders=None, message="") -> None:
+def _refuse(client, org_id, d, body, code, detail="", tenders=None, message="",
+            message_suffix="") -> None:
     """THE single refusal site for a daily-closing submit (index §29.11). Records WHY the closing was
     refused in the SAME commcalc.closing_attempt audit trail the accepted and blocked tries already
     use — so GET /closing/attempts and the Management Review screen gain refusals with no second
@@ -9473,7 +9531,7 @@ def _refuse(client, org_id, d, body, code, detail="", tenders=None, message="") 
     refusal paths stored nothing at all, so a rep who said "I submitted it" and a manager who saw
     nothing had no evidence either way (owner bug report 2026-10-02, 117 E Burnside Ave).
     harness_closing_submit_refusal.py FAILS THE BUILD if a new path bypasses this function."""
-    r = _refusal.Refusal(code, detail=detail, message=message)
+    r = _refusal.Refusal(code, detail=detail, message=message, message_suffix=message_suffix)
     b = body or {}
     try:
         # A date we could not parse has no close_date to file the refusal under, and close_date is
@@ -11282,6 +11340,104 @@ def _closing_source_rows(client, org_id: str) -> list:
 def _closing_source(client, org_id: str, store_code=None) -> str:
     """THE RESOLVER — one store's closing source. Per-store override → org default → house default."""
     return _closing_src.resolve(_closing_source_rows(client, org_id), store_code)
+
+
+def _closing_grain_rows(client, org_id: str) -> list:
+    """THE ONE READ of `commcalc.closing_grain_config` (mig 1080). A missing table (pre-mig-1080) or
+    a failed read returns `[]`, which `closing_grain.resolve` folds to the house default — ONE
+    closing per store-day — so the protection the owner asked for is live without waiting on the
+    schema change. It never raises, because a config read must not take the closing form down."""
+    try:
+        return (client.schema("commcalc").table("closing_grain_config")
+                .select("id,store_code,grain,updated_at,updated_by")
+                .eq("org_id", org_id).limit(5000).execute().data) or []
+    except Exception as e:
+        print(f"WARN closing_grain_config read failed (defaulting to one per store-day): {e}")
+        return []
+
+
+def _closing_grain(client, org_id: str, store_code=None) -> str:
+    """THE RESOLVER — how many closings one store-day takes at this store. Per-store override → org
+    default → house default."""
+    return _grain_src.resolve(_closing_grain_rows(client, org_id), store_code)
+
+
+def _closing_grain_map(client, org_id: str, store_codes) -> dict:
+    """The batch resolver — `{store_code: grain}` from ONE config read, for a sheet upload or sweep."""
+    return _grain_src.grain_map(_closing_grain_rows(client, org_id), store_codes)
+
+
+@router.get("/grain-config")
+def get_closing_grain_config(store_code: str = "", org_id: str = ORG_ID):
+    """How many daily closings one store-day takes: the org default, every per-store override, and
+    (when `store_code` is given) the effective answer for that one store."""
+    require_org(org_id)
+    rows = _closing_grain_rows(sb(), org_id)
+    return {
+        "grains": list(_grain_src.GRAINS),
+        "labels": dict(_grain_src.LABELS),
+        "help": dict(_grain_src.HELP),
+        "house_default": _grain_src.HOUSE_DEFAULT,
+        "org_default": _grain_src.resolve(rows, None),
+        "overrides": [{"store_code": r.get("store_code"), "grain": _grain_src.normalize(r.get("grain")),
+                       "updated_at": r.get("updated_at"), "updated_by": r.get("updated_by")}
+                      for r in rows if str(r.get("store_code") or "").strip()],
+        "store_code": store_code or None,
+        "effective": _grain_src.resolve(rows, store_code) if store_code else None,
+    }
+
+
+class PutClosingGrainIn(LaxModel):
+    store_code: Any = None     # blank / omitted → the ORG DEFAULT row
+    store_codes: Any = None    # SEVERAL stores in one call (the Store Setup multi-select dropdown)
+    grain: Any = None          # 'store_day' | 'rep_day'
+
+
+def _closing_grain_write_one(client, org_id: str, rows: list, code, raw: str, email) -> None:
+    """Set ONE store's override (or the org default when `code` is None). THE ONE WRITER of
+    `closing_grain_config` — a multi-store save fans out through this, exactly as the closing-source
+    setting does, so "several stores at once" cannot grow a second, differently-behaved write path."""
+    row = {"org_id": org_id, "store_code": code, "grain": raw, "updated_at": _now(),
+           "updated_by": email}
+    found = [r for r in rows
+             if (str(r.get("store_code") or "").strip().upper() or None) == (code.upper() if code else None)]
+    try:
+        if found:
+            (client.schema("commcalc").table("closing_grain_config").update(row)
+             .eq("org_id", org_id).eq("id", found[0]["id"]).execute())
+        else:
+            client.schema("commcalc").table("closing_grain_config").insert(row).execute()
+    except Exception as e:
+        print(f"WARN closing grain save failed (org {org_id}, store {code}): {e}")
+        raise HTTPException(400, "Could not save how many closings a store-day takes. The setting is "
+                                 "not available on this tenant yet — contact support.")
+
+
+@router.put("/grain-config")
+def put_closing_grain_config(payload: PutClosingGrainIn, org_id: str = ORG_ID,
+                             authorization: str = Header(default="")):
+    """Set the org default, ONE store's override, or SEVERAL stores' overrides in one call.
+
+    Gated to the same 'closing' settings area as the closing-source and tender config: whether a
+    store-day may hold two declarations of the same cash is not a market-scoped caller's decision.
+    """
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Changing how many closings a store-day takes is permission-restricted.")
+    raw = str(payload.grain or "").strip().lower()
+    if raw not in _grain_src.GRAINS:
+        raise HTTPException(400, f"grain must be one of {', '.join(_grain_src.GRAINS)}")
+    codes = _closing_src.normalize_store_codes(
+        payload.store_codes if payload.store_codes is not None else payload.store_code)
+    rows = _closing_grain_rows(client, org_id)
+    email = _caller_email(client, authorization)
+    for code in (codes or [None]):
+        _closing_grain_write_one(client, org_id, rows, code, raw, email)
+    return {"ok": True, "store_code": codes[0] if codes else None, "store_codes": codes,
+            "count": len(codes) or 1, "grain": raw,
+            "label": _grain_src.LABELS.get(raw, raw),
+            "scope": "store" if codes else "org_default"}
 
 
 def _closing_source_map(client, org_id: str, store_codes) -> dict:

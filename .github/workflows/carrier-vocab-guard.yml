@@ -235,6 +235,11 @@ on:
       - "backend/app/modules/closing/unfinished_day.py"
       - "backend/app/modules/closing/submit_refusal.py"
       - "backend/app/modules/closing/dedup_key.py"
+      # index §29.13 — one store-day takes one closing; the lock reads the router, the grain
+      # registry, the dedup key, migration 1080 and the Management Review screen
+      - "backend/harness_closing_store_day_grain.py"
+      - "backend/app/modules/closing/closing_grain.py"
+      - "database/migrations/1080_closing_grain_config.sql"
       - "backend/harness_report_kind_lock.py"
       - "backend/harness_connector_scope_lock.py"
       - "backend/app/modules/commcalc/connector_registry.py"
@@ -1585,6 +1590,33 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_submit_refusal.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE STORE-DAY GRAIN LOCK (index §29.13, owner bug report 2026-10-13 "2 reps did the closing for Oct 10 for
+  # nostrand ave ... the system should not have taken duplicate entries"). The platform had exactly ONE answer to
+  # "is this store-day already closed?" and it was "only if this same REP closed it" — in closing/dedup_key, in the
+  # unique index built from it, and in create_row's pre-insert guard — so a second PERSON was a duplicate to none of
+  # them and the day's declared cash doubled into every downstream total in silence (Nostrand / 2026-10-10 held three
+  # accepted closings, $370 against a POS day of $140). closing/closing_grain is now the one home for how many
+  # closings a store-day takes, per-org config with a per-store override and a house default of one-per-store-day.
+  # This job FAILS THE BUILD if create_row stops dereferencing it, if the dedup key is composed without the grain, if
+  # the closing-sheet upload (the second writer of daily_closing) stops asking the same question, if a second copy of
+  # the vocabulary appears, if migration 1080 starts recomputing stored dedup keys (which would collide on the 16
+  # historical two-rep store-days), or if the Management Review screen has no words for the new refusal. It drives the
+  # real submit endpoint and the real sheet ingest against the shared in-memory client, so it needs the backend's
+  # dependencies — same reason as the job above. DB-free.
+  closing-store-day-grain-lock:
+    name: Closing store-day grain lock (one store-day, one closing)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-day grain lock (a second rep is refused and told; the key, the guard and the sheet upload all dereference one registry — index §29.13)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_store_day_grain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE UNFINISHED-DAY LOCK (index §29.12) imports the real closing router (closing_resume,
   # _log_attempt, _closing_summary_for_date), so it needs the backend's dependencies and its own job
