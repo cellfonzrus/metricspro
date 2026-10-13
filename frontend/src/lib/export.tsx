@@ -59,6 +59,12 @@ export type ExportColumn = {
   field?: string                                   // stable identity (defaults to header)
   type?: 'text' | 'money' | 'number' | 'date'      // filter/sort semantics (money implies type=money)
   role?: 'rep' | 'store' | 'date' | 'month'        // force a quick-filter role (else auto-detected)
+  // Optional TOTAL-ROW override, read by lib/report-totals.resolveAgg (ignored by export itself).
+  // `report-totals` has always documented that "a page can override any column with an explicit
+  // `agg`", but the field was not on this type, so no page could actually say it and every numeric
+  // column was summed. A column whose numbers do not ADD — a maximum, a share, a per-month ratio —
+  // needs 'none', or the total row shows a figure the data never contained.
+  agg?: 'sum' | 'avg' | 'none'
   // Optional DISPLAY-ONLY hints used by <DataGrid> (ignored by export — export always uses `get`):
   render?: (row: any) => ReactNode                 // custom cell rendering (e.g. per-column number format)
   tip?: string                                     // header tooltip

@@ -997,6 +997,89 @@ check("Q9 an empty feed produces an empty report, never a crash or a zero claim"
       and P.handset_orders(None, None)["totals"]["cost"] == 0.0)
 
 
+# ── §R THE SAME ACCOUNTS, EVERY MONTH (owner ask 2026-10-13) ─────────────────────────────────────
+# "I need the accounts which are 2 more summarized at the bottom for each month with the drill down".
+# The lock that matters is R1: the month on screen is ONE ROW of this table, so the two must agree by
+# construction, not by coincidence. R2-R4 hold the arithmetic (the months partition the whole), and
+# R5-R8 hold the honesty rules the month report already lives under — a month with nothing flagged is
+# reported as zero, a month boundary is a real boundary, and nothing here reaches a verdict.
+# September carries a FOUR-line account (flagged) and October carries rows with nothing flagged.
+_RMONTHS = LIVE_SHAPE + [
+    {"period": "September 2026", "ban": None, "bin": "B2-900000001",
+     "activation_order": f"36000010{i}", "tx_date": "2026-09-0%d" % (i + 1),
+     "merchant_account_id": "168874", "activation_type": "Add",
+     "sku": "Samsung Galaxy A16 5G TO", "imei": "90000000000000%d" % i, "spiff_m1": -20.0}
+    for i in range(4)
+] + [
+    # October: two single-line accounts. Rows, but nothing over the threshold.
+    {"period": "October 2026", "ban": None, "bin": "B2-A00000001", "activation_order": "370000001",
+     "tx_date": "2026-10-02", "merchant_account_id": "168874", "activation_type": "New",
+     "sku": "Samsung Galaxy A16 5G TO", "imei": "101000000000001", "spiff_m1": -10.0},
+    {"period": "October 2026", "ban": None, "bin": "B2-A00000002", "activation_order": "370000002",
+     "tx_date": "2026-10-03", "merchant_account_id": "168874", "activation_type": "New",
+     "sku": "Samsung Galaxy A16 5G TO", "imei": "101000000000002", "spiff_m1": -10.0},
+]
+_BM = P.multi_line_by_month(_RMONTHS, CFG["account_key_columns"], CFG["family_line_threshold"])
+_rowof = {r["period"]: r for r in _BM["by_month"]}
+
+# R1 IS THE WHOLE POINT: the month report and this table's row for that month are the same figures.
+# Built the way the screen builds the month report — `account_groups` over that month's rows alone.
+_augG = P.account_groups([r for r in _RMONTHS if r["period"] == "August 2026"],
+                         CFG["account_key_columns"])
+_augF = P.flag_multi_line_accounts(_augG, CFG["family_line_threshold"])
+_augS = P.multi_line_summary(_augG, _augF, CFG["family_line_threshold"])
+check("R1 the month on screen is ONE ROW of this table — the two cannot disagree",
+      {k: v for k, v in _rowof["August 2026"].items() if k != "period"} == _augS,
+      f'{_rowof["August 2026"]} vs {_augS}')
+check("R2 every uploaded month gets a row, newest and oldest alike",
+      _BM["periods"] == ["August 2026", "October 2026", "September 2026"] and _BM["months"] == 3)
+check("R3 the months partition the file — accounts and lines add up to the whole, nothing double-counted",
+      sum(r["accounts"] for r in _BM["by_month"]) == _BM["totals"]["accounts"]
+      and sum(r["lines"] for r in _BM["by_month"]) == _BM["totals"]["lines"]
+      and sum(r["lines_with_no_account"] for r in _BM["by_month"])
+      == _BM["totals"]["lines_with_no_account"])
+check("R4 …and so do the flagged accounts, so the drill-down can never show an account twice or lose one",
+      sum(r["flagged_accounts"] for r in _BM["by_month"]) == len(_BM["flagged"])
+      and sum(r["flagged_lines"] for r in _BM["by_month"])
+      == sum(a["lines"] for a in _BM["flagged"]))
+check("R5 a month with rows but NOTHING flagged is reported as zero, never omitted",
+      _rowof["October 2026"]["accounts"] == 2
+      and _rowof["October 2026"]["flagged_accounts"] == 0)
+check("R6 the flag is per month — the four-line September account flags in September only",
+      _rowof["September 2026"]["flagged_accounts"] == 1
+      and _rowof["September 2026"]["max_lines_on_one_account"] == 4
+      and [a["period"] for a in _BM["flagged"] if a["account_key"] == "B2-900000001"]
+      == ["September 2026"])
+check("R7 the same account key in two different months is two findings, not one grown plan",
+      P.multi_line_by_month(
+          LIVE_SHAPE + NEXT_MONTH, CFG["account_key_columns"],
+          CFG["family_line_threshold"])["by_month"][-1]["flagged_accounts"] == 0)
+check("R8 the threshold is READ from config, never spelled in this report",
+      _BM["threshold"] == CFG["family_line_threshold"]
+      and P.multi_line_by_month(_RMONTHS, CFG["account_key_columns"], 3)["totals"]["flagged_accounts"]
+      < _BM["totals"]["flagged_accounts"])
+check("R9 every account carries its month, so the drill-down needs no second lookup",
+      all(a.get("period") for a in _BM["flagged"]))
+check("R10 it is evidence, not a verdict — no field here claims fraud",
+      not any("fraud" in k or "deemed" in k for r in _BM["by_month"] for k in r))
+check("R11 an empty upload produces an empty table, never a crash or a zero claim",
+      P.multi_line_by_month([], CFG["account_key_columns"], 2)["by_month"] == []
+      and P.multi_line_by_month(None, None, None)["months"] == 0)
+# THE DESIGN LOCK: this report must DEREFERENCE the month report's three functions, not re-tally. A
+# second grouping loop here is the duplicate derivation the index rules forbid, and it would drift
+# from the screen the first time either side changed.
+_bmsrc = inspect.getsource(P.multi_line_by_month)
+check("R12 it dereferences the month report's own grouping, flagging and summary",
+      all(f"{fn}(" in _bmsrc for fn in
+          ("account_groups", "flag_multi_line_accounts", "multi_line_summary")))
+check("R13 …and re-tallies nothing of its own — no second distribution counter",
+      "lines_per_account" not in _bmsrc and "dist" not in _bmsrc)
+check("R14 the router feeds it EVERY month, from the read it already made",
+      "multi_line_by_month(" in _rtext and "every_month" in _rtext
+      and _rtext.count("def _prospect_feed_rows") == 1)
+check("R15 one home for the month stamped on a row — the grouping reads it too",
+      "_row_period(r)" in _pcode and _pcode.count('.get("period") or "").strip()') == 1)
+
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
 if FAIL:

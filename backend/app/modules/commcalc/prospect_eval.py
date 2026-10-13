@@ -299,6 +299,11 @@ def default_period(periods_by_feed, leading_feed="ma_commission", today=None):
             "from_feed": src, "months_available": every, "in_progress": skipped}
 
 
+def _row_period(row):
+    """PURE: the month stamped on one feed row, as the grouping keys spell it."""
+    return str((row or {}).get("period") or "").strip()
+
+
 def substance(rows):
     """PURE: what a mapped file actually put in the table.
 
@@ -315,7 +320,7 @@ def substance(rows):
         if not isinstance(r, dict):
             continue
         n += 1
-        if str(r.get("period") or "").strip():
+        if _row_period(r):
             dated += 1
         if not any(k not in month and v not in (None, "", 0, 0.0) for k, v in r.items()):
             empty += 1
@@ -517,7 +522,6 @@ def line_id(row):
     v = "" if v is None else str(v).strip()
     return v or None
 
-
 def account_groups(rows, columns):
     """PURE: commission rows → {(period, account_key): {...}} plus the rows that carry no account.
 
@@ -534,7 +538,7 @@ def account_groups(rows, columns):
             unidentified.append(r)
             continue
         used[col] = used.get(col, 0) + 1
-        period = str((r or {}).get("period") or "").strip()
+        period = _row_period(r)
         g = groups.setdefault((period, key), {"period": period, "account_key": key,
                                               "account_column": col, "lines": []})
         g["lines"].append(r)
@@ -659,6 +663,57 @@ def multi_line_summary(grouped, flagged, threshold):
         "max_lines_on_one_account": max(dist) if dist else 0,
     }
 
+
+# ── EVERY MONTH, NOT JUST THE ONE ON SCREEN (owner ask 2026-10-13) ────────────────────────────────
+# OWNER, VERBATIM: *"I need the accounts which are 2 more summarized at the bottom for each month with
+# the drill down"*. The month report already answered this for ONE month, and the whole point of the
+# question is the comparison a single month cannot make: an account carrying four lines in one month
+# is a family; the same shape in five consecutive months is a pattern.
+#
+# NOT A SECOND COUNT. This reads the SAME three functions the month report reads — `account_groups`,
+# `flag_multi_line_accounts`, `multi_line_summary` — and slices their output per period. It deliberately
+# does NOT re-group or re-tally: a per-month counter of its own is exactly the duplicate derivation the
+# index rules forbid, and it would drift from the figure on screen the first time either changed. §R1
+# fails the build if the month on screen and this report's row for that month ever disagree.
+#
+# `period` is already on every group key and on every flagged account, because `account_groups` groups
+# WITHIN a month (three lines added across three separate months is a customer who grew their plan, not
+# a multi-line sale). So the per-month view needs no new identity — only the slice.
+def multi_line_by_month(rows, columns, threshold):
+    """PURE: every uploaded month's multi-line picture, from the SAME grouping the month report uses.
+
+    `rows` is the commission feed across EVERY period, not one month's. Returns:
+        {"threshold", "months", "periods", "by_month": [summary + {"period"}], "totals": summary,
+         "flagged": [accounts, every month]}
+
+    `by_month` carries a row for EVERY month that has rows, including months with nothing flagged —
+    reported as zero rather than omitted, because a month missing from a list reads as a month with no
+    data, which is a different fact and the one this report must never fake."""
+    grouped = account_groups(rows, columns)
+    flagged = flag_multi_line_accounts(grouped, threshold)
+    groups = grouped.get("groups") or {}
+    unident = grouped.get("unidentified") or []
+    periods = sorted({str(k[0]) for k in groups} | {_row_period(r) for r in unident})
+    by_month = []
+    for p in periods:
+        sub_groups = {k: g for k, g in groups.items() if str(k[0]) == p}
+        sub_unident = [r for r in unident if _row_period(r) == p]
+        used = {}
+        for g in sub_groups.values():
+            col = g.get("account_column")
+            used[col] = used.get(col, 0) + len(g["lines"])
+        sub = {"groups": sub_groups, "unidentified": sub_unident, "columns_used": used}
+        row = multi_line_summary(sub, [a for a in flagged if str(a.get("period")) == p], threshold)
+        row["period"] = p
+        by_month.append(row)
+    return {
+        "threshold": max(0, int(threshold or 0)),
+        "months": len(periods),
+        "periods": periods,
+        "by_month": by_month,
+        "totals": multi_line_summary(grouped, flagged, threshold),
+        "flagged": flagged,
+    }
 
 # ── THE AVERAGE EXPENSE MATRIX ────────────────────────────────────────────────────────────────────
 
@@ -1183,7 +1238,7 @@ def handset_orders(ful_rows, store_index_rows=None):
         st["orders"] += 1
         st["units"] += n
         st["cost"] = round(st["cost"] + ext, 2)
-        month = str(r.get("period") or "").strip() or "(no month on the row)"
+        month = _row_period(r) or "(no month on the row)"
         mo = by_month.setdefault(month, {"month": month, "orders": 0, "units": 0.0, "cost": 0.0})
         mo["orders"] += 1
         mo["units"] += n

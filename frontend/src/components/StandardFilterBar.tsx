@@ -23,7 +23,7 @@ import MarketStorePicker from '@/components/MarketStorePicker'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
-import { isStandardFilterActive } from '@/lib/standard-filters'
+import { isStandardFilterActive, monthSelectValue, monthNeedsOwnOption } from '@/lib/standard-filters'
 
 type OptIn = EntityOption[] | string[] | undefined
 const toOpts = (o: OptIn): EntityOption[] =>
@@ -99,9 +99,9 @@ export default function StandardFilterBar({
       {s.period && periodMode === 'month' && (
         <label style={lbl}>Month
           {periods && periods.length > 0
-            ? <select style={sel} value={value.period && value.period.length === 7 ? value.period : ''} onChange={e => set({ period: e.target.value })}>
+            ? <select style={sel} value={monthSelectValue(value.period)} onChange={e => set({ period: e.target.value })}>
                 {periods.map(m => <option key={m} value={m}>{m}</option>)}
-                {value.period && !periods.includes(value.period) && <option value={value.period}>{value.period}</option>}
+                {monthNeedsOwnOption(value.period, periods) && <option value={value.period}>{value.period}</option>}
               </select>
             : <input type="month" style={sel} value={value.period || ''} onChange={e => set({ period: e.target.value })} />}
         </label>
