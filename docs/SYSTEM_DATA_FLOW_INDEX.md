@@ -111,6 +111,7 @@ Primary code homes:
 | COMMCALC-05 | **Several handsets to one buyer in one day** | "Which buyers walked out with more handsets in one day than a family plausibly would — counted across the separate receipts the sale was split over, from the live till feed rather than a carrier statement weeks later, and with the evidence a manager needs instead of a verdict?" |
 | COMMCALC-06 | **An accessory attach decides which rate a line earns** | "The $25 edge payment is supposed to require $25 of accessories on the same sale, and to drop to the lesser rate when it is not there. Which record says the accessories were sold, what happens when the sale cannot be read, and why could no gate in this engine do this before?" |
 | COMMCALC-07 | **One pull loop, many feeds — and a report line is not a category until the tenant says so** | "The portal publishes its own daily report of what each worker sold, and the reps declare the same day at closing. Which code reaches a report on a portal and lands it, and which declared category is a report line — when the portal's words are not ours?" |
+| COMMCALC-08 | **A file that produced no rows is told why — the pairing, not the spreadsheet** | "My upload was refused and the message blamed my file. Which columns did the reader look for, which ones does my file actually carry, and if they are not the same — which feed does this file belong to?" |
 
 ---
 
@@ -24978,6 +24979,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-05 | commcalc |
 | COMMCALC-06 | commcalc |
 | COMMCALC-07 | commcalc |
+| COMMCALC-08 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -26827,3 +26829,109 @@ already normalized.
 - Same class: §19.18 (a mechanism written and its callers left unwired), §66 (a value read without
   its basis), §76 (the declared-category registry this feed points at), §36 (the connector KIND
   precedent), mig 1011 (two report kinds, one table).
+
+---
+
+## §COMMCALC-08. A FILE THAT PRODUCED NO ROWS IS TOLD WHY — the pairing, not the spreadsheet (owner report 2026-10-13)
+
+Two uploads were refused with *"That file produced no rows once its header and any total row were
+read."* Both files were fine. They were `MA - Empire October Commission Details (24).xls` and its
+September twin, and both were handed to the **MA Daily Transactions** reader — which shares **not one
+column name** with the Commission Details layout (proved, not assumed: §COMMCALC-08.4 g1 asserts the
+intersection of the two declared layouts is empty). Every row mapped to nothing, `map_records`
+dropped them all, and the refusal stated a fact about the FILE when what was actually wrong was the
+PAIRING. The owner spent his evening looking for a defect in a spreadsheet that did not have one.
+
+### COMMCALC-08.1 Duplicate check (the build gate)
+
+| Mechanism that already exists | Question it answers | Why it is not this |
+|---|---|---|
+| `report_kinds.detect_report_kind` | "which report KIND is this file", from registry rows + confirmed fingerprints | A different question and a different key. It ranks *registry kinds* using `norm_header`, which collapses punctuation to match **loosely** — right for detection, wrong here, because a looser key reports a column as found that the mapper then does not read. **EXTENDED, not duplicated:** it stays the detector; this is the mapper answering for itself. |
+| `uploadGuard.readUploadOutcome` (frontend) | "does a zero-row upload render honestly" | THE SAME CLASS, one feed further in — so it was **extended** with one branch rather than given a second interpreter. The wording is not copied into the UI; the backend sentence is displayed verbatim. |
+| the X-Report's `skipped` / `note` ladder | why a tender file produced nothing | The precedent this follows ("name the columns found"), scoped to one feed. Generalised here instead of copied again. |
+| `harness_mapping_key_lock` | which report_key a commission statement type maps under | About the mapping KEY, not about header matching or empty results. |
+| `prospect_eval.substance` / `substance_note` (§COMMCALC-03.10) | "rows landed, but do they carry anything" | The step AFTER this one. That reads rows that exist; this explains why none do. |
+
+### COMMCALC-08.2 One fact, one home, dereferenced
+
+`commcalc/column_mapping.py`, in dependency order:
+
+- **`match_key(header)`** — THE key the mapper pairs a rule's `source_header` with a file's column
+  by, and the one home of that fact. Anything answering *for* the mapper must ask the same question
+  the same way or its answer is a guess. Factored out of `apply_mapping`, which now dereferences it
+  on both sides of the match.
+- **`header_fit(headers, rules)`** → `{found, missing, expected, extra, fraction}`, in the ORIGINAL
+  spellings so a message can quote the file and the mapping back verbatim.
+- **`no_rows_diagnosis(...)`** → the reason token and the sentence. **Returns `None` when nothing is
+  wrong**, so no caller can print a cause over a successful upload.
+- **`resolve_rules(rows, carrier_id)`** — the per-field resolution, factored out of `load_rules` so
+  the bulk read cannot resolve a rule differently from the single read the upload itself used.
+- **`rules_by_report_key` / `candidate_rules`** — "which feeds could this file be", in ONE query.
+  A key the tenant configured is scored against the tenant's OWN column names; a key it has not
+  configured falls back to the built-in layout, because an unmapped feed is still a feed the file
+  may belong to — which is exactly the case on a brand-new prospect.
+
+**A fourth copy found and rewired on the way:** `suggest()` spelled the mapper's header key inline
+four times. It is the function that tells the column-mapping wizard which header to propose, so a
+drift between it and `apply_mapping` would propose a column the mapper does not read. All four now
+dereference `match_key`.
+
+**RULE TWO:** no feed, carrier or tenant is named in the mechanism. The candidate feeds and their
+display labels are the CALLER's — which is why the sentence says "MA Commission Details" and not
+`ma_commission` (COMMCALC-08.4 g8).
+
+### COMMCALC-08.3 The siblings, fixed in the same change rather than excused
+
+`map_records` has three landing callers, and all three answered this question differently:
+
+| Caller | Before | Now |
+|---|---|---|
+| `_upload_prospect_feed_impl` | refused with the blanket sentence | refuses with the cause, and names the feed the file belongs to |
+| `_ingest_mapped_df` (the `/upload-mapped` core — also the onboarding intake commit and a custom report's dataset binding) | returned `saved: 0` with **no reason at all** | returns `no_rows_reason` + `no_rows_note` |
+| `commission_import_commit` (the wizard's own copy of the pipeline) | same silence | dereferences the same one home |
+
+The two live cores **report** rather than raise, because an automated sweep is allowed to hand them
+an empty day; the prospect upload still **refuses**, because a person pressed a button and is owed an
+answer. `_ledger_map_records` is a separate mapper and a separate change — stated, not covered.
+
+### COMMCALC-08.4 Locked so it cannot un-wire
+
+`backend/harness_mapping_diagnosis.py` — **51 passed / 0 failed**, DB-free, run in CI inside the
+`store-takeover-eval-proof` job (which already installs the backend's dependencies), and named in
+the workflow's path filter alongside `column_mapping.py`.
+
+- **(a)** a `map_records` caller that does not dereference the diagnosis → RED. Derived from the AST,
+  never a name list, so a NEW landing path that drops every row silently is the defect and fails.
+- **(b)** a second match key: any header-matching function that spells the normalisation itself → RED.
+- **(c)** the diagnosis is silent for a file that produced rows.
+- **(d)** one resolution — both reads go through `resolve_rules`.
+- **(e)** RULE TWO over the mechanism's own source.
+- **(f)** the cause reported is the FIRST thing that was wrong, in pipeline order: `file_empty` →
+  `no_data_rows` → `no_columns_match` → `rows_blank_in_columns` → `all_rows_are_totals`. So a
+  mis-paired file is never reported as an empty one, and a totals-only file is only read that way
+  once the columns DID match.
+- **(g)** the owner's own case, rebuilt from the two DECLARED layouts (no header list is written in
+  the harness): his headers must diagnose as `no_columns_match`, must name MA Commission Details,
+  must quote his file's own columns back, and the SAME file under the right feed must map all 31 rows
+  and get no diagnosis at all.
+- **(h)** negative controls: each check above is shown going red.
+
+### COMMCALC-08.5 Cross-references
+
+| Code | Question it answers |
+|---|---|
+| `commcalc/column_mapping.match_key` | which key a header is matched by — the mapper's own |
+| `commcalc/column_mapping.header_fit` | which of a mapping's columns this file carries |
+| `commcalc/column_mapping.no_rows_diagnosis` | why a file produced no rows, and whose columns these are |
+| `commcalc/column_mapping.resolve_rules` | the effective rule per target field |
+| `commcalc/column_mapping.rules_by_report_key` | every key's effective rules, in one query |
+| `commcalc/column_mapping.candidate_rules` | which feeds a mis-paired file could belong to |
+| `uploadGuard.readUploadOutcome` | whether a zero-row upload renders honestly (extended, not duplicated) |
+| `harness_mapping_diagnosis.py` | the lock: every landing path names the cause, from one home |
+
+No migration. No table. No report. Nothing money-touching: the diagnosis is produced only when
+zero rows were written, and it changes no write, no delete and no figure.
+
+Same class: §COMMCALC-03.9 (an upload that failed left no record anywhere — the defect that made
+this one visible), §19.18 (a mechanism written and its callers left unwired), §66 (a value read
+without its basis), §64 (one home for "which store is this address").

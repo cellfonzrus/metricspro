@@ -530,6 +530,10 @@ on:
       # agree. The routers it AST-scans are already named by the globs below.
       - "backend/harness_prospect_eval.py"
       - "backend/harness_upload_trace_coverage.py"
+      # The mapping-diagnosis lock names itself AND `column_mapping.py`, its one home, so a change to
+      # the mapper's header key or to any landing path re-runs the proof that the cause is still named.
+      - "backend/harness_mapping_diagnosis.py"
+      - "backend/app/modules/commcalc/column_mapping.py"
       # §COMMCALC-05 — several handsets to one buyer in one day. Named with its home and the two
       # it dereferences (flag_registry for severity/threshold, the box-department set the box
       # count uses) so a change to either re-runs this proof.
@@ -1736,6 +1740,14 @@ jobs:
       - name: Run the upload-trace coverage ratchet (every writing upload endpoint records what it did, and the silent register may only shrink)
         working-directory: backend
         run: python3 harness_upload_trace_coverage.py | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the mapping-diagnosis lock, same job for the same reason: it imports `column_mapping`
+      # (pandas-free but it reads `report_pull`'s declared layouts) and it is what stops a landing
+      # path dropping every row without naming the difference between the columns it looked for and
+      # the columns the file carries (owner report 2026-10-13: a Commission Details export refused by
+      # the Daily Transactions reader, blamed on the file).
+      - name: Run the mapping-diagnosis lock (a file that produced no rows is told WHY, from one home, and every map_records landing path dereferences it)
+        working-directory: backend
+        run: python3 harness_mapping_diagnosis.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
   # THE STORED-CREDENTIAL LOCK (index §CORE-03) reaches `app.core.crypto` → `app.core.config`, which
   # imports pydantic_settings, and its §A does REAL Fernet round trips rather than asserting over a
   # stub — so it needs `cryptography` too. Both are in backend/requirements.txt, so it runs in its own

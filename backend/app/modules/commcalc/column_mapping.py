@@ -666,10 +666,18 @@ def load_rules(client, org_id, report_key, carrier_id=None):
     NULL/global rules for the same target_field. Returns a list of rule dicts."""
     q = (client.schema("commcalc").table("column_mapping").select("*")
          .eq("org_id", org_id).eq("report_key", report_key).eq("is_active", True))
-    rows = q.execute().data or []
+    return resolve_rules(q.execute().data or [], carrier_id)
+
+
+def resolve_rules(rows, carrier_id=None):
+    """The effective rule per target field, from raw `column_mapping` rows for ONE report key. PURE.
+
+    The ONE home of that resolution: `load_rules` reads a single key through it and
+    `rules_by_report_key` reads every key through it, so a bulk read can never resolve a rule
+    differently from the single read the upload itself used."""
     by_field = {}
     # global (carrier_id NULL) first, then carrier-specific overrides win
-    for r in sorted(rows, key=lambda x: (x.get("carrier_id") is not None, x.get("priority") or 100)):
+    for r in sorted(rows or [], key=lambda x: (x.get("carrier_id") is not None, x.get("priority") or 100)):
         cid = r.get("carrier_id")
         if cid and carrier_id and cid != carrier_id:
             continue          # a different carrier's override — ignore
@@ -677,6 +685,58 @@ def load_rules(client, org_id, report_key, carrier_id=None):
             continue          # carrier-specific rule but no carrier context — ignore
         by_field[r["target_field"]] = r
     return list(by_field.values())
+
+
+def rules_by_report_key(client, org_id, carrier_id=None, exclude=None):
+    """{report_key: effective rules} for every key this org has active mappings for, in ONE query.
+
+    For the diagnosis path, which asks "whose columns ARE these?" and would otherwise issue a query
+    per known report key on a file that landed nothing. Resolution is `resolve_rules`, the same one
+    `load_rules` uses. Returns {} on any read error — a diagnosis is never worth a 500."""
+    try:
+        rows = ((client.schema("commcalc").table("column_mapping")
+                 .select("report_key,target_field,source_header,transform,priority,carrier_id")
+                 .eq("org_id", org_id).eq("is_active", True)).execute().data or [])
+    except Exception:
+        return {}
+    grouped = {}
+    for r in rows:
+        k = str(r.get("report_key") or "").strip()
+        if k and k != (exclude or None):
+            grouped.setdefault(k, []).append(r)
+    return {k: resolve_rules(v, carrier_id) for k, v in grouped.items()}
+
+
+def candidate_rules(client, org_id, carrier_id=None, exclude=None, keys=None):
+    """{report_key: rules} for the feeds a mis-paired file could actually belong to — the ONE builder
+    the diagnosis path uses, so every caller offers the same candidates.
+
+    A key the tenant has configured reads its CONFIGURED rules (so a remapped feed is diagnosed
+    against the tenant's own column names, never a built-in layout); a key it has not configured
+    reads the built-in layout, because a feed nobody has mapped yet is still a feed the file may
+    belong to — and that is exactly the case on a brand-new prospect. `keys` narrows the offer to a
+    caller's own list (a picker with three feeds should not name a fourth); omitted, every known key
+    is on offer. One query for the configured rows."""
+    configured = rules_by_report_key(client, org_id, carrier_id, exclude=exclude)
+    try:
+        offer = list(keys) if keys is not None else known_report_keys(client, org_id)
+    except Exception:
+        offer = list(configured)
+    out = {}
+    for k in offer:
+        if exclude and k == exclude:
+            continue
+        r = configured.get(k)
+        if not r:
+            try:
+                r = default_mapping(k, client, org_id)
+            except Exception:
+                r = []
+        if r:
+            out[k] = r
+    for k, r in configured.items():
+        out.setdefault(k, r)
+    return out
 
 
 # ── WHICH MAPPING APPLIES TO THIS STATEMENT — ONE answer, every route (owner 2026-09-24; index §30.17a) ─
@@ -711,14 +771,28 @@ def statement_rules(rules, carrier_id):
     return glob, ("global" if glob else "none")
 
 
+def match_key(header):
+    """THE key a header is matched by, and the ONE home of that fact (owner directive 2026-10-13).
+
+    `apply_mapping` matches a rule's `source_header` against a file's column by this key and nothing
+    else, so anything that wants to ANSWER FOR the mapper — "would it have found this column?" —
+    must ask the same question the same way or its answer is a guess. `header_fit` and
+    `no_rows_diagnosis` below dereference this; `harness_mapping_diagnosis.py` fails the build if a
+    second spelling of it appears beside them.
+
+    Deliberately NOT `report_kinds.norm_header`, which collapses punctuation to match a header
+    LOOSELY for layout detection. Loose is right for "which report is this"; it is wrong here,
+    because a looser key would report a column as found that the mapper then does not read. PURE."""
+    return str(header or "").strip().lower()
+
+
 def apply_mapping(row, rules, base):
     """Build a target-table row from a source spreadsheet row using the mapping rules.
-    Header match is case-insensitive. `base` carries org_id + period fields."""
-    idx = {str(k).strip().lower(): v for k, v in row.items()}
+    Header match is case-insensitive (see `match_key`). `base` carries org_id + period fields."""
+    idx = {match_key(k): v for k, v in row.items()}
     out = dict(base)
     for rule in rules:
-        src = str(rule.get("source_header") or "").strip().lower()
-        val = idx.get(src)
+        val = idx.get(match_key(rule.get("source_header")))
         out[rule["target_field"]] = apply_transform(val, rule.get("transform"))
     return out
 
@@ -735,23 +809,116 @@ def map_records(records, rules, base):
     return out
 
 
+# ── WHY A FILE PRODUCED NO ROWS (owner report 2026-10-13) ─────────────────────────────────────
+# A refusal that says "that file produced no rows" states a fact about the FILE when the thing that
+# was actually wrong is usually the PAIRING: a Commission Details export was handed to the Daily
+# Transactions reader, whose fifteen columns it shares none of, so every row mapped to nothing and
+# was dropped. The owner was sent looking for a problem in his spreadsheet; there was none.
+#
+# THE CLASS: a mapper that knows which columns it looked for and which ones the file carries must
+# not report "no rows" without naming the difference. These two functions are the ONE home of that
+# answer, pure and DB-free, and every caller of `map_records` dereferences them rather than writing
+# its own sentence (`harness_mapping_diagnosis.py` fails the build if one stops).
+
+
+def header_fit(headers, rules):
+    """Which of `rules`' source headers this file actually carries. PURE.
+
+    {found, missing, expected, extra, fraction} — `found`/`missing` are the ORIGINAL spellings so a
+    message can quote the file and the mapping back verbatim. Matched by `match_key`, the mapper's
+    own key, so `found` means "the mapper would read this column" and nothing looser."""
+    have = {match_key(h): str(h).strip() for h in (headers or []) if str(h or "").strip()}
+    want, found, missing = [], [], []
+    for r in rules or []:
+        src = str((r or {}).get("source_header") or "").strip()
+        if not src or src in want:
+            continue
+        want.append(src)
+        (found if match_key(src) in have else missing).append(src)
+    claimed = {match_key(w) for w in want}
+    return {"found": found, "missing": missing, "expected": want,
+            "extra": [v for k, v in have.items() if k not in claimed],
+            "fraction": (len(found) / len(want)) if want else 0.0}
+
+
+def no_rows_diagnosis(headers, rules, n_records, n_mapped, n_footers=0, candidates=None, labels=None):
+    """WHY a file produced no rows, as a reason token and a sentence a person can act on. PURE.
+
+    The stages are asked in the order the pipeline runs them, so the FIRST thing that was wrong is
+    the thing reported:
+      `file_empty`           — nothing was read at all;
+      `no_data_rows`         — a header row and nothing under it;
+      `no_columns_match`     — none of the columns this feed reads are in the file (the pairing is
+                               wrong); with `candidates` the feed whose columns the file DOES carry
+                               is named, which is the whole answer in one line;
+      `rows_blank_in_columns`— the columns are there and every row is blank in all of them;
+      `all_rows_are_totals`  — every row read as a grand-total footer.
+    `candidates` is {feed_key: rules} — the caller names which feeds are on offer, so no feed is
+    named in this module (RULE TWO); `labels` is its {key: display name}, because the person reading
+    the sentence picked "MA Daily Transactions" from a list, not `ma_daily_tx`. Returns None when
+    nothing is wrong (n_mapped > 0), so a caller cannot print a diagnosis over a successful upload."""
+    if n_mapped:
+        return None
+    fit = header_fit(headers, rules)
+    cols = ", ".join(fit["expected"][:12]) + ("…" if len(fit["expected"]) > 12 else "")
+    seen = ", ".join(str(h).strip() for h in (headers or []) if str(h or "").strip())[:400] or "(none)"
+    out = {"columns_expected": fit["expected"], "columns_found": fit["found"],
+           "columns_missing": fit["missing"], "columns_in_file": fit["extra"], "better_fit": None}
+    if not headers and not n_records:
+        return {**out, "reason": "file_empty",
+                "sentence": "That file had no columns and no rows — it is empty, or it is not a "
+                            "readable export. Nothing was written and nothing was removed."}
+    if not n_records:
+        return {**out, "reason": "no_data_rows",
+                "sentence": "That file has a header row and no rows under it. Nothing was written "
+                            "and nothing was removed — an empty file never empties a period."}
+    if not fit["found"]:
+        best = None
+        for key, krules in (candidates or {}).items():
+            f = header_fit(headers, krules)
+            rank = (len(f["found"]), f["fraction"])
+            if f["found"] and (best is None or rank > (len(best[1]["found"]), best[1]["fraction"])):
+                best = (key, f)
+        tail = ""
+        if best:
+            out["better_fit"] = {"key": best[0], "matched": best[1]["found"],
+                                 "fraction": round(best[1]["fraction"], 3)}
+            tail = (f" Its columns match a different feed — "
+                    f"{(labels or {}).get(best[0]) or best[0]} — which carries "
+                    f"{', '.join(best[1]['found'][:6])}. Upload it there instead.")
+        return {**out, "reason": "no_columns_match",
+                "sentence": f"That file does not carry any of the {len(fit['expected'])} columns this "
+                            f"feed reads ({cols}), so every one of its {n_records} rows mapped to "
+                            f"nothing. Its own columns are: {seen}.{tail} Nothing was written and "
+                            f"nothing was removed."}
+    if n_footers and not n_mapped:
+        return {**out, "reason": "all_rows_are_totals",
+                "sentence": f"Every one of that file's {n_footers} rows read as a grand-total row — "
+                            f"blank in every column that identifies a record. Nothing was written, "
+                            f"because a totals row ingested as data doubles every figure."}
+    return {**out, "reason": "rows_blank_in_columns",
+            "sentence": f"That file carries the columns this feed reads ({', '.join(fit['found'][:6])}) "
+                        f"but all {n_records} of its rows are blank in every one of them. Nothing was "
+                        f"written and nothing was removed."}
+
+
 # ── auto-suggest from an uploaded sample's headers ────────────────────────────────────────────
 def suggest(headers, report_key, existing_rules=None, client=None, org_id=None):
     """For each canonical target field, suggest the best-matching header from the uploaded file.
     Confidence: 'mapped' (already configured) > 'exact' > 'alias' > 'fuzzy' > '' (no match).
     (client, org_id) merge the per-tenant registry so user-added fields are auto-suggested too."""
     existing = {r["target_field"]: r for r in (existing_rules or [])}
-    hmap = {str(h).strip().lower(): str(h).strip() for h in headers if str(h).strip()}
+    hmap = {match_key(h): str(h).strip() for h in headers if str(h).strip()}
     out = []
     for (tf, label, transform, required, default_src, aliases) in _registry_overlay(report_key, client, org_id):
         suggested, conf = "", ""
-        if tf in existing and str(existing[tf].get("source_header") or "").strip().lower() in hmap:
-            suggested, conf = hmap[str(existing[tf]["source_header"]).strip().lower()], "mapped"
+        if tf in existing and match_key(existing[tf].get("source_header")) in hmap:
+            suggested, conf = hmap[match_key(existing[tf]["source_header"])], "mapped"
         else:
             candidates = [default_src] + list(aliases) + [label]
             for c in candidates:                       # exact header match
-                if str(c).strip().lower() in hmap:
-                    suggested, conf = hmap[str(c).strip().lower()], ("exact" if c == default_src else "alias")
+                if match_key(c) in hmap:
+                    suggested, conf = hmap[match_key(c)], ("exact" if c == default_src else "alias")
                     break
             if not suggested:                          # fuzzy: header contains the field token
                 token = tf.replace("_", "")

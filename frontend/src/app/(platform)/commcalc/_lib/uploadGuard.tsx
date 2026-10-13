@@ -160,6 +160,18 @@ export function readUploadOutcome(r: any, unit = 'row(s)', pos = 'POS'): UploadO
       'This is the signature of a truncated / partial export; verify the source file is complete.'
     return { tone: 'warn', reason, saved, text: `Saved ${saved.toLocaleString()} ${unit}, but with a warning: ${reason}` }
   }
+  // ── A MAPPED UPLOAD THAT PRODUCED NO ROWS (owner report 2026-10-13) ───────────────────────────
+  // The same class this whole file exists for, one feed further in: the generic mapped importer
+  // saved 0 rows and rendered a green "Saved 0 rows." The backend now says WHY — the stage that
+  // emptied the file, and, when the file was handed to the wrong feed, which feed its columns
+  // actually belong to. The sentence is NOT re-written here: `column_mapping.no_rows_diagnosis` is
+  // its one home, and a copy of the wording in the UI is the divergence this file was written to
+  // stop. `no_rows_reason` rides along for the banner heading only.
+  if (r?.no_rows_note && !saved) {
+    return { tone: 'guard', reason: String(r.no_rows_note), saved: 0,
+             title: `Saved 0 ${unit} — ${String(r.no_rows_reason || 'no rows')}`,
+             text: String(r.no_rows_note) }
+  }
   return { tone: 'ok', saved, text: `Saved ${saved.toLocaleString()} ${unit}.` }
 }
 
