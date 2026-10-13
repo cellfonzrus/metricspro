@@ -120,6 +120,102 @@ FEED_REGISTRY = {
 FEED_KEYS = tuple(FEED_REGISTRY)
 
 
+# ── WHAT A FILE ACTUALLY PUT IN THE TABLE ─────────────────────────────────────────────────────────
+# OWNER REPORT 2026-10-13: "i just uploaded handset info monthwise and also all the others" — and the
+# evaluation was blank. The upload had reported `rows_written: 66,388` and that read as success. What
+# had actually landed was 66,388 rows of one feed (the other two were never uploaded at all), and of
+# the rows that did land only 897 carried a store and 798 a price: the marketplace export lists twenty
+# order types and carries a ship-to, a cost and a date on the handset orders ALONE.
+#
+# THE CLASS, not the instance. A count of rows written is not a measure of what a file answered. A
+# row that mapped nothing but its own period columns occupies the table and answers no question, and
+# a surface reporting only the total cannot tell a good file from a file read with the wrong layout.
+# So every prospect upload reports its SUBSTANCE, and the screen shows it next to the total.
+#
+# Deliberately feed-AGNOSTIC: it asks only whether a mapped row carries any value at all outside the
+# period columns, and those columns come from `data_lineage_registry.MONTH_COLUMNS` — the one home for
+# "which columns hold a row's month" — never from a list kept here. No per-feed column knowledge, so
+# it cannot drift from a feed's real shape, and it is right about a feed that does not exist yet.
+# ── WHICH MONTH THE REPORT OPENS ON ───────────────────────────────────────────────────────────────
+# OWNER REPORT 2026-10-13, same report as `substance` above: the handset months HAD been uploaded
+# (March to September 2026) and the evaluation still showed nothing.
+#
+# THE CLASS: "which month does this prospect cover" was derived from ONE feed. The default period was
+# the latest month the COMMISSION feed named, and with no commission rows it fell through to today's
+# month — a month no uploaded feed covers — so every uploaded row was filtered out of the read and
+# the screen was blank on data that was sitting in the table. A prospect with only two of the three
+# feeds is the ordinary case while a pack is being assembled, and that is exactly when the report
+# must still show what it has.
+#
+# The rule is now: the latest month ANY of the prospect's feeds names. Commission still LEADS where
+# it has rows, because it is the feed the P&L's revenue comes from and opening on a month with money
+# in it is the useful default; a month only the other feeds name is better than a month nothing names.
+def default_period(periods_by_feed, leading_feed="ma_commission"):
+    """PURE: the month a prospect's report should open on, and why.
+
+    `periods_by_feed` {feed_key: [period strings]} — whatever each feed's rows are stamped with.
+    Returns `{period, basis, from_feed, months_available}`; `period` is "" only when no feed names a
+    single month, and `basis` always says which rule chose it so the screen can state it."""
+    by_feed = {}
+    for k, ps in (periods_by_feed or {}).items():
+        months = sorted({str(p).strip() for p in (ps or []) if str(p or "").strip()},
+                        key=period_sort_key)
+        if months:
+            by_feed[k] = months
+    every = sorted({m for ms in by_feed.values() for m in ms}, key=period_sort_key)
+    if not every:
+        return {"period": "", "basis": "no uploaded row names a month", "from_feed": None,
+                "months_available": []}
+    if by_feed.get(leading_feed):
+        return {"period": by_feed[leading_feed][-1],
+                "basis": "the latest month the commission feed covers", "from_feed": leading_feed,
+                "months_available": every}
+    src = next((k for k, ms in sorted(by_feed.items()) if ms and ms[-1] == every[-1]), None)
+    return {"period": every[-1],
+            "basis": ("the latest month any uploaded feed covers — the commission feed has no rows "
+                      "yet, so the P&L's revenue lines will read as not uploaded"),
+            "from_feed": src, "months_available": every}
+
+
+def substance(rows):
+    """PURE: what a mapped file actually put in the table.
+
+    `rows` are the mapped dicts, exactly as they are about to be written. Returns
+    `{rows, empty, carrying_data, dated, undated}` where `empty` counts rows that carry nothing but
+    their own period stamp — the shape a file read with the wrong column layout produces.
+
+    `dated` counts rows that ended up with a period. It is NOT the same question as `empty`: a row can
+    carry a date and nothing else, or carry money and no readable date, and both are worth saying."""
+    from app.modules.commcalc.data_lineage_registry import MONTH_COLUMNS
+    month = set(MONTH_COLUMNS)
+    n = empty = dated = 0
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        n += 1
+        if str(r.get("period") or "").strip():
+            dated += 1
+        if not any(k not in month and v not in (None, "", 0, 0.0) for k, v in r.items()):
+            empty += 1
+    return {"rows": n, "empty": empty, "carrying_data": n - empty,
+            "dated": dated, "undated": n - dated}
+
+
+def substance_note(sub, feed_label):
+    """PURE: the one sentence a screen shows when a file landed rows that answer nothing. None when
+    every row carries data — an absence is reported, never a finding invented."""
+    sub = sub or {}
+    n, empty = int(sub.get("rows") or 0), int(sub.get("empty") or 0)
+    if not n or not empty:
+        return None
+    if empty == n:
+        return (f"Every one of the {n:,} rows read from this file carries nothing but a date. "
+                f"That is what a file read with the wrong column layout looks like — check the "
+                f"column mapping for '{feed_label}' before reading anything into the evaluation.")
+    return (f"{empty:,} of the {n:,} rows read from this file carry nothing but a date, so "
+            f"{n - empty:,} rows are what the evaluation can actually see.")
+
+
 def live_table_of(feed_key):
     """PURE: the live table whose column shape this prospect feed mirrors, read from the ONE home of
     that fact (`column_mapping.TABLE_MAP`). None when the key is not a prospect feed."""

@@ -518,6 +518,7 @@ on:
       # change to any booking one-home the prospect P&L reads re-runs the proof that the two still
       # agree. The routers it AST-scans are already named by the globs below.
       - "backend/harness_prospect_eval.py"
+      - "backend/harness_upload_trace_coverage.py"
       # §COMMCALC-05 — several handsets to one buyer in one day. Named with its home and the two
       # it dereferences (flag_registry for severity/threshold, the box-department set the box
       # count uses) so a change to either re-runs this proof.
@@ -1712,6 +1713,12 @@ jobs:
       - name: Run the store-takeover evaluation proof (a prospect books through the company's own homes and writes none of them; the average survives a month that omits a line and a month with a wider roster; a line nothing can answer is never a measured zero - index COMMCALC-03)
         working-directory: backend
         run: python3 harness_prospect_eval.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE SAME JOB runs the upload-trace ratchet: it imports prospect_eval (so it needs these same
+      # dependencies) and it is the lock that stops a writing upload endpoint going silent again,
+      # which is what left a failed prospect upload with no record anywhere (owner report 2026-10-13).
+      - name: Run the upload-trace coverage ratchet (every writing upload endpoint records what it did, and the silent register may only shrink)
+        working-directory: backend
+        run: python3 harness_upload_trace_coverage.py | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
   # THE STORED-CREDENTIAL LOCK (index §CORE-03) reaches `app.core.crypto` → `app.core.config`, which
   # imports pydantic_settings, and its §A does REAL Fernet round trips rather than asserting over a
   # stub — so it needs `cryptography` too. Both are in backend/requirements.txt, so it runs in its own

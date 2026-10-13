@@ -574,7 +574,8 @@ _section = _rtext[_rtext.index(_marker):]
 # The section's own functions, taken from the WHOLE file's AST by name (re-parsing a text slice
 # would mean re-indenting it, and an indented slice is not the code that runs).
 _PROSPECT_FUNCS = {"list_prospects", "create_prospect", "update_prospect", "delete_prospect",
-                   "upload_prospect_feed", "prospect_evaluation", "_prospect_row", "_prospect_cfg",
+                   "upload_prospect_feed", "_upload_prospect_feed_impl",
+                   "prospect_evaluation", "_prospect_row", "_prospect_cfg",
                    "_prospect_feed_rows", "_prospect_expense_window", "_prospect_homes",
                    "_prospect_num", "_prospect_pl_labels", "_period_keys_for_prospect"}
 _rtree = ast.parse(_rtext)
@@ -638,8 +639,14 @@ check("every WRITE in the feature lands on a prospect table and nothing else",
       _writes <= {"store_prospect", "prospect_feed_row"}, str(sorted(_writes)))
 check("the evaluation endpoint itself writes nothing at all",
       not _written_in([n for n in _nodes if n.name == "prospect_evaluation"]))
+# The upload is a THIN TRACED WRAPPER since 2026-10-13 (a prospect upload that failed left no record
+# anywhere — see harness_upload_trace_coverage.py), so the write lives in the impl and the wrapper
+# must write nothing at all. Both halves are asserted: the impl's one table, and the wrapper's none.
 check("…and the upload writes only the one prospect landing table",
-      _written_in([n for n in _nodes if n.name == "upload_prospect_feed"]) == {"prospect_feed_row"})
+      _written_in([n for n in _nodes if n.name == "_upload_prospect_feed_impl"])
+      == {"prospect_feed_row"})
+check("…and its traced wrapper writes nothing itself",
+      not _written_in([n for n in _nodes if n.name == "upload_prospect_feed"]))
 check("the uploaded rows are read NOWHERE else in the router",
       _rtext.count("prospect_feed_row") == _section.count("prospect_feed_row"))
 check("the migration this needs is the one the section's errors name",
@@ -651,6 +658,67 @@ check("the upload reuses the live reader, mapping and shape rules rather than a 
                                   "column_mapping.derive_row_periods")))
 check("the statement is assembled by the finance engine, not by a builder of its own",
       "_eng._assemble" in _section and "_an.pl_totals" in _section)
+
+# ── §J WHICH MONTH THE REPORT OPENS ON (owner report 2026-10-13) ──────────────────────────────────
+# He had uploaded seven months of handset orders and the report was blank: the default month came
+# from the COMMISSION feed alone and fell through to today's month, which no uploaded row covers.
+_dp = P.default_period
+check("J1 the commission feed leads where it has rows",
+      _dp({"ma_commission": ["July 2026", "August 2026"],
+           "ma_marketplace_orders": ["September 2026"]})["period"] == "August 2026")
+check("J2 a feed-less commission does NOT fall through to nothing",
+      _dp({"ma_marketplace_orders": ["March 2026", "September 2026", "May 2026"]})["period"]
+      == "September 2026")
+check("J3 …and it says WHY, naming the commission gap rather than implying the month is complete",
+      "commission feed has no rows" in _dp({"ma_marketplace_orders": ["May 2026"]})["basis"])
+check("J4 a prospect with no rows at all names no month",
+      _dp({})["period"] == "" and "no uploaded row" in _dp({})["basis"])
+check("J5 every month with rows is offered, not just the one chosen",
+      _dp({"ma_commission": ["July 2026"], "ma_daily_tx": ["April 2026"]})["months_available"]
+      == ["April 2026", "July 2026"])
+check("J6 months sort by the platform's own period order, not alphabetically",
+      _dp({"ma_daily_tx": ["April 2026", "September 2026", "December 2026"]})["period"]
+      == "December 2026")
+check("J7 a blank or None period is not a month",
+      _dp({"ma_daily_tx": [None, "", "  "]})["period"] == "")
+check("J8 the basis is ALWAYS stated — no path returns a month with no reason",
+      all(_dp(x).get("basis") for x in ({}, {"ma_commission": ["July 2026"]},
+                                        {"ma_daily_tx": ["July 2026"]},
+                                        {"ma_daily_tx": [None]})))
+check("J9 the endpoint dereferences this home rather than resolving the month itself",
+      "_pev.default_period(" in _section)
+check("J10 …and publishes the basis on the payload, so the screen can state it",
+      'ev["period_basis"]' in _rtext)
+check("J11 the retired single-feed rule is GONE from the endpoint",
+      '.eq("feed_key", "ma_commission")' not in _section)
+
+# ── §K WHAT A FILE ACTUALLY PUT IN THE TABLE ──────────────────────────────────────────────────────
+# `rows_written: 66,388` read as success on a file whose rows carried nothing but a date.
+check("K1 a row carrying only its period counts as empty",
+      P.substance([{"period": "x", "period_month": 1, "period_year": 2026}])["empty"] == 1)
+check("K2 a row carrying a value counts as carrying data",
+      P.substance([{"period": "x", "price": 1.0}])["carrying_data"] == 1)
+check("K3 an empty amount is not data — the wrong-layout shape maps zeros and blanks",
+      P.substance([{"period": "x", "price": 0.0, "tspid": "", "city": None}])["empty"] == 1)
+check("K4 dated and undated are counted separately from empty",
+      P.substance([{"price": 1.0}, {"period": "x", "price": 2.0}]) ==
+      {"rows": 2, "empty": 0, "carrying_data": 2, "dated": 1, "undated": 1})
+check("K5 no note when every row carries data",
+      P.substance_note(P.substance([{"period": "x", "price": 1.0}]), "F") is None)
+check("K6 a wholly hollow file names the column mapping as the thing to check",
+      "column mapping" in (P.substance_note(P.substance([{"period": "x"}]), "F") or ""))
+check("K7 a partly hollow file says how many rows the evaluation can see",
+      "1 of the 2" in (P.substance_note(
+          P.substance([{"period": "x"}, {"period": "x", "price": 1.0}]), "F") or ""))
+check("K8 an empty file is measured as nothing, never reported as a problem",
+      P.substance([])["rows"] == 0 and P.substance_note(P.substance([]), "F") is None)
+_pcode = open(_SRC).read()
+check("K9 the period columns come from the ONE home, not a list kept here",
+      "MONTH_COLUMNS" in _pcode and "data_lineage_registry" in _pcode
+      and "'period_month'" not in _pcode and '"period_month"' not in _pcode)
+check("K10 the upload reports the substance, not only the row count",
+      "_pev.substance(" in _section and '"rows_answering_nothing"' in _section)
+
 
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")

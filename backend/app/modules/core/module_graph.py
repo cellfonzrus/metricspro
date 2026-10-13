@@ -142,7 +142,7 @@ FACTS: dict[str, dict] = {
                     'more lines than one month should?',
         "homes": ('app/modules/commcalc/prospect_eval.py',),
         "index": ('COMMCALC-03',),
-        "locks": ('harness_prospect_eval.py',),
+        "locks": ('harness_prospect_eval.py', 'harness_upload_trace_coverage.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         #
@@ -700,6 +700,10 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/epay_sweep.py': ('_lin',),
             'app/modules/commcalc/inventory_sold_recon.py': ('_dlr',),
             'app/modules/commcalc/ma_recon.py': ('SALES_DISPLAY_SOURCES',),
+            # The takeover evaluation asks the registry which columns hold a row's MONTH, so its
+            # "what did this file actually put in the table" measurement cannot drift from the
+            # platform's own answer (`prospect_eval.substance`, owner report 2026-10-13).
+            'app/modules/commcalc/prospect_eval.py': ('MONTH_COLUMNS',),
             # The portal pull asks the registry whether its TARGET TABLE stores a row's month
             # (§COMMCALC-04), instead of carrying its own `has_period` flag per report spec.
             'app/modules/commcalc/report_pull.py': ('_lin',),

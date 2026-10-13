@@ -154,6 +154,7 @@ interface Evaluation {
   feeds_present?: string[]
   feeds_missing?: string[]
   rows_by_feed?: Record<string, number>
+  period_basis?: { period?: string; basis?: string; from_feed?: string | null; months_available?: string[] }
   multi_line?: { summary: MultiLineSummary; flagged: FlaggedAccount[]; flagged_line_ids: string[]; flagged_imeis: string[] }
   expenses?: { matrix: Record<string, ExpenseCell>; rent: RentMeta; months?: string[]; window?: ExpenseWindow }
   default_mode?: string
@@ -174,6 +175,8 @@ interface UploadResult {
   periods_replaced: string[]
   footer_rows_dropped: number
   rows_with_no_date: number
+  rows_answering_nothing?: number
+  substance_note?: string | null
 }
 interface PlRow { section: string; label: string; amount: number; key: string }
 
@@ -390,11 +393,13 @@ export default function StoreTakeoverPage() {
     if (period) form.append('period', period)
     try {
       const r: UploadResult = await apiUpload(`/api/v1/commcalc/prospects/${pid}/upload${orgParam1()}`, form)
+      const hollow = (r.rows_answering_nothing || 0) > 0 && (r.rows_answering_nothing || 0) === (r.rows_written || 0)
       setMsg({
-        ok: true,
+        ok: !hollow,
         text: `${r.feed_label}: ${(r.rows_written || 0).toLocaleString()} rows read into ${(r.periods_replaced || []).join(', ') || 'no month'}`
           + (r.footer_rows_dropped ? ` · ${r.footer_rows_dropped} total row(s) dropped` : '')
-          + (r.rows_with_no_date ? ` · ${r.rows_with_no_date} row(s) had no readable date` : ''),
+          + (r.rows_with_no_date ? ` · ${r.rows_with_no_date} row(s) had no readable date` : '')
+          + (r.substance_note ? ` — ${r.substance_note}` : ''),
       })
       loadList(); load()
     } catch (e) {
@@ -547,6 +552,32 @@ export default function StoreTakeoverPage() {
                   <b>{money(Math.abs((rentMeta.entered || 0) - rentMeta.replaced_average))}</b> a month.
                 </div>}
             </div>
+          </div>
+          {/* WHAT IS ACTUALLY IN THE TABLE — a row per feed, uploaded or not. The missing-feed
+              sentence below was already here and was not enough: it does not say how MANY rows a
+              present feed landed, so a feed read with the wrong column layout (66,388 rows that
+              answer nothing — owner report 2026-10-13) read as a feed that worked. */}
+          <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>What has been uploaded</div>
+            {Object.keys(registry).map(k => {
+              const n = (data?.rows_by_feed || {})[k]
+              const has = (n || 0) > 0
+              return (
+                <div key={k} style={{ fontSize: 12, display: 'flex', gap: 8, padding: '2px 0' }}>
+                  <span style={{ color: has ? 'var(--ok, #15803d)' : '#b45309' }}>{has ? '✓' : '○'}</span>
+                  <span style={{ flex: 1 }}>{registry[k]?.label || k}</span>
+                  <b style={{ color: has ? 'var(--text1)' : '#b45309' }}>
+                    {has ? `${(n || 0).toLocaleString()} rows this month` : 'nothing uploaded'}
+                  </b>
+                </div>
+              )
+            })}
+            {data?.period_basis?.basis &&
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                Showing <b>{data?.period}</b> — {data.period_basis.basis}.
+                {(data.period_basis.months_available || []).length > 1 &&
+                  ` Months with uploaded rows: ${(data.period_basis.months_available || []).join(', ')}.`}
+              </div>}
           </div>
           {(data?.feeds_missing || []).length > 0 &&
             <div style={{ fontSize: 12, color: '#92400e', marginTop: 10 }}>

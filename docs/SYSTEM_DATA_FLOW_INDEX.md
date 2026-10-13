@@ -26099,6 +26099,82 @@ behaves identically before and after mig 1077 is applied.
 
 ---
 
+### COMMCALC-03.9 An upload that failed left no record anywhere (owner report 2026-10-13)
+
+Owner, verbatim: *"jose was not able to uloasd the filres"*, and an hour later *"i just upladed
+handset infor monthwise and also all teptherg but it does nto show me any link for a report"*. Both
+reduced to one fact, and it was not the fact either of them described.
+
+**Measured in production before anything was built.** Two tables, each written BEFORE parsing, agree
+that nothing a person uploaded reached the API that day: `commcalc.upload_trace` (written in a
+`finally`, so a wrong file, a parse error, a crash and a refused duplicate all land a row) and
+`core.import_batches` (the bytes are claimed before they are read). Jose was signed in at 18:05 UTC
+and his `market_manager` role carries `permissions.scope = 'all'` plus the `commissions` module, so
+RBAC was not hiding the tile. That pair is the triage table, and it is now written down so nobody
+re-derives it:
+
+| `upload_trace` | `core.import_batches` | what it means |
+|---|---|---|
+| present, `status='error'` | present | the importer refused it — read `error` verbatim |
+| **absent** | **absent** | the request never reached the API (browser, auth, CORS, gateway 502/413) |
+| absent | present, stuck `parsing` | died between the claim and the trace (rare) |
+
+**THE CLASS, not the instance.** "Did this ingest happen, and what did it do" has ONE home —
+`commcalc/router._write_upload_trace`, the owner's debug-first surface — and the prospect upload was a
+writing ingest that did not dereference it. Fixing only that endpoint is the patchwork CLAUDE.md
+forbids, so the general fact is enforced: `harness_upload_trace_coverage.py` (34 checks, run by the
+store-takeover job) scans the router, DERIVES which upload endpoints write rows from the call graph
+rather than from a name list, and fails the build when a writing upload endpoint is silent and
+unregistered. **Six siblings are still silent** and are declared with a reason each
+(`upload_mapped`, `commission_ledger_import`, `onboarding_intake_analyze`,
+`onboarding_intake_commit`, `import_product_mrc`, `ma_overview_upload_report`); the register may only
+shrink, and `PINNED_MAX` must EQUAL the measured count, so a slack pin cannot stop the ratchet. Two
+of them trace through a helper the scan cannot follow — the scan resolves writers inside
+`commcalc/router.py` only, and that limit is stated in the lock rather than implied, which is why a
+register line for an endpoint the scan calls read-only also fails the build.
+
+The prospect upload is now a thin traced wrapper over `_upload_prospect_feed_impl`, the posture
+`upload_file` already had, tracing under `source='prospect-upload'` with the prospect named in the
+note (no migration: `upload_trace` carries no prospect column, and a diagnostic does not justify
+mutating the schema).
+
+### COMMCALC-03.10 A row count is not a measure of what a file answered
+
+The same report, second half. `rows_written: 66,388` was reported for "empire" and read as success.
+What had actually landed was 66,388 rows of ONE feed — the commission and daily-TX feeds had never
+been uploaded at all — and the marketplace export lists **twenty order types** while carrying a
+ship-to, a cost and a date on the handset orders ALONE: of 68,000 rows scanned, **897 carry a store
+and 798 are branded-handset orders**, and 3,103 carry no date. Seven Empire stores are in there
+(TSPIDs 169291/169292/169335/169336/169441/169442/169445), which is what makes a per-store report
+possible at all — and `raw_ma_commission.merchant_account_id`, `raw_ma_daily_tx.account_id` and
+`raw_ma_fulfillment.tspid` are the SAME identifier space (verified on live house data: 170074,
+170083, 170084 appear in both feeds), so one key joins all three.
+
+`prospect_eval.substance(rows)` measures it, and deliberately knows nothing about any feed: it asks
+only whether a mapped row carries a value outside the period columns, and those columns are read from
+`data_lineage_registry.MONTH_COLUMNS` — the one home — never from a list kept beside it. So it cannot
+drift from a feed's real shape and it is right about a feed that does not exist yet.
+`substance_note` returns **None** when nothing is wrong (an absence is never a finding), names the
+column mapping as the thing to check when EVERY row is hollow, and the screen stops calling such an
+upload a success.
+
+### COMMCALC-03.11 Which month the report opens on, from every feed
+
+The actual cause of the blank screen, and a third instance of the same shape. The default period was
+`max(period)` over the **commission feed alone**; with no commission rows it fell through to *today's
+month*, which no uploaded row covers, so seven months of uploaded handset orders were filtered out of
+the read and the report was empty on data sitting in the table.
+
+`prospect_eval.default_period(periods_by_feed)` is the one home. Commission still LEADS where it has
+rows — it is where the P&L's revenue comes from, so opening on a month with money in it is the useful
+default — otherwise the latest month ANY feed names wins, and a month only the other feeds name beats
+a month nothing names. It ALWAYS returns a stated `basis` (and names the commission gap when that is
+why), every month with rows in `months_available`, and `""` rather than a guess when no row names a
+month. The endpoint publishes the basis on the payload and the screen prints it, so the month the
+report opened on is never implied. §J of the lock fails the build if the retired single-feed read
+reappears.
+
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back
