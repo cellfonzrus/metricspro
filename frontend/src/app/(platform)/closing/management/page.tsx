@@ -222,6 +222,7 @@ const REFUSAL_WORDS: Record<string, string> = {
   duplicate_already_submitted: 'already submitted for the day',
   duplicate_multiple: 'more than one closing already exists',
   duplicate_race: 'submitted twice at once',
+  store_day_already_closed: 'the store-day was already closed by someone else',
   expense_description_required: 'an expense had no description',
   expense_line_invalid: 'an expense line was incomplete',
   identity_missing: 'no store or no employee name',

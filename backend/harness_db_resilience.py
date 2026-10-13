@@ -1094,7 +1094,35 @@ _all_routes = _flatten_routes(real_app.routes)
 # worktree is what settled it.) The pin was re-taken on a measured, fully-accounted addition; it was
 # never relaxed to make CI green, and the six route names above are what a future reader checks it
 # against.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1784"))
+# RE-PINNED 2026-10-12, 1784 -> 1785 (index COMMCALC-05). Every record above stays. The delta is ONE
+# route and it is named: GET /commcalc/watchdog/multi-handset — the drill-down behind the "several
+# handsets to one buyer in one day" finding (owner ask: "we need to have the drilldown to check who
+# made the sale for how much, if no accessories are sold with the sale and no activation fee"). It is
+# a READ: it re-reads the sales feed through the same `_read_sales` one home the sweep uses, applies
+# the district-manager span filter BEFORE counting, and returns the per-line breakdown the findings
+# table has no column for. It writes nothing — §I15/§I20 of harness_multi_handset_day.py fail the
+# build if it stops being a GET or starts stating a verdict.
+# Verified the same way as every pin above, BEFORE re-pinning: the harness was run on a clean
+# `git worktree` of origin/main (b409f12) and reported 1784, then on this tree and reported 1785,
+# and `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 1 with `'^-@router\.'` = 0 —
+# one added, NONE removed. The pin was re-taken on a measured, fully-accounted addition; it was
+# never relaxed to make CI green.
+# RE-PINNED 2026-10-13, 1785 -> 1787 (index §29.13). Every record above stays. The delta is TWO
+# routes and they are named: GET /closing/grain-config and PUT /closing/grain-config — the per-org,
+# per-store setting for HOW MANY daily closings one store-day takes (owner bug report 2026-10-13:
+# "2 reps did the closing for Oct 10 for nostrand ave ... the system should not have taken duplicate
+# entries"). The GET is a READ of `commcalc.closing_grain_config` through the one
+# `_closing_grain_rows` read; the PUT writes only that config table, through the single
+# `_closing_grain_write_one` writer, gated to the same 'closing' settings area as the closing-source
+# and tender config. Neither touches a money column, a feed, a roster row or a closing row —
+# harness_closing_store_day_grain.py §H locks the wiring and §H5f locks migration 1080 out of
+# commcalc.daily_closing entirely.
+# Verified the same way as every pin above, BEFORE re-pinning: the harness was run on a clean
+# `git worktree` of origin/main (d8c85f8) and reported 1785 PASS / 138 passed 0 failed, then on this
+# tree and reported 1787, and `git diff origin/main -- backend/ | grep -c '^+@router\.'` = 2 with
+# `'^-@router\.'` = 0 — two added, NONE removed. The pin was re-taken on a measured, fully-accounted
+# addition; it was never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1787"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

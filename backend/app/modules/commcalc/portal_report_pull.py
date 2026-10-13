@@ -1,6 +1,6 @@
 """THE ONE HOME for "reach a report on a portal we are logged into, export it, and land it".
 
-THE CLASS THIS MODULE IS THE ONE HOME FOR (index §COMMCALC-05)
+THE CLASS THIS MODULE IS THE ONE HOME FOR (index §COMMCALC-07)
 --------------------------------------------------------------
 Pulling a report from a portal is six steps, and only the last two are about the FEED: resolve the
 window of days, reach the report, press its export control, read the download, parse it, store it.

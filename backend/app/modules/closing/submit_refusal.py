@@ -77,6 +77,14 @@ REFUSALS = {
              "to review them and release the correct one before resubmitting."),
     "duplicate_race": (
         409, "Already submitted for this day — ask a manager to release it before resubmitting."),
+    # SOMEBODY ELSE already closed this store-day (owner bug report 2026-10-13, `closing_grain`).
+    # Distinct from `duplicate_already_submitted`, which is the same rep submitting twice: this one
+    # is a DIFFERENT person, and the words have to say so or the rep reads it as their own mistake
+    # and keeps retrying. Who holds the day rides as the message suffix (`closing_grain`
+    # renders it — these words never name a person, a store or a date).
+    "store_day_already_closed": (
+        409, "This store's closing for the day has already been submitted by someone else, so it "
+             "cannot be entered twice. If it needs to be redone, ask a manager to release it."),
     "expense_description_required": (
         400, "A description is required for the expense."),
     "identity_missing": (

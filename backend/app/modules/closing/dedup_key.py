@@ -16,7 +16,12 @@ dedup-key formula that is not `SQL_EXPR`.
 PURE: no I/O.
 """
 
-#: The canonical SQL spelling of `for_row`, as it must appear in any migration that computes the key.
+from . import closing_grain as _grain
+
+#: The canonical SQL spelling of `for_row` AT REP-DAY GRAIN, as it must appear in any migration that
+#: computes the key. No migration computes the store-day spelling: migration 1080 deliberately
+#: recomputes NOTHING, because rewriting a stored key at the new grain would collide on the 16
+#: store-days that historically hold two reps.
 #: Column-qualified with the alias `d` (the shape migration 502's UPDATE already uses).
 SQL_EXPR = ("d.org_id::text || '|' || btrim(coalesce(d.store_code,'')) || '|' || "
             "lower(btrim(coalesce(d.employee_name,''))) || '|' || d.close_date::text")
@@ -37,13 +42,29 @@ def _fold_employee(v) -> str:
     return str(v or "").strip().lower()
 
 
-def for_row(org_id, store_code, employee_name, close_date) -> str:
+def for_row(org_id, store_code, employee_name, close_date, grain=None) -> str:
     """THE dedup key. Returns '' when the key cannot identify a closing (no store or no employee
     name) — the caller must treat an empty key as "not dedupable" rather than storing it, because a
-    stored empty-ish key would make two unrelated identity-less closings collide."""
+    stored empty-ish key would make two unrelated identity-less closings collide.
+
+    `grain` is the tenant's declared answer to "how many closings does one store-day take"
+    (`closing/closing_grain`, owner 2026-10-13). At the house default — ONE per store-day — the key
+    leaves the EMPLOYEE OUT, so the partial unique index mig 502 built on this column (widened by
+    mig 1037) refuses a second rep's row for the same store-day with no new index and no new column.
+    The grain is DEREFERENCED, never re-decided here, so the key and the router's pre-insert guard
+    cannot disagree about what a duplicate is.
+
+    The two spellings can never collide: a store-day key has three `|` segments, a rep-day key four,
+    and an employee name cannot contain `|` in a way that closes that gap (the date is always the
+    last segment). Existing rows keep whatever key they were written with — this function changes
+    what NEW submits are keyed by, and no migration recomputes stored keys (the 16 historical
+    two-rep store-days would collide if one did, and mig 1037's §3 guard would correctly abort).
+    """
     store, emp = _fold_store(store_code), _fold_employee(employee_name)
     if not store or not emp:
         return ""
+    if _grain.key_omits_employee(grain if grain is not None else _grain.HOUSE_DEFAULT):
+        return f"{org_id}|{store}|{close_date}"
     return f"{org_id}|{store}|{emp}|{close_date}"
 
 

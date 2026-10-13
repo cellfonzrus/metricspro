@@ -104,7 +104,7 @@ FACTS: dict[str, dict] = {
             'app/scripts/backfill_customer_pin_encryption.py': ('backfill_customer_pins',),
         },
     },
-    # ── §COMMCALC-05 (owner directive 2026-10-12) — one pull loop, many feeds ───────────────────
+    # ── §COMMCALC-07 (owner directive 2026-10-12) — one pull loop, many feeds ───────────────────
     'portal_report_pull': {
         "question": 'Which code reaches a report on a portal we are logged into, presses its export '
                     'control and lands the file? It used to be whichever sweep needed it: the loop '
@@ -115,7 +115,7 @@ FACTS: dict[str, dict] = {
                     '(four functions) and the loop is written once; three older sweeps still drive '
                     'their own and are PINNED with reasons in the lock, a count that may only shrink.',
         "homes": ('app/modules/commcalc/portal_report_pull.py',),
-        "index": ('COMMCALC-05',),
+        "index": ('COMMCALC-07',),
         "locks": ('harness_portal_report_pull.py',),
         # SNAPSHOT — written BY HAND (§50): the modules that IMPORT the home, derived from the import
         # graph. The adapters import it for its helpers and are resolved BY it through the registry,
@@ -142,13 +142,43 @@ FACTS: dict[str, dict] = {
                     'only a declared mapping or the category\'s own label counts as the tenant\'s '
                     'word, and a line two categories could claim resolves to neither.',
         "homes": ('app/modules/commcalc/pos_report_feed.py',),
-        "index": ('COMMCALC-05',),
+        "index": ('COMMCALC-07',),
         "locks": ('harness_pos_report_feed.py',),
         "callers": {
             'app/modules/commcalc/pos_report_sweep.py': ('feed',),
         },
     },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
+    'multi_handset_one_buyer': {
+        "question": 'Which buyers took more handsets in one day at one store than a family plausibly '
+                    'would — counted ACROSS the receipts the sale was split over, from the LIVE '
+                    'daily sales feed rather than anything uploaded for an evaluation?',
+        "homes": ('app/modules/commcalc/multi_handset_day.py',),
+        "index": ('COMMCALC-05',),
+        "locks": ('harness_multi_handset_day.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50).
+        #
+        # THE SIBLING, NAMED SO NOBODY MERGES THEM. `commcalc/prospect_eval.py` (COMMCALC-03) asks
+        # the SAME question of an UPLOADED carrier statement for a store we do not own. The two are
+        # deliberately separate: that one reads `prospect_feed_row` and the carrier's own account
+        # column weeks after the fact, this one reads the live POS feed the morning after, and
+        # neither feed can answer for the other. The owner drew the line himself ("this would check
+        # the flags for ongoing activation not the test data uploaded for evaluation").
+        #
+        # WHAT IS NOT HERE: no severity, area or label of its own (`flag_registry` owns all three),
+        # no threshold (a `watchdog_rule` config row), and no idea of its own about which line is a
+        # handset — the per-org `box_departments` set is INJECTED by the caller, the same membership
+        # test `router._sales_cell_agg` counts boxes with. §G of the lock fails the build if this
+        # module reads that config itself or defaults it to the house labels.
+        "callers": {
+            # The ONE sweep every watchdog runs on (one cron line, §53). It reads the sales lines
+            # through `_read_sales` — which dereferences `router._open_month_source`, the one home
+            # for "which sales table answers for this period" — injects this org's
+            # `box_departments` and the shared void-token filter, and writes under the detector's
+            # OWN `source` so the commission recalculation's flag pass cannot retire its findings.
+            'app/modules/commcalc/watchdog_router.py': ('_handsets',),
+        },
+    },
     'store_takeover_evaluation': {
         "question": 'What would a store we are considering taking over be worth, from its own MA '
                     'commission / daily-TX / handset-order uploads against OUR average store '
@@ -500,6 +530,7 @@ FACTS: dict[str, dict] = {
             'app/modules/closing/cash_watchdog.py': ('_reg',),
             'app/modules/closing/ops_chargebacks.py': ('_reg',),
             'app/modules/commcalc/flags.py': ('_reg',),
+            'app/modules/commcalc/multi_handset_day.py': ('_reg',),
             'app/modules/commcalc/portout_flags.py': ('_reg',),
             'app/modules/commcalc/router.py': ('flag_registry',),
             'app/modules/commcalc/sale_installment_engine.py': ('_reg',),
@@ -805,6 +836,31 @@ FACTS: dict[str, dict] = {
             # really did (Aug 2026: 30 at the till, 0 on the statement). It now resolves the basis,
             # the declaration and both counts here and keeps no predicate of its own.
             'app/modules/commcalc/calculator.py': ('_tib',),
+        },
+    },
+    'attach_qualifier': {
+        "question": 'Did this SALE earn the line its full declared rate, or the lesser one — and who '
+                    'decides what counts toward the condition?',
+        "homes": ('app/modules/commcalc/attach_qualifier.py',),
+        "index": ('COMMCALC-06',),
+        "locks": ('harness_attach_qualifier.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but see the
+        # caveat recorded in §COMMCALC-01: --bless rewrites a callers block to BARE lines and strips
+        # the per-caller comments from every fact it touches, so this block is hand-written and the
+        # derived edge below was verified by running the guard (not --bless) afterwards.
+        "callers": {
+            # The plan pay engine. Before this, EVERY gate it had could only turn a payment OFF
+            # (`plan_pay_gate` suppresses; `financing_tiers` re-rates from a MONTH's attainment), so no
+            # rule could earn a lesser rate from a fact about the SALE its line belonged to. It now
+            # resolves the condition, both rates and the on-screen sentence here, injects its own
+            # `_rule_matches` and the accessory predicate, and keeps no threshold test of its own.
+            'app/modules/commcalc/commission_engine.py': ('_aq',),
+            # The SAVE path, and it is a caller for a reason worth stating: that path is
+            # DELETE-THEN-INSERT with an explicit column list, so a qualifier column it does not
+            # write back is WIPED the next time anyone saves the plan. It dereferences the measure and
+            # scope allowlists from here rather than retyping them, so the vocabulary cannot drift
+            # between what an admin can save and what the engine will honour.
+            'app/modules/commcalc/router.py': ('_aqm',),
         },
     },
     'commission_ledger_identity': {

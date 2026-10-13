@@ -5,7 +5,7 @@ and the back-office portal publishes its OWN report of the same day. He asked fo
 to be pulled daily and *"checked against what the employees declare daily"*. This module is the pull
 side of that; the comparison is its own change and reads these rows.
 
-WHAT IT IS, EXACTLY. The second adapter of `portal_report_pull.py` (index §COMMCALC-05) — it supplies
+WHAT IT IS, EXACTLY. The second adapter of `portal_report_pull.py` (index §COMMCALC-07) — it supplies
 the four contract functions and nothing else. The login, the second factor, the durable session, the
 cron, the route gate, the session-health chip, the cooldown and the pull loop are all the EXISTING
 machinery, unchanged and not copied. What is new here is only: which reports to pull (config on the

@@ -126,7 +126,7 @@ INGEST_TABLES_BY_MODULE = {
         "merchant_settlement_day", "merchant_settlement_batch",
         # Back-office POS report portal (owner 2026-10-12, mig 1078). The portal's own account of what
         # each worker sold, per declared category, per day — pulled by the shared portal loop
-        # (index §COMMCALC-05). It is the PORTAL's claim, landed beside what the reps declared at
+        # (index §COMMCALC-07). It is the PORTAL's claim, landed beside what the reps declared at
         # closing (commcalc.closing_metric_line, mig 1072) and never merged into it: merging them
         # would destroy the comparison the feed exists for.
         "portal_metric_day",

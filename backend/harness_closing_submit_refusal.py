@@ -288,23 +288,34 @@ check("a refusal with no amounts yet records none rather than a fabricated zero"
 # C. PURE — one dedup-key formula
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n== C. dedup_key: one home, and the whitespace divergence is gone ==")
-check("the key is org|store|folded-name|date",
-      dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01") == f"{HOUSE}|B-117|rohit|2026-10-01")
+# The key's GRAIN is the tenant's declared answer to "how many closings does a store-day take"
+# (`closing/closing_grain`, owner 2026-10-13); `harness_closing_store_day_grain.py` owns that
+# question end to end. This section proves the FOLDING rules, which are the same at either grain, so
+# it names the grain explicitly rather than relying on whatever the house default happens to be.
+REP_DAY = "rep_day"
+check("the key is org|store|folded-name|date at rep-day grain",
+      dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01", grain=REP_DAY)
+      == f"{HOUSE}|B-117|rohit|2026-10-01")
+check("at STORE-DAY grain the name is out of the key — which is how a second rep is now refused",
+      dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01", grain="store_day")
+      == f"{HOUSE}|B-117|2026-10-01")
 check("THE DIVERGENCE: a stray space in the name no longer makes a second key",
-      dk.for_row(HOUSE, "B-117", " Rohit ", "2026-10-01")
-      == dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01"))
+      dk.for_row(HOUSE, "B-117", " Rohit ", "2026-10-01", grain=REP_DAY)
+      == dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01", grain=REP_DAY))
 check("case in the name folds (one person types it two ways)",
-      dk.for_row(HOUSE, "B-117", "ROHIT", "2026-10-01")
-      == dk.for_row(HOUSE, "B-117", "rohit", "2026-10-01"))
-check("case in the STORE CODE does not fold (a code is an assigned identifier)",
-      dk.for_row(HOUSE, "b-117", "Rohit", "2026-10-01")
-      != dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01"))
-check("two reps at one store on one day are two keys (one row per rep per day, by design)",
-      dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01")
-      != dk.for_row(HOUSE, "B-117", "Kashif", "2026-10-01"))
+      dk.for_row(HOUSE, "B-117", "ROHIT", "2026-10-01", grain=REP_DAY)
+      == dk.for_row(HOUSE, "B-117", "rohit", "2026-10-01", grain=REP_DAY))
+check("case in the STORE CODE does not fold (a code is an assigned identifier), at either grain",
+      dk.for_row(HOUSE, "b-117", "Rohit", "2026-10-01", grain=REP_DAY)
+      != dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01", grain=REP_DAY)
+      and dk.for_row(HOUSE, "b-117", "Rohit", "2026-10-01", grain="store_day")
+      != dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01", grain="store_day"))
+check("two reps at one store on one day are two keys ONLY where the tenant declares rep-day grain",
+      dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01", grain=REP_DAY)
+      != dk.for_row(HOUSE, "B-117", "Kashif", "2026-10-01", grain=REP_DAY))
 check("'Rohit' and 'Rohit Kumar' stay DIFFERENT (converging rep identity is a roster question)",
-      dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01")
-      != dk.for_row(HOUSE, "B-117", "Rohit Kumar", "2026-10-01"))
+      dk.for_row(HOUSE, "B-117", "Rohit", "2026-10-01", grain=REP_DAY)
+      != dk.for_row(HOUSE, "B-117", "Rohit Kumar", "2026-10-01", grain=REP_DAY))
 check("no store or no name -> no key, and not dedupable",
       dk.for_row(HOUSE, "", "Rohit", "2026-10-01") == ""
       and dk.for_row(HOUSE, "B-117", "   ", "2026-10-01") == ""

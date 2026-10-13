@@ -19,7 +19,7 @@
 --     declared-category axis; a pull feed upserted on a natural key cannot share them without
 --     re-creating that defect.
 --   · commcalc.merchant_settlement_day (mig 955) — the card feed's landing table. Same MECHANISM
---     (and that mechanism is now shared: index §COMMCALC-05), different GRAIN and different subject:
+--     (and that mechanism is now shared: index §COMMCALC-07), different GRAIN and different subject:
 --     money by card brand, not units and dollars by declared category and worker.
 --   · commcalc.closing_metric_line (mig 1072) — what the REPS declared. Deliberately separate: a
 --     portal's figure written into the tenant's own declarations would destroy the very comparison

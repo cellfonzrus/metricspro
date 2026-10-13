@@ -106,9 +106,11 @@ Primary code homes:
 | CORE-03 | **A stored credential is encrypted at rest** | "A UPS Store portal login is about to be typed into this platform — where does the password go, and who can read it? Which other columns in this database are credentials, which of them were plaintext, and what stops the next sweep adding an eleventh one that nobody encrypts?" |
 | CORE-04 | **And the rows ALREADY stored** | "A column became encrypted on write — so what happened to the values written before that? Which encrypted column has a sweep that seals its old rows, which has none, and what stops the fifth encrypted column shipping half protected while every new write looks perfect?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
-| COMMCALC-05 | **One pull loop, many feeds — and a report line is not a category until the tenant says so** | "The portal publishes its own daily report of what each worker sold, and the reps declare the same day at closing. Which code reaches a report on a portal and lands it, and which declared category is a report line — when the portal's words are not ours?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
+| COMMCALC-05 | **Several handsets to one buyer in one day** | "Which buyers walked out with more handsets in one day than a family plausibly would — counted across the separate receipts the sale was split over, from the live till feed rather than a carrier statement weeks later, and with the evidence a manager needs instead of a verdict?" |
+| COMMCALC-06 | **An accessory attach decides which rate a line earns** | "The $25 edge payment is supposed to require $25 of accessories on the same sale, and to drop to the lesser rate when it is not there. Which record says the accessories were sold, what happens when the sale cannot be read, and why could no gate in this engine do this before?" |
+| COMMCALC-07 | **One pull loop, many feeds — and a report line is not a category until the tenant says so** | "The portal publishes its own daily report of what each worker sold, and the reps declare the same day at closing. Which code reaches a report on a portal and lands it, and which declared category is a report line — when the portal's words are not ours?" |
 
 ---
 
@@ -125,7 +127,7 @@ email), (c) **RPC/manual entry**.
 | `daily_sales_feed` | `047_sales_feed_recon.sql:19` | superset of raw_sales + `customer, email, customer_no` | The **processed** daily sales source; falls back to raw_sales |
 | `raw_payment_detail` | `002_commcalc.sql:34` | `business_address, payment_type, amount, mdn, imei, payment_date, rep_username, sequence` | GP (payment categorization), commission reimbursement; **per-LINE commission** for the event ROI via `mdn` (99.85% populated) and `imei` — note the CHARGEBACK leg (`Commission Withholding`) is keyed by `imei` with NO `mdn` at all (349 house rows, 349 imei, 0 mdn), so a number-only join reports GROSS as if it were net (§23s.8) |
 | `merchant_settlement_day` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, business_date, merchant_id, terminal_id, store_code, card_brand, gross_amount, refund_amount, net_amount, fee_amount, txn_count, batch_ref, raw` | **Merchant-processor card settlement** — the PROCESSOR side of the daily-closing card tally (§12a). Grain = org × source × merchant × business_date × card_brand |
-| `portal_metric_day` | `1078_portal_metric_day.sql` | `org_id, source_id, portal_key, report_key, business_date, store_code, store_key, store_label, employee_name, employee_key, metric_key, metric_basis, line_label, units, amount, source_line` | **What an external POS report says a store sold** — per worker, per DECLARED category (§COMMCALC-05). Grain = org × source × business_date × store × worker × category. Never merged into `closing_metric_line`, which is what the reps declared |
+| `portal_metric_day` | `1078_portal_metric_day.sql` | `org_id, source_id, portal_key, report_key, business_date, store_code, store_key, store_label, employee_name, employee_key, metric_key, metric_basis, line_label, units, amount, source_line` | **What an external POS report says a store sold** — per worker, per DECLARED category (§COMMCALC-07). Grain = org × source × business_date × store × worker × category. Never merged into `closing_metric_line`, which is what the reps declared |
 | `merchant_settlement_batch` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, deposit_date, batch_date, merchant_id, store_code, batch_ref, deposit_amount, fee_amount, raw` | Processor **funding** events (money to the bank) — cash/deposit recon (§12). A DIFFERENT grain from settlement; never sum the two |
 | `raw_mi` | `002_commcalc.sql:46` | `salesforce_id, actual_mi_payout, actual_atu_payout, phone_number, subscriber_status` | Carrier residual gate (paid-proof), MI/ATU |
 | `raw_dlar_rep` | `002_commcalc.sql:56` (+`012`,`031`, `1026`) | `rep_name, store, atu_pct, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, bounty, split, ga_prepaid` **+ `as_of_date`** (mig `1026`, the ADVOCATE report's own date — §19.28; NULL on rows written before it, where `created_at` is an upper bound only) | Rep KPI, comp trend, the pay engine's tier |
@@ -6722,7 +6724,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.raw_sales_product` (mig `1011`, **NOT applied**) — the POS BY-PRODUCT aggregate's OWN table (layout `pos_product_sales`; owner decision 2026-09-20, §32): raw_sales's columns + `source` (the kind stamp, default `pos_product_sales`) + `import_batch_id` | `_ingest_mapped_df` via `/upload-mapped` (`report_key=pos_product_sales`) and the intake's `pos` kind (`_intake_land` → `SOURCE_KIND_TARGET['pos']` = `TABLE_MAP['pos_product_sales']`); slice-replaced per store × `trans_date` × kind (`ingest_slice.INGEST_PARTITION`) | `_intake_reread_sales(table='raw_sales_product')` → the Stage-4 verify + report links (`_intake_link_source`). **Summed by NO money report** (it double-counts against line-level rows) — `landing_identity.CONSUMERS['raw_sales_product']` says so; before the migration a landing to it is REFUSED naming the file |
 | `commcalc.daily_sales_feed` | B2B/email sweeps, upload | `_compute_feed_actuals_py` (primary source), sales report, fallback in calc |
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
-| `commcalc.portal_metric_day` | `pos_report_sweep.ingest_report` (daily portal pull, through the shared loop `portal_report_pull.pull_reports_on_page`) | nothing yet — the comparison against what the reps declared is its own change (§COMMCALC-05.6). Resolved by NAME through `report_pull_map.portal_declared_metric`, never hardcoded |
+| `commcalc.portal_metric_day` | `pos_report_sweep.ingest_report` (daily portal pull, through the shared loop `portal_report_pull.pull_reports_on_page`) | nothing yet — the comparison against what the reps declared is its own change (§COMMCALC-07.6). Resolved by NAME through `report_pull_map.portal_declared_metric`, never hardcoded |
 | `commcalc.merchant_settlement_batch` | `merchant_portal_sweep.store_batches` | cash/deposit recon (§12); NEVER summed into the closing card tally (different grain) |
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report` (its carrier bucketing is §58's one home, dereferenced — §58.7), reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
 | `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; **the P&L's MI/ATU residual, PER STORE since mig `1033` (§7b)** — `coa.build_inputs` reads `residual_subs.MI_PNL_COLUMNS` (`salesforce_id` + the two payout columns) and books through `residual_subs.mi_pnl_bookings`, the door resolved by `residual_subs.canonical_salesforce_store_index`; nothing else turns these two columns into a P&L line; **the PORT-OUT side of the daily fraud report** (`subscriber_status` `'PORTED-OUT'`, dated from `mi_deactivation_date` → `residual_transfer_out_date` → the monthly snapshot transition — §19.32), read through the retention report's own bounded loader `marketing.router._es_mi_snapshots`, never a second read path; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
@@ -7020,8 +7022,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /commcalc/commission-category-map` · `GET /commcalc/commission-ledger/templates` | `router.get_commission_category_map` (returns `default_rules` for the templates that HAVE them, `unclassified_note` when a report inherits none, and the amount column's convention) / `commission_ledger_templates` → `list_templates` | §15, §25.12 — the Category Map editor and its template picker |
 | `GET /commcalc/exec-mtd/{period}` (returns `metric_coverage` — the silent-zero detector) · `GET/PUT /commcalc/exec-metric-config` | `router.py` `exec_mtd` / `get_exec_metric_config` / `put_exec_metric_config` | §3 Exec-MTD metric definitions (carrier presets + detector, mig `962`) |
 | `GET /commcalc/exec-mtd/{period}` **`landing`** (§32, 2026-09-20) — THE WAY BACK TO THE UPLOAD: the tables this page reads, the fields it needs (`CONSUMERS['raw_sales'].exec_mtd.needs`), `blank_fields` (blank on EVERY row of the period — rows exist but nothing to count), `feeds` (the registry kinds whose upload lands in those tables, each with the page to upload it on) | `router.py` `_exec_mtd` → `landing_identity.blank_fields_over` / `feeds_for_table` | `commcalc/exec/mtd/page.tsx` amber banner ("N sales lines carry none of the columns this page counts … upload it as <kind> under <page>", links through ScreenLink) |
-| `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, the three merchant portals, the supply vendors, and since §COMMCALC-05 any `pos_report` back-office portal — a feed is registered in `_SOURCE_SCRAPERS` and that registration IS its scheduling); cron self-registered by mig `956`; since mig `998` a connector whose `pull` route is closed is dropped BEFORE `next_run_at` is advanced and reported as `route_disabled` in the tick's answer — §12a.1 |
-| `POST /commcalc/data-sources/sweep/run-due` (the SAME endpoint, no new route) | `router._pos_report_scraper` → `portal_report_pull.run_cold_sweep` | §COMMCALC-05 the daily pull of a back-office POS report for every `processor='pos_report'` source — one `_SOURCE_SCRAPERS` registration IS the scheduling |
+| `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, the three merchant portals, the supply vendors, and since §COMMCALC-07 any `pos_report` back-office portal — a feed is registered in `_SOURCE_SCRAPERS` and that registration IS its scheduling); cron self-registered by mig `956`; since mig `998` a connector whose `pull` route is closed is dropped BEFORE `next_run_at` is advanced and reported as `route_disabled` in the tick's answer — §12a.1 |
+| `POST /commcalc/data-sources/sweep/run-due` (the SAME endpoint, no new route) | `router._pos_report_scraper` → `portal_report_pull.run_cold_sweep` | §COMMCALC-07 the daily pull of a back-office POS report for every `processor='pos_report'` source — one `_SOURCE_SCRAPERS` registration IS the scheduling |
 | `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
 | `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
 | `GET/POST/DELETE /marketing/options` · `GET/PUT /marketing/config` | `marketing/router.py` | §23 — RULE TWO option registry (the owner's "+") and the module switches (approval DEFAULT OFF) |
@@ -7163,6 +7165,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET/PUT /closing/source-config` (WHERE a store's daily closing comes from — org default + per-store override; the PUT gated to the 'closing' settings area), `POST /closing/derive-day` (manual / backfill; `dry_run=`), `POST /closing/derive-due` (NOTIFY_RUN_SECRET nightly sweep, only tenants with a derived store), `POST /closing/derive-range` (retroactive backfill, `start=`/`end=`/`dry_run=`, bounded by `MAX_DERIVE_BACKFILL_DAYS`); the PUT takes `store_codes[]` (the Store Setup multi-select) as well as one `store_code`, fanning out through the single `_closing_source_write_one` | `closing/router.py` (`get_closing_source_config`/`put_closing_source_config`/`derive_closing_day`/`derive_closing_due`/`derive_closing_range`; ONE read `_closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, ONE writer `_derive_write`, money + counts from the shared `_b2b_day`); pure `closing/closing_source.py`; mig `1035`; screen `/storeops/setup/stores` | §19.39 |
+| `GET/PUT /closing/grain-config` (**HOW MANY closings one store-day takes** — `store_day` (house default: whoever closes first owns the day, a second person is refused and told who holds it) or `rep_day` (an envelope per rep); org default + per-store override, the PUT gated to the 'closing' settings area and taking `store_codes[]` as well as one `store_code`, fanning out through the single `_closing_grain_write_one`) | `closing/router.py` (`get_closing_grain_config`/`put_closing_grain_config`; ONE read `_closing_grain_rows`, ONE resolver `_closing_grain`/`_closing_grain_map`); pure `closing/closing_grain.py`; mig `1080`; **no screen yet** | §29.13 |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
@@ -7279,6 +7282,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.36) |
 | **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) 
 | **Where does THIS store's daily closing come from — a rep typing it, or the sales feed?** (and therefore: is a store with no closing row a person who didn't submit, or a derivation that didn't run?) | `commcalc.closing_source_config` (mig `1035`): `store_code IS NULL` = the org default, a row per store = the override; house default `rep_entry` | ONE registry `closing/closing_source.py` (`resolve`, `expects_rep_submission`, `is_derived`, `derivable`, `derive_row`, `plan_day` — pure); ONE read `closing/router._closing_source_rows`, ONE resolver `_closing_source`/`_closing_source_map`, dereferenced by the submit endpoint, `closing_stores`, `_run_closing_missing_alerts` and `attention_providers._p_closing_stale_stores`; lock `harness_closing_source_lock.py`, proofs `harness_closing_source.py` + `harness_closing_source_sweep.py` + `harness_closing_source_multistore.py` (§19.39) |
+| **How many daily closings does ONE STORE-DAY take — and is a second person's submit a duplicate?** (before 2026-10-13 the answer was carried in the dedup key as "only if the same REP closed it", so two reps declared one day's cash twice and nothing noticed: Nostrand / 2026-10-10, $370 against a POS day of $140) | `commcalc.closing_grain_config` (mig `1080`): `store_code IS NULL` = the org default, a row per store = the override; house default `store_day` | ONE registry `closing/closing_grain.py` (`resolve`, `blocks_other_reps`, `key_omits_employee` — pure); ONE read `closing/router._closing_grain_rows`, ONE resolver `_closing_grain`/`_closing_grain_map`, dereferenced by `create_row` (refusal `store_day_already_closed`), by `dedup_key.for_row` (so the EXISTING unique index enforces it) and by the closing-sheet upload `_ingest_dataframe` (skips + reports); the derive sweep is excused and the excuse is locked; lock `harness_closing_store_day_grain.py` (§29.13) |
 | **Did the server actually STORE what an employee-row Save sent?** (vs a 2xx whose gate dropped a field) | the endpoint's reply: `update_employee`'s `UPDATE … RETURNING` row + `pay_fields_ignored`; the lunch / face configs' saved columns | `frontend/src/lib/rowSave.ts::notPersisted` (`NOT_SAVED_KEYS`, `sameStoredValue`) over each slice's `echo` in `lib/employeeRowSlices.ts`, applied by `runRowSave`; lock `harness_row_save_lock.py` §8, proof `prove_row_save.mjs` §V (§19.37) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
@@ -7325,7 +7329,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Platform authority REACH (how many operators hold full reach; how many surfaces a scoped role would lose at the mig-`984` cutover) | `core.platform_operator.operator_role` + per-row `capabilities` overrides, resolved against `operator.ROUTE_CAPABILITIES` ∪ `core.operator_route_capability` | `operator.enforcement_preview` → `GET /core/operator/enforcement`; §22 |
 | Platform health lamp (per subsystem, per tenant, and the roll-up) | `control_box.evaluate_check` → `roll_up`; composed from `import_health.collect_attention` + `portal_session_health.summarize` + scheduler heartbeats. Ladder `green < unmonitored < amber < unknown < red`; `unmonitored` is NEVER counted as green and the coverage fraction is stated out loud | `GET /core/control-box`, `core.system_check_run.lamp`; §20 |
 | External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
-| Portal-reported units / $ per declared category (per store, day, worker) | `portal_metric_day.units` / `.amount`, with `metric_basis` saying whether the category is the TENANT's word (`line_map` / `label`) or a text match | `pos_report_feed.normalize` → `totals_by_store_day` (rows with no resolved store are reported and EXCLUDED, never counted as $0 for a store); §COMMCALC-05. No money books from it — it exists to be compared against the declaration, and a disagreement is reported to a human |
+| Portal-reported units / $ per declared category (per store, day, worker) | `portal_metric_day.units` / `.amount`, with `metric_basis` saying whether the category is the TENANT's word (`line_map` / `label`) or a text match | `pos_report_feed.normalize` → `totals_by_store_day` (rows with no resolved store are reported and EXCLUDED, never counted as $0 for a store); §COMMCALC-07. No money books from it — it exists to be compared against the declaration, and a disagreement is reported to a human |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
 | **Zero-sales day state** (`had_sales` / `measured_zero` / `not_reported` / `closed` / `in_progress` / `off` / `rule_refused`) and **consecutive zero days** | `daily_sales_feed` ∪ `raw_sales` per (store × day) via `_sales_rows_union`, classified by `line_class` inside `_sales_cell_agg`; feed COVERAGE from the raw rows before the skip rules; trading days from `storeops.shifts.scheduled_hours` | `zero_sales.store_day_state` / `rep_day_state` / `walk_run` ← `router._zero_sales_core` → `GET /commcalc/zero-sales`. **An unmeasured day's count is `null`, never `0`** — armed negative control in `harness_zero_sales.py` §A. Alert threshold `consecutive_days` (config, house default 2) → `zero_sales.alert_items` → `manager_digest` → `storeops.alert_log` scope `'zero_sales'` (§15z) |
 | Exec-MTD LINE metrics (Bill Payment Qty/$ · Total Phones · Activation Fee · Total Protect) | `raw_sales.department` / `.category` / `.product_desc` matched against `commcalc.exec_metric_config.rules` (EXACT membership for dept/cat, substring for `product_desc_contains`) | `exec_metric_defs.resolve` (tenant row > house `carrier` PRESET > `CODE_DEFAULTS`, mig `962`) → `exec_metric_defs.line_match` inside `_sales_cell_agg`; silent-zero detector `bucket_coverage` → `GET /exec-mtd/*` key `metric_coverage` → Exec-MTD banner. Also the SECONDARY basis for `/metric-recon` and Leg B of the mig-`944` 3-way bill-pay recon; the mig-`939` P&L carve-out does NOT read it. Proof `harness_exec_metric_defs.py` (§3) |
@@ -15038,6 +15042,86 @@ row needs Abid's third submit, and the **$194.17 cash overage is a real discrepa
 than have the platform absorb. Three harnesses are red on `main` and unchanged by this PR —
 `harness_closing_submissions` (legacy-row tender fallback), `harness_closing_hardening` (B1e/B1f oracle) and
 `harness_closing_reports_span_scope` (7B) — confirmed by stashing these changes and re-running.
+
+
+### 29.13 TWO REPS CLOSED ONE STORE-DAY AND NOTHING NOTICED (owner bug report 2026-10-13)
+
+Owner, verbatim: *"2 reps did the closing for Oct 10 for nostrand ave , for luxelink , by rana Bilal and Moza Ali ,
+one the system should not have taken duplicate entries - it should have flagged the second person that they cannot
+enter , research ,move the entries for ran a Bilal to 531 utica"*
+
+**LIVE EVIDENCE FIRST (read-only, Supabase REST, before a line was written).**
+
+| what was there | value |
+|---|---|
+| `commcalc.daily_closing`, Luxelink, store `Nostrand`, `2026-10-10` | **THREE accepted closings**: Rana Bilal **$230.00** (23:03:21), moza ali **$140.00** (23:04:02), Dixit Chauhan **$0.00** (submitted 2026-10-13 16:35) |
+| the store-day's declared cash | **$370.00** against a POS day of **$140.00** |
+| `commcalc.daily_sales_feed`, `2026-10-10` | `3560 Nostrand Avenue` cash $140.00, salesperson **"Ali, Moaz"**; `531 Utica Ave` cash $447.29 + External $12.00, salesperson **"Bilal, rana"** |
+| store `Utica`, `2026-10-10` | **no closing at all** |
+| every other Nostrand store-day 2026-09-05 → 2026-10-12 | **exactly one closing** |
+| house-wide store-days holding more than one closing | **54**, of which **16 hold two DIFFERENT reps**, at 3–4 a month, across **both** tenants |
+
+So the POS feed independently says who was where: moza ali's row is right, Rana Bilal's belongs to Utica, and the
+platform noticed neither the duplicate nor the misfiling.
+
+**THE CLASS, NOT THE INSTANCE.** The platform had exactly ONE answer to *"is this store-day already closed?"* and it
+was **"only if this same REP closed it"** — carried in the dedup key (`closing/dedup_key`, `(org, store, employee,
+day)`), in the partial unique index built from it (`daily_closing_one_active_per_rep_day`, mig 502 / 1037), and in
+`create_row`'s pre-insert guard. A second **person** was therefore a duplicate to none of them, for any store, rep or
+tenant, and the day's cash doubled into `closing_summary`, the cash recon, the envelope report and the deposit chain
+in silence. It is also why a closing filed at the **wrong store** goes unnoticed: `_gate_row` compares a rep against
+the POS day for the store they picked, and Rana Bilal had no POS rows at Nostrand, so the gate had nothing to compare
+and passed him as `recon_pending`.
+
+**THE HOME: `backend/app/modules/closing/closing_grain.py`** (PURE, DB-free) — `GRAINS` /
+`normalize` / `resolve` / `grain_map` / `blocks_other_reps` / `key_omits_employee` / `refusal_detail` /
+`refusal_suffix`. Per-org config row with a per-store override and a house default of **`store_day`** — one closing
+for the whole store-day. RULE TWO: no tenant or store name in code; a tenant that genuinely banks an envelope per rep
+declares `rep_day` and behaves exactly as the platform did before.
+
+**THE EXISTING MECHANISM IS EXTENDED, NOT DUPLICATED (duplicate-check gate).** `dedup_key.for_row` now takes the
+grain and, at `store_day`, leaves the employee out of the key — so the unique index mig 502 already built on that
+column refuses the second rep's row **with no new index and no new column**. The two spellings cannot collide (three
+`|` segments vs four). Migration 1080 creates the config table and **recomputes no stored key**: rewriting history to
+the store-day spelling would collide on the 16 two-rep store-days above, and mig 1037's §3 guard would correctly
+abort. History keeps the key it was written with.
+
+**THE CALLERS, ALL OF THEM.** `closing/router.create_row` (the submit) refuses with the new
+`store_day_already_closed` code through the one `_refuse` site, naming who holds the day; `closing/router.
+_ingest_dataframe` (the closing-sheet upload — the **second** writer of `daily_closing`, which set no dedup key at
+all and could do by file exactly what the form did by hand) asks the same registry from one config read and
+**skips + reports** (`skipped_already_closed`) rather than inserting a second declaration or merging two people's
+money into a figure nobody declared. The derive sweep (`_derive_closing_day`) is **excused and the excuse is
+locked**: it is already store-day grained and never overwrites a human's row (`kept_manual`).
+
+**THE CORRECTION PATH.** A manager's release now lets the RIGHT person redo a store-day the WRONG person closed: the
+resubmit UPDATEs that one row, carries the new name onto it, re-locks it and audits the correction — never a second
+insert. The same rep resubmitting without a release is refused exactly as before.
+
+**ENDPOINTS:** `GET /closing/grain-config` (the org default, every override, the effective answer for one store) and
+`PUT /closing/grain-config` (org default, one store, or several in one call through
+`_closing_grain_write_one`, the ONE writer) — gated to the same `closing` settings area as the closing-source and
+tender config.
+
+**LOCK:** `backend/harness_closing_store_day_grain.py`, **82 checks**, wired into
+`carrier-vocab-guard.yml` as its own job (`closing-store-day-grain-lock`) and named in the paths filter. It drives the
+REAL submit endpoint and the REAL sheet ingest against the shared `harness_intake_fakes.FakeDB`, reproduces the
+Nostrand 2026-10-10 shape as its regression, and fails the build if `create_row` or the sheet upload stops
+dereferencing the registry, if the key is composed without the grain, if a second copy of the vocabulary appears
+(`flag_registry`'s own older `grain` vocabulary is excluded BY NAME and held apart by §H3c), if migration 1080 starts
+rewriting stored keys, or if the Management Review screen has no words for the new refusal. Five negative controls.
+`harness_closing_submit_refusal.py` §C was updated to name the grain explicitly (120 passed / 0 failed) — its old
+assertion *"two reps at one store on one day are two keys, by design"* **was** the defect.
+
+**OPEN — reported, not fixed.**
+- Moving Rana Bilal's row to `Utica` puts his declared **$230.00** against Utica's POS cash of **$447.29** — a
+  **$217.29 shortage** that nobody has looked at, because while the row sat at Nostrand the close gate had no POS
+  figure for him there. The repair runbook states this and adjusts nothing.
+- **A rep with no POS activity at the store they are closing is still not flagged.** `_b2b_day`'s `by_rep` already
+  holds the answer and the gate already reads it; turning it into a hard refusal would turn away a legitimate rep on a
+  no-sale shift or a late feed, so the honest shape is a non-blocking management flag. Not built here.
+- The Store Setup screen has no control for the grain yet — the endpoints above are the whole surface, so switching a
+  tenant to `rep_day` is an API call today.
 
 
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)
@@ -24680,7 +24764,8 @@ registered section" and adds the module↔section direction it never had.
 122 rows: the 109 numbered top-level `##` sections (§23s is grandfathered as two headings and
 registers once), plus §15.1–§15.3, which are where the `notify` module is actually documented, plus
 the eleven `§<MODULE>-NN` sections allocated since CORE-01 (§CORE-01, §CORE-02, §CORE-03, §CORE-04,
-§COMMCALC-01, §COMMCALC-02, §COMMCALC-03, §COMMCALC-04, §COMMCALC-05, §CLOSING-01, §STOREOPS-01).
+§COMMCALC-01, §COMMCALC-02, §COMMCALC-03, §COMMCALC-04, §COMMCALC-05, §COMMCALC-06, §COMMCALC-07,
+§CLOSING-01, §STOREOPS-01).
 
 Declared, and verified against the code paths each section cites wherever it cites any: 81 of the
 110 sections cite a backend module path and are checked against it, 12 of those cite four or more
@@ -24891,6 +24976,8 @@ status word rather than a blank that reads as nil.
 | COMMCALC-04 | commcalc |
 | CORE-04 | core |
 | COMMCALC-05 | commcalc |
+| COMMCALC-06 | commcalc |
+| COMMCALC-07 | commcalc |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -26112,16 +26199,303 @@ file once this ships.
   left unwired), §19.36 (the boundary that made a broken write read as an unlicensed feature).
 
 
+## §COMMCALC-05. SEVERAL HANDSETS TO ONE BUYER IN ONE DAY — the live feed, counted across the receipts the sale was split over (owner ask 2026-10-12)
+
+Owner: *"add the famimly check to the regular activations also under the flags tile"*, then, deciding
+the feed himself: *"this wooulkd check the flags for ongoing actyivation not the test data uploaded
+for evauluation"* and *"good point , it should be daily sales feed"*.
+
+**One home:** `backend/app/modules/commcalc/multi_handset_day.py` (pure, DB-free).
+**Lock:** `backend/harness_multi_handset_day.py`. **Flag type:** `MULTI_HANDSET_ONE_BUYER`, area
+`fraud`, severity HIGH, grain `store_day`, registered in `flag_registry.TYPES`.
+
+### COMMCALC-05.1 Duplicate check (the build gate)
+
+| Already answers something near it | Why it is not this | What this reuses |
+|---|---|---|
+| `DUPLICATE_IMEI` (§53, fraud) | ONE device on SEVERAL lines — the inverse shape | nothing to share |
+| `RSK_ACTIVATIONS` (§53, fraud) | counts RSK-REGISTER activations per rep: about the till and the salesperson, not the buyer | untouched |
+| §COMMCALC-03 prospect eval | the SAME question on an UPLOADED statement for a store we do not own | deliberately NOT shared — see .2 |
+| `router._sales_cell_agg` box count (§3, mig 218) | counts boxes per cell, not per buyer | **the `box_departments` membership test, injected** |
+| `flag_registry` (§53) | — | severity, area, label, threshold, on/off switch |
+
+New here and nowhere else: grouping handset lines by **(store, day, buyer) ACROSS receipts**, and the
+receipt breakdown inside a case.
+
+### COMMCALC-05.2 Why this and §COMMCALC-03 are two detectors and must stay two
+
+They ask one question of two feeds that cannot answer for each other. §COMMCALC-03 reads
+`prospect_feed_row` — an uploaded carrier statement for a store nobody owns yet — keys on the
+carrier's own account column, and answers weeks late from money already paid. This reads the live
+`commcalc.daily_sales_feed` and answers the morning after, while the handsets are still recoverable.
+The owner drew this line himself. **Merging them would let a prospect's uploaded rows raise live
+operational flags**, which is the one thing §COMMCALC-03's AST lock exists to prevent.
+
+### COMMCALC-05.3 A handset is a BOX-DEPARTMENT line — never a serial number
+
+Measured against production 2026-10-12, the whole feed (151,102 rows):
+
+| Candidate test | Rows | Verdict |
+|---|---|---|
+| `serial_1` present | 24,452 | **WRONG.** Plan lines carry a serial: 1,062 `Total MAX 5G Plan $55`, 435 `Total Wireless Home Internet`, the tablet plans. One phone plus two plans counted as three devices. |
+| `customer_no` present | 21,188 (26%) | **WRONG as a buyer key.** Absent on 59% of serial-bearing rows, and the rows that carry it are mostly `Other Carr. payments` and `System`. A check keyed on it reports a clean bill of health it has not earned. |
+| department ∈ the org's `box_departments` | 9,759 | **RIGHT.** The same membership test the box count uses, so this detector and that store's own box count cannot disagree. |
+
+The set is **injected by the caller**, never read or defaulted inside the module — `harness_multi_handset_day.py` §G
+fails the build if that changes. An undeclared set yields no findings **and says so**, rather than
+falling back to the house Boost-XP labels and reading as "all clear".
+
+### COMMCALC-05.4 Why it groups ACROSS receipts (the measurement that forced the design)
+
+A per-receipt check was the obvious design and the wrong one. On the same live feed:
+
+- **392** receipts carry more than 2 handsets.
+- But **501** buyer-days do, and **191 of those are split across several receipts** — invisible to a
+  per-receipt test.
+- Worst case: **16 handsets over EIGHT separate receipts**, 3248 W Lawrence Ave, 2026-09-18, every
+  line **$0.00**. Also 18 handsets / 3 receipts (2640 Narragansett, 2026-07-02) and 17 handsets /
+  4 receipts at $0.00 (4640-A W Diversey Ave, 2026-07-18).
+- **129 of the 501 cases are entirely $0.00** — promotional activations in volume to one name.
+
+A threshold a till can evade by ringing a second sale is not a threshold.
+
+### COMMCALC-05.5 The buyer key, and what it deliberately cannot do
+
+`(org, store, day, normalised name)`. The name is folded for case and spacing only. Initials,
+nicknames and misspellings are **not** folded — that would invent an identity, and a flag that
+accuses the wrong person is worse than one that misses. The live placeholder values the feed actually
+carries (`No Customer` on 203 device rows, `walk  in`, `BOOST MOBILE`, `Back Order`) are **not
+grouped**: they are counted and reported as unattributable, because fusing hundreds of unrelated
+walk-ins into one case is a worse answer than no answer.
+
+Same day and same store is what makes an exact-name match defensible. The cost is stated on screen,
+not buried: it cannot see one buyer across different days, different stores, or under a differently
+spelled name.
+
+### COMMCALC-05.6 It reports evidence and returns no verdict
+
+Nothing here concludes that fraud happened and no function returns a judgement — `harness_multi_handset_day.py`
+§E walks the module's own strings and fails the build if any user-facing sentence calls something
+fraud, abuse or a scheme. A family of five buying five phones is a good sale and reads identically in
+this feed. So a case carries what a human needs to tell them apart — the handsets and models, the
+receipt split and per-receipt counts, the dollars, whether every line was $0.00, the reps, the day —
+and the coaching note asks for a check (*"Confirm these were one genuine sale and not split to stay
+under a per-sale limit"*), never an accusation.
+
+### COMMCALC-05.7 Where it is
+
+| Thing | Where |
+|---|---|
+| the rules | `commcalc/multi_handset_day.py` — `handset_rows` / `group_by_buyer_day` / `cases` / `findings` |
+| the proof | `harness_multi_handset_day.py` (CI: "Several handsets to one buyer lock") |
+| the type, severity, threshold | `commcalc/flag_registry.py` — `TYPES` + `DEFAULT_PARAMS['MULTI_HANDSET_ONE_BUYER']['max_handsets'] = 2` |
+| the tenant's override | a `commcalc.watchdog_rule` row (no migration — the table already exists) |
+| the board | Flags & Compliance, area `fraud` |
+| the caller (the only one) | `commcalc/watchdog_router.py::_run_for_org` — the one sweep, one cron line |
+| the live sales read | `commcalc/watchdog_router.py::_read_sales` → `router._open_month_source` (§19.16) |
+
+### COMMCALC-05.8 Which sales table it reads, and the sibling that fix closed
+
+The owner named the feed himself on 2026-10-12: *"good point , it should be daily sales feed"* — the
+check must see activations as they happen, not a month-end archive. But `daily_sales_feed` is **not
+named** anywhere in the sweep. `router._open_month_source(client, org_id, period)` is the ONE home for
+"which sales table answers for this period" (§19.16): the OPEN month reads the daily feed, where the
+hourly Sales Transaction Details email lands, a CLOSED month reads the authoritative `raw_sales`, and
+each falls back to the other. A literal table name in the sweep would be a second opinion about which
+feed is live, and §H15 of the lock fails the build if one appears.
+
+`_read_sales` is that dereference, and it is shared by **every** sales-reading surface in the file —
+which is how building this found and fixed a sibling, as the design rule requires:
+
+- **The void sweep** (`_run_for_org`) and **the void register** (`GET /watchdog/voids`) both named
+  `raw_sales` literally. On the month in progress — the only month anybody can still act on — that
+  archive does not exist yet, so both read **zero lines and reported no voids rather than no data**.
+- Every CLOSED month is byte-identical, because the one home returns `raw_sales` first for them. The
+  change is that the open month is looked at at all.
+- The sales rows are now read **once** per sweep and handed to both detectors, so the two can never
+  disagree about what the month contained.
+
+Buyer-name coverage differs between the two tables and is reported, never assumed (measured live
+2026-10-12): `daily_sales_feed` carries a `customer` on **151,102 of 151,102** rows, `raw_sales` on
+**141,758 of 219,375** (65%). Lines with no buyer, or a placeholder like `No Customer`, are counted as
+`unattributable_lines` in the summary rather than dropped silently — a bare empty case list would read
+as "all clear" when it can also mean "nobody recorded who bought these".
+
+### COMMCALC-05.9 The `source` string, and the retirement defect it avoids
+
+`flag_persist.sync` RETIRES every open flag in the period that carries one of the caller's `sources`
+and that the run did not produce. `router._CALC_FLAG_SOURCES` already claims `'sales'` for the
+commission recalculation's own flag pass. The detector's first draft wrote its findings under
+`'sales'`, which would have had **the next recalculation of that month silently resolve every one of
+them away** — the detector would have looked correct and then emptied itself. It owns
+`SOURCE = "multi_handset_watchdog"`, and §H1–H3 of the lock fail the build if that collides with a
+source the commission pass retires.
+
+The POS store spelling goes in `store_address`; `flag_store_resolver.stamp_flags` (mig 285) is the one
+home that turns it into a `store_code` a district manager's board can filter on. A code guessed in the
+detector would be a second store resolver (§64).
+
+### COMMCALC-05.10 The drill-down, and what was sold alongside
+
+Owner, 2026-10-12: *"for all these flagged activations with more than one phone sold we need to have
+the drilldown to check who made the sale for how much, if no accessories are sold with the sale and no
+activation fee it is definletly leaning towards fraud"*.
+
+| Thing | Where |
+|---|---|
+| the drill-down | `GET /commcalc/watchdog/multi-handset` — per case: every handset line's rep, amount, device, serial, receipt |
+| accessory dollars on the same receipts | `router._is_accessory`, INJECTED |
+| set-up / activation fee lines | `router._is_setup_fee` (mig 217 keyword list), INJECTED |
+
+**Why an endpoint and not a column.** `flag_persist._ROW_FIELDS` is the set of columns the findings
+table holds and a per-line breakdown is not one of them — the evidence dict is dropped on write by
+design. The board keeps the one-line finding a manager scans; the drill-down answers "show me the
+lines" from the feed at read time, through the same `_read_sales` one home, so the two cannot disagree
+about what the month contained. It applies the district-manager span filter BEFORE counting.
+
+**Both companion predicates are injected, over the SAME `accessory_config` row `box_departments` comes
+from.** One declaration therefore answers "is this a handset", "is this an accessory" and "is this a
+fee", so the three readings cannot disagree about one line. There are about eight divergent accessory
+classifiers in this codebase (see `accessory_definition.py`); picking a different one here would have
+made the drill-down disagree with the Sales Report's own accessory dollars. A fee is not counted as an
+accessory — the Sales Report's rule, kept so both numbers mean here what they mean everywhere else.
+
+**Not measured is not zero.** With no predicate supplied the signals are `None` and the sentence
+asserts nothing about them. Only a real look that found nothing yields `0.0`, which is when the
+coaching note changes to *"Nothing was sold alongside these handsets … pull the receipts and the
+buyer's ID before the return window closes."* §I4–I6 of the lock fail the build if an unmeasured run
+can ever render as "none sold" — otherwise an unconfigured tenant reads as a chain full of fraud.
+
+**THE OWNER'S RULE WAS MEASURED BEFORE IT WAS BUILT, AND HIS CONJUNCTION DOES NOT FIRE.** On live
+October 2026, across both tenants with sales (17 flagged cases):
+
+| | house org | the other tenant |
+|---|---|---|
+| flagged cases | 4 | 13 |
+| **no accessory on the sale** | 0 | **2** |
+| no set-up/activation fee | 0 | 0 |
+| **neither accessory nor fee** | **0** | **0** |
+
+A set-up or activation fee is present on every flagged case — the house org bills one per handset —
+so "no activation fee" discriminates nothing on this data, and the AND of the owner's two conditions
+would have shown him an empty screen. **Accessory dollars alone are the signal**: they narrow 17 cases
+to 2. Both numbers are reported and neither is turned into a verdict; `signal` on each case lists which
+of the two is absent, as a filter.
+
+The standout the signal surfaces: **4 promo iPhones at $0.00 each, one receipt, one rep, no
+accessories**, on a port-in multi-line promotion. The other of the two reads like a genuine household
+bundle (a tablet, a home-internet router and a phone), which is exactly why the detector reports and
+does not conclude.
+
+## §COMMCALC-06. AN ACCESSORY ATTACH DECIDES WHICH DECLARED RATE A LINE EARNS (owner directive 2026-10-12)
+
+**Owner, verbatim.** *"Payment for edge on total which is defined as $25 must be accompanied with
+atleast $25 worth of accessories , add this logic in the system not as hard coded but as a logic
+platform wide which might be used by other carriers also , label the commission as $25 acc is must to
+be qualified for $25 commission otherwise the commision falls back to $10 or whatever is paid to
+Chicago market"*
+
+**THE CLASS, not the instance.** The missing thing was not Total's edge payout. It was that **every gate
+in the plan engine could only turn a payment OFF** — `plan_pay_gate` suppresses (scope, exclusion, unit
+dedup, §6f) and `financing_tiers` re-rates from a MONTH's attainment (mig 273). Nothing could say "this
+line earns a LESSER declared rate because of a fact about the SALE it belongs to". That is the
+mechanism, and it is carrier-agnostic.
+
+**HALF THE ASK ALREADY EXISTED, and was reused rather than rebuilt.** *"or whatever is paid to Chicago
+market"* needs nothing new: migration **262** already lets a rule state the market, store or employee it
+applies to — it was built from the owner's own 2026-08-01 report (*"All activations are being paid $10
+flat, this is only for NY employees, but this empluee is in Chicago"*). A tenant either enters that
+market's figure as the fallback, or leaves the fallback NULL and lets that market's own scoped rule pay.
+
+| | |
+|---|---|
+| one home | `backend/app/modules/commcalc/attach_qualifier.py` — PURE, imports nothing from `app` |
+| config | `commcalc.commission_rule` (mig **1079**): `qualifier_min`, `qualifier_measure`, `qualifier_scope`, `qualifier_match_field`, `qualifier_match_op`, `qualifier_match_value`, `qualifier_fallback_amount`, `qualifier_label`. All nullable; a NULL `qualifier_min` is NO condition, so applying 1079 changes nothing |
+| wired at | `commission_engine.preview` — context built ONCE from `valid` (the period's whole validated feed), applied at the single line where `_line_payout` turns a rate into dollars, via `attach_qualifier.rule_view` |
+| save path | `router.save_commission_plan` round-trips all eight columns. That path is DELETE-THEN-INSERT with an explicit column list, so a column not written back is **WIPED on the next plan save** — §19.18 at its most expensive, since what it erases is money policy. Locked by `harness_attach_qualifier.py` §J |
+| lock | `harness_attach_qualifier.py` — 83 checks, DB-free; **6 of them were RED against the un-wired engine** |
+
+**WHAT IS NOT DUPLICATED, and this is the whole design.** *"Is this line an accessory"* is **not answered
+here.** There are already ~8 accessory classifiers in this codebase (§19.42 and the `accessory_definition`
+docstring enumerate them), and the one the money path honours is `plan_pay_gate.accessory_predicate` →
+`accessory_definition.classify`, the map the owner curates by hand on `/commcalc/accessory-definition`.
+It is **INJECTED**. *"Does this line match a rule"* is injected too — `commission_engine._rule_matches`,
+exactly as `financing_tiers.build_context` takes the same callable, so the condition is counted by
+precisely the code that decides what pays. The lock proves this structurally: the module **reads no
+classifying column at all** (only `trans_id`, `ext_price`, `gp`), so a keyword list cannot appear in it.
+
+**MEASURED OVER THE WHOLE SALE, not the rep's share of it.** What the customer bought is not an accident
+of who rang which line, so two reps on one sale read the same verdict.
+
+**AN UNMEASURABLE SALE PAYS THE FULL RATE, AND IS REPORTED.** A row with no `trans_id` has no knowable
+siblings, and an unreadable accessory definition makes the condition unanswerable — neither is "zero
+accessories". Treating unknown as zero would quietly dock a rep on a data defect. Such lines earn the
+full rate, carry `basis = "unmeasured"`, and are counted in the engine's guard. Same posture as
+`payroll_hours_basis` for an undated cell (§14y.1) and the §66 allowlist rule.
+
+**A FLAT FALLBACK CANNOT BE APPLIED TO A PERCENTAGE RULE**, because `_line_payout` prices those off
+`pct`: overwriting `amount` would change nothing while the screen claimed a lesser rate was paid. The
+pairing is **refused and reported** (`basis = "unsupported"`), and that rule keeps paying what it pays.
+
+**THE LABEL IS DERIVED, NEVER WRITTEN.** The owner asked to see *"$25 acc is must to be qualified for $25
+commission"*. Those dollars are one tenant's figures, so `describe()` builds the sentence from the config
+— today it renders *"$25 of accessories is required to qualify for the $25 commission; otherwise $10."*
+and a tenant with other numbers reads their own. RULE TWO holds: no carrier, tenant, product, market or
+dollar figure appears in the code, and the lock scans for them.
+
+**MEASURED ON LIVE DATA before anything moves** (read-only, 2026-10-12, the Total tenant's two $25
+`edge` rules, DISTINCT sales, at a $25 minimum with a $10 fallback). The live `accessory` flag is stamped
+by a classifier this container cannot run, so that tenant's own `department in (Accessories,
+C2Wireless)` declaration stands in and these are therefore a FLOOR:
+
+| month | sales | qualified | short | pays today | with the rule | delta |
+|---|---|---|---|---|---|---|
+| Jul 2026 | 2 | 0 | 2 | $50.00 | $20.00 | −$30.00 |
+| Aug 2026 | 7 | 6 | 1 | $175.00 | $160.00 | −$15.00 |
+| Sep 2026 | 8 | 4 | 4 | $200.00 | $140.00 | −$60.00 |
+| Oct 2026 to date | 2 | 2 | 0 | $50.00 | $50.00 | $0.00 |
+
+**One of those sales carried $24.99 of accessories** — a penny short cost the rep $15 under the rule as
+literally stated. Surfaced for the owner rather than rounded away in code: a tolerance is a config
+decision, not something the engine should invent.
+
+Nothing is switched on. Migration 1079 is **surfaced for owner approval, not applied**, no rule declares
+a qualifier, and no stored payout is touched.
+
+### COMMCALC-06.1 Cross-references
+
+- **§16 (by TABLE):** `commcalc.commission_rule` — eight new columns (mig 1079), read by
+  `attach_qualifier.resolve` and round-tripped by `router.save_commission_plan`.
+- **§17 (by FUNCTION):** `attach_qualifier.resolve` / `build_context` / `verdict` / `rule_view` /
+  `describe`; `commission_engine.preview` (the one caller).
+- **§18 (by QUESTION):** "Did this sale earn the line its full rate, or the lesser one — and who decides
+  what counts toward the condition?" → `attach_qualifier`, dereferencing
+  `plan_pay_gate.accessory_predicate` for the accessory answer and `commission_engine._rule_matches` for
+  the sibling match. Never a classifier of its own.
+- **Siblings checked and NOT duplicated:** `plan_pay_gate` (suppression — a different outcome, and the
+  home for it), `financing_tiers` (re-rating from a month's attainment, not from one sale),
+  `daily_incentive` (§76.4 — declared qualifiers, but it computes only and pays nobody),
+  `management_incentive` (§9 — manager-level qualifier gates), `accessory_definition` (mig 257 — the
+  definition this dereferences).
+- **§6f / §19.42:** the accessory-classifier divergence this deliberately does not add to.
+
 ---
 
-## §COMMCALC-05. ONE PULL LOOP, MANY FEEDS — AND A REPORT LINE IS NOT A CATEGORY UNTIL THE TENANT SAYS SO (owner directive 2026-10-12)
+## §COMMCALC-07. ONE PULL LOOP, MANY FEEDS — AND A REPORT LINE IS NOT A CATEGORY UNTIL THE TENANT SAYS SO (owner directive 2026-10-12)
+
+> **Section number:** written as §COMMCALC-05 and renumbered to **§COMMCALC-07** on merge. #453 took
+> §COMMCALC-05 and #457 took §COMMCALC-06 while this was in flight, and both carry a migration
+> (`1079`, `1080`) coupled to their number; this change's migration (`1078`) is not coupled to a
+> section id, so it was the cheapest of the three to move. That is the **fifth** number race in four
+> days (§61/§62, §67, §68/§71, and now this) — the allocator added by §CORE-01 hands out the next
+> free id but cannot RESERVE it on `main`, which is the gap each race keeps finding.
 
 Owner, verbatim: the back-office portal's reports *"should be checked against what the employees
 declare daily … but i dont wnat them to be hard coded it should be a design effect"*. This is step 2
 of the three he approved (step 1 was §CORE-03, the portal credentials); step 3, the comparison
 itself, is its own change and is deliberately NOT claimed here.
 
-### §COMMCALC-05.1 THE CLASS, NOT THE INSTANCE
+### §COMMCALC-07.1 THE CLASS, NOT THE INSTANCE
 
 The instance is "the tenant's POS report has no puller". Two classes sat behind it.
 
@@ -26146,7 +26520,7 @@ Both wrong answers to "which declared category is this report line?" are worse t
   not*. A line matched by resemblance, then compared against a rep's declaration, manufactures a
   disagreement (or hides a real one) with nothing to show a reader which it was.
 
-### §COMMCALC-05.2 THE TWO ONE-HOMES
+### §COMMCALC-07.2 THE TWO ONE-HOMES
 
 **`backend/app/modules/commcalc/portal_report_pull.py`** — "reach a report on a portal we are logged
 into, export it, land it", written exactly once. A feed is an **ADAPTER**: a module exposing four
@@ -26174,7 +26548,7 @@ it, and the reason `metric_basis` is a stored column: a surface reading `metric_
 treat a text coincidence as a declaration. A metric key is never invented here — the catalog is the
 tenant's, and this module only points at a key it already has.
 
-### §COMMCALC-05.3 A CONNECTOR KIND, NOT A VENDOR
+### §COMMCALC-07.3 A CONNECTOR KIND, NOT A VENDOR
 
 `pos_report_sweep.CONNECTOR = "pos_report"` is the `data_source.processor` of *a back-office portal
 that publishes a daily sales report* — the `supply/portal.SUPPLY_PROCESSOR` posture. **No vendor's
@@ -26187,7 +26561,7 @@ stated in the code: **this connector does nothing at all until an operator decla
 least one report** — and it says so in the operator's own words rather than pulling zero rows and
 looking healthy.
 
-### §COMMCALC-05.4 WHAT WAS REUSED, NOT REBUILT (duplicate check — build gate)
+### §COMMCALC-07.4 WHAT WAS REUSED, NOT REBUILT (duplicate check — build gate)
 
 | Checked | Verdict |
 |---|---|
@@ -26209,7 +26583,7 @@ looking healthy.
 **NEW:** two modules, one adapter, one table (`commcalc.portal_metric_day`, mig **1078**), one
 `report_pull_map` house row, two lineage edges.
 
-### §COMMCALC-05.5 LOCKED SO IT CANNOT UN-WIRE
+### §COMMCALC-07.5 LOCKED SO IT CANNOT UN-WIRE
 
 `backend/harness_portal_report_pull.py` (101 checks, stdlib, in `carrier-vocab-guard`):
 
@@ -26239,7 +26613,7 @@ for column, and §K is a whole-word RULE TWO scan over the executable text of bo
 a real bug:** a mapping onto a category the tenant had deleted was honoured when the map arrived
 already normalized.
 
-### §COMMCALC-05.6 WHAT IS NOT DONE, STATED
+### §COMMCALC-07.6 WHAT IS NOT DONE, STATED
 
 - **The comparison is not built.** The rows land, they are readable, and nothing checks them against
   what the reps declared. That is the owner's actual ask and it is the next change; the lineage edge
@@ -26249,7 +26623,7 @@ already normalized.
   inert until an operator declares the portal, logs in once on the live screencast so the second
   factor is satisfied, and saves the report's navigation and export control. The portal credentials
   and the authenticator secret are already encrypted at rest (§CORE-03).
-- **Three older sweeps still drive their own pull loop** (§COMMCALC-05.5), pinned and visible.
+- **Three older sweeps still drive their own pull loop** (§COMMCALC-07.5), pinned and visible.
 - Same class: §19.18 (a mechanism written and its callers left unwired), §66 (a value read without
   its basis), §76 (the declared-category registry this feed points at), §36 (the connector KIND
   precedent), mig 1011 (two report kinds, one table).

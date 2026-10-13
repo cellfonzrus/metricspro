@@ -235,6 +235,11 @@ on:
       - "backend/app/modules/closing/unfinished_day.py"
       - "backend/app/modules/closing/submit_refusal.py"
       - "backend/app/modules/closing/dedup_key.py"
+      # index §29.13 — one store-day takes one closing; the lock reads the router, the grain
+      # registry, the dedup key, migration 1080 and the Management Review screen
+      - "backend/harness_closing_store_day_grain.py"
+      - "backend/app/modules/closing/closing_grain.py"
+      - "database/migrations/1080_closing_grain_config.sql"
       - "backend/harness_report_kind_lock.py"
       - "backend/harness_connector_scope_lock.py"
       - "backend/app/modules/commcalc/connector_registry.py"
@@ -490,7 +495,7 @@ on:
       # for the same §13e reason as the lines above, plus every module wired to the registry: a
       # caller that stops dereferencing it is exactly what this job exists to catch, so a change to
       # one of them must not be able to skip the job.
-      # index §COMMCALC-05 — ONE PULL LOOP, MANY FEEDS. Same §13e reason as the lines above: both
+      # index §COMMCALC-07 — ONE PULL LOOP, MANY FEEDS. Same §13e reason as the lines above: both
       # locks name THEMSELVES, plus the loop, the two adapters and the pure parser. The ratchet that
       # stops a third feed copying the loop can only hold if a change to any of them runs the job.
       - "backend/harness_portal_report_pull.py"
@@ -524,6 +529,16 @@ on:
       # change to any booking one-home the prospect P&L reads re-runs the proof that the two still
       # agree. The routers it AST-scans are already named by the globs below.
       - "backend/harness_prospect_eval.py"
+      # §COMMCALC-05 — several handsets to one buyer in one day. Named with its home and the two
+      # it dereferences (flag_registry for severity/threshold, the box-department set the box
+      # count uses) so a change to either re-runs this proof.
+      - "backend/harness_multi_handset_day.py"
+      - "backend/app/modules/commcalc/multi_handset_day.py"
+      - "backend/app/modules/commcalc/flag_registry.py"
+      # The ONLY caller: §H of the lock AST-reads it to prove the sweep injects the per-org box
+      # departments and the void filter, writes under the detector's own `source`, and names no
+      # sales table literally. A change here must re-run that proof.
+      - "backend/app/modules/commcalc/watchdog_router.py"
       - "backend/app/modules/commcalc/prospect_eval.py"
       - "backend/app/modules/account/device_cogs.py"
       - "backend/app/modules/account/ma_store_pnl.py"
@@ -629,6 +644,10 @@ on:
       - "backend/harness_trade_in_basis.py"
       - "backend/app/modules/commcalc/trade_in_basis.py"
       - "database/migrations/1075_trade_in_basis_config.sql"
+      - "backend/harness_attach_qualifier.py"
+      - "backend/app/modules/commcalc/attach_qualifier.py"
+      - "backend/app/modules/commcalc/commission_engine.py"
+      - "database/migrations/1079_commission_rule_attach_qualifier.sql"
       - "backend/app/modules/commcalc/boost_terms.py"
       - "backend/app/modules/commcalc/payout_structure.py"
       - "backend/harness_kpi_vintage.py"
@@ -1058,10 +1077,10 @@ jobs:
       - name: Run the declared-category target proof (the four built-ins byte-identical with a catalog present; a declared category reaches need and pace with no new arithmetic; the backward calculation is honest with no days left - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_declared_axis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the portal-pull lock (ONE loop reaches, exports and lands every portal report; a feed is an adapter; a zero-row pull is never delivered; the three sweeps that still drive their own are pinned with reasons and the count may only shrink - index COMMCALC-05)
+      - name: Run the portal-pull lock (ONE loop reaches, exports and lands every portal report; a feed is an adapter; a zero-row pull is never delivered; the three sweeps that still drive their own are pinned with reasons and the count may only shrink - index COMMCALC-07)
         working-directory: backend
         run: python3 harness_portal_report_pull.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the POS-report feed proof (a report line is matched to a DECLARED category by the tenant's own mapping or its own label; a line two categories could claim resolves to NEITHER; every row carries the basis it was matched on - index COMMCALC-05)
+      - name: Run the POS-report feed proof (a report line is matched to a DECLARED category by the tenant's own mapping or its own label; a line two categories could claim resolves to NEITHER; every row carries the basis it was matched on - index COMMCALC-07)
         working-directory: backend
         run: python3 harness_pos_report_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
@@ -1085,6 +1104,9 @@ jobs:
       - name: Run the trade-in basis lock (WHICH RECORD pays the trade-in spiff is the org's declared fact with one home; the till is the house default; distinct transactions never lines; the case-folded declaration; a trade-in whose rep cannot be resolved is reported, never dropped — owner 2026-10-12, index §COMMCALC-01)
         working-directory: backend
         run: python3 harness_trade_in_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the attach-qualifier proof (a condition measured over the WHOLE SALE decides which DECLARED rate a line earns; the accessory test and the rule matcher are INJECTED so the module owns no classifier and reads no classifying column; an unmeasurable sale pays the FULL rate and is reported; a flat fallback on a percentage rule is refused; the plan save round-trips all eight columns or it would wipe them — owner 2026-10-12, index §COMMCALC-06)
+        working-directory: backend
+        run: python3 harness_attach_qualifier.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the Ready App denominator proof (ONE new-activation count = Exec MTD Total Activation less Upgrade less swap; the carrier reconciliation 8/13; the derived rate resolved at score time; house pay byte-identical until the basis column is set — owner 2026-09-27, index §19.31)
         working-directory: backend
         run: python3 harness_ready_app_denominator.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1586,6 +1608,33 @@ jobs:
         shell: bash
         run: python3 harness_closing_submit_refusal.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # THE STORE-DAY GRAIN LOCK (index §29.13, owner bug report 2026-10-13 "2 reps did the closing for Oct 10 for
+  # nostrand ave ... the system should not have taken duplicate entries"). The platform had exactly ONE answer to
+  # "is this store-day already closed?" and it was "only if this same REP closed it" — in closing/dedup_key, in the
+  # unique index built from it, and in create_row's pre-insert guard — so a second PERSON was a duplicate to none of
+  # them and the day's declared cash doubled into every downstream total in silence (Nostrand / 2026-10-10 held three
+  # accepted closings, $370 against a POS day of $140). closing/closing_grain is now the one home for how many
+  # closings a store-day takes, per-org config with a per-store override and a house default of one-per-store-day.
+  # This job FAILS THE BUILD if create_row stops dereferencing it, if the dedup key is composed without the grain, if
+  # the closing-sheet upload (the second writer of daily_closing) stops asking the same question, if a second copy of
+  # the vocabulary appears, if migration 1080 starts recomputing stored dedup keys (which would collide on the 16
+  # historical two-rep store-days), or if the Management Review screen has no words for the new refusal. It drives the
+  # real submit endpoint and the real sheet ingest against the shared in-memory client, so it needs the backend's
+  # dependencies — same reason as the job above. DB-free.
+  closing-store-day-grain-lock:
+    name: Closing store-day grain lock (one store-day, one closing)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-day grain lock (a second rep is refused and told; the key, the guard and the sheet upload all dereference one registry — index §29.13)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_store_day_grain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
   # THE UNFINISHED-DAY LOCK (index §29.12) imports the real closing router (closing_resume,
   # _log_attempt, _closing_summary_for_date), so it needs the backend's dependencies and its own job
   # — the same reason closing-refusal-lock above has one. It FAILS THE BUILD if a blocked submit ever
@@ -1640,6 +1689,26 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_base_url.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+
+
+  # SEVERAL HANDSETS TO ONE BUYER (index COMMCALC-05). Drives the real detector over fixtures shaped
+  # like the live daily sales feed: a plan line carrying a serial is not a handset, a sale split over
+  # eight receipts is ONE case, the threshold is a config row, and §E walks the module's own strings
+  # so no user-facing sentence can call anything fraud. It imports app.modules.commcalc.flag_registry,
+  # which reaches app/core/config.py -> pydantic_settings, so it runs with the backend's dependencies
+  # installed (harness_ci_pipefail_lock enforces exactly this). DB-free.
+  multi-handset-one-buyer-lock:
+    name: Several handsets to one buyer lock (DB-free, the real detector)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the multi-handset lock (a plan is not a handset; one case across eight receipts; the threshold is config; evidence, never a verdict)
+        working-directory: backend
+        run: python3 harness_multi_handset_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
 
   # THE STORE-TAKEOVER EVALUATION PROOF (index COMMCALC-03) drives the real prospect_eval rules over the

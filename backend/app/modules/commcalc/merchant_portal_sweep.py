@@ -1,6 +1,6 @@
 """Merchant-portal FEED ADAPTER — the card-settlement half of the portal pull (owner directive 2026-09-04).
 
-WHAT THIS IS, AFTER §COMMCALC-05. The pull LOOP (window of days, reach the report, press export, read
+WHAT THIS IS, AFTER §COMMCALC-07. The pull LOOP (window of days, reach the report, press export, read
 the download, the honest failure wording, the cold-session restore) is `portal_report_pull.py`, used by
 every feed. This module is the part that is actually about CARD SETTLEMENT: the three portals'
 descriptors, the normalizers, store attribution through the mig-902 merchant map, and the two landing
@@ -14,7 +14,7 @@ IMPORTED from the one home under their old names, so every caller and
 
 WHAT IT REUSES — no second login engine, no second browser stack, no second scheduler (CLAUDE.md
 duplicate-check build gate):
-  • portal_report_pull.py       THE pull loop (index §COMMCALC-05). This module supplies the feed.
+  • portal_report_pull.py       THE pull loop (index §COMMCALC-07). This module supplies the feed.
   • live_login.py               ONE live browser from login through 2FA code entry, streamed to the
                                 operator, then the authenticated storage_state persisted.
   • vidapay_sweep primitives    _launch / _new_context / _proxy_arg / capture_session_state / _classify /

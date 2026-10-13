@@ -1699,6 +1699,32 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         _fin, _fin_ctx = None, None
     _fin_on = bool(_fin is not None and _fin_ctx and _fin_ctx.get("active"))
     _fin_notices = []
+    # ── ATTACH QUALIFIER (mig 1079; owner directive 2026-10-12; index §COMMCALC-06) ───────────
+    # "Payment for edge on total which is defined as $25 must be accompanied with atleast $25 worth of
+    # accessories ... otherwise the commision falls back to $10 or whatever is paid to Chicago market".
+    # THE CLASS: every gate above can only turn a payment OFF — `plan_pay_gate` suppresses, and
+    # `financing_tiers` re-rates from a MONTH's attainment. Nothing could say "this line earns a LESSER
+    # declared rate because of a fact about the SALE it belongs to". `attach_qualifier` is the one home
+    # for that question; nothing here tests a threshold or classifies a line itself.
+    # Measured over `valid` — the period's WHOLE validated feed, not one rep's lines — because what the
+    # customer bought is not an accident of who rang which line. The accessory predicate and this
+    # engine's OWN `_rule_matches` are INJECTED, the same way `financing_tiers` takes them, so the
+    # condition is counted by exactly the code that decides what pays.
+    # INERT BY CONSTRUCTION: `active` is False until some rule carries a `qualifier_min`, and every
+    # branch below is then the pre-2026-10-12 path.
+    _aq, _aq_ctx = None, None
+    try:
+        from app.modules.commcalc import attach_qualifier as _aq
+        _aq_rules = [r for pl in (plans or {}).values() for r in (pl.get("rules") or [])]
+        _aq_ctx = _aq.build_context(valid, _aq_rules, _acc_fn, _rule_matches)
+    except Exception as _aqe:
+        print(f"WARN attach qualifier unavailable: {_aqe}")
+        _aq, _aq_ctx = None, None
+    _aq_on = bool(_aq is not None and _aq_ctx and _aq_ctx.get("active"))
+    _aq_guard = {"lines": 0, "met": 0, "fell_back": 0, "unmeasured": 0, "unsupported": 0,
+                 "amount_full": 0.0, "amount_paid": 0.0, "by_rule": {}, "by_rep": {},
+                 "notes": list((_aq_ctx or {}).get("notes") or []),
+                 "unmeasurable_rows": int((_aq_ctx or {}).get("unmeasurable") or 0)}
     # DEVICE SET-UP FEE / ACTIVATION FEE as its OWN pay item (owner 2026-08-01, mig 263).
     # The Boost engine has paid a % of the set-up fee COLLECTED since day one (calculator.py); every
     # other carrier had no way to. This is that pay item for the plan engine. It is NOT a commission
@@ -2047,7 +2073,50 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                         ldet["amount"] = None          # flat bonus: paid once per rep, not per line
                         ldet["flat_once"] = True
                     continue
-                pay = _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
+                # ATTACH QUALIFIER (§COMMCALC-06). The verdict decides WHICH declared rate this
+                # line earns; `rule_view` hands `_line_payout` the same rule with that rate
+                # substituted, so this engine keeps exactly one place where a rate becomes dollars.
+                # A line that fell short is NEVER a silent $10: its reason rides the drill-down.
+                _aq_v = _aq.verdict(row, rule, _aq_ctx) if _aq_on else None
+                if _aq_v is not None:
+                    _aq_rule = _aq.rule_view(rule, _aq_v)
+                    _aq_guard["lines"] += 1
+                    _aq_basis = _aq_v.get("basis")
+                    if _aq_basis == _aq.BASIS_FULL:
+                        _aq_guard["met"] += 1
+                    elif _aq_basis == _aq.BASIS_FALLBACK:
+                        _aq_guard["fell_back"] += 1
+                    elif _aq_basis == _aq.BASIS_UNSUPPORTED:
+                        _aq_guard["unsupported"] += 1
+                    else:
+                        _aq_guard["unmeasured"] += 1
+                    _aq_full = _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
+                    pay = _line_payout(row, _aq_rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
+                    _aq_guard["amount_full"] = round(_aq_guard["amount_full"] + _aq_full, 2)
+                    _aq_guard["amount_paid"] = round(_aq_guard["amount_paid"] + pay, 2)
+                    _aqr = _aq_guard["by_rule"].setdefault(
+                        str(rid), {"label": rb.get("label"), "requirement": _aq.describe(rule),
+                                   "lines": 0, "met": 0, "fell_back": 0, "unmeasured": 0,
+                                   "amount_full": 0.0, "amount_paid": 0.0})
+                    _aqr["lines"] += 1
+                    _aqr["met"] += 1 if _aq_basis == _aq.BASIS_FULL else 0
+                    _aqr["fell_back"] += 1 if _aq_basis == _aq.BASIS_FALLBACK else 0
+                    _aqr["unmeasured"] += 1 if _aq_basis == _aq.BASIS_UNMEASURED else 0
+                    _aqr["amount_full"] = round(_aqr["amount_full"] + _aq_full, 2)
+                    _aqr["amount_paid"] = round(_aqr["amount_paid"] + pay, 2)
+                    if _aq_basis != _aq.BASIS_FULL:
+                        _aq_guard["by_rep"][e["name"]] = round(
+                            _aq_guard["by_rep"].get(e["name"], 0.0) + (pay - _aq_full), 2)
+                    if ldet is not None:
+                        ldet["qualifier_basis"] = _aq_basis
+                        ldet["qualifier_reason"] = _aq_v.get("reason")
+                        ldet["qualifier_measured"] = _aq_v.get("measured")
+                        ldet["qualifier_minimum"] = _aq_v.get("minimum")
+                        ldet["qualifier_requirement"] = _aq.describe(rule)
+                        if _aq_basis != _aq.BASIS_FULL:
+                            ldet["would_have_paid_full"] = round(_aq_full, 2)
+                else:
+                    pay = _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
                 # ACTIVATION-DETAIL PAYOUT-KIND GUARD (mig 296): a %-of-GP / %-of-price rule cannot be
                 # priced on an Activation Details line (no cost/price columns). _line_payout already
                 # returned $0 for it; record the refusal as a plain-language note so the $0 is explained
@@ -2279,6 +2348,19 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                       "month (whole-month), and attainment is measured monthly against the store's "
                       "financing target - owner decision 2026-08-04."),
         }
+    # ATTACH-QUALIFIER REPORT (§COMMCALC-06). Emitted whenever a rule carries a condition AT ALL —
+    # including when every sale met it — because "nobody fell short" is itself the answer to "is this
+    # rule costing my reps anything", and because a rule whose fallback its payout kind cannot express
+    # must be VISIBLE rather than quietly doing nothing. A tenant with no qualifier produces no key and
+    # a result dict byte-identical to the pre-2026-10-12 engine.
+    if _aq_on and (_aq_guard["lines"] or _aq_guard["notes"]):
+        out["attach_qualifier"] = dict(_aq_guard, basis=(
+            "A rule may require a minimum on the SALE its line belongs to; met, the line earns the "
+            "rule's rate, and short, it earns the rule's declared fallback. The requirement is "
+            "measured across the whole transaction whoever rang each line, the accessory answer comes "
+            "from the tenant's own accessory definition, and a sale that cannot be read pays the FULL "
+            "rate and is counted in `unmeasured` rather than quietly docked — owner directive "
+            "2026-10-12."))
     if _sf_on and (_sf_guard["collected"] or _sf_guard["paid"]):
         _sf_guard["config_source"] = "tenant" if (_sf_cfg or {}).get("_stored") else "code_default"
         _sf_guard["keywords"] = _sf_kws

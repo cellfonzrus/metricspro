@@ -1,4 +1,4 @@
-"""Proof + LOCK: the portal report pull is ONE loop, and a feed is an adapter it calls (index §COMMCALC-05).
+"""Proof + LOCK: the portal report pull is ONE loop, and a feed is an adapter it calls (index §COMMCALC-07).
 
 WHAT THIS PROVES. The loop itself, driven against a FAKE page and a FAKE adapter — no browser, no
 network, no database. Reaching a report, pressing its export, an unreachable report, a missing export
