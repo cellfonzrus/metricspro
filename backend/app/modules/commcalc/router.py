@@ -10487,31 +10487,60 @@ def _ad_field_rule(client, org_id):
 
 
 def _ad_sales(client, org_id, period="", store="", rep="", cap=200000):
-    """ORG-SCOPED, paged read of the period's sale lines — only the columns the definition needs.
-    Filters go in the QUERY (never fetch-all-then-filter); `period` matches BOTH spellings."""
-    cols = "trans_id,trans_date,period,store,salesperson,department,category,product_desc,sku,ext_price,gp,voided,trans_type"
-    rows, start, page, truncated, err = [], 0, 1000, False, None
-    while True:
-        try:
-            q = (client.schema("commcalc").table("raw_sales").select(cols).eq("org_id", org_id))
-            if period:
-                q = q.in_("period", _pvariants(period))
-            if store:
-                q = q.eq("store", store)
-            if rep:
-                q = q.eq("salesperson", rep)
-            chunk = q.range(start, start + page - 1).execute().data or []
-        except Exception as e:
-            err = str(e)[:200]
-            break
-        rows.extend(chunk)
-        if len(chunk) < page:
-            break
-        start += page
-        if len(rows) >= cap:
-            truncated = True
-            break
+    """ORG-SCOPED read of the period's sale lines for every "what counts as an accessory / what is the
+    set-up fee" PICK-DON'T-TYPE surface. Returns (rows, meta).
+
+    READS THE ONE SALES UNION, NOT raw_sales (fix 2026-10-14; owner report: "accessories sales are
+    showing less in metricspro for boost than by b2b"). This helper used to read `raw_sales` alone.
+    `commcalc.raw_sales` is the MONTH-END ARCHIVE, promoted at month close, and its promotion has been
+    manual since `report_definitions.sales.auto` went false — live it holds ZERO rows for September and
+    October 2026. So every surface below this helper was structurally blind to the open month and to any
+    month whose archive had not been built:
+      · `/accessory-definition/agreement` — the report whose `only_here` column IS "lines the tenant's
+        own declared definition would count and the money path does not". The house POS renamed its
+        accessory category `Accessory` -> `Accessories` in July 2026; the declared field rule
+        (`accessory_definition.DEFAULT_TOKENS = ('accessor',)`) covers that spelling and
+        `_is_accessory`'s exact-match category list did not, so $7,304.58 of accessory sales since July
+        (Oct 1-13 alone: $1,560.96, eight 'Apple Airpods Pro 3' lines under department 'BYOD') read as
+        non-accessory — and the ONE report that exists to say so could not see a single one of those
+        lines, because they are only in the feed.
+      · `/accessory-definition/observed`, `/propose`, `/save` preview, `/pay-impact`,
+        `/setup-fee/candidates`, `/setup-fee/recognition-divergence` — same blindness, same cause.
+    A detector of a classification gap that reads a different table from the classifier is not a
+    detector. `_sales_rows_union_txn` is the ONE transaction-grain union (`raw_sales` u
+    `daily_sales_feed`, deduped by `trans_id`, the open-month primary winning a whole transaction) and
+    is the same reader the Sales Report, Executive MTD and the pay path dereference, so these surfaces
+    now measure the rows the number they are explaining was computed from. No second union is built
+    here; `harness_accessory_definition_live_month.py` fails the build if one appears.
+
+    `cols='*'`: `raw_sales` carries `sku` and `daily_sales_feed` does not, and selecting an absent
+    column THROWS inside the union's per-table read, which is swallowed to `[]` — i.e. a named column
+    list would have turned this fix back into silent emptiness. `sku_coverage` therefore reports a feed
+    line as sku-less, which is what it is.
+
+    `store` / `rep` are applied IN MEMORY, deliberately. The union takes no such filter, and giving it
+    one means a second query shape over the same two tables — the duplicate this module's own docstring
+    forbids. The read is already narrowed to one period (~35k lines live, far below any ceiling).
+    """
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    rows, umeta, err = [], {}, None
+    try:
+        rows, umeta = _sales_rows_union_txn(client, org_id, period, cols='*')
+    except Exception as e:                      # the union never raises; belt-and-braces
+        err = str(e)[:200]
+        rows, umeta = [], {}
+    if store:
+        rows = [r for r in rows if str(r.get('store') or '').strip() == str(store).strip()]
+    if rep:
+        rows = [r for r in rows if str(r.get('salesperson') or '').strip() == str(rep).strip()]
+    truncated = len(rows) >= cap
+    if truncated:
+        rows = rows[:cap]
     return rows, {"rows_read": len(rows), "truncated": truncated, "cap": cap, "error": err,
+                  "source": "raw_sales u daily_sales_feed (trans_id-deduped union)",
+                  "union": umeta,
                   "filters": {"period": period or None, "store": store or None, "rep": rep or None}}
 
 

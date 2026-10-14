@@ -237,7 +237,7 @@ def unordered_range_sites(tree):
 # THE PIN. Measured 2026-10-14 over `backend/app`, the one home excluded. It may only go DOWN, and
 # the equality is deliberate: converting a loop to the one home means lowering this number in the
 # same commit, so the count on screen is always the real one.
-PINNED_UNORDERED = 99
+PINNED_UNORDERED = 98   # 99 -> 98 on 2026-10-14: router._ad_sales no longer pages raw_sales itself (index §19.55)
 
 sites = {}
 for dirpath, _dirs, files in os.walk(APP):
