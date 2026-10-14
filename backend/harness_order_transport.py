@@ -603,6 +603,55 @@ ok("_vc.customer_for_store(" in _sweep,
 ok("customer=" in _sweep and "ship_to_store" in _sweep,
    "I27 and keys it on the store the draft already ships to")
 
+# ══ §J  ONE ENTRY POINT FOR "READ THIS VENDOR'S PRICES" ══════════════════════════════════════════════
+# A route-per-endpoint shape is the duplicate defect wearing a hat: the screen then needs its own copy
+# of which vendors are on an API in order to choose, and the two copies drift. ONE endpoint dereferences
+# order_transport and reports which route ran.
+print("\n§J  one endpoint picks the route; nothing else re-derives it")
+_SUP_ROUTER = os.path.join(APP, "modules", "supply", "router.py")
+_rt = code_text(_SUP_ROUTER)
+
+_read_posts = re.findall(r'@router\.post\("(/vendors/\{vendor_id\}/catalog[^"]*)"\)', _rt)
+ok(_read_posts == ["/vendors/{vendor_id}/catalog/read"],
+   f"J1 LOCK: exactly ONE endpoint starts a catalog read {_read_posts}")
+ok(bool(re.search(r'@router\.post\("/vendors/\{vendor_id\}/catalog/read"\)\s*\nasync def (\w+)', _rt)),
+   "J2 that endpoint is async, so the API route needs no second endpoint to be awaited from")
+ok("_tr.transport_for(v)" in _rt and '.get("kind") == "api"' in _rt,
+   "J3 LOCK: it DEREFERENCES order_transport.transport_for rather than reading portal_config itself")
+ok('"route": "api"' in _rt and '"route": "portal"' in _rt,
+   "J4 the answer NAMES the route that ran — a caller never has to infer which path it got")
+ok("api-read" not in _rt,
+   "J5 the route-forcing endpoint is gone: no caller can name the route and bypass the resolver")
+_FAKE_SIBLING = ('@router.post("/vendors/{vendor_id}/catalog/api-read")\n'
+                 'async def _sibling(vendor_id): ...\n'
+                 '@router.post("/vendors/{vendor_id}/catalog/read")\n'
+                 'async def _read(vendor_id): ...\n')
+ok(re.findall(r'@router\.post\("(/vendors/\{vendor_id\}/catalog[^"]*)"\)', _FAKE_SIBLING)
+   == ["/vendors/{vendor_id}/catalog/api-read", "/vendors/{vendor_id}/catalog/read"],
+   "J5-armed the endpoint scan DOES see a second catalog-read endpoint when one exists")
+
+# The vendor payload carries the resolved route, so the SCREEN reads it instead of re-deriving it.
+ok('out["transport"]' in _rt and "_tr.transport_for(v)" in _rt,
+   "J6 the vendor payload carries the SERVER-resolved route for the screen to read")
+_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "src")
+_web_copies = []
+if os.path.isdir(_WEB):
+    for base, _dirs, files in os.walk(_WEB):
+        for fn in files:
+            if not fn.endswith((".ts", ".tsx")):
+                continue
+            fp = os.path.join(base, fn)
+            try:
+                txt = open(fp, encoding="utf-8").read()
+            except Exception:
+                continue
+            if "order_transport" in txt and "transport?.kind" not in txt:
+                _web_copies.append(os.path.relpath(fp, _WEB))
+ok(not _web_copies,
+   f"J7 LOCK: no screen reads order_transport config itself — it reads the resolved route {_web_copies}")
+ok("order_transport" in "const t = v.portal_config.order_transport",
+   "J7-armed the screen scan matches a real second derivation")
+
 print("\n" + "=" * 78)
 print(f"{passed} passed, {failed} failed")
 if failed:

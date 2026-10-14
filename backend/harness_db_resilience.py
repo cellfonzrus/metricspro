@@ -1136,7 +1136,22 @@ _all_routes = _flatten_routes(real_app.routes)
 # tree and reported 1788, and `git diff origin/main -- backend/app | grep -c '^+@router\.'` = 1 with
 # `'^-@router\.'` = 0 — one added, NONE removed. The pin was re-taken on a measured, fully-accounted
 # addition; it was never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1788"))
+# RE-PINNED 2026-10-14, 1788 -> 1787 (index §51.10). Every record above stays. This is the FIRST pin
+# taken on a REMOVAL, so it is recorded as one: the delta is one route DELETED and it is named —
+# POST /supply/vendors/{vendor_id}/catalog/api-read. It was the route-forcing sibling of
+# POST .../catalog/read, and a caller naming the route keeps its own copy of which vendors are on an
+# API, which drifts from order_transport.transport_for. The surviving endpoint now dereferences that
+# one home and delegates (`_read_catalog_via_api` / `_read_catalog_via_portal`), so nothing the
+# deleted endpoint did was lost — only the second way of asking for it. harness_order_transport.py §J
+# fails the build if a second catalog-read endpoint reappears (J1/J5, verified against a deliberately
+# re-added sibling).
+# Verified the same way as every pin above, BEFORE re-pinning: the harness was run on a clean
+# `git worktree` of origin/main (4b6734a) and reported 1788 PASS / 138 passed 0 failed, then on this
+# tree and reported 1787, and `git diff origin/main -- backend/app | grep -c '^-@router\.'` = 2 with
+# `'^+@router\.'` = 1 — the +1/-1 pair is .../catalog/read moving within the file, leaving ONE net
+# removal. The pin was re-taken on a measured, fully-accounted REMOVAL; it was never relaxed to make
+# CI green, and a count that comes back HIGHER than this pin is still a failure.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1787"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
