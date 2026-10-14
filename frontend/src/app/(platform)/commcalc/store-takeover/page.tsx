@@ -4,7 +4,12 @@ import { api, apiUpload, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
-import { emptyStandardFilter, filterRows, isStandardFilterActive,
+// `filterRows` is deliberately NOT imported: it matches ONE store value per row, and this page's
+// two store-keyed shapes do not have one — a flagged account can name several processor accounts,
+// and the sections are keyed by store KEY rather than by the label a selection carries. `storeFilter`
+// below is the page's single place for that, and it resolves key, label and account off one store
+// record so the sections cannot disagree.
+import { emptyStandardFilter, isStandardFilterActive,
          type StandardFilterValue } from '@/lib/standard-filters'
 import { SetupNotice } from '@/lib/setupNotice'
 

@@ -50,13 +50,13 @@ ok('a SHARE does not add — the override is honoured', resolveAgg(shareCol, MON
 ok('…and its header alone would NOT have caught it (no %, no "per", no "rate" in it)',
   !AVG_RE.test(shareCol.header))
 ok('an explicit override beats every other rule, including the money rule',
-  resolveAgg({ header: 'Cost', get: r => 1, money: true, agg: 'none' }, MONTHS) === 'none')
+  resolveAgg({ header: 'Cost', get: () => 1, money: true, agg: 'none' }, MONTHS) === 'none')
 ok('…and can force a sum a header would otherwise average',
-  resolveAgg({ header: 'Rate', get: r => 1, align: 'right', agg: 'sum' }, MONTHS) === 'sum')
+  resolveAgg({ header: 'Rate', get: () => 1, align: 'right', agg: 'sum' }, MONTHS) === 'sum')
 ok('with no override the behaviour is unchanged — this is additive, no adopter moves',
   resolveAgg({ header: 'Units', get: r => r.flagged, align: 'right' }, MONTHS) === 'sum'
   && resolveAgg({ header: 'Store', get: r => r.period }, MONTHS) === 'none'
-  && resolveAgg({ header: 'Accessory rate', get: r => 1, align: 'right' }, MONTHS) === 'avg')
+  && resolveAgg({ header: 'Accessory rate', get: () => 1, align: 'right' }, MONTHS) === 'avg')
 
 // ── the wiring, which is the part that can come undone ──────────────────────────────────────────
 const read = rel => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
