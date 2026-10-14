@@ -154,14 +154,27 @@ st3["shifts"] = [{"org_id": HOUSE, "store_code": "S1", "employee_name": "Ana Rep
                   {"org_id": HOUSE, "store_code": "S1", "employee_name": "Ghost Rep",
                    "shift_date": "2026-08-06", "is_deleted": True}]
 disp3 = cr._who_worked_display_by_store(cr.sb(), HOUSE, "2026-08-06")
-check("3a. no actual signal, but scheduled -> source=scheduled (fallback, not asserted as fact)",
-      disp3["S1"]["source"] == "scheduled" and disp3["S1"]["worked"][0]["tag"] == "scheduled",
+# UPDATED 2026-10-14 (owner report: *"it should only show the actual person who worked for all
+# reporting not the one with the home store"*). The roster guess USED to ride in `worked` carrying a
+# "scheduled" tag, and every caller had to render the tag or lose it — a report headed "Who worked"
+# showed somebody the schedule merely expected. `worked` is now ACTUAL ONLY and the guess has its own
+# field, so a caller reading `worked` CANNOT print a guess as a fact. The two assertions below are
+# the same two facts, now read from the two fields.
+check("3a. no actual signal, but scheduled -> source=scheduled, and the guess is NOT in `worked`",
+      disp3["S1"]["source"] == "scheduled" and disp3["S1"]["worked"] == []
+      and disp3["S1"]["scheduled"][0]["tag"] == "scheduled",
       str(disp3.get("S1")))
+check("3a2. ...the scheduled person is named in `scheduled`, so nothing is lost — only moved",
+      [r["name"] for r in disp3["S1"]["scheduled"]] == ["Ana Rep"], str(disp3["S1"]["scheduled"]))
 check("3b. summary says 'was scheduled', never 'worked today' — doesn't overclaim",
       "was scheduled" in disp3["S1"]["summary"] and "worked today" not in disp3["S1"]["summary"],
       disp3["S1"]["summary"])
+check("3b2. ...and says plainly that nobody clocked in or sold",
+      "nobody clocked in or rang a sale" in disp3["S1"]["summary"], disp3["S1"]["summary"])
 check("3c. a SOFT-DELETED shift is not a shift — Ghost Rep excluded",
-      "Ghost Rep" not in [r["name"] for r in disp3["S1"]["worked"]], str(disp3["S1"]["worked"]))
+      "Ghost Rep" not in [r["name"] for r in disp3["S1"]["scheduled"]], str(disp3["S1"]["scheduled"]))
+check("3d. an ACTUAL day carries no scheduled guess at all (nothing to second-guess)",
+      disp.get("S1", {}).get("scheduled") == [] if "S1" in disp else False, str(disp.get("S1")))
 
 # ═══ 4. NO signal at all (no punch, no sale, no schedule) — honest gap, not "nobody worked" ════════
 st4 = fresh_store(); wire(st4)
@@ -245,6 +258,8 @@ check("7b. S1 (no closing) IS in not_closed, carrying worked/worked_source/worke
       and nc["S1"]["worked_summary"] == "Jane Doe worked today"
       and nc["S1"]["worked"] == [{"name": "Jane Doe", "email": None, "emails": None, "tag": "clocked"}],
       str(nc.get("S1")))
+check("7b2. ...and an ACTUAL day carries an empty scheduled_only, never a roster name",
+      nc["S1"]["scheduled_only"] == [], str(nc["S1"].get("scheduled_only")))
 check("7c. RULE ONE — the LUX tenant's punch at the same store_code does NOT leak into the house org's list",
       "Lux Intruder" not in [r["name"] for r in nc["S1"]["worked"]], str(nc["S1"]["worked"]))
 
@@ -261,6 +276,56 @@ nc8 = {s["store_code"]: s for s in resp8["not_closed"]}
 check("8. LUX tenant sees only ITS OWN rep (Lux Rep), never the house org's punch at the same store_code",
       nc8.get("S1", {}).get("worked") == [{"name": "Lux Rep", "email": None, "emails": None, "tag": "clocked"}],
       str(nc8.get("S1")))
+
+# ═══ 9. THE REPORTED DEFECT — ONE MAN, TWO FEEDS, TWO SPELLINGS (owner 2026-10-14) ════════════════
+#         Measured on live production: B-1750 on 2026-10-10 held ONE punch (`Simarjyot Singh`, 11.77h)
+#         and sales rows whose `salesperson` is `Singh, Simarjyot`. The old union was over NAME
+#         STRINGS, so the report said "Simarjyot Singh, Singh, Simarjyot" — two reps, one human.
+#         This runs the REAL `_who_worked_by_store` (both signals, unpatched) with the B2B read stubbed
+#         to the shape the live feed returns, which is the only part this harness cannot stand up.
+st9 = fresh_store(); wire(st9)
+st9["timelog"] = [{"org_id": HOUSE, "employee_name": "Simarjyot Singh", "store_code": "S1",
+                   "work_date": "2026-10-10"}]
+_orig_b2b = cr._b2b_sales_rows
+cr._b2b_sales_rows = lambda client, org_id, date, cols: [
+    {"store": "S1", "salesperson": "Singh, Simarjyot", "user_login": "Simarjyot", "voided": None}]
+disp9 = cr._who_worked_display_by_store(cr.sb(), HOUSE, "2026-10-10")
+check("9a. the punch spelling and the sales spelling are ONE person, listed ONCE",
+      [r["name"] for r in disp9["S1"]["worked"]] == ["Simarjyot Singh"], str(disp9["S1"]["worked"]))
+check("9b. ...tagged as BOTH signals, so neither is lost in the collapse",
+      disp9["S1"]["worked"][0]["tag"] == "clocked+sold", str(disp9["S1"]["worked"]))
+check("9c. ...and the sentence names him once",
+      disp9["S1"]["summary"] == "Simarjyot Singh worked today", disp9["S1"]["summary"])
+raw9 = cr._who_worked_by_store(cr.sb(), HOUSE, "2026-10-10")
+check("9d. the classifier keeps both raw spellings for the recon, under one person",
+      [p["variants"] for p in raw9["S1"]["people"].values()],
+      [["Simarjyot Singh", "Singh, Simarjyot"]])
+check("9e. the login he transacted under rides with the collapsed name, not the feed's spelling",
+      raw9["S1"]["logins"] == {"Simarjyot Singh": {"Simarjyot"}}, str(raw9["S1"]["logins"]))
+# CONTROL: the ROSTER's spelling outranks both feeds, because it is what an administrator typed.
+st9b = fresh_store(); wire(st9b)
+st9b["timelog"] = [{"org_id": HOUSE, "employee_name": "SIMARJYOT  SINGH", "store_code": "S1",
+                    "work_date": "2026-10-10"}]
+st9b["employees"] = [{"org_id": HOUSE, "name": "Simarjyot Singh", "email": "sim@x.com"}]
+disp9b = cr._who_worked_display_by_store(cr.sb(), HOUSE, "2026-10-10")
+check("9f. a shouted punch spelling is displayed in the roster's spelling",
+      [r["name"] for r in disp9b["S1"]["worked"]] == ["Simarjyot Singh"], str(disp9b["S1"]["worked"]))
+check("9g. ...and still finds his email, which an exact-string lookup would have missed",
+      disp9b["S1"]["worked"][0]["email"] == "sim@x.com", str(disp9b["S1"]["worked"]))
+# A punch and a sale at the SAME store spelled in two CASES of the store code must not split the day
+# (the live 'b-418' / 'B-418' phantom). Both signals key on account.store_identity.store_key.
+st9c = fresh_store(); wire(st9c)
+st9c["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "", "is_active": True}]
+st9c["timelog"] = [{"org_id": HOUSE, "employee_name": "Jane Doe", "store_code": "s1",
+                    "work_date": "2026-10-10"}]
+cr._b2b_sales_rows = lambda client, org_id, date, cols: [
+    {"store": "S1", "salesperson": "John Smith", "user_login": "jsmith", "voided": None}]
+raw9c = cr._who_worked_by_store(cr.sb(), HOUSE, "2026-10-10")
+check("9h. a lower-case punch code and an upper-case sales code are ONE store-day",
+      sorted(raw9c.keys()) == ["S1"], str(sorted(raw9c.keys())))
+check("9i. ...holding both people", sorted(p["name"] for p in raw9c["S1"]["people"].values()),
+      ["Jane Doe", "John Smith"])
+cr._b2b_sales_rows = _orig_b2b
 
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")

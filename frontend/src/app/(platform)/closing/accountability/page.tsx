@@ -33,10 +33,14 @@ const WORKED_SOURCE_NOTE: Record<string, string> = {
   none: 'no clock-in and no sales recorded',
 }
 type WorkedPerson = { name?: string; email?: string; tag?: string }
-type Worked = { people?: WorkedPerson[]; source?: string; summary?: string; resolved?: boolean }
+type Worked = { people?: WorkedPerson[]; scheduled_only?: WorkedPerson[]; source?: string; summary?: string; resolved?: boolean }
 type Dm = { names?: string[]; resolved?: boolean; district?: string }
 type PeopleRow = { dm?: Dm; worked?: Worked }
 const peopleNames = (w?: Worked) => (w?.people || []).map(p => p?.name).filter(Boolean)
+// WHO WORKED and WHO WAS EXPECTED are two facts in two fields (owner report 2026-10-14). `people`
+// holds only an ACTUAL signal; a store where nobody clocked in or sold reports the roster's names
+// here, and they are never printed in the "Who worked" cell.
+const scheduledNames = (w?: Worked) => (w?.scheduled_only || []).map(p => p?.name).filter(Boolean)
 
 export default function AccountabilityChainPage() {
   const today = localToday()
@@ -113,6 +117,7 @@ export default function AccountabilityChainPage() {
       { header: 'DM', field: 'dm', get: (r: PeopleRow) => (r.dm?.resolved ? (r.dm?.names || []).join(', ') : 'not in org tree') },
       { header: 'Who worked', field: 'worked', get: (r: PeopleRow) => (r.worked?.resolved ? peopleNames(r.worked).join(', ') : 'not resolved') },
       { header: 'Who worked — source', field: 'worked_source', get: (r: PeopleRow) => (r.worked?.resolved ? (r.worked?.source || '') : '') },
+      { header: 'Scheduled (nobody worked)', field: 'scheduled_only', get: (r: PeopleRow) => scheduledNames(r.worked).join(', ') },
     ]
     // THREE COLUMNS PER STAGE — done / when / who — because "with dates and by who" is the ask, and
     // a spreadsheet that collapses them into one cell cannot be filtered or pivoted on.
@@ -244,7 +249,14 @@ export default function AccountabilityChainPage() {
                       {!r.worked?.resolved
                         ? <span style={{ color: 'var(--text3)' }} title="Who worked is looked up one day at a time, so only the most recent days in a long range are resolved. Narrow the range to see this day.">not resolved</span>
                         : peopleNames(r.worked).length === 0
-                          ? <span style={{ color: 'var(--warn)' }} title={WORKED_SOURCE_NOTE[r.worked?.source] || ''}>nobody recorded</span>
+                          ? <>
+                              <span style={{ color: 'var(--warn)' }} title={WORKED_SOURCE_NOTE[r.worked?.source] || ''}>nobody recorded</span>
+                              {scheduledNames(r.worked).length > 0 && (
+                                <div style={{ fontSize: 11, color: 'var(--warn)' }} title="The schedule expected these people. Nobody clocked in or rang a sale, so this is not a record of who was here.">
+                                  📅 scheduled: {scheduledNames(r.worked).join(', ')}
+                                </div>
+                              )}
+                            </>
                           : <>
                               <div>{peopleNames(r.worked).join(', ')}</div>
                               <div style={{ fontSize: 11, color: r.worked?.source === 'scheduled' ? 'var(--warn)' : 'var(--text3)' }}>

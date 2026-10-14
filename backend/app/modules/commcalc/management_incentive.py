@@ -29,19 +29,22 @@ inflates pay.
 SCOPE_RANK = {"employee": 4, "role": 3, "store": 2, "market": 1, "default": 0}
 
 
+from app.modules.core import person_identity as _person_identity
+
+
 def _canon(s):
     return " ".join(str(s or "").strip().lower().split())
 
 
 def _canon_person(name):
-    """Name-order-insensitive person key ('Last, First' == 'First Last'), mirroring the commission engine."""
-    raw = str(name or "").strip()
-    if not raw:
-        return ""
-    if "," in raw:
-        last, _, first = raw.partition(",")
-        raw = f"{first.strip()} {last.strip()}"
-    return " ".join(raw.lower().split())
+    """WHO IS THIS PERSON is one fact with one home: `core.person_identity.person_key` (§CORE-08).
+
+    This WAS a near-copy that "mirrored the commission engine" and did not: it reordered a name with
+    ANY number of commas, where the engine reorders only the single-comma 'Last, First' shape and
+    leaves anything else folded but unchanged. So 'Khan, Ariful, Jr' keyed one way for a commission
+    and another way for a management plan. Dereferencing settles it on the engine's rule; no live
+    employee or salesperson name holds two commas, so nothing moves today."""
+    return _person_identity.person_key(name)
 
 
 def resolve_plan(plans, *, employee_name=None, role=None, store=None, market=None, store_keys=None):

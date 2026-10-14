@@ -108,6 +108,7 @@ Primary code homes:
 | CORE-05 | **A paged read is a read of the data** | "The takeover report says one subscriber account carries 27 activated lines and it carries nine — where did the other 18 come from? What does a read that pages 1,000 rows at a time promise about the rows it has not asked for yet, how many of this platform's reads make that promise, and which of them are reading a feed twice while missing a third of it?" |
 | CORE-06 | **A tile is a menu entry, so it answers the menu's question** | "I cannot see the schedule on the app — where are we at making that live to all employees? Which door leads to a `tileOnly` page, and does that door ask whether the person looking at it may walk through?" |
 | CORE-07 | **A login is nobody until it is linked to its person** | "All stores should see their schedules and submit their closing — what is the process to add app access to all of them? Which column ties a login to the employee it belongs to, and does every path that creates a login write it?" |
+| CORE-08 | **Which person is this name** | "Why does the report show 2 reps who worked at the store — it should only show the actual person who worked, for all reporting, not the one with the home store. Which rule decides that a punch and a sale are the same human, how many rules did that, and which field is a record of who was there as against who the schedule expected?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25134,6 +25135,7 @@ status word rather than a blank that reads as nil.
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
+| CORE-08 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -27977,3 +27979,116 @@ Not a migration: the column already exists and already has the right meaning. **
 this ship are not retro-linked** — the one live instance (the Vzone rep) is repaired by re-assigning
 that person from the Roles grid, which is config, not a data fix.
 
+
+## §CORE-08. WHICH PERSON IS THIS NAME (owner report 2026-10-14)
+
+Owner, on the Closing & Cash Pickup Status report (§48.8) he had just been given: *"why does it show
+2 reps who worked at the store, it should only show teh actual person who worked for all reporting
+not the one with the homw store"*.
+
+Two different defects, both in the same cell, and he named both.
+
+### CORE-08.1 THE INSTANCE, measured on live production
+
+B-1750 on 2026-10-10 had **one man** in it. The report said `Simarjyot Singh, Singh, Simarjyot`.
+
+| signal | table | what it holds for that store-day |
+|---|---|---|
+| the punch | `storeops.timelog` | `Simarjyot Singh`, 11.77h, store_code `B-1750` |
+| the sale | the B2B sales feed | `salesperson = "Singh, Simarjyot"`, `user_login` `Simarjyot`, store `1750 5th Ave` |
+
+`closing/router._who_worked_by_store` unioned those two **name strings**. A union of strings has no
+notion of a person, so one man counted twice. Same shape on 2026-10-11.
+
+**The "home store" half is the SECOND defect, and it is not a home store.** `storeops.timelog.store_code`
+is where the punch happened, proven rather than assumed: **75 of 89** house employees have punches at
+more than one store since 1 July 2026 (`Angie Ramos` → B-1750, B-2509, B-6011). What the owner was
+actually seeing is the **scheduled-roster fallback** — when nobody clocked in or rang a sale, the
+who-worked signal returned the names the schedule *expected*, tagged `"scheduled"`, inside the same
+list as the people who really worked. Every caller had to render that tag or lose it, and the §48.8
+report's "Who worked" column did not render it. A guess read as a fact.
+
+### CORE-08.2 THE CLASS, not the instance
+
+**A name string is not an identity.** Every surface that joins two systems' people asks the same
+question, and this repo answered it in **nine** places — two of which each declared themselves the
+one home for it, for different callers:
+
+| where | the rule it ran | read by |
+|---|---|---|
+| `commcalc/commission_engine._canon_person` | casefold + single-comma reorder | ~30 commcalc sites; a payout's match key |
+| `commcalc/management_incentive._canon_person` | a NEAR-copy that said it mirrored the engine and did not — it reordered ANY number of commas | manager-plan scope match |
+| `commcalc/targets_engine.name_key` | uppercase, punctuation out, tokens SORTED | the schedule↔POS target join (§COMMCALC-02) |
+| `commcalc/commission_drilldown._tok` | lowercase word-set | the "did you mean" ranking |
+| `closing/router._name_match` | equal / contained / shared first token | did this person submit, is this person on the roster |
+| `closing/ops_chargebacks._name_match` | a BYTE copy of the above, kept local to dodge an import cycle | the missed-closing sweep |
+| `storeops/payroll_identity.person_key` | accent-folded, order-free sorted tokens — **the strongest rule in the building** | the clock feed's employee matcher |
+| `storeops/payroll_identity.name_tokens` / `_fold_person` | its two halves | ditto |
+| `closing/router._who_worked_by_store` | **no rule at all** — a raw string union | the surface the owner reported |
+
+The last line is the finding. `closing` could not read `storeops/payroll_identity` without a module
+cycle and could not read `commission_engine` without importing the commission engine, so the signal
+the owner looks at grew the weakest answer in the codebase: none.
+
+### CORE-08.3 THE FIX — one home, four NAMED questions, dereferenced
+
+`backend/app/modules/core/person_identity.py` is the one home. It is **pure at import time** (`re`
+only; the accent fold's import is deferred to call time), so every module above can read it and none
+can cycle on it. Four questions, named apart so they cannot be mistaken for one another:
+
+| function | forgives | for |
+|---|---|---|
+| `person_key` | one comma's word order, case, spacing | what ~30 commcalc **money** sites already key on — deliberately **not widened**, because widening a payout join moves money |
+| `token_key` | all of the above **and** bare word order | the 2026-09-02 schedule↔POS target join (`KELLIE MARK` vs `Kellie, Mark`) |
+| `folded_token_key` | all of the above **and accents** | **the key new code should join on**, and the one the who-worked signal and the clock-feed matcher use (`Martínez, LESLIEE` == `LESLIEE Martinez`) |
+| `loosely_same_person` | a shared first token, a substring | a generous **screening** rule — proven non-transitive in the lock (`Amir Khan` ~ `Amir` ~ `Amir Hassan`), so never a grouping key |
+
+Plus the presentation fact collapsing two spellings immediately raises — *which one do we show?*
+`best_spelling` / `collapse`: the **roster's** spelling wins (what an administrator typed), else a
+comma-free form beats `Last, First`, else more words beat fewer, else alphabetical — so the chosen
+name never depends on which feed loaded first.
+
+**It is deliberately not fuzzy.** `Abdul K` and `Abdul Kakar` — both live house punch spellings —
+stay two people. Merging them is a judgement a human makes; a key that made it silently would
+sometimes merge two real people, which is the costlier error.
+
+**The who-worked signal now unions PEOPLE.** `_who_worked_by_store` collapses both signals on
+`folded_token_key`, reads `storeops.employees` for the authoritative spelling, and buckets **both**
+signals on `account/store_identity.store_key` (§64) — previously the sales row resolved its store and
+the punch's `store_code` went in raw, so a punch stamped `b-418` bucketed apart from `B-418` and its
+rep vanished from the real store's day.
+
+**And "who worked" is no longer the same field as "who was expected".** `_who_worked_display_by_store`
+returns `worked` (actual only) and `scheduled` (the roster guess, only when nothing actual exists) as
+**two fields**. A caller reading `worked` *cannot* print a guess as a fact. All three screens render
+them apart, and §48.8 exports the guess under a heading that says what it is — `Scheduled (nobody
+worked)`.
+
+### CORE-08.4 PROOF
+
+- `backend/harness_person_identity.py` — **95 passed / 0 failed**. §A is byte-identity: replicas of
+  all five moved rules as they stood on `main` are the oracle over a 47-name corpus of the live
+  spellings, so the move is proven not to have changed any caller's answer. §A2 pins the two modules
+  that each claimed the question. §B reproduces the owner's cell. §D the non-fuzzy guarantees. §E the
+  non-transitivity that justifies the fourth function. §F the lock: nine dereferences each one line,
+  no seventh copy of the comma reorder or the first-token fallback anywhere, the home's import-time
+  purity, and every screen rendering the guess apart. §G six controls.
+- `backend/harness_cash_pickup_who_worked.py` — **35 passed / 0 failed**, extended with §9, which
+  drives the **real** classifier over the in-memory client on the owner's own fixture: one punch, one
+  sale, two spellings, **one** entry, tagged `clocked+sold`, with both raw spellings kept for the
+  recon and the lower-case store code folded onto the right store-day. Its §3 assertions were
+  UPDATED, not dropped — the flattened `worked` list was the defect.
+
+Both run in CI (`carrier-vocab-guard`; the who-worked proof in the installed-dependencies job,
+because it imports the closing router). `harness_cash_pickup_who_worked.py` came OFF
+`harness_unrun_pending.txt` — the debt list shrank by one, 322 → 321.
+
+### CORE-08.5 WHAT IT REGISTERS
+
+**No table, no migration, no endpoint, no report.** `GET /closing/accountability-chain` and
+`GET /closing/pickups` each gain one FIELD (`scheduled_only`) on an answer they already gave, so §16
+(by TABLE) and §17 (by ENDPOINT) carry no new row and §18 (by METRIC) nothing new to measure — the
+numbers did not change, which people they name did. The duplicate check (CLAUDE.md build gate) is
+this section's own §CORE-08.2 table: nine existing mechanisms found, **nine extended or
+dereferenced, none siblinged** — and the one new file exists precisely so there is one fewer rule in
+the building, not one more. Registered in `core/module_graph.FACTS['person_identity']`.

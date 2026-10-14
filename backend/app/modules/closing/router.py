@@ -39,6 +39,9 @@ from . import unfinished_day as _unfinished
 from . import closing_source as _closing_src
 from . import closing_grain as _grain_src
 from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
+from app.modules.account import store_identity as _store_identity  # noqa: E402
+# WHO IS THIS PERSON — one fact, one home (§CORE-08). Pure, stdlib-only, no cycle.
+from app.modules.core import person_identity as _person_identity  # noqa: E402
 from . import metric_catalog as _metrics
 from . import closing_refile as _refile
 
@@ -6854,9 +6857,13 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             # produced an empty envelope list beside a full straggler list. Filtered, this list now
             # ANSWERS the question instead: that store did not submit a closing.
             mk = (s.get("market") or "").strip() or sm_market.get(code, "")
-            wd = _worked_display.get(code, {"worked": [], "source": "none", "summary": "no worked-signal recorded"})
+            wd = _worked_display.get(code, {"worked": [], "scheduled": [], "source": "none",
+                                             "summary": "no worked-signal recorded"})
+            # `worked` is people who ACTUALLY worked; the roster guess rides its own field so this
+            # screen cannot show somebody the schedule merely expected as somebody who was here.
             not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk,
-                               "worked": wd["worked"], "worked_source": wd["source"], "worked_summary": wd["summary"]})
+                               "worked": wd["worked"], "scheduled_only": wd.get("scheduled") or [],
+                               "worked_source": wd["source"], "worked_summary": wd["summary"]})
         not_closed.sort(key=lambda s: str(s.get("store_name") or ""))
 
     # OWNER DIRECTIVE 2026-08-04 ("cash on hand needs to be completed along with cash pickup"):
@@ -9128,10 +9135,15 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
                    "district": (_ch.get("district") or {}).get("name")}
         if r["day"] in _worked_by_date:
             _w = (_worked_by_date[r["day"]] or {}).get(r["store_code"]) or {}
+            # `people` is ACTUAL workers only (punch and/or sale). A store where nobody clocked in
+            # reports its roster guess as `scheduled_only`, never as `people` — "who worked" and
+            # "who was expected" are two facts and this report shows them in two columns.
             r["worked"] = {"resolved": True, "people": _w.get("worked") or [],
+                           "scheduled_only": _w.get("scheduled") or [],
                            "source": _w.get("source") or "none", "summary": _w.get("summary") or ""}
         else:
-            r["worked"] = {"resolved": False, "people": [], "source": None, "summary": ""}
+            r["worked"] = {"resolved": False, "people": [], "scheduled_only": [],
+                           "source": None, "summary": ""}
     # WHO, AS A PERSON. Most of these columns hold a NAME already (verified_by 'Rana',
     # picked_up_by, handed_to); `envelope_count.counted_by` holds an actor UUID since §47 and the
     # legacy sentinel before it. core.actors is the ONE uid->person join (§47.2) and
@@ -9534,13 +9546,10 @@ def _f(v) -> float:
 
 
 def _name_match(a: str, b: str) -> bool:
-    """Loose match between a scheduled name and a submitted name (first-token / contains)."""
-    a, b = (a or "").strip().lower(), (b or "").strip().lower()
-    if not a or not b:
-        return False
-    if a == b or a in b or b in a:
-        return True
-    return a.split()[0] == b.split()[0]
+    """COULD these two names be one person, generously — one fact with one home:
+    `core.person_identity.loosely_same_person` (§CORE-08). A SCREENING rule, never a grouping key
+    (it is not transitive); grouping is `person_identity.folded_token_key`."""
+    return _person_identity.loosely_same_person(a, b)
 
 
 # ── B2B money actuals for the closing money-recon (accessory gross, cash vs card) ────────────
@@ -10551,52 +10560,113 @@ def _rep_b2b(day: dict, store_code: str, emp_name: str):
     return agg
 
 
+def _roster_spellings(client, org_id: str) -> dict:
+    """{person_key: the roster's spelling} from `storeops.employees` — the name an administrator
+    typed, which is the name the owner recognises on a report. Keyed through THE ONE person key
+    (§CORE-08) so it answers for a feed that spells the same person differently. Last writer wins
+    inside one key, which is harmless: both rows are the same human by definition of the key."""
+    out = {}
+    try:
+        emps = (client.schema("storeops").table("employees").select("name")
+                .eq("org_id", org_id).execute().data) or []
+        for e in emps:
+            nm = (e.get("name") or "").strip()
+            if nm:
+                out[_person_identity.folded_token_key(nm)] = nm
+    except Exception as e:
+        print("roster spellings load failed:", e)
+    return out
+
+
 def _who_worked_by_store(client, org_id: str, date: str) -> dict:
     """Who ACTUALLY worked each store on `date`, so the closing checks reality instead of the roster
     (a scheduled rep who never showed shouldn't be dunned for a closing; a rep who sold but wasn't
-    scheduled should be). Two independent signals, unioned per store_code:
-      • clocked_in — storeops.timelog punches for the day (store_code straight off the punch).
+    scheduled should be). Two independent signals, unioned per store:
+      • clocked_in — storeops.timelog punches for the day. The punch's own store_code: PROVEN on live
+                     data 2026-10-14 to be where the punch happened and not a home-store stamp — 75
+                     of 89 house employees have punches at more than one store since July.
       • sold        — distinct salespeople on that store's B2B sales rows (raw_sales / daily feed),
                       plus the set of user_logins each name transacted under, so a rep who rang
                       sales under a DIFFERENT login than they clocked in on is surfaced for recon.
-    Returns {store_code: {"clocked_in": set, "sold": set, "logins": {salesperson: set(user_login)}}}."""
-    out = {}
 
-    def _bucket(code):
-        return out.setdefault(code, {"clocked_in": set(), "sold": set(), "logins": {}})
+    THE UNION IS OVER PEOPLE, NOT OVER NAME STRINGS (owner report 2026-10-14: *"why does it show 2
+    reps who worked at the store"*). B-1750 on 2026-10-10 had ONE man in it: the punch spells him
+    'Simarjyot Singh', the sales feed spells him 'Singh, Simarjyot', and a union of strings reported
+    two reps. Both signals now collapse through THE ONE person key (§CORE-08) and are displayed in
+    the roster's spelling, so one human is one entry however many ways the feeds spell them.
 
-    # 1) Clock-ins — authoritative store_code, independent of whether B2B is loaded.
+    THE STORE SIDE IS THE SAME FIX. The punch's store_code went in raw while the sales row's store
+    resolved, so a punch stamped 'b-418' bucketed apart from 'B-418' (the live case-fold phantom) and
+    its rep vanished from the real store's day. Both signals now key on
+    `account.store_identity.store_key` through the shared resolver.
+
+    Returns {store_code: {"clocked_in": set, "sold": set, "logins": {name: set(user_login)},
+                          "people": {person_key: {"name","variants","clocked","sold","logins"}}}}.
+    `clocked_in` / `sold` hold ONE display name per person — the shape every caller already reads."""
+    roster = _roster_spellings(client, org_id)
+    try:
+        resolve = _addr_resolver(client, org_id)
+    except Exception as e:
+        print("who-worked store resolver unavailable:", e)
+        resolve = None
+
+    # key -> {"variants": set, "clocked": bool, "sold": bool, "logins": set}
+    acc = {}
+
+    def _person(code, raw_name):
+        key = _person_identity.folded_token_key(raw_name)
+        p = acc.setdefault(code, {}).setdefault(
+            key, {"variants": set(), "clocked": False, "sold": False, "logins": set()})
+        p["variants"].add(str(raw_name).strip())
+        return p
+
+    # 1) Clock-ins — the punch's own store, independent of whether B2B is loaded.
     try:
         tl = (client.schema("storeops").table("timelog")
               .select("employee_name,store_code").eq("org_id", org_id)
               .eq("work_date", date).execute().data) or []
         for t in tl:
-            code = (t.get("store_code") or "").strip()
+            code = _store_identity.store_key(resolve, t.get("store_code"))
             nm = (t.get("employee_name") or "").strip()
             if code and nm:
-                _bucket(code)["clocked_in"].add(nm)
+                _person(code, nm)["clocked"] = True
     except Exception as e:
         print("who-worked timelog load failed:", e)
 
     # 2) B2B sales-by-rep — resolve the raw store string → store_code the same way the money recon does.
     try:
-        resolve = _addr_resolver(client, org_id)
         rows = _b2b_sales_rows(client, org_id, date, "store,salesperson,user_login,voided")
         for r in rows:
             if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
                 continue
-            code = resolve(r.get("store"))
+            code = _store_identity.store_key(resolve, r.get("store"))
             sp = (r.get("salesperson") or "").strip()
             if not (code and sp):
                 continue
-            b = _bucket(code)
-            b["sold"].add(sp)
+            p = _person(code, sp)
+            p["sold"] = True
             login = (r.get("user_login") or "").strip()
             if login:
-                b["logins"].setdefault(sp, set()).add(login)
+                p["logins"].add(login)
     except Exception as e:
         print("who-worked B2B load failed:", e)
 
+    out = {}
+    for code, people in acc.items():
+        bucket = {"clocked_in": set(), "sold": set(), "logins": {}, "people": {}}
+        for key, p in people.items():
+            name = _person_identity.best_spelling(p["variants"], roster,
+                                                  _person_identity.folded_token_key)
+            if p["clocked"]:
+                bucket["clocked_in"].add(name)
+            if p["sold"]:
+                bucket["sold"].add(name)
+            if p["logins"]:
+                bucket["logins"][name] = set(p["logins"])
+            bucket["people"][key] = {"name": name, "variants": sorted(p["variants"]),
+                                     "clocked": p["clocked"], "sold": p["sold"],
+                                     "logins": sorted(p["logins"])}
+        out[code] = bucket
     return out
 
 
@@ -10617,25 +10687,38 @@ def _who_worked_display_by_store(client, org_id: str, date: str) -> dict:
     """Display-ready "who worked" for every store on `date`, built ON TOP of `_who_worked_by_store`
     (the SAME clocked-in ∪ B2B-sold definition DM-Verify already uses — no second/divergent
     classifier here, only presentation). Adds two things `_who_worked_by_store` intentionally doesn't
-    carry: a scheduled-roster FALLBACK for a store with zero actual signal (labeled as such, never
-    presented as fact), and email disambiguation for a name shared by 2+ roster employees (RULE THREE).
+    carry: the scheduled-roster names for a store with NO actual signal, and email disambiguation for
+    a name shared by 2+ roster employees (RULE THREE).
 
-    Returns {store_code: {"worked": [{"name","email","tag"}], "source": "actual"|"scheduled"|"none",
-                           "summary": <plain-English line>}}.
-    `tag` (only meaningful for source=="actual") is "clocked", "sold", or "clocked+sold"; for
-    source=="scheduled" every rep is tagged "scheduled".
+    `worked` HOLDS ONLY PEOPLE WHO ACTUALLY WORKED (owner report 2026-10-14: *"it should only show
+    the actual person who worked for all reporting not the one with the home store"*). The roster
+    guess used to be returned in that same list, tagged, and every caller rendered the tag or lost
+    it — so a report headed "Who worked" showed somebody the schedule merely expected. The two facts
+    are now two fields: a caller that reads `worked` CANNOT render a guess as a fact, and one that
+    wants the guess asks for `scheduled` and says so.
+
+    Returns {store_code: {"worked": [{"name","email","tag"}],   # actual only: clocked and/or sold
+                          "scheduled": [{"name","email","tag"}],# roster, ONLY when nothing actual
+                          "source": "actual"|"scheduled"|"none",
+                          "summary": <plain-English line>}}.
+    `tag` is "clocked", "sold" or "clocked+sold" on `worked`, and "scheduled" on `scheduled`.
     """
     who = _who_worked_by_store(client, org_id, date)
 
-    # Scheduled fallback — same query shape _closing_summary_for_date uses (storeops.shifts,
-    # is_deleted=False, this exact date), independently gathered here since this helper has no
-    # dependency on that function's org_ctx caching.
+    # Scheduled roster for the day — same query shape _closing_summary_for_date uses (storeops.shifts,
+    # is_deleted=False, this exact date). Collapsed through THE ONE person key and keyed on THE ONE
+    # store key, for the same reason the actual signals are (§CORE-08): the schedule is typed by a
+    # human and spells people its own way too.
     sched_by_store = {}
+    try:
+        _resolve = _addr_resolver(client, org_id)
+    except Exception:
+        _resolve = None
     try:
         shifts = (client.schema("storeops").table("shifts").select("store_code,employee_name")
                   .eq("org_id", org_id).eq("is_deleted", False).eq("shift_date", date).execute().data) or []
         for s in shifts:
-            sc = s.get("store_code")
+            sc = _store_identity.store_key(_resolve, s.get("store_code"))
             nm = (s.get("employee_name") or "").strip()
             if sc and nm:
                 sched_by_store.setdefault(sc, set()).add(nm)
@@ -10644,8 +10727,10 @@ def _who_worked_display_by_store(client, org_id: str, date: str) -> dict:
 
     # Roster name -> email(s), for RULE THREE disambiguation. A name matching 2+ roster employees is
     # genuinely ambiguous from a name-only signal (clocked_in/sold are both name-keyed) — surfaced
-    # honestly (both emails shown) rather than guessing which one it was.
+    # honestly (both emails shown) rather than guessing which one it was. Keyed through THE ONE person
+    # key so a feed spelling finds the roster row an exact-string lookup would miss.
     name_to_emails = {}
+    roster_spelling = {}
     try:
         emps = (client.schema("storeops").table("employees").select("name,email")
                 .eq("org_id", org_id).execute().data) or []
@@ -10653,14 +10738,16 @@ def _who_worked_display_by_store(client, org_id: str, date: str) -> dict:
             nm = (e.get("name") or "").strip()
             em = (e.get("email") or "").strip()
             if nm:
-                name_to_emails.setdefault(nm.casefold(), [])
-                if em and em not in name_to_emails[nm.casefold()]:
-                    name_to_emails[nm.casefold()].append(em)
+                k = _person_identity.folded_token_key(nm)
+                roster_spelling[k] = nm
+                name_to_emails.setdefault(k, [])
+                if em and em not in name_to_emails[k]:
+                    name_to_emails[k].append(em)
     except Exception as e:
         print("who-worked-display roster load failed:", e)
 
     def _rep(name, tag):
-        emails = name_to_emails.get(name.casefold(), [])
+        emails = name_to_emails.get(_person_identity.folded_token_key(name), [])
         return {"name": name, "email": (emails[0] if len(emails) == 1 else None),
                 "emails": emails if len(emails) > 1 else None, "tag": tag}
 
@@ -10671,23 +10758,29 @@ def _who_worked_display_by_store(client, org_id: str, date: str) -> dict:
         clocked = set(ww.get("clocked_in", set()))
         sold = set(ww.get("sold", set()))
         worked_names = sorted(clocked | sold)
+        # The schedule, collapsed to one entry per person in the roster's spelling.
+        sched_names = sorted({p["name"] for p in _person_identity.collapse(
+            sched_by_store.get(code, set()), roster_spelling,
+            _person_identity.folded_token_key).values()})
         if worked_names:
             reps = [_rep(n, "clocked+sold" if (n in clocked and n in sold) else
                           ("clocked" if n in clocked else "sold")) for n in worked_names]
             source = "actual"
             summary = f"{_join_names_and(worked_names)} worked today"
+            sched_out = []
+        elif sched_names:
+            reps = []
+            source = "scheduled"
+            verb = "was" if len(sched_names) == 1 else "were"
+            summary = (f"nobody clocked in or rang a sale here; "
+                       f"{_join_names_and(sched_names)} {verb} scheduled")
+            sched_out = [_rep(n, "scheduled") for n in sched_names]
         else:
-            sched_names = sorted(sched_by_store.get(code, set()))
-            if sched_names:
-                reps = [_rep(n, "scheduled") for n in sched_names]
-                source = "scheduled"
-                verb = "was" if len(sched_names) == 1 else "were"
-                summary = f"{_join_names_and(sched_names)} {verb} scheduled (no punch or sale signal)"
-            else:
-                reps = []
-                source = "none"
-                summary = "no worked-signal recorded"
-        out[code] = {"worked": reps, "source": source, "summary": summary}
+            reps = []
+            source = "none"
+            summary = "no worked-signal recorded"
+            sched_out = []
+        out[code] = {"worked": reps, "scheduled": sched_out, "source": source, "summary": summary}
     return out
 
 

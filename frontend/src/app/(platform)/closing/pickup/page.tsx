@@ -118,6 +118,9 @@ export default function CashPickupPage() {
         { header: 'Market', get: (r: any) => r.market || '' },
         { header: 'Who worked', get: (r: any) => r.worked_summary || 'no worked-signal recorded' },
         { header: 'Signal', get: (r: any) => r.worked_source === 'actual' ? 'clock-in/sale' : r.worked_source === 'scheduled' ? 'scheduled only' : 'none' },
+        // WHO WORKED and WHO WAS EXPECTED are two facts (owner report 2026-10-14) — the roster guess
+        // exports in its own column rather than inside the who-worked cell.
+        { header: 'Scheduled (nobody worked)', get: (r: any) => (r.scheduled_only || []).map((w: any) => w.name).filter(Boolean).join(', ') },
       ],
       rows: data?.not_closed || [],
     }] : []
@@ -504,7 +507,7 @@ export default function CashPickupPage() {
                       color: s.worked_source === 'actual' ? 'var(--text2)' : s.worked_source === 'scheduled' ? '#b45309' : 'var(--text3)',
                       fontStyle: s.worked_source === 'none' ? 'italic' : 'normal',
                     }}
-                    title={(s.worked || []).map((w: any) => `${w.name}${w.emails ? ` — name shared by: ${w.emails.join(', ')}` : (w.email ? ` (${w.email})` : '')}${w.tag && w.tag !== 'clocked' ? ` [${w.tag}]` : ''}`).join('\n')}
+                    title={[...(s.worked || []), ...(s.scheduled_only || [])].map((w: any) => `${w.name}${w.emails ? ` — name shared by: ${w.emails.join(', ')}` : (w.email ? ` (${w.email})` : '')}${w.tag && w.tag !== 'clocked' ? ` [${w.tag}]` : ''}`).join('\n')}
                   >
                     {s.worked_source === 'scheduled' && '📅 '}
                     {s.worked_summary || 'no worked-signal recorded'}
