@@ -567,7 +567,7 @@ for it in STRAYMOD:
         it["module"] = "vip"               # a module its page does not carry in that menu
 check("C9c control: a door whose module its own menu's page does not carry → RED",
       bool(deep_link_problems(STRAYMOD)))
-# C10 — RE-EXPRESSED 2026-10-14 (index §CORE-08). It used to assert the hub held a tile TITLED
+# C10 — RE-EXPRESSED 2026-10-14 (index §CORE-09). It used to assert the hub held a tile TITLED
 # "Employees & Pay". The owner then asked for a "Manage Employees" tile holding Employees & Pay, the
 # Employee Database and a password-reset door, so the tile's title is now the GROUP's name and the
 # door is one of its items. The RULING §19.40 made was never about the tile's title — it was that the

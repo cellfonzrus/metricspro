@@ -1,5 +1,5 @@
 'use client'
-// ── "ASSIGN THIS PERSON A PASSWORD I TYPE" — ONE home, dereferenced (owner 2026-10-14, §CORE-08) ──
+// ── "ASSIGN THIS PERSON A PASSWORD I TYPE" — ONE home, dereferenced (owner 2026-10-14, §CORE-09) ──
 //
 // OWNER: *"provide a link to reset the password for the employee login on payroll Dashboard … in
 // both config and this new link to password reset, the admin should be able to assign a manual

@@ -39,6 +39,7 @@ type StageCell = {
   collected_recorded?: number
 }
 type WorkedPerson = { name?: string }
+const names = (people?: WorkedPerson[]) => (people || []).map(p => p?.name).filter(Boolean).join(', ')
 type ChainRow = {
   store_code: string; day: string; store_name?: string; market?: string | null
   closing_state: string; closing_label: string; closing_submitted: boolean
@@ -46,7 +47,7 @@ type ChainRow = {
   cash_declared: number; cash_picked: number; cash_awaiting: number
   stages: StageCell[]
   dm?: { names?: string[]; resolved?: boolean; district?: string | null }
-  worked?: { people?: WorkedPerson[]; source?: string; resolved?: boolean }
+  worked?: { people?: WorkedPerson[]; scheduled_only?: WorkedPerson[]; source?: string; resolved?: boolean }
 }
 type StateCount = { key: string; label: string; store_days: number }
 type ChainResponse = {
@@ -174,8 +175,14 @@ export default function ClosingPickupStatus({ filterValue, onFilterChange, showF
       tip: 'Who submitted the closing.' },
     { header: 'Closed at', field: 'closed_at', get: (r: ChainRow) => stamp(cell(r, 'closing').at || ''),
       tip: 'When the last rep of that store-day submitted.' },
-    { header: 'Who worked', field: 'worked', get: (r: ChainRow) => (r.worked?.resolved ? (r.worked?.people || []).map(p => p?.name).filter(Boolean).join(', ') : 'not resolved'),
-      tip: 'Who was actually in the store that day — clocked in or ringing sales — even when nobody closed. "not resolved" means this day was not looked up, never that the store was empty.' },
+    // WHO WORKED and WHO WAS EXPECTED are two columns (owner report 2026-10-14: *"it should only
+    // show the actual person who worked for all reporting not the one with the home store"*). This
+    // column holds ONLY an actual signal — a punch or a sale, one row per person however many ways
+    // the two feeds spell them. The roster's guess has its own column and says so in its heading.
+    { header: 'Who worked', field: 'worked', get: (r: ChainRow) => (r.worked?.resolved ? names(r.worked?.people) : 'not resolved'),
+      tip: 'Who was actually in the store that day — clocked in or ringing sales — even when nobody closed. One line per person: the punch and the sales feed often spell the same person differently, and they are matched, not listed twice. Blank means nobody clocked in or rang a sale; "not resolved" means this day was not looked up.' },
+    { header: 'Scheduled (nobody worked)', field: 'scheduled_only', get: (r: ChainRow) => names(r.worked?.scheduled_only),
+      tip: 'Only filled in when NOBODY clocked in or rang a sale: who the schedule expected that day. It is not a record of who was in the store, which is why it is never shown in the "Who worked" column.' },
     { header: 'DM', field: 'dm', get: (r: ChainRow) => (r.dm?.resolved ? (r.dm?.names || []).join(', ') : 'not in org tree'),
       tip: 'The district manager the store is assigned to, from the org chart. "not in org tree" means the store is not wired into the hierarchy.' },
     { header: 'Cash pickup', field: 'pickup_label', get: (r: ChainRow) => r.pickup_label || '',

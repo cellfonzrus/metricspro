@@ -1,5 +1,5 @@
 // Proof for the Payroll hub's "Manage Employees" tile and its password-reset door (owner 2026-10-14,
-// index §CORE-08). Run: node prove_manage_employees_tile.mjs
+// index §CORE-09). Run: node prove_manage_employees_tile.mjs
 //
 // WHAT THIS PROVES, and why it is a proof rather than a lock. The lock
 // (backend/harness_assign_password_one_home.py) pins the WIRING: one home, three consumers, no second

@@ -1,5 +1,5 @@
 'use client'
-// ── RESET AN EMPLOYEE'S PASSWORD — the Payroll hub's door to it (owner 2026-10-14, §CORE-08) ──────
+// ── RESET AN EMPLOYEE'S PASSWORD — the Payroll hub's door to it (owner 2026-10-14, §CORE-09) ──────
 //
 // OWNER: *"provide a link to reset the password for the employee login on payroll Dashboard, make a
 // tile called Manage employee and move employee and pay and employee database along with password
@@ -12,7 +12,7 @@
 // tile: the hub gate (lib/hub-gate.ts, §CORE-06) would correctly DROP the link for every HR or market
 // manager, so the owner's new tile would show the password door to nobody but a full admin. This page
 // is `module: 'hr'`, like the two tiles it now sits beside, and renders the SAME component — no
-// second copy of the form, the fetch, or the policy echo (index §CORE-08).
+// second copy of the form, the fetch, or the policy echo (index §CORE-09).
 //
 // NOBODY'S ACCESS WIDENS. The authority is and stays the server: `POST /core/users/set-password`
 // gates on `_can_edit_setting(caller, 'security')` and re-validates the password against the tenant

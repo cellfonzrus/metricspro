@@ -43,20 +43,19 @@ def sb():
 
 # ── small local helpers (kept self-contained — no top-level cross-module import, mirrors the
 #    closing<->commcalc lazy-import boundary documented in closing/router.py) ─────────────────
+from app.modules.core import person_identity as _person_identity
+
+
 def _norm_store(s) -> str:
     return (s or "").strip().upper()
 
 
 def _name_match(a: str, b: str) -> bool:
-    """Loose match between two person names (same rule as closing/router.py's _name_match, kept
-    local so this module has zero import-time dependency on router.py — avoids a cycle since
-    router.py imports FROM this module)."""
-    a, b = (a or "").strip().lower(), (b or "").strip().lower()
-    if not a or not b:
-        return False
-    if a == b or a in b or b in a:
-        return True
-    return a.split()[0] == b.split()[0]
+    """COULD these two names be one person, generously — one fact with one home:
+    `core.person_identity.loosely_same_person` (§CORE-08). This WAS a byte copy of the router's rule,
+    kept local to avoid an import cycle; the home is pure and imports nothing of ours, so there is no
+    cycle left to avoid."""
+    return _person_identity.loosely_same_person(a, b)
 
 
 def _num(v) -> float:

@@ -45,7 +45,7 @@ on:
       - "frontend/src/lib/hub-gate.ts"
       - "backend/harness_hub_viewer_gate.py"
       - "frontend/scratchpad/prove_hub_gate.mjs"
-      # assign-a-password is one home (index §CORE-08) — the component, its three consumers, the
+      # assign-a-password is one home (index §CORE-09) — the component, its three consumers, the
       # Payroll hub's Manage Employees tile, the lock and the proof
       - "frontend/src/components/AssignPasswordCard.tsx"
       - "backend/harness_assign_password_one_home.py"
@@ -293,7 +293,7 @@ jobs:
         run: node prove_hub_gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   assign-password-one-home:
-    # §CORE-08 — "assign this employee a password I type" is ONE home
+    # §CORE-09 — "assign this employee a password I type" is ONE home
     # (frontend/src/components/AssignPasswordCard.tsx) that all three surfaces offering it render:
     # Admin → Security Settings, Admin → Roles (👥 Assign people, "in config") and the Payroll hub's
     # new Manage Employees tile (/hr/employee-password). The CAPABILITY was already correct and had one

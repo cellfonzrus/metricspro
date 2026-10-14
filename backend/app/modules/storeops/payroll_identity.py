@@ -50,6 +50,9 @@ change).
 """
 
 
+from app.modules.core import person_identity as _person_identity
+
+
 def business_id_alias_map(employees):
     """{str(numeric employees.id): business employees.employee_id} for every employee whose two id
     forms actually differ (the common case, since the auto-generated business id is "E<numeric id>",
@@ -236,38 +239,26 @@ def match_reason(basis):
 
 
 def _fold_person(v):
-    """The comparison form for a person spelling: accent-folded through THE one accent fold
-    (`account/store_identity.fold_accents`), lower-cased, non-alphanumerics dropped.
-
-    THE ACCENT FOLD IS WHY THIS EXISTS. `str.isalnum()` is True for `'í'`, so every plain fold in
-    this codebase kept it and `Martínez` compared unequal to `Martinez` — a live employee whose
-    clock rows matched nothing at all. The fold itself was fixed in its one home, for every caller;
-    this function simply uses it."""
-    from app.modules.account.store_identity import fold_accents
-    return "".join(ch for ch in fold_accents(v).lower() if ch.isalnum())
+    """WHO IS THIS PERSON is one fact with one home: `core.person_identity.fold_person` (§CORE-08).
+    The rule, and the Martínez finding that produced it, live there now; this name is kept because
+    this module and the clock feed read it."""
+    return _person_identity.fold_person(v)
 
 
 def name_tokens(v):
-    """PURE: the set of folded name TOKENS in a person spelling, in any of its shapes.
-
-    `"Martínez, LESLIEE"` → `{'martinez', 'lesliee'}`; `"Caba, David, A"` → `{'caba','david','a'}`
-    (a middle initial is a THIRD comma segment, so nothing here splits on the comma and assumes two
-    parts); `"Leslie Martinez"` → `{'leslie','martinez'}`. Order-free on purpose: the feed writes
-    `Last, First` and the roster writes `First Last`, and which way round a name is written is not a
-    fact about who the person is.
-    """
-    import re as _re
-    return {t for t in (_fold_person(x) for x in _re.split(r"[,\s]+", str(v or ""))) if t}
+    """One fact, one home: `core.person_identity.name_tokens` (§CORE-08). PURE."""
+    return _person_identity.name_tokens(v)
 
 
 def person_key(v):
-    """PURE: the order-free identity key for a person spelling — the sorted folded tokens joined.
+    """One fact, one home: `core.person_identity.folded_token_key` (§CORE-08) — the order-free,
+    accent-folded identity key. PURE.
 
-    `"Martínez, LESLIEE"` and `"LESLIEE Martinez"` share a key; `"Caba, David, A"` does NOT share a
-    key with `"Caba, David"`, because dropping a middle initial is a judgement a human makes, not
-    one a key may make silently. `match_tokens` is the looser, REPORTED comparison for that case.
-    """
-    return "|".join(sorted(name_tokens(v)))
+    THIS MODULE USED TO BE THAT HOME (the clock feed still called it one), and `closing`'s
+    who-worked signal could not reach it without storeops importing closing, so it grew a name
+    union of its own and reported one man as two reps (owner report 2026-10-14). The rule moved to
+    a module both sides can read; nothing about the key changed."""
+    return _person_identity.folded_token_key(v)
 
 
 def build_employee_matcher(employees, link_rows=None):

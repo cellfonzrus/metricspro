@@ -108,7 +108,8 @@ Primary code homes:
 | CORE-05 | **A paged read is a read of the data** | "The takeover report says one subscriber account carries 27 activated lines and it carries nine — where did the other 18 come from? What does a read that pages 1,000 rows at a time promise about the rows it has not asked for yet, how many of this platform's reads make that promise, and which of them are reading a feed twice while missing a third of it?" |
 | CORE-06 | **A tile is a menu entry, so it answers the menu's question** | "I cannot see the schedule on the app — where are we at making that live to all employees? Which door leads to a `tileOnly` page, and does that door ask whether the person looking at it may walk through?" |
 | CORE-07 | **A login is nobody until it is linked to its person** | "All stores should see their schedules and submit their closing — what is the process to add app access to all of them? Which column ties a login to the employee it belongs to, and does every path that creates a login write it?" |
-| CORE-08 | **A capability without a door is not a feature** | "Where do I reset an employee's login password, and why is the one screen that can do it a page my HR manager cannot open? Which surfaces offer it, and what stops the next one retyping the form?" |
+| CORE-08 | **Which person is this name** | "Why does the report show 2 reps who worked at the store — it should only show the actual person who worked, for all reporting, not the one with the home store. Which rule decides that a punch and a sale are the same human, how many rules did that, and which field is a record of who was there as against who the schedule expected?" |
+| CORE-09 | **A capability without a door is not a feature** | "Where do I reset an employee's login password, and why is the one screen that can do it a page my HR manager cannot open? Which surfaces offer it, and what stops the next one retyping the form?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -6918,7 +6919,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `GET /commcalc/targets/{period}/backward?goal=&metric_key=&scope=&rep=` — **"what do I need to reach X?"**: `need`, `per_day`, `per_week`, per category or for one. The GOAL is a parameter, not the stored target, so an arbitrary level can be asked. Computed from the same `compute_scope` the calendar uses, so the two cannot disagree; with no open days left `per_day` is `null` rather than the need restated as a daily figure (§COMMCALC-02.5).
 - *(no endpoint added)* — §CORE-03 changes nothing a caller can see: the credential columns were ALREADY stripped from every API read (`router._SOURCE_SECRETS`, each `_*_public_cfg`, `google_reviews.public_config`, `billing._pc_out`) and that stays the first line of defence. What changed is what a DATABASE dump holds. `portal_secret.protection_state()` is the one thing a screen may newly ask: `'protected'` once a key is configured, `'unprotected'` without one — so a page taking a portal password can SAY which, rather than let an operator assume (§CORE-03.5).
 - `POST /hr/onboarding/encrypt-existing` (§CORE-04) — unchanged to its caller, but it no longer holds the loop: it calls `encryption_backfill.backfill_intake_sensitive`, which `run_all()` also runs, so the `ENCRYPTION_BACKFILL_ON_BOOT=1` route now covers this family too. Before that it was the ONLY path, which is how two bank routing numbers stayed readable: nothing was wrong with the code, nobody had pressed the button.
-- *(no endpoint added)* — §CORE-08 adds no route: `POST /core/users/set-password` (`core/router.py::admin_set_password`) already set a SPECIFIC admin-chosen password, validated server-side by `validate_password`, toggling `app_users.must_reset_password` and audited as `password_admin_set`, gated on `_can_edit_setting(caller, "security")`. What changed is the number of SURFACES that offer it — one (`/admin/security`) became three (`+ /admin/roles` 👥 Assign people, `+ /hr/employee-password`), all rendering the one card `frontend/src/components/AssignPasswordCard.tsx`; `GET /core/security-settings` is the `can_edit` read each of them shows the form on (§CORE-08.3).
+- *(no endpoint added)* — §CORE-09 adds no route: `POST /core/users/set-password` (`core/router.py::admin_set_password`) already set a SPECIFIC admin-chosen password, validated server-side by `validate_password`, toggling `app_users.must_reset_password` and audited as `password_admin_set`, gated on `_can_edit_setting(caller, "security")`. What changed is the number of SURFACES that offer it — one (`/admin/security`) became three (`+ /admin/roles` 👥 Assign people, `+ /hr/employee-password`), all rendering the one card `frontend/src/components/AssignPasswordCard.tsx`; `GET /core/security-settings` is the `can_edit` read each of them shows the form on (§CORE-09.3).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -7282,7 +7283,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
-| **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile; lock `harness_assign_password_one_home.py` (47) + proof `prove_manage_employees_tile.mjs` (24) — §CORE-08 |
+| **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile; lock `harness_assign_password_one_home.py` (47) + proof `prove_manage_employees_tile.mjs` (24) — §CORE-09 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Store-days started and not finished** (per store-day) — somebody submitted, the close gate sent them back to recount, and they did not return: `unfinished` / `unfinished_counts` on `GET /closing/rollup`, the `unfinished` block on each `GET /closing/summary` store card, the DM-verify banner. Carries the entered money and the gate's OWN recorded variance (never recomputed). **NOT a money figure**: an unfinished day writes no `commcalc.daily_closing` row, so it reaches no cash, recon or P&L total (owner chose "not until corrected", 2026-10-04). Distinct from **turned away** below (refused before the gate) and from **not submitted** (nobody tried) | `closing/unfinished_day.state_for`/`describe` over `commcalc.closing_attempt` + `commcalc.daily_closing` | §29.12 |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
@@ -25193,6 +25194,7 @@ status word rather than a blank that reads as nil.
 | CORE-06 | core |
 | CORE-07 | core |
 | CORE-08 | core |
+| CORE-09 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -28095,15 +28097,128 @@ this ship are not retro-linked** — the one live instance (the Vzone rep) is re
 that person from the Roles grid, which is config, not a data fix.
 
 
+## §CORE-08. WHICH PERSON IS THIS NAME (owner report 2026-10-14)
 
-## §CORE-08. A CAPABILITY WITHOUT A DOOR IS NOT A FEATURE — one card, three surfaces (owner 2026-10-14)
+Owner, on the Closing & Cash Pickup Status report (§48.8) he had just been given: *"why does it show
+2 reps who worked at the store, it should only show teh actual person who worked for all reporting
+not the one with the homw store"*.
+
+Two different defects, both in the same cell, and he named both.
+
+### CORE-08.1 THE INSTANCE, measured on live production
+
+B-1750 on 2026-10-10 had **one man** in it. The report said `Simarjyot Singh, Singh, Simarjyot`.
+
+| signal | table | what it holds for that store-day |
+|---|---|---|
+| the punch | `storeops.timelog` | `Simarjyot Singh`, 11.77h, store_code `B-1750` |
+| the sale | the B2B sales feed | `salesperson = "Singh, Simarjyot"`, `user_login` `Simarjyot`, store `1750 5th Ave` |
+
+`closing/router._who_worked_by_store` unioned those two **name strings**. A union of strings has no
+notion of a person, so one man counted twice. Same shape on 2026-10-11.
+
+**The "home store" half is the SECOND defect, and it is not a home store.** `storeops.timelog.store_code`
+is where the punch happened, proven rather than assumed: **75 of 89** house employees have punches at
+more than one store since 1 July 2026 (`Angie Ramos` → B-1750, B-2509, B-6011). What the owner was
+actually seeing is the **scheduled-roster fallback** — when nobody clocked in or rang a sale, the
+who-worked signal returned the names the schedule *expected*, tagged `"scheduled"`, inside the same
+list as the people who really worked. Every caller had to render that tag or lose it, and the §48.8
+report's "Who worked" column did not render it. A guess read as a fact.
+
+### CORE-08.2 THE CLASS, not the instance
+
+**A name string is not an identity.** Every surface that joins two systems' people asks the same
+question, and this repo answered it in **nine** places — two of which each declared themselves the
+one home for it, for different callers:
+
+| where | the rule it ran | read by |
+|---|---|---|
+| `commcalc/commission_engine._canon_person` | casefold + single-comma reorder | ~30 commcalc sites; a payout's match key |
+| `commcalc/management_incentive._canon_person` | a NEAR-copy that said it mirrored the engine and did not — it reordered ANY number of commas | manager-plan scope match |
+| `commcalc/targets_engine.name_key` | uppercase, punctuation out, tokens SORTED | the schedule↔POS target join (§COMMCALC-02) |
+| `commcalc/commission_drilldown._tok` | lowercase word-set | the "did you mean" ranking |
+| `closing/router._name_match` | equal / contained / shared first token | did this person submit, is this person on the roster |
+| `closing/ops_chargebacks._name_match` | a BYTE copy of the above, kept local to dodge an import cycle | the missed-closing sweep |
+| `storeops/payroll_identity.person_key` | accent-folded, order-free sorted tokens — **the strongest rule in the building** | the clock feed's employee matcher |
+| `storeops/payroll_identity.name_tokens` / `_fold_person` | its two halves | ditto |
+| `closing/router._who_worked_by_store` | **no rule at all** — a raw string union | the surface the owner reported |
+
+The last line is the finding. `closing` could not read `storeops/payroll_identity` without a module
+cycle and could not read `commission_engine` without importing the commission engine, so the signal
+the owner looks at grew the weakest answer in the codebase: none.
+
+### CORE-08.3 THE FIX — one home, four NAMED questions, dereferenced
+
+`backend/app/modules/core/person_identity.py` is the one home. It is **pure at import time** (`re`
+only; the accent fold's import is deferred to call time), so every module above can read it and none
+can cycle on it. Four questions, named apart so they cannot be mistaken for one another:
+
+| function | forgives | for |
+|---|---|---|
+| `person_key` | one comma's word order, case, spacing | what ~30 commcalc **money** sites already key on — deliberately **not widened**, because widening a payout join moves money |
+| `token_key` | all of the above **and** bare word order | the 2026-09-02 schedule↔POS target join (`KELLIE MARK` vs `Kellie, Mark`) |
+| `folded_token_key` | all of the above **and accents** | **the key new code should join on**, and the one the who-worked signal and the clock-feed matcher use (`Martínez, LESLIEE` == `LESLIEE Martinez`) |
+| `loosely_same_person` | a shared first token, a substring | a generous **screening** rule — proven non-transitive in the lock (`Amir Khan` ~ `Amir` ~ `Amir Hassan`), so never a grouping key |
+
+Plus the presentation fact collapsing two spellings immediately raises — *which one do we show?*
+`best_spelling` / `collapse`: the **roster's** spelling wins (what an administrator typed), else a
+comma-free form beats `Last, First`, else more words beat fewer, else alphabetical — so the chosen
+name never depends on which feed loaded first.
+
+**It is deliberately not fuzzy.** `Abdul K` and `Abdul Kakar` — both live house punch spellings —
+stay two people. Merging them is a judgement a human makes; a key that made it silently would
+sometimes merge two real people, which is the costlier error.
+
+**The who-worked signal now unions PEOPLE.** `_who_worked_by_store` collapses both signals on
+`folded_token_key`, reads `storeops.employees` for the authoritative spelling, and buckets **both**
+signals on `account/store_identity.store_key` (§64) — previously the sales row resolved its store and
+the punch's `store_code` went in raw, so a punch stamped `b-418` bucketed apart from `B-418` and its
+rep vanished from the real store's day.
+
+**And "who worked" is no longer the same field as "who was expected".** `_who_worked_display_by_store`
+returns `worked` (actual only) and `scheduled` (the roster guess, only when nothing actual exists) as
+**two fields**. A caller reading `worked` *cannot* print a guess as a fact. All three screens render
+them apart, and §48.8 exports the guess under a heading that says what it is — `Scheduled (nobody
+worked)`.
+
+### CORE-08.4 PROOF
+
+- `backend/harness_person_identity.py` — **95 passed / 0 failed**. §A is byte-identity: replicas of
+  all five moved rules as they stood on `main` are the oracle over a 47-name corpus of the live
+  spellings, so the move is proven not to have changed any caller's answer. §A2 pins the two modules
+  that each claimed the question. §B reproduces the owner's cell. §D the non-fuzzy guarantees. §E the
+  non-transitivity that justifies the fourth function. §F the lock: nine dereferences each one line,
+  no seventh copy of the comma reorder or the first-token fallback anywhere, the home's import-time
+  purity, and every screen rendering the guess apart. §G six controls.
+- `backend/harness_cash_pickup_who_worked.py` — **35 passed / 0 failed**, extended with §9, which
+  drives the **real** classifier over the in-memory client on the owner's own fixture: one punch, one
+  sale, two spellings, **one** entry, tagged `clocked+sold`, with both raw spellings kept for the
+  recon and the lower-case store code folded onto the right store-day. Its §3 assertions were
+  UPDATED, not dropped — the flattened `worked` list was the defect.
+
+Both run in CI (`carrier-vocab-guard`; the who-worked proof in the installed-dependencies job,
+because it imports the closing router). `harness_cash_pickup_who_worked.py` came OFF
+`harness_unrun_pending.txt` — the debt list shrank by one, 322 → 321.
+
+### CORE-08.5 WHAT IT REGISTERS
+
+**No table, no migration, no endpoint, no report.** `GET /closing/accountability-chain` and
+`GET /closing/pickups` each gain one FIELD (`scheduled_only`) on an answer they already gave, so §16
+(by TABLE) and §17 (by ENDPOINT) carry no new row and §18 (by METRIC) nothing new to measure — the
+numbers did not change, which people they name did. The duplicate check (CLAUDE.md build gate) is
+this section's own §CORE-08.2 table: nine existing mechanisms found, **nine extended or
+dereferenced, none siblinged** — and the one new file exists precisely so there is one fewer rule in
+the building, not one more. Registered in `core/module_graph.FACTS['person_identity']`.
+
+
+## §CORE-09. A CAPABILITY WITHOUT A DOOR IS NOT A FEATURE — one card, three surfaces (owner 2026-10-14)
 
 Owner: *"provide a link to reset the password for the employee log in on payroll Dash board make a
 tile called Manage employee and move emplpouyee and pay and employe database along with password
 reset under that tile - in both config and this new link to password reset, teh admin should be able
 to assign a manual password aalso"*.
 
-### CORE-08.1 Two of the three asks were already built
+### CORE-09.1 Two of the three asks were already built
 
 Read carefully, the request is three things, and only one of them was missing code:
 
@@ -28132,7 +28247,7 @@ Meanwhile `Admin → Roles & Access` → **👥 Assign people** — the screen w
 code. There was no way to type a password on the screen whose whole job is logins. That is the "in
 config" half of the ask.
 
-### CORE-08.2 THE CLASS, not the instance
+### CORE-09.2 THE CLASS, not the instance
 
 The instance is *"the Payroll hub has no password link"*. The class is **a capability reachable from
 exactly one surface, when three surfaces need it** — and the patchwork answer to that is to retype
@@ -28140,7 +28255,7 @@ the form on each new surface. Three copies of one question: the picker, the `fet
 echo of the password policy, each free to drift from the server's `validate_password` the next time
 the policy gains a rule. That is the duplicate defect the index rules already forbid.
 
-### CORE-08.3 THE FIX — one card, dereferenced, and it cannot un-wire
+### CORE-09.3 THE FIX — one card, dereferenced, and it cannot un-wire
 
 **`frontend/src/components/AssignPasswordCard.tsx`** IS "assign a password to an employee login", for
 every surface that offers it. It holds the one `POST /core/users/set-password` call in the frontend,
@@ -28170,7 +28285,7 @@ Cellfonz HR, not to a district manager. The proof runs that rejected design on p
 "simplifies" it back. The new route is `module: 'hr'`, `scopes: ['all','market']`, `tileOnly: true` —
 the shape of the two tiles it was folded beside — and renders the SAME component.
 
-### CORE-08.4 THE TILE
+### CORE-09.4 THE TILE
 
 The Payroll hub (`/payroll`) had `Employees & Pay` and `Employee Database` as two adjacent
 single-link tiles. They are now the first two items of **👥 Manage Employees**, joined by
@@ -28190,7 +28305,7 @@ TITLED "Employees & Pay", which was one implementation of the ruling; it now ass
 door *labelled* "Employees & Pay" pointing at the tab, whichever tile groups it, plus a control (C10b)
 that goes red if the label leaves.
 
-### CORE-08.5 PROOF
+### CORE-09.5 PROOF
 
 - `backend/harness_assign_password_one_home.py` — **47 passed / 0 failed**, and **armed**: on pristine
   `origin/main` it reports **29 failed**, so it is a lock and not a description. Static on purpose —

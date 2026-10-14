@@ -474,6 +474,16 @@ on:
       - "database/migrations/1045_billpay_fee_product_desc.sql"
       - "database/migrations/1046_billpay_fee_charged.sql"
       - "backend/harness_accountability_chain.py"
+      # index §CORE-08 — the ONE home for "is this the same human", and the who-worked proof that
+      # runs the real classifier. Named here so a change to the home, to any of its nine call sites
+      # or to a screen that renders who worked actually runs the locks.
+      - "backend/app/modules/core/person_identity.py"
+      - "backend/harness_person_identity.py"
+      - "backend/harness_cash_pickup_who_worked.py"
+      - "backend/app/modules/storeops/payroll_identity.py"
+      - "backend/app/modules/commcalc/management_incentive.py"
+      - "backend/app/modules/commcalc/targets_engine.py"
+      - "backend/app/modules/closing/ops_chargebacks.py"
       - "backend/harness_org_chain.py"
       # index §13a — the canonical store→market resolution guard. It had never run in ANY workflow
       # (wired 2026-10-10), and a lock behind an allowlist that does not name its own subject skips
@@ -1053,6 +1063,16 @@ jobs:
       - name: Run the alert auto-fix lock (an alert that can be fixed says how, and a recorded silence suppresses nothing — index §15.1)
         working-directory: backend
         run: python3 harness_alert_autofix.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      # §CORE-08 (owner report 2026-10-14): "why does it show 2 reps who worked at the store, it
+      # should only show the actual person who worked". One man, spelled 'Simarjyot Singh' by the
+      # punch and 'Singh, Simarjyot' by the sales feed, listed twice because the who-worked signal
+      # unioned NAME STRINGS. "Is this the same human" now has ONE home that the clock feed, the
+      # commission engine, the targets join and the closing module all dereference; this lock fails
+      # the build if a seventh copy of the rule appears, if any of the nine call sites stops
+      # dereferencing it, or if a screen can print the roster's guess in a "who worked" column.
+      - name: Run the person-identity lock (one home for "is this the same human" — index §CORE-08)
+        working-directory: backend
+        run: python3 harness_person_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the five-stage accountability chain lock (each stage read from its own home; the spine makes "not done" visible — index §48)
         working-directory: backend
         run: python3 harness_accountability_chain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1530,6 +1550,13 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # §CORE-08 (owner report 2026-10-14). This one drives the REAL `_who_worked_by_store` /
+      # `_who_worked_display_by_store` over the in-memory client, so it imports the closing router
+      # and belongs in this job rather than the bare-Python one above.
+      - name: Run the who-worked proof — the real classifier, one person, two feeds, two spellings, ONE entry
+        working-directory: backend
+        shell: bash
+        run: python3 harness_cash_pickup_who_worked.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the deposit-recon pure math + cash-split proof (cash_for_basis and cash_components — the one home every cash-basis surface dereferences, index §47.9)
         working-directory: backend
         shell: bash
