@@ -2,8 +2,12 @@
 import { useEffect, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
-import EntityPicker from '@/components/EntityPicker'
 import PhoneInput from '@/components/PhoneInput'
+// ASSIGN-A-PASSWORD IS ONE HOME (owner 2026-10-14, index §CORE-08). The card used to be written
+// out below; the owner asked for the same affordance on Admin → Roles ("in config") and behind the
+// Payroll hub's new Manage Employees tile, so it moved to a component all three render. This page
+// hands it the policy + roster + can_edit it has already loaded, so nothing is fetched twice.
+import AssignPasswordCard from '@/components/AssignPasswordCard'
 
 // Common country codes for the tenant-default picker (RULE THREE: pick, with an "Other…" affordance).
 const CC_OPTIONS = [
@@ -37,20 +41,6 @@ function CcPicker({ value, disabled, onChange }: { value: string; disabled: bool
   )
 }
 
-// Client echo of the server password policy (server is authoritative). [] = OK.
-function pwErrors(pw: string, p: any): string[] {
-  const e: string[] = []
-  if (pw.length > 128) return ['Password must be at most 128 characters.']
-  if (!p) return e
-  if (pw.length < p.min_length) e.push(`Use at least ${p.min_length} characters.`)
-  if (pw.length > p.max_length) e.push(`Use at most ${p.max_length} characters.`)
-  if (p.require_upper && !/[A-Z]/.test(pw)) e.push('Add an uppercase letter.')
-  if (p.require_lower && !/[a-z]/.test(pw)) e.push('Add a lowercase letter.')
-  if (p.require_digit && !/[0-9]/.test(pw)) e.push('Add a number.')
-  if (p.require_special && !/[!@#$%^&*()\-_=+[\]{};:,.?/]/.test(pw)) e.push('Add a special character.')
-  return e
-}
-
 export default function SecuritySettingsPage() {
   const [loaded, setLoaded] = useState(false)
   const [canEdit, setCanEdit] = useState(false)
@@ -62,12 +52,6 @@ export default function SecuritySettingsPage() {
   const [users, setUsers] = useState<{ id: string; label: string; sublabel?: string; email: string }[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
-
-  // admin-set-password card
-  const [setEmail, setSetEmail] = useState<string | null>(null)
-  const [setPw, setSetPw] = useState('')
-  const [requireChange, setRequireChange] = useState(true)
-  const [setMsg2, setSetMsg2] = useState('')
 
   // self-service 2FA phone enrollment card
   const [enrollPhone, setEnrollPhone] = useState('')
@@ -110,18 +94,6 @@ export default function SecuritySettingsPage() {
     } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
     finally { setBusy(false) }
   }
-  async function assignPassword() {
-    if (!setEmail) { setSetMsg2('Pick an employee.'); return }
-    const pe = pwErrors(setPw, pol)
-    if (pe.length) { setSetMsg2(pe.join(' ')); return }
-    setSetMsg2('')
-    try {
-      await api('/api/v1/core/users/set-password', { method: 'POST',
-        body: JSON.stringify({ email: setEmail, password: setPw, require_change: requireChange }) })
-      setSetMsg2(`Password set for ${setEmail}. Hand it over securely.`)
-      setSetPw('')
-    } catch (e: any) { setSetMsg2('Failed: ' + (e?.message || e)) }
-  }
 
   async function sendPhoneCode() {
     setEnrollMsg('')
@@ -141,7 +113,6 @@ export default function SecuritySettingsPage() {
   }
 
   if (!loaded) return <div style={{ padding: 20 }}>Loading…</div>
-  const setPwErrs = setPw ? pwErrors(setPw, pol) : []
   const toggle = (k: string) => setPol((p: any) => ({ ...p, [k]: !p[k] }))
   const twChannel = (c: string) => setTw((t: any) => {
     const has = (t.channels || []).includes(c)
@@ -264,29 +235,8 @@ export default function SecuritySettingsPage() {
         {enrollMsg && <div style={{ marginTop: 10, fontSize: 13, color: enrollMsg.includes('failed') || enrollMsg.includes('Could not') ? '#dc2626' : '#059669' }}>{enrollMsg}</div>}
       </div>
 
-      {/* Admin-assigned password */}
-      {canEdit && (
-        <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Set an employee&apos;s password</div>
-          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
-            Set a specific password for anyone in this company. It must pass the policy above; they&apos;ll be asked to change it on next login (unless you turn that off).
-          </div>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            <div style={{ minWidth: 240 }}>
-              <EntityPicker options={users} value={setEmail} onChange={setSetEmail} placeholder="Pick an employee…" />
-            </div>
-            <div>
-              <input type="text" value={setPw} onChange={e => setSetPw(e.target.value)} placeholder="New password" style={{ ...num, width: 200 }} />
-              {setPwErrs.length > 0 && <ul style={{ margin: '6px 0 0', paddingLeft: 16, fontSize: 11, color: '#b45309' }}>{setPwErrs.map((x, i) => <li key={i}>{x}</li>)}</ul>}
-            </div>
-            <label style={{ ...chk, marginTop: 8 }}>
-              <input type="checkbox" checked={requireChange} onChange={e => setRequireChange(e.target.checked)} /> Require change on next login
-            </label>
-            <button className="btn btn-primary" style={{ marginTop: 4 }} onClick={assignPassword}>Set password</button>
-          </div>
-          {setMsg2 && <div style={{ marginTop: 10, fontSize: 13, color: setMsg2.startsWith('Failed') ? '#dc2626' : '#059669' }}>{setMsg2}</div>}
-        </div>
-      )}
+      {/* Admin-assigned password — the ONE home (index §CORE-08), rendered, never retyped. */}
+      <AssignPasswordCard policy={pol} users={users} canEdit={canEdit} />
     </div>
   )
 }

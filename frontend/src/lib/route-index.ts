@@ -284,6 +284,13 @@ export const ROUTES: RouteEntry[] = [
   { path: '/hr' },
   { path: '/hr/compliance' },
   { path: '/hr/employee-database' },
+  // Added by hand, not by `--bless`: the blesser re-sorts entries main has out of order and drops
+  // the in-file notes, which would bury this one-line change in unrelated churn. Aliases are the
+  // words somebody looking for this actually types — the §54.7 lesson from `/account/password`,
+  // which is the page a search for "password reset" used to miss entirely. No `label`: the
+  // page's wording belongs to NAV (lib/rbac.ts), and a second spelling here is the duplicate
+  // this registry's own §G forbids.
+  { path: '/hr/employee-password', aliases: ['employee password', 'reset an employee password', 'reset employee login', 'set a password for an employee', 'assign a password', 'manual password', 'employee login password', 'change someone else password'] },
   { path: '/hr/letters' },
   { path: '/hr/letters/queue', label: 'Letters Waiting to Send', aliases: ['letter queue', 'letters waiting'] },
   { path: '/hr/letters/send', label: 'Send a Letter', aliases: ['send letter', 'write a letter'] },

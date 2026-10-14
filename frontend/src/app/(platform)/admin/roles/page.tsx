@@ -12,6 +12,7 @@ import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, canSeeItem, navBlockReason,
 import { ExportButtons } from '@/lib/export'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker from '@/components/EntityPicker'
+import AssignPasswordCard from '@/components/AssignPasswordCard'
 import Link from 'next/link'
 
 // One-click templates for the roles most tenants need but the base 4 don't include.
@@ -1031,6 +1032,16 @@ export default function RolesAdminPage() {
               </span>
             </div>
           </div>
+
+          {/* ASSIGN A MANUAL PASSWORD — "in config" (owner 2026-10-14, index §CORE-08). This tab is
+              where logins are provisioned, resent and revealed, and every one of those issues a
+              GENERATED code; there was no way to type a specific password. The affordance already
+              existed with one server path (POST /core/users/set-password) and one UI, on Admin →
+              Security Settings. So this renders the SAME component rather than retyping the form,
+              the fetch or the policy echo — and it self-loads the policy + can_edit, so the server
+              (`_can_edit_setting(caller, 'security')`) stays the authority here too. */}
+          <AssignPasswordCard title="🔑 Set a specific password for someone" />
+          <div style={{ height: 16 }} />
 
           {/* Login-without-role warning (auth-ux hardening 2026-08-03). These people sign in fine and
               then hit "Account not set up" — from their side it looks like the whole app is broken.

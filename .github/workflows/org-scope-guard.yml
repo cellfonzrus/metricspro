@@ -45,6 +45,11 @@ on:
       - "frontend/src/lib/hub-gate.ts"
       - "backend/harness_hub_viewer_gate.py"
       - "frontend/scratchpad/prove_hub_gate.mjs"
+      # assign-a-password is one home (index §CORE-09) — the component, its three consumers, the
+      # Payroll hub's Manage Employees tile, the lock and the proof
+      - "frontend/src/components/AssignPasswordCard.tsx"
+      - "backend/harness_assign_password_one_home.py"
+      - "frontend/scratchpad/prove_manage_employees_tile.mjs"
   push:
     branches: [main]
     paths:
@@ -286,6 +291,33 @@ jobs:
       - name: Run the hub viewer-gate proof (real NAV, real tile literals, real role rows)
         working-directory: frontend/scratchpad
         run: node prove_hub_gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  assign-password-one-home:
+    # §CORE-09 — "assign this employee a password I type" is ONE home
+    # (frontend/src/components/AssignPasswordCard.tsx) that all three surfaces offering it render:
+    # Admin → Security Settings, Admin → Roles (👥 Assign people, "in config") and the Payroll hub's
+    # new Manage Employees tile (/hr/employee-password). The CAPABILITY was already correct and had one
+    # server path (POST /core/users/set-password, gated on _can_edit_setting(caller,'security')); what
+    # was missing was a door for the people who manage employees, and the patchwork answer would have
+    # been to retype the form, the fetch and the policy echo on each new surface. The LOCK is static on
+    # purpose: a surface that re-implements the card compiles and looks right, and a tile that loses a
+    # door is still a valid tile — neither tsc nor a build can see either. The PROOF runs the shipped
+    # viewer gate over the real NAV and the real tile literal and shows why the password door had to be
+    # an `hr` route: pointed at /admin/security it is dropped for every HR and market manager.
+    name: Assign-password one home
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the assign-password one-home lock (stdlib only, no deps)
+        working-directory: backend
+        run: python3 harness_assign_password_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the Manage Employees tile proof (real NAV, real tile literal, real role rows)
+        working-directory: frontend/scratchpad
+        run: node prove_manage_employees_tile.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   people-visibility:
     # §14w — "whose PERSON-KEYED rows may this login READ?" is ONE declared fact (app/core/scope.py:
