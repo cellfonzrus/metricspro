@@ -26608,6 +26608,70 @@ months are not.
 click.
 
 
+### COMMCALC-03.21 The breakup of what was sold (owner ask 2026-10-13)
+
+Owner, verbatim: *"Also summarize at the end of the report, the breakup of Phones tablets, Fios VHI,
+and if any other item was sold"*.
+
+**RULE TWO decides the vocabulary, not the wording of the ask.** "Fios" and "VHI" are one carrier's
+brand names for home internet, and a carrier name in code is what RULE TWO forbids — the
+`carrier-vocab-guard` job fails the build over it. So the CLASS is `home_internet`, labelled "Home
+internet", and the WORDS that match it are config: the house tokens are generic (`home internet`,
+`router`, `internet`, `gateway`) and a tenant whose feed spells it its own way declares its own
+tokens. `harness_prospect_eval.py` §S10 fails the build if a brand reaches the mechanism's source,
+and §S11 proves a tenant declaring `vhi` gets it matched.
+
+**One home, not a sibling.** The rules live in `commcalc/product_mix.py`, which has owned "read a
+product description" since §62 (`model_of`). It gains `resolve_product_classes`, `product_class_of`
+and `product_breakup`; `prospect_eval.products_sold` only names WHICH COLUMNS of the prospect's sheet
+answer, through `PRODUCT_DESC_COLUMN` / `NO_DEVICE_COLUMN`. §S17 fails the build if a second copy of
+the rules appears in the report, and §S14 — which **caught a second read of the product column in
+`device_keys_of` the moment it was written** — fails it if a caller stops dereferencing them.
+
+**Measured on the live feed first (5,495 commission rows, Total by Verizon, 2026-10-13), and it
+changed the design twice.**
+
+| | Lines | Basis |
+|---|---|---|
+| Phone | 4,650 | residual — a real product name matching no class token |
+| Tablet | 354 | a word in the product name |
+| Home internet | 78 | a word in the product name |
+| Hotspot | 1 | a word in the product name |
+| Watch, accessory | 0 | declared classes nobody sold — **reported as zero, never omitted** |
+| No device sold | 383 | the feed's own `byop` declaration |
+| No product named | 29 | nothing to read |
+
+- **There is no declared product-class column.** `sub_type` is blank on 4,027 of 5,495 rows and `TWP`
+  on the rest; `activation_type2` says only `branded` or `byop`. So the class is read from the product
+  description, and every line therefore carries its **basis** — a class read off a keyword is not the
+  evidence a declared one is, which is the §66 lesson, and the screen prints the four counts.
+- **`Product Not Available` looks like missing data and is not.** 383 of those 412 rows DECLARE
+  `byop` — the customer brought their own phone and no device was sold. A declared fact outranks a
+  description (§S3), so those land in `no_device`; the 29 that declare nothing are named on their own
+  line and **never folded into phones** (§S7).
+
+**The residual is a device, and that is a choice with a cost, stated.** A real product name matching
+no class token counts as a phone, because a handset feed's unmatched names are overwhelmingly
+handsets. The cost is that a genuinely new category reads as a phone until its token is declared, so
+`basis_counts.residual_device` reports how many were placed that way and the phone row carries its own
+model list — which is where a human scanning the breakup sees something that is plainly not a phone.
+`unplaced` deliberately lists ONLY the rows that named nothing: an "unplaced" list carrying 4,650
+ordinary handsets is a list nobody reads (§S8).
+
+**What it is not narrowed by, and why.** The store filter (§COMMCALC-03.20) does not touch this
+table: a commission row names a processor account, not the store address the classes would have to be
+keyed by, and a per-store count nobody could tie back is worse than none.
+
+**Locked** by §S1–S17 (256 passed / 0 failed): S1 the classes add up to the file with nothing lost or
+double-counted; S4 a declared class nobody sold is a zero, not an omission; S9 the models come from the
+one model home so a promo-decorated line and a bare one are one product; S12 a token matches on a WORD
+boundary (`tab` inside another word is not a tablet); S13 an empty class list is honoured; S16 an empty
+feed produces an empty breakup rather than a zero claim.
+
+**Where it is:** `/commcalc/store-takeover`, the last section of the report, through `ReportShell`
+with its "share of lines" column declaring `agg: 'none'` (§COMMCALC-03.20 — a share does not add).
+
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back

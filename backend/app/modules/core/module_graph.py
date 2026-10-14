@@ -239,6 +239,10 @@ FACTS: dict[str, dict] = {
             # `_sales_cell_agg` asks price_cfg for the band and the model rather than deciding either,
             # and the endpoint wires the report. §62.
             'app/modules/commcalc/router.py': ('_pmix',),
+            # The takeover evaluation's "what was sold" breakup reads the SAME home for what a product
+            # description means — `product_class_of` / `product_breakup` beside `model_of`, so a
+            # tablet is one thing on the platform. §COMMCALC-03.21.
+            'app/modules/commcalc/prospect_eval.py': ('_pm',),
         },
     },
     'kpi_column_meaning': {
