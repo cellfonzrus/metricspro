@@ -28096,6 +28096,15 @@ that goes red if the label leaves.
   all three doors for both; §4 a store- or self-scoped rep gets the whole tile dropped rather than a
   tile of dead links.
 - CI: org-scope-guard job **Assign-password one home** runs both.
+- **Two neighbouring ratchets moved, both downward.** A new page must be FINDABLE: `/hr/employee-password`
+  is registered in `frontend/src/lib/route-index.ts` with the words somebody looking for it actually types
+  ("reset an employee password", "assign a password", "manual password"), which is the §54.7 lesson from
+  `/account/password` — the page a search for "password reset" used to miss entirely. Its entry carries NO
+  `label`, because the page's wording belongs to NAV and a second spelling is the duplicate that registry's
+  own §G forbids; it was added by hand rather than by `--bless`, which re-sorts entries `main` has out of
+  order and drops the in-file notes. And the lint register SHRANK: moving the card out of `/admin/security`
+  took two `any` annotations with it, so `eslint_pending.txt` reads 14 for that page instead of 16 and
+  `harness_frontend_lint_lock.PINNED_TOTAL` drops 5645 → 5643 (§CORE-02).
 
 **No migration, and no money moves.** No table, column or endpoint was added — `app_users`,
 `must_reset_password` and `set-password` all pre-date this. Nothing here reads or writes pay.

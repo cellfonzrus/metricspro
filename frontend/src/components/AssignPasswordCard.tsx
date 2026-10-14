@@ -71,41 +71,44 @@ export type AssignPasswordCardProps = {
 
 export default function AssignPasswordCard({ policy, users, canEdit, title, bare }: AssignPasswordCardProps) {
   // Self-load anything the host did not hand over, so a new surface needs ONE line to adopt this.
-  const [pol, setPol] = useState<PasswordPolicy>(policy ?? null)
-  const [may, setMay] = useState<boolean | null>(canEdit ?? null)
-  const [roster, setRoster] = useState<EntityOption[]>(users || [])
+  // The host's props are DERIVED FROM, never copied into state: a `useEffect` that mirrors a prop
+  // into state is a second source of truth for the same fact (and `react-hooks/set-state-in-effect`
+  // refuses it) — exactly the duplication this component exists to remove.
+  const [fetched, setFetched] = useState<{ pol: PasswordPolicy; may: boolean } | null>(null)
+  const [fetchedUsers, setFetchedUsers] = useState<EntityOption[] | null>(null)
   const [email, setEmail] = useState<string | null>(null)
   const [pw, setPw] = useState('')
   const [requireChange, setRequireChange] = useState(true)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const needPolicy = policy === undefined || canEdit === undefined
+  const needSettings = policy === undefined || canEdit === undefined
   useEffect(() => {
-    if (policy !== undefined) setPol(policy)
-    if (canEdit !== undefined) setMay(canEdit)
-  }, [policy, canEdit])
-  useEffect(() => {
-    if (!needPolicy) return
+    if (!needSettings) return
     let live = true
     api('/api/v1/core/security-settings')
-      .then(s => { if (!live) return; setPol(s?.password_policy || null); setMay(!!s?.can_edit) })
-      .catch(() => { if (live) setMay(false) })
+      .then(s => { if (live) setFetched({ pol: s?.password_policy || null, may: !!s?.can_edit }) })
+      .catch(() => { if (live) setFetched({ pol: null, may: false }) })
     return () => { live = false }
-  }, [needPolicy])
+  }, [needSettings])
   useEffect(() => {
-    if (users) { setRoster(users); return }
+    if (users) return
     let live = true
     api(`/api/v1/core/users?org_id=${ORG_ID}`)
       .then(u => {
         if (!live) return
-        setRoster(((u?.users || []) as Record<string, string>[])
+        setFetchedUsers(((u?.users || []) as Record<string, string>[])
           .filter(x => x.email)
           .map(x => ({ id: x.email, label: x.full_name || x.email, sublabel: x.email })))
       })
-      .catch(() => { /* roster optional — the admin can still not guess an email, so just empty */ })
+      .catch(() => { if (live) setFetchedUsers([]) })
     return () => { live = false }
   }, [users])
+
+  const pol: PasswordPolicy = policy !== undefined ? policy : (fetched ? fetched.pol : null)
+  // null = "not answered yet". The form is never rendered on a guess.
+  const may: boolean | null = canEdit !== undefined ? canEdit : (fetched ? fetched.may : null)
+  const roster: EntityOption[] = users || fetchedUsers || []
 
   const assign = useCallback(async () => {
     if (!email) { setMsg('Pick an employee.'); return }
