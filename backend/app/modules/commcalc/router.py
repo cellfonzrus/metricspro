@@ -48746,7 +48746,16 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     # reads rather than a slimmed copy of them.
     ev["multi_line_by_month"] = _pev.multi_line_by_month(
         every_month.get("ma_commission") or [], cfg["account_key_columns"],
-        cfg["family_line_threshold"])
+        cfg["family_line_threshold"], _pev.activation_rules(cfg))
+    # ── THE ACTIVATIONS, AND WHAT WAS SOLD, PER MONTH (owner ask 2026-10-14) ─────────────────────
+    # "the activations per month details is also missing which breaks up teh new acts upgrade tablet
+    # fios etc". Both are the pure one homes over the WHOLE upload, so the month on screen is one row
+    # of each table rather than a second derivation of it — the same contract §COMMCALC-03.20's month
+    # table already carries, and the harness fails the build if a row and the month report disagree.
+    ev["activations_by_month"] = _pev.activations_by_month(
+        every_month.get("ma_commission") or [], cfg)
+    ev["products_by_month"] = _pev.products_by_month(
+        every_month.get("ma_commission") or [], cfg)
     # WHOSE RULES BOOKED THIS (owner report 2026-10-14, §COMMCALC-03.22). The switches come back
     # with the statement so the reader can see that the figures are the ORG'S declarations, and
     # which of them are still the house answer because nobody has declared one.

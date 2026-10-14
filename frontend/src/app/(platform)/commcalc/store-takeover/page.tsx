@@ -148,6 +148,37 @@ interface CoverageLine {
   reason: string | null
   feeds: string[]
 }
+// ── THE ACTIVATIONS, PER MONTH (owner ask 2026-10-14) ───────────────────────────────────────────
+// Every figure here is the server's, counted by the platform's ONE activation classifier — this page
+// renders it and computes nothing. `classes_absent` names the classes this feed carries no value
+// for, which the card states in words rather than printing a zero beside them.
+interface ActivationMonth {
+  period: string
+  lines: number
+  classified: number
+  new_activations: number
+  by_class: Record<string, number>
+  add_a_lines: number
+  add_a_line_configured: boolean
+  excluded: number
+  unclassified: number
+  unclassified_values: { value: string; lines: number }[]
+  products: Record<string, number>
+  product_labels: Record<string, string>
+}
+interface ActivationsByMonth {
+  months: number
+  periods: string[]
+  by_month: ActivationMonth[]
+  totals: ActivationMonth
+  classes: string[]
+  class_labels: Record<string, string>
+  classes_absent: string[]
+  new_activation_sentence: string
+  reading: string
+}
+interface ProductBreakupMonth extends ProductBreakup { period: string }
+interface ProductMonthRow extends ProductClassRow { period: string }
 interface CoverageSummary {
   lines: number
   measured: number
@@ -192,6 +223,8 @@ interface Evaluation {
   multi_line?: { summary: MultiLineSummary; flagged: FlaggedAccount[]; flagged_line_ids: string[]; flagged_imeis: string[] }
   multi_line_by_month?: MultiLineByMonth
   products?: ProductBreakup
+  activations_by_month?: ActivationsByMonth
+  products_by_month?: { months: number; periods: string[]; by_month: ProductBreakupMonth[]; totals: ProductBreakup }
   expenses?: { matrix: Record<string, ExpenseCell>; rent: RentMeta; months?: string[]; window?: ExpenseWindow }
   default_mode?: string
   scenarios?: Record<string, Scenario>
@@ -310,23 +343,44 @@ const PL_COLS: ExportColumn[] = [
   { header: 'Line', get: (r: PlRow) => r.label },
   { header: 'Amount', get: (r: PlRow) => r.amount, money: true },
 ]
+// ── WHAT EACH COLUMN MEANS, PRINTED ON THE REPORT (owner ask 2026-10-14) ────────────────────────
+// Owner, reading three rows of this very table: *"what doe sthis report signify- expain on teh report
+// what each filter signifies- do tehy mean there is only ne accoutn for 27 lines"* and *"explain each
+// coloumn"*. The explanation rides the COLUMN (`tip`), so ReportShell prints it as the header tooltip
+// AND in its "What each column means" legend — one text, and a renamed or deleted column takes its
+// explanation with it instead of leaving a paragraph describing something that is no longer there.
 const FLAG_COLS: ExportColumn[] = [
-  { header: 'Month', get: (r: FlaggedAccount) => r.period },
-  { header: 'Account', get: (r: FlaggedAccount) => r.account_key },
-  { header: 'Account column', get: (r: FlaggedAccount) => r.account_column },
-  { header: 'Lines', get: (r: FlaggedAccount) => r.lines, align: 'right' },
-  { header: 'Add-a-lines', get: (r: FlaggedAccount) => r.add_a_lines, align: 'right' },
-  { header: 'All on one day', get: (r: FlaggedAccount) => (r.same_day ? 'yes' : 'no') },
-  { header: 'Days', get: (r: FlaggedAccount) => (r.days || []).join(', ') },
-  { header: 'One store account', get: (r: FlaggedAccount) => (r.same_processor_account ? 'yes' : 'no') },
+  { header: 'Month', get: (r: FlaggedAccount) => r.period,
+    tip: 'The month stamped on the commission lines, not the month they were paid.' },
+  { header: 'Account', get: (r: FlaggedAccount) => r.account_key,
+    tip: 'ONE carrier billing account. Every line on this row was activated on this single account '
+       + '— that is what makes the row worth a look.' },
+  { header: 'Account column', get: (r: FlaggedAccount) => r.account_column,
+    tip: 'Which column of your file identified the account. Different files name it differently, so '
+       + 'the report says which one it read rather than assuming.' },
+  { header: 'Lines', get: (r: FlaggedAccount) => r.lines, align: 'right',
+    tip: 'How many activated lines sit on that one account in that month.' },
+  { header: 'Add-a-lines', get: (r: FlaggedAccount) => r.add_a_lines, align: 'right',
+    tip: 'Of those lines, how many were added to an account that already had one. Counted by the same '
+       + 'rule your live stores are counted under.' },
+  { header: 'All on one day', get: (r: FlaggedAccount) => (r.same_day ? 'yes' : 'no'),
+    tip: '"yes" means every line was rung on a single day. A family buying four phones at once reads '
+       + 'this way too, so it is a reason to look, never a verdict.' },
+  { header: 'Days', get: (r: FlaggedAccount) => (r.days || []).join(', '),
+    tip: 'The actual dates the lines were rung.' },
+  { header: 'One store account', get: (r: FlaggedAccount) => (r.same_processor_account ? 'yes' : 'no'),
+    tip: '"yes" means every line was rung through the same store processor account; "no" means the '
+       + 'lines are spread across more than one.' },
   {
     header: 'Phones sold on it',
     get: (r: FlaggedAccount) => (r.devices || [])
       .map(d => `${d.sku || '(no model)'}${d.lines > 1 ? ` ×${d.lines}` : ''}`).join(' · '),
+    tip: 'The handsets activated on that account, with a count where the same model repeats.',
   },
   {
     header: 'IMEIs',
     get: (r: FlaggedAccount) => (r.devices || []).flatMap(d => d.imeis || []).join(' '),
+    tip: 'The serial number of each handset, so a human can trace the actual devices.',
   },
 ]
 
@@ -427,21 +481,73 @@ const MONTH_COLS: ExportColumn[] = [
 // ── WHAT WAS SOLD (owner ask 2026-10-13: "the breakup of Phones tablets, Fios VHI, and if any other
 // item was sold"). The classes, their counts and their models are ALL the server's — this table
 // renders them. "Share of lines" does not add, so it declares `agg: 'none'`; the line count does.
+// A MONTH COLUMN IS WHAT GIVES THIS TABLE ITS MONTH FILTER (owner ask 2026-10-14: "the filter for
+// each month is missing from each report"). ReportShell turns any month-roled column into a By-month
+// dropdown, so the control comes from the shared shell and is the same on every report.
 const PRODUCT_COLS: ExportColumn[] = [
-  { header: 'What was sold', get: (r: ProductClassRow) => r.label },
-  { header: 'Lines', get: (r: ProductClassRow) => r.lines, align: 'right' },
+  { header: 'Month', get: (r: ProductMonthRow) => r.period, role: 'month',
+    tip: 'The month stamped on the commission line. Pick one in the month dropdown to read it alone.' },
+  { header: 'What was sold', get: (r: ProductMonthRow) => r.label,
+    tip: 'The class the line was placed in. Every line lands in exactly one, so the rows add up to '
+       + 'the file.' },
+  { header: 'Lines', get: (r: ProductMonthRow) => r.lines, align: 'right',
+    tip: 'How many activated lines sold that class in that month.' },
   {
     header: 'Share of lines',
-    get: (r: ProductClassRow) => (r.share === null ? '—' : `${r.share.toFixed(2)}%`),
+    get: (r: ProductMonthRow) => (r.share === null ? '—' : `${r.share.toFixed(2)}%`),
     align: 'right', agg: 'none',
+    tip: "That class's share of its own month. Shares of different months do not add, which is why "
+       + 'the total row leaves this blank.',
   },
-  { header: 'Models', get: (r: ProductClassRow) => r.models.length, align: 'right' },
+  { header: 'Models', get: (r: ProductMonthRow) => r.models.length, align: 'right',
+    tip: 'How many distinct models were sold in that class that month.' },
   {
     header: 'Most sold',
-    get: (r: ProductClassRow) => (r.models || []).slice(0, 3)
+    get: (r: ProductMonthRow) => (r.models || []).slice(0, 3)
       .map(m => `${m.model}${m.lines > 1 ? ` ×${m.lines}` : ''}`).join(' · ') || '—',
+    tip: 'The three best-selling models of that class, with counts.',
   },
 ]
+// ── THE ACTIVATIONS, PER MONTH (owner ask 2026-10-14) ───────────────────────────────────────────
+// "the activations per month details is also missing which breaks up teh new acts upgrade tablet
+// fios etc". The Month column is deliberate twice over: it is the breakup the owner asked for AND it
+// is what gives this table its OWN month filter, because ReportShell turns any month-roled column
+// into a By-month dropdown. That is the answer to *"the filter for each month is missing from each
+// report"* — the filter comes from the shared shell, so it is the same control on every report and
+// no page types one of its own.
+//
+// NOTHING HERE ADDS THAT SHOULD NOT. Add-a-lines are a subset of the activations beside them, so
+// both columns sum honestly; the unclassified count is a line count and sums; nothing is a ratio.
+function actCols(labels: Record<string, string>, products: string[],
+                 productLabels: Record<string, string>): ExportColumn[] {
+  return [
+    { header: 'Month', get: (r: ActivationMonth) => r.period, role: 'month',
+      tip: 'The month stamped on the commission line, not the month it was paid.' },
+    { header: 'Lines', get: (r: ActivationMonth) => r.lines, align: 'right',
+      tip: 'Every activated line the commission sheet carries for that month.' },
+    { header: 'New activations', get: (r: ActivationMonth) => r.new_activations, align: 'right',
+      tip: 'Counted by the same rule your live stores are counted under, so this figure and a store '
+         + "report mean the same thing. An add-a-line is an activation and is counted here too." },
+    ...['activation', 'byod', 'port', 'upgrade'].map(k => ({
+      header: labels[k] || k,
+      get: (r: ActivationMonth) => r.by_class?.[k] ?? 0,
+      align: 'right' as const,
+      tip: `How many of that month's lines were ${(labels[k] || k).toLowerCase()}.`,
+    })),
+    { header: 'Add-a-lines', get: (r: ActivationMonth) => r.add_a_lines, align: 'right',
+      tip: 'A line added to an account that already had one. It is counted as the activation it is '
+         + 'as well, so this column deliberately overlaps the ones before it.' },
+    ...products.map(k => ({
+      header: productLabels[k] || k,
+      get: (r: ActivationMonth) => r.products?.[k] ?? 0,
+      align: 'right' as const,
+      tip: `Lines whose product was placed as ${(productLabels[k] || k).toLowerCase()}.`,
+    })),
+    { header: 'Not classified', get: (r: ActivationMonth) => r.unclassified, align: 'right',
+      tip: 'Lines whose activation type is a word nobody has told the platform about yet. Zero means '
+         + 'every line was placed.' },
+  ]
+}
 const EXP_COLS: ExportColumn[] = [
   { header: 'Expense line', get: (r: ExpenseCell) => r.expense_name },
   { header: 'Booked', get: (r: ExpenseCell) => r.amount, money: true },
@@ -566,9 +672,23 @@ export default function StoreTakeoverPage() {
   // P&L books from, so a line here is a line in the statement above. Not narrowed by the store
   // filter: the commission row names a processor account, not the store address these classes would
   // have to be keyed by, and a per-store count nobody could tie back is worse than none.
+  // THE ACTIVATION TABLE'S COLUMNS depend on which product classes the server actually returned, so
+  // they are built from its own labels rather than a list typed here that a new class would not be in.
+  const acts: ActivationsByMonth | null = data?.activations_by_month || null
+  const actColumns = useMemo<ExportColumn[]>(() => {
+    if (!acts) return []
+    const keys = Object.keys(acts.totals.product_labels || {})
+      .filter(k => (acts.totals.products?.[k] ?? 0) > 0)
+    return actCols(acts.class_labels || {}, keys, acts.totals.product_labels || {})
+  }, [acts])
   const products: ProductBreakup | null = data?.products || null
-  const productRows = useMemo<ProductClassRow[]>(
-    () => (products?.classes || []), [products])
+  // EVERY MONTH, flattened to one row per (month, class), so the table carries the month dimension
+  // the owner asked for and the shared shell can filter on it. The page's own month is NOT applied:
+  // this is the month table, and narrowing it by the page would leave the dropdown with one choice.
+  const productRows = useMemo<ProductMonthRow[]>(
+    () => (data?.products_by_month?.by_month || [])
+      .flatMap(m => (m.classes || []).map(c => ({ ...c, period: m.period }))),
+    [data?.products_by_month])
 
   // EVERY MONTH THE UPLOAD COVERS, not just the one on screen. The rows are the server's own, so the
   // month the report is showing IS one of these rows. The MONTH filter deliberately does not narrow
@@ -1147,7 +1267,17 @@ export default function StoreTakeoverPage() {
                   </div>
                 : <ReportShell title="Accounts over the line threshold"
                                filename={`takeover-multiline-${data?.period || ''}`}
-                               columns={FLAG_COLS} rows={shownFlagged} compact stickyHeader pinFirst />}
+                               columns={FLAG_COLS} rows={shownFlagged} compact stickyHeader pinFirst
+                               notice={<><b>What a row means.</b> One row is ONE carrier billing
+                                 account that carried more than {mlSummary.threshold} activated
+                                 line{mlSummary.threshold === 1 ? '' : 's'} in a single month &mdash; so
+                                 the <b>Lines</b> figure is how many lines sit on that one account,
+                                 not how many accounts there are. Nothing here concludes that anything
+                                 is wrong: a family of four buying four phones on one account on one
+                                 day reads exactly the same way. The columns are the evidence a person
+                                 needs to tell the two apart, and the filters above only choose which
+                                 of these accounts you are looking at &mdash; they never change a
+                                 figure in the P&amp;L.</>} />}
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 9 }}>
               Which column names the account is a setting, not a guess — this month it answered on{' '}
               {Object.keys(mlSummary.account_columns_used || {})
@@ -1161,7 +1291,13 @@ export default function StoreTakeoverPage() {
                        subtitle="Booked line by line through the same chart of accounts your own P&L uses"
                        filename={`takeover-pl-${data?.period || ''}-${shownMode}`}
                        columns={PL_COLS} rows={plRows} compact stickyHeader
-                       defaultGroupBy="Section" collapsibleGroups totals />
+                       defaultGroupBy="Section" collapsibleGroups totals
+                       noticeTone={covSummary.not_measured ? 'warn' : 'info'}
+                       notice={<><b>Read this before the bottom line.</b>{' '}
+                         {covSummary.bottom_line_note} {covSummary.measured} of {covSummary.lines}{' '}
+                         chart lines were measured and {covSummary.not_measured} cannot be answered
+                         from the uploaded reports, so they read as not measured rather than as
+                         zero.</>} />
 
           {/* ── WHAT IT COULD NOT ANSWER ─────────────────────────────────────────────────────── */}
           <div className="card" style={{ padding: '14px 16px', margin: '18px 0' }}>
@@ -1194,7 +1330,14 @@ export default function StoreTakeoverPage() {
             {expWindow.error &&
               <div style={{ fontSize: 12, color: '#991b1b', marginBottom: 8 }}>❌ {expWindow.error}</div>}
             <ReportShell title="" filename={`takeover-expenses-${data?.period || ''}`}
-                         columns={EXP_COLS} rows={expRows} compact stickyHeader totals />
+                         columns={EXP_COLS} rows={expRows} compact stickyHeader totals
+                         noticeTone={partialLines.length ? 'warn' : 'info'}
+                         notice={<><b>These are OUR costs, not the prospect&rsquo;s.</b> Each line is
+                           what one of our own stores pays for it, averaged over the complete months
+                           we have, because a takeover pack carries no expenses of its own. A line
+                           missing from some of those months is averaged over the months it is present
+                           in and said so above, never spread thinner across months that never
+                           recorded it.</>} />
           </div>
         </>}
 
@@ -1274,7 +1417,12 @@ export default function StoreTakeoverPage() {
             make every column look profitable.
           </div>
           <ReportShell title="" filename={`takeover-pl-by-store-${data?.period || ''}`}
-                       columns={MATRIX_COLS} rows={matrixRows} compact stickyHeader />
+                       columns={MATRIX_COLS} rows={matrixRows} compact stickyHeader
+                       notice={<><b>Revenue, device cost and activations tie across the columns;
+                         expenses and net income deliberately do not.</b> Each store column is charged
+                         the FULL average monthly expense of one of our own stores, because that is
+                         the question &mdash; could this one site stand on its own &mdash; and a share
+                         of a per-store cost would make every column look profitable.</>} />
         </div>}
 
       {/* ── A COLUMN PER STORE, from the uploads ─────────────────────────────────────────────── */}
@@ -1292,7 +1440,12 @@ export default function StoreTakeoverPage() {
             what makes the figure an answer to &ldquo;could this site stand on its own&rdquo;.
           </div>
           <ReportShell title="" filename={`takeover-stores-${data?.period || ''}`}
-                       columns={STORE_COLS} rows={storeRows} compact stickyHeader totals />
+                       columns={STORE_COLS} rows={storeRows} compact stickyHeader totals
+                       notice={<><b>Gross profit is the figure the accessory target comes off</b>
+                         &mdash; carrier revenue less device cost, read from each store&rsquo;s own
+                         statement rather than subtracted here. Carrier revenue is every incoming
+                         carrier dollar these uploads carry, booked under your organisation&rsquo;s own
+                         declared rules.</>} />
         </div>}
 
       {/* ── THE HANDSETS ORDERED ─────────────────────────────────────────────────────────────── */}
@@ -1313,13 +1466,24 @@ export default function StoreTakeoverPage() {
           </div>
           <div style={{ fontSize: 12, fontWeight: 600, margin: '10px 0 4px' }}>By model</div>
           <ReportShell title="" filename={`takeover-handsets-models-${data?.period || ''}`}
-                       columns={HANDSET_MODEL_COLS} rows={handsets.models} compact stickyHeader totals />
+                       columns={HANDSET_MODEL_COLS} rows={handsets.models} compact stickyHeader totals
+                       noticeTone={handsets.set_aside.rows ? 'warn' : 'info'}
+                       notice={<><b>These are orders placed, not lines activated.</b> Units times the
+                         unit price on the order, the same multiplication the device cost on the
+                         P&amp;L uses, so the two cannot disagree. A row carrying no unit price is set
+                         aside and counted beside the table rather than treated as free.</>} />
           <div style={{ fontSize: 12, fontWeight: 600, margin: '14px 0 4px' }}>By store</div>
           <ReportShell title="" filename={`takeover-handsets-stores-${data?.period || ''}`}
-                       columns={HANDSET_STORE_COLS} rows={handsetStores} compact stickyHeader totals />
+                       columns={HANDSET_STORE_COLS} rows={handsetStores} compact stickyHeader totals
+                       notice={<><b>Only the orders that name a ship-to store appear here.</b> An
+                         order with no store is counted in the totals above but cannot be placed on a
+                         site, so it is left out of this split rather than attributed to a guess.</>} />
           <div style={{ fontSize: 12, fontWeight: 600, margin: '14px 0 4px' }}>By month</div>
           <ReportShell title="" filename={`takeover-handsets-months-${data?.period || ''}`}
-                       columns={HANDSET_MONTH_COLS} rows={handsets.by_month} compact stickyHeader totals />
+                       columns={HANDSET_MONTH_COLS} rows={handsets.by_month} compact stickyHeader totals
+                       notice={<><b>Every uploaded month, so they can be compared</b> &mdash; use the
+                         month filter on this table to read one alone. Orders carrying no date are
+                         counted in the totals above and cannot appear in any month.</>} />
         </div>}
 
       {/* ── THE ACCOUNTS AT THE BOTTOM, AND THE NUMBER UNDERNEATH THEM ───────────────────────── */}
@@ -1380,6 +1544,46 @@ export default function StoreTakeoverPage() {
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>{fraud.reading}</div>
         </div>}
 
+      {/* ── THE ACTIVATIONS, PER MONTH (owner ask 2026-10-14) ──────────────────────────────────
+          "the activations per month details is also missing which breaks up teh new acts upgrade
+          tablet fios etc". Counted by the platform's ONE activation classifier, so a figure here and
+          a figure on a live store report mean the same thing. Not narrowed by the page's month on
+          purpose: this IS the month table, and it carries its own month filter from the shared
+          shell. Every number is the server's. */}
+      {pid && !loading && acts && acts.totals.lines > 0 &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            Activations, month by month
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+            {num(acts.totals.lines)} activated line{acts.totals.lines === 1 ? '' : 's'} across{' '}
+            {acts.months} month{acts.months === 1 ? '' : 's'}, of which{' '}
+            <b>{num(acts.totals.add_a_lines)}</b> {acts.totals.add_a_lines === 1 ? 'is' : 'are'} an
+            add-a-line. Use the month dropdown on this table to read one month on its own.
+          </div>
+          <ReportShell title="" filename={`takeover-activations-by-month`}
+                       columns={actColumns} rows={acts.by_month} compact stickyHeader pinFirst totals
+                       noticeTone={acts.totals.unclassified ? 'warn' : 'info'}
+                       notice={<>
+                         <b>What this table is.</b> {acts.reading}
+                         {acts.classes_absent.length > 0 &&
+                           <> {' '}Your file records no{' '}
+                             {acts.classes_absent.map(c => (acts.class_labels[c] || c).toLowerCase())
+                               .join(' and no ')}{' '}
+                             at all, so{' '}
+                             {acts.classes_absent.length === 1 ? 'that column reads' : 'those columns read'}
+                             {' '}zero because the file carries nothing to count, not because none were
+                             sold.</>}
+                         {acts.totals.unclassified > 0 &&
+                           <> {' '}<b>{num(acts.totals.unclassified)} line
+                             {acts.totals.unclassified === 1 ? '' : 's'} could not be placed</b>, under
+                             the value{acts.totals.unclassified_values.length === 1 ? '' : 's'}{' '}
+                             {acts.totals.unclassified_values.slice(0, 6)
+                               .map(u => `${u.value} (${num(u.lines)})`).join(', ')}. Tell the platform
+                             which kind of activation each of those words means and they will count.</>}
+                       </>} />
+        </div>}
+
       {/* ── WHAT WAS SOLD — the breakup at the end of the report (owner ask 2026-10-13) ──────────
           "the breakup of Phones tablets, Fios VHI, and if any other item was sold". The owner's own
           words name one carrier's brands for home internet; RULE TWO keeps a carrier name out of the
@@ -1388,15 +1592,20 @@ export default function StoreTakeoverPage() {
       {pid && !loading && products && products.totals.lines > 0 &&
         <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
-            What was sold &mdash; {data?.period}
+            What was sold, month by month
           </div>
           <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
-            Every one of the {num(products.totals.lines)} commission lines this month, placed in one
-            class and one only, so the breakup adds up to the file. Counted over the same lines the
-            P&amp;L above books from.
+            Every commission line of every uploaded month, placed in one class and one only, so the
+            breakup adds up to the file. {data?.period} alone holds{' '}
+            {num(products.totals.lines)} line{products.totals.lines === 1 ? '' : 's'}; use the month
+            dropdown on this table to read any one month.
           </div>
-          <ReportShell title="" filename={`takeover-products-${data?.period || ''}`}
-                       columns={PRODUCT_COLS} rows={productRows} compact stickyHeader pinFirst totals />
+          <ReportShell title="" filename="takeover-products-by-month"
+                       columns={PRODUCT_COLS} rows={productRows} compact stickyHeader pinFirst totals
+                       notice={<><b>What this table is.</b> Each row is one class of product in one
+                         month. A line is placed by what the product is called on the sheet unless the
+                         feed declares it outright, and the class is never guessed twice — so these
+                         rows add up to the lines the P&amp;L above books from.</>} />
           {/* HOW EACH CLASS WAS DECIDED. A class read off a product description is not the evidence a
               class the feed declared is, and §66 was paid for exactly that confusion. */}
           <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
@@ -1442,7 +1651,12 @@ export default function StoreTakeoverPage() {
           </div>
           <ReportShell title="" filename={`takeover-multiline-by-month-${pid}`}
                        columns={MONTH_COLS} rows={monthRows} compact stickyHeader pinFirst totals
-                       onRowClick={(r: MonthRow) => setOpenMonth(m => (m === r.period ? '' : r.period))} />
+                       onRowClick={(r: MonthRow) => setOpenMonth(m => (m === r.period ? '' : r.period))}
+                       notice={<><b>Click a month to open the accounts behind it.</b> Every uploaded
+                         month is here on purpose, so comparing them is possible; the month filter on
+                         this table narrows it to one. An account is counted in each month it happens
+                         in, because three lines added across three months is a customer who grew
+                         their plan rather than a multi-line sale.</>} />
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 9 }}>
             This table is every uploaded month on purpose, so the <b>Month</b> filter at the top does
             not narrow it &mdash; comparing the months is the whole question it answers. The
@@ -1467,7 +1681,11 @@ export default function StoreTakeoverPage() {
                     page are applied.
                   </div>
                 : <ReportShell title="" filename={`takeover-multiline-${openMonth}`}
-                               columns={FLAG_COLS} rows={drilled} compact stickyHeader pinFirst />}
+                               columns={FLAG_COLS} rows={drilled} compact stickyHeader pinFirst
+                               notice={<><b>The accounts behind {openMonth}.</b> Each row is one
+                                 carrier billing account and its <b>Lines</b> figure is how many
+                                 lines sit on it, so the rows do not add up to the month&rsquo;s
+                                 account count.</>} />}
               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
                 These are the same accounts the month report above lists, for this month. What they are
                 worth to the bottom line is measured for the evaluated month only &mdash; pick

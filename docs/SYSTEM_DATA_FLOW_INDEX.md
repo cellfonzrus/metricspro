@@ -26761,6 +26761,111 @@ Same class: §66 (a value read without its basis), §19.18 (a registry written a
 unwired), §58 (one home for what a carrier dollar IS).
 
 
+### COMMCALC-03.23 ACTIVATIONS PER MONTH — counted by the PLATFORM'S classifier, not a second tally (owner ask 2026-10-14)
+
+Owner, verbatim: *"the activations per month details is also missing which breaks up teh new acts
+upgrade tablet fios etc"* and *"the filter for each month is missing from each report"*.
+
+**The duplicate check came first and changed the design.** §6f/§19.31 already own "what kind of
+activation is this line" — `commcalc/line_class.py`, whose classes are exactly the owner's words
+(`activation` / `port` / `byod` / `upgrade`), with an add-a-line as a MODIFIER on one rather than a
+fifth class, and `new_activation_units` as the ONE derivation of the count the Sales report,
+Executive MTD, the Boost pay engine and the DLAR reconciliation all print. A private New/Add tally in
+the prospect report would have been a second answer to that question. **Reused:**
+`line_class.activation_units` / `new_activation_units` / `add_a_line_units` / `is_add_a_line` /
+`ACTIVATION_TYPE_CLASSES` / `CLASS_LABELS`, `product_mix.product_breakup` (via §COMMCALC-03.21's
+`products_sold`), `prospect_eval._row_period`. **Created:** `rows_by_period`, `activations_by_month`,
+`products_by_month`, `house_activation_declaration` / `activation_rules`, migration 1082. No new
+endpoint and no new table.
+
+**What that cost, measured before deciding.** The house classifier reads `contract_type`, which a
+takeover pack does not have, so on the live upload it placed **0 of 5,495 rows** — every class would
+have read zero, which is the fake answer this report must never give. The feed carries the fact in
+two narrow columns whose values are exact rather than prose: `activation_type` (New 3,907 · Add 1,588)
+and `activation_type2` (branded 5,083 · byop 383 · blank 29). So the vocabulary is **declared** for
+those two columns (fields + tokens as config, RULE TWO) and the declaration was measured against every
+row before it shipped:
+
+| | lines |
+|---|---|
+| activation | 5,112 |
+| bring-your-own | 383 |
+| **total** | **5,495** — the file exactly |
+| of which add-a-lines | 1,588 |
+| unplaced | **0** |
+| excluded | 0 |
+
+`'add'` is declared as the add-a-line **MODIFIER** and not as a class on purpose: 166 `Add` lines are
+also `byop`, and as a class it would have mis-called every one of them.
+
+**Upgrade and port read zero, and say so.** This feed records neither, so `classes_absent` names them
+and the card states in words that the file carries nothing to count — never a count of zero sales.
+Same refusal as §COMMCALC-03.21's product classes.
+
+**Per month, live 2026-10-14** (months sum to the total on lines, new activations and add-a-lines —
+asserted by §U3):
+
+| month | lines | new activations | add-a-lines | bring-your-own | phone / tablet / home internet |
+|---|---|---|---|---|---|
+| March 2026 | 39 | 39 | 2 | 2 | 34 / 3 / 0 |
+| April 2026 | 866 | 866 | 44 | 37 | 754 / 57 / 10 |
+| May 2026 | 1,066 | 1,066 | 61 | 41 | 946 / 57 / 16 |
+| June 2026 | 1,209 | 1,209 | 142 | 72 | 1,057 / 63 / 9 |
+| July 2026 | 1,217 | 1,217 | 369 | 82 | 1,025 / 93 / 15 |
+| August 2026 | 613 | 613 | 496 | 79 | 458 / 56 / 15 |
+| September 2026 | 482 | 482 | 471 | 68 | 375 / 25 / 13 |
+| October 2026 | 3 | 3 | 3 | 2 | 1 / 0 / 0 |
+| **all** | **5,495** | **5,495** | **1,588** | **383** | |
+
+> **REPORTED, NOT SMOOTHED:** add-a-lines run from 44 of 866 lines in April to **471 of 482 in
+> September**. Either the store swung almost entirely to add-a-lines or the later months' files are
+> partial. The report shows it; nothing in the code hides it.
+
+**The copy that was deleted.** `flag_multi_line_accounts` carried
+`activation_type == "add"` — a bare value comparison on one column, which is the §19.18 shape twice
+over: it answered a question `line_class` already answers, and it would have read zero for any feed
+spelling an add-a-line elsewhere. It dereferences `line_class.is_add_a_line` now; verified
+byte-identical on the live upload (1,588 both ways) and locked by §U11.
+
+### COMMCALC-03.23a THE MONTH FILTER COMES FROM THE SHARED SHELL
+
+Owner: *"the filter for each month is missing from each report"*. The page already had ONE month
+control at the top driving the server query (§COMMCALC-03.20); what was missing was a month control on
+each sub-report, so one month could be read without moving the whole page.
+
+**`ReportShell` already turns any month-roled column into a By-month dropdown.** So the fix is a
+`role: 'month'` column on each per-month table rather than a selector typed onto the page: the control
+is the same on every report on the platform, and no page owns a copy of it. The activations table and
+the products table (now every month, flattened to one row per month and class) carry it.
+
+### COMMCALC-03.23b THE NOTICE BAR AND THE COLUMN LEGEND — `ReportShell`, for every report
+
+Owner: *"also give me notification bar ont eh top of each report"*, and of the flagged-account table
+*"expain on teh report what each filter signifies"* / *"explain each coloumn"*.
+
+Both live in `components/ReportShell.tsx`, not on the page that asked:
+
+- **`notice` / `noticeTone`** — ONE bar above every `ReportShell`, rendered before the toolbar so it
+  is read before the numbers. Three tones sharing `NarrativeBanner`'s palette, so a warning on a
+  report and a warning on a banner do not read as two severities. A report that passes neither renders
+  byte-identically to before.
+- **`ExportColumn.tip`** is now the ONE home for "what this column means". `ReportShell` prints it as
+  the header tooltip AND in an openable **"What each column means"** legend, because a tooltip is
+  invisible on a touch screen and to anyone not hunting for it. The explanation rides the COLUMN, so a
+  renamed or deleted column takes its explanation with it instead of leaving a paragraph describing
+  something that is no longer there — the drift a paragraph typed beside a table always produces.
+
+Every report on the takeover page carries a notice; the flagged-account table answers the owner's own
+question on itself (*"do tehy mean there is only ne accoutn for 27 lines"* → one row is ONE carrier
+billing account, and `Lines` is how many lines sit on it).
+
+**Proof.** `backend/harness_prospect_eval.py` §U — **286 checks, 0 failed**. §U1 forbids a tally of
+prospect_eval's own; **§U2 is ARMED** (the house classifier really does place none of these rows);
+§U3 ties the months to the total; §U5 proves `'add'` as a class would mis-call the byop lines; §U6 the
+absent classes; §U7 an unknown value reported by name; §U9 `rows_by_period` dereferences the one home
+for a row's month; §U11 the deleted comparison; §U12 a declared map replaces the house one whole;
+§U14 RULE TWO on the token words; §U16 the month-roled column.
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back
