@@ -11,6 +11,7 @@ import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import { useReportLabels } from '@/lib/report-labels'
 import SubmissionsTable, { monthStart } from './_lib/SubmissionsTable'
+import ClosingPickupStatus from './_lib/ClosingPickupStatus'
 import { MarketStorePicker, type StoreOpt } from './_lib/MarketStorePicker'
 
 const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
@@ -24,7 +25,11 @@ export default function ClosingDashboard() {
   const [filt, setFilt] = useState<StandardFilterValue>(() => ({ period: monthStart(), periodTo: localToday(), stores: [], markets: [], reps: [] }))
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<'detail' | 'store' | 'rep'>('detail')
+  // THE OWNER ASKED FOR THIS REPORT IN BOTH PLACES (2026-10-14): "On the daily closing dashboard and
+  // daily closing page I need report which store did not submit closing and which store got store
+  // cash picked". So the same shared component renders here as a fourth tab, driven by THIS page's
+  // filter bar, and on its own page as a Daily Closing tile. One report, two entrances.
+  const [tab, setTab] = useState<'detail' | 'store' | 'rep' | 'status'>('detail')
   const [readiness, setReadiness] = useState<any>(null)   // self-diagnostic (2026-07-16), best-effort
   // Anti-clobber: only the LATEST in-flight rollup request may land (a fast filter change used to let
   // a slower, stale response overwrite a newer one — the timeclock last-response-wins race class).
@@ -246,9 +251,9 @@ export default function ClosingDashboard() {
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-            {(['detail', 'store', 'rep'] as const).map(x => (
+            {(['detail', 'store', 'rep', 'status'] as const).map(x => (
               <button key={x} className={`btn ${tab === x ? 'btn-primary' : 'btn-secondary'}`} style={{ fontSize: 13 }} onClick={() => { setTab(x); if (x === 'detail') setDrill('all') }}>
-                {x === 'detail' ? '🧾 All submissions' : x === 'store' ? '🏬 By store' : '🧑 By rep'}
+                {x === 'detail' ? '🧾 All submissions' : x === 'store' ? '🏬 By store' : x === 'rep' ? '🧑 By rep' : '🔔 Not closed / cash not picked up'}
               </button>
             ))}
           </div>
@@ -261,7 +266,11 @@ export default function ClosingDashboard() {
             onScopedRows={onScopedRows} drill={drill} onClearDrill={() => setDrill('all')}
             hidden={tab !== 'detail'} />
 
-          {tab === 'detail' ? null : tab === 'store' ? (
+          {tab === 'status' && (
+            <ClosingPickupStatus filterValue={filt} onFilterChange={setFilt} showFilterBar={false} />
+          )}
+
+          {tab === 'detail' || tab === 'status' ? null : tab === 'store' ? (
             byStore.length === 0 ? (
               <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No closing rows for this range yet.</div>
             ) : (

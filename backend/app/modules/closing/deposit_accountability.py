@@ -519,6 +519,115 @@ def date_span(start, end):
 # Management Envelope Receipt (§47) — management counting the envelope and recording short/over.
 # Both facts are on every row either way, so if the owner means mgmt_confirmed by "management
 # review", it is a change of which cell shows it, never a change of what is read.
+# ── WAS THE STORE'S CASH COLLECTED? THE ONE HOME FOR THAT ANSWER ───────────────────────────────
+# OWNER ASK 2026-10-14, verbatim: *"On the daily closing dashboard and daily closing page I need
+# report which store did not submit closing and which store got store cash picked and another report
+# which cash did not get [picked up] - these can be in one report with 2 filters added picked and not
+# picked up - with all standard filters"*.
+#
+# THE CLASS, NOT THE INSTANCE. "This store's cash was picked up" was answerable on exactly one
+# screen — the DM's own cash-pickup action list — and only there because that screen builds the
+# ENVELOPE SPINE itself: a `daily_closing` row with cash left to collect (or an envelope photo) is an
+# envelope, and a `cash_pickup` row matched on (store, day, rep) says it was collected. The
+# five-stage chain next door asked the same question off the PICKUP TABLE alone, so a store-day with
+# $1,200 declared and nobody to collect it showed "no envelope recorded" — indistinguishable from a
+# store-day with no cash to collect at all. Two paths answering one question, and one of them unable
+# to see the money: the duplicate defect the index rules forbid.
+#
+# So the rule lives here, once, and both callers dereference it. It is PURE: the caller reads the
+# declared envelopes (through `envelope_report.declared_total_cash` + `envelope.net_row` — the one
+# homes for "how much cash does this row declare" and "what is left in it after approved expenses")
+# and hands them in.
+NOTHING_TO_COLLECT = "nothing_to_collect"
+NOT_PICKED_UP = "not_picked_up"
+PARTLY_PICKED_UP = "partly_picked_up"
+PICKED_UP = "picked_up"
+PICKUP_STATES = (NOTHING_TO_COLLECT, NOT_PICKED_UP, PARTLY_PICKED_UP, PICKED_UP)
+#: What a manager reads. No table, column or hosting name may appear here (index §19.38).
+PICKUP_LABELS = {
+    NOTHING_TO_COLLECT: "No cash to collect",
+    NOT_PICKED_UP: "Not picked up",
+    PARTLY_PICKED_UP: "Partly picked up",
+    PICKED_UP: "Picked up",
+}
+#: THE TWO FILTERS THE OWNER ASKED FOR, and what each one means — declared here so no screen and no
+#: endpoint decides it twice. A PARTLY-picked store-day answers "not picked up", because cash is
+#: still in that drawer; a day with nothing to collect answers NEITHER, because "nobody collected the
+#: nothing that was there" is not a gap anybody should be sent to chase (that store-day's real
+#: question is whether a closing was filed, which the closing filter answers).
+PICKUP_FILTERS = {
+    "picked": (PICKED_UP,),
+    "not_picked": (NOT_PICKED_UP, PARTLY_PICKED_UP),
+}
+
+
+def pickup_filter_states(choice):
+    """PURE: a filter choice -> the states it admits, or None for "no filter". Unknown choice is
+    None (no filter) rather than an empty set, the same blank-is-off contract the three standard
+    filter resolvers keep — a mistyped filter must never silently drop every row."""
+    return PICKUP_FILTERS.get(str(choice or "").strip().lower())
+
+
+def _who(v):
+    return str(v or "").strip().casefold()
+
+
+def cash_pickup_state(declared_envelopes, day_row):
+    """PURE: one store-day's DECLARED cash envelopes + its accountability day row -> whether the
+    store's cash was collected, and how much is still in the drawer.
+
+    `declared_envelopes` is [{employee_name, cash}] — one per rep closing that has cash to collect,
+    built by the caller from the one homes named above. `day_row` is this store-day's own
+    `day_accountability` row (or None when no pickup was ever recorded for it).
+
+    THE JOIN IS (store, day, rep) — the same key the cash-pickup screen matches a pickup row to an
+    envelope on, so a day where two reps filed and one envelope was collected reads PARTLY, never
+    PICKED. BILL-PAYMENT pickups are excluded by `kind`: the owner asked for STORE CASH, and the
+    bill-pay envelope is its own sibling flow with its own screen.
+
+    Money is reported on BOTH bases and neither is presented as the other: `declared_cash` is what
+    the reps declared, `collected_recorded` is what the DM's pickup rows actually carry. They can
+    legitimately differ (the mig-1039 bill-pay netting basis), so the verdict is decided by
+    ENVELOPE COUNTS, never by subtracting one basis from the other — which is how a netted day
+    would otherwise read as permanently short.
+    """
+    envs = list(declared_envelopes or [])
+    cash_envs = [e for e in ((day_row or {}).get("envelopes") or [])
+                 if str((e or {}).get("kind") or "cash").strip().lower() == "cash"]
+    collected = [e for e in cash_envs if (e or {}).get("state") != "unpicked"]
+    picked_who = {_who(e.get("employee_name")) for e in collected}
+
+    declared = picked = awaiting = 0.0
+    n_picked = 0
+    for e in envs:
+        amt = round(_f((e or {}).get("cash")), 2)
+        declared = round(declared + amt, 2)
+        if _who((e or {}).get("employee_name")) in picked_who:
+            n_picked += 1
+            picked = round(picked + amt, 2)
+        else:
+            awaiting = round(awaiting + amt, 2)
+
+    if not envs and not collected:
+        state = NOTHING_TO_COLLECT
+    elif not collected:
+        state = NOT_PICKED_UP
+    elif envs and n_picked < len(envs):
+        state = PARTLY_PICKED_UP
+    else:
+        # Every declared envelope was collected — or a pickup exists for a store-day whose closing
+        # declared no collectable cash at all, which is still money that moved and is still picked up.
+        state = PICKED_UP
+    return {
+        "state": state, "label": PICKUP_LABELS[state],
+        "picked_up": state == PICKED_UP,
+        "envelopes": len(envs), "envelopes_picked": n_picked,
+        "envelopes_collected": len(collected),
+        "declared_cash": declared, "picked_cash": picked, "awaiting_cash": awaiting,
+        "collected_recorded": round(_f(sum(_f(e.get("amount")) for e in collected)), 2),
+    }
+
+
 STAGE_KEYS = ("closing", "dm_verify", "pickup", "handover", "mgmt_review")
 STAGE_LABELS = {
     "closing": "Daily Closing",
@@ -557,7 +666,8 @@ def _max(a, b):
     return (a if a >= b else b) or None
 
 
-def stage_chain(expected_keys, closing_rows, verification_rows, day_rows, count_rows):
+def stage_chain(expected_keys, closing_rows, verification_rows, day_rows, count_rows,
+                attempt_rows=None, declared_envelopes=None):
     """PURE: → (rows, summary). One row per (store_code, day) with the five stage cells.
 
     `expected_keys` is the SPINE — an iterable of (store_code, day) from `expected_store_codes` ×
@@ -567,6 +677,16 @@ def stage_chain(expected_keys, closing_rows, verification_rows, day_rows, count_
     real thing to see, never silently dropped).
 
     `day_rows` are `day_accountability`'s own rows — pass them straight through.
+
+    `attempt_rows` are the range's `closing_attempt` rows. With them the closing stage stops saying
+    "no closing filed" for a store-day where a rep DID submit and the close gate sent them back to
+    recount — the state `unfinished_day` (index §29.12) already names, and the reason that module
+    exists. Omitted, the cell behaves exactly as it did before.
+
+    `declared_envelopes` is {(store_code, day): [{employee_name, cash}]} — the declared cash
+    envelopes of each store-day, from the caller's reads. With it the pickup stage carries the MONEY
+    (declared, collected, still in the drawer) and the picked/not-picked verdict, through
+    `cash_pickup_state`. Omitted, the cell behaves exactly as it did before.
     """
     chain = {}
 
@@ -574,7 +694,8 @@ def stage_chain(expected_keys, closing_rows, verification_rows, day_rows, count_
         k = (str(code or "").strip() or "?", str(day or "")[:10])
         if not k[1]:
             return None
-        return chain.setdefault(k, {"closing": [], "ver": None, "day": None, "counts": []})
+        return chain.setdefault(k, {"closing": [], "ver": None, "day": None, "counts": [],
+                                    "attempts": []})
 
     for code, day in expected_keys or []:
         slot(code, day)
@@ -595,15 +716,23 @@ def stage_chain(expected_keys, closing_rows, verification_rows, day_rows, count_
         s = slot((r or {}).get("store_code"), (r or {}).get("close_date"))
         if s is not None:
             s["counts"].append(r)
+    # A submit the gate turned back has NO closing row, so its store-day may not be in `chain` yet —
+    # `slot` creates it, which is the point: that store-day is exactly the one that used to read as
+    # "nobody submitted".
+    for r in attempt_rows or []:
+        s = slot((r or {}).get("store_code"), (r or {}).get("close_date"))
+        if s is not None:
+            s["attempts"].append(r)
 
     rows = []
     for (code, day), g in sorted(chain.items(), key=lambda kv: (kv[0][1], kv[0][0])):
-        rows.append(_chain_row(code, day, g))
+        rows.append(_chain_row(code, day, g, (declared_envelopes or {}).get((code, day))))
     return rows, chain_summary(rows)
 
 
-def _chain_row(code, day, g):
+def _chain_row(code, day, g, declared=None):
     crs, ver, dayr, cnts = g["closing"], g["ver"], g["day"], g["counts"]
+    atts = g.get("attempts") or []
 
     # 1. DAILY CLOSING — the rep's filing. `at` is the LATEST submission of the day: a store-day is
     #    not filed until its last rep has filed, and reporting the earliest would call a
@@ -611,8 +740,17 @@ def _chain_row(code, day, g):
     c_at = None
     for r in crs:
         c_at = _max(c_at, (r or {}).get("submitted_at") or (r or {}).get("created_at"))
+    # WHY THE DAY HAS NO CLOSING is NOT decided here — `unfinished_day.describe` is the one home for
+    # it (index §29.12) and this cell dereferences it. Without it, "the rep submitted twice and the
+    # gate sent them back to recount" rendered identically to "nobody came in", which are opposite
+    # operational facts: one needs a correction, the other needs a nag. `done` is unchanged (a
+    # closing row exists or it does not), so every existing reader of this cell is unaffected.
+    from . import unfinished_day as _ufd
+    _state = _ufd.describe(crs[0] if crs else None, atts)
     closing = _cell(bool(crs), c_at, _names((r or {}).get("employee_name") for r in crs),
-                    ("%d row(s)" % len(crs)) if crs else "no closing filed", rows=len(crs))
+                    ("%d row(s)" % len(crs)) if crs else _state["label"], rows=len(crs),
+                    state=_state["state"], state_label=_state["label"],
+                    tries=_state.get("tries") or 0, turned_away=_state.get("turned_away") or 0)
 
     # 2. DM VERIFIED — a verification row whose `verified` is truthy. A row that exists but is not
     #    verified is NOT done, and says so, rather than being counted by its mere existence.
@@ -630,10 +768,20 @@ def _chain_row(code, day, g):
     for e in picked:
         p_at = _max(p_at, e.get("picked_up_at"))
         pickers.append(e.get("picked_up_by"))
+    # THE MONEY, and the picked/not-picked verdict — from `cash_pickup_state`, the one home. The
+    # old detail line said "no envelope recorded" for a store-day with real declared cash and nobody
+    # to collect it; it now says which of the four states that store-day is in.
+    _cash = cash_pickup_state(declared, dayr)
     pickup = _cell(bool(picked) and not unpicked, p_at, _names(pickers),
                    ("%d of %d envelope(s) picked up" % (len(picked), len(envs))) if envs
-                   else "no envelope recorded",
-                   envelopes=len(envs), picked=len(picked), unpicked=len(unpicked))
+                   else _cash["label"],
+                   envelopes=len(envs), picked=len(picked), unpicked=len(unpicked),
+                   cash_state=_cash["state"], cash_label=_cash["label"],
+                   declared_cash=_cash["declared_cash"], picked_cash=_cash["picked_cash"],
+                   awaiting_cash=_cash["awaiting_cash"],
+                   collected_recorded=_cash["collected_recorded"],
+                   declared_envelopes=_cash["envelopes"],
+                   declared_envelopes_picked=_cash["envelopes_picked"])
 
     # A picked envelope is HANDED OVER once its disposition is recorded — deposited at the bank, or
     # handed to management. `undisposed` is precisely "the DM still holds it", which is the gap the
@@ -683,6 +831,14 @@ def _chain_row(code, day, g):
     stuck = next((k for k in STAGE_KEYS if not stages[k]["done"]), None)
     return {
         "store_code": code, "day": day,
+        # THE TWO ANSWERS THE OWNER ASKED FOR, promoted to the row so a report can filter and sort on
+        # them without reaching into a stage cell. Both are the stage cells' own values, dereferenced
+        # — not a second derivation.
+        "closing_state": closing["state"], "closing_label": closing["state_label"],
+        "closing_submitted": closing["done"],
+        "pickup_state": _cash["state"], "pickup_label": _cash["label"],
+        "cash_declared": _cash["declared_cash"], "cash_picked": _cash["picked_cash"],
+        "cash_awaiting": _cash["awaiting_cash"],
         "stages": [dict(stages[k], key=k, label=STAGE_LABELS[k]) for k in STAGE_KEYS],
         "stuck_at": stuck, "stuck_label": STAGE_LABELS.get(stuck) if stuck else None,
         "stages_done": sum(1 for k in STAGE_KEYS if stages[k]["done"]),
@@ -709,4 +865,29 @@ def chain_summary(rows):
         "by_stage": [by_stage[k] for k in STAGE_KEYS],
         "stuck_at": [{"key": k, "label": STAGE_LABELS[k], "store_days": stuck.get(k, 0)}
                      for k in STAGE_KEYS if stuck.get(k)],
+        # THE OWNER'S TWO QUESTIONS, counted (2026-10-14). Every state is a key even at zero, so a
+        # tile never renders blank for want of one; and the cash figures are summed over exactly the
+        # rows handed in, like every other count here.
+        "closing_states": [
+            {"key": k, "label": _cl_label(k),
+             "store_days": sum(1 for r in rows if r.get("closing_state") == k)}
+            for k in _closing_states()],
+        "pickup_states": [
+            {"key": k, "label": PICKUP_LABELS[k],
+             "store_days": sum(1 for r in rows if r.get("pickup_state") == k)}
+            for k in PICKUP_STATES],
+        "cash_declared": round(sum(_f(r.get("cash_declared")) for r in rows), 2),
+        "cash_picked": round(sum(_f(r.get("cash_picked")) for r in rows), 2),
+        "cash_awaiting": round(sum(_f(r.get("cash_awaiting")) for r in rows), 2),
     }
+
+
+def _closing_states():
+    """The closing-state vocabulary, from its own home — never re-spelled here."""
+    from . import unfinished_day as _ufd
+    return _ufd.STATES
+
+
+def _cl_label(key):
+    from . import unfinished_day as _ufd
+    return _ufd.LABELS.get(key, key)

@@ -117,6 +117,20 @@ def net_row(gross_cash, row_id, exp_by_row, wd_by_row) -> float:
     return round(out, 2)
 
 
+def is_collectable(closing_row, net_cash) -> bool:
+    """IS THERE AN ENVELOPE HERE TO COLLECT? — the one home for that predicate (owner ask 2026-10-14).
+
+    True when the row has cash left in it after netting, or an envelope photo (a photographed
+    envelope is a physical envelope somebody must collect even when its netted cash reads zero).
+
+    It was spelled inline on the cash-pickup screen and NOWHERE ELSE, which is why the
+    accountability chain beside it could not tell a store-day with $1,200 waiting from a store-day
+    with nothing to collect: it had no way to ask the question. Both dereference this now, and
+    `harness_accountability_chain.py` fails the build if a second copy of the rule appears.
+    """
+    return _f(net_cash) > 0 or bool((closing_row or {}).get("envelope_picture"))
+
+
 def net_store_day(gross_cash, store_code, close_date, exp_by_store_day, wd_by_store_day) -> float:
     """envelope_available aggregated for a (store, day) — the basis _bank_deposit_declared /
     cash_position use. exp_by_store_day / wd_by_store_day are the SUPERSET dicts from

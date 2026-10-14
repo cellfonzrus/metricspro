@@ -6568,7 +6568,11 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         # `create_row` zeroes the legacy columns — an invariant this screen was silently relying on.
         cash = envelope_report_mod.declared_total_cash(r)
         cash = _envelope.net_row(cash, r.get("id"), _exp_by_row, _wd_by_row)
-        if cash <= 0 and not r.get("envelope_picture"):
+        # "Is there an envelope here to collect" is ONE rule, and it now lives in
+        # `envelope.is_collectable` — dereferenced here and by the accountability chain's cash
+        # columns, so the DM's action list and the report cannot disagree about which store-days had
+        # cash waiting. Byte-identical to the inline test it replaces.
+        if not _envelope.is_collectable(r, cash):
             continue
         code = r.get("store_code") or ""
         meta = smeta.get(code, {})
@@ -8919,7 +8923,8 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
 
 @router.get("/accountability-chain")
 def accountability_chain(date: str = "", start: str = "", end: str = "", stores: str = "",
-                         market: str = "", stuck: str = "",
+                         market: str = "", markets: str = "", employees: str = "",
+                         stuck: str = "", pickup: str = "", closing: str = "",
                          authorization: str = Header(default=""), org_id: str = ORG_ID):
     """THE FIVE-STAGE ACCOUNTABILITY CHAIN over a date range (owner 2026-10-02): per (store, day),
     whether each of Daily Closing / DM verified / Cash pickup / Cash handover / Management review is
@@ -8931,6 +8936,26 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
     `expected_store_codes × date_span` — the same "which stores were expected to file" rule the
     cash-pickup screen's `not_closed` straggler list uses — because a store that filed nothing has no
     row to key on and can only be reported against a list of stores that should have filed.
+
+    WHO DID NOT CLOSE, AND WHOSE CASH IS STILL IN THE DRAWER (owner ask 2026-10-14): *"report which
+    store did not submit closing and which store got store cash picked and another report which cash
+    did not get [picked up] - these can be in one report with 2 filters added picked and not picked
+    up - with all standard filters"*. Both are this report's existing grain, and neither is a new
+    derivation:
+
+      · `closing=submitted|not_submitted` reads the closing stage's state, which dereferences
+        `unfinished_day.describe` — so "nobody submitted" stops covering for "a rep submitted and
+        the close gate sent them back", which is a correction to chase, not a nag.
+      · `pickup=picked|not_picked` reads `deposit_accountability.cash_pickup_state` over the
+        store-day's DECLARED envelopes (`envelope_report.declared_total_cash`, netted by
+        `envelope.net_row`, admitted by `envelope.is_collectable` — the same three one-homes the
+        cash-pickup screen rides) joined to the pickup rows on (store, day, rep). A partly-collected
+        store-day answers `not_picked`, because cash is still in that drawer.
+
+    ALL THREE STANDARD FILTERS now, each through its ONE resolver. A rep filter narrows to the
+    store-days that person actually worked and DROPS the empty-store spine, deliberately: "this store
+    filed nothing" is a fact about a store, not about a person, and leaving the spine in would accuse
+    a rep of not closing stores they were never in.
 
     Keyset-scoped like every closing report (a DM sees their own span). Pure math:
     `closing/deposit_accountability.stage_chain`; proof `backend/harness_accountability_chain.py`."""
@@ -8966,11 +8991,15 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
     # must not rebuild the set inline — a hand-rolled set is how the spellings diverged in the first
     # place). Both return None for "no filter", which every `if store_set and ...` below reads as off.
     store_set = _resolve_store_filter(stores)
-    market_set = _resolve_market_filter(market, None)
+    market_set = _resolve_market_filter(market, markets)
+    employee_set = _resolve_employee_filter(employees)
     expected = _da.expected_store_codes(
         store_rows, keyset_ok=(None if ks is None else (lambda c, a: in_keyset(ks, c, a))),
         store_set=store_set, market_set=market_set)
-    expected_keys = [(c, d) for d in days for c in expected]
+    # THE SPINE is every expected store × every day — which is what makes a store that filed nothing
+    # visible at all. A REP filter drops it (see the docstring): with one applied the report answers
+    # "which of this person's store-days are outstanding", and an empty store is not one of them.
+    expected_keys = [] if employee_set else [(c, d) for d in days for c in expected]
 
     def _range(schema, table, cols):
         try:
@@ -8981,12 +9010,49 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
             print(f"WARN accountability chain {table} unavailable: {e}")
             return []
 
-    closings = _range("commcalc", "daily_closing", "store_code,close_date,employee_name,submitted_at,created_at")
+    # THE MONEY COLUMNS need the drawer, so this read carries `envelope_report.CLOSING_SELECT` — the
+    # one declaration of "which daily_closing columns the cash math needs" — rather than a hand-
+    # written money column list, plus the two timestamps the closing stage already reported on.
+    closings = _range("commcalc", "daily_closing",
+                      envelope_report_mod.CLOSING_SELECT + ",submitted_at,created_at")
     vers = _range("commcalc", "daily_closing_verification", "store_code,close_date,verified,verified_by,verified_at,note")
     counts = _range("commcalc", "envelope_count", "store_code,close_date,counted_by,counted_at,status")
+    # The submit trail, so a store-day the close gate sent back is not reported as "nobody submitted"
+    # (index §29.12). A pre-mig-103 database without the table degrades to the old behaviour.
+    # `refused` is the column `submit_refusal.is_real_try` reads — selecting the code without it
+    # would make every turned-away submit read as a real try, which is the opposite of the fix.
+    attempts = _range("commcalc", "closing_attempt",
+                      "store_code,close_date,employee_name,attempt_no,created_at,refused,refusal_code")
     day_rows, _sum = _da.day_accountability(_accountability_pickup_rows(client, org_id, start, end))
 
-    rows, summary = _da.stage_chain(expected_keys, closings, vers, day_rows, counts)
+    # A REP FILTER narrows the rows the stages are built from, so every cell on screen describes that
+    # person's own work rather than their name sitting beside somebody else's money — the same
+    # posture the deposit-accountability board applies to its envelopes.
+    if employee_set:
+        def _is_emp(r):
+            return str((r or {}).get("employee_name") or "").strip().casefold() in employee_set
+        closings = [r for r in closings if _is_emp(r)]
+        attempts = [r for r in attempts if _is_emp(r)]
+
+    # THE DECLARED ENVELOPES of each store-day — what the pickup verdict is measured against. Built
+    # from the three one-homes the cash-pickup screen rides, never a fourth rule: the drawer
+    # (`declared_total_cash`), what is left in it after approved expenses and withdrawals
+    # (`net_row`), and whether that is an envelope at all (`is_collectable`).
+    _exp_by_row, _ = _envelope.approved_expense_totals(client, org_id, date_from=start, date_to=end)
+    _wd_by_row, _ = _envelope.withdrawal_totals(client, org_id, date_from=start, date_to=end)
+    declared_envelopes = {}
+    for r in closings:
+        _cash = _envelope.net_row(envelope_report_mod.declared_total_cash(r), r.get("id"),
+                                  _exp_by_row, _wd_by_row)
+        if not _envelope.is_collectable(r, _cash):
+            continue
+        _k = ((r.get("store_code") or "").strip() or "?", str(r.get("close_date") or "")[:10])
+        declared_envelopes.setdefault(_k, []).append(
+            {"employee_name": r.get("employee_name"), "cash": _cash})
+
+    rows, summary = _da.stage_chain(expected_keys, closings, vers, day_rows, counts,
+                                    attempt_rows=attempts,
+                                    declared_envelopes=declared_envelopes)
     # KEYSET + FILTERS applied to the FINAL rows too: a store-day can enter the chain by carrying an
     # artefact even when it is not in `expected` (an inactive store that filed anyway), and such a row
     # must still obey the viewer's span and the screen's filters before it is shown.
@@ -9006,6 +9072,17 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
     _stuck = {x.strip().lower() for x in stuck.split(",") if x.strip()}
     if _stuck:
         rows = [r for r in rows if str(r.get("stuck_at") or "").lower() in _stuck]
+    # THE OWNER'S TWO FILTERS. What each choice admits is declared in the pure module
+    # (`PICKUP_FILTERS`), so this endpoint and the screen cannot disagree about what "not picked up"
+    # means; an unknown choice is no filter at all, never an empty result.
+    _pick_states = _da.pickup_filter_states(pickup)
+    if _pick_states:
+        rows = [r for r in rows if r.get("pickup_state") in _pick_states]
+    _closing = str(closing or "").strip().lower()
+    if _closing == "submitted":
+        rows = [r for r in rows if r.get("closing_submitted")]
+    elif _closing == "not_submitted":
+        rows = [r for r in rows if not r.get("closing_submitted")]
     for r in rows:
         meta = smeta.get(r["store_code"], {})
         r["store_name"] = meta.get("address") or r["store_code"]
@@ -9082,6 +9159,16 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
             # The stage vocabulary, served from the pure module so the screen spells no stage key
             # and no stage label (the §47 basis-selector posture).
             "stages": _da.stage_catalog(),
+            # The two filter vocabularies, served from the pure module so the screen spells neither
+            # a state key nor a state label of its own (the §47 basis-selector posture).
+            "pickup_states": [{"key": k, "label": _da.PICKUP_LABELS[k]} for k in _da.PICKUP_STATES],
+            "pickup_filters": [{"key": k, "states": list(v)} for k, v in _da.PICKUP_FILTERS.items()],
+            # What was actually applied, so the screen can state its own filters rather than assume.
+            "filters": {"stores": sorted(store_set) if store_set else [],
+                        "markets": sorted(market_set) if market_set else [],
+                        "employees": sorted(employee_set) if employee_set else [],
+                        "pickup": pickup or None, "closing": closing or None,
+                        "spine": not bool(employee_set)},
             "stores_expected": len(expected)}
 
 
