@@ -20306,6 +20306,12 @@ reason `_vendor_public` now carries a server-resolved `transport` block (`kind`,
 `has_customer_rule`, `customer_errors`), and `frontend/src/lib/supply.ts` documents that the screen
 READS it rather than re-reading `portal_config`.
 
+The route count pinned by `harness_db_resilience.py` §I0 moved **1788 -> 1787**, and this is the
+first pin in that file taken on a REMOVAL. Verified the house way before re-pinning: a clean
+worktree of `origin/main` (4b6734a) reported 1788 / 138 passed, this tree reported 1787, and the
+`@router.` diff is 2 removed / 1 added — the +1/-1 pair is `.../catalog/read` moving within the
+file, leaving one net removal. A count coming back HIGHER than the pin is still a failure.
+
 Locked by `harness_order_transport.py` **§J** (9 checks): exactly one catalog-read endpoint, it is
 async, it dereferences `transport_for`, it names the route, the sibling spelling is gone, the vendor
 payload carries the resolved route, and no `.ts`/`.tsx` file reads `order_transport` itself. Each has
