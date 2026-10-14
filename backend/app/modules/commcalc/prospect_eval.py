@@ -1126,6 +1126,199 @@ def expense_bookings(matrix, route_expense_line):
     return out
 
 
+# ── WHAT THE SELLER DECLARES, PER STORE (owner ask 2026-10-14, §COMMCALC-03.26) ──────────────────
+# Verbatim: *"add a line for accessories sales as declared by seller to include in gorss profit and
+# then calculate the net income, the cell sould be able to fill in manually and include the rent cell
+# also for each store, if the rent is declared then the suystem will automaticalluy subtract our avg
+# rent from the expenses if the rent is nto declared then it will keep our average as a part of the
+# expense or the bettwe rway is to create a cell with ouer rent and if it is diff then it can vbe
+# user overwritten"*. The owner named both designs and chose the second, so the rent cell OPENS on
+# our own average and an entered figure replaces it.
+#
+# TWO FACTS THE UPLOADED FEEDS CANNOT CARRY, and they are different kinds of unknowable:
+#   · ACCESSORY SALES — no carrier feed records them, because the carrier does not sell the case.
+#     Until now the report could only say what accessory revenue the site WOULD NEED
+#     (`accessory_break_even`); a seller's declaration is the only measurement that exists.
+#   · THIS SITE'S RENT — a fact about the address, known before the deal, where every other expense
+#     line is the average of what OUR stores spend (§COMMCALC-03.6).
+#
+# THE DUPLICATE CHECK, and it changed the design twice:
+#   · `apply_rent_override` ALREADY replaces an averaged rent with an entered one, splits it across
+#     several declared rent lines and reports the average it displaced. So the per-store cell is that
+#     SAME function applied per column — not a second substitution. It is applied ONCE to the
+#     averaged matrix per column, NEVER chained onto an already-overridden matrix, because a second
+#     pass would record the first override as the "average it replaced" and the screen would then
+#     claim our stores pay the prospect's rent.
+#   · ACCESSORY COST was NOT invented here. `coa` has carried `accessory_rev` and `accessory_cost`
+#     lines and an `accessory_cogs_pct` since mig 611 — a per-org rate the owner himself set to 20%
+#     on 2026-06-20 — so a declared sale books its cost at the ORG'S OWN declared rate, read through
+#     that one home and injected. Booking the declaration as revenue with no cost would have shown a
+#     gross profit the store has never earned, and inventing a second rate here would have been the
+#     divergence the index rules forbid.
+#
+# WHAT ADDS ACROSS THE COLUMNS AND WHAT DOES NOT, kept exactly as §COMMCALC-03.19 set it: a declared
+# accessory sale is the STORE'S OWN money, so it sums to the whole-prospect column (revenue ties, and
+# §N holds that). Rent is an EXPENSE, and every column already carries one whole store's expense on
+# purpose, so a per-store rent changes that column alone.
+# THE TWO CELLS, named once. The endpoint, the table and the harness all read this tuple, so a third
+# cell is added in one place or not at all.
+DECLARED_INPUT_COLUMNS = ("declared_accessory_sales", "declared_rent_monthly")
+DECLARED_ACCESSORY_LINE = "accessory_rev"       # = coa.PL_SPEC's revenue line, never a new line
+DECLARED_ACCESSORY_COST_LINE = "accessory_cost"
+DECLARED_ACCESSORY_LABEL = "Accessory sales declared by the seller"
+DECLARED_ACCESSORY_COST_LABEL = "Accessory cost on the declared sales"
+# WHY A DECLARATION IS NOT A MEASUREMENT, said on the screen rather than implied by a number that
+# looks like every other number on the row.
+DECLARED_BASIS = (
+    "a figure the SELLER states, not one any uploaded feed measures - no carrier feed records an "
+    "accessory sale. It is entered per store and per month, its cost is taken at the rate this "
+    "organisation itself declares for accessories, and both halves are shown so the declaration can "
+    "be argued with rather than trusted")
+RENT_CELL_BASIS = (
+    "the cell opens on the average monthly rent OUR OWN stores pay, which is what this evaluation "
+    "charges a site that has declared nothing. Typing this address's real rent replaces that average "
+    "for this store only - and the average it displaced stays on the row, so the two can be compared")
+
+
+def store_declared_inputs(rows):
+    """PURE: `prospect_store_input` rows -> {store_key: {accessory_sales, rent}}.
+
+    A blank cell is None (NOT 0.00) and stays None: "the seller declared nothing" and "the seller
+    declared zero accessory sales" are different claims, and only the second may book a zero. The
+    last row wins for a repeated key, which the table's own unique constraint already prevents."""
+    out = {}
+    for r in rows or []:
+        r = r or {}
+        key = str(r.get("store_key") or "").strip()
+        if not key:
+            continue
+        acc = r.get("declared_accessory_sales")
+        rent = r.get("declared_rent_monthly")
+        out[key] = {
+            "accessory_sales": (round(safe_float(acc), 2) if acc is not None else None),
+            "rent": (round(safe_float(rent), 2) if rent is not None else None),
+        }
+    return out
+
+
+def declared_accessory_bookings(sales, cogs_pct):
+    """PURE: a declared monthly accessory sale -> [(line, amount, label), ...] for `add_booking`.
+
+    `cogs_pct` is the ORG'S `coa` accessory rate, injected (house 0.20, owner-set 2026-06-20) - this
+    function holds no rate of its own. None/blank declaration books NOTHING; a declared 0.00 also
+    books nothing, because a zero line and an absent line read identically on a statement and the
+    difference is carried by `declared` on the payload instead."""
+    amt = round(safe_float(sales), 2)
+    if not amt:
+        return []
+    pct = safe_float(cogs_pct)
+    pct = pct if 0 <= pct <= 1 else 0.0
+    cost = round(amt * pct, 2)
+    out = [(DECLARED_ACCESSORY_LINE, amt, DECLARED_ACCESSORY_LABEL)]
+    if cost:
+        out.append((DECLARED_ACCESSORY_COST_LINE, cost, DECLARED_ACCESSORY_COST_LABEL))
+    return out
+
+
+def declared_meta(sales, cogs_pct, rent, rent_meta=None):
+    """PURE: what the screen prints beside the two cells - the declaration, its cost, the gross
+    profit it adds, and whether each cell is a declaration or our average."""
+    amt = round(safe_float(sales), 2) if sales is not None else None
+    pct = safe_float(cogs_pct)
+    pct = pct if 0 <= pct <= 1 else 0.0
+    cost = round((amt or 0.0) * pct, 2)
+    rm = rent_meta or {}
+    return {
+        "accessory_sales": amt,
+        "accessory_declared": sales is not None,
+        "accessory_cogs_pct": pct,
+        "accessory_cost": (cost if amt else None),
+        "accessory_gross_profit": (round(amt - cost, 2) if amt else None),
+        "accessory_basis": DECLARED_BASIS,
+        "rent_entered": (round(safe_float(rent), 2) if rent is not None else None),
+        # BOTH HALVES, deliberately: the flag says a rent was DECLARED for this store, so it needs
+        # the entered figure as well as a meta that applied it. Reading the meta alone let a column
+        # that declared nothing inherit the whole-prospect override's `applied` and claim a
+        # declaration it never carried.
+        "rent_declared": bool(rent is not None and rm.get("applied")),
+        "rent_reason": rm.get("reason"),
+        "rent_lines": list(rm.get("rent_lines") or []),
+        "rent_our_average": rm.get("replaced_average"),
+        "rent_basis": RENT_CELL_BASIS,
+    }
+
+
+# ── THE MONTH-OF-LIFE LEGS, M1 AND M2-M12 (owner report 2026-10-14, §COMMCALC-03.27) ─────────────
+# Verbatim: *"also i cant see the m2-m12 commision line"*. The money was never missing - $39,704.49
+# of it in the live prospect's September, measured - but all of it sat inside ONE `carrier_comm` line
+# with the legs only in its drill-down detail, so nothing on the report named them.
+#
+# IT MATTERS MORE HERE THAN ANYWHERE ELSE ON THE PLATFORM: M2-M12 is money owed on lines ALREADY SOLD
+# before the takeover. It keeps arriving for a while after the keys change hands and then stops. A
+# buyer who reads the total as recurring revenue is overpaying, and 97% of that September figure
+# ($38,451.50) is trailing-leg money.
+#
+# NOTHING IS DERIVED HERE. `ma_store_pnl.ma_earned_month_ladder` and `ma_received_month_ladder` are
+# the platform's two ladder one-homes; they are injected and called with the PROSPECT's rows and the
+# PROSPECT's org config, exactly as every other booking home in this file is. `commission_legs` owns
+# which rung is the first month and which is trailing, and `commission_ledger.LEG_LABELS` owns what
+# the two buckets are CALLED - this function asks all three and adds nothing of its own.
+def commission_leg_ladder(earned, received, m1_month=None, leg_labels=None, ladder_key=None,
+                          ladder_sort_key=None):
+    """PURE: the two injected ladders -> the rungs and the M1 / M2-M12 split, ready to render.
+
+    `earned` / `received` are `ma_*_month_ladder` payloads. Both are always reported: the sheet says
+    what was EARNED in the activation month, the cash rows say what was RECEIVED, and for a takeover
+    the two answer different questions (what the book is worth vs what is landing now). A basis with
+    no rows is reported as having none, never folded into the other.
+
+    The unknown rung keeps its own name. A commission sheet that states no month-of-life cannot be
+    read as a first month, and reading it as one is what would make a trailing book look fresh."""
+    m1 = int(m1_month or 1)
+    labels = dict(leg_labels or {})
+    out = {}
+    for basis, lad in (("earned", earned), ("received", received)):
+        lad = lad or {}
+        months = {}
+        for k, v in (lad.get("months") or {}).items():
+            amt = round(safe_float(v), 2)
+            if amt:
+                months[str(k)] = amt
+        buckets = {"m1": 0.0, "trailing": 0.0, "unsplit": 0.0}
+        for k, amt in months.items():
+            try:
+                n = int(k)
+            except (TypeError, ValueError):
+                buckets["unsplit"] = round(buckets["unsplit"] + amt, 2)
+                continue
+            key = "m1" if n == m1 else ("trailing" if n > m1 else "unsplit")
+            buckets[key] = round(buckets[key] + amt, 2)
+        rungs = sorted(months, key=ladder_sort_key) if ladder_sort_key else sorted(months)
+        out[basis] = {
+            "basis": lad.get("basis"),
+            "basis_label": lad.get("basis_label"),
+            "months": months,
+            "rungs": rungs,
+            "buckets": buckets,
+            "bucket_labels": {k: labels.get(k, k) for k in ("m1", "trailing", "unsplit")},
+            "total": round(sum(months.values()), 2),
+            "measured": bool(months),
+        }
+    tot = out["received"]["total"] or out["earned"]["total"]
+    trail = (out["received"]["buckets"]["trailing"] if out["received"]["measured"]
+             else out["earned"]["buckets"]["trailing"])
+    out["trailing_total"] = round(trail, 2)
+    out["trailing_share"] = (round(trail / tot, 4) if tot else None)
+    out["reading"] = (
+        "M2-M12 is commission owed on lines that were already sold before the takeover. It keeps "
+        "arriving for a while after the keys change hands and then stops, so it is not recurring "
+        "revenue and a price built on the total overpays for it."
+        if trail else
+        "No trailing-leg commission is measured in this month, so every commission dollar here is "
+        "first-month money on lines sold in the month itself.")
+    return out
+
+
 # ── THE STATEMENT ─────────────────────────────────────────────────────────────────────────────────
 
 def empty_inputs(spec):
@@ -1360,17 +1553,20 @@ def coverage_summary(cov):
             "feeds carry: activation commission and month spiffs, the airtime merchant discount "
             "and the airtime residual, market-development money, fees and consumer financing — "
             "each booked by the company's own P&L code under this organisation's own declared "
-            "rules (see the booking switches). It does NOT include retail device or accessory "
-            "sales, bill-pay fees or any other counter income, because a store we do not operate "
-            "gives us no point-of-sale feed. So read the result as the carrier side's contribution "
-            "against a typical store's costs, not as the prospect's net income."),
+            "rules (see the booking switches). It does NOT include retail device sales, bill-pay "
+            "fees or any other counter income, because a store we do not operate gives us no "
+            "point-of-sale feed — accessory sales appear ONLY where the seller has declared them in "
+            "the per-store cell, and are marked as a declaration rather than a measurement. So read "
+            "the result as the carrier side's contribution against a typical store's costs, plus "
+            "whatever the seller has declared, not as the prospect's measured net income."),
     }
 
 
 # ── THE EVALUATION ────────────────────────────────────────────────────────────────────────────────
 
 def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None,
-             exclusion_mode=HOUSE_EXCLUSION_MODE):
+             exclusion_mode=HOUSE_EXCLUSION_MODE, store_inputs=None, prospect_rent=None,
+             accessory_cogs_pct=None):
     """PURE: one prospect month → the whole evaluation, under BOTH exclusion modes.
 
     `feeds`  {feed_key: [rows]} — prospect rows in the live tables' own column shape.
@@ -1380,7 +1576,17 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
                  ma_commission_bookings, ma_tx_bookings, ma_unit_price_from_rows,
                  ma_sold_cost_from_rows, route_expense_line, spec, pl_section,
                  ma_pnl_config, ma_cfg
-    `expense_matrix` the rent-overridden average matrix (`apply_rent_override`'s first return).
+    `expense_matrix` the AVERAGED expense matrix, BEFORE any rent override. The override is applied
+             here, once per column (`apply_rent_override`), so a store's own declared rent replaces
+             our average for that column alone and nothing is ever overridden twice — see the
+             §COMMCALC-03.26 section comment for why a chained second pass misreports our average.
+    `rent_meta` ignored, and kept only so an older caller does not break; the rent metadata this
+             function RETURNS is the one the screen reads.
+    `store_inputs` `store_declared_inputs()`'s output — what the seller declared, per store.
+    `prospect_rent` the whole-prospect rent (`store_prospect.actual_rent_monthly`), used for the
+             whole-prospect column, which has no single address.
+    `accessory_cogs_pct` the ORG'S accessory cost rate from `coa` (mig 611), injected, never held
+             here.
 
     BOTH modes are always computed. The owner asked for a sub-report that takes the flagged phones
     out "or leaves them", and a toggle that recomputes one of them would mean the two numbers never
@@ -1402,15 +1608,28 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
     drop_ids, drop_imeis = flagged_line_ids(flagged), flagged_imeis(flagged)
 
     price = homes["ma_unit_price_from_rows"](ful_rows)
-    exp_bookings = expense_bookings(expense_matrix or {}, homes["route_expense_line"])
+    # THE RENT, RESOLVED ONCE PER COLUMN off the AVERAGED matrix. `_exp_for` is the only place a
+    # column's expense bookings are built, so the whole-prospect column and a store column cannot be
+    # costed by two different routines, and neither can be overridden twice.
+    avg_matrix = {k: dict(v) for k, v in (expense_matrix or {}).items()}
+    rent_names = cfg.get("rent_expense_names") or ()
+
+    def _exp_for(rent):
+        mtx, meta = apply_rent_override(avg_matrix, rent_names, rent)
+        return expense_bookings(mtx, homes["route_expense_line"]), mtx, meta
+
+    exp_bookings, expense_matrix, rent_meta = _exp_for(prospect_rent)
     exp_lines = {line for line, _amt, _lbl in exp_bookings}
+    declared = store_declared_inputs(store_inputs) if isinstance(store_inputs, (list, tuple)) \
+        else dict(store_inputs or {})
+    acc_pct = safe_float(accessory_cogs_pct)
 
     # ONE BOOKING PATH, used for the whole prospect and for each of its stores. Factored out when the
     # per-store columns were added (owner ask 2026-10-13): a second loop over a store's own rows is
     # how the columns would stop summing to the total, which is the only thing that makes a per-store
     # view trustworthy. `expenses` is passed in because our average expense matrix is a WHOLE-PROSPECT
     # figure — see `store_scenarios` for why a store's column carries no share of it.
-    def _book(mode, c_rows, t_rows, f_rows, expenses):
+    def _book(mode, c_rows, t_rows, f_rows, expenses, declared_sales=None):
         kept, dropped = split_rows(c_rows, drop_ids if mode == "exclude" else ())
         inputs = empty_inputs(homes["spec"])
         booked = set()
@@ -1434,6 +1653,12 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
             booked.add("device_cost")
         for line, amt, label in expenses:
             add_booking(inputs, line, amt, label, homes.get("accrue_detail"))
+        # WHAT THE SELLER DECLARED. Booked LAST and through the same `add_booking` every other
+        # dollar takes, so a declaration lands on coa's own accessory lines and flows into gross
+        # profit and net income by the statement's own arithmetic rather than by an adjustment.
+        for line, amt, label in declared_accessory_bookings(declared_sales, acc_pct):
+            add_booking(inputs, line, amt, label, homes.get("accrue_detail"))
+            booked.add(line)
         cov = coverage(homes["spec"], homes["pl_section"], booked,
                        {l for l, _a, _lb in expenses}, feeds_present)
         return {
@@ -1449,7 +1674,18 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
             "measured_lines": sorted(booked | {l for l, _a, _lb in expenses}),
         }
 
-    scenarios = {mode: _book(mode, comm_rows, tx_rows, ful_rows, exp_bookings)
+    # THE WHOLE-PROSPECT COLUMN carries the SUM of the per-store declarations, because a declared
+    # accessory sale is the store's own money and revenue ties across the columns (§N holds that).
+    # Only declarations for a store the uploads actually name are summed; a key naming no column is
+    # REPORTED below rather than silently added to a total nobody can drill into.
+    stores = store_index(feeds, homes["account_store_index"]) if homes.get(
+        "account_store_index") else {}
+    declared_known = {k: v for k, v in declared.items() if k in stores}
+    declared_unknown = sorted(k for k in declared if k not in stores)
+    declared_total = round(sum(safe_float(v.get("accessory_sales"))
+                               for v in declared_known.values()
+                               if v.get("accessory_sales") is not None), 2) or None
+    scenarios = {mode: _book(mode, comm_rows, tx_rows, ful_rows, exp_bookings, declared_total)
                  for mode in EXCLUSION_MODES}
 
     # ── THE COLUMNS, one per store the uploads name ────────────────────────────────────────────────
@@ -1472,20 +1708,39 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
     # own money. `expenses_included` and `expenses_basis` say which it is on every column, the screen
     # prints it, and `harness_prospect_eval.py` §N holds BOTH halves: the lines that must tie still
     # tie, and the two that must not are asserted not to.
-    stores = store_index(feeds, homes["account_store_index"]) if homes.get(
-        "account_store_index") else {}
     split = rows_by_store(feeds, set(stores)) if stores else {}
     store_scenarios = {}
     for key, per in sorted(split.items()):
+        dec = declared.get(key) or {}
+        # THIS SITE'S OWN RENT, or our average when the seller has declared none. The override runs
+        # off `avg_matrix` every time, never off the whole-prospect column's already-overridden one.
+        st_rent = dec.get("rent")
+        st_exp, st_matrix, st_rent_meta = (_exp_for(st_rent) if st_rent is not None
+                                           else (exp_bookings, expense_matrix, rent_meta))
         store_scenarios[key] = {
             "store": stores.get(key) or {"account": None, "address": None, "name": None,
                                          "label": key, "has_address": False,
                                          "feeds": sorted(k for k, v in per.items() if v)},
             "expenses_included": True,
             "expenses_basis": STORE_EXPENSE_BASIS,
+            "declared": declared_meta(dec.get("accessory_sales"), acc_pct, st_rent, st_rent_meta),
+            "expenses": {"matrix": st_matrix or {}, "rent": st_rent_meta or {}},
+            # THE LEGS FOR THIS SITE, through the same two injected ladder homes the whole prospect
+            # uses — so a column's trailing share and the total's cannot be built two ways.
+            "commission_legs": (commission_leg_ladder(
+                homes["ma_earned_month_ladder"](per.get("ma_commission") or [],
+                                                homes.get("ma_cfg")),
+                homes["ma_received_month_ladder"](per.get("ma_daily_tx") or [],
+                                                  homes.get("ma_pnl_config"),
+                                                  homes.get("ma_cfg")),
+                m1_month=homes.get("leg_m1_month"), leg_labels=homes.get("leg_labels"),
+                ladder_sort_key=homes.get("ladder_sort_key"))
+                if homes.get("ma_earned_month_ladder") and homes.get("ma_received_month_ladder")
+                else None),
             "scenarios": {mode: _book(mode, per.get("ma_commission") or [],
                                       per.get("ma_daily_tx") or [],
-                                      per.get("ma_marketplace_orders") or [], exp_bookings)
+                                      per.get("ma_marketplace_orders") or [], st_exp,
+                                      dec.get("accessory_sales"))
                           for mode in EXCLUSION_MODES},
         }
     return {
@@ -1500,8 +1755,36 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
                        "flagged_line_ids": sorted(drop_ids),
                        "flagged_imeis": sorted(drop_imeis)},
         "expenses": {"matrix": expense_matrix or {}, "rent": rent_meta or {},
+                     "average_matrix": avg_matrix,
                      "bookings": [{"line": l, "amount": a, "label": lb}
                                   for l, a, lb in exp_bookings]},
+        # WHAT THE SELLER DECLARED, and what nobody has declared yet — both named. A store with no
+        # declaration is listed so the screen can show an empty cell that invites one, rather than
+        # the reader having to notice an absence.
+        "declared": {
+            "by_store": {k: declared_meta(v.get("accessory_sales"), acc_pct, v.get("rent"))
+                         for k, v in sorted(declared_known.items())},
+            "accessory_total": declared_total,
+            "accessory_cogs_pct": (acc_pct if 0 <= acc_pct <= 1 else 0.0),
+            "stores_declaring": sorted(k for k, v in declared_known.items()
+                                       if v.get("accessory_sales") is not None),
+            "stores_without_declaration": sorted(k for k in stores
+                                                 if (declared.get(k) or {}).get(
+                                                     "accessory_sales") is None),
+            "keys_naming_no_store": declared_unknown,
+            "accessory_basis": DECLARED_BASIS,
+            "rent_basis": RENT_CELL_BASIS,
+        },
+        # M1 vs M2-M12, through the two ladder one-homes (§COMMCALC-03.27). Absent homes degrade to
+        # "not measured" rather than to a zero that reads like a measurement.
+        "commission_legs": (commission_leg_ladder(
+            homes["ma_earned_month_ladder"](comm_rows, homes.get("ma_cfg")),
+            homes["ma_received_month_ladder"](tx_rows, homes.get("ma_pnl_config"),
+                                              homes.get("ma_cfg")),
+            m1_month=homes.get("leg_m1_month"), leg_labels=homes.get("leg_labels"),
+            ladder_sort_key=homes.get("ladder_sort_key"))
+            if homes.get("ma_earned_month_ladder") and homes.get("ma_received_month_ladder")
+            else None),
         "default_mode": exclusion_mode if exclusion_mode in EXCLUSION_MODES else HOUSE_EXCLUSION_MODE,
         "scenarios": scenarios,
         "stores": stores,

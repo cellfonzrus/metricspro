@@ -237,6 +237,17 @@ interface Evaluation {
   break_even?: Record<string, BreakEven>
   rule_basis?: RuleBasis
   our_stores?: OurStores
+  declared?: {
+    by_store: Record<string, Declared>
+    accessory_total: number | null
+    accessory_cogs_pct: number
+    stores_declaring: string[]
+    stores_without_declaration: string[]
+    keys_naming_no_store: string[]
+    accessory_basis: string
+    rent_basis: string
+  }
+  commission_legs?: CommissionLegs | null
   error?: string
 }
 // ── COMPARE IT WITH A STORE WE ALREADY OWN (owner ask 2026-10-14) ───────────────────────────────
@@ -270,6 +281,46 @@ interface BreakEven {
   basis: string
   per_activation_basis: string
 }
+// ── WHAT THE SELLER DECLARED, PER STORE (owner ask 2026-10-14) ──────────────────────────────────
+// Two figures no carrier feed can carry: this site's accessory sales and this site's rent. Both are
+// DECLARATIONS, and the screen says so rather than letting them sit among the measured numbers
+// looking the same. `rent_our_average` is what our own stores pay, which is what the column charges
+// when nothing is declared — so the cell opens on it and an entered figure replaces it.
+interface Declared {
+  accessory_sales: number | null
+  accessory_declared: boolean
+  accessory_cogs_pct: number
+  accessory_cost: number | null
+  accessory_gross_profit: number | null
+  accessory_basis: string
+  rent_entered: number | null
+  rent_declared: boolean
+  rent_reason: string | null
+  rent_lines: string[]
+  rent_our_average: number | null
+  rent_basis: string
+}
+// ── M1 AND M2–M12 (owner report 2026-10-14: "i cant see the m2-m12 commision line") ─────────────
+// The month-of-life ladder on both bases: what the commission sheet says was EARNED in the
+// activation month, and what the daily-transaction rows say was RECEIVED as cash. For a takeover
+// these answer different questions — what the book is worth against what is landing now.
+interface LegLadder {
+  basis: string | null
+  basis_label: string | null
+  months: Record<string, number>
+  rungs: string[]
+  buckets: { m1: number; trailing: number; unsplit: number }
+  bucket_labels: Record<string, string>
+  total: number
+  measured: boolean
+}
+interface CommissionLegs {
+  earned: LegLadder
+  received: LegLadder
+  trailing_total: number
+  trailing_share: number | null
+  reading: string
+}
 interface StoreBlock {
   store: ProspectStore
   expenses_included: boolean
@@ -277,6 +328,8 @@ interface StoreBlock {
   statements?: Record<string, Statement>
   delta?: Delta
   break_even?: Record<string, BreakEven>
+  declared?: Declared
+  commission_legs?: CommissionLegs | null
 }
 interface HandsetModel { model: string; orders: number; units: number; cost: number; unit_price_low: number; unit_price_high: number }
 interface HandsetStore { store: string; account: string | null; orders: number; units: number; cost: number }
@@ -550,6 +603,98 @@ function comparisonCols(ours: OurStores,
          + 'closest thing to a like-for-like answer to \u201ccould that site stand on its own\u201d.' },
   ]
 }
+// ── THE TWO CELLS THE SELLER FILLS IN (owner ask 2026-10-14, §COMMCALC-03.26) ───────────────────
+// Verbatim: *"the cell sould be able to fill in manually and include the rent cell also for each
+// store ... or the bettwe rway is to create a cell with ouer rent and if it is diff then it can vbe
+// user overwritten"*. The owner named two designs for the rent and picked the second, so the rent
+// cell OPENS ON OUR OWN AVERAGE and typing over it replaces that average for this store only.
+//
+// A CELL THAT REMEMBERS ITS OWN VALUE IS A CELL THAT CAN LIE. The input shows the draft only while
+// somebody is typing in it; the moment it is saved the draft is dropped and the cell renders the
+// figure the SERVER returned, which is the same figure the P&L above was built from. That is why
+// `onSave` reloads rather than patching local state.
+//
+// AN EMPTY BOX IS NOT A ZERO. Clearing the accessory cell means the seller has declared nothing and
+// the line disappears from the statement; typing 0 is a CLAIM that this counter sells no
+// accessories, and is charged as one. Same for the rent: cleared goes back to our average, 0 says
+// this site pays no rent. The two tips say so, because the difference is invisible otherwise.
+function declaredCols(pct: number,
+                      draft: Record<string, string>,
+                      onDraft: (key: string, value: string) => void,
+                      onSave: (key: string, field: 'declared_accessory_sales' | 'declared_rent_monthly',
+                               value: string) => void,
+                      busy: boolean): ExportColumn[] {
+  const cell = (r: StoreRow, field: 'declared_accessory_sales' | 'declared_rent_monthly',
+                saved: number | null, placeholder: string) => {
+    const dk = `${r.key}|${field}`
+    const shown = draft[dk] !== undefined ? draft[dk] : (saved === null ? '' : String(saved))
+    return (
+      <input value={shown} inputMode="decimal" disabled={busy}
+             aria-label={`${placeholder} for ${r.label}`}
+             placeholder={placeholder}
+             onChange={e => onDraft(dk, e.target.value)}
+             onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+             onBlur={() => {
+               if (draft[dk] === undefined) return
+               const was = saved === null ? '' : String(saved)
+               if (draft[dk].trim() === was.trim()) { onDraft(dk, undefined as unknown as string); return }
+               onSave(r.key, field, draft[dk])
+             }}
+             style={{ fontSize: 11, padding: '2px 4px', width: 92, textAlign: 'right' }} />
+    )
+  }
+  return [
+    {
+      header: 'Accessory sales declared by seller',
+      field: 'declared_accessory_sales',
+      get: (r: StoreRow) => r.declared?.accessory_sales ?? null,
+      money: true, agg: 'none',
+      render: (r: StoreRow) => cell(r, 'declared_accessory_sales',
+                                    r.declared?.accessory_sales ?? null, 'per month'),
+      tip: 'Type what the seller says this counter takes in accessories each month, and press Enter. '
+         + 'No carrier feed records an accessory sale, so this is the only measurement of it that '
+         + `exists — it is a DECLARATION, not something we have verified. Its cost is taken at ${Math.round(pct * 100)}% `
+         + '(the accessory cost rate this company itself has set), and the revenue, the cost and the '
+         + 'gross profit it adds are all shown so the figure can be argued with. An empty box means '
+         + 'the seller has declared nothing; typing 0 is a claim that this counter sells nothing.',
+    },
+    { header: 'Cost on the declared sales', get: (r: StoreRow) => r.declared?.accessory_cost ?? null,
+      money: true, agg: 'none',
+      tip: `The declared sales at this company's own accessory cost rate of ${Math.round(pct * 100)}%. It books to `
+         + 'the cost-of-goods line, so the gross profit on the left already has it taken off.' },
+    { header: 'Gross profit on accessories', get: (r: StoreRow) => r.declared?.accessory_gross_profit ?? null,
+      money: true, agg: 'none',
+      tip: 'The declared sales less that cost — what the declaration adds to this store\u2019s gross '
+         + 'profit, and through it to the bottom line and to the accessories the store still has to sell.' },
+    {
+      header: 'Rent for this store',
+      field: 'declared_rent_monthly',
+      get: (r: StoreRow) => (r.declared?.rent_entered ?? r.declared?.rent_our_average ?? null),
+      money: true, agg: 'none',
+      render: (r: StoreRow) => cell(r, 'declared_rent_monthly',
+                                    r.declared?.rent_entered ?? null,
+                                    r.declared?.rent_our_average !== null
+                                      && r.declared?.rent_our_average !== undefined
+                                      ? String(r.declared.rent_our_average) : 'per month'),
+      tip: 'This box opens on the average monthly rent OUR OWN stores pay, which is what this '
+         + 'evaluation charges a site that has declared nothing. Type this address\u2019s real rent '
+         + 'and press Enter and it replaces that average for this store only — the expenses, the '
+         + 'bottom line and the accessory target on this row all move with it. Clear the box to go '
+         + 'back to our average.',
+    },
+    { header: 'Rent basis', get: (r: StoreRow) => (r.declared?.rent_declared ? 'Declared' : 'Our average'),
+      agg: 'none',
+      tip: 'Whether the rent charged on this row is the figure somebody typed for this address, or '
+         + 'the average of what our own stores pay. A row reading "Our average" has not been priced '
+         + 'on its own lease.' },
+    { header: 'Of which M2\u2013M12', get: (r: StoreRow) => r.trailing,
+      money: true, agg: 'none',
+      tip: 'How much of this store\u2019s commission is trailing-leg money — owed on lines that were '
+         + 'already sold before the takeover. It keeps arriving for a while after the keys change '
+         + 'hands and then stops, so it is not recurring revenue and a price built on the total '
+         + 'overpays for it.' },
+  ]
+}
 const STORE_COLS: ExportColumn[] = [
   { header: 'Store', get: (r: StoreRow) => r.label },
   { header: 'Account', get: (r: StoreRow) => r.account || '—' },
@@ -604,6 +749,11 @@ interface StoreRow {
   label: string; account: string | null; revenue: number; cogs: number; grossProfit: number
   contribution: number
   activations: number; needed: number | null; perBox: number | null
+  // THE TWO DECLARED CELLS, carried on the row so the editable columns read the SERVER's saved
+  // figure rather than a copy the screen keeps — a cell that remembers its own value is a cell that
+  // can disagree with the P&L built from it.
+  declared: Declared | null
+  trailing: number | null
 }
 // ── WHOSE RULES BOOKED THIS (owner report 2026-10-14) ───────────────────────────────────────────
 // The evaluation books through the company's own P&L code, and now under THIS organisation's own
@@ -810,6 +960,9 @@ export default function StoreTakeoverPage() {
   const scenario: Scenario | null = data?.scenarios?.[shownMode] || null
   const statement: Statement | null = data?.statements?.[shownMode] || null
   const breakEven: BreakEven | null = data?.break_even?.[shownMode] || null
+  // THE MONTH-OF-LIFE LEGS for the whole prospect. Null when the server could not read the two
+  // ladder one-homes, which is reported as not measured rather than as a zero.
+  const legs: CommissionLegs | null = data?.commission_legs || null
   const handsets: HandsetOrders | null = data?.handset_orders || null
   const fraud: FraudExposure | null = data?.fraud || null
   const delta: Delta | null = data?.delta || null
@@ -958,6 +1111,8 @@ export default function StoreTakeoverPage() {
         activations: b.scenarios?.[shownMode]?.activations ?? 0,
         needed: be?.needed ?? null,
         perBox: be?.per_activation ?? null,
+        declared: b.declared || null,
+        trailing: b.commission_legs?.trailing_total ?? null,
       }
     }).sort((a, b) => (b.contribution || 0) - (a.contribution || 0))
   }, [data?.store_scenarios, shownMode, storeFilter])
@@ -985,11 +1140,6 @@ export default function StoreTakeoverPage() {
   // The column list is rebuilt when a pick changes because the cells close over the picks. It stays
   // a useMemo all the same: a NEW array on every render re-mounts the table and the open dropdown
   // would close under the pointer.
-  const storeColumns = useMemo<ExportColumn[]>(
-    () => (ours && ours.comparable
-           ? [...STORE_COLS, ...comparisonCols(ours, peerPick, pickPeer)]
-           : STORE_COLS),
-    [ours, peerPick, pickPeer])
 
   // The columns ARE the stores, in the order the store index names them, with the whole prospect
   // last. Built with useMemo because a column list that is rebuilt every render re-mounts the table.
@@ -1090,6 +1240,45 @@ export default function StoreTakeoverPage() {
       return null
     } finally { setBusy('') }
   }, [loadList, load])
+
+  // DEFINED AFTER `save` DELIBERATELY: the dependency array of a useCallback is evaluated the
+  // moment the component renders, so a hook up above that listed `save` would read it before its
+  // own `const` had initialised and throw on the first paint.
+  // ── THE TWO DECLARED CELLS (owner ask 2026-10-14) ────────────────────────────────────────────
+  // The draft holds ONLY what is being typed right now. On save it is dropped and the cell goes back
+  // to rendering the server's figure, which is the one the P&L above was built from — so a cell can
+  // never show a number the statement does not carry.
+  const [cellDraft, setCellDraft] = useState<Record<string, string>>({})
+  const onCellDraft = useCallback((key: string, value: string) => {
+    setCellDraft(prev => {
+      const next = { ...prev }
+      if (value === undefined) delete next[key]
+      else next[key] = value
+      return next
+    })
+  }, [])
+  const saveCell = useCallback(async (storeKey: string,
+                                      field: 'declared_accessory_sales' | 'declared_rent_monthly',
+                                      value: string) => {
+    if (!pid) return
+    // A BLANK CLEARS, it does not zero. null means "the seller has declared nothing": the column
+    // goes back to our average rent and books no accessory revenue, which is a different claim from
+    // a declared 0.00 and is stored differently.
+    const body: Record<string, unknown> = { store_key: storeKey }
+    body[field] = value.trim() === '' ? null : value.trim()
+    setCellDraft(prev => {
+      const next = { ...prev }
+      delete next[`${storeKey}|${field}`]
+      return next
+    })
+    await save(`/prospects/${pid}/store-inputs${orgParam1()}`, body, 'PUT')
+  }, [pid, save])
+  const declaredPct = data?.declared?.accessory_cogs_pct ?? 0
+  const storeColumns = useMemo<ExportColumn[]>(
+    () => [...STORE_COLS,
+           ...declaredCols(declaredPct, cellDraft, onCellDraft, saveCell, busy !== ''),
+           ...(ours && ours.comparable ? comparisonCols(ours, peerPick, pickPeer) : [])],
+    [declaredPct, cellDraft, onCellDraft, saveCell, busy, ours, peerPick, pickPeer])
 
   const uploadFeed = useCallback(async (feedKey: string, file: File) => {
     setBusy(feedKey); setMsg(null)
@@ -1589,6 +1778,73 @@ export default function StoreTakeoverPage() {
                            recorded it.</>} />
           </div>
         </>}
+
+      {/* ── M1 AND M2–M12 (owner report 2026-10-14: "i cant see the m2-m12 commision line") ─── */}
+      {/* The money was never missing — it sat inside one commission line with the legs only in its
+          drill-down. It matters more on a takeover than anywhere else on the platform, because
+          M2–M12 is owed on lines that were SOLD BEFORE the keys change hands: it keeps arriving for
+          a while and then stops, so a price built on the total overpays for it. */}
+      {pid && !loading && legs &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            First month and M2&ndash;M12
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+            {legs.reading}
+          </div>
+          {(['received', 'earned'] as const).map(basis => {
+            const lad = legs[basis]
+            if (!lad) return null
+            return (
+              <div key={basis} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  {basis === 'received' ? 'Cash received this month' : 'Earned in the activation month'}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>
+                  {lad.basis_label || basis}
+                </div>
+                {!lad.measured
+                  ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                      Nothing is measured on this basis for this month &mdash; the feed it reads
+                      carries no month-of-life for any row. That is an absence, not a zero.
+                    </div>
+                  : <>
+                      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                        {(['m1', 'trailing', 'unsplit'] as const).map(b => (
+                          (b === 'unsplit' && !lad.buckets.unsplit) ? null :
+                          <div key={b}>
+                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                              {lad.bucket_labels[b] || b}
+                            </div>
+                            <div style={{ fontSize: 15 }}>{money(lad.buckets[b])}</div>
+                          </div>
+                        ))}
+                        <div style={{ borderLeft: '1px solid var(--line)', paddingLeft: 20 }}>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>Total</div>
+                          <div style={{ fontSize: 15, fontWeight: 700 }}>{money(lad.total)}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8 }}>
+                        {lad.rungs.map(k => (
+                          <div key={k} style={{ fontSize: 11 }}>
+                            <span style={{ color: 'var(--text3)' }}>
+                              {k === 'unknown' ? 'Unlabelled' : `M${k}`}{' '}
+                            </span>
+                            <b>{money(lad.months[k])}</b>
+                          </div>
+                        ))}
+                      </div>
+                    </>}
+              </div>
+            )
+          })}
+          {legs.trailing_share !== null &&
+            <div style={{ fontSize: 12, marginTop: 4 }}>
+              <b>{Math.round((legs.trailing_share || 0) * 1000) / 10}%</b> of this month&rsquo;s
+              commission is trailing-leg money, {money(legs.trailing_total)} of it. Read that part as
+              a wasting asset with a tail, not as revenue the site will keep earning.
+            </div>}
+        </div>}
 
       {/* ── WHAT THE COUNTER HAS TO SELL (owner ask 2026-10-13) ──────────────────────────────── */}
       {pid && !loading && statement && breakEven &&

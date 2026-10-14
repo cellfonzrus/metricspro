@@ -27160,6 +27160,104 @@ Same class: §COMMCALC-03.7 (what the evaluation cannot answer, said out loud), 
 count is not a measure of what a file answered), §19.36 (the one home for a setup notice).
 
 
+### COMMCALC-03.26 WHAT THE SELLER DECLARES: ACCESSORY SALES AND THIS SITE'S RENT (owner ask 2026-10-14)
+
+**Migration:** `1083_prospect_store_declared_input.sql` (one new table, `commcalc.prospect_store_input`;
+moves no money). **Endpoint:** `PUT /commcalc/prospects/{id}/store-inputs`.
+
+Owner, verbatim: *"add a line for accessories sales asa declared by seller to include in gorss profit
+and then calculate the net income, the cell sould be able to fill in manually and include the rent cell
+also for each store, if the rent is declared then the suystem will automaticalluy subtract our avg rent
+from the expenses if the rent is nto declared then it will keep our average as a part of the expense or
+the bettwe rway is to create a cell with ouer rent and if it is diff then it can vbe user overwritten"*
+— two designs named for the rent, and he chose the second, so **the rent cell opens on OUR OWN average
+and typing over it replaces that average for that store alone**.
+
+| question | one home |
+|---|---|
+| what has the seller declared for this store | `commcalc/prospect_eval.store_declared_inputs` |
+| what does a declared accessory sale book | `commcalc/prospect_eval.declared_accessory_bookings` |
+| what do the two cells print beside themselves | `commcalc/prospect_eval.declared_meta` |
+| what does an entered rent replace | `commcalc/prospect_eval.apply_rent_override` (§COMMCALC-03.6, unchanged) |
+| what does accessory revenue cost | `account/coa._account_config['accessory_cogs_pct']` (mig 611) |
+
+**THE DUPLICATE CHECK CHANGED THE DESIGN TWICE, and that is the whole value of this section.**
+
+1. **The rent substitution already existed** and was NOT rewritten. `apply_rent_override` has replaced
+   an averaged rent with an entered one since §COMMCALC-03.6, splits it across several declared rent
+   lines and reports the average it displaced. The per-store cell is that same function, applied
+   **ONCE PER COLUMN** off the averaged matrix. `evaluate` now owns that application (`_exp_for`) and
+   the router no longer overrides the rent before calling it.
+   **NEVER CHAIN IT.** A second override over an already-overridden matrix records the FIRST override
+   as `replaced_average`, and the screen then tells the reader our own stores pay the prospect's rent.
+   §X5 is the CONTROL that proves the chained form misreports (9,000 instead of 4,200) and §X6 holds
+   that exactly two `apply_rent_override(` spellings exist in the module: the definition and one call.
+2. **The accessory cost rate was not invented.** `coa.PL_SPEC` has carried `accessory_rev` and
+   `accessory_cost` all along, and `account_config.accessory_cogs_pct` (mig 611) is the rate **the
+   owner himself set to 20% on 2026-06-20**. A declared sale books its cost at the ORG'S rate, read
+   through that one home and injected into the pure function. Booking the declaration as revenue with
+   no cost would have shown a gross profit the store has never earned; a second rate here would have
+   been the divergence the index rules forbid. §X2 fails the build if a literal rate appears.
+
+**THE VOCABULARY ALREADY NAMED THE HOLE.** Both lines were already listed in
+`prospect_eval.NEEDS_POS_FEED` — the map of P&L lines that need a point-of-sale feed a store we do not
+operate will never give us. The seller's declaration is the only measurement of that hole that exists,
+so it is **stored as a declaration and rendered as one** (§X4).
+
+**NULL IS NOT ZERO, and the two are kept apart end to end.** A cleared cell means the seller has
+declared nothing: the column charges our average rent and books no accessory line. A declared `0.00`
+is a CLAIM — this site pays no rent, or this counter sells nothing — and is charged as one. The screen
+sends `null` for a blank and never `0` (§X19), `store_declared_inputs` keeps `None` as `None` (§X1),
+and `rent_declared` needs BOTH an entered figure and an applied override, so a column that declared
+nothing cannot inherit the whole-prospect override's `applied` and claim a declaration (§X7).
+
+**WHAT ADDS ACROSS THE COLUMNS, unchanged from §COMMCALC-03.19.** A declared accessory sale is the
+store's own money, so it sums to the whole-prospect column and **revenue still ties** (§X25). Rent is
+an expense, and every column already carries one whole store's expense on purpose, so a per-store rent
+moves that column alone (§X23). A declaration keyed to a store the uploads do not name is **reported by
+name** rather than added to a total nobody can drill into (§X26), and a store with no declaration is
+named too, so an empty cell reads as an invitation (§X27).
+
+**MEASURED END TO END** (`harness_prospect_eval.py` §X21–X28, DB-free): a declared $5,000 at 20% moves
+revenue +$5,000, cost of goods +$1,000, gross profit +$4,000 and the bottom line +$4,000, and drops the
+accessory break-even target by exactly that $4,000 — through the statement's own arithmetic, never an
+adjustment. With no declarations the evaluation is byte-identical to what it was before this ask (§X28).
+
+### COMMCALC-03.27 FIRST MONTH AND M2–M12, NAMED (owner report 2026-10-14)
+
+Owner, verbatim: *"also i cant see the m2-m12 commision line"*. No migration, no new column.
+
+| question | one home |
+|---|---|
+| what did the commission sheet say was EARNED, by month-of-life | `account/ma_store_pnl.ma_earned_month_ladder` |
+| what did the cash rows say was RECEIVED, by month-of-life | `account/ma_store_pnl.ma_received_month_ladder` |
+| which rung is the first month and which is trailing | `commcalc/commission_legs.bucket_for_leg` |
+| what are the two buckets CALLED | `commcalc/commission_ledger.LEG_LABELS` |
+| in what order do the rungs read | `commcalc/commission_legs.ladder_sort_key` |
+| the prospect's view of all five | `commcalc/prospect_eval.commission_leg_ladder` |
+
+**The money was never missing.** It sat inside one `carrier_comm` line with the legs only in that
+line's drill-down detail, so nothing on the report named them. **Measured on the live prospect's
+September 2026: $39,704.49 of month-spiff cash, of which $38,451.50 — 97% — is M2–M6.**
+
+**WHY IT MATTERS MORE HERE THAN ANYWHERE ELSE ON THE PLATFORM.** M2–M12 is commission owed on lines
+that were **already sold before the takeover**. It keeps arriving for a while after the keys change
+hands and then stops, so it is not recurring revenue, and a price built on the commission total
+overpays for it. The card and the per-store column both say so in those words.
+
+**NOTHING IS DERIVED HERE.** `commission_leg_ladder` is handed the two ladder payloads and the three
+vocabulary answers; it parses no label, slices no `M`-prefix off a detail string and calls neither
+month parser (§X15 fails the build on `re.search`, `startswith("M")`, `[1:].isdigit()`,
+`month_leg_of` or `parse_payment_month` appearing in it). A rung the feed does not carry is not
+invented — there is no `range(1, 13)` and no max-month config (§X12).
+
+**BOTH BASES ARE ALWAYS REPORTED, and an absent one says so.** The sheet answers what was earned in
+the activation month; the cash rows answer what landed. For a takeover those are different questions
+(what the book is worth against what is arriving now), so neither is folded into the other, and a
+basis with no rows reads as **not measured** rather than as a measured zero (§X14). A commission sheet
+that states no month-of-life keeps the rung **Unlabelled** and is never read as a first month (§X13) —
+reading a trailing book as fresh is precisely the error that would overprice a deal.
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back

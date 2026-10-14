@@ -48612,6 +48612,7 @@ def _prospect_homes(client, org_id):
     again."""
     from app.modules.account import (ma_store_pnl as _msp, device_cogs as _dcg, coa as _coa,
                                      residual_subs as _rsub)
+    from app.modules.commcalc import commission_ledger as _cled, commission_legs as _clegs
     return {
         "ma_commission_bookings": _msp.ma_commission_bookings,
         "ma_tx_bookings": _msp.ma_tx_bookings,
@@ -48632,6 +48633,18 @@ def _prospect_homes(client, org_id):
         #
         # …and the (column, migration) pair lists the loaders themselves own, so `rule_basis`
         # can say which switch is a decision and which is a fallback without keeping a copy.
+        # M1 vs M2-M12 (§COMMCALC-03.27). The two LADDER one-homes, injected PURE, plus the two
+        # modules that own what a rung is CALLED — so the prospect report cannot hold a second
+        # answer to "which month-of-life is this dollar".
+        "ma_earned_month_ladder": _msp.ma_earned_month_ladder,
+        "ma_received_month_ladder": _msp.ma_received_month_ladder,
+        "leg_labels": dict(_cled.LEG_LABELS),
+        "leg_m1_month": _clegs.DEFAULT_CFG.get("m1_month"),
+        "ladder_sort_key": _clegs.ladder_sort_key,
+        # THE ORG'S OWN ACCESSORY COST RATE (coa, mig 611 — house 0.20, owner-set 2026-06-20). The
+        # seller's declared accessory sale books its cost at THIS rate; §COMMCALC-03.26 never holds
+        # a rate of its own.
+        "accessory_cogs_pct": _coa._account_config(client, org_id).get("accessory_cogs_pct"),
         "house_ma_cfg": _msp.default_config(),
         "house_ma_pnl_config": _rsub.default_ma_pnl_config(),
         "pl_config_columns": tuple(_msp.PL_CONFIG_COLUMNS) + tuple(_rsub.MA_PNL_CONFIG_COLUMNS),
@@ -48641,6 +48654,66 @@ def _prospect_homes(client, org_id):
 
 PROSPECT_PL_SECTIONS = [("Revenue", "revenue"), ("Cost of Goods Sold", "cogs"),
                         ("Operating Expenses", "opex"), ("Other", "other")]
+
+
+# ── THE SELLER'S PER-STORE DECLARATIONS (§COMMCALC-03.26, mig 1083) ──────────────────────────────
+def _prospect_store_inputs(client, org_id, prospect_id):
+    """I/O: the prospect's per-store declared cells, org-scoped. NEVER raises — a tree without mig
+    1083 degrades to no declarations, which is exactly the pre-ask behaviour (our average rent, no
+    accessory revenue), so the report cannot be taken down by a missing migration."""
+    try:
+        return (client.schema("commcalc").table("prospect_store_input")
+                .select("store_key,declared_accessory_sales,declared_rent_monthly")
+                .eq("org_id", org_id).eq("prospect_id", prospect_id)
+                .limit(2000).execute().data) or []
+    except Exception as e:
+        print(f"WARN prospect_store_input unavailable: {e}")
+        return []
+
+
+class ProspectStoreInputIn(LaxModel):
+    # `Any = None` and `LaxModel`, matching `ProspectIn` above: None means NOT ENTERED and a figure
+    # arriving as a string from a text box is still a figure. `_prospect_num` is the one home that
+    # tells "declared zero" from "nobody has declared anything".
+    store_key: str = ""
+    declared_accessory_sales: Any = None
+    declared_rent_monthly: Any = None
+
+
+@router.put("/prospects/{prospect_id}/store-inputs")
+def set_prospect_store_input(prospect_id: str, body: ProspectStoreInputIn, org_id: str = ORG_ID,
+                             authorization: str = Header(default="")):
+    """Save (or clear) one store's declared accessory sales and declared rent.
+
+    A field the body does NOT carry is left alone; a field carried as null is CLEARED. That is the
+    same contract `update_prospect` already honours for the prospect's own rent, and it is what lets
+    a screen send one cell without blanking the other one somebody just typed.
+
+    Clearing the rent is not the same as entering zero: cleared means "the seller has declared
+    nothing", so the column goes back to charging our own average, while a declared 0.00 is a claim
+    that this site pays no rent and is charged as such."""
+    require_org(org_id)
+    client = sb()
+    _prospect_row(client, org_id, prospect_id)
+    key = (body.store_key or "").strip()
+    if not key:
+        raise HTTPException(400, "store_key is required — it names which store column the cell is on.")
+    sent = (body.model_dump(exclude_unset=True) if hasattr(body, "model_dump")
+            else body.dict(exclude_unset=True))
+    patch = {}
+    for col in _pev.DECLARED_INPUT_COLUMNS:
+        if col in sent:
+            patch[col] = _prospect_num(getattr(body, col))
+    if not patch:
+        return {"store_key": key, "changed": []}
+    row = dict(patch, org_id=org_id, prospect_id=prospect_id, store_key=key,
+               updated_at=column_mapping.now_iso())
+    try:
+        (client.schema("commcalc").table("prospect_store_input")
+         .upsert(row, on_conflict="prospect_id,store_key").execute())
+    except Exception as e:
+        raise HTTPException(500, f"store input save failed: {type(e).__name__}: {e}")
+    return {"store_key": key, "changed": sorted(patch), "saved": patch}
 
 
 @router.get("/prospects/{prospect_id}/evaluation")
@@ -48698,12 +48771,17 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     except Exception as e:
         raise HTTPException(500, f"prospect feed read failed: {type(e).__name__}: {e}")
     matrix, months, exp_notes = _prospect_expense_window(client, org_id, cfg, period)
-    matrix, rent_meta = _pev.apply_rent_override(
-        matrix, cfg["rent_expense_names"], prospect.get("actual_rent_monthly"))
-
+    # THE RENT IS NO LONGER OVERRIDDEN HERE (§COMMCALC-03.26). `evaluate` applies
+    # `apply_rent_override` once per column, off this AVERAGED matrix, because a store that declares
+    # its own rent must not inherit the whole-prospect override — and a second pass over an
+    # already-overridden matrix would record the first override as the average it displaced.
     homes = _prospect_homes(client, org_id)
     mode = (prospect.get("exclusion_mode") or _pev.HOUSE_EXCLUSION_MODE)
-    ev = _pev.evaluate(feeds, cfg, homes, matrix, rent_meta, period, mode)
+    store_inputs = _prospect_store_inputs(client, org_id, prospect_id)
+    ev = _pev.evaluate(feeds, cfg, homes, matrix, None, period, mode,
+                       store_inputs=store_inputs,
+                       prospect_rent=prospect.get("actual_rent_monthly"),
+                       accessory_cogs_pct=homes.get("accessory_cogs_pct"))
     ev["expenses"]["window"] = exp_notes
     ev["expenses"]["months"] = months
 
