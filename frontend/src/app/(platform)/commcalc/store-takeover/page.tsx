@@ -3,6 +3,14 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, apiUpload, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import StandardFilterBar from '@/components/StandardFilterBar'
+// `filterRows` is deliberately NOT imported: it matches ONE store value per row, and this page's
+// two store-keyed shapes do not have one — a flagged account can name several processor accounts,
+// and the sections are keyed by store KEY rather than by the label a selection carries. `storeFilter`
+// below is the page's single place for that, and it resolves key, label and account off one store
+// record so the sections cannot disagree.
+import { emptyStandardFilter, isStandardFilterActive,
+         type StandardFilterValue } from '@/lib/standard-filters'
 import { SetupNotice } from '@/lib/setupNotice'
 
 // STORE TAKEOVER EVALUATION — owner directive 2026-10-12: *"need to make a module for evaluating the
@@ -61,6 +69,15 @@ interface FlaggedAccount {
   same_processor_account: boolean
   devices: FlaggedDevice[]
   line_ids: string[]
+}
+interface MonthRow extends MultiLineSummary { period: string }
+interface MultiLineByMonth {
+  threshold: number
+  months: number
+  periods: string[]
+  by_month: MonthRow[]
+  totals: MultiLineSummary
+  flagged: FlaggedAccount[]
 }
 interface MultiLineSummary {
   threshold: number
@@ -157,6 +174,7 @@ interface Evaluation {
   rows_by_feed?: Record<string, number>
   period_basis?: { period?: string; basis?: string; from_feed?: string | null; months_available?: string[] }
   multi_line?: { summary: MultiLineSummary; flagged: FlaggedAccount[]; flagged_line_ids: string[]; flagged_imeis: string[] }
+  multi_line_by_month?: MultiLineByMonth
   expenses?: { matrix: Record<string, ExpenseCell>; rent: RentMeta; months?: string[]; window?: ExpenseWindow }
   default_mode?: string
   scenarios?: Record<string, Scenario>
@@ -342,6 +360,27 @@ interface StoreRow {
   label: string; account: string | null; revenue: number; cogs: number; contribution: number
   activations: number; needed: number | null; perBox: number | null
 }
+// ── EVERY MONTH, AT THE BOTTOM (owner ask 2026-10-13: "the accounts which are 2 more summarized at
+// the bottom for each month with the drill down"). One row per uploaded month, computed by the server
+// from the SAME grouping the month report above uses — the month on screen is one row of this table,
+// and the backend harness fails the build if the two ever disagree.
+const MONTH_COLS: ExportColumn[] = [
+  { header: 'Month', get: (r: MonthRow) => r.period },
+  { header: 'Accounts over the threshold', get: (r: MonthRow) => r.flagged_accounts, align: 'right' },
+  { header: 'Lines on them', get: (r: MonthRow) => r.flagged_lines, align: 'right' },
+  // A MAXIMUM AND A SHARE DO NOT ADD. Without `agg: 'none'` the total row would sum twelve months of
+  // "worst account" into a number no account ever carried, and sum twelve percentages past 100.
+  { header: 'Worst single account', get: (r: MonthRow) => r.max_lines_on_one_account, align: 'right',
+    agg: 'none' },
+  { header: 'Accounts in the month', get: (r: MonthRow) => r.accounts, align: 'right' },
+  { header: 'Lines in the month', get: (r: MonthRow) => r.lines, align: 'right' },
+  {
+    header: 'Share of accounts flagged',
+    get: (r: MonthRow) => (r.accounts ? `${((r.flagged_accounts / r.accounts) * 100).toFixed(1)}%` : '—'),
+    align: 'right', agg: 'none',
+  },
+  { header: 'Lines with no account', get: (r: MonthRow) => r.lines_with_no_account, align: 'right' },
+]
 const EXP_COLS: ExportColumn[] = [
   { header: 'Expense line', get: (r: ExpenseCell) => r.expense_name },
   { header: 'Booked', get: (r: ExpenseCell) => r.amount, money: true },
@@ -361,9 +400,17 @@ const EXP_COLS: ExportColumn[] = [
 export default function StoreTakeoverPage() {
   const [list, setList] = useState<ProspectList | null>(null)
   const [pid, setPid] = useState('')
-  const [period, setPeriod] = useState('')
-  // The sub-report's filters. Deliberately NOT in the URL or stored: a filtered view that came back
-  // tomorrow and hid rows somebody never chose to hide is how a list stops being trusted.
+  // THE STANDARD FILTERS, at the top of the page and applying across it (owner ask 2026-10-13: "all
+  // standard filters on top of the page so they run all across"). The platform's shared bar owns them
+  // — <StandardFilterBar> over a StandardFilterValue (RULE FIVE, §3d) — so this page gets the same
+  // month and store controls, the same pick-don't-type behaviour and the same Clear as every other
+  // report, and never a filter bar of its own. The MONTH is the one the server query runs on; the
+  // STORES narrow every section whose rows name a store, and the page says where they do not reach.
+  const [sf, setSf] = useState<StandardFilterValue>(emptyStandardFilter())
+  const period = sf.period || ''
+  // The module-specific filters, appended to the bar rather than replacing any of the core set.
+  // Deliberately NOT in the URL or stored: a filtered view that came back tomorrow and hid rows
+  // somebody never chose to hide is how a list stops being trusted.
   const [fMinLines, setFMinLines] = useState('')
   const [fSameDay, setFSameDay] = useState(false)
   const [fAddALine, setFAddALine] = useState(false)
@@ -375,6 +422,7 @@ export default function StoreTakeoverPage() {
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [newName, setNewName] = useState('')
+  const [openMonth, setOpenMonth] = useState('')   // the month whose accounts are drilled into
   const [rentDraft, setRentDraft] = useState('')
   // The prospect whose stored rent is in `rentDraft`. Compared rather than ignored, so a reload of
   // the same prospect never overwrites a figure the user is halfway through typing.
@@ -428,6 +476,59 @@ export default function StoreTakeoverPage() {
   const flagged: FlaggedAccount[] = useMemo(
     () => data?.multi_line?.flagged || [], [data])
 
+  // ── WHAT THE STORE FILTER ADMITS — decided ONCE, read by every section that names a store ──────
+  // One home for the page's own filter, because a matrix showing three stores beside a store table
+  // showing five is worse than no filter at all. The option id is the store KEY (unique by
+  // construction); the label and the processor account come off the same store record, so a section
+  // keyed by address and a section keyed by account number narrow to the same stores.
+  const storeOptions = useMemo(() => {
+    const blocks = data?.store_scenarios || {}
+    return Object.keys(blocks)
+      .map(k => ({ id: k, label: blocks[k].store?.label || k,
+                   sublabel: blocks[k].store?.account || undefined }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [data?.store_scenarios])
+  const storeFilter = useMemo(() => {
+    const blocks = data?.store_scenarios || {}
+    if (!sf.stores.length) return null
+    const keys = new Set<string>(), labels = new Set<string>(), accounts = new Set<string>()
+    for (const k of sf.stores) {
+      keys.add(k)
+      const st = blocks[k]?.store
+      if (st?.label) labels.add(String(st.label))
+      if (st?.account) accounts.add(String(st.account))
+    }
+    return { keys, labels, accounts }
+  }, [data?.store_scenarios, sf.stores])
+  const filtering = isStandardFilterActive(sf)
+  // EVERY MONTH THE UPLOAD COVERS, not just the one on screen. The rows are the server's own, so the
+  // month the report is showing IS one of these rows. The MONTH filter deliberately does not narrow
+  // this table: comparing the months is the entire question it answers, and a one-row comparison
+  // answers nothing. The STORE filter does not narrow it either — an account's lines can sit on more
+  // than one processor account, so a per-store count of them would be a figure nobody could tie back.
+  // Both exclusions are stated under the table rather than left for somebody to discover.
+  const monthRows = useMemo<MonthRow[]>(
+    () => data?.multi_line_by_month?.by_month || [], [data?.multi_line_by_month])
+  const monthTotals: Partial<MultiLineSummary> = data?.multi_line_by_month?.totals || {}
+  // THE DRILL-DOWN: the accounts of the opened month, from the SAME flagged list the table counted —
+  // every account carries its own month, so this is a slice and never a second read. The page's own
+  // account/device/line filters apply here, as they do to the month report's list.
+  const drilled = useMemo<FlaggedAccount[]>(() => {
+    if (!openMonth) return []
+    const min = Number(fMinLines) || 0
+    const needle = fDevice.trim().toLowerCase()
+    const acct = fAccount.trim().toLowerCase()
+    return (data?.multi_line_by_month?.flagged || []).filter(r =>
+      r.period === openMonth
+      && (!min || (r.lines || 0) >= min)
+      && (!fSameDay || !!r.same_day)
+      && (!fAddALine || (r.add_a_lines || 0) > 0)
+      && (!acct || String(r.account_key || '').toLowerCase().includes(acct))
+      && (!needle || (r.devices || []).some(d =>
+        String(d.sku || '').toLowerCase().includes(needle)
+        || (d.imeis || []).some(i => String(i).toLowerCase().includes(needle)))))
+  }, [data?.multi_line_by_month, openMonth, fMinLines, fSameDay, fAddALine, fAccount, fDevice])
+
   // FILTERS ON THE SUB-REPORT (owner ask 2026-10-12: "need the filters also"). They narrow the LIST
   // only — never the P&L, and never the keep-vs-exclude figures above it. Those two numbers are what
   // the flagged accounts are worth in total, and a number that silently followed a filter would
@@ -437,14 +538,15 @@ export default function StoreTakeoverPage() {
     const needle = fDevice.trim().toLowerCase()
     const acct = fAccount.trim().toLowerCase()
     return flagged.filter(r =>
-      (!min || (r.lines || 0) >= min)
+      (!storeFilter || (r.processor_accounts || []).some(a => storeFilter.accounts.has(String(a))))
+      && (!min || (r.lines || 0) >= min)
       && (!fSameDay || !!r.same_day)
       && (!fAddALine || (r.add_a_lines || 0) > 0)
       && (!acct || String(r.account_key || '').toLowerCase().includes(acct))
       && (!needle || (r.devices || []).some(d =>
         String(d.sku || '').toLowerCase().includes(needle)
         || (d.imeis || []).some(i => String(i).toLowerCase().includes(needle)))))
-  }, [flagged, fMinLines, fSameDay, fAddALine, fAccount, fDevice])
+  }, [flagged, fMinLines, fSameDay, fAddALine, fAccount, fDevice, storeFilter])
   const mlSummary: Partial<MultiLineSummary> = data?.multi_line?.summary || {}
   const coverage: CoverageLine[] = scenario?.coverage || []
   const covSummary: Partial<CoverageSummary> = scenario?.coverage_summary || {}
@@ -466,12 +568,20 @@ export default function StoreTakeoverPage() {
     return out
   }, [statement])
 
+  // The handset orders are keyed by the store's ADDRESS, which is the same store record the filter
+  // read its labels from — so picking a store narrows this table to the same stores as the matrix.
+  const handsetStores = useMemo<HandsetStore[]>(
+    () => (data?.handset_orders?.by_store || [])
+      .filter(r => !storeFilter || storeFilter.labels.has(String(r.store))),
+    [data?.handset_orders, storeFilter])
+
+
   // A ROW PER STORE, built from the per-store statements the server assembled with the SAME builder
   // as the whole-prospect statement. Nothing is re-summed here: a figure the screen computes is a
   // figure that can disagree with the report above it.
   const storeRows = useMemo<StoreRow[]>(() => {
     const blocks = data?.store_scenarios || {}
-    return Object.keys(blocks).map(k => {
+    return Object.keys(blocks).filter(k => !storeFilter || storeFilter.keys.has(k)).map(k => {
       const b = blocks[k]
       const t = b.statements?.[shownMode]?.totals
       const be = b.break_even?.[shownMode]
@@ -486,16 +596,17 @@ export default function StoreTakeoverPage() {
         perBox: be?.per_activation ?? null,
       }
     }).sort((a, b) => (b.contribution || 0) - (a.contribution || 0))
-  }, [data?.store_scenarios, shownMode])
+  }, [data?.store_scenarios, shownMode, storeFilter])
 
   // The columns ARE the stores, in the order the store index names them, with the whole prospect
   // last. Built with useMemo because a column list that is rebuilt every render re-mounts the table.
   const matrixStores = useMemo(() => {
     const blocks = data?.store_scenarios || {}
     return Object.keys(blocks)
+      .filter(k => !storeFilter || storeFilter.keys.has(k))
       .map(k => ({ key: k, label: blocks[k].store?.label || k }))
       .sort((a, b) => a.label.localeCompare(b.label))
-  }, [data?.store_scenarios])
+  }, [data?.store_scenarios, storeFilter])
 
   // One row per P&L line the WHOLE-prospect statement carries (its own line vocabulary and order —
   // this screen invents no line), then the subtotals, the activated-line count and the two
@@ -647,22 +758,13 @@ export default function StoreTakeoverPage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 12, color: 'var(--text2)' }}>Prospect{' '}
           <select style={{ ...sel, minWidth: 220 }} value={pid}
-                  onChange={e => { setPid(e.target.value); setPeriod(''); setMode(''); setRentFor('') }}>
+                  onChange={e => { setPid(e.target.value); setSf(emptyStandardFilter()); setMode(''); setRentFor('') }}>
             <option value="">— pick a store being evaluated —</option>
             {prospects.map(p => (
               <option key={p.id} value={p.id}>{p.name}{p.status && p.status !== 'evaluating' ? ` · ${p.status}` : ''}</option>
             ))}
           </select>
         </label>
-        {pid &&
-          <label style={{ fontSize: 12, color: 'var(--text2)' }}
-                 title="The month to evaluate. Blank opens on the latest month this prospect's own commission file covers.">
-            Month{' '}
-            <select style={sel} value={period} onChange={e => setPeriod(e.target.value)}>
-              <option value="">latest uploaded</option>
-              {(prospect?.periods || []).map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </label>}
         <span style={{ flex: 1 }} />
         <input style={{ ...sel, width: 180 }} placeholder="New prospect name" value={newName}
                onChange={e => setNewName(e.target.value)} />
@@ -676,6 +778,68 @@ export default function StoreTakeoverPage() {
           + Open an evaluation
         </button>
       </div>
+
+      {/* ── THE STANDARD FILTERS, AT THE TOP, RUNNING ACROSS THE PAGE ────────────────────────────
+          Owner ask 2026-10-13: *"all standard filters on top of the page so they run all across"*.
+          The platform's shared <StandardFilterBar> (RULE FIVE, §3d) — never a bar of this page's own.
+          · MONTH drives the server query, so every figure below it is that month's.
+          · STORES narrow every section that names a store: the P&L matrix columns, the store table,
+            the handset orders by store and the flagged-account list.
+          · MARKET and PERSON are omitted, and the deviation is stated rather than silent: a store we
+            do not own sits in no market of ours and has nobody on our roster, so those two controls
+            could only ever filter everything away.
+          The module's own filters are APPENDED on the right; the core set is never substituted. */}
+      {pid && !data?.error &&
+        <div style={{ position: 'sticky', top: 0, zIndex: 5, background: 'var(--bg, var(--surface))',
+                      paddingTop: 6, marginBottom: 4 }}>
+          <StandardFilterBar
+            value={sf} onChange={setSf}
+            show={{ period: true, stores: true, markets: false, reps: false }}
+            periodMode="month" periods={prospect?.periods || []}
+            storeOptions={storeOptions} storeLabel="Stores…"
+            right={
+              <>
+                <label style={{ fontSize: 12, color: 'var(--text2)' }}
+                       title="Both figures are always computed. This only picks which one is shown.">
+                  Flagged accounts{' '}
+                  <select style={sel} value={shownMode} onChange={e => setMode(e.target.value)}>
+                    <option value="keep">kept in the profit</option>
+                    <option value="exclude">taken out of the profit</option>
+                  </select>
+                </label>
+                <input style={{ ...sel, width: 110 }} inputMode="numeric" placeholder="Min lines"
+                       value={fMinLines} onChange={e => setFMinLines(e.target.value)} />
+                <input style={{ ...sel, width: 140 }} placeholder="Account number"
+                       value={fAccount} onChange={e => setFAccount(e.target.value)} />
+                <input style={{ ...sel, width: 170 }} placeholder="Phone model or IMEI"
+                       value={fDevice} onChange={e => setFDevice(e.target.value)} />
+                <label style={{ fontSize: 12.5, display: 'flex', gap: 5, alignItems: 'center' }}>
+                  <input type="checkbox" checked={fSameDay}
+                         onChange={e => setFSameDay(e.target.checked)} />
+                  All lines on one day
+                </label>
+                <label style={{ fontSize: 12.5, display: 'flex', gap: 5, alignItems: 'center' }}>
+                  <input type="checkbox" checked={fAddALine}
+                         onChange={e => setFAddALine(e.target.checked)} />
+                  Has add-a-lines
+                </label>
+                {(fMinLines || fAccount || fDevice || fSameDay || fAddALine) &&
+                  <button className="btn btn-secondary" style={{ fontSize: 12 }}
+                          onClick={() => { setFMinLines(''); setFAccount(''); setFDevice('')
+                                           setFSameDay(false); setFAddALine(false) }}>
+                    Clear these
+                  </button>}
+              </>
+            } />
+          {filtering &&
+            <div style={{ fontSize: 11.5, color: '#92400e', marginBottom: 10 }}>
+              ◻︎ The store filter narrows the P&amp;L columns, the store table, the handset orders and
+              the flagged accounts. The <b>whole-prospect</b> P&amp;L above them, its tiles and the
+              keep-versus-exclude figures are the WHOLE month either way &mdash; they are what the
+              prospect is worth in total, and a headline that silently followed a filter would answer
+              a question nobody asked.
+            </div>}
+        </div>}
 
       {msg &&
         <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13, background: msg.ok ? 'var(--surface2)' : '#fee2e2', color: msg.ok ? 'var(--text2)' : '#991b1b' }}>
@@ -796,14 +960,9 @@ export default function StoreTakeoverPage() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 13, fontWeight: 700 }}>{prospect?.name} · {data?.period}</div>
             <span style={{ flex: 1 }} />
-            <label style={{ fontSize: 12, color: 'var(--text2)' }}
-                   title="Both figures are always computed. This only picks which one is shown; the other is beside it in the sub-report below.">
-              Flagged multi-line accounts{' '}
-              <select style={sel} value={shownMode} onChange={e => setMode(e.target.value)}>
-                <option value="keep">kept in the profit</option>
-                <option value="exclude">taken out of the profit</option>
-              </select>
-            </label>
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+              flagged accounts {shownMode === 'exclude' ? 'taken out of' : 'kept in'} the profit
+            </span>
           </div>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -860,36 +1019,10 @@ export default function StoreTakeoverPage() {
                       sub="how much of the contribution rests on accounts nobody has cleared"
                       warn={(delta.share_of_bottom_line_at_risk || 0) > 5} />
               </div>}
-            {flagged.length > 0 && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
-                            marginBottom: 10 }}>
-                <input style={{ ...sel, width: 120 }} inputMode="numeric" placeholder="Min lines"
-                       value={fMinLines} onChange={e => setFMinLines(e.target.value)} />
-                <input style={{ ...sel, width: 150 }} placeholder="Account number"
-                       value={fAccount} onChange={e => setFAccount(e.target.value)} />
-                <input style={{ ...sel, width: 190 }} placeholder="Phone model or IMEI"
-                       value={fDevice} onChange={e => setFDevice(e.target.value)} />
-                <label style={{ fontSize: 12.5, display: 'flex', gap: 5, alignItems: 'center' }}>
-                  <input type="checkbox" checked={fSameDay}
-                         onChange={e => setFSameDay(e.target.checked)} />
-                  All lines on one day
-                </label>
-                <label style={{ fontSize: 12.5, display: 'flex', gap: 5, alignItems: 'center' }}>
-                  <input type="checkbox" checked={fAddALine}
-                         onChange={e => setFAddALine(e.target.checked)} />
-                  Has add-a-lines
-                </label>
-                {(fMinLines || fAccount || fDevice || fSameDay || fAddALine) &&
-                  <button className="btn btn-secondary"
-                          onClick={() => { setFMinLines(''); setFAccount(''); setFDevice('')
-                                           setFSameDay(false); setFAddALine(false) }}>
-                    Clear
-                  </button>}
-                <span style={{ fontSize: 12, color: 'var(--text3)' }}>
-                  showing {num(shownFlagged.length)} of {num(flagged.length)}
-                  {shownFlagged.length !== flagged.length
-                    && ' — the figures above are still the full month'}
-                </span>
+            {flagged.length > 0 && shownFlagged.length !== flagged.length && (
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+                Showing {num(shownFlagged.length)} of {num(flagged.length)} &mdash; the filters at the
+                top of the page are narrowing this list; the figures above it are still the full month.
               </div>
             )}
             {flagged.length === 0
@@ -1072,7 +1205,7 @@ export default function StoreTakeoverPage() {
                        columns={HANDSET_MODEL_COLS} rows={handsets.models} compact stickyHeader totals />
           <div style={{ fontSize: 12, fontWeight: 600, margin: '14px 0 4px' }}>By store</div>
           <ReportShell title="" filename={`takeover-handsets-stores-${data?.period || ''}`}
-                       columns={HANDSET_STORE_COLS} rows={handsets.by_store} compact stickyHeader totals />
+                       columns={HANDSET_STORE_COLS} rows={handsetStores} compact stickyHeader totals />
           <div style={{ fontSize: 12, fontWeight: 600, margin: '14px 0 4px' }}>By month</div>
           <ReportShell title="" filename={`takeover-handsets-months-${data?.period || ''}`}
                        columns={HANDSET_MONTH_COLS} rows={handsets.by_month} compact stickyHeader totals />
@@ -1134,6 +1267,61 @@ export default function StoreTakeoverPage() {
             ))}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>{fraud.reading}</div>
+        </div>}
+
+      {/* ── THE SAME ACCOUNTS, MONTH BY MONTH, WITH THE DRILL-DOWN ──────────────────────────────
+          Owner ask 2026-10-13: *"I need the accounts which are 2 more summarized at the bottom for
+          each month with the drill down"*. One account carrying four lines in one month is a family;
+          the same shape every month is a pattern, and that is the comparison no single month can
+          make. Click a month to open its accounts. */}
+      {pid && !loading && monthRows.length > 0 &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            Accounts over {data?.multi_line_by_month?.threshold} lines, month by month
+            &mdash; {monthRows.length} month{monthRows.length === 1 ? '' : 's'} uploaded
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+            Across every month this prospect has uploaded: <b>{num(monthTotals.flagged_accounts)}</b>
+            {' '}account{monthTotals.flagged_accounts === 1 ? '' : 's'} over the threshold carrying
+            {' '}<b>{num(monthTotals.flagged_lines)}</b> lines, out of
+            {' '}{num(monthTotals.accounts)} accounts and {num(monthTotals.lines)} lines in all.
+            {' '}An account is counted in each month it happens in: three lines added across three
+            separate months is a customer who grew their plan, not a multi-line sale.
+          </div>
+          <ReportShell title="" filename={`takeover-multiline-by-month-${pid}`}
+                       columns={MONTH_COLS} rows={monthRows} compact stickyHeader pinFirst totals
+                       onRowClick={(r: MonthRow) => setOpenMonth(m => (m === r.period ? '' : r.period))} />
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 9 }}>
+            This table is every uploaded month on purpose, so the <b>Month</b> filter at the top does
+            not narrow it &mdash; comparing the months is the whole question it answers. The
+            {' '}<b>Stores</b> filter does not narrow it either: an account&rsquo;s lines can sit on
+            more than one store account, so a per-store count of them could not be tied back to
+            either store. The account, model and line filters DO apply to the accounts below.
+          </div>
+          {openMonth &&
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700 }}>{openMonth}</div>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+                  {num(drilled.length)} account{drilled.length === 1 ? '' : 's'} over the threshold
+                </span>
+                <span style={{ flex: 1 }} />
+                <button className="btn btn-secondary" style={{ fontSize: 12 }}
+                        onClick={() => setOpenMonth('')}>Close</button>
+              </div>
+              {drilled.length === 0
+                ? <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+                    No account in {openMonth} is over the threshold once the filters at the top of the
+                    page are applied.
+                  </div>
+                : <ReportShell title="" filename={`takeover-multiline-${openMonth}`}
+                               columns={FLAG_COLS} rows={drilled} compact stickyHeader pinFirst />}
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+                These are the same accounts the month report above lists, for this month. What they are
+                worth to the bottom line is measured for the evaluated month only &mdash; pick
+                {' '}<b>{openMonth}</b> in the Month filter to see the P&amp;L with and without them.
+              </div>
+            </div>}
         </div>}
 
       {pid && !loading && !statement && !data?.error &&

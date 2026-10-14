@@ -130,5 +130,35 @@ ok('fold: market "NORTH" matches North + north (3 rows)', filterRows(cvRows, { .
 // (e) AND semantics preserved under folding
 ok('fold: store+rep AND, both case-variant → still matches', filterRows(cvRows, { ...emptyStandardFilter(), stores: ['MAIN ST'], reps: ['ann lee'] }, cvAcc).length === 3)
 
+// ── (f) THE MONTH DROPDOWN SHOWS WHAT IS SELECTED (owner ask 2026-10-13) ────────────────────────
+// The bar used to select `period` only when it was seven characters long (ISO 'YYYY-MM') while ALSO
+// appending an option for a period its list does not carry — two contradictory rules. A surface whose
+// months are spelled the way a carrier statement spells them ('August 2026', which this platform
+// stores as a period) therefore rendered its month dropdown BLANK over a report that was showing that
+// very month. One home now decides it, and these hold both halves.
+const monthSelectValue = period => norm(period)
+const monthNeedsOwnOption = (period, periods) => { const p = norm(period); return !!p && !(periods || []).includes(p) }
+const ISO = ['2026-07', '2026-08']
+const NAMED = ['July 2026', 'August 2026']
+ok('month: an ISO period in the list stays selected', monthSelectValue('2026-08') === '2026-08')
+ok('month: a NAMED period in the list stays selected (was blank)', monthSelectValue('August 2026') === 'August 2026')
+ok('month: no month chosen is the ONLY empty case', monthSelectValue('') === '' && monthSelectValue(undefined) === '')
+ok('month: whitespace is not a selection', monthSelectValue('   ') === '')
+ok('month: a period the list carries needs no option of its own',
+  monthNeedsOwnOption('2026-08', ISO) === false && monthNeedsOwnOption('August 2026', NAMED) === false)
+ok('month: a period the list does NOT carry gets one, so the control is never blank over a real month',
+  monthNeedsOwnOption('2026-05', ISO) === true && monthNeedsOwnOption('May 2026', NAMED) === true)
+ok('month: with no selection nothing is appended', monthNeedsOwnOption('', ISO) === false)
+ok('month: ISO adopters are a BYTE-FOR-BYTE no-op — the old rule and the new agree on every ISO case',
+  ISO.concat(['2026-01', '2026-12']).every(m => monthSelectValue(m) === (m && m.length === 7 ? m : '')))
+// …and the component must DEREFERENCE them rather than deciding it inline again.
+{
+  const fs = await import('node:fs')
+  const bar = fs.readFileSync(new URL('../src/components/StandardFilterBar.tsx', import.meta.url), 'utf8')
+  ok('month: the bar dereferences the one home', bar.includes('monthSelectValue(value.period)')
+    && bar.includes('monthNeedsOwnOption(value.period, periods)'))
+  ok('month: …and no copy of the discarded length rule survives in it', !bar.includes('length === 7'))
+}
+
 console.log(`\nstandard-filters: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

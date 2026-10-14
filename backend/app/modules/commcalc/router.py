@@ -48514,12 +48514,20 @@ async def _upload_prospect_feed_impl(prospect_id, feed_key, period, carrier_id,
 
 
 def _prospect_feed_rows(client, org_id, prospect_id, period):
-    """{feed_key: [rows]} for one prospect month, each row in its LIVE table's column shape.
+    """`(feeds, every_month)` — the prospect's rows for one month, and the same rows for ALL months.
+
+    `feeds` is `{feed_key: [rows]}` for the evaluated month, each row in its LIVE table's column shape.
 
     The handset PRICE LIST is read across ALL periods, deliberately and for the same reason
     `device_cogs.ma_unit_price_map` does: a handset ordered in June and activated in July must still
-    be priced, and the fulfillment sheet is a price list as much as a purchase log."""
+    be priced, and the fulfillment sheet is a price list as much as a purchase log.
+
+    `every_month` is the WHOLE upload, month-stamped rows and all, carried out of the SAME read rather
+    than fetched again — the per-month multi-line rollup (owner ask 2026-10-13, "summarized at the
+    bottom for each month") needs every month, and a second query for rows already in hand is both a
+    cost and a chance for the two reads to disagree about what was uploaded."""
     feeds = {k: [] for k in _pev.FEED_KEYS}
+    every_month = {k: [] for k in _pev.FEED_KEYS}
     rows = _feed_read.read_all(
         lambda: (client.schema("commcalc").table("prospect_feed_row")
                  .select("feed_key,period,row")
@@ -48529,12 +48537,20 @@ def _prospect_feed_rows(client, org_id, prospect_id, period):
         feed = str(r.get("feed_key") or "")
         if feed not in feeds:
             continue
-        if feed != "ma_marketplace_orders" and str(r.get("period") or "") not in wanted:
-            continue
         row = r.get("row")
-        if isinstance(row, dict):
-            feeds[feed].append(row)
-    return feeds
+        if not isinstance(row, dict):
+            continue
+        # The month is stamped on the FEED ROW, not reliably inside the row itself, so it is carried
+        # onto the row for the all-months read — `account_groups` groups by `period` and a row whose
+        # month were blank would collapse every month into one group.
+        stamped = str(r.get("period") or "")
+        if stamped and not str(row.get("period") or "").strip():
+            row = dict(row, period=stamped)
+        every_month[feed].append(row)
+        if feed != "ma_marketplace_orders" and stamped not in wanted:
+            continue
+        feeds[feed].append(row)
+    return feeds, every_month
 
 
 def _period_keys_for_prospect(period):
@@ -48655,7 +48671,7 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
                                   "upload a feed, or check its column mapping if one is loaded")}
 
     try:
-        feeds = _prospect_feed_rows(client, org_id, prospect_id, period)
+        feeds, every_month = _prospect_feed_rows(client, org_id, prospect_id, period)
     except Exception as e:
         raise HTTPException(500, f"prospect feed read failed: {type(e).__name__}: {e}")
     matrix, months, exp_notes = _prospect_expense_window(client, org_id, cfg, period)
@@ -48703,6 +48719,15 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     # …and for the whole prospect, which is the one that carries our average expenses.
     ev["break_even"] = {m: _pev.accessory_break_even(
         statements[m], ev["scenarios"][m].get("activations"), _an.pl_totals) for m in statements}
+    # ── THE SAME ACCOUNTS, EVERY MONTH (owner ask 2026-10-13) ────────────────────────────────────
+    # "summarized at the bottom for each month with the drill down". Computed by the pure one home
+    # over the WHOLE upload — the month on screen is one row of this table, and the harness fails the
+    # build if that row and the month report ever disagree. The flagged accounts themselves come back
+    # with it, each stamped with its month, so the drill-down reads the same objects the month report
+    # reads rather than a slimmed copy of them.
+    ev["multi_line_by_month"] = _pev.multi_line_by_month(
+        every_month.get("ma_commission") or [], cfg["account_key_columns"],
+        cfg["family_line_threshold"])
     ev["prospect"] = prospect
     ev["period_basis"] = period_basis        # why the report opened on this month — stated, never implied
     return ev

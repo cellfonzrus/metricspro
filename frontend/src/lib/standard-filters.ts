@@ -41,6 +41,28 @@ export function ymd(v: any): string {
   return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
 }
 
+/** The value a MONTH DROPDOWN should show for the current selection, given the month options it is
+ *  rendering. One home because the bar previously decided this inline with two contradictory rules: it
+ *  selected `period` only when it was seven characters long (ISO 'YYYY-MM'), while also appending an
+ *  option for a `period` the list does not carry — so a surface whose months are spelled 'August 2026'
+ *  (a carrier statement's own spelling, which this platform stores as a period) rendered its dropdown
+ *  with NOTHING selected even though the month was chosen and the report below it was that month's.
+ *
+ *  The rule: show whatever is selected. '' means "no month chosen" and is the only empty case. ISO
+ *  periods are unaffected — `monthSelectValue('2026-08', [...])` is '2026-08' either way — so this is
+ *  a no-op for every adopter whose months are ISO and a fix for every adopter whose months are not. */
+export function monthSelectValue(period: string | undefined): string {
+  return norm(period)
+}
+
+/** True when a chosen month is NOT one of the dropdown's options and the dropdown must therefore carry
+ *  an option of its own for it — otherwise the browser has nothing to select and the control renders
+ *  blank over a report that is showing that month. */
+export function monthNeedsOwnOption(period: string | undefined, periods?: string[]): boolean {
+  const p = norm(period)
+  return !!p && !(periods || []).includes(p)
+}
+
 export function emptyStandardFilter(period = ''): StandardFilterValue {
   return { period, periodTo: '', stores: [], markets: [], reps: [] }
 }

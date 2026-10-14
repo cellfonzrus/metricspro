@@ -26542,6 +26542,72 @@ bottom line is its own revenue less its own costs less the full expense; N14 the
 sentence in one place and warns that those rows do not add.
 
 
+### COMMCALC-03.20 Every month at the bottom, and the filters at the top (owner ask 2026-10-13)
+
+Owner, verbatim: *"Also I need the accounts which are 2 more summarized at the bottom for each month
+with the drill down will all standard filters on top of the page so they run all across"*.
+
+**Two asks, and the first one is a comparison no single month can make.** One account carrying four
+lines in one month is a family; the same shape in five consecutive months is a pattern. The month
+report (§COMMCALC-03.15) could only ever answer for the month on screen.
+
+`prospect_eval.multi_line_by_month(rows, columns, threshold)` answers it, and it is **not a second
+count**: it calls `account_groups`, `flag_multi_line_accounts` and `multi_line_summary` — the month
+report's own three functions — and slices their output per period. A per-month counter of its own
+would be the duplicate derivation the index rules forbid and would drift from the figure on screen the
+first time either changed. **§R1 fails the build if the month on screen and this table's row for that
+month ever disagree**, by rebuilding the month report the way the screen builds it and asserting the
+two dicts are equal. R3/R4 hold the partition (the months add up to the whole, nothing double-counted
+and no flagged account lost or shown twice), R5 reports a month with rows and nothing flagged **as
+zero rather than omitting it**, R12/R13 fail the build if the function stops dereferencing those three
+or starts re-tallying, and R10 keeps §P6's rule: no field here reaches a verdict.
+
+It costs **no extra query**. `router._prospect_feed_rows` already read every row the prospect has in
+order to filter one month out of them, so it now returns `(feeds, every_month)` from that same read —
+a second query for rows already in hand is both a cost and a chance for two reads to disagree about
+what was uploaded. The month is stamped on the **feed row**, not reliably inside the row, so it is
+carried onto the row there; `_row_period` is the ONE home for reading it and the grouping, the
+substance check and the handset report were all rewired to it (three hand-written copies, found by
+§R15 the moment the lock was written).
+
+**The filters.** The platform already has the one home for this — `<StandardFilterBar>` over a
+`StandardFilterValue` (RULE FIVE, §3d) — so the page adopts it and has no bar of its own:
+
+- **Month** drives the server query, exactly as before.
+- **Stores** narrow every section that names a store: the P&L matrix columns, the row-per-store
+  table, the handset orders by store and the flagged-account list. `storeFilter` is the single place
+  deciding which stores are admitted, because a matrix showing three stores beside a store table
+  showing five is worse than no filter at all. It carries the store's key, its address and its
+  processor account off ONE store record, so a section keyed by address and a section keyed by
+  account number narrow to the same stores.
+- **Market** and **person** are omitted and the deviation is stated: a store we do not own sits in no
+  market of ours and has nobody on our roster, so those two could only filter everything away.
+- The module's own five filters (min lines, account, model/IMEI, one-day, add-a-lines) and the
+  keep-versus-exclude switch are **appended** on the right. The core set is never substituted.
+
+**Where the filters do NOT reach is printed on the screen, not left to be discovered.** The
+whole-prospect P&L, its tiles and the keep-versus-exclude figures are the whole month either way —
+they are what the prospect is worth in total. The month table is every uploaded month on purpose, so
+the Month filter does not narrow it; and the Stores filter does not either, because an account's lines
+can sit on more than one processor account and a per-store count of them could be tied back to neither.
+
+**A shared-component defect the adoption surfaced.** `StandardFilterBar`'s month dropdown selected
+`value.period` only when it was seven characters long (ISO `YYYY-MM`) while **also** appending an
+option for a period its list does not carry — two contradictory rules. Any surface whose months are
+spelled the way a carrier statement spells them (`August 2026`, which this platform stores as a
+period) therefore rendered its month dropdown **blank over a report that was showing that very
+month**. Fixed as a class, in the lib rather than the page: `standard-filters.monthSelectValue` and
+`monthNeedsOwnOption` are the one home, the bar dereferences them, and
+`scratchpad/prove_standard_filters.mjs` (40 passed / 0 failed) holds both halves plus a source check
+that the bar has not un-wired and that no copy of the discarded `length === 7` rule survives. **It is
+a byte-for-byte no-op for every adopter whose months are ISO** and a fix for every adopter whose
+months are not.
+
+**Where it is:** `/commcalc/store-takeover`, bottom of the page, every table through `ReportShell`
+(the one sorted/exportable table, `harness_table_sort_lock`) with the drill-down opened by a row
+click.
+
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back

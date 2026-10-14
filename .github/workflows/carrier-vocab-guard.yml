@@ -540,6 +540,16 @@ on:
       # the mapper's header key or to any landing path re-runs the proof that the cause is still named.
       - "backend/harness_mapping_diagnosis.py"
       - "backend/app/modules/commcalc/column_mapping.py"
+      # The two frontend proofs that now run in the same job name THEMSELVES and the shared files
+      # they lock, so a change to the filter bar, the filter lib, the ExportColumn shape, the totals
+      # aggregator or the screen re-runs the proofs that none of them has un-wired.
+      - "frontend/scratchpad/prove_standard_filters.mjs"
+      - "frontend/scratchpad/prove_report_totals.mjs"
+      - "frontend/src/components/StandardFilterBar.tsx"
+      - "frontend/src/lib/standard-filters.ts"
+      - "frontend/src/lib/report-totals.ts"
+      - "frontend/src/lib/export.tsx"
+      - "frontend/src/app/(platform)/commcalc/store-takeover/page.tsx"
       # §COMMCALC-05 — several handsets to one buyer in one day. Named with its home and the two
       # it dereferences (flag_registry for severity/threshold, the box-department set the box
       # count uses) so a change to either re-runs this proof.
@@ -1773,6 +1783,18 @@ jobs:
       - name: Run the mapping-diagnosis lock (a file that produced no rows is told WHY, from one home, and every map_records landing path dereferences it)
         working-directory: backend
         run: python3 harness_mapping_diagnosis.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the two FRONTEND proofs this screen's filter bar now rests on. They are in the same job
+      # because they lock the same screen, and in CI at all because a wiring check that nothing runs
+      # is not a gate: "lock it so it cannot un-wire" (CLAUDE.md) only holds if the build fails.
+      # Node only — no backend dependency — so they cost seconds.
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run the standard-filter proof (the month dropdown shows the month the report is showing, whatever its spelling, and the shared bar still dereferences the one home)
+        working-directory: frontend
+        run: node scratchpad/prove_standard_filters.mjs | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the report-total proof (a column whose numbers do not ADD - a maximum, a share - is not summed into a figure the data never contained)
+        working-directory: frontend
+        run: node scratchpad/prove_report_totals.mjs | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
   # THE STORED-CREDENTIAL LOCK (index §CORE-03) reaches `app.core.crypto` → `app.core.config`, which
   # imports pydantic_settings, and its §A does REAL Fernet round trips rather than asserting over a
   # stub — so it needs `cryptography` too. Both are in backend/requirements.txt, so it runs in its own
