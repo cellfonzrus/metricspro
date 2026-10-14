@@ -7479,7 +7479,7 @@ than by b2b"*, with the B2B "Month To Date Location Sales Report + Gross Profits
 
 **MEASURED LIVE, read-only through the REST API, house org.** B2B's `Acc. Sales` column totalled
 **$21,329.72** over its nineteen Boost stores; the shared `_is_accessory` over the same nineteen stores
-and the same days summed **$19,768.76**. **FOURTEEN of the nineteen tied to the penny**, and that is the
+and the same days summed **$19,785.91**. **FOURTEEN of the nineteen tied to the penny**, and that is the
 finding: the classifier was right and its VOCABULARY was one word short. The five that did not tie
 decomposed exactly — four were short by their `category='Accessories'` lines, and the fifth
 (196 Martin Luther King Jr Dr, $17.15) is a different, separate thing, below. The pasted report is

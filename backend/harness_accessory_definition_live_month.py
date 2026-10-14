@@ -10,7 +10,7 @@ THE DEFECT, as the owner saw it (2026-10-14, B2B "Month To Date Location Sales R
     "need to check why the accessories sales are showing less in metricspro for boost than by b2b"
 
 MEASURED AGAINST PRODUCTION (house org, read-only). B2B's Acc. Sales for 10/01-10/13 was $21,329.72
-over its nineteen Boost stores; MetricsPro's shared `_is_accessory` summed $19,768.76 over the same
+over its nineteen Boost stores; MetricsPro's shared `_is_accessory` summed $19,785.91 over the same
 nineteen. FOURTEEN of the nineteen tied to the penny, which is what said the classifier was right and
 its VOCABULARY was short by one word: the house POS renamed its accessory category `Accessory` ->
 `Accessories` in July 2026. `accessory_config.categories` is matched by EXACT membership, so eight
