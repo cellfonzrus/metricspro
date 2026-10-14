@@ -27,8 +27,39 @@ wants the top N rows is asking a different question and should order and slice e
 that wants "the data" gets the data. `harness_feed_read_lock.py` fails the build if a pay-path read
 re-introduces a literal row ceiling.
 
+A PAGED READ WITH NO TOTAL ORDER IS NOT A READ OF THE DATA (owner report 2026-10-14).
+
+The instance: the Store Takeover Evaluation showed one subscriber account carrying **27 activated
+lines** in June 2026, the same five IMEIs printed three times over. The account really carries
+**nine**. The class is one sentence:
+
+    **`OFFSET`/`range()` paging without an `ORDER BY` pages an UNORDERED set, so the backend may
+    serve the same row in two pages and never serve another at all.**
+
+Postgres makes no promise about row order without `ORDER BY`, and it does not have to: a second
+page is a second plan on a table another session may have touched. Measured live 2026-10-14 against
+`commcalc.prospect_feed_row`, one prospect, 137,374 rows:
+
+| read | rows returned | distinct | duplicate copies | never served |
+|---|---|---|---|---|
+| no `ORDER BY` (what this loop used to do) | 137,374 | 88,294 | 49,080 | 49,080 |
+| `order=id.asc` | 137,374 | 137,374 | 0 | 0 |
+
+So a third of that feed was invisible to every surface reading it while another third was counted
+twice, and NOTHING reported a problem: the loop still terminated on a short page and still returned
+a plausible row count. This is the §19.48 failure all over again — a read that is wrong quietly —
+and it is worse, because a ceiling at least drops the SAME rows every time.
+
+`ORDER_KEY` is therefore applied on every page, and it is appended, so a caller that orders by its
+own column keeps that order and gets a total one. A table whose stable key is spelled otherwise
+passes `order=`; a read that cannot be ordered RAISES rather than returning a scrambled feed,
+because a scrambled feed is indistinguishable from a correct one downstream.
+
 NO DB AND NO NETWORK IN THIS MODULE. The caller hands in a factory that returns a fresh query
 builder, so a proof harness drives the same loop over a fake table.
+
+Proof: `backend/harness_feed_read_lock.py` — the lock this docstring has named since 2026-10-06 and
+which did not exist until 2026-10-14.
 """
 from __future__ import annotations
 
@@ -50,24 +81,44 @@ class IncompleteRead(RuntimeError):
     cost July $62,700 was a read that failed quietly and looked like less data."""
 
 
-def read_all(make_query, page: int = PAGE):
+# THE COLUMN THAT MAKES THE PAGING TOTAL. Every table read through this module carries it (verified
+# live 2026-10-14: raw_mi, raw_sales, raw_comp_report, raw_payment_detail, store_expenses,
+# payment_categories, asset_ledger, prospect_feed_row, carrier_category_map, account_statements all
+# have `id`). It is a KEY, not a sort the caller asked for, so it is appended after any order the
+# caller set rather than replacing it.
+ORDER_KEY = "id"
+
+
+def read_all(make_query, page: int = PAGE, order: str = ORDER_KEY):
     """Every row `make_query()` matches, as one list, oldest page first.
 
     `make_query()` must return a FRESH query builder each call — postgrest builders carry the range
     they were last given, so reusing one silently re-requests the same window forever.
 
+    `order` is the stable key the pages are cut on (`ORDER_KEY` by default), APPENDED to whatever
+    the caller already ordered by. Without it the pages are cut out of an unordered set and rows
+    duplicate and vanish — see the module docstring for the live measurement. Passing a falsy
+    `order` is refused: there is no such thing as a correct unordered paged read.
+
     Raises `IncompleteRead` rather than returning a partial list, so no caller can mistake a failed
-    read for an empty feed.
+    read for an empty feed, or a scrambled one for the feed.
     """
     page = max(1, int(page or PAGE))
+    key = str(order or "").strip()
+    if not key:
+        raise IncompleteRead(
+            "a paged read needs a stable order key — paging an unordered set serves some rows "
+            "twice and others never (see this module's docstring); pass order='<column>'")
     out: list = []
     start = 0
     for _ in range(MAX_PAGES):
         try:
-            resp = make_query().range(start, start + page - 1).execute()
+            resp = make_query().order(key).range(start, start + page - 1).execute()
         except Exception as e:  # noqa: BLE001 - re-raised as IncompleteRead, never swallowed
             raise IncompleteRead(
-                f"paged read failed at offset {start} after {len(out)} rows: {e}") from e
+                f"paged read failed at offset {start} after {len(out)} rows, ordered by "
+                f"'{key}': {e} — if this table has no '{key}' column, pass the column that is its "
+                f"stable key; do NOT drop the order, an unordered paged read loses rows") from e
         chunk = resp.data or []
         out.extend(chunk)
         if len(chunk) < page:

@@ -1120,16 +1120,22 @@ FACTS: dict[str, dict] = {
         },
     },
     'complete_feed_read': {
-        "question": 'Have I read ALL of this feed, or only the first N rows somebody typed?',
+        "question": 'Have I read ALL of this feed — every row, each exactly once — or only the '
+                    'first N rows somebody typed, in whatever order the backend felt like?',
         "homes": ('app/modules/core/feed_read.py',),
-        "index": ('19.48',),
-        "locks": ('harness_pay_feed_balance.py', 'harness_installment_month_anchor.py'),
+        "index": ('19.48', 'CORE-05'),
+        "locks": ('harness_feed_read_lock.py', 'harness_pay_feed_balance.py',
+                  'harness_installment_month_anchor.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             # §19.51 — raw_mi is the feed §19.48's own docstring named as the next ceiling risk
             # (46,047 rows in September, growing ~4,000 a month); its private page loop is retired.
             'app/modules/commcalc/installment_engine.py': ('_feed_read',),
             'app/modules/commcalc/router.py': ('_feed_read',),
+            # §CORE-05 — the appeal-recovery evidence reads. Their own copy of the page loop is
+            # retired: it paged without an ORDER BY, so a device whose payment row was never served
+            # read as "no evidence" and bucketed the appeal as not_recoverable.
+            'app/modules/recovery/engine.py': ('_feed_read',),
         },
     },
     'payment_category_map': {

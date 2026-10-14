@@ -117,7 +117,15 @@ class _FakeTable:
     def __init__(self, rows, fail_at=None, always_full=False):
         self.rows, self.fail_at, self.always_full = rows, fail_at, always_full
         self.a = self.b = 0
+        self.ordered_by = None
         self.calls = 0
+
+    def order(self, column, desc=False):
+        # §CORE-05: the one home now pages on a stable key, so this fake must model `order` or it
+        # is modelling a backend this platform does not read from. It serves `rows` in the order it
+        # was given, which IS key order for these fixtures.
+        self.ordered_by = column
+        return self
 
     def range(self, a, b):
         self.a, self.b = a, b

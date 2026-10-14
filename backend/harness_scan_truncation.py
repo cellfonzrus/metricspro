@@ -39,6 +39,12 @@ class _Q:
     def limit(self, n):
         return _Q(self.rows[:n])
 
+    def order(self, column, desc=False):
+        # §CORE-05: a paged read now cuts its pages on a stable key, so the fake backend sorts the
+        # way the real one does. Rows missing the key sort last rather than raising.
+        return _Q(sorted(self.rows, key=lambda r: (r.get(column) is None, r.get(column)),
+                         reverse=bool(desc)))
+
     def range(self, lo, hi):
         # PostgREST: inclusive bounds, and never more than PAGE_CAP rows in one response.
         return _Q(self.rows[lo:min(hi + 1, lo + PAGE_CAP)])
