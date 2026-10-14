@@ -48671,10 +48671,13 @@ def _prospect_store_inputs(client, org_id, prospect_id):
         return []
 
 
-class ProspectStoreInputIn(BaseModel):
-    store_key: str
-    declared_accessory_sales: Optional[float] = None
-    declared_rent_monthly: Optional[float] = None
+class ProspectStoreInputIn(LaxModel):
+    # `Any = None` and `LaxModel`, matching `ProspectIn` above: None means NOT ENTERED and a figure
+    # arriving as a string from a text box is still a figure. `_prospect_num` is the one home that
+    # tells "declared zero" from "nobody has declared anything".
+    store_key: str = ""
+    declared_accessory_sales: Any = None
+    declared_rent_monthly: Any = None
 
 
 @router.put("/prospects/{prospect_id}/store-inputs")
