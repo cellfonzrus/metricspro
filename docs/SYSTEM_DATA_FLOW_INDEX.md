@@ -6675,6 +6675,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `data_lineage_registry.PERIOD_GRAIN_REASONS` + `day_keyed_date_columns()` / `is_day_keyed()` (code registry) — **which feeds are replaced by DAY and carry their own month, and which are replaced per PERIOD with a stated reason.** DERIVED from `DATA_DATE_COLUMN_BY_TABLE`, so a feed that declares a data-date column is day-keyed the same day; a declared table that is neither fails the build | code | `router._upload_file_impl` (`DATE_KEYED` is the derivation, no literal map), `epay_sweep._pull_and_store` / `_store_day_grain` / `_store_rows_by_day`; one parser `commcalc/feed_period.py`; lock `harness_feed_day_grain.py` (85) — §19.46 |
 | `job-run.isRunning` / `settleStatus` / `nextPollDelay` / `buttonState` (code) — **is this background job running, and may its control be pressed.** The ONE vocabulary of server words that mean "in flight", the ONE rule that a status read older than the press cannot downgrade it, the ONE bounded poll schedule, and the ONE derivation of a control's label/disabled/badge | code | `commcalc/page.tsx` (⚡ Run Calculation), `closing/imports/page.tsx` + `commcalc/connectors/page.tsx` (Run now), `commcalc/_lib/AutoCalcNotice.tsx`; backend companion `commcalc.router._calc_status_pick` + `CALC_RUNNING_STATES` (the one cross-language copy, pinned by G12); lock `frontend/prove_job_run.mjs` (87) — §6q |
 | `core/feed_read.read_all` / `PAGE` / `MAX_PAGES` / `IncompleteRead` (code) — **"give me ALL of this feed": one paged read with NO limit parameter and no default cap, so a row count is a property of the DATA and never of a literal.** A failed read RAISES rather than returning a short list | code | `commcalc.router` input loader (`fetch`), `_compute_gp` (payment detail + comp report), the three period-rollup reads, the ePay-split read, the two unnarrowed `raw_sales` reads, the three comp-report reads; lock `harness_pay_feed_balance.py` §G (107) — §19.48 |
+| `commcalc.router._ad_sales` (code) — **the rows every "what counts as an accessory / what is the set-up fee" PICK-DON'T-TYPE surface reasons over, read through the ONE transaction-grain sales union.** It read `raw_sales` alone, the month-end archive with zero rows for Sep/Oct 2026, so six detectors were blind on the open month while the classifier they audit read the live feed. `cols='*'` is load-bearing (`sku` exists in the archive and not the feed; an absent column throws and is swallowed to `[]`) | code | `/accessory-definition/agreement` · `/observed` · `/propose` · the save preview · `/pay-impact` · `/setup-fee/candidates` · `/setup-fee/recognition-divergence`; dereferences `router._sales_rows_union_txn`, never a second union; lock `harness_accessory_definition_live_month.py` §C–§D (28) — §19.55 |
 | `commcalc/installment_month` — `resolve_month` / `month_span` / `in_schedule` / `horizon` / `period_index` / `index_of_date` / `BasisTally` / `BASIS_ACTIVATION`·`BASIS_ORIGIN_PERIOD`·`BASIS_WINDOW_EDGE` (code) — **"which instalment month is this row in, and is that month PROVEN by the row or assumed from the window the reader pulled": the answer never travels without its BASIS.** Pure stdlib: no DB, no clock, no carrier / tenant / product name, and it never decides WHICH column holds a date | code | `installment_engine.compute_installments` (`_im`, anchored on the row's own `mi_activation_date`) and `sale_installment_engine.compute_sale_installments` (`_im`, anchored on the row's own origin month — byte-identical to its retired inline expressions); lock `harness_installment_month_anchor.py` (151) — §19.51 |
 | `commcalc/pay_data_quality.reconcile_pay_feed` + `PLACEABLE_CATEGORIES` + `UNPLACED_REASONS` + `day_coverage_gap` + `statement_month_coverage` + `VERDICT_PASSED`/`VERDICT_FAILED`/`VERDICT_NOT_MEASURED` (code) — **the pay feed's BALANCE: every dollar PLACED in a pay bucket or REPORTED unplaced under a named reason, with `balances` as the arithmetic proof.** Never decides what a category means — the caller hands in the org's own map (RULE TWO) | code | `commcalc.router.pay_feed_balance` (`GET /commcalc/pay-feed-balance`); the ONE statement of which buckets `calculator.pay_by_login` actually reads; locks `harness_pay_feed_balance.py` (107) + `harness_statement_month_coverage.py` (121) — §19.48, §19.54 |
 | `commcalc/feed_period.request_window` + `END_EXCLUSIVE`/`END_INCLUSIVE`/`END_BOUNDARY_DEFAULT` + `month_days` (code) — **the window a pull must ASK for so its last day actually arrives, and the calendar a closed month is judged against.** A window's end boundary is an assumption about SOMEBODY ELSE'S system: per-report config (`report_definitions.end_boundary`) with the house default `exclusive`, which is what every month of real data shows. Pure stdlib; an unreadable end date is never silently moved | code | `epay_sweep._expand_jobs` (the ONLY caller that widens anything — `_set_daily_range` types what it is given and no caller adds a `+1`); `pay_data_quality.statement_month_coverage` reads `month_days` / `month_state`; lock `harness_statement_month_coverage.py` (121) — §19.54 |
@@ -7274,6 +7275,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $68,479.60 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $70,157.10 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
 | **Have I read ALL of this feed, or just the first N rows?** — a read of a growing feed carries NO literal row ceiling; a failed read raises instead of returning a short list | `core/feed_read.read_all` (no `limit=` parameter exists to pass) | every pay-path and GP-path feed read dereferences it; lock `harness_pay_feed_balance.py` §G — §19.48. Live 2026-10-06: `.limit(50000)` against July's 82,999 payment-detail rows read $60,994.46 of carrier commission where the feed holds $123,700.62, losing 12 of 122 rep logins |
+| **Where does the accessory classifier disagree with the tenant's OWN declaration of "accessory" — on the month that is open right now?** — the declaration (`accessory_definition`, default token `accessor` on department/category) vs the predicate every report sums (`_is_accessory`, EXACT membership on `accessory_config.categories`); a disagreement is REPORTED and the config row is the fix, never a predicate that substring-matches | the period's sale lines, read through `router._ad_sales` → `_sales_rows_union_txn` (`raw_sales` ∪ `daily_sales_feed`) | `accessory_definition.agreement`'s `only_here` / `spelling_drift` → `GET /commcalc/accessory-definition/agreement`; lock `harness_accessory_definition_live_month.py` (28) — §19.55. Live 2026-10-14: the POS renamed `Accessory` → `Accessories` in July and $7,304.58 of accessory sales read as non-accessory (Oct 1–14 $1,560.96), while the detector that exists to say so saw 0 rows for Sep and Oct |
 | **What window must a pull ASK for, so the last day it intends to cover actually arrives?** — a window's end boundary is an assumption about somebody else's system, and an end-exclusive source silently drops the end date it was given | `commcalc.report_definitions.end_boundary` per org, house default `exclusive` (RULE TWO) | ONE home `commcalc/feed_period.request_window`, dereferenced by `epay_sweep._expand_jobs`; no caller adds a day of its own; lock `harness_statement_month_coverage.py` §A/§B/§F — §19.54. Live 2026-10-08: the carrier statement stops one day short of **every** month — 31-day months at the 30th, 30-day at the 29th, and October (pulled 10-03) at the 2nd — **$111,949.22** across seven closed months |
 | **Does this month's STATEMENT cover every day the month is owed — and what is missing worth?** — a CLOSED month is judged against the CALENDAR (the only authority that does not come from a window), an OPEN month only against the days the per-line feed received; the missing days are NAMED and PRICED, and a day nothing can price is reported unpriced, never valued at $0.00 | `feed_period.month_days` × `raw_comp_report.begin_date`, priced from `raw_payment_detail.amount` | `pay_data_quality.statement_month_coverage` (which DEREFERENCES `day_coverage_gap`, never a sibling) → `GET /commcalc/pay-feed-balance`.`statement_month`; §19.49's tri-state verdict, `not_measured` when no statement day arrived at all; lock `harness_statement_month_coverage.py` (121) — §19.54. Live 2026-10-08: seven closed months each FAILED on their own final day; two feeds that AGREE are still not a finished month |
 | **Do these two feeds for the SAME carrier money cover the same days?** — a month whose coverage is incomplete is not a finished month | `raw_payment_detail.payment_date` vs `raw_comp_report.begin_date` | `pay_data_quality.day_coverage_gap` → `GET /commcalc/pay-feed-balance`; §19.48. Live 2026-10-06, re-verified 2026-10-08: the statement is missing the final day of all seven closed months ($111,949.22); October has two days in both and ties to the penny, and August 1-30 is $523,093.67 on both sides. ⚠ This question alone is BLIND to a day BOTH feeds lost — that is `statement_month_coverage`'s calendar question above (§19.54) |
@@ -7469,6 +7471,83 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | target attainment % | `commcalc.targets` vs the period's actuals | `targets_engine.attainment_pct` — **THE one formula**, dereferenced by `aggregate_stores` (the area roll-up) and by the DM visit plan; no target returns `None`, never 0% or 100% |
 
 ## 19. Known gaps & inert config
+
+§19.55 **A DETECTOR THAT READS A DIFFERENT TABLE FROM THE CLASSIFIER IS NOT A DETECTOR — accessory
+sales short of the carrier's own report, and the one surface built to say so reading a dead archive**
+(owner 2026-10-14: *"need to check why the accessories sales are showing less in metricspro for boost
+than by b2b"*, with the B2B "Month To Date Location Sales Report + Gross Profits" for Boost attached).
+
+**MEASURED LIVE, read-only through the REST API, house org.** B2B's `Acc. Sales` column totalled
+**$21,329.72** over its nineteen Boost stores; the shared `_is_accessory` over the same nineteen stores
+and the same days summed **$19,785.91**. **FOURTEEN of the nineteen tied to the penny**, and that is the
+finding: the classifier was right and its VOCABULARY was one word short. The five that did not tie
+decomposed exactly — four were short by their `category='Accessories'` lines, and the fifth
+(196 Martin Luther King Jr Dr, $17.15) is a different, separate thing, below. The pasted report is
+dated 10/14 but was pulled before that day traded; against 10/01–10/13, **eighteen of nineteen stores
+tie to the penny** once the category is declared, and the nineteenth is the $17.15.
+
+**THE INSTANCE.** The house POS renamed its accessory category **`Accessory` → `Accessories`** in July
+2026. `commcalc.accessory_config.categories` is matched by EXACT membership (`_is_accessory`:
+`c in acfg["categories"]`), so eight *Apple Airpods Pro 3* lines rung under department `BYOD` /
+category `Accessories` read as non-accessory. Per month since the rename: **Jul $783.95 · Aug
+$1,472.77 · Sep $3,322.66 · Oct 1–14 $1,560.96 = $7,304.58**, and growing. The FIX IS THE CONFIG ROW —
+declaring the POS's own spelling — not a predicate that substring-matches categories: that would be a
+code fix to a config problem and would move every tenant's accessory money unasked. A per-tenant config
+row is not a patch; per-tenant CODE is. **SIBLINGS CHECKED in the same pass:** LuxeLink already
+declares `Accessories`, and the third org has no rows since September, so the hole is the house org's
+alone — measured, not assumed.
+
+**THE CLASS, which is the part worth keeping.** The platform ALREADY HAS a detector for exactly this.
+`GET /commcalc/accessory-definition/agreement`'s `only_here` column is by construction *"lines the
+tenant's own declared definition would count and the money path does not"*, and the declared default
+field rule is `accessory_definition.DEFAULT_TOKENS = ('accessor',)` — a SUBSTRING that covers
+`Accessories`. It reported nothing, because its reader `router._ad_sales` read **`commcalc.raw_sales`
+alone**. raw_sales is the MONTH-END ARCHIVE whose promotion has been manual since
+`report_definitions.sales.auto` went false: live it holds **zero rows for September and October 2026**
+(§19.26 / `monthly-sales-basis-september-missing`). So the one surface built to report this class of
+gap was structurally blind to the open month, and to every month whose archive was never built, while
+the classifier it audits reads the live feed. **A classification detector must read the rows the
+classifier read.**
+
+**THE FIX — one home, dereferenced, six surfaces at once.** `router._ad_sales` now reads
+`router._sales_rows_union_txn` — the ONE transaction-grain sales union (`raw_sales` ∪
+`daily_sales_feed`, deduped by `trans_id`, the open-month primary winning a whole transaction), the
+same reader the Sales Report, Executive MTD and the pay path already dereference. No second union is
+built. Everything under that one helper gains the live month: `/accessory-definition/agreement`,
+`/observed`, `/propose`, the save preview, `/pay-impact`, `/setup-fee/candidates` and
+`/setup-fee/recognition-divergence`. `cols='*'` is load-bearing and is locked: `raw_sales` carries
+`sku` and `daily_sales_feed` does not, and selecting a feed-absent column THROWS inside the union's
+per-table read, which is swallowed to `[]` — a named column list would have turned this fix straight
+back into silent emptiness. `store` / `rep` are applied in memory on purpose: the union takes no such
+filter and giving it one means a second query shape over the same two tables.
+
+**VERIFIED WITH THE REAL CODE AGAINST PRODUCTION (read-only, 2026-10-14).** `_ad_sales` rows —
+2026-10 **0 → 11,950**, 2026-09 **0 → 22,914**, 2026-08 **24,890 → 24,890** (a promoted, closed month
+is byte-identical: raw_sales leads and the feed contributes nothing extra). The agreement report's
+`analyzer only_here` — the surface that disagrees — **0 → 8 lines / $1,560.96** for October and
+**0 → 22 lines / $3,322.66** for September, the same figures measured independently off the feed. The
+detector and the arithmetic now agree because they read the same rows.
+
+**THE LOCK.** `backend/harness_accessory_definition_live_month.py` — **28 checks, DB-free, verified
+RED with 11 failures against the pre-change router**. §A the regression (the reported defect reproduces,
+the config row closes it, and it moves no device line); §B the declaration covered the missed spelling
+all along, so the gap was always reportable; §C the reader — the empty archive, the unchanged closed
+month, the archive-only transaction kept, the filters, the blank-period default, the cap that says it
+truncated; §D the un-wire locks (the union is dereferenced, no private query, `cols='*'`, every surface
+still reads through the one helper); §E negative controls, including that the predicate is NOT quietly
+substring-matching and that the declaration is NOT wired into it by this change. CI:
+`carrier-vocab-guard` (paths filter + its own step).
+
+**STILL OPEN, reported rather than quietly fixed.** ① The house org's `product_keywords` list is
+patchwork — twenty-one whole product names plus eleven generic substrings — and the substring `cable`
+catches `XFINITY PREPAID XB3V4-INTERNET KIT WO CABLE`, which is why 196 Martin Luther King Jr Dr reads
+**$17.15 ABOVE** B2B. That is the `edge-is-financing-not-device-model` name-keyword class
+`accessory_definition`'s own docstring already names; $1,164 of such lines sit outside the nineteen
+Boost-report stores. ② Nine house stores (5619 N. Broad St, 6149 Woodland Ave, 1 S 60th street, 2701
+Germantown ave, 6507 Castor Avenue, 2778 Ephraim Ave, 723 N Market St, 3605 Germantown Ave, 1710 W 4th
+St) are NOT on the carrier's Boost report, so a total-vs-total comparison against it is not like for
+like — **$19,135.82** of October accessory sales. Neither is a defect in this change; both are named so
+the next comparison starts from them.
 
 §19.54 **A WINDOW'S END BOUNDARY IS SOMEBODY ELSE'S ASSUMPTION, AND A MONTH THAT IS A DAY SHORT IS NOT
 A FINISHED MONTH — the carrier statement missing the last day of every month** (owner 2026-10-08:

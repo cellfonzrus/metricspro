@@ -274,6 +274,11 @@ on:
       # change to any of them must run it.
       - "backend/harness_accessory_target_plan.py"
       - "backend/app/modules/commcalc/accessory_target_plan.py"
+      # index §19.49 — "what counts as an accessory" and the detector that reports where the predicate
+      # and the tenant's own declaration disagree. The lock reads the declaration module and the one
+      # helper every pick-don't-type surface reads its rows through, so a change to either must run it.
+      - "backend/harness_accessory_definition_live_month.py"
+      - "backend/app/modules/commcalc/accessory_definition.py"
       # index §63 — the month's declared focus and the weekly check-in. The lock reads the home, the
       # attention provider that is the login surface, and `core/scope.py` + `closing/closer_pick.py`
       # (where the "market manager or above" scope tiers now live, dereferenced rather than copied a
@@ -1964,6 +1969,26 @@ jobs:
       - name: Run the bill-pay fee / activation-candidate proof (the 690 stay silent; the real gap is still reported; the other tenant byte-identical — index §19.42)
         working-directory: backend
         run: python3 harness_billpay_fee_not_activation.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE ACCESSORY-VOCABULARY LIVE-MONTH PROOF (index §19.49) drives the REAL `router._ad_sales`,
+  # `_is_accessory` and `accessory_definition.field_token_hit` / `agreement` over in-memory rows: the
+  # owner's 2026-10-14 report (accessory sales short of B2B) reproduced and closed by the config row, the
+  # DECLARED field rule shown to have covered the missed spelling all along, and the UN-WIRE LOCKS — the
+  # six pick-don't-type surfaces must keep reading the ONE transaction-grain sales union
+  # (`_sales_rows_union_txn`) instead of `raw_sales` alone, with `cols='*'`, so a detector can never again
+  # go blind on the open month while the classifier it audits reads the live feed. DB-free.
+  accessory-vocabulary-live-month-proof:
+    name: Accessory vocabulary / live-month detector (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the accessory-vocabulary live-month proof (the gap reproduces and closes; the detector reads the one union, not the dead archive — index §19.49)
+        working-directory: backend
+        run: python3 harness_accessory_definition_live_month.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SCHEDULE-FROM-WORK-HISTORY PROOF (index §14v) drives the REAL
   # storeops/schedule_from_history.py over in-memory transaction rows: the calendar arithmetic against
