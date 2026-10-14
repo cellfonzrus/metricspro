@@ -20306,6 +20306,18 @@ reason `_vendor_public` now carries a server-resolved `transport` block (`kind`,
 `has_customer_rule`, `customer_errors`), and `frontend/src/lib/supply.ts` documents that the screen
 READS it rather than re-reading `portal_config`.
 
+Moving the browser gate behind a helper exposed a BLIND SPOT in
+`harness_browser_sweep_kinds.py`, and the blind spot was fixed rather than the expectation lowered.
+That file locks "an endpoint that can reach a live browser calls `require_browser_service()`", but it
+read only each handler's own body — so moving `live_login_start()` and the guard into
+`_read_catalog_via_portal` dropped `read_vendor_catalog` out of the checked set entirely, taking its
+guard assertion with it. The reach is now DERIVED by `_effective_body()`, which follows the router's
+own module-level helpers transitively, matching a helper named as a BARE VALUE (the
+`run_in_threadpool(_helper, …)` form) as well as a call site — the parenthesised form alone still
+missed it. Three controls ride with it, and deleting the guard from the helper was verified to fail
+the build. The same walk run against `origin/main` finds the same four endpoints, so it tightened the
+lock without re-interpreting existing code.
+
 The route count pinned by `harness_db_resilience.py` §I0 moved **1788 -> 1787**, and this is the
 first pin in that file taken on a REMOVAL. Verified the house way before re-pinning: a clean
 worktree of `origin/main` (4b6734a) reported 1788 / 138 passed, this tree reported 1787, and the
