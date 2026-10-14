@@ -13,15 +13,14 @@
 //     resolves (the D2 degradation contract).
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
-import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { useCachedApi, CONFIG } from '@/lib/cache'
-import { NAV, platformOK, canSeeItem, carrierOKActive, verticalOK, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, type NavItem } from '@/lib/rbac'
+import { useHubGate } from '@/lib/hub-gate'
 import HubTiles from '@/components/HubTiles'
 import StatTile from '@/components/StatTile'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, mergeUnplacedItems, subsFromNavLayout,
          type TileLayout } from '@/lib/tile-hubs'
 
-type NavCfg = { labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }
 type TileResp = { module: string; layout: TileLayout | null; resolved_from: 'tenant' | 'house' | null }
 // GET /commcalc/compliance-summary — one count per queue; count null = the probe could not run.
 type ComplianceCat = { key: string; label: string; href: string; count: number | null; note?: string | null }
@@ -31,8 +30,6 @@ const GROUP_NAME = 'Flags & Compliance'
 const SLUG = slugGroup(GROUP_NAME) // 'flags-compliance' — the D1 tile-layout module key
 
 export default function ComplianceDashboardPage() {
-  const { permissions, session, rbacEnabled, tenant, user } = useAuth()
-  const { activeCarrier } = useActiveCarrier()
   const [summary, setSummary] = useState<ComplianceSummary | null>(null)
   const [sumErr, setSumErr] = useState('')
 
@@ -42,24 +39,17 @@ export default function ComplianceDashboardPage() {
       .catch(e => { setSumErr(e?.message || String(e)); setSummary(null) })
   }, [])
 
-  const navGroup = useMemo(() => NAV.find(g => slugGroup(g.group) === SLUG) || null, [])
-  const { data: navCfg } = useCachedApi<NavCfg>('/api/v1/commcalc/nav-config', CONFIG)
+  const { groupOK, gateItems, navCfg } = useHubGate()
+  // `groupOK` is the platform-only group gate (index §38), read from the one home rather than retyped
+  // — this page walked NAV without it before, and only the ITEM half was ever applied here.
+  const navGroup = useMemo(() => NAV.find(g => slugGroup(g.group) === SLUG && groupOK(g)) || null, [groupOK])
   const { data: tileResp } = useCachedApi<TileResp>(`/api/v1/commcalc/tile-layout?module=${SLUG}`, CONFIG)
 
-  // exact sidebar gating (the /hub/[group] predicates) — this page's own entry excluded
-  const visibleItems = useMemo<NavItem[]>(() => {
-    if (!navGroup) return []
-    const caps = navCfg?.capabilities || {}
-    const gated = rbacEnabled !== false && !!session
-    return navGroup.items
-      .filter(it => it.href !== '/compliance' && !it.href.startsWith('/hub/'))
-      .filter(it => platformOK(it, user))   // index §38.6 — platform-only pages reach the super admin alone
-      .filter(it => !gated || canSeeItem(permissions, it))
-      .filter(it => !it.cap || caps[it.cap] !== false)
-      .filter(it => carrierOKActive(it.href, activeCarrier, caps))
-      .filter(it => verticalOK(it, tenant?.vertical, caps))
-      .filter(it => !navCfg?.layout?.items?.[it.href]?.hidden)
-  }, [navGroup, navCfg, permissions, session, rbacEnabled, activeCarrier, tenant?.vertical, user])
+  // THE VIEWER GATE is lib/hub-gate.ts — the ONE home, shared with the generic hub and the two
+  // curated hubs. This page's own entry is excluded on top of it: a dashboard must not tile itself.
+  const visibleItems = useMemo<NavItem[]>(
+    () => (navGroup ? gateItems(navGroup.items).filter(it => it.href !== '/compliance') : []),
+    [navGroup, gateItems])
 
   const groups = useMemo(() => {
     if (!navGroup) return []

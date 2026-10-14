@@ -41,6 +41,10 @@ on:
       # the row-save lock (index §19.35) — its proof and ratchet live beside frontend/src
       - "frontend/prove_row_save.mjs"
       - "frontend/row_save_pending.txt"
+      # the hub viewer gate (index §CORE-06) — the one home, its consumers, its lock and its proof
+      - "frontend/src/lib/hub-gate.ts"
+      - "backend/harness_hub_viewer_gate.py"
+      - "frontend/scratchpad/prove_hub_gate.mjs"
   push:
     branches: [main]
     paths:
@@ -251,6 +255,31 @@ jobs:
       - name: Run the employee-write proof (the real handlers, both defects reproduced then fixed)
         working-directory: backend
         run: python3 harness_employee_write_proof.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  hub-viewer-gate:
+    # §CORE-06 — "may THIS viewer open THIS page from a tile" is ONE home (frontend/src/lib/hub-gate.ts)
+    # that every HubTiles consumer dereferences. The two CURATED hubs (/storeops, /payroll) rendered a
+    # hand-woven tile literal with NO gate at all, so the Workforce dashboard — the only door to the
+    # tileOnly /storeops/schedule page — offered a store-scoped rep 11 of its 21 interior links and 2 of
+    # its 6 KPI tiles pointing at pages the route guard bounces. The LOCK is static on purpose: the
+    # failure mode is an ABSENT filter, so the page compiles, renders and simply offers dead links, which
+    # neither tsc nor a build can see. The PROOF re-implements the shipped predicates verbatim and runs
+    # them against the real NAV, the real tile literals and the real production role rows, reproducing
+    # the defect on the pre-fix surface before showing it closed.
+    name: Hub viewer gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the hub viewer-gate lock (stdlib only, no deps)
+        working-directory: backend
+        run: python3 harness_hub_viewer_gate.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the hub viewer-gate proof (real NAV, real tile literals, real role rows)
+        working-directory: frontend/scratchpad
+        run: node prove_hub_gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   people-visibility:
     # §14w — "whose PERSON-KEYED rows may this login READ?" is ONE declared fact (app/core/scope.py:

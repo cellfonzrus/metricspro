@@ -264,14 +264,23 @@ WIRES = [
 layout = read("frontend/src/app/(platform)/layout.tsx")
 hub = read("frontend/src/app/(platform)/hub/[group]/page.tsx")
 comp = read("frontend/src/app/(platform)/compliance/page.tsx")
+# The viewer gate for a TILED HUB moved to its own home on 2026-10-14 (index §CORE-06) because four
+# surfaces needed it and the two CURATED hubs had none. So the vertical filter is pinned IN that home,
+# and every hub is pinned to dereference it — a strictly wider net than the two pages checked before.
+hubgate = read("frontend/src/lib/hub-gate.ts")
+wf_hub = read("frontend/src/app/(platform)/storeops/page.tsx")
+pay_hub = read("frontend/src/app/(platform)/payroll/page.tsx")
 auth = read("frontend/src/lib/auth-context.tsx")
 login = read("frontend/src/app/login/page.tsx")
 WIRES += [
     ("sidebar filters by verticalOK", layout, r"verticalOK\(it, tenant\?\.vertical, caps\)"),
     ("route guard asks verticalPathOK", layout, r"verticalPathOK\(pathname, tenant\?\.vertical\)"),
     ("guard's safe home skips vertical-hidden pages", layout, r"safeHomeFor\(permissions, tenant\?\.vertical\)"),
-    ("hub dashboards filter by verticalOK", hub, r"verticalOK\(it, tenant\?\.vertical, caps\)"),
-    ("compliance dashboard filters by verticalOK", comp, r"verticalOK\(it, tenant\?\.vertical, caps\)"),
+    ("the hub viewer gate filters by verticalOK", hubgate, r"verticalOK\(it, tenant\?\.vertical, caps\)"),
+    ("hub dashboards go through that gate", hub, r"useHubGate\(\)"),
+    ("compliance dashboard goes through that gate", comp, r"useHubGate\(\)"),
+    ("the Workforce hub goes through that gate", wf_hub, r"useHubGate\(\)"),
+    ("the Payroll hub goes through that gate", pay_hub, r"useHubGate\(\)"),
     ("active carrier honours uses_carriers", auth, r"defaultActiveCarrier\(carriers, tenant\?\.vertical\?\.uses_carriers\)"),
     ("login redirect skips vertical-hidden pages", login, r"safeHomeFor\(permissions, tenant\?\.vertical\)"),
     ("closing form reads closing_hidden", read("frontend/src/components/ClosingSubmitForm.tsx"),
@@ -375,6 +384,11 @@ check("F1 vertical keys appear only in the mirror", not spelled, spelled)
 print("§G negative controls")
 check("G1 removing the sidebar gate goes RED", not wired(layout.replace("verticalOK(it, tenant?.vertical, caps)", "true"),
                                                          r"verticalOK\(it, tenant\?\.vertical, caps\)"))
+check("G1b removing the vertical filter from the hub viewer gate goes RED",
+      not wired(hubgate.replace("verticalOK(it, tenant?.vertical, caps)", "true"),
+                r"verticalOK\(it, tenant\?\.vertical, caps\)"))
+check("G1c a hub that stops dereferencing that gate goes RED",
+      not wired(wf_hub.replace("useHubGate()", "noGate()"), r"useHubGate\(\)"))
 check("G2 dropping the entitlement ask goes RED",
       not wired(ent_src.replace("module_applies_to_tenant", "nothing"), WIRES[0][2]))
 check("G3 a drifted mirror goes RED", parse_seed(read(MIG).replace("'Wireless retail'", "'Wireless'"))[0] != [dict(r) for r in V.HOUSE_VERTICALS])
