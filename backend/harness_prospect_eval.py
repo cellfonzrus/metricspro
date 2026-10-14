@@ -66,6 +66,8 @@ from app.modules.account import ma_store_pnl as MSP             # noqa: E402
 from app.modules.account import residual_subs as RS             # noqa: E402
 from app.modules.account import engine as ENG                   # noqa: E402
 from app.modules.account import analysis as AN                  # noqa: E402
+from app.modules.commcalc import commission_ledger as _CLED   # noqa: E402
+from app.modules.commcalc import commission_legs as _CLEGS    # noqa: E402
 
 # THE HOME this lock owns, read from the graph rather than typed here — a registry written and left
 # un-dereferenced is not a fix (index §19.18, §50).
@@ -435,8 +437,14 @@ _banned = {"spiff_m1", "spiff_m2", "merchant_discount", "retail_cost", "device_m
 check("it reads NO carrier money column — every dollar comes from a booking one-home",
       not (_strings & _banned), str(sorted(_strings & _banned)))
 _funcs = {n.name for n in ast.walk(_tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-check("it defines no booking function of its own beyond routing an expense and the adder",
-      not {f for f in _funcs if "booking" in f and f not in ("expense_bookings", "add_booking")},
+# `declared_accessory_bookings` is the third name allowed here, and only because it books NOTHING a
+# feed carries: its amount is a figure the SELLER typed and its cost rate is coa's own
+# `accessory_cogs_pct`, injected. The guard's purpose is to stop a carrier-money rule being written
+# here, and §X2 below holds that this function reads no feed column and holds no rate of its own.
+check("it defines no booking function of its own beyond routing an expense, the adder and the "
+      "seller's own declaration",
+      not {f for f in _funcs if "booking" in f and f not in (
+          "expense_bookings", "add_booking", "declared_accessory_bookings")},
       str(sorted(_funcs)))
 check("it imports no database client and no I/O library",
       not {n.module for n in ast.walk(_tree) if isinstance(n, ast.ImportFrom)} &
@@ -1536,8 +1544,8 @@ check("V13 the PICK is per row and display-only: the column's `get` returns our 
       and "ourOf(r)?.label" in _PAGE)
 check("V14 every comparison column declares `agg: 'none'` — the same store can be picked on two "
       "rows, and a summed total row would show a figure our business never earned",
-      _PAGE.split("function comparisonCols")[1].split("const STORE_COLS")[0].count("agg: 'none'")
-      == 5)
+      _PAGE.split("function comparisonCols")[1].split("function declaredCols")[0]
+      .count("agg: 'none'") == 5)
 check("V15 nothing is compared until a human picks it: no store is pre-selected, and the columns "
       "are absent entirely when there is nothing to compare",
       "pick[r.key] || ''" in _PAGE
@@ -1597,6 +1605,273 @@ check("W8 an evaluation with nothing in it reads as empty rather than as a store
       "nothing yet" in _PAGE
       and "has no P&amp;L" in _START
       and "You have not evaluated any store yet" in _START)
+
+# ── §X — WHAT THE SELLER DECLARES, AND THE MONTH-OF-LIFE LEGS ────────────────────────────────────
+# §COMMCALC-03.26 (two editable per-store cells) and §COMMCALC-03.27 (M1 vs M2-M12). The point of
+# every check here is that NEITHER feature invented a rule: the accessory cost rate is coa's, the
+# rent substitution is the one that already existed, and the leg ladders are ma_store_pnl's.
+print("\n  §X  the seller's declarations, and the M1 / M2-M12 legs:")
+
+_PEV_SRC = open(_SRC).read()
+_DECSRC = ("def store_declared_inputs" + _PEV_SRC.split("def store_declared_inputs")[1]
+           .split("# ── THE MONTH-OF-LIFE LEGS")[0])
+
+check("X1 a blank cell stays None and is NOT read as a declared zero — \"the seller declared "
+      "nothing\" and \"the seller declared zero\" are different claims",
+      P.store_declared_inputs([{"store_key": "a"}])["a"] == {"accessory_sales": None, "rent": None}
+      and P.store_declared_inputs([{"store_key": "b", "declared_accessory_sales": 0,
+                                    "declared_rent_monthly": 0}])["b"]
+          == {"accessory_sales": 0.0, "rent": 0.0}
+      and P.store_declared_inputs([{"store_key": "  "}]) == {})
+
+check("X2 the declared booking holds NO accessory cost rate of its own and reads no feed column — "
+      "the rate is coa's `accessory_cogs_pct`, injected",
+      P.declared_accessory_bookings(5000, 0.20) == [
+          ("accessory_rev", 5000.0, P.DECLARED_ACCESSORY_LABEL),
+          ("accessory_cost", 1000.0, P.DECLARED_ACCESSORY_COST_LABEL)]
+      # CODE ONLY — the prose above these functions names the house rate on purpose, and §V2
+      # learned the same lesson: a scan that reads comments fails on its own explanation.
+      and "0.2" not in py_code_only(_DECSRC) and "0.20" not in py_code_only(_DECSRC)
+      and "accessory_cogs_pct" not in py_code_only(_DECSRC).replace("cogs_pct", "")
+      # …and the same rate the LIVE P&L uses, asked of coa itself rather than compared to a literal.
+      and P.declared_accessory_bookings(1000, COA.ACCESSORY_COGS_PCT)[1][1]
+          == round(1000 * COA.ACCESSORY_COGS_PCT, 2))
+
+check("X3 a rate outside 0..1 books no cost rather than a nonsense one, and an absent or zero "
+      "declaration books nothing at all",
+      P.declared_accessory_bookings(5000, 7)[0] == ("accessory_rev", 5000.0,
+                                                    P.DECLARED_ACCESSORY_LABEL)
+      and len(P.declared_accessory_bookings(5000, 7)) == 1
+      and P.declared_accessory_bookings(None, 0.2) == []
+      and P.declared_accessory_bookings(0, 0.2) == []
+      and P.declared_accessory_bookings("", 0.2) == [])
+
+check("X4 the two declared lines are coa's OWN accessory lines, and both were already declared as "
+      "lines a point-of-sale feed would answer — the declaration fills exactly that hole",
+      P.DECLARED_ACCESSORY_LINE in {k for k, *_ in COA.PL_SPEC}
+      and P.DECLARED_ACCESSORY_COST_LINE in {k for k, *_ in COA.PL_SPEC}
+      and COA.PL_SECTION[P.DECLARED_ACCESSORY_LINE] == "revenue"
+      and COA.PL_SECTION[P.DECLARED_ACCESSORY_COST_LINE] == "cogs"
+      and P.DECLARED_ACCESSORY_LINE in P.NEEDS_POS_FEED
+      and P.DECLARED_ACCESSORY_COST_LINE in P.NEEDS_POS_FEED)
+
+# THE ONE THAT MATTERS MOST. A per-store rent must be resolved off the AVERAGED matrix every time.
+# Chaining a second override onto an already-overridden matrix records the FIRST override as "the
+# average it replaced", and the screen then tells the reader our own stores pay the prospect's rent.
+_AVG, _ = P.apply_rent_override(M, CFG["rent_expense_names"], None)
+_ONCE, _M_ONCE = P.apply_rent_override(_AVG, CFG["rent_expense_names"], 9000)
+_CHAINED, _M_CHAINED = P.apply_rent_override(_ONCE, CFG["rent_expense_names"], 3000)
+_FRESH, _M_FRESH = P.apply_rent_override(_AVG, CFG["rent_expense_names"], 3000)
+check("X5 CONTROL — chaining a second rent override reports the FIRST override as our average "
+      "(9000.0), which is the defect `_exp_for` exists to prevent",
+      _M_CHAINED["replaced_average"] == 9000.0 and _M_FRESH["replaced_average"] == 4200.0
+      and _M_CHAINED["replaced_average"] != _M_FRESH["replaced_average"])
+check("X6 …so evaluate() resolves every column off ONE averaged matrix through ONE helper, and the "
+      "router no longer overrides the rent before calling it",
+      "def _exp_for(rent):" in _PEV_SRC
+      and "apply_rent_override(avg_matrix, rent_names, rent)" in _PEV_SRC
+      and _PEV_SRC.count("apply_rent_override(") == 2      # the def, and that single call site
+      and "_pev.apply_rent_override(" not in _rtext)
+
+check("X7 a store that declares nothing is charged OUR AVERAGE and is labelled as such, never "
+      "silently zeroed and never silently presented as the real rent",
+      # The second argument pair is the real hazard: a column that declared NOTHING must not read
+      # the whole-prospect override's `applied` as its own declaration.
+      P.declared_meta(None, 0.2, None, _M_FRESH)["rent_declared"] is False
+      and P.declared_meta(None, 0.2, None, {})["rent_entered"] is None
+      and P.declared_meta(None, 0.2, None, _M_FRESH)["rent_our_average"] == 4200.0
+      and P.declared_meta(3000, 0.2, 3000, _M_FRESH)["rent_declared"] is True
+      and P.declared_meta(None, 0.2, None, {})["accessory_declared"] is False
+      and P.declared_meta(0, 0.2, None, {})["accessory_declared"] is True)
+
+check("X8 the gross profit a declaration adds is the declared sale LESS its cost, so a declaration "
+      "can never add more to the bottom line than it is worth",
+      P.declared_meta(5000, 0.2, None, {})["accessory_gross_profit"] == 4000.0
+      and P.declared_meta(5000, 0.2, None, {})["accessory_cost"] == 1000.0
+      and P.declared_meta(None, 0.2, None, {})["accessory_gross_profit"] is None)
+
+check("X9 the two cells are named ONCE and the endpoint reads that tuple, so a third cell is added "
+      "in one place or not at all",
+      P.DECLARED_INPUT_COLUMNS == ("declared_accessory_sales", "declared_rent_monthly")
+      and "for col in _pev.DECLARED_INPUT_COLUMNS:" in _rtext
+      and 'on_conflict="prospect_id,store_key"' in _rtext)
+
+check("X10 RULE TWO — the declaration vocabulary carries no carrier, tenant or product name",
+      not [w for w in ("boost", "total by verizon", "luxelink", "cellfonz", "ondigo", "vzone")
+           if w in (P.DECLARED_BASIS + P.RENT_CELL_BASIS + P.DECLARED_ACCESSORY_LABEL
+                    + P.DECLARED_ACCESSORY_COST_LABEL).lower()])
+
+# ── the legs ──
+_LAD_E = {"basis": "commission_sheet", "basis_label": "earned", "total": 0.0,
+          "months": {"1": 1000.0, "2": 500.0, "unknown": 25.0}, "by_store": {}}
+_LAD_R = {"basis": "daily_tx", "basis_label": "received", "total": 0.0,
+          "months": {"1": 1237.99, "3": 11545.25, "6": 3090.0}, "by_store": {}}
+_LEGS = P.commission_leg_ladder(_LAD_E, _LAD_R, m1_month=1, leg_labels=_CLED.LEG_LABELS,
+                                ladder_sort_key=_CLEGS.ladder_sort_key)
+check("X11 M1 is the first-month leg and everything later is M2-M12, split by the rule "
+      "`commission_legs` already owns — not by a comparison written here",
+      _LEGS["received"]["buckets"] == {"m1": 1237.99, "trailing": 14635.25, "unsplit": 0.0}
+      and _LEGS["received"]["total"] == 15873.24
+      and _LEGS["trailing_total"] == 14635.25
+      and _LEGS["received"]["bucket_labels"]["trailing"] == "M2–M12")
+
+check("X12 a rung the feed does not carry is NOT invented, and the rungs come back in the ONE "
+      "platform ordering with the unlabelled rung last",
+      _LEGS["received"]["rungs"] == ["1", "3", "6"]
+      and _LEGS["earned"]["rungs"] == ["1", "2", "unknown"]
+      and "range(" not in _PEV_SRC.split("def commission_leg_ladder")[1].split("\ndef ")[0])
+
+check("X13 a sheet that states no month-of-life is reported UNLABELLED, never read as a first "
+      "month — reading a trailing book as fresh is the error that would overprice a deal",
+      _LEGS["earned"]["buckets"]["unsplit"] == 25.0
+      and _LEGS["earned"]["buckets"]["m1"] == 1000.0
+      and _CLEGS.ladder_sort_key("unknown") > _CLEGS.ladder_sort_key("99"))
+
+check("X14 a basis with no rows is reported as not measured rather than as a measured zero",
+      P.commission_leg_ladder({}, {}, leg_labels=_CLED.LEG_LABELS)["earned"]["measured"] is False
+      and P.commission_leg_ladder({}, {}, leg_labels=_CLED.LEG_LABELS)["received"]["total"] == 0.0
+      and P.commission_leg_ladder({}, {}, leg_labels=_CLED.LEG_LABELS)["trailing_share"] is None
+      and "No trailing-leg commission is measured" in P.commission_leg_ladder(
+          {}, {}, leg_labels=_CLED.LEG_LABELS)["reading"])
+
+check("X15 the legs are the two LADDER one-homes, injected and called with the prospect's own rows "
+      "— prospect_eval derives no month from a label and parses no detail string",
+      "ma_earned_month_ladder" in _PEV_SRC and "ma_received_month_ladder" in _PEV_SRC
+      and '"ma_earned_month_ladder": _msp.ma_earned_month_ladder' in _rtext
+      and '"ma_received_month_ladder": _msp.ma_received_month_ladder' in _rtext
+      # …and it PARSES nothing. The rungs come straight out of the injected ladder's own `months`
+      # dict; there is no regex here, no `M`-prefix slicing of a detail label and no call to either
+      # month parser. `ma_store_pnl` owns that reading and is the only place that does it. (A blunt
+      # ban on the word "month" would be wrong: `months` and `m1_month` are the ladder's own names.)
+      and "month_leg_of" not in py_code_only(_PEV_SRC)
+      and "parse_payment_month" not in _PEV_SRC
+      and not {t for t in ("re.search", "re.match", 'startswith("M")', "[1:].isdigit()")
+               if t in py_code_only(
+                   _PEV_SRC.split("def commission_leg_ladder")[1].split("\ndef ")[0])})
+
+check("X16 the trailing share is REPORTED with its warning, because M2-M12 is money owed on lines "
+      "sold before the takeover and a price built on the total overpays for it",
+      0 < (_LEGS["trailing_share"] or 0) < 1
+      and "already sold before the takeover" in _LEGS["reading"]
+      and "not recurring revenue" in _LEGS["reading"])
+
+# ── the screen ──
+_DECPAGE = _PAGE.split("function declaredCols")[1].split("const STORE_COLS")[0]
+check("X17 the two cells are EDITABLE on the store table, and the rent cell opens on OUR OWN "
+      "average — the design the owner chose between the two he named",
+      "declared_accessory_sales" in _DECPAGE and "declared_rent_monthly" in _DECPAGE
+      and "r.declared?.rent_our_average" in _DECPAGE
+      and "declaredCols(declaredPct, cellDraft, onCellDraft, saveCell" in _PAGE)
+
+check("X18 a saved cell renders the SERVER's figure, not a copy the screen kept — the draft is "
+      "dropped on save and the reload brings the figure the P&L was built from",
+      "delete next[`${storeKey}|${field}`]" in _PAGE
+      and "draft[dk] !== undefined ? draft[dk]" in _DECPAGE
+      and "await save(`/prospects/${pid}/store-inputs" in _PAGE)
+
+check("X19 clearing a cell sends null (declared nothing), never 0 — the empty box and the declared "
+      "zero reach the server as different claims",
+      "value.trim() === '' ? null : value.trim()" in _PAGE)
+
+check("X20 the page holds no accessory cost rate of its own: the percentage it prints comes from "
+      "the server's own resolved config",
+      "data?.declared?.accessory_cogs_pct" in _PAGE
+      and "0.2" not in _DECPAGE and "* 100" in _DECPAGE)
+
+# ── §X21+ END TO END: the declaration reaching the statement, and the rent moving ONE column ─────
+# The checks above prove the pieces. These prove the arithmetic that the owner will actually read:
+# a declared accessory sale raising gross profit and the bottom line, and a per-store rent moving
+# that column's expenses and NOTHING else.
+# ONE CELL AT A TIME, deliberately. A fixture that declares both an accessory sale and a rent moves
+# the bottom line twice, and a check that asserted one delta would then be passing for the wrong
+# reason — which is how the first draft of X21 read $9,000 as $4,000 and still went green.
+_SKEYS = sorted(_EVX["store_scenarios"])
+# THE RENT FIXTURE NAMES THE LINE THE CONFIG CALLS RENT. `_EXPM` above calls it "rent", which the
+# house `rent_expense_names` ("rent / lease") does not match — `apply_rent_override` then correctly
+# ADDS the declared line instead of replacing one, and the first draft of X23 read that +1,000 as a
+# replacement. The fixture is the thing that was wrong, so it is the thing that changed.
+_EXPR = {"rent / lease": {"expense_name": "Rent / Lease", "amount": 6000.0, "source_key": "rent"},
+         "wages": {"expense_name": "Salaries", "amount": 4000.0, "source_key": "salaries"}}
+_EVR0 = P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPR, {}, "May 2026")
+_baseR = _tot(_EVR0["store_scenarios"][_SKEYS[0]]["scenarios"]["keep"]["inputs"])
+_baseRQ = _tot(_EVR0["store_scenarios"][_SKEYS[1]]["scenarios"]["keep"]["inputs"])
+_DEC_IN = [{"store_key": _SKEYS[0], "declared_accessory_sales": 5000,
+            "declared_rent_monthly": 1000}]
+_EVR = P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPR, {}, "May 2026",
+                  store_inputs=[{"store_key": _SKEYS[0], "declared_rent_monthly": 1000}],
+                  accessory_cogs_pct=0.20)
+_colR = _tot(_EVR["store_scenarios"][_SKEYS[0]]["scenarios"]["keep"]["inputs"])
+_colRQ = _tot(_EVR["store_scenarios"][_SKEYS[1]]["scenarios"]["keep"]["inputs"])
+_DEC_ACC = [{"store_key": _SKEYS[0], "declared_accessory_sales": 5000}]
+_EVA = P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                  store_inputs=_DEC_ACC, accessory_cogs_pct=0.20)
+_colA = _tot(_EVA["store_scenarios"][_SKEYS[0]]["scenarios"]["keep"]["inputs"])
+_EVD = P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                  store_inputs=_DEC_IN, accessory_cogs_pct=0.20)
+_wholeD = _tot(_EVD["scenarios"]["keep"]["inputs"])
+_colD = _tot(_EVD["store_scenarios"][_SKEYS[0]]["scenarios"]["keep"]["inputs"])
+_colQ = _tot(_EVD["store_scenarios"][_SKEYS[1]]["scenarios"]["keep"]["inputs"])
+_baseD = _tot(_EVX["store_scenarios"][_SKEYS[0]]["scenarios"]["keep"]["inputs"])
+_baseQ = _tot(_EVX["store_scenarios"][_SKEYS[1]]["scenarios"]["keep"]["inputs"])
+
+check("X21 a declared accessory sale raises that column's REVENUE by the declared figure and its "
+      "COST OF GOODS by the org's own rate — the gross profit moves by the difference, never by "
+      "the whole sale",
+      round(_colA["revenue"] - _baseD["revenue"], 2) == 5000.0
+      and round(_colA["cogs"] - _baseD["cogs"], 2) == 1000.0
+      and round(_colA["gross_profit"] - _baseD["gross_profit"], 2) == 4000.0
+      and round(_colA["net_income"] - _baseD["net_income"], 2) == 4000.0
+      and round(_colA["expenses"], 2) == round(_baseD["expenses"], 2),   # the rent did NOT move
+      f"rev {_colA['revenue'] - _baseD['revenue']} cogs {_colA['cogs'] - _baseD['cogs']} "
+      f"gp {_colA['gross_profit'] - _baseD['gross_profit']}")
+
+check("X22 …and it reaches the bottom line through the STATEMENT'S own arithmetic, so the accessory "
+      "target falls by exactly what the declaration added",
+      (_EVD["store_scenarios"][_SKEYS[0]]["scenarios"]["keep"] is not None)
+      and round(P.accessory_break_even(_baseD, 0)["needed"]
+                - P.accessory_break_even(_colA, 0)["needed"], 2) == 4000.0)
+
+check("X23 the rent moves ONE column: the declaring store's expenses change and the other store's "
+      "do not — which is the whole point of a per-store cell",
+      round(_baseR["expenses"], 2) == 10000.0
+      and round(_baseR["expenses"] - _colR["expenses"], 2) == 5000.0   # 6,000 average -> 1,000 declared
+      and round(_colRQ["expenses"], 2) == round(_baseRQ["expenses"], 2) == 10000.0,
+      f"declaring {_baseR['expenses']}->{_colR['expenses']}  other {_baseRQ['expenses']}->{_colRQ['expenses']}")
+
+check("X24 the declaring column reports the average it displaced, and the other column still "
+      "reports itself as carrying our average",
+      _EVR["store_scenarios"][_SKEYS[0]]["declared"]["rent_declared"] is True
+      and _EVR["store_scenarios"][_SKEYS[0]]["declared"]["rent_entered"] == 1000.0
+      and _EVR["store_scenarios"][_SKEYS[0]]["declared"]["rent_our_average"] == 6000.0
+      and _EVR["store_scenarios"][_SKEYS[1]]["declared"]["rent_declared"] is False
+      and _EVR["store_scenarios"][_SKEYS[1]]["declared"]["accessory_sales"] is None)
+
+check("X25 the whole-prospect column carries the SUM of the declarations, so revenue still ties "
+      "across the columns exactly as §N holds it must",
+      round(_wholeD["revenue"] - _wholeX["revenue"], 2) == 5000.0
+      and _EVD["declared"]["accessory_total"] == 5000.0
+      and round(sum(_tot(b["scenarios"]["keep"]["inputs"])["revenue"]
+                    for b in _EVD["store_scenarios"].values()), 2)
+          == round(_wholeD["revenue"], 2))
+
+check("X26 a declaration keyed to a store the uploads do not name is REPORTED by name, never "
+      "silently added to a total nobody can drill into",
+      P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                 store_inputs=[{"store_key": "nobody", "declared_accessory_sales": 999}],
+                 accessory_cogs_pct=0.2)["declared"]["keys_naming_no_store"] == ["nobody"]
+      and P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                     store_inputs=[{"store_key": "nobody", "declared_accessory_sales": 999}],
+                     accessory_cogs_pct=0.2)["declared"]["accessory_total"] is None)
+
+check("X27 a store with no declaration is NAMED too, so an empty cell is an invitation rather than "
+      "an absence the reader has to notice",
+      sorted(_EVD["declared"]["stores_without_declaration"]) == [_SKEYS[1]]
+      and _EVD["declared"]["stores_declaring"] == [_SKEYS[0]])
+
+check("X28 with no declarations at all the evaluation is byte-identical to what it was before this "
+      "ask — our average rent, no accessory line, nothing moved",
+      _tot(P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026")
+           ["scenarios"]["keep"]["inputs"]) == _wholeX)
 
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")

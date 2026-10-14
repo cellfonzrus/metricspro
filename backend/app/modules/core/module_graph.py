@@ -218,7 +218,7 @@ FACTS: dict[str, dict] = {
                     'expenses with ITS actual rent — and which of its subscriber accounts carry '
                     'more lines than one month should?',
         "homes": ('app/modules/commcalc/prospect_eval.py',),
-        "index": ('COMMCALC-03',),
+        "index": ('COMMCALC-03', 'COMMCALC-03.26', 'COMMCALC-03.27'),
         "locks": ('harness_prospect_eval.py', 'harness_upload_trace_coverage.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04). The lock verifies it against the real import graph.
@@ -230,6 +230,17 @@ FACTS: dict[str, dict] = {
         # `account/analysis.pl_totals`, `commcalc/expenses_effective` and `commcalc/column_mapping` —
         # injected by `router._prospect_homes()` so the prospect P&L and the company P&L cannot
         # disagree. §D of the lock fails the build if this module grows a rule of its own.
+        #
+        # §COMMCALC-03.26 / .27 ADDED TWO MORE DEREFERENCES, NOT TWO MORE RULES:
+        #   · the seller's declared accessory sale books its COST at `account/coa`'s own
+        #     `account_config.accessory_cogs_pct` (mig 611, the rate the owner set to 20% on
+        #     2026-06-20), injected — §X2 of the lock fails the build on a literal rate here;
+        #   · the M1 / M2-M12 split reads `account/ma_store_pnl.ma_earned_month_ladder` and
+        #     `ma_received_month_ladder`, with `commcalc/commission_legs` saying which rung is
+        #     trailing and `commcalc/commission_ledger.LEG_LABELS` saying what the buckets are
+        #     called. §X15 fails the build if this module parses a month out of a label itself.
+        # The per-store rent is the SAME `apply_rent_override` §COMMCALC-03.6 shipped, now applied
+        # once per column instead of once per prospect; §X6 holds that exactly one call site exists.
         "callers": {
             'app/modules/commcalc/router.py': ('_pev',),
         },
