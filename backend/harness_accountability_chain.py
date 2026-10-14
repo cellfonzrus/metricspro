@@ -154,7 +154,13 @@ check("date_span on garbage is empty, never a crash", DAM.date_span("not-a-date"
 rows, summ = DAM.stage_chain([("B-559", "2026-09-06")], [], [], [], [])
 check("one expected store-day with no artefact yields exactly one row", len(rows), 1)
 check("...and it is stuck at the FIRST stage", rows[0]["stuck_at"], "closing")
-check("...with closing reading 'no closing filed'", rows[0]["stages"][0]["detail"], "no closing filed")
+# WORDING UPDATED 2026-10-14: the cell no longer says "no closing filed", it says WHICH kind of
+# not-filed this is — the `unfinished_day` label (index §29.12). The old string could not tell
+# "nobody came in" from "a rep submitted and the gate sent them back", and §J below proves the
+# distinction rather than this line asserting the flattened wording.
+check("...with closing reading the unfinished-day label for a day nobody touched",
+      rows[0]["stages"][0]["detail"], "Not submitted")
+check("...and naming the state, not just the absence", rows[0]["stages"][0]["state"], "not_started")
 check("...zero stages done", rows[0]["stages_done"], 0)
 check("...and it is not complete", rows[0]["complete"], False)
 check("the five stages appear in the owner's order",
@@ -359,6 +365,136 @@ else:
     check("the screen exists", False)
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+print("\nJ. WHO DID NOT CLOSE, AND WHOSE CASH IS STILL IN THE DRAWER (owner 2026-10-14)")
+# Owner, verbatim: "report which store did not submit closing and which store got store cash picked
+# and another report which cash did not get [picked up] - these can be in one report with 2 filters
+# added picked and not picked up - with all standard filters".
+#
+# TWO LIES THIS SECTION FORBIDS, both of which the chain told before:
+#   1. a store-day where a rep DID submit and the close gate sent them back read exactly like one
+#      nobody worked — a correction to chase, reported as a nag;
+#   2. a store-day with real declared cash and nobody to collect it read "no envelope recorded" —
+#      indistinguishable from a store-day with nothing to collect at all.
+from app.modules.closing import unfinished_day as UFD          # noqa: E402
+# `envelope.py` imports dateutil, which this stdlib-only harness must not need — so it is loaded
+# PURE (top-level defs only), the same posture `actors.py` is loaded with above. The function under
+# test does no I/O and no date parsing.
+ENV = load_pure(os.path.join(HERE, "app", "modules", "closing", "envelope.py"))
+
+# ── 1. the closing cell dereferences `unfinished_day`, it does not re-derive a state ────────────
+check("the closing-state vocabulary IS unfinished_day's, never a second list",
+      [x["key"] for x in DAM.chain_summary([])["closing_states"]], list(UFD.STATES))
+_ATT = [{"store_code": "B-117", "close_date": "2026-10-01", "employee_name": "Abid",
+         "attempt_no": 1, "created_at": "2026-10-01T22:00:00Z"},
+        {"store_code": "B-117", "close_date": "2026-10-01", "employee_name": "Abid",
+         "attempt_no": 2, "created_at": "2026-10-01T22:00:02Z"}]
+_r_none, _ = DAM.stage_chain([("B-117", "2026-10-01")], [], [], [], [])
+_r_att, _ = DAM.stage_chain([("B-117", "2026-10-01")], [], [], [], [], attempt_rows=_ATT)
+check("a store-day nobody touched reads NOT SUBMITTED", _r_none[0]["closing_state"], "not_started")
+check("...and the SAME store-day with two blocked submits reads AWAITING CORRECTION",
+      _r_att[0]["closing_state"], "awaiting_correction")
+check("...which is the live B-117 / 2026-10-01 shape the unfinished-day home was built for",
+      _r_att[0]["closing_label"], UFD.LABELS[UFD.AWAITING_CORRECTION])
+check("...and it counts the real tries", _r_att[0]["stages"][0]["tries"], 2)
+check("a submit the gate TURNED AWAY is not a try, so the day reads turned_away",
+      DAM.stage_chain([("B-117", "2026-10-01")], [], [], [], [],
+                      attempt_rows=[dict(_ATT[0], refused=True)])[0][0]["closing_state"],
+      "turned_away")
+check("a FILED store-day is finished whatever its attempt history",
+      DAM.stage_chain([("B-117", "2026-10-01")],
+                      [{"store_code": "B-117", "close_date": "2026-10-01",
+                        "employee_name": "Abid", "submitted_at": "2026-10-02T01:00:00Z"}],
+                      [], [], [], attempt_rows=_ATT)[0][0]["closing_state"], "finished")
+check("`done` is UNCHANGED by all of this — a closing row exists or it does not",
+      [_r_none[0]["stages"][0]["done"], _r_att[0]["stages"][0]["done"]], [False, False])
+
+# ── 2. the pickup verdict, on the ENVELOPE spine, cash only, joined on (store, day, rep) ────────
+_DAY = {"store_code": "B-1", "day": "2026-10-01", "envelopes": [
+    {"kind": "cash", "employee_name": "Rana", "state": "undisposed", "amount": 500.0,
+     "picked_up_at": "2026-10-01T20:00:00Z"},
+    {"kind": "billpay", "employee_name": "Moza", "state": "undisposed", "amount": 99.0}]}
+_DECL = [{"employee_name": "Rana", "cash": 500.0}, {"employee_name": "moza", "cash": 300.0}]
+_two = DAM.cash_pickup_state(_DECL, _DAY)
+check("two reps filed, one envelope collected -> PARTLY, never picked",
+      _two["state"], DAM.PARTLY_PICKED_UP)
+check("...and the money still in the drawer is the UNCOLLECTED rep's", _two["awaiting_cash"], 300.0)
+check("...the collected one is reported separately, not netted against it", _two["picked_cash"], 500.0)
+_BP_ONLY = {"envelopes": [{"kind": "billpay", "employee_name": "Moza", "state": "deposited",
+                           "amount": 300.0}]}
+check("A BILL-PAY pickup does NOT collect the store cash (the owner asked for store cash)",
+      DAM.cash_pickup_state([{"employee_name": "Moza", "cash": 300.0}], _BP_ONLY)["state"],
+      DAM.NOT_PICKED_UP)
+check("...and none of its money is reported as store cash collected",
+      DAM.cash_pickup_state([{"employee_name": "Moza", "cash": 300.0}],
+                            _BP_ONLY)["collected_recorded"], 0.0)
+check("the rep join folds case, so 'moza' and 'Moza' are one person",
+      DAM.cash_pickup_state([{"employee_name": "MOZA", "cash": 300.0}],
+                            {"envelopes": [{"kind": "cash", "employee_name": "moza",
+                                            "state": "deposited", "amount": 300.0}]})["state"],
+      DAM.PICKED_UP)
+check("nothing declared and nothing collected is NO CASH TO COLLECT, not a gap",
+      DAM.cash_pickup_state([], None)["state"], DAM.NOTHING_TO_COLLECT)
+check("declared cash and no pickup row at all is NOT PICKED UP, with the money named",
+      [DAM.cash_pickup_state(_DECL, None)["state"], DAM.cash_pickup_state(_DECL, None)["awaiting_cash"]],
+      [DAM.NOT_PICKED_UP, 800.0])
+check("every declared envelope collected is PICKED UP",
+      DAM.cash_pickup_state([{"employee_name": "Rana", "cash": 500.0}], _DAY)["state"],
+      DAM.PICKED_UP)
+# The cell and the row carry the same verdict — one of them is the other, not a sibling derivation.
+_rowp, _sump = DAM.stage_chain([("B-1", "2026-10-01")], [], [], [_DAY], [],
+                               declared_envelopes={("B-1", "2026-10-01"): _DECL})
+check("the row's pickup_state IS the pickup cell's cash_state",
+      _rowp[0]["pickup_state"], _rowp[0]["stages"][2]["cash_state"])
+check("...and the row's money IS the cell's money",
+      [_rowp[0]["cash_declared"], _rowp[0]["cash_awaiting"]],
+      [_rowp[0]["stages"][2]["declared_cash"], _rowp[0]["stages"][2]["awaiting_cash"]])
+check("the summary totals the cash still out there over exactly the rows handed in",
+      _sump["cash_awaiting"], 300.0)
+check("every pickup state is a summary key even at zero",
+      [x["key"] for x in _sump["pickup_states"]], list(DAM.PICKUP_STATES))
+
+# ── 3. THE TWO FILTERS mean ONE thing, declared once ───────────────────────────────────────────
+check("'picked' admits only the fully-collected state",
+      DAM.pickup_filter_states("picked"), (DAM.PICKED_UP,))
+check("'not picked' admits PARTLY too — cash is still in that drawer",
+      DAM.PARTLY_PICKED_UP in DAM.pickup_filter_states("not_picked"), True)
+check("...and does NOT admit a store-day with nothing to collect",
+      DAM.NOTHING_TO_COLLECT in DAM.pickup_filter_states("not_picked"), False)
+check("a blank or mistyped filter is NO filter, never an empty report",
+      [DAM.pickup_filter_states(""), DAM.pickup_filter_states("nope")], [None, None])
+check("the four states and the filters are exhaustive of each other",
+      sorted(set(DAM.PICKUP_FILTERS["picked"]) | set(DAM.PICKUP_FILTERS["not_picked"])
+             | {DAM.NOTHING_TO_COLLECT}), sorted(DAM.PICKUP_STATES))
+
+# ── 4. ONE HOME for "is there an envelope here to collect", dereferenced by BOTH callers ────────
+check("envelope.is_collectable admits cash", ENV.is_collectable({}, 12.5), True)
+check("...and a photographed envelope with no cash left in it",
+      ENV.is_collectable({"envelope_picture": "p.jpg"}, 0.0), True)
+check("...and nothing else", ENV.is_collectable({}, 0.0), False)
+_pk_fn = next((f for f in ast.walk(ast.parse(RSRC))
+               if isinstance(f, ast.FunctionDef) and f.name == "closing_pickups"), None)
+check("the cash-pickup screen dereferences it instead of spelling the rule",
+      "_envelope.is_collectable" in (ast.get_source_segment(RSRC, _pk_fn) or ""), True)
+_ch_fn = next((f for f in ast.walk(ast.parse(RSRC))
+               if isinstance(f, ast.FunctionDef) and f.name == "accountability_chain"), None)
+_CH = ast.get_source_segment(RSRC, _ch_fn) or ""
+check("the chain dereferences the same predicate for its cash columns",
+      "_envelope.is_collectable" in _CH, True)
+check("...and the drawer figure comes from envelope_report, not a column read",
+      "declared_total_cash" in _CH and "CLOSING_SELECT" in _CH, True)
+check("...and no second copy of the collectable rule survives in the router",
+      'not r.get("envelope_picture")' in nocomment(RSRC), False)
+check("the chain reads `refused`, or every turned-away submit would read as a real try",
+      "refused" in _CH, True)
+check("the endpoint applies the owner's two filters through the pure module",
+      "pickup_filter_states" in _CH and "closing_submitted" in _CH, True)
+check("...and takes all three standard filters, each through its one resolver",
+      all(x in _CH for x in ("_resolve_store_filter", "_resolve_market_filter",
+                             "_resolve_employee_filter")), True)
+check("a rep filter drops the empty-store spine rather than accusing a rep of a store they never saw",
+      "[] if employee_set else" in _CH, True)
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
 print("\nI. CONTROLS — each rule goes RED with the defect patched back in")
 check("CONTROL: counting a verification row's EXISTENCE as verified would pass an unverified day",
       bool({"verified": False}.get("verified_by", "Rana")))
@@ -372,6 +508,22 @@ check("CONTROL: a store-day absent from the spine would vanish from a 'done or n
       DAM.stage_chain([], [], [], [], [])[0], [])
 check("CONTROL: sending a name to the uid resolver would ask the DB about 'Rana'",
       AM.is_actor_uid("Rana"), False)
+# §J's own controls — each is the defect as it actually shipped.
+check("CONTROL: reading 'no closing row' as 'nobody submitted' loses Abid's two blocked tries",
+      UFD.state_for(None, _ATT) != UFD.NOT_STARTED, True)
+check("CONTROL: measuring the pickup off the PICKUP TABLE alone shows no envelope for $800 waiting",
+      len((DAM.stage_chain([("B-1", "2026-10-01")], [], [], [], [])[0])[0]["stages"][2]["envelopes"]
+          if isinstance((DAM.stage_chain([("B-1", "2026-10-01")], [], [], [], [])[0])[0]
+                        ["stages"][2]["envelopes"], list) else []) == 0
+      and DAM.cash_pickup_state(_DECL, None)["awaiting_cash"] == 800.0, True)
+check("CONTROL: subtracting the recorded pickup from the declared drawer would call a netted day short",
+      DAM.cash_pickup_state([{"employee_name": "Rana", "cash": 500.0}],
+                            {"envelopes": [{"kind": "cash", "employee_name": "Rana",
+                                            "state": "deposited", "amount": 420.0}]})["state"],
+      DAM.PICKED_UP)
+check("CONTROL: folding bill-pay envelopes in would call a store-cash day collected",
+      DAM.cash_pickup_state([{"employee_name": "Moza", "cash": 300.0}],
+                            _BP_ONLY)["picked_cash"], 0.0)
 
 print("\n" + "=" * 96)
 print("RESULT: %d passed, %d failed" % (_pass, _fail))

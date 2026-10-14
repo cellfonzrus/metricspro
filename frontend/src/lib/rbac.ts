@@ -188,6 +188,7 @@ const REPORT_TREES: [string, string][] = [
   ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
   ['/closing/recon', 'closing'],
   ['/closing/accountability', 'closing'],
+  ['/closing/closing-pickup-status', 'closing'],
   // MANAGEMENT WATCHDOG (owner 2026-10-05, index §53). The whole /watchdog tree is one report
   // area — the board, every area page under the dynamic route, and the void register — gated as
   // 'commissions', byte-identical to /commcalc/flags, because it is the same findings table read
@@ -1044,6 +1045,11 @@ export const NAV: NavGroup[] = [
     // machinery). Same scope tiers as DM Verify — DMs count envelopes for their span.
     { href: '/closing/envelope-report', label: 'Management Envelope Receipt', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/accountability', label: 'Cash Accountability Chain', icon: '🔗', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // CLOSING & CASH PICKUP STATUS (owner ask 2026-10-14): "which store did not submit closing and
+    // which store got store cash picked ... which cash did not get [picked up]". Placed next to the
+    // chain it is a view of — same module key and same scope tiers, because it reads the same
+    // keyset-scoped endpoint and shows nothing the chain does not.
+    { href: '/closing/closing-pickup-status', label: 'Closing & Cash Pickup Status', icon: '🔔', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Management one-screen cash recon (owner 2026-09-02): "only market manager and above see it"
     // — the ENFORCEMENT is server-side (closing/billpay_pickup.can_see_cash_recon, the mig-434
@@ -1423,6 +1429,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
   ['/closing/tender-recon', 'ops'], ['/closing/tender-recon-3way', 'ops'], ['/closing/accessory-recon', 'ops'],
   ['/closing/pickup', 'ops'], ['/closing/billpay-pickup', 'ops'],
+  ['/closing/closing-pickup-status', 'ops'],
   ['/closing/cash-recon-management', 'ops'], ['/closing/epay-recon', 'ops'],
   ['/closing/envelope-report', 'ops'],
   ['/closing/external-credit-recon', 'ops'],

@@ -7175,7 +7175,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
-| `GET /closing/accountability-chain` (**THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN** — per (store, day): Daily Closing / DM verified / Cash pickup / Cash handover / Management review, each `done`+`at`+`by`, plus `stuck_at`; **plus `dm` (the assigned district manager) and `worked` (who was actually in the store that day, `actual`/`scheduled`/`none`, resolved for the 31 most recent dates with `worked_resolved_dates` / `worked_dates_capped`) — §48.7**; keyset-scoped, 62-day cap, standard `stores`/`market` filters through their one resolver each) | `closing/router.py` (`accountability_chain`); pure `closing/deposit_accountability.py` (`expected_store_codes`, `date_span`, `stage_chain`, `chain_summary`, `stage_catalog`) dereferencing `day_accountability`; names via `core/actors.py` (`is_actor_uid`/`resolve_actor_names`); pure `storeops/org_chain.py` (`dm_by_store`) over `storeops.router.org_chain_inputs`; who-worked via `closing/router._who_worked_display_by_store`; screen `/closing/accountability` | §48, §48.7 |
+| `GET /closing/accountability-chain` (**THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN** — per (store, day): Daily Closing / DM verified / Cash pickup / Cash handover / Management review, each `done`+`at`+`by`, plus `stuck_at`; **plus `dm` (the assigned district manager) and `worked` (who was actually in the store that day, `actual`/`scheduled`/`none`, resolved for the 31 most recent dates with `worked_resolved_dates` / `worked_dates_capped`) — §48.7**; keyset-scoped, 62-day cap, **plus, per row, `closing_state`/`closing_label` (dereferencing `unfinished_day.describe`) and `pickup_state`/`pickup_label` + `cash_declared`/`cash_picked`/`cash_awaiting` (dereferencing `deposit_accountability.cash_pickup_state` over the declared envelope spine) — §48.8**; keyset-scoped, 62-day cap, ALL THREE standard filters (`stores`/`markets`+`market`/`employees`) through their one resolver each, plus `pickup=picked|not_picked` and `closing=submitted|not_submitted`) | `closing/router.py` (`accountability_chain`); pure `closing/deposit_accountability.py` (`expected_store_codes`, `date_span`, `stage_chain`, `chain_summary`, `stage_catalog`) dereferencing `day_accountability`; names via `core/actors.py` (`is_actor_uid`/`resolve_actor_names`); pure `storeops/org_chain.py` (`dm_by_store`) over `storeops.router.org_chain_inputs`; who-worked via `closing/router._who_worked_display_by_store`; cash via `envelope_report.declared_total_cash` + `envelope.net_row` + `envelope.is_collectable`; screens `/closing/accountability` and `/closing/closing-pickup-status` (+ the `/closing` dashboard tab, same component) | §48, §48.7, §48.8 |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report |
 | `GET /portout-fraud` (THE DAILY FRAUD REPORT: port-in activations that ported OUT again inside the configured window, with the accessory sold alongside each one; composes `line_class.activation_class` (is it a port-in), `event_sales.line_feed_state` (did it stay — the retention report's own derivation), `_is_accessory`/`_is_setup_fee` (the Sales Report's own accessory dollar) and the retention report's own bounded `raw_mi` loader; pure `portout_fraud.py`; READ-ONLY, `books_to == []`; the headline carries `undecidable` + `coverage_pct` beside `flagged`) | `commcalc/router.py` (`get_portout_fraud`, beside `/dlar-vs-platform`; rules via `_portout_rules`) | §19.32 — the daily fraud report |
@@ -7417,6 +7417,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Bill-pay cash pending remittance (per store) | `daily_closing.epay_on_cash` (DM `dm_epay_cash` winning) − `billpay_pickup.amount` (picked_up) | `_billpay_position_core` → `billpay_pickup.billpay_position` (`GET /closing/billpay-pickups` by_store; mig `942`) |
 | Deposit-accountability GREEN day | ≥1 picked-up envelope AND all accounted: (`disposition='deposited'` AND `deposit_slip_path` set) OR (`disposition='handed_to_mgmt'` AND `mgmt_confirmed`) | `deposit_accountability.day_accountability` → `GET /closing/deposit-accountability` (mig `943`) |
 | Cash-chain STAGE DONE (per store-day, 5 stages) | `closing`: ≥1 `daily_closing` row · `dm_verify`: a verification row with `verified` · `pickup`: EVERY envelope picked up · `handover`: every picked envelope has a disposition · `mgmt_review`: ≥1 `envelope_count` row | `deposit_accountability.stage_chain` → `GET /closing/accountability-chain` (§48) |
+| **Daily closing SUBMITTED or not (per store-day)** | four states, not two: `not_started` (nobody submitted) · `awaiting_correction` (a rep submitted and the close gate sent them back — real money, real variance) · `turned_away` (every submit refused before the gate) · `finished`. The `not_submitted` filter is "`finished` is false" | `unfinished_day.describe` → `deposit_accountability.stage_chain` → `GET /closing/accountability-chain` (§29.12, §48.8) |
+| **Store cash PICKED UP or not (per store-day)** | over the DECLARED envelope spine (`declared_total_cash` → `net_row` → `is_collectable`) joined to the cash pickups on (store, day, rep): `nothing_to_collect` · `not_picked_up` · `partly_picked_up` · `picked_up`. Decided by envelope COUNTS, never by subtracting one money basis from another; bill-pay pickups excluded by `kind`. `not_picked` admits PARTLY | `deposit_accountability.cash_pickup_state` → `GET /closing/accountability-chain` (§48.8) |
+| **Cash still in the store (per store-day)** | the declared cash of the envelopes nobody has collected yet (`cash_awaiting`); `collected_recorded` beside it is what the pickup rows themselves carry, never subtracted from it | `deposit_accountability.cash_pickup_state` → `GET /closing/accountability-chain` (§48.8) |
 | Cash-chain STUCK AT | the FIRST stage, in chain order, that is not done (NULL = fully accounted) | `deposit_accountability.stage_chain` → `GET /closing/accountability-chain` (§48) |
 | Store-days a closing is EXPECTED from | active store, in the viewer's keyset, passing the screen's store/market filters × every day in the range — a roster fact, NOT a staffing fact (§48.5) | `deposit_accountability.expected_store_codes` × `date_span` → `GET /closing/accountability-chain`, and `not_closed` on `GET /closing/pickups` |
 | Actual cash picked from envelope (variance vs declared, per pickup) | `cash_pickup`/`billpay_pickup.actual_picked_amount` (mig `949`; NULL = not recorded, never 0) vs the declared `amount` snapshot; short/over/match = `envelope_report.count_fields` (the mig-936 truth table, reused) | `pickup_actual.row_variance` → `GET /closing/pickups`/`/billpay-pickups` variance fields + accountability day chips; RELIEVES `_cash_position_core` (→ mig-938 BS store-cash) ONLY under `cash_pickup_config.pickup_actual_relieves_cash` (default false = declared, byte-identical; `pickup_actual.outflow_amount`) |
@@ -19723,7 +19726,7 @@ attainment division in `targets_engine`, no second org-tree walk, no sales recou
 > or not with dates and by who / DM verified or not with dates and by who / CAsh pick with dates and by
 > who / Cash Handover with dates and by who / managment review with dates and by who"*
 
-`GET /closing/accountability-chain` → **Cash Accountability Chain** (`/closing/accountability`). One row
+`GET /closing/accountability-chain` → **Cash Accountability Chain** (`/closing/accountability`) and **Closing & Cash Pickup Status** (`/closing/closing-pickup-status` + the `/closing` dashboard tab, §48.8). One row
 per **(store, day)**, five stage cells, each carrying `done` / `at` / `by`, plus `stuck_at` — the first
 stage not yet done.
 
@@ -19871,6 +19874,74 @@ resolver contains a district walk of its own) and `harness_dmverify_parity.py` �
 REAL endpoint over an org tree + a clock-in + a sales row: both people named, the DM named, the unwired
 tree distinguished from an empty one, and the cap proven by lowering it). Both run in
 `carrier-vocab-guard`. **No migration. No money math touched** — every added figure is a name or a flag.
+
+### 48.8 WHO DID NOT CLOSE, AND WHOSE CASH IS STILL IN THE DRAWER (owner 2026-10-14)
+
+> Owner: *"On the daily closing dashboard and daily closing page I need report which store did not
+> submit closing and which store got store cash picked and another report which cash did not get
+> ocikeuo - these can be in one report with 2 filters added picked and not picked up - with all
+> standard filters"*
+
+**DUPLICATE CHECK (the build gate), and what it found.** Both questions were already this report's
+grain, so **no new endpoint, no new table and no migration**: `GET /closing/accountability-chain`
+already reports, per (store, day), whether the closing was filed and whether the cash was collected.
+What it *could not* do was tell two pairs of opposite facts apart — and in each case the fact it was
+missing already had a home it was not dereferencing.
+
+| the two facts it flattened | the home it now dereferences |
+|---|---|
+| "nobody submitted" vs "a rep submitted and the close gate sent them back to recount" | `closing/unfinished_day.describe` (§29.12) — the four states and their words |
+| "nothing to collect" vs "$1,200 is sitting in that drawer" | `closing/deposit_accountability.cash_pickup_state`, over the envelope spine |
+
+**THE CLASS.** The pickup side read the **pickup table alone**, so a store-day with declared cash and
+nobody to collect it rendered "no envelope recorded" — identical to a store-day with no cash at all.
+The envelope SPINE is the closing rows, and that rule lived inline on exactly one screen
+(`GET /closing/pickups`), which is why the report beside it could not ask the question. Three homes
+now answer it, each dereferenced rather than copied:
+
+| fact | home | callers |
+|---|---|---|
+| how much cash does this closing row declare | `envelope_report.declared_total_cash` (either era) | the pickup screen, **the chain** |
+| what is left in that envelope after approved expenses / withdrawals | `envelope.net_row` | the pickup screen, **the chain** |
+| **is there an envelope here to collect at all** | **`envelope.is_collectable`** (NEW — was inline on the pickup screen) | the pickup screen, **the chain** |
+| was this store-day's cash collected, and how much is still out | **`deposit_accountability.cash_pickup_state`** (NEW) | the chain's pickup cell + row |
+
+`cash_pickup_state` joins on **(store, day, rep)** — the same key the pickup screen matches a pickup
+row to an envelope on — so a day where two reps filed and one envelope was collected reads
+`partly_picked_up`, never `picked_up`. **Bill-payment pickups are excluded by `kind`**: the owner asked
+for store cash, and bill-pay is its own sibling flow with its own screen. The verdict is decided by
+**envelope counts, never by subtracting one money basis from another** — the declared figure and what
+the pickup rows carry legitimately differ under the mig-1039 netting basis, so both are reported side
+by side (`cash_declared` / `cash_picked` / `cash_awaiting` / `collected_recorded`) and a netted day can
+never read as permanently short.
+
+**THE TWO FILTERS mean one thing, declared once** (`deposit_accountability.PICKUP_FILTERS`, read by
+both the endpoint and the screen): `picked` admits `picked_up`; `not_picked` admits
+`not_picked_up` **and `partly_picked_up`**, because cash is still in that drawer; `nothing_to_collect`
+answers neither, because nobody should be sent to chase the nothing that was there. A blank or
+mistyped choice is **no filter**, never an empty report. `closing=submitted|not_submitted` reads the
+closing stage's `done`, unchanged.
+
+**ALL THREE STANDARD FILTERS**, each through its one resolver (`harness_closing_filter_contract`):
+`markets` (plural, beside the legacy singular `market`) and `employees` are new on this endpoint. A
+**rep filter narrows the rows the stages are built from and DROPS the empty-store spine**, deliberately:
+"this store filed nothing" is a fact about a store, not about a person, and leaving the spine in would
+accuse a rep of not closing stores they were never in. `filters.spine` says which posture applied.
+
+**WHERE IT IS REACHABLE** (the owner asked for both): `/closing/closing-pickup-status` — a Daily
+Closing **tile** (`tileOnly`, beside the chain) — and a fourth tab on the `/closing` dashboard,
+**rendering the same component** (`closing/_lib/ClosingPickupStatus.tsx`) driven by that page's own
+filter bar. One report, two entrances; two copies of one report is how two screens start disagreeing.
+The screen spells no state key and no state label of its own — every word comes down in the response.
+
+**Lock.** `harness_accountability_chain.py` §J (37 checks + 4 controls, 148/0 overall): the closing
+vocabulary IS `unfinished_day.STATES`; B-117 / 2026-10-01's two blocked submits read
+`awaiting_correction` where a day nobody touched reads `not_started`; a turned-away submit is not a
+try; a filed day is finished whatever its history; `done` is unchanged for every existing reader; the
+row's verdict IS the cell's verdict; and the build fails if a second copy of the collectable rule
+reappears in the router, if the chain stops selecting `refused`, or if the rep-filter spine rule is
+removed. §B's "no closing filed" wording assertion was UPDATED — the flattened string was the thing
+being fixed.
 
 ## 49. THE CAMERAS WENT DARK AND NOTHING SAID SO — registering vision with the machinery that already existed (owner 2026-10-02)
 
