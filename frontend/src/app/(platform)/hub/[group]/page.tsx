@@ -11,29 +11,28 @@
 // Either way mergeUnplacedItems() appends any visible page the layout does not name to a trailing
 // 'More' tile — a page that ships after the dashboard was designed can never become unreachable.
 //
-// RBAC: every interior link is filtered through the SAME predicates the sidebar uses — canSeeItem +
-// tenant capability + active-carrier + the tenant nav-layout `hidden` flag — so a tile can never
+// RBAC: every interior link is filtered through lib/hub-gate.ts — the ONE home for "may this viewer
+// open this page from a tile", shared with /compliance and the two curated hubs — so a tile can never
 // surface a page its viewer could not already see in the menu. A designed layout naming a page the
 // viewer may not see simply renders without it (and a tile left empty by that filtering is dropped).
 // The curated /payroll and /storeops hubs deliberately do NOT route here (they keep their hand-woven
-// tiles + KPI rows); this page serves every other group, including unknown slugs (friendly notice).
-import { useCallback, useMemo } from 'react'
+// tiles + KPI rows), but they now dereference the same gate: not doing so was the 2026-10-14 defect.
+import { useMemo } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { useAuth, useActiveCarrier } from '@/lib/auth-context'
+import { useAuth } from '@/lib/auth-context'
 import { useCachedApi, CONFIG } from '@/lib/cache'
-import { NAV, platformOK, canSeeItem, carrierOKActive, verticalOK, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, platformOK, type NavItem } from '@/lib/rbac'
+import { useHubGate } from '@/lib/hub-gate'
 import HubTiles from '@/components/HubTiles'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, mergeUnplacedItems, subsFromNavLayout,
          subsFromItemTiles, type TileLayout } from '@/lib/tile-hubs'
 
-type NavCfg = { labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }
 type TileResp = { module: string; layout: TileLayout | null; resolved_from: 'tenant' | 'house' | null }
 
 export default function HubDashboardPage() {
   const { group: slug } = useParams<{ group: string }>()
-  const { permissions, session, rbacEnabled, tenant, user } = useAuth()
-  const { activeCarrier } = useActiveCarrier()
+  const { user } = useAuth()
 
   // A platform-only group (the Super Admin Toolbox, index §38) resolves for the platform super admin
   // alone; anyone else gets the same "no dashboard here" notice as an unknown slug.
@@ -43,31 +42,16 @@ export default function HubDashboardPage() {
   // Both fetches are best-effort + cached (the same nav-config entry the sidebar shares). A failed
   // tile-layout read degrades to the auto-derived default; a failed nav-config read means no
   // caps/layout refinement — the hub still renders.
-  const { data: navCfg } = useCachedApi<NavCfg>('/api/v1/commcalc/nav-config', CONFIG)
+  const { gateItems, navCfg } = useHubGate()
   const { data: tileResp, loading } = useCachedApi<TileResp>(
     navGroup ? `/api/v1/commcalc/tile-layout?module=${encodeURIComponent(slug)}` : null, CONFIG)
 
-  // Mirror the sidebar's gating exactly ((platform)/layout.tsx): RBAC only while login is enforced
-  // and a session exists (the open app shows everything, like the sidebar's `open` path), then
-  // tenant capability, active-carrier lens, and the tenant nav-layout `hidden` override. The
-  // group's own '/hub/…' entry is excluded — a dashboard must not tile a link to itself.
-  // ONE gate, applied to whichever set of nav items we are filtering. Mirrors the sidebar exactly
-  // ((platform)/layout.tsx): RBAC only while login is enforced and a session exists (the open app
-  // shows everything, like the sidebar's `open` path), then tenant capability, active-carrier lens,
-  // and the tenant nav-layout `hidden` override.
-  const gateItems = useCallback((items: NavItem[]) => {
-    const caps = navCfg?.capabilities || {}
-    const gated = rbacEnabled !== false && !!session
-    return items
-      .filter(it => !it.href.startsWith('/hub/'))
-      .filter(it => platformOK(it, user))
-      .filter(it => !gated || canSeeItem(permissions, it))
-      .filter(it => !it.cap || caps[it.cap] !== false)
-      .filter(it => carrierOKActive(it.href, activeCarrier, caps))
-      .filter(it => verticalOK(it, tenant?.vertical, caps))
-      .filter(it => !navCfg?.layout?.items?.[it.href]?.hidden)
-  }, [navCfg, permissions, session, rbacEnabled, activeCarrier, tenant?.vertical, user])
-
+  // THE VIEWER GATE is lib/hub-gate.ts — the ONE home, shared with /compliance and the two curated
+  // hubs (/storeops, /payroll), which had no gate at all until 2026-10-14. It mirrors the sidebar
+  // ((platform)/layout.tsx): RBAC only while login is enforced and a session exists, then the
+  // platform-only gate, tenant capability, active-carrier lens, vertical, and the tenant nav-layout
+  // `hidden` override. The group's own '/hub/…' entry is excluded there — a dashboard must not tile
+  // a link to itself.
   // THIS group's own items — what the auto-derived default tiles, and the "not yet placed" tile, are
   // built from. A dashboard with no design still shows its own module, not the whole app.
   const visibleItems = useMemo<NavItem[]>(

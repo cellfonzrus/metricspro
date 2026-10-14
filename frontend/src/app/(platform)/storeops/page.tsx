@@ -18,6 +18,12 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import Link from 'next/link'
 import StatTile from '@/components/StatTile'
 import HubTiles, { type HubGroup } from '@/components/HubTiles'
+// VIEWER GATE — the ONE home (lib/hub-gate.ts, owner report 2026-10-14). The tile literal below and
+// the KPI row are a MENU: every entry has to pass the same gate the sidebar and the route guard
+// apply, or a rep lands here (the only door to the tileOnly Schedule page) on a dashboard whose
+// links bounce them home. 11 of the 21 interior links and 2 of the 6 KPI tiles did exactly that for
+// a store-scoped rep before this.
+import { useHubGate } from '@/lib/hub-gate'
 
 function weekRange() {
   const d = new Date()
@@ -111,6 +117,7 @@ const GROUPS: HubGroup[] = [
 ]
 
 export default function WorkforceDashboard() {
+  const { canOpen, gateHubGroups } = useHubGate()
   const [emps, setEmps] = useState<any[]>([])
   const [stores, setStores] = useState<any[]>([])
   const [timeoff, setTimeoff] = useState<any[]>([])
@@ -139,6 +146,9 @@ export default function WorkforceDashboard() {
       .catch(() => {})
   }, [])
 
+  // Tiles and KPI cards this viewer may actually open. A tile left with no reachable page is dropped
+  // whole (gateHubGroups), exactly as the designed-layout path drops one.
+  const groups = gateHubGroups(GROUPS)
   const activeStores = stores.filter(s => s.is_active).length
   const pendingTO = timeoff.filter(t => t.status === 'pending').length
   const weekHours = shifts.reduce((s, x) => s + (Number(x.scheduled_hours) || 0), 0)
@@ -159,18 +169,24 @@ export default function WorkforceDashboard() {
       ) : (
         <>
           <div className="stat-grid" style={{ marginBottom: 22 }}>
-            <StatTile label="Active employees" value={emps.length.toLocaleString()} accent="#2563eb" href="/storeops/employees" sub="View →" />
-            <StatTile label="Active stores" value={activeStores.toLocaleString()} accent="#059669" href="/storeops/setup/stores" sub="View →" />
-            <StatTile label="This week's scheduled hrs" value={weekHours.toFixed(1)} accent="#d97706" href="/storeops/schedule" sub="View →" />
-            <StatTile label="Pending time off" value={pendingTO.toLocaleString()} accent={pendingTO ? '#dc2626' : '#6b7280'} href="/storeops/timeoff"
-              sub="View →" delta={pendingTO ? { value: 'needs review', dir: 'down' } : undefined} />
-            <StatTile label="Open shift swaps" value={(swapsPending ?? 0).toLocaleString()} accent={swapsPending ? '#dc2626' : '#6b7280'} href="/storeops/swaps"
-              sub="View →" delta={swapsPending ? { value: 'needs review', dir: 'down' } : undefined} />
-            <StatTile label="Time-clock approvals" value={(clockPending ?? 0).toLocaleString()} accent={clockPending ? '#dc2626' : '#6b7280'} href="/storeops/timeclock-permissions"
-              sub="View →" delta={clockPending ? { value: 'needs review', dir: 'down' } : undefined} />
+            {canOpen('/storeops/employees') && (<StatTile label="Active employees" value={emps.length.toLocaleString()} accent="#2563eb" href="/storeops/employees" sub="View →" />)}
+            {canOpen('/storeops/setup/stores') && (<StatTile label="Active stores" value={activeStores.toLocaleString()} accent="#059669" href="/storeops/setup/stores" sub="View →" />)}
+            {canOpen('/storeops/schedule') && (<StatTile label="This week's scheduled hrs" value={weekHours.toFixed(1)} accent="#d97706" href="/storeops/schedule" sub="View →" />)}
+            {canOpen('/storeops/timeoff') && (<StatTile label="Pending time off" value={pendingTO.toLocaleString()} accent={pendingTO ? '#dc2626' : '#6b7280'} href="/storeops/timeoff"
+              sub="View →" delta={pendingTO ? { value: 'needs review', dir: 'down' } : undefined} />)}
+            {canOpen('/storeops/swaps') && (<StatTile label="Open shift swaps" value={(swapsPending ?? 0).toLocaleString()} accent={swapsPending ? '#dc2626' : '#6b7280'} href="/storeops/swaps"
+              sub="View →" delta={swapsPending ? { value: 'needs review', dir: 'down' } : undefined} />)}
+            {canOpen('/storeops/timeclock-permissions') && (<StatTile label="Time-clock approvals" value={(clockPending ?? 0).toLocaleString()} accent={clockPending ? '#dc2626' : '#6b7280'} href="/storeops/timeclock-permissions"
+              sub="View →" delta={clockPending ? { value: 'needs review', dir: 'down' } : undefined} />)}
           </div>
 
-          <HubTiles groups={GROUPS} />
+          <HubTiles groups={groups} />
+          {groups.length === 0 && (
+            <div className="card" style={{ padding: 24, fontSize: 13.5, color: 'var(--text2)' }}>
+              Nothing to show — none of the Workforce pages are enabled for your role. Ask your
+              administrator if you believe you should see them.
+            </div>
+          )}
         </>
       )}
     </div>

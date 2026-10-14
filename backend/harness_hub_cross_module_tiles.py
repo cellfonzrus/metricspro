@@ -44,6 +44,13 @@ FRONT = os.path.join(os.path.dirname(HERE), "frontend", "src")
 HUB = os.path.join(FRONT, "app", "(platform)", "hub", "[group]", "page.tsx")
 DESIGNER = os.path.join(FRONT, "app", "(platform)", "admin", "dashboards", "page.tsx")
 RBAC = os.path.join(FRONT, "lib", "rbac.ts")
+# The ONE home for the viewer gate since 2026-10-14 (index §CORE-06).
+GATE = os.path.join(FRONT, "lib", "hub-gate.ts")
+
+
+def read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
 
 P = F = 0
 
@@ -113,14 +120,18 @@ print()
 print("=" * 78)
 print("C. Widening the DESIGNER must not widen the VIEWER")
 print("=" * 78)
+# The gate MOVED to its own home on 2026-10-14 (index §CORE-06) because four surfaces needed it and
+# two of them had no gate at all. This still pins "one gate, both sets through it" — the home is now
+# lib/hub-gate.ts, and harness_hub_viewer_gate.py pins every consumer dereferencing it.
 check("C1 there is ONE gate function, so the wider set cannot drift from the group's own",
-      hub.count("const gateItems = useCallback(") == 1, "gateItems is not a single shared helper")
-gate = hub[hub.index("const gateItems"):]
-gate = gate[:gate.index("}, [")]
+      os.path.exists(GATE) and read(GATE).count("const gateItems = useCallback(") == 1
+      and hub.count("useHubGate()") == 1,
+      "gateItems is not a single shared helper the hub dereferences exactly once")
+gate = read(GATE) if os.path.exists(GATE) else ""
 for pred, why in (("canSeeItem(permissions, it)", "RBAC"),
                   ("caps[it.cap] !== false", "tenant capability"),
                   ("carrierOKActive(", "active-carrier lens"),
-                  ("hidden", "tenant nav-layout hidden override")):
+                  ("hidden[it.href]?.hidden", "tenant nav-layout hidden override")):
     check(f"C2 the gate still applies the {why} filter", pred in gate, gate[:200])
 check("C3 BOTH sets go through that one gate — the cross-module list is gateItems(...), never raw NAV",
       bool(re.search(r"gateItems\(NAV(\.filter\(g => platformOK\(g, user\)\))?\.flatMap", hub))

@@ -106,6 +106,7 @@ Primary code homes:
 | CORE-03 | **A stored credential is encrypted at rest** | "A UPS Store portal login is about to be typed into this platform — where does the password go, and who can read it? Which other columns in this database are credentials, which of them were plaintext, and what stops the next sweep adding an eleventh one that nobody encrypts?" |
 | CORE-04 | **And the rows ALREADY stored** | "A column became encrypted on write — so what happened to the values written before that? Which encrypted column has a sweep that seals its old rows, which has none, and what stops the fifth encrypted column shipping half protected while every new write looks perfect?" |
 | CORE-05 | **A paged read is a read of the data** | "The takeover report says one subscriber account carries 27 activated lines and it carries nine — where did the other 18 come from? What does a read that pages 1,000 rows at a time promise about the rows it has not asked for yet, how many of this platform's reads make that promise, and which of them are reading a feed twice while missing a third of it?" |
+| CORE-06 | **A tile is a menu entry, so it answers the menu's question** | "I cannot see the schedule on the app — where are we at making that live to all employees? Which door leads to a `tileOnly` page, and does that door ask whether the person looking at it may walk through?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25059,6 +25060,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-07 | commcalc |
 | COMMCALC-08 | commcalc |
 | CORE-05 | core |
+| CORE-06 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -27482,3 +27484,88 @@ is gone and its three evidence reads are still org-scoped.
 Same class: §19.48 (a read with a literal ceiling), §19.18 (a mechanism written and its callers left
 unwired), §19.46 (a row's month is a property of the row), §COMMCALC-03.9 (an upload that reported
 success and answered nothing).
+
+## §CORE-06. A TILE IS A MENU ENTRY, SO IT ANSWERS THE MENU'S QUESTION (owner report 2026-10-14)
+
+Owner: *"I cannot see the schedule on thr app , where are we at making that live to all employees"*.
+
+### CORE-06.1 Two separate facts, and only one of them was a defect
+
+The schedule GATE shipped and merged on 2026-10-05 (§14w PR #389, §14x PR #390, migration **1058**
+applied): a rep reads their own shifts, a manager theirs plus whoever works under them, an admin
+everything. Verified still live 2026-10-14 — `storeops.app_config.rbac_enabled = true`, all 30 role
+rows carry `people_visibility`, 254 shifts stored for the current week across three tenants, and all
+73 active rep logins carry an `employee_id` (without one `schedule_emp_ids` returns `set()`, which is
+deny-all).
+
+So nothing about the gate was broken. Two other things were:
+
+- **CONFIG, not code.** `/storeops/schedule` is `tileOnly` (Phase W2.1, the "cleaner look"
+  directive), so the sidebar never lists it — the Workforce hub tile is its only door. And the
+  Luxelink `sales_rep` role carries `permissions.modules.storeops = false`, which closes that door
+  for **39 of the 111 active logins**. One checkbox on Admin → Roles & Access, no migration.
+- **CODE.** The door itself never asked whether the person looking at it could walk through.
+
+### CORE-06.2 THE CLASS, not the instance
+
+Five surfaces render `HubTiles`, and each answered *"which of these pages may this viewer open"* for
+itself — three copies of one predicate stack, and two surfaces with no answer at all:
+
+| surface | the viewer gate |
+|---|---|
+| `(platform)/hub/[group]/page.tsx` | the stack, inline |
+| `(platform)/compliance/page.tsx` | the same stack, **retyped** |
+| `(platform)/admin/dashboards/page.tsx` | a third copy — a **different** question (what a DESIGNER may place) |
+| `(platform)/storeops/page.tsx` | hand-woven `HubGroup[]` literal, **none** |
+| `(platform)/payroll/page.tsx` | hand-woven `HubGroup[]` literal, **none** |
+
+Measured against the live NAV and the live role rows, the Workforce hub showed a store-scoped rep
+**11 of its 21 interior links** and **2 of its 6 KPI tiles** pointing at pages `canAccessPath`
+bounces: `/storeops/timeclock`, `/attendance`, `/accountability`, `/employees`, `/reports`,
+`/visits`, `/visits/settings`, `/visits/plan`, `/reviews/config`, `/setup/stores`,
+`/setup/employees`. That is the **"the tab is there but clicking it does nothing"** failure
+`rbac.ts` already names twice (TKT-1009, TKT-1012) — reached through a tile instead of the menu,
+because the two curated hubs were the consumers that never asked. A tile is a menu entry; it owes
+the menu's answer.
+
+### CORE-06.3 THE FIX — one home, dereferenced, and it cannot un-wire
+
+**`frontend/src/lib/hub-gate.ts::useHubGate()`** is the ONE home for "may this viewer open this page
+from a tile". It mirrors the sidebar's own chain verbatim (`(platform)/layout.tsx`): RBAC only while
+login is enforced **and** a session exists (the open app shows everything, as the sidebar's `open`
+path does), then `platformOK`, the tenant capability flag, the active-carrier lens, the tenant
+vertical, and the tenant nav-layout `hidden` override.
+
+- `gateItems(items)` — for a hub built from NAV items (the generic hub, `/compliance`).
+- `canOpen(href)` — for a hand-woven tile or KPI literal, whose entries are hrefs, not NAV items.
+- `gateHubGroups(groups)` — `canOpen` over a `HubGroup[]` literal, dropping a tile left with no
+  reachable page (exactly as `tile-hubs.ts::layoutToHubGroups` already drops one).
+
+**Why `canOpen` falls back to `canAccessPath`.** A hand-woven tile may name an href with no NAV entry
+of its own. Fail-closed would hide a page the route guard would admit — a tile vanishing for no
+reason is the same defect wearing a hat. So an href NAV does not carry is answered by `canAccessPath`,
+which IS the route guard, and the two can never disagree.
+
+**`/admin/dashboards` is excused on purpose**, and the harness pins the excuse: it answers the
+designer's question, not the viewer's, and its renderer re-applies the viewer gate. The rule §23g
+already states — *widening what a DESIGNER may place must never widen what a VIEWER may see* — now
+has one implementation instead of three.
+
+Both curated hubs also say so plainly when nothing is reachable, rather than rendering an empty page.
+
+### CORE-06.4 PROOF
+
+- `frontend/scratchpad/prove_hub_gate.mjs` (38) — verbatim re-impl of `moduleGranted` / `canSeeItem`
+  / `canAccessPath` / `canOpen`, run against the **real** NAV parsed out of `rbac.ts`, the **real**
+  tile literals parsed out of both curated hubs, and the **real** production role rows. §1 reproduces
+  the defect on the pre-fix surface (11 of 21 and 2 of 6) so the regression cannot stop being
+  reproduced; §2 asserts nothing offered bounces and nothing legitimate was lost (an admin keeps
+  21/21, a store-scoped rep keeps the 10 that are genuinely theirs, Schedule among them); §3 pins
+  that ticking Workforce on the one Luxelink role opens Schedule **without** bringing a manager-only
+  page with it, plus the deep-link and fallback rules.
+- `backend/harness_hub_viewer_gate.py` (51) — the build lock. **Static on purpose**: the failure mode
+  is an ABSENT filter, so the page compiles, renders and simply offers links that bounce; no type
+  checker and no test of the gate itself can see a caller that never calls it. §A the one home carries
+  the whole stack, §B every `HubTiles` consumer dereferences it, §C nobody retypes it, §D the curated
+  KPI rows are gated too, §E eight negative controls proving each check bites.
+

@@ -17,6 +17,11 @@
 // (Hours Approval, Payroll, Payroll Expenses, Payroll Tax — plus the two previously-orphaned
 // surfaces, Payroll Change Log and Salary Advances, which had no menu entry at all) · HR Total Comp.
 import HubTiles, { type HubGroup } from '@/components/HubTiles'
+// VIEWER GATE — the ONE home (lib/hub-gate.ts, owner report 2026-10-14). Sibling of the Workforce
+// hub: a hand-woven tile literal is a MENU, so every entry passes the same gate the sidebar and the
+// route guard apply. Most of these pages are admin/HR-only, so before this a store-scoped viewer was
+// shown payroll setup, the payer registry and the pay run and bounced by the guard on each.
+import { useHubGate } from '@/lib/hub-gate'
 
 const GROUPS: HubGroup[] = [
   {
@@ -75,6 +80,8 @@ const GROUPS: HubGroup[] = [
 ]
 
 export default function PayrollDashboardPage() {
+  const { gateHubGroups } = useHubGate()
+  const groups = gateHubGroups(GROUPS)
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
@@ -86,7 +93,13 @@ export default function PayrollDashboardPage() {
         </p>
       </div>
 
-      <HubTiles groups={GROUPS} />
+      <HubTiles groups={groups} />
+      {groups.length === 0 && (
+        <div className="card" style={{ padding: 24, fontSize: 13.5, color: 'var(--text2)' }}>
+          Nothing to show — none of the Payroll pages are enabled for your role. Ask your
+          administrator if you believe you should see them.
+        </div>
+      )}
     </div>
   )
 }
