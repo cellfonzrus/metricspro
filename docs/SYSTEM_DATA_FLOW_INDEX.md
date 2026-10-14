@@ -105,6 +105,7 @@ Primary code homes:
 | CORE-02 | **The code style checker is a CHECK, and it only turns one way** | "`npm run lint` existed for months and nothing in CI ran it — 5953 findings sat in a tree everyone called green. What lints the frontend now, why is it a RATCHET instead of a clean gate, what stops someone reaching green with an `eslint-disable` comment or by deleting a rule from the config, and which of those 5953 were left alone because fixing them would move money?" |
 | CORE-03 | **A stored credential is encrypted at rest** | "A UPS Store portal login is about to be typed into this platform — where does the password go, and who can read it? Which other columns in this database are credentials, which of them were plaintext, and what stops the next sweep adding an eleventh one that nobody encrypts?" |
 | CORE-04 | **And the rows ALREADY stored** | "A column became encrypted on write — so what happened to the values written before that? Which encrypted column has a sweep that seals its old rows, which has none, and what stops the fifth encrypted column shipping half protected while every new write looks perfect?" |
+| CORE-05 | **A paged read is a read of the data** | "The takeover report says one subscriber account carries 27 activated lines and it carries nine — where did the other 18 come from? What does a read that pages 1,000 rows at a time promise about the rows it has not asked for yet, how many of this platform's reads make that promise, and which of them are reading a feed twice while missing a third of it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25057,6 +25058,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-06 | commcalc |
 | COMMCALC-07 | commcalc |
 | COMMCALC-08 | commcalc |
+| CORE-05 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -27299,3 +27301,97 @@ zero rows were written, and it changes no write, no delete and no figure.
 Same class: §COMMCALC-03.9 (an upload that failed left no record anywhere — the defect that made
 this one visible), §19.18 (a mechanism written and its callers left unwired), §66 (a value read
 without its basis), §64 (one home for "which store is this address").
+
+---
+
+## §CORE-05. A PAGED READ IS A READ OF THE DATA — one stable key, every row exactly once (owner report 2026-10-14)
+
+Owner, 2026-10-14, verbatim: *"do tehy mean there is only ne accoutn for 27 lines"* — about a row of
+the Store Takeover Evaluation's multi-line account report claiming **27 activated lines** on one
+subscriber account in June 2026, the same five IMEIs printed three times over.
+
+**That account carries nine lines.** The report was not wrong about the account; the read underneath it
+was wrong about the feed.
+
+### CORE-05.1 THE CLASS, not the instance
+
+> **`OFFSET` / `range()` paging without an `ORDER BY` pages an UNORDERED set, so the backend may serve
+> one row in two pages and never serve another at all.**
+
+Postgres promises nothing about row order without `ORDER BY`, and it does not have to — each page is a
+fresh plan over a table other sessions are writing. `core/feed_read.read_all`, the one home for "give
+me ALL of this feed" (§19.48), asked for rows 0–999, then 1000–1999, and so on, with no order at all.
+
+**MEASURED LIVE 2026-10-14** (read-only, Supabase REST, `commcalc.prospect_feed_row`, one prospect
+holding 137,374 rows, the two reads run back to back):
+
+| read | rows returned | distinct | duplicate copies | never served |
+|---|---|---|---|---|
+| no `ORDER BY` — what the one home did | 137,374 | **88,294** | **49,080** | **49,080** |
+| `order=id.asc` | 137,374 | 137,374 | 0 | 0 |
+
+So **a third of that feed was invisible** to every surface reading it while another third was counted
+twice — and nothing reported a problem. The loop still ended on a short page and still returned a
+plausible row count, which is the §19.48 failure mode again (*a read that is wrong quietly*) and worse
+than a literal ceiling: a ceiling at least drops the same rows every time, so the figure is at least
+stable enough to notice.
+
+On the owner's three pasted rows the true figures are **9, 7 and 8 lines**, against 27, 26 and 26 on
+screen. The duplicated rows also flipped two derived answers: `add_a_lines` read 4 where the account
+has 1, and `same_processor_account` read "yes" for an account whose lines were rung at more than one
+store. A duplicate row is not a cosmetic inflation — it changes every count, share and yes/no derived
+from the set.
+
+### CORE-05.2 THE FIX — in the one home, and it cannot un-wire
+
+`feed_read.ORDER_KEY` (`"id"`) is applied on **every page**, and it is **appended**, so a caller that
+orders by its own column keeps that order and gets a *total* one — verified against the installed
+postgrest builder, whose `order()` concatenates onto any existing order rather than replacing it.
+Every table read through this module carries `id` (verified live 2026-10-14: `raw_mi`, `raw_sales`,
+`raw_comp_report`, `raw_payment_detail`, `store_expenses`, `payment_categories`, `asset_ledger`,
+`prospect_feed_row`, `carrier_category_map`, `account_statements`). A table whose stable key is spelled
+otherwise passes `order=`; a read that **cannot** be ordered RAISES `IncompleteRead` rather than
+returning a scrambled feed, because a scrambled feed is indistinguishable from a correct one
+downstream — exactly the property that let this run for months.
+
+### CORE-05.3 THE SIBLING — the appeal-recovery engine's own copy of the loop
+
+`recovery/engine._read_all` kept a private page loop, and its own docstring already named the hazard it
+then walked into: a `.limit(N)` shot dropped rows *"with no ORDER BY, so WHICH rows vanished was
+arbitrary from one call to the next"* — and the loop that replaced the limit paged without an ORDER BY
+either. It builds the `pay_by_imei` / `mi_by_serial` evidence dictionaries, so **a device whose payment
+row was never served reads as "no evidence found"**, which is precisely the input that buckets an
+appeal as `not_recoverable`. Missing evidence and absent evidence are indistinguishable downstream, so
+the engine could not detect its own blind spot. It dereferences the one home now and keeps no loop.
+
+### CORE-05.4 THE 99 THAT ARE STILL WRONG, counted rather than assumed away
+
+This is the honest part. `read_all` has 30 call sites; the rest of the backend pages in **private
+copies of the same loop**, and an AST scan of `backend/app` counts **99 `range()` reads with no
+`.order()` on their chain**, across 32 files. Among them are paths that move money:
+`account/coa._fetch_all` (the P&L's own table reader), `account/residual_subs` (4),
+`account/statement_engine` (2), `account/ledger_pnl`, `account/ma_store_pnl.load_store_index`,
+`account/device_cogs`, `commcalc/commission_engine` (2), `commcalc/payout_accrual` (7),
+`commcalc/ma_recon`, `commcalc/whatif` (7).
+
+`harness_feed_read_lock.py` §C pins that number and requires EQUALITY: a new unordered paged read fails
+the build, and converting one to the one home requires lowering the pin in the same commit. So the
+count on screen is always the real state of the platform rather than a claim that the platform is
+fixed. Converting them is the follow-up work, one subsystem per PR, because each is a money path and a
+blind conversion of a money path is how a quiet read becomes a quiet booking.
+
+### CORE-05.5 PROOF
+
+`harness_feed_read_lock.py` — **19 passed / 0 failed**, DB-free. The one home is driven over a fake
+backend that models PostgREST: ordered, it serves a sorted slice; unordered, a differently permuted one
+per page — the live failure, deterministically. **§A2 is armed**: replayed against the pre-fix loop the
+same fixture returns 2,500 rows holding only 2,426 distinct, 74 duplicate copies and 74 rows never
+served, so the check fails on the old code and the detector is not decorative. §A5 proves a caller's
+own order survives, §A6 that an orderless read is refused rather than served, §A7 that a failed page
+raises and names the key, §B that the module keeps one `.range(` behind an `.order(` and still carries
+no row ceiling, §C the sibling ratchet with four negative controls, §D that the recovery engine's loop
+is gone and its three evidence reads are still org-scoped.
+
+Same class: §19.48 (a read with a literal ceiling), §19.18 (a mechanism written and its callers left
+unwired), §19.46 (a row's month is a property of the row), §COMMCALC-03.9 (an upload that reported
+success and answered nothing).
