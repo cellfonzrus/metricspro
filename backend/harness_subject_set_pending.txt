@@ -1,0 +1,68 @@
+# DEBT LIST — scanning guards that still assert a bare lower bound on a set they DERIVED from the code.
+#
+# Read harness_subject_set_lock.py for why this shape is a hole: when the derived set shrinks, the
+# per-subject assertions about the missing subject do not fail, they STOP EXISTING. A lower bound is
+# not a measurement of the set; the declared-set form is:
+#
+#     EXPECTED = {…}                                        # module level, written by a person
+#     eq(set(derived), EXPECTED, "…are exactly the declared set")
+#
+# THE LIST MAY ONLY SHRINK. One row = one `harness_file.py::variable`. A new site fails the build —
+# do not add a row to pass CI; declare the set. When you convert one, DELETE its row and lower
+# PINNED_MAX in the lock by the same amount.
+#
+# Measured 2026-10-14: 51 sites across 41 harnesses, less the one the owner directive was raised over
+# (harness_browser_sweep_kinds.py::reach, converted in the same change — see SUPPLY_BROWSER_ENDPOINTS).
+# Most of what is left is fixture sanity ("there is something lagging in the fixture to build an item
+# from"), which is harmless; the dangerous ones are the sites whose set is a list of CODE SITES — the
+# comment on each row is its own assertion label, so the two are told apart by reading it.
+harness_approvals_gate.py::routes                   # 4b all {len(routes)} approvals route(s) inherit it
+harness_closing_refile.py::_derived                 # A1 the scan finds the schema
+harness_closing_submit_refusal.py::_refuse_calls    # H2a create_row has a _refuse call for every refusal path
+harness_connector_scope_lock.py::seed               # the seed parses into rows (%d)
+harness_cron_registrar_schema.py::calls             # A2 at least three registrars call one (the hooks exist)
+harness_cron_registrar_schema.py::defined           # A1 the migrations define at least one ensure_*_cron function
+harness_dm_checklist_carrier_review.py::carrier_qs  # D2 the carrier-specific questions survived the rename (got %d, expected >= 8)
+harness_doc_intel.py::_payload                      # J2 every insert on the new tables carries org_id in its payload
+harness_encryption_backfill_coverage.py::SWEEPS     # A1  all four measured families are registered
+harness_envelope_receipt_basis.py::brands           # the mig-953 brand list was actually derived (not an empty set that can never fail)
+harness_export_xss_upload.py::_lw_sites             # F1c the F1 scan is non-vacuous (it really found the call sites it is judging)
+harness_feed_watchdog.py::WATCHED                   # A2 the watched set is non-empty and covers most of the registry
+harness_fix_pipeline.py::ent.ALL_MODULES            # fix_pipeline
+harness_flag_review_persistence.py::orgs            # E4 the sample spans BOTH tenants (a house-only proof proves nothing, contract §2)
+harness_manager_followup.py::CS.CATEGORIES          # B2 ... so a queue added to the registry appears here with no change to this module
+harness_manager_followup.py::_na                    # I15 every queue this board cannot attribute is reported WITH A REASON, not omitted
+harness_mapping_diagnosis.py::_landing_callers      # a1 every map_records caller in the router is accounted for
+harness_multi_handset_day.py::s_junk                # F3 the summary says what the key cannot answer
+harness_notify_send_identity.py::ROWS               # D2 every send_log row DEREFERENCES the one home — none names report_key by hand
+harness_onboarding_intake_b.py::c12                 # C12 an upload that cannot be verified reports its problems
+harness_one_domain_lock.py::endpoints               # the backend declares browser-launching endpoints (the scan is not empty)
+harness_one_domain_lock.py::patterns                # DIRECT_ROUTES parsed from the home
+harness_org_scope_guard.py::writes                  # ingest-screen guard found no guarded sales-basis writes at all ({len(writes)}) —
+harness_path_redact.py::tmpl                        # included-router containers are WALKED to their leaf routes
+harness_pay_visibility.py::_guard_stmts             # K8-0: the shipped dashboard carries a pay guard (own_eid resolution + the gated strip)
+harness_peer_comparison.py::_LAG                    # J1 there is something lagging in the fixture to build an item from
+harness_portal_report_pull.py::seen                 # the registry serves every connector the adapters claim (%d)
+harness_portal_secret_lock.py::SCAN                 # D0  the scan still finds the credential columns it is meant to police (non-vacuous)
+harness_pos_onboarding.py::_in_pos                  # M1b it is not alone — the gate could deadlock any of these task pages
+harness_pos_onboarding.py::route_fns                # P10a the harness found the onboarding routes
+harness_report_kinds.py::b2b_keys                   # the house seed carries B2B-applies-to kinds (the ones the Verizon tenant must not see)
+harness_roles_module_catalog.py::labels             # MODULE_LABELS parsed
+harness_roles_module_catalog.py::nav                # the NAV literal parsed (a plausible module count)
+harness_row_save_lock.py::slice_names               # 8a the home defines slices
+harness_screen_link_guard.py::SCREENS               # A1 the registry parsed and is not empty
+harness_screen_link_guard.py::_task_hrefs           # G1 the onboarding task list declares hrefs at all (the parse still works)
+harness_setup_documents.py::required_seeded         # A10 required documents seeded (%s)
+harness_super_admin_toolbox.py::copies              # A4 the toolbox carries at least 20 super-admin screens
+harness_super_admin_toolbox.py::tiles               # A6 the copies spread over >= 5 distinct tiles (%s)
+harness_supply_ordering.py::handlers                # J3 endpoints found
+harness_target_axis_lock.py::folds                  # s call sites are all accounted for (found {len(folds)})
+harness_target_axis_lock.py::scopes                 # B6 compute_scope
+harness_tenant_implementation.py::py_seq            # A1 the backend defines an ordered implementation spine
+harness_training_center.py::PACK                    # F1 the bundled pack parses
+harness_training_center.py::rp2                     # B9 …and keeps the ones that do
+harness_vision_onboarding.py::O.STEPS               # there are steps at all
+harness_whats_new.py::PACK                          # G1 the bundled pack parses
+harness_wizard_feedback_guard.py::labels            # read the panel
+harness_workflow_stacking.py::layout                # A8 the rest of the module is still reachable, in its own tiles
+harness_workflow_stacking.py::ts_seq                # A1 the runbook defines a workflow sequence

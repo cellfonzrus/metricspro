@@ -27,6 +27,12 @@ on:
 permissions:
   contents: read
 
+# Without pipefail a step's status is the LAST command's, so a gate piped to tee passes when the
+# gate fails (harness_ci_pipefail_lock.py). Declared here even though no step pipes today.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   reachability:
     # `deployment_status` fires for every state (pending/in_progress/failure/success) and for previews.
