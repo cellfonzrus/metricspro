@@ -999,7 +999,9 @@ FACTS: dict[str, dict] = {
             # `_month_token` is §60's binding of `parse_payment_month` — "does this label SAY a
             # month", which is exactly that function's own question (its docstring is explicit that
             # the month-of-life LEG question belongs to `month_leg_of` instead).
-            'app/modules/commcalc/router.py': ('_month_token', 'commission_ledger'),
+            # §COMMCALC-03.27 added `_cled` — `LEG_LABELS`, so the takeover report calls the
+            # M1 and M2-M12 buckets exactly what the commission ledger calls them.
+            'app/modules/commcalc/router.py': ('_cled', '_month_token', 'commission_ledger'),
             'app/modules/commcalc/sale_installment_engine.py': ('month_leg_of',),
         },
     },
