@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, apiUpload, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
@@ -202,6 +202,7 @@ interface Evaluation {
   handset_orders?: HandsetOrders
   fraud?: FraudExposure
   break_even?: Record<string, BreakEven>
+  rule_basis?: RuleBasis
   error?: string
 }
 interface ProspectStore {
@@ -337,6 +338,12 @@ const STORE_COLS: ExportColumn[] = [
   { header: 'Account', get: (r: StoreRow) => r.account || '—' },
   { header: 'Carrier revenue', get: (r: StoreRow) => r.revenue, money: true },
   { header: 'Device cost', get: (r: StoreRow) => r.cogs, money: true },
+  // THE FIGURE THE ACCESSORY TARGET IS TAKEN OFF (owner ask 2026-10-14: "should have gross profit
+  // instead of carrier evenue to claculate accessories to be sold"). Revenue less device cost, read
+  // from that store's OWN statement — the same `gross_profit` total the P&L matrix row shows, never
+  // a subtraction done here. The accessory requirement has always come off net income, which IS
+  // this figure less our average expenses; this column is what makes that visible.
+  { header: 'Gross profit', get: (r: StoreRow) => r.grossProfit, money: true },
   { header: 'Profit or loss on measured revenue', get: (r: StoreRow) => r.contribution, money: true },
   { header: 'Activated lines', get: (r: StoreRow) => r.activations, align: 'right' },
   { header: 'Must sell in accessories', get: (r: StoreRow) => r.needed, money: true },
@@ -374,8 +381,27 @@ interface MatrixRow {
   all: number | null
 }
 interface StoreRow {
-  label: string; account: string | null; revenue: number; cogs: number; contribution: number
+  label: string; account: string | null; revenue: number; cogs: number; grossProfit: number
+  contribution: number
   activations: number; needed: number | null; perBox: number | null
+}
+// ── WHOSE RULES BOOKED THIS (owner report 2026-10-14) ───────────────────────────────────────────
+// The evaluation books through the company's own P&L code, and now under THIS organisation's own
+// declared switches rather than the house defaults. A switch nobody has declared says so, with the
+// migration that would let them, because a figure resting on a fallback must not read as a decision.
+interface RuleSwitch {
+  key: string; column: string; value: unknown; house_value: unknown; basis: string
+  migration: string | null; answers: string
+}
+interface RuleBasis {
+  switches: RuleSwitch[]
+  declared: number
+  house_default: number
+  column_absent: number
+  unknown_columns: string[]
+  columns_missing: string[]
+  migrations_missing: string[]
+  reading: string
 }
 // ── EVERY MONTH, AT THE BOTTOM (owner ask 2026-10-13: "the accounts which are 2 more summarized at
 // the bottom for each month with the drill down"). One row per uploaded month, computed by the server
@@ -633,6 +659,7 @@ export default function StoreTakeoverPage() {
         account: b.store?.account || null,
         revenue: t?.revenue ?? 0,
         cogs: t?.cogs ?? 0,
+        grossProfit: t?.gross_profit ?? 0,
         contribution: t?.net_income ?? 0,
         activations: b.scenarios?.[shownMode]?.activations ?? 0,
         needed: be?.needed ?? null,
@@ -1010,10 +1037,13 @@ export default function StoreTakeoverPage() {
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
             <Tile label="Carrier-side revenue" value={money(statement.totals?.revenue)}
-                  sub="what the carrier and distributor paid, plus airtime margin" />
+                  sub="activation commission and month spiffs, airtime margin and residual, market-development money, fees and financing — booked under this organisation's own declared rules" />
             <Tile label="Device cost" value={money(statement.totals?.cogs)}
                   sub={`${num(scenario.device_cost_meta?.priced)} handsets priced off its own order sheet`} />
-            <Tile label="Gross profit" value={money(statement.totals?.gross_profit)} />
+            <Tile label="Gross profit" value={money(statement.totals?.gross_profit)}
+                  sub={(statement.totals?.cogs ?? 0) < 0
+                    ? 'higher than revenue this month: the device purchase rebates these feeds carry exceed the handset cost, so cost of goods is negative'
+                    : 'carrier-side revenue less device cost — the figure the accessory target is taken off, once our average expenses come out of it'} />
             <Tile label="Our average expenses" value={money(statement.totals?.expenses)}
                   sub={(data?.expenses?.months || []).join(', ') || 'no basis months'} />
             <Tile label="Profit or loss on measured revenue" value={money(statement.totals?.net_income)}
@@ -1029,6 +1059,43 @@ export default function StoreTakeoverPage() {
               ? <> and <b>{covSummary.uploaded_feed_missing}</b> wait on a file you have not uploaded</>
               : null}.
           </div>
+
+          {/* ── WHOSE RULES BOOKED THIS (owner report 2026-10-14) ──────────────────────────────
+              The evaluation used to book through the company's own code while overriding the
+              company's own declarations with house defaults, which on this prospect hid every
+              month spiff and every MDF dollar and kept all airtime money out of the store columns.
+              The switches are on screen now, each saying whether it is a decision or a fallback. */}
+          {data?.rule_basis &&
+            <div className="card" style={{ padding: '12px 16px', marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
+                ⚙ Booked under your own rules — {data.rule_basis.declared} of
+                {' '}{data.rule_basis.switches.length} switches differ from the house answer
+                {data.rule_basis.column_absent
+                  ? <>, {data.rule_basis.column_absent} cannot be set until a migration runs</>
+                  : null}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
+                {data.rule_basis.reading}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto auto 1fr', gap: '4px 12px', fontSize: 12 }}>
+                {data.rule_basis.switches.map(sw =>
+                  <React.Fragment key={sw.key}>
+                    <span style={{ fontWeight: 600 }}>{sw.key.replace(/_/g, ' ')}</span>
+                    <span style={{ fontFamily: 'ui-monospace, monospace' }}>
+                      {Array.isArray(sw.value)
+                        ? (sw.value.length ? sw.value.join(', ') : '(none declared)')
+                        : String(sw.value)}
+                    </span>
+                    <span style={{ color: sw.basis === 'column_absent' ? '#92400e' : 'var(--text3)' }}>
+                      {sw.basis === 'declared'
+                        ? <><b>yours</b> — {sw.answers}</>
+                        : sw.basis === 'house_default'
+                          ? <>house answer, which you may have chosen or never set — {sw.answers}</>
+                          : <>no such column yet{sw.migration ? <>, needs migration {sw.migration}</> : null} — {sw.answers}</>}
+                    </span>
+                  </React.Fragment>)}
+              </div>
+            </div>}
 
           {/* ── THE SUB-REPORT: the flagged accounts, and what they are worth ───────────────── */}
           <div className="card" style={{ padding: '14px 16px', marginBottom: 18 }}>

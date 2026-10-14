@@ -48593,10 +48593,19 @@ def _prospect_expense_window(client, org_id, cfg, period):
     return matrix, months, notes
 
 
-def _prospect_homes():
+def _prospect_homes(client, org_id):
     """THE dereferenced one-homes, gathered in one place so the evaluation books through the very
     code the live P&L books through. Any copy of a rule here would be the divergence
-    §COMMCALC-03 exists to prevent; `harness_prospect_eval.py` §D fails the build if one appears."""
+    §COMMCALC-03 exists to prevent; `harness_prospect_eval.py` §D fails the build if one appears.
+
+    AND UNDER THE ORG'S OWN DECLARED SWITCHES (owner report 2026-10-14, §COMMCALC-03.22). These
+    booking functions are config-driven by design, and this dict used to hand them
+    `default_config()` / `default_ma_pnl_config()` — the HOUSE answers. Booking through the
+    company's code while overriding the company's declarations is a divergence with no symptom: on
+    the live prospect it hid $322,380.88 of month-spiff and MDF income across eight months and kept
+    every store column from carrying one airtime dollar. The loaders are the one home for "what has
+    this organisation declared"; §T of the harness fails the build if a default is injected here
+    again."""
     from app.modules.account import (ma_store_pnl as _msp, device_cogs as _dcg, coa as _coa,
                                      residual_subs as _rsub)
     return {
@@ -48611,8 +48620,18 @@ def _prospect_homes():
         # ACCOUNT → STORE, the mig-314 home, injected PURE (never `load_store_index`, which would
         # read OUR fulfilment table): a prospect's stores come from the prospect's OWN uploaded rows.
         "account_store_index": _msp.account_store_index,
-        "ma_cfg": _msp.default_config(),
-        "ma_pnl_config": _rsub.default_ma_pnl_config(),
+        "ma_cfg": _msp.load_config(client, org_id),
+        "ma_pnl_config": _rsub.load_ma_pnl_config(client, org_id),
+        # the HOUSE answers, from the modules that own them — so "is this switch a decision" is
+        # settled against the real default and never against a copy of it. They are COMPARED
+        # against, never booked with.
+        #
+        # …and the (column, migration) pair lists the loaders themselves own, so `rule_basis`
+        # can say which switch is a decision and which is a fallback without keeping a copy.
+        "house_ma_cfg": _msp.default_config(),
+        "house_ma_pnl_config": _rsub.default_ma_pnl_config(),
+        "pl_config_columns": tuple(_msp.PL_CONFIG_COLUMNS) + tuple(_rsub.MA_PNL_CONFIG_COLUMNS),
+        "pl_config_migration": dict(_msp.PL_CONFIG_MIGRATION, **_rsub.MA_PNL_CONFIG_MIGRATION),
     }
 
 
@@ -48678,7 +48697,7 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     matrix, rent_meta = _pev.apply_rent_override(
         matrix, cfg["rent_expense_names"], prospect.get("actual_rent_monthly"))
 
-    homes = _prospect_homes()
+    homes = _prospect_homes(client, org_id)
     mode = (prospect.get("exclusion_mode") or _pev.HOUSE_EXCLUSION_MODE)
     ev = _pev.evaluate(feeds, cfg, homes, matrix, rent_meta, period, mode)
     ev["expenses"]["window"] = exp_notes
@@ -48728,6 +48747,13 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     ev["multi_line_by_month"] = _pev.multi_line_by_month(
         every_month.get("ma_commission") or [], cfg["account_key_columns"],
         cfg["family_line_threshold"])
+    # WHOSE RULES BOOKED THIS (owner report 2026-10-14, §COMMCALC-03.22). The switches come back
+    # with the statement so the reader can see that the figures are the ORG'S declarations, and
+    # which of them are still the house answer because nobody has declared one.
+    ev["rule_basis"] = _pev.rule_basis(
+        homes["ma_cfg"], homes["ma_pnl_config"],
+        homes["house_ma_cfg"], homes["house_ma_pnl_config"],
+        config_columns=homes["pl_config_columns"], migration_of=homes["pl_config_migration"])
     ev["prospect"] = prospect
     ev["period_basis"] = period_basis        # why the report opened on this month — stated, never implied
     return ev
