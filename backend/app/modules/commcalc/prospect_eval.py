@@ -1150,7 +1150,7 @@ def rule_basis(ma_cfg, ma_pnl_cfg=None, house_ma=None, house_pnl=None,
                     "configuration row — not this report's defaults. A switch reading "
                     "'house_default' holds the house answer, which this organisation may have "
                     "chosen or may simply never have set; one reading 'column_absent' cannot be "
-                    "set at all until its migration runs."),
+                    "set at all until this feature's setup is finished on this system."),
     }
 
 

@@ -11,7 +11,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 // record so the sections cannot disagree.
 import { emptyStandardFilter, isStandardFilterActive,
          type StandardFilterValue } from '@/lib/standard-filters'
-import { SetupNotice } from '@/lib/setupNotice'
+import { SetupNotice, PlatformDetail } from '@/lib/setupNotice'
 
 // STORE TAKEOVER EVALUATION — owner directive 2026-10-12: *"need to make a module for evaluating the
 // store sales for the store we need to take over, but without creating the actual stores but upload
@@ -1071,7 +1071,7 @@ export default function StoreTakeoverPage() {
                 ⚙ Booked under your own rules — {data.rule_basis.declared} of
                 {' '}{data.rule_basis.switches.length} switches differ from the house answer
                 {data.rule_basis.column_absent
-                  ? <>, {data.rule_basis.column_absent} cannot be set until a migration runs</>
+                  ? <>, {data.rule_basis.column_absent} cannot be set on this system yet</>
                   : null}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
@@ -1091,7 +1091,8 @@ export default function StoreTakeoverPage() {
                         ? <><b>yours</b> — {sw.answers}</>
                         : sw.basis === 'house_default'
                           ? <>house answer, which you may have chosen or never set — {sw.answers}</>
-                          : <>no such column yet{sw.migration ? <>, needs migration {sw.migration}</> : null} — {sw.answers}</>}
+                          : <>not set up on this system yet — {sw.answers}
+                              {sw.migration ? <PlatformDetail detail={sw.migration} style={{ marginLeft: 6 }} /> : null}</>}
                     </span>
                   </React.Fragment>)}
               </div>

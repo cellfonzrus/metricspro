@@ -1281,6 +1281,17 @@ check("T12 …and the screen shows the switches, so a figure resting on a fallba
       "decision",
       "data?.rule_basis &&" in _PAGE and "sw.basis === 'declared'" in _PAGE
       and "column_absent" in _PAGE)
+# A SWITCH THAT CANNOT BE SET IS A SETUP FACT, AND SETUP INTERNALS ARE NOT TENANT COPY (owner 2026-09-29,
+# §19.36). The first cut of this panel printed "needs migration <file>" on the screen every tenant opens,
+# which is the exact sentence that rule exists to stop. The consequence stays in plain words; the file name
+# goes through the ONE gated carrier, so the platform team still sees it and nobody else does.
+check("T13 the panel names no migration in tenant copy, and the file name rides the one gated carrier",
+      "migration" not in _PAGE.split("data?.rule_basis &&")[1].split("THE SUB-REPORT")[0].lower()
+         .replace("sw.migration", "").replace("detail={sw.", "")
+      and "<PlatformDetail detail={sw.migration}" in _PAGE
+      and "PlatformDetail } from '@/lib/setupNotice'" in _PAGE)
+check("T14 …and the backend's own explanation of the same fact names none either",
+      "migration" not in P.rule_basis(MSP.default_config())["reading"].lower())
 
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
