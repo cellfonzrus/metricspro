@@ -239,6 +239,32 @@ _BROWSER_CALLS = ("start_session(", "live_login_start(", "_live_pull(")
 SUPPLY_ROUTER = os.path.join(APP, "modules", "supply", "router.py")
 
 
+def _effective_body(name, fns, _seen=None):
+    """A handler's own body PLUS the bodies of the same-module helpers it calls, transitively.
+
+    Added 2026-10-14. The claim this file locks is "an ENDPOINT that can reach a live browser calls
+    require_browser_service()", and that claim does not care whether the browser call sits inline or
+    one hop away in a module-level helper. Reading only the handler's own body made moving a call
+    into a helper enough to drop the endpoint out of the checked set — a blind spot, not a pass. So
+    the reach is DERIVED by following the calls, and both the classification and the guard assertion
+    read the same derived text.
+    """
+    _seen = set() if _seen is None else _seen
+    if name in _seen or name not in fns:
+        return ""
+    _seen.add(name)
+    body = fns[name]
+    out = [body]
+    # A bare NAME, not a call site: a helper reaches the browser just as surely when it is handed to
+    # run_in_threadpool / create_task as a value as when it is called with parentheses, and the
+    # parenthesised form alone missed exactly that (read_vendor_catalog, 2026-10-14). Over-matching
+    # is bounded because the names are intersected with this module's own functions.
+    for callee in sorted(set(re.findall(r"\b(_[A-Za-z0-9_]+)\b", body))):
+        if callee in fns and callee not in _seen:
+            out.append(_effective_body(callee, fns, _seen))
+    return "\n".join(out)
+
+
 def _browser_modules_elsewhere():
     derived = set()
     for root, _dirs, files in os.walk(os.path.join(APP, "modules")):
@@ -267,14 +293,28 @@ def _browser_modules_elsewhere():
     for name, body in sorted(handlers.items()):
         if not re.search(r"@router\.(get|post|put|patch|delete)", _src(SUPPLY_ROUTER).split("def %s(" % name)[0][-400:]):
             continue
-        (reach if any(c in body for c in _BROWSER_CALLS) else plain).append(name)
+        eff = _effective_body(name, handlers)
+        (reach if any(c in eff for c in _BROWSER_CALLS) else plain).append(name)
     ok(len(reach) >= 4, "the supply router's browser endpoints were found", str(reach))
     for name in reach:
-        ok("require_browser_service()" in handlers[name],
+        ok("require_browser_service()" in _effective_body(name, handlers),
            "supply %s() reaches a live browser and calls require_browser_service()" % name)
     for name in plain:
-        ok("require_browser_service()" not in handlers[name],
+        ok("require_browser_service()" not in _effective_body(name, handlers),
            "supply %s() reaches no browser and does NOT require the browser service" % name)
+    # The helper walk must not be vacuous: a handler whose browser call and guard BOTH sit in a
+    # same-module helper has to classify exactly as if they were inline. 2026-10-14: this is not
+    # hypothetical — read_vendor_catalog moved both into _read_catalog_via_portal, and before the
+    # walk existed the endpoint silently left the `reach` set, taking its guard assertion with it.
+    _probe = {"_h_endpoint": "    return await run_in_threadpool(_h_helper, x)\n",
+              "_h_helper": "    require_browser_service()\n    return live_login_start(sid)\n"}
+    _probe_eff = _effective_body("_h_endpoint", _probe)
+    ok(any(c in _probe_eff for c in _BROWSER_CALLS) and "require_browser_service()" in _probe_eff,
+       "control: a browser call and its guard are seen THROUGH a same-module helper")
+    ok(not any(c in _probe["_h_endpoint"] for c in _BROWSER_CALLS),
+       "control: …and the handler's own body really does name neither (so the walk did the work)")
+    ok(_effective_body("_h_helper", {"_h_helper": "    return _h_helper(1)\n"}) is not None,
+       "control: a self-calling helper terminates instead of recursing forever")
 
 
 if __name__ == "__main__":

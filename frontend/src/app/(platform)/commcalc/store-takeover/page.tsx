@@ -406,6 +406,79 @@ const FLAG_COLS: ExportColumn[] = [
 // ── THE NEW TABLES (owner ask 2026-10-13) ────────────────────────────────────────────────────────
 // Every one goes through ReportShell, which is the platform's ONE sorted/exportable table (owner
 // directive 2026-08-10, locked by harness_table_sort_lock) — never a hand-rolled <table>.
+// ── WHAT WE HAVE EVALUATED SO FAR (owner report 2026-10-14) ────────────────────────────────────
+// Owner: *"it does not let you pick fromt eh drop down what we have evelauterd so far"*.
+//
+// The dropdown did list them, but the page auto-opened the first one so the list was never the thing
+// you were looking at, and a name in a <select> does not tell you whether that evaluation has
+// anything in it yet. This is the same list as a TABLE: what has been uploaded, how many months, and
+// what is still missing, with one button per row. Through `ReportShell` like every other table on the
+// platform (owner directive 2026-08-10) rather than a hand-rolled one.
+interface ProspectRow {
+  id: string; name: string; status: string
+  months: number; rows: number
+  present: string[]; missing: string[]
+  latest: string
+}
+function prospectRows(prospects: Prospect[], registry: Record<string, FeedInfo>): ProspectRow[] {
+  const keys = Object.keys(registry)
+  return prospects.map(p => {
+    const byPeriod = p.feed_rows || {}
+    const periods = Object.keys(byPeriod)
+    let rows = 0
+    const present = new Set<string>()
+    for (const per of periods) {
+      for (const [feed, n] of Object.entries(byPeriod[per] || {})) {
+        rows += Number(n) || 0
+        if (Number(n) > 0) present.add(feed)
+      }
+    }
+    return {
+      id: String(p.id),
+      name: p.name || '(unnamed)',
+      status: p.status || 'evaluating',
+      months: periods.length,
+      rows,
+      present: keys.filter(k => present.has(k)),
+      // Only the feeds this platform KNOWS about are called missing. A feed the registry does not
+      // name is not a gap in your upload, it is a gap in the registry.
+      missing: keys.filter(k => !present.has(k)),
+      latest: (p.periods || [])[0] || '',
+    }
+  })
+}
+function prospectCols(registry: Record<string, FeedInfo>,
+                      onOpen: (id: string) => void): ExportColumn[] {
+  const label = (k: string) => registry[k]?.label || k
+  return [
+    { header: 'Store being evaluated', get: (r: ProspectRow) => r.name,
+      tip: 'The name you gave this evaluation. It is not a store on your platform and never becomes '
+         + 'one — walking away from a deal leaves nothing behind.' },
+    { header: 'Months uploaded', get: (r: ProspectRow) => r.months, align: 'right',
+      tip: 'How many different months its carrier reports cover. More months is a better read: one '
+         + 'month can be a good month.' },
+    { header: 'Latest month', get: (r: ProspectRow) => r.latest || '—',
+      tip: 'The most recent month any uploaded file covers.' },
+    { header: 'Rows uploaded', get: (r: ProspectRow) => r.rows, align: 'right',
+      tip: 'Every line read out of its files, across every month and every report.' },
+    { header: 'Reports in', get: (r: ProspectRow) => r.present.map(label).join(' · ') || 'nothing yet',
+      tip: 'Which of its carrier reports have landed.' },
+    { header: 'Still to upload', get: (r: ProspectRow) => r.missing.map(label).join(' · ') || 'none',
+      tip: 'Which reports this evaluation has never seen. The commission report is the one that '
+         + 'carries the money, so an evaluation without it has no P&L to show.' },
+    { header: 'Status', get: (r: ProspectRow) => r.status,
+      tip: 'Where you have got to with this one.' },
+    {
+      header: 'Open',
+      get: () => '',
+      render: (r: ProspectRow) => (
+        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 10px' }}
+                onClick={() => onOpen(r.id)}>Open</button>
+      ),
+      tip: 'Opens this evaluation. Nothing is opened until you say so.',
+    },
+  ]
+}
 // ── THE COMPARISON COLUMN (owner ask 2026-10-14) ───────────────────────────────────────────────
 // Owner: *"Add one more column to it with to pick our existing store to compare the sales of the
 // existing PNL with the new ones we might take over"*.
@@ -688,13 +761,15 @@ export default function StoreTakeoverPage() {
   // the same prospect never overwrites a figure the user is halfway through typing.
   const [rentFor, setRentFor] = useState('')
 
+  // NOTHING IS OPENED FOR YOU (owner report 2026-10-14: "the main screen does nto tell you what to
+  // do it just sits tehre and it pops up teh dat aautoamatically also it does not let you pick fromt
+  // eh drop down what we have evelauterd so far"). This used to select `prospects[0]`, which had two
+  // costs the owner felt at once: the page loaded a whole evaluation nobody asked for, and because
+  // `pid` was never empty the START PANEL below — the only thing on the page that says what to do —
+  // could never render. One cause, both complaints. The page now opens on that panel, every time.
   const loadList = useCallback(() => {
     api(`/api/v1/commcalc/prospects${orgParam1()}`)
-      .then((d: ProspectList) => {
-        setList(d)
-        const first = (d?.prospects || [])[0]
-        setPid(p => p || (first ? String(first.id) : ''))
-      })
+      .then((d: ProspectList) => setList(d))
       .catch(e => setList({ error: errText(e) }))
   }, [])
   useEffect(() => { loadList() }, [loadList])
@@ -721,11 +796,16 @@ export default function StoreTakeoverPage() {
   useEffect(() => { load() }, [load])
   const loading = !!pid && loadedKey !== key
 
-  const prospects: Prospect[] = list?.prospects || []
+  // MEMOISED, not just derived: `list?.prospects || []` is a NEW array identity on every render, so
+  // the table's column and row memos below would rebuild every time and re-mount the table under the
+  // pointer. Same for the registry.
+  const prospects = useMemo<Prospect[]>(() => list?.prospects || [], [list?.prospects])
   const prospect: Prospect | null = data?.prospect
     || prospects.find(p => String(p.id) === pid)
     || null
-  const registry: Record<string, FeedInfo> = data?.feed_registry || list?.feed_registry || {}
+  const registry = useMemo<Record<string, FeedInfo>>(
+    () => data?.feed_registry || list?.feed_registry || {},
+    [data?.feed_registry, list?.feed_registry])
   const shownMode = mode || data?.default_mode || 'keep'
   const scenario: Scenario | null = data?.scenarios?.[shownMode] || null
   const statement: Statement | null = data?.statements?.[shownMode] || null
@@ -881,6 +961,17 @@ export default function StoreTakeoverPage() {
       }
     }).sort((a, b) => (b.contribution || 0) - (a.contribution || 0))
   }, [data?.store_scenarios, shownMode, storeFilter])
+
+  // ── WHAT WE HAVE EVALUATED SO FAR, as the page's own first screen ─────────────────────────────
+  // Memoised because a column list rebuilt every render re-mounts the table. `openProspect` is the
+  // SAME state change the dropdown makes — one way to open an evaluation, two places to press it.
+  const openProspect = useCallback((id: string) => {
+    setPid(id); setSf(emptyStandardFilter()); setMode(''); setRentFor('')
+  }, [])
+  const listRows = useMemo<ProspectRow[]>(
+    () => prospectRows(prospects, registry), [prospects, registry])
+  const listColumns = useMemo<ExportColumn[]>(
+    () => prospectCols(registry, openProspect), [registry, openProspect])
 
   // ── WHICH OF OUR STORES EACH ROW IS COMPARED WITH (owner ask 2026-10-14) ──────────────────────
   // Keyed by the prospect store's block key, so a pick survives sorting, filtering and a month
@@ -1060,7 +1151,7 @@ export default function StoreTakeoverPage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 12, color: 'var(--text2)' }}>Prospect{' '}
           <select style={{ ...sel, minWidth: 220 }} value={pid}
-                  onChange={e => { setPid(e.target.value); setSf(emptyStandardFilter()); setMode(''); setRentFor('') }}>
+                  onChange={e => openProspect(e.target.value)}>
             <option value="">— pick a store being evaluated —</option>
             {prospects.map(p => (
               <option key={p.id} value={p.id}>{p.name}{p.status && p.status !== 'evaluating' ? ` · ${p.status}` : ''}</option>
@@ -1148,11 +1239,57 @@ export default function StoreTakeoverPage() {
           {msg.ok ? '✓ ' : '❌ '}{msg.text}
         </div>}
 
+      {/* ── START HERE — the page's own first screen, never help text ─────────────────────────
+          Owner report 2026-10-14: *"the main screen does nto tell you what to do it just sits
+          tehre"*. Both intro paragraphs above carry `pg-note`, which globals.css HIDES unless an
+          approved role has help switched on — so with help off this page showed a title and a
+          dropdown and nothing else. Instructions a reader needs in order to USE the page are not
+          help: they are the page. This panel carries NO `pg-note` and is what the page opens on. */}
       {!pid &&
-        <div className="card" style={{ padding: '16px', fontSize: 13, color: 'var(--text2)' }}>
-          Name the store you are evaluating above and press <b>Open an evaluation</b>. Then upload its
-          three carrier reports and enter its rent.
-        </div>}
+        <>
+          <div className="card" style={{ padding: '14px 16px', marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+              Start here &mdash; three steps
+            </div>
+            <ol style={{ fontSize: 13, color: 'var(--text2)', margin: 0, paddingLeft: 20,
+                         lineHeight: 1.7 }}>
+              <li><b>Pick a store below</b>, or type a name in the box above and press{' '}
+                <b>+ Open an evaluation</b> to start a new one.</li>
+              <li><b>Upload its carrier reports</b> &mdash;{' '}
+                {Object.keys(registry).length > 0
+                  ? Object.values(registry).map(f => f.label).join(', ')
+                  : 'its commission, daily-transaction and handset-order files'}. The commission
+                report is the one that carries the money, so start with that one.</li>
+              <li><b>Type its actual monthly rent</b>, which replaces ours in the expense average.
+                Then read the P&amp;L, and compare it with one of your own stores.</li>
+            </ol>
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10 }}>
+              Nothing here creates a store, a mapping or a statement, and nothing is opened until you
+              open it. The rows you upload are read by this page and by nothing else.
+            </div>
+          </div>
+
+          {prospects.length > 0
+            ? <div className="card" style={{ padding: '14px 16px', marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+                  What you have evaluated so far &mdash; {prospects.length}{' '}
+                  store{prospects.length === 1 ? '' : 's'}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 10 }}>
+                  Newest first. Press <b>Open</b> on any row, or use the Prospect dropdown above.
+                </div>
+                <ReportShell title="" filename="takeover-evaluations"
+                             columns={listColumns} rows={listRows} compact stickyHeader
+                             notice={<><b>An evaluation with no commission report has no P&amp;L
+                               yet.</b> The &ldquo;Still to upload&rdquo; column says what each one is
+                               waiting for, and the row counts are what actually landed in the
+                               platform &mdash; not what the file claimed.</>} />
+              </div>
+            : <div className="card" style={{ padding: '16px', fontSize: 13, color: 'var(--text2)' }}>
+                You have not evaluated any store yet. Type a name in the box above and press{' '}
+                <b>+ Open an evaluation</b> to start the first one.
+              </div>}
+        </>}
 
       {pid && data?.error &&
         <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>

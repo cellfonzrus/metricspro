@@ -21,6 +21,9 @@ export interface Vendor {
   data_source_id?: string | null; is_price_source: boolean
   recipe?: { level: string; text: string }; recipe_errors?: string[]
   login?: VendorLogin | null; catalog_seen_at?: string | null; attention?: Attention[]
+  // The route the SERVER resolved for this vendor (§51). Read it; never re-derive it from
+  // portal_config here, or this file becomes a second home for "which route is this vendor on".
+  transport?: { kind?: string; reason?: string; has_customer_rule?: boolean; customer_errors?: string[] }
 }
 export interface Offer {
   row_id: string; name: string; sku?: string; price: number | null; list_price?: number | null
