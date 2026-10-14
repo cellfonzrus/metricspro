@@ -102,6 +102,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/closing/cash-config' },
   { path: '/closing/cash-position', label: 'Cash Position', aliases: ['cash on hand', 'cash position'] },
   { path: '/closing/cash-recon-management' },
+  { path: '/closing/closing-pickup-status', aliases: ['not closed', 'did not close', 'missing closing', 'closing not submitted', 'cash not picked up', 'cash still in store', 'who did not close', 'pickup status'] },
   { path: '/closing/count-config', label: 'Cash Count Setup', aliases: ['count config', 'denomination count'] },
   { path: '/closing/deposit-categories' },
   { path: '/closing/deposit-recon' },
