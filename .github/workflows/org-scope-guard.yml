@@ -255,6 +255,12 @@ jobs:
       - name: Run the employee-write proof (the real handlers, both defects reproduced then fixed)
         working-directory: backend
         run: python3 harness_employee_write_proof.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # §CORE-07, the sibling of the one mint above: that gives the PERSON a business id, this makes the
+      # LOGIN point at it. A login with app_users.employee_id NULL is nobody — a blank Schedule and a
+      # closer_no_name refusal on Submit Closing — and two of the three create paths never wrote it.
+      - name: Run the login/employee link lock
+        working-directory: backend
+        run: python3 harness_app_user_employee_link.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   hub-viewer-gate:
     # §CORE-06 — "may THIS viewer open THIS page from a tile" is ONE home (frontend/src/lib/hub-gate.ts)
