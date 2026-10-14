@@ -8,7 +8,7 @@
 // comes back). Portal behaviour (catalog pages, selectors, the optional ordering recipe) is the vendor's
 // portal config — a vendors.json block from the price-compare kit — never code.
 import { useCallback, useEffect, useState } from 'react'
-import { api, apiUpload } from '@/lib/client'
+import { api, apiDownload, apiUpload } from '@/lib/client'
 import LiveVendorWindow from '@/components/supply/LiveVendorWindow'
 import { panel, input, label, btn, btnPrimary, btnDanger, th, cell, fmtMoney, fmtDate, type Vendor } from '@/lib/supply'
 
@@ -91,18 +91,46 @@ export default function SupplyVendorsPage() {
     setBusy(false)
   }
 
+  // ONE button for "read this vendor's prices". The SERVER picks the route from what the vendor
+  // declares (§51) and says which one ran, so this screen keeps no copy of which vendors are on an
+  // API. A portal read opens the live window; an API read is already finished when it answers.
   async function readCatalog(v: Vendor) {
     setMsg('')
     try {
-      const r: { blocked?: boolean; requires_confirm?: boolean; phase?: string; message?: string; block_reason?: string; sid: string } = await api(`/api/v1/supply/vendors/${v.id}/catalog/read`, { method: 'POST', body: '{}' })
+      const r: { route?: string; blocked?: boolean; requires_confirm?: boolean; phase?: string; message?: string; block_reason?: string; sid?: string; pages?: number; rows_ingested?: number; rejected?: number } =
+        await api(`/api/v1/supply/vendors/${v.id}/catalog/read`, { method: 'POST', body: '{}' })
+      if (r.route === 'api') {
+        const rej = r.rejected ? ` · ${r.rejected} rejected` : ''
+        setMsg(`✅ Read ${v.name} over its order API — ${r.rows_ingested ?? 0} prices landed${rej}.`)
+        load()
+        return
+      }
       if (r.blocked || r.requires_confirm || r.phase === 'route_disabled') { setMsg('⚠️ ' + (r.message || r.block_reason || 'The portal login is paused.')); return }
-      setLive({ sid: r.sid, title: `Reading ${v.name}'s catalog` })
+      if (r.sid) setLive({ sid: r.sid, title: `Reading ${v.name}'s catalog` })
     } catch (err) {
       const e = err as ApiError
       setMsg('❌ ' + (e?.status === 503
         ? 'This server cannot open a browser (the vendor portal read runs on the browser worker, which is not configured here). Upload the price-compare kit\'s products file instead.'
         : (e?.message || err)))
     }
+  }
+
+  // This tenant's own stores, in the vendor's customer-import columns, for a vendor that declares a
+  // customer rule. The file is only the identities — which of them the vendor treats as wholesale,
+  // and on what terms, is the vendor's own setting and this platform never decides it.
+  async function exportCustomers(v: Vendor) {
+    setBusy(true); setMsg('')
+    try {
+      const r: { stores?: number; customers?: unknown[]; skipped?: { store_code?: string; reason?: string }[] } =
+        await api(`/api/v1/supply/vendors/${v.id}/customers`)
+      await apiDownload(`/api/v1/supply/vendors/${v.id}/customers.csv`)
+      const named = (r.customers || []).length
+      const missed = (r.skipped || []).length
+      setMsg(missed
+        ? `✅ ${named} of ${r.stores ?? named} stores exported. ${missed} could not be named: ${(r.skipped || []).slice(0, 3).map(s => `${s.store_code || '?'} (${s.reason || 'no reason given'})`).join(', ')}${missed > 3 ? '…' : ''}`
+        : `✅ All ${named} stores exported. Upload the file on the vendor's side, then set each one's payment terms there.`)
+    } catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
+    setBusy(false)
   }
 
   // Delete (owner 2026-10-01). The server decides delete vs archive: a vendor that purchase orders still name is
@@ -172,6 +200,7 @@ export default function SupplyVendorsPage() {
                 <td style={cell}>
                   <div style={{ display: 'flex', gap: 6 }}>
                     {v.is_price_source && v.data_source_id && <button style={btn} onClick={() => readCatalog(v)}>Read prices now</button>}
+                    {v.transport?.has_customer_rule && <button style={btn} disabled={busy} onClick={() => exportCustomers(v)}>Store list for vendor</button>}
                     <button style={btnDanger} disabled={busy} onClick={() => removeVendor(v)}>Delete</button>
                   </div>
                 </td>
