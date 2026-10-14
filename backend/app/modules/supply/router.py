@@ -25,6 +25,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
@@ -98,6 +99,19 @@ def _vendor_public(v, login=None, last_seen=None):
     out["login"] = login
     out["catalog_seen_at"] = last_seen
     out["attention"] = L.vendor_attention(v, login, last_seen)
+    # The declared route, DEREFERENCED here (order_transport, §51) rather than re-derived on the
+    # screen: the page needs to know whether a store list can be exported for this vendor, and a
+    # second reading of portal_config in TypeScript is a copy that would drift from this one.
+    from app.modules.supply import order_transport as _tr
+    from app.modules.supply import vendor_customer as _vc
+    try:
+        _route = _tr.transport_for(v) or {}
+        out["transport"] = {"kind": _route.get("kind"), "reason": _route.get("reason"),
+                            "has_customer_rule": bool(_route.get("customer")),
+                            "customer_errors": _vc.validate_customer(_route.get("customer"))}
+    except Exception as e:  # one malformed config row may not take down the whole vendor list
+        out["transport"] = {"kind": None, "reason": f"this vendor's route could not be read: {str(e)[:120]}",
+                            "has_customer_rule": False, "customer_errors": []}
     return out
 
 
@@ -247,15 +261,34 @@ def save_vendor_login(vendor_id: str, body: VendorLoginIn, authorization: str = 
             "login": store.load_logins(client, org_id, [sid]).get(sid)}
 
 
-@router.post("/vendors/{vendor_id}/catalog/read")
-def read_vendor_catalog(vendor_id: str, confirm: bool = False, org_id: str = ORG_ID):
-    """Read this vendor's catalog NOW through the EXISTING live-login path: commcalc's
-    /data-sources/{sid}/live-login/start (route gate, cooldown, SERVICE_ROLE/BROWSER_SERVICE_URL handling),
-    whose post-login pull dispatches a supply login to portal.catalog_pull_on_page. The page streams the
-    session from the commcalc live-login endpoints. If this deploy cannot launch a browser, that endpoint
-    says so (503 with the reason) — nothing here pretends a read happened."""
+def _read_catalog_via_portal(client, org_id: str, v: dict, confirm: bool) -> dict:
+    """The browser route: commcalc's /data-sources/{sid}/live-login/start (route gate, cooldown,
+    SERVICE_ROLE/BROWSER_SERVICE_URL handling), whose post-login pull dispatches a supply login to
+    portal.catalog_pull_on_page. The page then streams the session from the commcalc live-login
+    endpoints. If this deploy cannot launch a browser that endpoint says so (503 with the reason) —
+    nothing here pretends a read happened."""
     from app.core.service_role import require_browser_service
     require_browser_service()
+    if not v.get("data_source_id"):
+        raise HTTPException(400, "Save this vendor's portal login first (Supply → Vendors → Login).")
+    if not L.vendor_scrape_config(v).get("start_urls"):
+        raise HTTPException(400, "Add the vendor's catalog links first.")
+    from app.modules.commcalc.router import live_login_start
+    res = live_login_start(v["data_source_id"], org_id=org_id, confirm=confirm)
+    return {"route": "portal", "sid": v["data_source_id"], **(res or {})}
+
+
+@router.post("/vendors/{vendor_id}/catalog/read")
+async def read_vendor_catalog(vendor_id: str, confirm: bool = False, org_id: str = ORG_ID):
+    """Read this vendor's catalog NOW. ONE endpoint for "read this vendor's prices", whichever way
+    this vendor is reached: it DEREFERENCES the route the vendor already declares for orders
+    (order_transport.transport_for, §51) instead of asking the caller to pick.
+
+    A second endpoint per route would be two paths answering one question, and the screen would have
+    to carry a copy of "which vendors are on the API" to choose between them. The answer reports
+    which route ran, so nothing has to infer it.
+    """
+    from app.modules.supply import order_transport as _tr
     client = sb()
     try:
         v = store.vendor_by_id(client, org_id, vendor_id)
@@ -263,13 +296,9 @@ def read_vendor_catalog(vendor_id: str, confirm: bool = False, org_id: str = ORG
         _migration_guard(e)
     if not v:
         raise HTTPException(404, "Vendor not found.")
-    if not v.get("data_source_id"):
-        raise HTTPException(400, "Save this vendor's portal login first (Supply → Vendors → Login).")
-    if not L.vendor_scrape_config(v).get("start_urls"):
-        raise HTTPException(400, "Add the vendor's catalog links first.")
-    from app.modules.commcalc.router import live_login_start
-    res = live_login_start(v["data_source_id"], org_id=org_id, confirm=confirm)
-    return {"sid": v["data_source_id"], **(res or {})}
+    if (_tr.transport_for(v) or {}).get("kind") == "api":
+        return await _read_catalog_via_api(client, org_id, v)
+    return await run_in_threadpool(_read_catalog_via_portal, client, org_id, v, confirm)
 
 
 @router.get("/vendors/{vendor_id}/catalog")
@@ -286,25 +315,18 @@ def vendor_catalog(vendor_id: str, limit: int = 500, org_id: str = ORG_ID):
 
 
 # ══ CATALOG READ (route c — the vendor's own order API; no browser needed) ═══════════════════════════
-@router.post("/vendors/{vendor_id}/catalog/api-read")
-async def read_vendor_catalog_api(vendor_id: str, org_id: str = ORG_ID):
+async def _read_catalog_via_api(client, org_id: str, v: dict) -> dict:
     """Read this vendor's prices through the API route it already declares for ORDERS (§51), and land
     them with the SAME lander every other catalog route uses (store.land_catalog → ONE snapshot
     table). Nothing vendor-specific is spelled here: the route and its dialect are config values.
 
-    A vendor without an `api` route gets a reason, never a fallback: guessing an endpoint is how a
-    read reaches the wrong store.
+    Reached only from read_vendor_catalog, which dereferences the route — there is no endpoint that
+    forces this path, because a caller naming the route is a caller keeping a second copy of it.
     """
     from app.modules.supply import api_credential as _cred
     from app.modules.supply import order_transport as _tr
     from app.modules.supply import shopify_draft_order as _shopify
-    client = sb()
-    try:
-        v = store.vendor_by_id(client, org_id, vendor_id)
-    except Exception as e:
-        _migration_guard(e)
-    if not v:
-        raise HTTPException(404, "Vendor not found.")
+    vendor_id = v["id"]
     route = _tr.transport_for(v)
     if route.get("kind") != "api":
         raise HTTPException(400, f"This vendor has no API route — {route.get('reason')}")
@@ -327,7 +349,7 @@ async def read_vendor_catalog_api(vendor_id: str, org_id: str = ORG_ID):
     except Exception as e:
         _migration_guard(e)
         raise HTTPException(500, str(e)[:400])
-    return {"pages": read.get("pages"), **landed}
+    return {"route": "api", "pages": read.get("pages"), **landed}
 
 
 # ══ THE VENDOR'S CUSTOMER LIST (seeded from this tenant's own stores) ════════════════════════════════
