@@ -23,24 +23,16 @@ from app.modules.commcalc.calculator import safe_float
 # pure (no imports of its own, no I/O), so dereferencing it keeps this engine pure too — and
 # keeps a target's UNIT and its ACHIEVED figure reading the same rule.
 from app.modules.closing.metric_catalog import figure_unit as _figure_unit
+# WHO IS THIS PERSON is one fact with one home (§CORE-08) — pure, so this engine stays pure.
+from app.modules.core import person_identity as _person_identity
 
 
 def name_key(name) -> str:
-    """Identity key for a PERSON's name across systems that spell it differently.
+    """WHO IS THIS PERSON, word order and all thrown away — one fact with one home:
+    `core.person_identity.token_key` (§CORE-08). The name is kept because this engine's callers read
+    it; the rule, and the 2026-09-02 finding that motivated it, live in the home. PURE."""
+    return _person_identity.token_key(name)
 
-    The schedule (storeops.shifts.employee_name) and the POS export (salesperson) are typed by
-    different people in different systems — LuxeLink's POS emits 'Antunez, Diana' while its schedule
-    says 'Diana Antunez', so a plain upper-case compare matched ZERO of that org's reps and every
-    per-employee daily target silently multiplied by rep_share = 0 (found 2026-09-02). Explicit
-    commcalc.name_map / rep_aliases rows still canonicalize FIRST (in _rep_canon_map, upstream of
-    this engine); this key is the format-normalization fallback beneath them: uppercase,
-    punctuation stripped, tokens SORTED — so 'Antunez, Diana', 'Diana Antunez' and 'KELLIE MARK' /
-    'Kellie, Mark' all collapse to one identity regardless of comma style or word order. Two
-    different people sharing the exact same name-token set within one store would merge — accept
-    that vanishing edge over the broken-by-default join. Names only; store codes keep their plain
-    upper-case compare."""
-    toks = re.sub(r"[^A-Z0-9 ]+", " ", str(name or "").upper()).split()
-    return " ".join(sorted(toks))
 
 # Display order; accessories is a dollar amount, the rest are transaction counts.
 #

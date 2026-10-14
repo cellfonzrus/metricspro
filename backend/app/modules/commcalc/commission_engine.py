@@ -15,6 +15,9 @@ Degrades to an empty/ready:false result if migration 059 isn't applied yet (tabl
 """
 import re
 
+# WHO IS THIS PERSON — one fact, one home (§CORE-08). Pure, stdlib-only, no cycle.
+from app.modules.core import person_identity as _person_identity
+
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import line_class as _lc    # THE activation-type predicate (2026-09-21)
 # ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
@@ -117,24 +120,12 @@ def _load_plans(client, org_id):
 
 
 def _canon_person(s):
-    """Canonicalize a person-name for name-ORDER-insensitive equality matching. PURE (no I/O).
+    """WHO IS THIS PERSON is one fact with one home: `core.person_identity.person_key` (§CORE-08).
 
-    Steps, in order: casefold · trim · collapse internal whitespace runs to one space · then
-    IF the result contains EXACTLY ONE comma, treat it as "Last, First" and reorder to "First Last"
-    (the pre-comma part is the surname — possibly multi-token — and is appended AFTER the post-comma
-    first-part, preserving each part's internal token order): "Islam Khan, Ariful" -> "ariful islam khan".
-    More than one comma, or an empty side, -> the non-reordered folded string, unchanged.
-
-    Deliberately NOT fuzzy: no token dropping, no middle-name stripping, no spelling tolerance.
-    "natasha cabrera" != "natasha nicole cabrera" stays UNMATCHED by design (data hygiene, not matching).
-    For comma-free ASCII single-spaced input this equals the previous `.strip().lower()` byte-for-byte,
-    so store/market/default and comma-free house employee data are unaffected."""
-    folded = re.sub(r"\s+", " ", ("" if s is None else str(s)).strip().casefold())
-    if folded.count(",") == 1:
-        last, first = (x.strip() for x in folded.split(","))
-        if last and first:
-            return f"{first} {last}"
-    return folded
+    This name is kept because ~30 call sites inside commcalc already read it; the RULE now lives in
+    one place, where the closing module's who-worked signal and the targets join read the same one.
+    PURE (no I/O)."""
+    return _person_identity.person_key(s)
 
 
 def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_value_raw, skeys=None):

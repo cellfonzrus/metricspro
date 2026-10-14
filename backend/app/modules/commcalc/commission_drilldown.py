@@ -30,7 +30,9 @@ from app.modules.commcalc import pay_data_quality as _pdq
 
 
 def _tok(s):
-    return set(re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).split())
+    """The name's word-set — one fact with one home: `core.person_identity.tokens` (§CORE-08)."""
+    from app.modules.core import person_identity as _person_identity
+    return _person_identity.tokens(s)
 
 
 def _name_match(a, b):

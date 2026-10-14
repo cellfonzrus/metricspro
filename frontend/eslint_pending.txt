@@ -109,7 +109,7 @@
 6	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/imports/page.tsx
 10	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/management/page.tsx
 52	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/page.tsx
-39	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/pickup/page.tsx
+38	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/pickup/page.tsx
 5	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/readiness/page.tsx
 9	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/recon/page.tsx
 21	@typescript-eslint/no-explicit-any	src/app/(platform)/closing/store-cash-on-hand/page.tsx

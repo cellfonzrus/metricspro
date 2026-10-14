@@ -444,6 +444,52 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_daily_incentive',),
         },
     },
+    # ── §CORE-08 (owner report 2026-10-14) — which PERSON is this name ──────────────────────────
+    'person_identity': {
+        "question": 'Is this the same human? Asked wherever two systems\' people are joined: a '
+                    'punch against a sale, the schedule against the POS, a closing against the '
+                    'roster, a commission plan against a rep. The owner reported a store-day '
+                    'listing "Simarjyot Singh, Singh, Simarjyot" — ONE man, because the who-worked '
+                    'signal unioned NAME STRINGS and a union of strings has no notion of a person. '
+                    'FOUR questions, named apart so they cannot be mistaken for one another: '
+                    '`person_key` (comma-order-insensitive, what ~30 commcalc money call sites '
+                    'already key on, deliberately unwidened), `token_key` (word order thrown away '
+                    'too, the 2026-09-02 schedule-vs-POS join), `folded_token_key` (THE STRONGEST '
+                    'and the one for new code: order-free AND accent-folded, so Martínez matches '
+                    'Martinez) and `loosely_same_person` (a generous SCREENING rule, proven '
+                    'non-transitive, so never a grouping key). Two modules each declared '
+                    'themselves the home — storeops/payroll_identity for the clock feed and '
+                    'commcalc/commission_engine for pay — and `closing` could reach neither '
+                    'without a cycle, which is exactly how it grew a seventh rule of its own.',
+        "homes": ('app/modules/core/person_identity.py',),
+        "index": ('CORE-08',),
+        "locks": ('harness_person_identity.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04).
+        "callers": {
+            # The commission PLAN engine's `_canon_person`, read ~30 times inside commcalc and the
+            # key a payout is matched on. Byte-identical to what it ran before, on purpose.
+            'app/modules/commcalc/commission_engine.py': ('_person_identity',),
+            # A NEAR-copy that said it mirrored the engine and did not: it reordered a name with ANY
+            # number of commas, so 'Khan, Ariful, Jr' keyed one way for a commission and another for
+            # a management plan.
+            'app/modules/commcalc/management_incentive.py': ('_person_identity',),
+            # `name_key` — the word-order-free key the per-employee daily target joins on (a plain
+            # compare matched ZERO of LuxeLink's reps, 2026-09-02).
+            'app/modules/commcalc/targets_engine.py': ('_person_identity',),
+            # The drill-down's word-set, for its "did you mean" ranking.
+            'app/modules/commcalc/commission_drilldown.py': ('_person_identity',),
+            # The closing module: `_name_match` (the screening rule) AND the who-worked signal,
+            # which is the surface the owner reported.
+            'app/modules/closing/router.py': ('_person_identity',),
+            # A byte copy of the router's screening rule, kept local to dodge an import cycle the
+            # pure home does not have.
+            'app/modules/closing/ops_chargebacks.py': ('_person_identity',),
+            # The clock feed's employee matcher. THIS MODULE USED TO BE THE HOME (clock_feed.py said
+            # so), and the accent fold that makes its key the strongest was found here.
+            'app/modules/storeops/payroll_identity.py': ('_person_identity',),
+        },
+    },
     'store_identity': {
         "question": 'Which STORE is this string? Asked by the GP report, the commission-leg '
                     'trend/breakout, the residual report, flags 7/8, the closing store-day match, '
@@ -490,12 +536,18 @@ FACTS: dict[str, dict] = {
             # matcher's person key ride the same accent fold, so a person and a store are folded by
             # one rule (mig 1073, §14z).
             'app/modules/storeops/clock_feed.py': ('_sid',),
-            'app/modules/storeops/payroll_identity.py': ('fold_accents',),
+            # THE ONE PERSON KEY (§CORE-08) folds a person's spelling through this fold, for the
+            # clock feed's matcher and the closing module's who-worked signal alike —
+            # `payroll_identity` dereferences it rather than importing the fold itself.
+            'app/modules/core/person_identity.py': ('fold_accents',),
             # The remaining five identity folds, found by the lock's second axis and wired in the
             # same PR rather than left as "the ones we did not get to". Each folds a KEY nothing
             # ever shows a human — a store code, a carrier label, a clock-in evidence key, a role
             # name — so routing it through the one fold gains matches and moves none.
-            'app/modules/closing/router.py': ('_sid_fold',),
+            # `_store_identity` since §CORE-08: the who-worked signal buckets a PUNCH's store_code
+            # through this chain, so a punch stamped 'b-418' cannot split from the same store's
+            # 'B-418' sales row.
+            'app/modules/closing/router.py': ('_sid_fold', '_store_identity'),
             'app/modules/commcalc/b2b_sweep.py': ('_sid_fold',),
             'app/modules/commcalc/vidapay_sweep.py': ('_sid_fold',),
             'app/modules/storeops/clockin_evidence.py': ('_sid_fold',),

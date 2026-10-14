@@ -35,7 +35,8 @@ THE ELEVEN TRAPS, AND WHAT IS DONE ABOUT EACH
     middle initial as a third comma segment), **and it carries accents** (`Martínez, LESLIEE`).
     `str.isalnum()` is True for `í`, so the platform's identity folds kept it and the row matched
     nothing; that was fixed in the fold itself (`store_identity.fold_accents`, for every caller),
-    and `payroll_identity.person_key` / `name_tokens` are the one home for the person spelling.
+    and `core/person_identity` is the one home for the person spelling (§CORE-08), which
+    `payroll_identity.person_key` / `name_tokens` dereference.
     Nothing here splits a name on the comma and assumes two parts.
  4. **CLOCK IN / OUT ARE LOCAL WALL CLOCK WITH NO TIMEZONE**, and `storeops.timelog` is UTC (the
     offset on the sample is 4h, EDT). `to_utc` takes the ZoneInfo the caller resolved through

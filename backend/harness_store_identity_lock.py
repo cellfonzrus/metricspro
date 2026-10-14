@@ -90,8 +90,10 @@ PINNED = {
     # Person-NAME matching, not a store. Same shape, different fact — pinned so the widened regex
     # has a reviewed classification for each and a NEW address site cannot hide among them.
     "modules/hr/letters.py": {"_common_merge": "NOT-AN-ADDRESS"},        # employee first name
-    "modules/closing/router.py": {"_name_match": "NOT-AN-ADDRESS"},
-    "modules/closing/ops_chargebacks.py": {"_name_match": "NOT-AN-ADDRESS"},
+    # `loosely_same_person` IS the rule the two closing `_name_match` helpers used to spell for
+    # themselves; both now dereference it (2026-10-14, index CORE-08), so the pin MOVED with the
+    # body rather than being added beside the old ones — one home, one pin.
+    "modules/core/person_identity.py": {"loosely_same_person": "NOT-AN-ADDRESS"},
     "modules/closing/closer_resolution.py": {"name_match": "NOT-AN-ADDRESS"},
     "modules/commcalc/pay_simulator.py": {
         "resolve_self": "MARKET-FALLBACK", "_rep_context": "MARKET-FALLBACK",

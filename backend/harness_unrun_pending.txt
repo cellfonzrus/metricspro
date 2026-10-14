@@ -53,7 +53,6 @@ harness_carrier_recon.py
 harness_carrier_vs_pay.py
 harness_cash_on_hand_pickup.py
 harness_cash_pickup.py
-harness_cash_pickup_who_worked.py
 harness_catalog_suggest.py
 harness_chargeback_flags_span_store.py
 harness_chat.py
