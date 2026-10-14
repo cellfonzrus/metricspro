@@ -1151,7 +1151,21 @@ _all_routes = _flatten_routes(real_app.routes)
 # `'^+@router\.'` = 1 — the +1/-1 pair is .../catalog/read moving within the file, leaving ONE net
 # removal. The pin was re-taken on a measured, fully-accounted REMOVAL; it was never relaxed to make
 # CI green, and a count that comes back HIGHER than this pin is still a failure.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1787"))
+# RE-PINNED 2026-10-14, 1787 -> 1788 (index §COMMCALC-03.26). Every record above stays. The delta is
+# ONE route and it is named: PUT /prospects/{prospect_id}/store-inputs — the seller's two declared
+# per-store cells on the store-takeover evaluation (accessory sales as the seller states them, and
+# this site's own rent). It writes ONLY commcalc.prospect_store_input (mig 1083, one new table), is
+# org-scoped through `require_org` and `_prospect_row` like every other prospect endpoint, and
+# touches no live table, no money column, no feed and no roster row — §COMMCALC-03's whole safety
+# property is that a prospect is reachable by no live reader, and this endpoint does not change it.
+# harness_prospect_eval.py §X1-X28 locks the wiring (337 passed / 0 failed).
+# Verified the same way as every pin above, BEFORE re-pinning: the harness was run on a clean
+# `git worktree` of origin/main (0e3c71b) and reported 1787 PASS / 138 passed 0 failed, then on this
+# tree and reported 1788, and `git diff origin/main -- backend/app | grep -c '^+@router\.'` = 1 with
+# `'^-@router\.'` = 0 — one added, NONE removed, and the one added printed by name. The pin was
+# re-taken on a measured, fully-accounted addition; it was never relaxed to make CI green, and a
+# count that comes back HIGHER than this pin is still a failure.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1788"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
