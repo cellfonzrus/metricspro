@@ -75,6 +75,10 @@ DB-free. Proof: `backend/harness_prospect_eval.py`.
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc.expenses_effective import period_sort_key
 from app.modules.commcalc import product_mix as _pm
+# THE activation classifier — what KIND of activation a sale line is (§6f/§19.31). Dereferenced,
+# never re-derived: a prospect counting activations on its own rule would be a second answer to a
+# question the platform already answers for every live store.
+from app.modules.commcalc import line_class as _lc
 
 # ── THE FEED REGISTRY ──────────────────────────────────────────────────────────────────────────────
 # The declared set of reports a prospect can be evaluated from.
@@ -413,6 +417,7 @@ CONFIG_COLUMNS = (
     ("prospect_expense_basis_months", "1077_store_prospect_eval.sql"),
     ("prospect_rent_expense_names", "1077_store_prospect_eval.sql"),
     ("prospect_expense_average_basis", "1077_store_prospect_eval.sql"),
+    ("prospect_activation_rules", "1082_prospect_activation_rules.sql"),
 )
 
 
@@ -424,6 +429,9 @@ def default_config():
         "expense_basis_months": HOUSE_EXPENSE_BASIS_MONTHS,
         "rent_expense_names": list(HOUSE_RENT_EXPENSE_NAMES),
         "expense_average_basis": HOUSE_AVERAGE_BASIS,
+        # The RAW declaration, not the resolved rules: `activation_rules(cfg)` resolves it through
+        # `line_class` so the resolution has one implementation and this dict stays JSON-shaped.
+        "activation_declaration": house_activation_declaration(),
     }
 
 
@@ -468,6 +476,12 @@ def resolve_config(row):
     basis = (row.get("prospect_expense_average_basis") or "").strip().lower()
     if basis in AVERAGE_BASES:
         cfg["expense_average_basis"] = basis
+    # A DECLARED VOCABULARY REPLACES THE HOUSE ONE WHOLE, never merges into it: a half-merged token
+    # map is how a tenant that deliberately drops a word gets it silently handed back (the same trap
+    # `_list_or_house` exists for, one level up).
+    decl = row.get("prospect_activation_rules")
+    if isinstance(decl, dict) and decl:
+        cfg["activation_declaration"] = decl
     return cfg
 
 
@@ -568,7 +582,7 @@ def device_keys_of(row):
     return (str(r.get(PRODUCT_DESC_COLUMN) or "").strip(), str(r.get("imei") or "").strip())
 
 
-def flag_multi_line_accounts(grouped, threshold):
+def flag_multi_line_accounts(grouped, threshold, rules=None):
     """PURE: the accounts carrying MORE THAN `threshold` lines in one month, with their devices.
 
     This is a WHO-TO-LOOK-AT report, and the wording matters: nothing here concludes that fraud
@@ -577,8 +591,16 @@ def flag_multi_line_accounts(grouped, threshold):
     carries the evidence a human needs to tell them apart — the lines, the devices, the day span, the
     store account, how many are add-a-lines — and no verdict.
 
-    Returns a list sorted by line count descending, then account key, so the output is stable."""
+    Returns a list sorted by line count descending, then account key, so the output is stable.
+
+    `rules` is the activation vocabulary; the add-a-line count is the ONE classifier's answer
+    (`line_class.is_add_a_line`), not a token spelled here. This line used to read
+    `activation_type == 'add'` — a bare value comparison on one column, which is the §19.18 shape
+    twice over: it answered a question `line_class` already answers, and it would have read zero for
+    any feed whose files spell an add-a-line anywhere else. Verified byte-identical on the live
+    upload: 1,588 both ways."""
     thr = max(0, int(threshold or 0))
+    rules = rules if rules is not None else activation_rules(None)
     out = []
     for (_period, _key), g in (grouped.get("groups") or {}).items():
         lines = g["lines"]
@@ -600,7 +622,7 @@ def flag_multi_line_accounts(grouped, threshold):
             acct = str((r or {}).get(_store_column("ma_commission")) or "").strip()
             if acct:
                 stores.add(acct)
-            if str((r or {}).get("activation_type") or "").strip().lower() == "add":
+            if _lc.is_add_a_line(r, rules):
                 adds += 1
         out.append({
             "period": g["period"],
@@ -687,7 +709,7 @@ def multi_line_summary(grouped, flagged, threshold):
 # `period` is already on every group key and on every flagged account, because `account_groups` groups
 # WITHIN a month (three lines added across three separate months is a customer who grew their plan, not
 # a multi-line sale). So the per-month view needs no new identity — only the slice.
-def multi_line_by_month(rows, columns, threshold):
+def multi_line_by_month(rows, columns, threshold, rules=None):
     """PURE: every uploaded month's multi-line picture, from the SAME grouping the month report uses.
 
     `rows` is the commission feed across EVERY period, not one month's. Returns:
@@ -698,7 +720,7 @@ def multi_line_by_month(rows, columns, threshold):
     reported as zero rather than omitted, because a month missing from a list reads as a month with no
     data, which is a different fact and the one this report must never fake."""
     grouped = account_groups(rows, columns)
-    flagged = flag_multi_line_accounts(grouped, threshold)
+    flagged = flag_multi_line_accounts(grouped, threshold, rules)
     groups = grouped.get("groups") or {}
     unident = grouped.get("unidentified") or []
     periods = sorted({str(k[0]) for k in groups} | {_row_period(r) for r in unident})
@@ -722,6 +744,174 @@ def multi_line_by_month(rows, columns, threshold):
         "totals": multi_line_summary(grouped, flagged, threshold),
         "flagged": flagged,
     }
+
+# ── WHAT KIND OF ACTIVATION, AND HOW MANY A MONTH (owner ask 2026-10-14) ─────────────────────────
+# Owner, verbatim: *"the activations per month details is also missing which breaks up teh new acts
+# upgrade tablet fios etc"*.
+#
+# THE DUPLICATE CHECK CAME FIRST, and it changed the design. The platform already owns "what kind of
+# activation is this line" — `line_class` (§6f), whose classes are exactly the words the owner used:
+# `activation` / `port` / `byod` / `upgrade`, with an add-a-line as a MODIFIER on one of them rather
+# than a fifth class, and `new_activation_units` as the ONE derivation of the count the Sales report,
+# Executive MTD, the Boost pay engine and the DLAR reconciliation all print (§19.31). A private
+# New/Add tally here would have been a second answer to that question, so this counts through
+# `line_class` and nothing else.
+#
+# WHAT THAT COST, MEASURED BEFORE DECIDING. The house classifier reads `contract_type`, which this
+# feed does not have, so on the live upload it classified **0 of 5,495 rows** — every class would have
+# read zero, which is the fake answer this report must never give. The feed carries the fact in two
+# narrow columns instead, and their values are exact rather than prose:
+#     `activation_type`   New 3,907 · Add 1,588                     (no other value)
+#     `activation_type2`  branded 5,083 · byop 383 · blank 29        (no other value)
+# So the vocabulary is DECLARED for this feed's two columns — fields and tokens as config, per RULE
+# TWO — and the declaration was then measured against every row before it shipped: 5,112 activation +
+# 383 byod = 5,495 exactly, 1,588 add-a-lines, 0 unplaced, 0 excluded. An 'Add' line can itself be
+# byop, which is precisely why 'add' is declared as the add-a-line MODIFIER and not as a class: as a
+# class it would have mis-called 166 bring-your-own lines.
+#
+# UPGRADE AND PORT READ ZERO, AND SAY SO. This feed records neither; `activations_by_month` therefore
+# reports them as classes the feed carries no value for, never as a count of zero sales. A class
+# absent from a list reads as a class nobody sells — a different fact, and the one the §COMMCALC-03.21
+# breakup already refuses to fake.
+ACTIVATION_RULES_FIELDS = ("activation_type", "activation_type2")
+# Generic words, in the same character as `line_class.HOUSE_TOKENS` — no carrier, tenant or product
+# name (RULE TWO). `port` / `upgrade` carry the house words so a feed that DOES spell them is placed.
+HOUSE_ACTIVATION_TOKENS = {
+    "activation": ["new", "add"],
+    "byod": ["byop", "bring your own", "own device"],
+    "port": ["port"],
+    "upgrade": ["upgrade"],
+}
+HOUSE_ACTIVATION_ADD_A_LINE = ["add"]
+
+
+def house_activation_declaration():
+    """PURE: the house declaration for a takeover pack's commission sheet — the two columns that
+    carry the fact and the generic words that name each class."""
+    return {"fields": list(ACTIVATION_RULES_FIELDS),
+            "tokens": {k: list(v) for k, v in HOUSE_ACTIVATION_TOKENS.items()},
+            "add_a_line": list(HOUSE_ACTIVATION_ADD_A_LINE)}
+
+
+def activation_rules(cfg=None):
+    """PURE: the prospect feed's activation vocabulary, resolved by the ONE classifier.
+
+    `cfg` is `resolve_config()`'s output (or None). A tenant whose takeover pack spells these columns
+    differently declares its own in `prospect_activation_rules`; the classifier, the count and every
+    class label still come from `line_class`."""
+    raw = (cfg or {}).get("activation_declaration") if isinstance(cfg, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        raw = house_activation_declaration()
+    return _lc.resolve_rules(raw)
+
+
+def _activation_txn_of(row):
+    """The unit id one activated line belongs to — `LINE_ID_COLUMN`, dereferenced, so the count and
+    the line list on the flagged-account report cannot be keyed differently."""
+    return str((row or {}).get(LINE_ID_COLUMN) or "").strip()
+
+
+def rows_by_period(rows):
+    """PURE: feed rows → {month: [rows]}, keyed exactly as the grouping keys spell it.
+
+    THE ONE HOME for "split this feed into its months". It dereferences `_row_period` (itself the one
+    home for the month stamped on a row, §COMMCALC-03.20), so a per-month sub-report and the month
+    report above it cannot disagree about which month a row is in."""
+    out = {}
+    for r in rows or []:
+        out.setdefault(_row_period(r), []).append(r)
+    return out
+
+
+def _activation_slice(rows, rules):
+    """PURE: one month's rows → the activation picture for them, counted through `line_class`."""
+    units = _lc.activation_units(rows, rules, txn_of=_activation_txn_of)
+    na = _lc.new_activation_units(rows, rules, txn_of=_activation_txn_of, units=units)
+    aal = _lc.add_a_line_units(rows, rules, txn_field=LINE_ID_COLUMN)
+    placed = sum(1 for u in units if u)
+    # A VALUE THE DECLARATION DOES NOT NAME IS REPORTED BY NAME. Silence here is how a feed's new
+    # spelling becomes a silently uncounted month; the screen shows the value so declaring it is a
+    # config edit rather than an investigation.
+    unplaced = {}
+    for i, r in enumerate(rows or []):
+        if units[i]:
+            continue
+        label = " · ".join(str((r or {}).get(f) or "").strip() or "(blank)"
+                           for f in ACTIVATION_RULES_FIELDS)
+        unplaced[label] = unplaced.get(label, 0) + 1
+    return {
+        "lines": len(rows or []),
+        "classified": placed,
+        "new_activations": na["count"],
+        "by_class": dict(na["by_class"]),
+        "add_a_lines": aal["transactions"],
+        "add_a_line_configured": aal["configured"],
+        "excluded": na["excluded_count"],
+        "unclassified": len(rows or []) - placed,
+        "unclassified_values": [{"value": v, "lines": c}
+                                for v, c in sorted(unplaced.items(), key=lambda x: (-x[1], x[0]))],
+    }
+
+
+def activations_by_month(comm_rows, cfg=None):
+    """PURE: the commission feed across EVERY month → the activations per month, broken up.
+
+    Returns `{"months", "periods", "by_month": [...], "totals", "classes", "class_labels",
+              "classes_absent", "reading"}`. Each `by_month` row carries the activation picture AND
+    the product breakup for the same rows, so "how many" and "of what" are one row rather than two
+    reports a reader has to line up by eye.
+
+    `classes_absent` names the classes this feed carries NO value for — reported as unanswerable
+    rather than as zero sales."""
+    rules = activation_rules(cfg)
+    groups = rows_by_period(comm_rows)
+    periods = sorted(groups, key=period_sort_key)
+    by_month = []
+    for p in periods:
+        rows = groups[p]
+        row = {"period": p}
+        row.update(_activation_slice(rows, rules))
+        pb = products_sold(rows, cfg)
+        row["products"] = {c["key"]: c["lines"] for c in pb["classes"]}
+        row["product_labels"] = dict(pb["labels"])
+        by_month.append(row)
+    totals = {"period": "All months"}
+    totals.update(_activation_slice(list(comm_rows or []), rules))
+    tot_pb = products_sold(list(comm_rows or []), cfg)
+    totals["products"] = {c["key"]: c["lines"] for c in tot_pb["classes"]}
+    totals["product_labels"] = dict(tot_pb["labels"])
+    seen = {c for m in by_month for c, n in (m["by_class"] or {}).items() if n}
+    return {
+        "months": len(periods),
+        "periods": periods,
+        "by_month": by_month,
+        "totals": totals,
+        "classes": list(_lc.ACTIVATION_TYPE_CLASSES),
+        "class_labels": dict(_lc.CLASS_LABELS),
+        "classes_absent": [c for c in _lc.ACTIVATION_TYPE_CLASSES if c not in seen],
+        "new_activation_sentence": _lc.NEW_ACTIVATION_SENTENCE,
+        "reading": ("Every line is classified by the same rule the live stores are counted under, so "
+                    "a count here and a count on a store report mean the same thing. An add-a-line "
+                    "is counted as the activation it is AND reported again in its own column, so the "
+                    "two columns deliberately overlap. A class this feed carries no value for is "
+                    "named as unanswerable, never shown as zero sales."),
+    }
+
+
+def products_by_month(comm_rows, cfg=None):
+    """PURE: what was sold, per month — the §COMMCALC-03.21 breakup sliced by `rows_by_period`.
+
+    The whole-upload row is the SAME `products_sold` the month report prints, so the month on screen
+    is one row of this table rather than a second derivation of it."""
+    groups = rows_by_period(comm_rows)
+    periods = sorted(groups, key=period_sort_key)
+    return {
+        "months": len(periods),
+        "periods": periods,
+        "by_month": [dict(products_sold(groups[p], cfg), period=p) for p in periods],
+        "totals": products_sold(list(comm_rows or []), cfg),
+    }
+
 
 # ── THE AVERAGE EXPENSE MATRIX ────────────────────────────────────────────────────────────────────
 
@@ -1203,7 +1393,11 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
     feeds_present = tuple(k for k in FEED_KEYS if feeds.get(k))
 
     grouped = account_groups(comm_rows, cfg["account_key_columns"])
-    flagged = flag_multi_line_accounts(grouped, cfg["family_line_threshold"])
+    # ONE resolution of the activation vocabulary for the whole evaluation, so the add-a-line column
+    # on the flagged-account list and the add-a-line count on the month table cannot be answered by
+    # two differently-resolved rule sets.
+    act_rules = activation_rules(cfg)
+    flagged = flag_multi_line_accounts(grouped, cfg["family_line_threshold"], act_rules)
     summary = multi_line_summary(grouped, flagged, cfg["family_line_threshold"])
     drop_ids, drop_imeis = flagged_line_ids(flagged), flagged_imeis(flagged)
 

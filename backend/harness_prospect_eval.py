@@ -1293,6 +1293,107 @@ check("T13 the panel names no migration in tenant copy, and the file name rides 
 check("T14 …and the backend's own explanation of the same fact names none either",
       "migration" not in P.rule_basis(MSP.default_config())["reading"].lower())
 
+# ── §U THE ACTIVATIONS PER MONTH (owner ask 2026-10-14) ──────────────────────────────────────────
+# "the activations per month details is also missing which breaks up teh new acts upgrade tablet fios
+# etc". The thing worth locking is NOT the arithmetic — it is that this report counts through the
+# platform's ONE activation classifier rather than its own New/Add tally, because a second answer to
+# "how many activations" is the §19.18 defect that the index rules forbid and that CI cannot see once
+# the two happen to agree on one upload.
+_LC = __import__("app.modules.commcalc.line_class", fromlist=["x"])
+_PEVTEXT = open(_SRC).read()
+# A takeover pack's shape, measured on the live upload 2026-10-14: the fact is in two narrow columns,
+# an 'Add' line can itself be byop, and no row carries an upgrade or a port.
+_ACT_ROWS = [
+    {"period": "June 2026", "activation_order": "A1", "ban": "ACCT1", "activation_type": "New",
+     "activation_type2": "branded", "sku": "Apple iPhone 16e 128GB Black"},
+    {"period": "June 2026", "activation_order": "A2", "ban": "ACCT1", "activation_type": "Add",
+     "activation_type2": "branded", "sku": "Samsung Galaxy Tab A9"},
+    {"period": "June 2026", "activation_order": "A3", "ban": "ACCT1", "activation_type": "Add",
+     "activation_type2": "byop", "sku": "Product Not Available"},
+    {"period": "July 2026", "activation_order": "A4", "ban": "ACCT2", "activation_type": "New",
+     "activation_type2": "byop", "sku": "Product Not Available"},
+    {"period": "July 2026", "activation_order": "A5", "ban": "ACCT2", "activation_type": "New",
+     "activation_type2": "branded", "sku": "Home Internet Gateway"},
+]
+_ACT = P.activations_by_month(_ACT_ROWS, P.default_config())
+check("U1 the count is the PLATFORM'S activation derivation, not this module's own — the report "
+      "dereferences line_class and spells no tally of its own",
+      "_lc.new_activation_units(" in _PEVTEXT and "_lc.activation_units(" in _PEVTEXT
+      and "_lc.add_a_line_units(" in _PEVTEXT
+      and 'activation_type") or "").strip().lower() == "add"' not in _PEVTEXT)
+check("U2 ARMED — the HOUSE classifier cannot place a takeover pack at all, which is why the "
+      "vocabulary is declared: pointed at its own column it places every row",
+      all(_LC.classify_line(r, _LC.HOUSE_RULES) is None for r in _ACT_ROWS)
+      and all(_LC.classify_line(r, P.activation_rules(P.default_config())) for r in _ACT_ROWS))
+check("U3 the months sum to the whole upload on every count — a month table that does not tie to "
+      "its own total is two derivations wearing one heading",
+      sum(m["lines"] for m in _ACT["by_month"]) == _ACT["totals"]["lines"] == 5
+      and sum(m["new_activations"] for m in _ACT["by_month"]) == _ACT["totals"]["new_activations"]
+      and sum(m["add_a_lines"] for m in _ACT["by_month"]) == _ACT["totals"]["add_a_lines"] == 2)
+check("U4 an add-a-line is counted as the ACTIVATION it is and reported again in its own column — "
+      "the two deliberately overlap, and the note says so",
+      _ACT["totals"]["new_activations"] == 5 and _ACT["totals"]["add_a_lines"] == 2
+      and "deliberately overlap" in _ACT["reading"])
+check("U5 'add' is the add-a-line MODIFIER, never a class: declared as a class it would mis-call "
+      "the bring-your-own lines that are also an add-a-line",
+      P.HOUSE_ACTIVATION_ADD_A_LINE == ["add"]
+      and _ACT["totals"]["by_class"].get("byod") == 2
+      and _LC.is_add_a_line(_ACT_ROWS[2], P.activation_rules(P.default_config())) is True
+      and _LC.classify_line(_ACT_ROWS[2], P.activation_rules(P.default_config())) == "byod")
+check("U6 a class the feed carries NO value for is named as unanswerable, never shown as zero sales",
+      sorted(_ACT["classes_absent"]) == ["port", "upgrade"]
+      and "never shown as zero sales" in _ACT["reading"])
+check("U7 a value the declaration does not name is reported BY NAME, so a feed's new spelling is a "
+      "config edit rather than a silently uncounted month",
+      P.activations_by_month([dict(_ACT_ROWS[0], activation_type="Transfer",
+                                   activation_type2="")], P.default_config()
+                             )["totals"]["unclassified_values"][0]["value"] == "Transfer · (blank)")
+check("U8 the per-month product breakup is the SAME §COMMCALC-03.21 function, sliced — not a second "
+      "classifier",
+      _ACT["by_month"][0]["products"]["tablet"] == 1
+      and _ACT["by_month"][1]["products"]["home_internet"] == 1
+      and "products_sold(rows, cfg)" in _PEVTEXT)
+check("U9 rows_by_period is the ONE home for splitting a feed into months and dereferences the one "
+      "home for a row's month",
+      P.rows_by_period(_ACT_ROWS).keys() == {"June 2026", "July 2026"}
+      and "_row_period(r)" in _PEVTEXT.split("def rows_by_period")[1].split("def ")[0])
+check("U10 products_by_month ties to the whole upload and to the month report above it",
+      sum(m["totals"]["lines"] for m in P.products_by_month(_ACT_ROWS)["by_month"])
+      == P.products_by_month(_ACT_ROWS)["totals"]["totals"]["lines"] == 5)
+check("U11 the add-a-line column on the FLAGGED list is the same classifier's answer — the old "
+      "`activation_type == 'add'` comparison is gone and the count is unchanged (2 of 5)",
+      sum(a["add_a_lines"] for a in P.flag_multi_line_accounts(
+          P.account_groups(_ACT_ROWS, P.HOUSE_ACCOUNT_KEY_COLUMNS), 0)) ==
+      sum(1 for r in _ACT_ROWS if str(r.get("activation_type") or "").lower() == "add") == 2)
+check("U12 the vocabulary is CONFIG: a declared map replaces the house one WHOLE, so a word a "
+      "tenant deliberately drops stays dropped",
+      P.resolve_config({"prospect_activation_rules": {"fields": ["sub_type"],
+                                                      "tokens": {"upgrade": ["twp"]}}}
+                       )["activation_declaration"] == {"fields": ["sub_type"],
+                                                       "tokens": {"upgrade": ["twp"]}}
+      and P.activation_rules(P.resolve_config(
+          {"prospect_activation_rules": {"fields": ["sub_type"],
+                                         "tokens": {"upgrade": ["twp"]}}}))["fields"] == ["sub_type"]
+      and P.default_config()["activation_declaration"]["fields"]
+          == list(P.ACTIVATION_RULES_FIELDS))
+check("U13 …and that column is registered with the migration that adds it, so a tree without the "
+      "migration still reports the house answer rather than failing",
+      ("prospect_activation_rules", "1082_prospect_activation_rules.sql") in P.CONFIG_COLUMNS
+      and P.config_columns_missing(())["prospect_activation_rules"]
+          == "1082_prospect_activation_rules.sql")
+check("U14 RULE TWO — the declaration carries generic words only, no carrier, tenant or product name",
+      not ({w for ws in P.HOUSE_ACTIVATION_TOKENS.values() for w in ws}
+           & {"total", "boost", "verizon", "vidapay", "twp", "fios", "luxelink", "cellfonz"}))
+check("U15 the endpoint returns both month tables, built over EVERY month rather than the one on "
+      "screen, and the page renders the server's figures",
+      '_pev.activations_by_month(\n        every_month.get("ma_commission") or [], cfg)' in _rtext
+      and '_pev.products_by_month(\n        every_month.get("ma_commission") or [], cfg)' in _rtext)
+check("U16 the activations table carries a month-ROLED column, which is what gives every report its "
+      "own month filter from the shared shell (owner: the filter per month was missing)",
+      "role: 'month'" in _PAGE
+      and _PAGE.count("role: 'month'") >= 2
+      and "actColumns" in _PAGE)
+
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
 if FAIL:

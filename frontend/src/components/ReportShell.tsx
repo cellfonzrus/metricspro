@@ -40,6 +40,13 @@ function detectRole(c: Col): 'rep' | 'store' | 'date' | 'month' | null {
   if (STORE_RE.test(h)) return 'store'
   return null
 }
+// The notice bar's three tones. Same semantic palette as NarrativeBanner so a warning on a report
+// and a warning on a banner do not read as two different severities.
+const NOTICE = {
+  info: { accent: 'var(--text3)', tint: 'var(--surface2)' },
+  warn: { accent: 'var(--amber, #f59e0b)', tint: 'color-mix(in srgb, var(--amber, #f59e0b) 8%, var(--surface))' },
+  good: { accent: 'var(--green)', tint: 'color-mix(in srgb, var(--green) 8%, var(--surface))' },
+} as const
 const str = (v: any) => (v == null ? '' : String(v))
 const num = (v: any) => { const n = Number(String(v).replace(/[^0-9.-]/g, '')); return isNaN(n) ? null : n }
 const money = (n: any) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
@@ -53,9 +60,22 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, rowStyle, totals, stickyHeader, pinFirst = true, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
+export function ReportShell({ title, subtitle, notice, noticeTone, filename, columns, rows, compact, right, children, onRowClick, rowStyle, totals, stickyHeader, pinFirst = true, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
   title: string
   subtitle?: string
+  // ── THE NOTICE BAR, AND WHAT EACH COLUMN MEANS (owner ask 2026-10-14) ───────────────────────
+  // Owner: *"also give me notification bar ont eh top of each report"* and, of a sub-report he
+  // was reading, *"expain on teh report what each filter signifies"* / *"explain each coloumn"*.
+  //
+  // BOTH LIVE HERE, not on the page that asked. A notice typed into one report's card is a notice
+  // the next report does not get, and a column explanation typed beside a table is one that drifts
+  // from the column the moment either is edited — the §19.18 shape in page copy. So: `notice` is
+  // ONE bar above every ReportShell on the platform, and the explanation of a column rides the
+  // COLUMN (`ExportColumn.tip`), rendered both as the header's tooltip and, because a tooltip is
+  // invisible on a touch screen and to anyone not hunting for it, as a legend the reader can open.
+  // A report that sets neither renders byte-identically to before.
+  notice?: React.ReactNode
+  noticeTone?: 'info' | 'warn' | 'good'
   filename?: string
   columns: Col[]
   rows: any[]
@@ -254,11 +274,42 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   }
   const pinBodyCls = (i: number) => (pinFirst && i === 0 ? 'rs-pin-body' : undefined)
 
+  const legend = cols.filter(c => !!c.tip)
+
   return (
     <div>
       <style>{`.rs-clickable:hover td{background:var(--surface2)}
         td.rs-pin-body{background:var(--surface)}
         .rs-clickable:hover td.rs-pin-body{background:var(--surface2)}`}</style>
+
+      {/* The notice bar — above everything, including the toolbar, so it is read before the numbers. */}
+      {notice && (
+        <div role="status" style={{
+          border: '1px solid var(--border)', borderLeft: `3px solid ${NOTICE[noticeTone || 'info'].accent}`,
+          background: NOTICE[noticeTone || 'info'].tint, borderRadius: 'var(--radius, 12px)',
+          padding: '9px 13px', marginBottom: 10, fontSize: 12.5, lineHeight: 1.55,
+          color: 'var(--text2)',
+        }}>{notice}</div>
+      )}
+
+      {/* What each column means — from the columns themselves, so it cannot drift from them. */}
+      {legend.length > 0 && (
+        <details style={{ marginBottom: 10 }}>
+          <summary style={{ fontSize: 12, color: 'var(--text2)', cursor: 'pointer' }}>
+            What each column means ({legend.length})
+          </summary>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '3px 12px',
+                        fontSize: 12, marginTop: 6, paddingLeft: 4 }}>
+            {legend.map(c => (
+              <Fragment key={key(c)}>
+                <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{c.header}</span>
+                <span style={{ color: 'var(--text2)' }}>{c.tip}</span>
+              </Fragment>
+            ))}
+          </div>
+        </details>
+      )}
+
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         {repCol && (
@@ -370,9 +421,11 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
           <colgroup>{cols.map(c => <col key={key(c)} style={{ width: cw.width(key(c)) }} />)}</colgroup>
           <thead><tr>{cols.map((c, i) => (
             <SortableTh key={key(c)} field={key(c)} sort={sort} onSort={toggle}
+              // The SAME `tip` the legend prints — one fact, two places to meet it, never two texts.
+              title={c.tip ? `${c.tip} · click to sort` : undefined}
               style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos, ...(i === 0 ? pinFor('head') : {}) }}
               after={<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} />}>
-              {c.header}
+              {c.header}{c.tip ? <span aria-hidden style={{ opacity: 0.45, marginLeft: 3, fontWeight: 400 }}>ⓘ</span> : null}
             </SortableTh>
           ))}</tr></thead>
           <tbody>

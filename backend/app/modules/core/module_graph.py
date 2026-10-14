@@ -809,7 +809,7 @@ FACTS: dict[str, dict] = {
     'line_class': {
         "question": 'What kind of line is this sales row, and does it count as a new activation?',
         "homes": ('app/modules/commcalc/line_class.py',),
-        "index": ('6',),
+        "index": ('6', 'COMMCALC-03.23'),
         "locks": ('harness_line_class_lock.py', 'harness_activation_event_lock.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
@@ -821,6 +821,10 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/payout_audience.py': ('_lc',),
             'app/modules/commcalc/payout_structure.py': ('_lc',),
             'app/modules/commcalc/plan_options.py': ('_lc',),
+            # The takeover evaluation counts its activations per month through THIS classifier rather
+            # than a New/Add tally of its own — a takeover pack's vocabulary is declared for its own
+            # columns, and the classes, the count and the labels all come from here. §COMMCALC-03.23.
+            'app/modules/commcalc/prospect_eval.py': ('_lc',),
             'app/modules/commcalc/router.py': ('_lc',),
             'app/modules/commcalc/sales_comparison.py': ('_lc',),
             'app/modules/commcalc/zero_sales.py': ('_lc',),
