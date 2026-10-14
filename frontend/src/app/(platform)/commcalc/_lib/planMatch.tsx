@@ -34,9 +34,16 @@ export type FieldInfo = {
   note?: string | null; resolution?: string
 }
 export type VocabItem = { value: string; label: string; help?: string; synthetic?: boolean; closed?: boolean; column?: boolean; uses?: string }
+export type QualifierDefaults = {
+  measure: string; scope: string; match_field: string; match_op: string; match_value: string
+}
 export type Vocab = {
   match_fields: VocabItem[]; match_ops: VocabItem[]; payout_kinds: VocabItem[]
   tier_bases: { value: string; label: string; help?: string }[]; tier_metrics: string[]
+  // ATTACH QUALIFIER (§COMMCALC-06). Served by plan_options.vocabulary, which dereferences
+  // commcalc/attach_qualifier — so the browser never names a measure or a default of its own.
+  qualifier_measures?: VocabItem[]; qualifier_scopes?: VocabItem[]
+  qualifier_defaults?: QualifierDefaults
 }
 export type Facets = {
   columns: string[]; dict: Record<string, string[]>; ct_resolved: string[] | null
@@ -71,6 +78,9 @@ export const FALLBACK_VOCAB: Vocab = {
     { value: 'lines', label: 'Lines matching the tier rule' },
   ],
   tier_metrics: ['none', 'activations', 'upgrades', 'boxes'],
+  // The qualifier keys are deliberately ABSENT here. This fallback exists for when the vocabulary
+  // endpoint is unreachable, and a money condition must not be editable against a GUESSED vocabulary:
+  // the editor hides the qualifier fields rather than offer measures it cannot confirm the engine reads.
 }
 
 // ── the matcher mirror (see the header note) ─────────────────────────────────────────────────────

@@ -60,6 +60,22 @@ SCOPE_TRANSACTION = "transaction"
 SCOPES = (SCOPE_TRANSACTION,)
 DEFAULT_SCOPE = SCOPE_TRANSACTION
 
+#: WHICH sibling lines count when the rule names none, in the rule matcher's own vocabulary. These are
+#: the values `resolve` falls back to, and the plan editor DEREFERENCES them (via
+#: `plan_options.vocabulary`) rather than re-typing them in the browser — a second copy of a default is
+#: how a screen comes to save something the engine never reads.
+DEFAULT_MATCH_FIELD = "accessory"
+DEFAULT_MATCH_OP = "equals"
+DEFAULT_MATCH_VALUE = "yes"
+
+#: The on-screen wording for each measure. Here rather than in the editor for the same reason: the
+#: vocabulary and its words are one fact.
+MEASURE_LABELS = {
+    MEASURE_AMOUNT: "dollars sold",
+    MEASURE_GP: "dollars of gross profit",
+    MEASURE_COUNT: "number of items",
+}
+
 #: What a line earns when the sale did not qualify and the rule declares no fallback: nothing. The
 #: line is still SHOWN with its reason — a $0 with no explanation is the defect, not the $0.
 BASIS_FULL = "full"
@@ -110,9 +126,9 @@ def resolve(rule):
         "measure": measure if measure in MEASURES else DEFAULT_MEASURE,
         "scope": scope if scope in SCOPES else DEFAULT_SCOPE,
         # WHICH sibling lines count, in the rule matcher's own vocabulary.
-        "match_field": rule.get("qualifier_match_field") or "accessory",
-        "match_op": rule.get("qualifier_match_op") or "equals",
-        "match_value": rule.get("qualifier_match_value") or "yes",
+        "match_field": rule.get("qualifier_match_field") or DEFAULT_MATCH_FIELD,
+        "match_op": rule.get("qualifier_match_op") or DEFAULT_MATCH_OP,
+        "match_value": rule.get("qualifier_match_value") or DEFAULT_MATCH_VALUE,
         # What the line earns when the sale falls short. None = nothing, stated rather than implied.
         "fallback_amount": _num_or_none(rule.get("qualifier_fallback_amount")),
         "label": str(rule.get("qualifier_label") or "").strip() or None,
@@ -127,7 +143,7 @@ def txn_key(row):
 def _counts_toward(row, q, is_accessory=None, matches=None):
     """Does this sibling line count toward the qualifier? The accessory test and the rule matcher are
     both INJECTED — this module owns neither."""
-    field = _norm(q.get("match_field")) or "accessory"
+    field = _norm(q.get("match_field")) or DEFAULT_MATCH_FIELD
     if field == "accessory":
         if is_accessory is None:
             return None            # cannot be answered; the caller reports it rather than guessing
@@ -284,7 +300,7 @@ def describe(rule):
 
 
 def _measure_noun(q):
-    field = _norm(q.get("match_field")) or "accessory"
+    field = _norm(q.get("match_field")) or DEFAULT_MATCH_FIELD
     if field == "accessory":
         return "accessories" if q["measure"] != MEASURE_COUNT else "accessory items"
     value = str(q.get("match_value") or "").strip()

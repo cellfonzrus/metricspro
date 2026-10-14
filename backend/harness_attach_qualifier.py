@@ -291,6 +291,110 @@ ok("J4 the router spells no measure vocabulary of its own", not _VOCAB_RETYPED, 
 ok("J5 a zero minimum is stored as NULL, never as a second spelling of OFF",
    "_qmin is not None and _qmin > 0" in RSRC)
 
+# ═════ K. THE SCREEN CAN DECLARE IT, AND CANNOT INVENT ITS OWN VOCABULARY ═══════════════════════
+section("K. The plan editor can declare a qualifier, dereferenced from this home")
+# WHY THIS SECTION EXISTS. PR #457 shipped the engine, the save path and the columns, and NO INPUT —
+# so the only way to declare a qualifier was a hand-written UPDATE, which section J proves the next
+# plan save would then wipe. A mechanism the owner cannot reach from the screen is 19.18 wearing a
+# different hat: written, unwired, and reported as done.
+FRONT = os.path.join(os.path.dirname(ROOT), "frontend", "src", "app", "(platform)", "commcalc")
+EDITOR = os.path.join(FRONT, "commission-plans", "page.tsx")
+PANEL = os.path.join(FRONT, "_lib", "QualifierEditor.tsx")
+OPTIONS = os.path.join(APP, "modules", "commcalc", "plan_options.py")
+def _read_or_blank(path):
+    """A file that is NOT THERE must fail these checks BY NAME, not as a traceback: "the editor sends
+    every qualifier column" reads as a red line an operator can act on, where a FileNotFoundError
+    reads as a broken harness and gets re-run. Verified: against pre-fix main every K check below
+    fails and none of them crash."""
+    try:
+        return io.open(path, encoding="utf-8").read()
+    except OSError:
+        return ""
+
+
+ESRC_UI = _read_or_blank(EDITOR)
+PSRC_UI = _read_or_blank(PANEL)
+OSRC = _read_or_blank(OPTIONS)
+ok("K0 the editor and its qualifier panel both exist",
+   bool(ESRC_UI) and bool(PSRC_UI), [p for p, c in ((EDITOR, ESRC_UI), (PANEL, PSRC_UI)) if not c])
+
+# K1-K2: the served vocabulary IS this module's, read at call time rather than copied.
+from app.modules.commcalc import plan_options as _po  # noqa: E402
+_V = _po.vocabulary()
+ok("K1 the served measures are exactly this home's, in its order",
+   [m["value"] for m in _V.get("qualifier_measures") or []] == list(aq.MEASURES))
+# getattr with a sentinel, not attribute access: a home that does not DECLARE its defaults yet must
+# fail this line by name rather than end the run with an AttributeError.
+_DEF = {k: getattr(aq, "DEFAULT_" + k.upper(), None)
+        for k in ("measure", "scope", "match_field", "match_op", "match_value")}
+ok("K2 the served defaults are exactly this home's",
+   all(v is not None for v in _DEF.values()) and _V.get("qualifier_defaults") == _DEF, _DEF)
+ok("K3 the vocabulary dereferences the module rather than retyping the list",
+   "_aq.MEASURES" in OSRC and "_aq.MEASURE_LABELS" in OSRC)
+_OPT_RETYPED = [l for l in OSRC.splitlines()
+                if '"gp"' in l and '"count"' in l and '"amount"' in l]
+ok("K4 plan_options spells no measure vocabulary of its own", not _OPT_RETYPED, _OPT_RETYPED[:1])
+
+# K5: the one fact every default is read from -- resolve() must not carry its own inline spelling,
+# or the screen and the engine can disagree about what "which lines count" means when left blank.
+_HOMESRC = io.open(HOME, encoding="utf-8").read()
+_INLINE = [l.strip() for l in _HOMESRC.splitlines()
+           if 'or "accessory"' in l or 'or "equals"' in l or 'or "yes"' in l]
+ok("K5 the home reads its defaults from its own constants, not inline literals",
+   not _INLINE, _INLINE[:1])
+
+# K6: every column goes back on save FROM THE EDITOR too. The router writing them (J1) is useless if
+# the browser never sends them: the save path only writes the keys the caller supplied.
+_UI_MISSING = [c for c in _QCOLS if (c + ":") not in ESRC_UI]
+ok("K6 the editor sends every qualifier column back on save", not _UI_MISSING, _UI_MISSING)
+ok("K7 the editor sends a blank minimum as null, never as 0",
+   "qualifier_min: qNum(" in ESRC_UI and "=== '' || v === null" in ESRC_UI)
+ok("K8 clearing a qualifier clears every one of its columns",
+   all((c + ":") in PSRC_UI for c in _QCOLS))
+
+# K9-K10: the sentence has ONE renderer. The owner reads it as the rule, so a TypeScript copy of the
+# same figures is a second home -- and the one that drifts, because nothing recomputes the stored one.
+ok("K9 the plan GET derives the sentence from this home",
+   "_aqm.describe(" in RSRC and '"qualifier_requirement"' in RSRC)
+
+
+def _decomment(src):
+    """Source with comments removed, so a QUOTED owner directive or a tooltip cannot trip a scan that
+    is looking for generated prose. The first draft of K10 flagged the owner's own words, pasted in a
+    header comment -- a detector that fires on English rather than on structure."""
+    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)
+    return "\n".join(re.sub(r"//.*$", " ", l) for l in src.splitlines())
+
+
+# The phrases are `describe`'s own signature, not ordinary help-text English: a screen containing one
+# has rebuilt the sentence. Checked against the three renderers so a new one cannot be missed.
+_SENTENCE_WORDS = ("is required to qualify", "short of the", "meeting the")
+ok("K10a the phrase list still matches describe() (a drifted list locks nothing)",
+   all(_w in _HOMESRC for _w in _SENTENCE_WORDS),
+   [_w for _w in _SENTENCE_WORDS if _w not in _HOMESRC])
+_UI_NO_COMMENTS = _decomment(PSRC_UI) + _decomment(ESRC_UI)
+_REBUILT = [w for w in _SENTENCE_WORDS if w in _UI_NO_COMMENTS]
+ok("K10 neither file rebuilds the sentence in the browser", not _REBUILT, _REBUILT)
+ok("K11 the editor displays the served sentence instead",
+   "qualifier_requirement" in PSRC_UI)
+
+# K11: the browser names no measure of its own. A select hard-coding 'gp' would still save, and would
+# silently stop offering a measure the day the engine gained one.
+_UI_MEASURE_LITERAL = [l.strip() for l in (PSRC_UI + ESRC_UI).splitlines()
+                       if ("'gp'" in l or '"gp"' in l) and "qualifier" in l.lower()]
+ok("K12 the editor names no measure literal", not _UI_MEASURE_LITERAL, _UI_MEASURE_LITERAL[:1])
+ok("K13 the fields are hidden when the vocabulary cannot be confirmed",
+   "qualifier_measures" in PSRC_UI and "qualifier_defaults" in PSRC_UI
+   and "qualifierVocabReady" in ESRC_UI)
+# A stored condition is never hidden behind a collapsed panel: money policy must be visible on load.
+ok("K14 a rule that already declares a qualifier is shown open",
+   "qOpen[i] || hasQualifier(r)" in ESRC_UI)
+# The one way this screen can dock pay by accident: a non-default match field with no value matches
+# nothing, so every sale measures zero and takes the lesser rate. The editor must say so.
+ok("K15 a non-default field with no value is warned about, not silently saved",
+   "measures zero" in PSRC_UI
+   and "qualifier_match_value || ''" in PSRC_UI.replace('"', "'"))
+
 # ═════ Z. ARMED CONTROLS — each asserts a check above would really fail ══════════════════════════
 section("Z. The checks are armed (each would catch its own defect)")
 ok("Z1 B6 would catch a module that read 'unanswerable' as zero",
@@ -309,6 +413,17 @@ ok("Z5 I7's detector finds a hand-rolled threshold when planted",
    and "_aq." not in _Z5)
 ok("Z6 C1 would catch 'no id' being treated as a transaction named ''",
    aq.txn_key({}) == "" and aq.verdict({}, RULE, C)["basis"] == aq.BASIS_UNMEASURED)
+
+ok("Z7 K6 would catch a column the editor stopped sending",
+   [c for c in _QCOLS if (c + ":") not in "qualifier_min: 1, qualifier_measure: 2"]
+   == ["qualifier_scope", "qualifier_match_field", "qualifier_match_op", "qualifier_match_value",
+       "qualifier_fallback_amount", "qualifier_label"])
+ok("Z8 K10 would catch the sentence rebuilt in TypeScript",
+   [w for w in _SENTENCE_WORDS
+    if w in _decomment("const s = `${min} of accessories is required to qualify for ${full}`")]
+   == ["is required to qualify"])
+ok("Z9 K1 would catch a vocabulary that dropped a measure",
+   [m["value"] for m in (_V.get("qualifier_measures") or [])[:-1]] != list(aq.MEASURES))
 
 print("\n%d passed, %d failed" % (sum(_P), len(_P) - sum(_P)))
 sys.exit(0 if all(_P) else 1)

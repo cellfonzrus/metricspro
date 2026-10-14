@@ -21217,6 +21217,13 @@ def list_commission_plans(org_id: str = ORG_ID):
     plans, ready = commission_engine._load_plans(client, org_id)
     if not ready:
         return {"plans": [], "ready": False, "note": "Run migration 059_commission_plans.sql to enable."}
+    # The qualifier SENTENCE is derived once, here, by the module that owns it (§COMMCALC-06). The
+    # editor DISPLAYS this string; it does not rebuild it in TypeScript, because a second rendering of
+    # the same figures is a second home that drifts — and the owner reads this sentence as the rule.
+    from app.modules.commcalc import attach_qualifier as _aqm
+    for _p in plans:
+        for _r in (_p.get("rules") or []):
+            _r["qualifier_requirement"] = _aqm.describe(_r)
     return {"plans": plans, "ready": True}
 
 

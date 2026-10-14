@@ -885,6 +885,11 @@ FACTS: dict[str, dict] = {
             # scope allowlists from here rather than retyping them, so the vocabulary cannot drift
             # between what an admin can save and what the engine will honour.
             'app/modules/commcalc/router.py': ('_aqm',),
+            # The plan editor's VOCABULARY. The screen had no input for a qualifier at all until this
+            # was wired, so the columns could only be set by hand — and the save path above then wiped
+            # them. This serves the measures, the scopes and the defaults by dereferencing the home, so
+            # the browser names no measure and no default of its own.
+            'app/modules/commcalc/plan_options.py': ('_aq',),
         },
     },
     'commission_ledger_identity': {

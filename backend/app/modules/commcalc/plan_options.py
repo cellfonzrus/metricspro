@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 
 from app.modules.commcalc import commission_engine
 from app.modules.commcalc import accessory_catalog as _cache
+from app.modules.commcalc import attach_qualifier as _aq
 
 # ── vocabulary (the ENGINE is the source of truth) ────────────────────────────────────────────────
 # Operators, verbatim from commission_engine._rule_matches: 'contains' (substring), 'in' (comma list),
@@ -213,6 +214,20 @@ def vocabulary():
                          if k in commission_engine.PAYOUT_KINDS],
         "tier_bases": [dict(b) for b in TIER_BASES],
         "tier_metrics": list(TIER_METRIC_SUGGESTIONS),
+        # ATTACH QUALIFIER (§COMMCALC-06). The editor offers the measures the engine understands and
+        # the defaults it falls back to, DEREFERENCED from `attach_qualifier` — never re-typed here or
+        # in the browser. Without this the plan editor had no input at all for a declared qualifier,
+        # so the mig-1079 columns could only be set by hand, and the editor's DELETE-THEN-INSERT save
+        # then wiped them on the next Save (§19.18 in the shape that erases money policy).
+        "qualifier_measures": [{"value": m, "label": _aq.MEASURE_LABELS[m]} for m in _aq.MEASURES],
+        "qualifier_scopes": [{"value": s, "label": "the whole sale"} for s in _aq.SCOPES],
+        "qualifier_defaults": {
+            "measure": _aq.DEFAULT_MEASURE,
+            "scope": _aq.DEFAULT_SCOPE,
+            "match_field": _aq.DEFAULT_MATCH_FIELD,
+            "match_op": _aq.DEFAULT_MATCH_OP,
+            "match_value": _aq.DEFAULT_MATCH_VALUE,
+        },
     }
 
 
