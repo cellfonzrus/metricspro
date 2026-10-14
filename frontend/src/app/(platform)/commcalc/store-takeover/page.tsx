@@ -70,6 +70,22 @@ interface FlaggedAccount {
   devices: FlaggedDevice[]
   line_ids: string[]
 }
+interface ProductModel { model: string; lines: number }
+interface ProductClassRow {
+  key: string
+  label: string
+  lines: number
+  share: number | null
+  models: ProductModel[]
+}
+interface ProductBreakup {
+  classes: ProductClassRow[]
+  labels: Record<string, string>
+  totals: { lines: number; classes_with_sales: number }
+  basis_counts: Record<string, number>
+  unplaced: { description: string; lines: number }[]
+  reading: string
+}
 interface MonthRow extends MultiLineSummary { period: string }
 interface MultiLineByMonth {
   threshold: number
@@ -175,6 +191,7 @@ interface Evaluation {
   period_basis?: { period?: string; basis?: string; from_feed?: string | null; months_available?: string[] }
   multi_line?: { summary: MultiLineSummary; flagged: FlaggedAccount[]; flagged_line_ids: string[]; flagged_imeis: string[] }
   multi_line_by_month?: MultiLineByMonth
+  products?: ProductBreakup
   expenses?: { matrix: Record<string, ExpenseCell>; rent: RentMeta; months?: string[]; window?: ExpenseWindow }
   default_mode?: string
   scenarios?: Record<string, Scenario>
@@ -381,6 +398,24 @@ const MONTH_COLS: ExportColumn[] = [
   },
   { header: 'Lines with no account', get: (r: MonthRow) => r.lines_with_no_account, align: 'right' },
 ]
+// ── WHAT WAS SOLD (owner ask 2026-10-13: "the breakup of Phones tablets, Fios VHI, and if any other
+// item was sold"). The classes, their counts and their models are ALL the server's — this table
+// renders them. "Share of lines" does not add, so it declares `agg: 'none'`; the line count does.
+const PRODUCT_COLS: ExportColumn[] = [
+  { header: 'What was sold', get: (r: ProductClassRow) => r.label },
+  { header: 'Lines', get: (r: ProductClassRow) => r.lines, align: 'right' },
+  {
+    header: 'Share of lines',
+    get: (r: ProductClassRow) => (r.share === null ? '—' : `${r.share.toFixed(2)}%`),
+    align: 'right', agg: 'none',
+  },
+  { header: 'Models', get: (r: ProductClassRow) => r.models.length, align: 'right' },
+  {
+    header: 'Most sold',
+    get: (r: ProductClassRow) => (r.models || []).slice(0, 3)
+      .map(m => `${m.model}${m.lines > 1 ? ` ×${m.lines}` : ''}`).join(' · ') || '—',
+  },
+]
 const EXP_COLS: ExportColumn[] = [
   { header: 'Expense line', get: (r: ExpenseCell) => r.expense_name },
   { header: 'Booked', get: (r: ExpenseCell) => r.amount, money: true },
@@ -501,6 +536,14 @@ export default function StoreTakeoverPage() {
     return { keys, labels, accounts }
   }, [data?.store_scenarios, sf.stores])
   const filtering = isStandardFilterActive(sf)
+  // WHAT WAS SOLD, for the evaluated month. The server counts it over the SAME commission rows the
+  // P&L books from, so a line here is a line in the statement above. Not narrowed by the store
+  // filter: the commission row names a processor account, not the store address these classes would
+  // have to be keyed by, and a per-store count nobody could tie back is worse than none.
+  const products: ProductBreakup | null = data?.products || null
+  const productRows = useMemo<ProductClassRow[]>(
+    () => (products?.classes || []), [products])
+
   // EVERY MONTH THE UPLOAD COVERS, not just the one on screen. The rows are the server's own, so the
   // month the report is showing IS one of these rows. The MONTH filter deliberately does not narrow
   // this table: comparing the months is the entire question it answers, and a one-row comparison
@@ -1267,6 +1310,47 @@ export default function StoreTakeoverPage() {
             ))}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>{fraud.reading}</div>
+        </div>}
+
+      {/* ── WHAT WAS SOLD — the breakup at the end of the report (owner ask 2026-10-13) ──────────
+          "the breakup of Phones tablets, Fios VHI, and if any other item was sold". The owner's own
+          words name one carrier's brands for home internet; RULE TWO keeps a carrier name out of the
+          code, so the class is "Home internet" and the words that match it are a config row. Every
+          figure is the server's. */}
+      {pid && !loading && products && products.totals.lines > 0 &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            What was sold &mdash; {data?.period}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+            Every one of the {num(products.totals.lines)} commission lines this month, placed in one
+            class and one only, so the breakup adds up to the file. Counted over the same lines the
+            P&amp;L above books from.
+          </div>
+          <ReportShell title="" filename={`takeover-products-${data?.period || ''}`}
+                       columns={PRODUCT_COLS} rows={productRows} compact stickyHeader pinFirst totals />
+          {/* HOW EACH CLASS WAS DECIDED. A class read off a product description is not the evidence a
+              class the feed declared is, and §66 was paid for exactly that confusion. */}
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
+            <b>How these were decided.</b>{' '}
+            {num(products.basis_counts.declared_no_device)} line
+            {products.basis_counts.declared_no_device === 1 ? '' : 's'} the feed itself declares as a
+            customer bringing their own phone;{' '}
+            {num(products.basis_counts.description_token)} placed by a word in the product name;{' '}
+            {num(products.basis_counts.residual_device)} that matched no class and are counted as
+            phones because this is a handset feed;{' '}
+            {num(products.basis_counts.no_product_named)} naming no product at all.
+            {products.basis_counts.residual_device > 0 &&
+              <> Check the phone row&rsquo;s models below if you expect a category we have not set up
+                 yet &mdash; anything that is plainly not a phone will be sitting there.</>}
+          </div>
+          {products.unplaced.length > 0 &&
+            <div style={{ fontSize: 12, color: '#92400e', marginTop: 8 }}>
+              ⚠︎ {products.unplaced.map(u => `${num(u.lines)} × ${u.description}`).join(', ')}
+              {' '}&mdash; {products.unplaced.length === 1 ? 'this row names' : 'these rows name'} no
+              product and {products.unplaced.length === 1 ? 'is' : 'are'} reported on their own line
+              rather than counted as a phone.
+            </div>}
         </div>}
 
       {/* ── THE SAME ACCOUNTS, MONTH BY MONTH, WITH THE DRILL-DOWN ──────────────────────────────

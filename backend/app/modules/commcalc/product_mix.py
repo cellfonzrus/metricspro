@@ -208,6 +208,191 @@ def model_of(product_desc, promo_tokens=None):
     return _SEP.join(keep).strip() or s
 
 
+# ── WHAT WAS SOLD ON THE LINE — phones, tablets, home internet, and anything else ────────────────
+# OWNER ASK 2026-10-13, verbatim: *"Also summarize at the end of the report, the breakup of Phones
+# tablets, Fios VHI, and if any other item was sold"*.
+#
+# RULE TWO DECIDES THE VOCABULARY, NOT THE OWNER'S WORDING. "Fios" and "VHI" are one carrier's brand
+# names for home internet, and a carrier name in code is exactly what RULE TWO forbids (the
+# `carrier-vocab-guard` CI job fails the build over it). So the CLASS is `home_internet`, labelled
+# "Home internet", and the WORDS that match it are config: the house tokens below are generic, and a
+# tenant whose feed spells it its own way declares those tokens on its own row. Nothing changes in
+# code when the next carrier calls it something else.
+#
+# MEASURED ON THE LIVE PROSPECT FEED FIRST (5,495 commission rows, Total by Verizon, 2026-10-13),
+# because the measurement changed the design twice:
+#   · There is NO declared product-class column. `sub_type` is blank on 4,027 of 5,495 rows and 'TWP'
+#     on the rest; `activation_type2` says 'branded' or 'byop'. So the class is read from the product
+#     DESCRIPTION, and every row therefore carries HOW it was decided — a class read off a keyword is
+#     not the same evidence as one the feed declared, and §66 was paid for exactly that confusion.
+#   · 412 rows read 'Product Not Available', which looks like missing data and is NOT: 383 of them
+#     are `byop` — bring-your-own-phone, where no device was sold at all. That is a declared fact and
+#     it outranks the description, so those land in `no_device` rather than in an "unknown" bucket or,
+#     worse, folded into phones. The 29 that declare nothing stay unclassified and are NAMED.
+#
+# THE RESIDUAL IS A DEVICE, AND THAT IS A CHOICE WITH A COST. A real product description that matches
+# no class token is counted as the residual class (house: `phone`), because a handset feed's unmatched
+# descriptions are overwhelmingly handsets — the large majority of the live rows. The cost is that a
+# genuinely new product category reads as a phone until someone declares its token. That is made
+# visible rather than silent in two places: `basis_counts.residual_device` says how many rows were
+# placed that way, and the residual class carries its own MODEL LIST, which is where a human scanning
+# the breakup sees a product that is plainly not a phone sitting in the phone bucket.
+HOUSE_PRODUCT_CLASSES = (
+    # key, label, tokens — FIRST class whose token matches wins, so the ORDER is part of the config.
+    ("tablet", "Tablet", ("tab", "tablet")),
+    ("home_internet", "Home internet", ("home internet", "router", "internet", "gateway")),
+    ("watch", "Watch / wearable", ("watch", "wearable")),
+    ("hotspot", "Hotspot", ("hotspot", "mifi")),
+    ("accessory", "Accessory / SIM only", ("sim only", "sim kit", "case", "charger", "protector")),
+)
+HOUSE_RESIDUAL_CLASS = ("phone", "Phone")
+# The declared words that mean NO DEVICE WAS SOLD on this line (the customer brought their own).
+# Generic; a tenant whose feed says it differently declares its own.
+HOUSE_NO_DEVICE_TOKENS = ("byop", "byod", "bring your own")
+NO_DEVICE_CLASS = ("no_device", "No device sold (customer brought their own)")
+# The feed's own placeholder for "this row names no product". Reported, never treated as a product
+# and never folded into the residual class.
+HOUSE_NO_PRODUCT_TOKENS = ("not available", "unavailable", "n/a")
+UNCLASSIFIED_CLASS = ("no_product_named", "No product named on the row")
+# Every basis a class can rest on, strongest first. A caller showing a class without its basis is the
+# §66 defect wearing new clothes, so the basis is returned beside the class on every single row.
+PRODUCT_CLASS_BASES = ("declared_no_device", "description_token", "residual_device", "no_product_named")
+
+
+def resolve_product_classes(raw=None):
+    """A tenant's declared product classes → an ordered tuple of `(key, label, tokens)`. PURE.
+
+    Missing / junk → the house classes. An explicitly EMPTY list is honoured and means "make no
+    product judgement": every line with a product then lands in the residual class, which is a real
+    answer for a tenant that sells one thing. A row missing a key or tokens is dropped rather than
+    guessed at."""
+    if raw is None or not isinstance(raw, (list, tuple)):
+        return HOUSE_PRODUCT_CLASSES
+    out = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        key = str(r.get("key") or "").strip().lower()
+        toks = r.get("tokens")
+        if not key or not isinstance(toks, (list, tuple)):
+            continue
+        tokens = tuple(t for t in (str(x or "").strip().lower() for x in toks) if t)
+        if not tokens:
+            continue
+        out.append((key, str(r.get("label") or key).strip(), tokens))
+    return tuple(out)
+
+
+def _has_token(text, tokens):
+    """PURE: whether any token appears in `text` on a WORD boundary.
+
+    A boundary test rather than `in`, deliberately: 'tab' inside 'established' is not a tablet, and a
+    substring match is how a product classifier quietly mislabels a whole month."""
+    low = f" {str(text or '').lower().strip()} "
+    for ch in "-_/,().+":
+        low = low.replace(ch, " ")
+    while "  " in low:
+        low = low.replace("  ", " ")
+    return any(f" {t} " in low for t in (tokens or ()) if t)
+
+
+def product_class_of(product_desc, declared=None, classes=None, residual=None,
+                     no_device_tokens=None, no_product_tokens=None):
+    """PURE: `(class_key, basis)` for ONE sale line — what was sold, and HOW that was decided.
+
+    `declared` is whatever the row's own feed column says about the line (for the live prospect feed,
+    `activation_type2`, which says 'branded' or 'byop'). It is checked FIRST and only for "no device
+    was sold", because that is the one thing the feed states outright; everything else is read from
+    the description and says so in its basis.
+
+    Never raises and never guesses silently: a description that names no product comes back as
+    `no_product_named`, not as the residual class."""
+    classes = HOUSE_PRODUCT_CLASSES if classes is None else tuple(classes)
+    res_key, _res_label = residual or HOUSE_RESIDUAL_CLASS
+    nod = HOUSE_NO_DEVICE_TOKENS if no_device_tokens is None else tuple(no_device_tokens)
+    nop = HOUSE_NO_PRODUCT_TOKENS if no_product_tokens is None else tuple(no_product_tokens)
+    if _has_token(declared, nod):
+        return NO_DEVICE_CLASS[0], "declared_no_device"
+    desc = str(product_desc or "").strip()
+    if not desc:
+        return UNCLASSIFIED_CLASS[0], "no_product_named"
+    low = desc.lower()
+    if any(t in low for t in nop if t):
+        return UNCLASSIFIED_CLASS[0], "no_product_named"
+    for key, _label, tokens in classes:
+        if _has_token(desc, tokens):
+            return key, "description_token"
+    return res_key, "residual_device"
+
+
+def product_breakup(rows, *, desc_of, declared_of=None, classes=None, residual=None,
+                    no_device_tokens=None, no_product_tokens=None, promo_tokens=None):
+    """PURE: sale lines → the breakup of what was sold, one row per class plus what it could not place.
+
+    `desc_of(row)` / `declared_of(row)` are the caller's column readers, injected so this function
+    names no feed column — the prospect evaluation and a live-store caller read different sheets and
+    must still get one answer. Models are named through `model_of`, the ONE home for "which model is
+    this description", so a promo-decorated line and a bare one are not two products.
+
+    Returns `{classes: [...], totals, basis_counts, unplaced: [...], labels}`. Every DECLARED class
+    appears even at zero lines: a class missing from a list reads as a class nobody sells, which is a
+    different fact from one that sold nothing this month."""
+    classes = HOUSE_PRODUCT_CLASSES if classes is None else tuple(classes)
+    res_key, res_label = residual or HOUSE_RESIDUAL_CLASS
+    labels = {k: lb for k, lb, _t in classes}
+    labels[res_key] = res_label
+    labels[NO_DEVICE_CLASS[0]] = NO_DEVICE_CLASS[1]
+    labels[UNCLASSIFIED_CLASS[0]] = UNCLASSIFIED_CLASS[1]
+    order = [k for k, _lb, _t in classes]
+    if res_key not in order:
+        order.insert(0, res_key)
+    order += [NO_DEVICE_CLASS[0], UNCLASSIFIED_CLASS[0]]
+    buckets = {k: {"key": k, "label": labels[k], "lines": 0, "models": {}} for k in order}
+    basis_counts = {b: 0 for b in PRODUCT_CLASS_BASES}
+    unplaced, n = {}, 0
+    for r in rows or []:
+        n += 1
+        desc = desc_of(r)
+        key, basis = product_class_of(
+            desc, declared_of(r) if declared_of else None, classes, (res_key, res_label),
+            no_device_tokens, no_product_tokens)
+        basis_counts[basis] = basis_counts.get(basis, 0) + 1
+        b = buckets.setdefault(key, {"key": key, "label": labels.get(key, key), "lines": 0,
+                                     "models": {}})
+        b["lines"] += 1
+        model = model_of(desc, promo_tokens) or str(desc or "").strip()
+        if model:
+            b["models"][model] = b["models"].get(model, 0) + 1
+        # `unplaced` is ONLY what could not be placed. A residual device WAS placed, on purpose, and
+        # listing thousands of handsets here would bury the handful of rows that name nothing at all —
+        # an "unplaced" list carrying the ordinary case is a list nobody reads. Residual placements
+        # stay visible two other ways: `basis_counts.residual_device` counts them, and the residual
+        # class carries its own model list.
+        if basis == "no_product_named":
+            label = model or "(nothing named)"
+            unplaced[label] = unplaced.get(label, 0) + 1
+    out = []
+    for k in order:
+        b = buckets[k]
+        out.append({"key": k, "label": b["label"], "lines": b["lines"],
+                    "share": round(b["lines"] / n * 100, 2) if n else None,
+                    "models": [{"model": m, "lines": c}
+                               for m, c in sorted(b["models"].items(), key=lambda x: (-x[1], x[0]))]})
+    return {
+        "classes": out,
+        "labels": labels,
+        "totals": {"lines": n, "classes_with_sales": sum(1 for b in out if b["lines"])},
+        "basis_counts": basis_counts,
+        "unplaced": [{"description": d, "lines": c}
+                     for d, c in sorted(unplaced.items(), key=lambda x: (-x[1], x[0]))],
+        "reading": ("A class read off the product description is not the same evidence as one the "
+                    "feed declared, so every line carries which it was. `residual_device` lines "
+                    "matched no declared token and were counted as the residual class; `unplaced` "
+                    "names only the rows that named no product at all, and the residual class's own "
+                    "model list is where a category nobody has declared yet shows up."),
+    }
+
+
 def cell_price_cfg(cuts=None, promo_tokens=None):
     """What `router._sales_cell_agg(..., price_cfg=…)` is handed: the two predicates, resolved ONCE
     here, plus the cuts for the payload. The cell pass only ACCUMULATES — it never decides what a

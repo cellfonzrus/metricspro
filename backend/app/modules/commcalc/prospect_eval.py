@@ -74,6 +74,7 @@ DB-free. Proof: `backend/harness_prospect_eval.py`.
 
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc.expenses_effective import period_sort_key
+from app.modules.commcalc import product_mix as _pm
 
 # ── THE FEED REGISTRY ──────────────────────────────────────────────────────────────────────────────
 # The declared set of reports a prospect can be evaluated from.
@@ -495,6 +496,13 @@ def config_columns_missing(present):
 
 # ── THE ACCOUNT IDENTITY, AND THE MULTI-LINE QUESTION ─────────────────────────────────────────────
 
+# WHAT WAS SOLD, and whether a device was sold at all — one home each, for the same reason
+# `_store_column` exists: a report that spells a feed column itself is a copy waiting to diverge.
+# Measured on the live feed (5,495 rows, 2026-10-13): `sku` names the product on every row that has
+# one, and `activation_type2` is the only column that declares 'byop' — 383 rows where no device was
+# sold, every one of which reads 'Product Not Available' in `sku`.
+PRODUCT_DESC_COLUMN = "sku"
+NO_DEVICE_COLUMN = "activation_type2"
 LINE_ID_COLUMN = "activation_order"       # measured 1,248 distinct over 1,248 rows — one per line
 NO_ACCOUNT_KEY = "(no account identifier on the row)"
 
@@ -557,7 +565,7 @@ def device_keys_of(row):
     `sku` may be the feed's own 'not available' placeholder — reported verbatim rather than cleaned,
     because the placeholder is itself the finding when it lands on a flagged account."""
     r = row or {}
-    return (str(r.get("sku") or "").strip(), str(r.get("imei") or "").strip())
+    return (str(r.get(PRODUCT_DESC_COLUMN) or "").strip(), str(r.get("imei") or "").strip())
 
 
 def flag_multi_line_accounts(grouped, threshold):
@@ -1178,8 +1186,31 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
         "stores": stores,
         "store_scenarios": store_scenarios,
         "handset_orders": handset_orders(ful_rows, stores),
+        # WHAT WAS SOLD, at the end of the report. Counted over the SAME commission rows the P&L books
+        # from, so a line in this breakup is a line in the statement above it.
+        "products": products_sold(comm_rows, cfg),
         "fraud": fraud_exposure(summary, flagged),      # the delta is folded in by the caller
     }
+
+
+# ── THE BREAKUP OF WHAT WAS SOLD (owner ask 2026-10-13) ──────────────────────────────────────────
+# "summarize at the end of the report, the breakup of Phones tablets, Fios VHI, and if any other item
+# was sold". Every rule here lives in `product_mix` — the ONE home for reading a product description
+# (`model_of` since §62, `product_class_of` and `product_breakup` since this ask) — so the prospect
+# report and any live-store caller cannot disagree about what a tablet is. This function only names
+# WHICH COLUMNS of the prospect's commission sheet answer, and it names them through the two one-homes
+# above rather than spelling them.
+def products_sold(comm_rows, cfg=None):
+    """PURE: the prospect's commission lines → the breakup of what was sold, through `product_mix`."""
+    c = cfg or {}
+    return _pm.product_breakup(
+        comm_rows or [],
+        desc_of=lambda r: (r or {}).get(PRODUCT_DESC_COLUMN),
+        declared_of=lambda r: (r or {}).get(NO_DEVICE_COLUMN),
+        classes=c.get("product_classes"),
+        no_device_tokens=c.get("no_device_tokens"),
+        no_product_tokens=c.get("no_product_tokens"),
+        promo_tokens=c.get("promo_tokens"))
 
 
 # ── WHAT HANDSETS THIS STORE ORDERED ──────────────────────────────────────────────────────────────

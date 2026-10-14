@@ -59,6 +59,7 @@ sys.path.insert(0, ".")
 from app.modules.core.module_graph import home_under_app        # noqa: E402
 from harnesslib import py_code_only                              # noqa: E402  (locks read CODE)
 from app.modules.commcalc import prospect_eval as P            # noqa: E402
+from app.modules.commcalc import product_mix as _pm         # noqa: E402
 from app.modules.account import coa as COA                      # noqa: E402
 from app.modules.account import device_cogs as DC               # noqa: E402
 from app.modules.account import ma_store_pnl as MSP             # noqa: E402
@@ -756,6 +757,10 @@ check("K7 a partly hollow file says how many rows the evaluation can see",
 check("K8 an empty file is measured as nothing, never reported as a problem",
       P.substance([])["rows"] == 0 and P.substance_note(P.substance([]), "F") is None)
 _pcode = py_code_only(open(_SRC).read())
+# The product-description home's own source, for §S10's RULE TWO check over the MECHANISM rather than
+# over the report that calls it.
+_PMSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "modules", "commcalc",
+                      "product_mix.py")
 check("K9 the period columns come from the ONE home, not a list kept here",
       "MONTH_COLUMNS" in _pcode and "data_lineage_registry" in _pcode
       and "'period_month'" not in _pcode and '"period_month"' not in _pcode)
@@ -1079,6 +1084,88 @@ check("R14 the router feeds it EVERY month, from the read it already made",
       and _rtext.count("def _prospect_feed_rows") == 1)
 check("R15 one home for the month stamped on a row — the grouping reads it too",
       "_row_period(r)" in _pcode and _pcode.count('.get("period") or "").strip()') == 1)
+
+# ── §S THE BREAKUP OF WHAT WAS SOLD (owner ask 2026-10-13) ───────────────────────────────────────
+# "summarize at the end of the report, the breakup of Phones tablets, Fios VHI, and if any other item
+# was sold". THREE things are locked here and each one was paid for:
+#   · RULE TWO — the owner's own words name a carrier's brands ("Fios", "VHI"). The class is
+#     `home_internet` and the matching words are CONFIG. S10 fails the build if a brand reaches code.
+#   · The §66 lesson — a class read off a keyword is not the evidence a declared class is, so every
+#     line carries its basis and the report counts them (S5, S6).
+#   · The live shape — 'Product Not Available' looks like missing data and is NOT: on the live feed
+#     383 of 412 such rows DECLARE `byop`, no device sold. A declared fact outranks a description
+#     (S3), and the rest are named rather than folded into phones (S7).
+_PRODROWS = [
+    {"sku": "Apple iPhone 16e 128GB Black TO", "activation_type2": "branded"},
+    {"sku": "Apple iPhone 16e 128GB Black TO", "activation_type2": "branded"},
+    {"sku": "Samsung Galaxy Tab A11+ 5G TO", "activation_type2": "branded"},
+    {"sku": "TCL Tab 8 NXTPAPER 5G TO", "activation_type2": "branded"},
+    {"sku": "Home Internet Router TO", "activation_type2": "branded"},
+    # the live trap: reads as missing, is actually a declared bring-your-own sale
+    {"sku": "Product Not Available", "activation_type2": "byop"},
+    # …and the one that declares nothing, which must NOT become a phone
+    {"sku": "Product Not Available", "activation_type2": None},
+]
+_PB = P.products_sold(_PRODROWS)
+_pbof = {c["key"]: c for c in _PB["classes"]}
+check("S1 every line is placed — the classes add up to the file, nothing lost or double-counted",
+      sum(c["lines"] for c in _PB["classes"]) == len(_PRODROWS) == _PB["totals"]["lines"])
+check("S2 phones, tablets and home internet are broken out, each on its own line",
+      (_pbof["phone"]["lines"], _pbof["tablet"]["lines"], _pbof["home_internet"]["lines"]) == (2, 2, 1))
+check("S3 a DECLARED 'no device sold' outranks the description — it is not an unknown",
+      _pbof["no_device"]["lines"] == 1
+      and P.products_sold([_PRODROWS[5]])["basis_counts"]["declared_no_device"] == 1)
+check("S4 a class the tenant declares but nobody sold is reported as ZERO, never omitted",
+      _pbof["watch"]["lines"] == 0 and _pbof["accessory"]["lines"] == 0
+      and _PB["totals"]["classes_with_sales"] == 5)
+check("S5 every line carries HOW its class was decided (the §66 lesson)",
+      set(_PB["basis_counts"]) == set(_pm.PRODUCT_CLASS_BASES)
+      and sum(_PB["basis_counts"].values()) == len(_PRODROWS))
+check("S6 …and a keyword placement is counted separately from a declared one",
+      _PB["basis_counts"]["description_token"] == 3
+      and _PB["basis_counts"]["residual_device"] == 2
+      and _PB["basis_counts"]["declared_no_device"] == 1)
+check("S7 a row naming no product is NAMED, never folded into the residual class",
+      _pbof["no_product_named"]["lines"] == 1
+      and [u["description"] for u in _PB["unplaced"]] == ["Product Not Available"])
+check("S8 …and an ordinary handset is NOT listed as unplaced — it was placed, on purpose",
+      not any("iPhone" in u["description"] for u in _PB["unplaced"])
+      and any("iPhone" in m["model"] for m in _pbof["phone"]["models"]))
+check("S9 the models under each class come from the ONE model home, so a promo-decorated line "
+      "and a bare one are one product",
+      _pm.product_breakup(
+          [{"sku": "moto g play - 2026 - 2026 Q3 Promo Upgrade - $240.00"}, {"sku": "moto g play - 2026"}],
+          desc_of=lambda r: r.get("sku"))["classes"][0]["models"] == [{"model": "moto g play - 2026",
+                                                                      "lines": 2}])
+check("S10 RULE TWO — no carrier or brand name in the mechanism's code",
+      not any(w in py_code_only(open(_PMSRC).read()).lower()
+              for w in ("fios", "vhi", "verizon", "boost", "ipad", "iphone", "samsung", "galaxy")))
+check("S11 …and the words that match a class are CONFIG, so a tenant can declare its own",
+      [c["key"] for c in _pm.resolve_product_classes(
+          [{"key": "home_internet", "label": "Home internet", "tokens": ["fios", "vhi"]}])]
+      if False else
+      _pm.product_class_of("VHI Gateway", classes=_pm.resolve_product_classes(
+          [{"key": "home_internet", "tokens": ["vhi"]}])) == ("home_internet", "description_token"))
+check("S12 a token matches on a WORD boundary — 'tab' inside another word is not a tablet",
+      _pm.product_class_of("Established Plan TO")[0] == "phone"
+      and _pm.product_class_of("Galaxy Tab A11+ 5G TO")[0] == "tablet")
+check("S13 an empty declared class list is honoured — no product judgement is a real answer",
+      _pm.product_breakup([{"sku": "Galaxy Tab A11+ TO"}], desc_of=lambda r: r.get("sku"),
+                          classes=())["classes"][0]["key"] == "phone")
+check("S14 the column that names the product is dereferenced, never spelled — the flag list read it "
+      "a second time and this check found it",
+      'PRODUCT_DESC_COLUMN = "sku"' in _pcode
+      and _pcode.count(".get(PRODUCT_DESC_COLUMN)") == 2        # the breakup AND device_keys_of
+      and '.get("sku")' not in _pcode)
+check("S15 the breakup is counted over the SAME rows the P&L books from",
+      "products_sold(comm_rows, cfg)" in _pcode)
+check("S16 an empty feed produces an empty breakup, never a crash or a zero claim",
+      P.products_sold([])["totals"]["lines"] == 0
+      and P.products_sold(None)["unplaced"] == []
+      and all(c["share"] is None for c in P.products_sold([])["classes"]))
+check("S17 the rules live in the ONE product-description home, not a second copy here",
+      "_pm.product_breakup(" in _pcode and "def product_class_of" not in _pcode
+      and "def product_breakup" not in _pcode)
 
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
