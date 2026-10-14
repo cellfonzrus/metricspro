@@ -20,6 +20,10 @@ on:
       # the undefined-name lock (index §6k) judges EVERY module under backend/app
       - "backend/app/**/*.py"
       - "backend/harness_undefined_names_lock.py"
+      # the paged-read lock (index §CORE-05) judges EVERY module under backend/app too
+      - "backend/harness_feed_read_lock.py"
+      - "backend/app/modules/core/feed_read.py"
+      - "backend/app/modules/recovery/engine.py"
       # the auto-calc-on-landing lock (index §6l) — every lander under backend/app, the index, the page, the CI
       - "backend/harness_auto_calc_lock.py"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
@@ -108,6 +112,25 @@ jobs:
       - name: Run the auto-calc-on-landing lock
         working-directory: backend
         run: python3 harness_auto_calc_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  feed-read-lock:
+    # A PAGED READ IS A READ OF THE DATA (owner report 2026-10-14, index §CORE-05). `range()` paging with
+    # no ORDER BY pages an UNORDERED set: measured live on one 137,374-row feed, the platform's own
+    # "read every row" home returned 88,294 distinct rows with 49,080 duplicate copies and a third of the
+    # feed never served — and reported nothing, because the loop still ended on a short page. That is what
+    # made one subscriber account read as 27 activated lines when it carries nine. Stdlib + ast, no pip
+    # install: the one home is driven over a fake backend that permutes an unordered read (armed — the
+    # pre-fix loop fails it), its order cannot be removed or applied after the window, and every remaining
+    # unordered paged read under backend/app is COUNTED against a pin that may only shrink.
+    name: A paged read is a read of the data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the paged-read lock
+        working-directory: backend
+        run: python3 harness_feed_read_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   unique-numbers:
     # A NUMBER NAMES ONE THING (2026-09-28): #315 and #317 were merged the same day and both took migration 1030 and

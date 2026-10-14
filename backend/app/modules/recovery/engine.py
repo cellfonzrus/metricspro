@@ -9,6 +9,8 @@ commcalc.appeal_recovery. Read-only against source tables; the asset-lending sys
 """
 from datetime import datetime as _dt
 
+from app.modules.core import feed_read as _feed_read   # THE paged read — §19.48/§CORE-05
+
 # The asset_ledger charge categories that ARE appeals (mirrors CHARGE_GROUPS["appeals"] in asset/router).
 APPEAL_CATEGORIES = [
     "Appeal Denied. Details in Boost Appeals Status",
@@ -43,34 +45,30 @@ def _parse_date(v):
         return None
 
 
-def _read_all(client, table, select, page=1000, cap=2_000_000, **eqs):
-    """Read EVERY matching row, paginated. Replaces a single `.limit(N)` shot (2026-08-10).
+def _read_all(client, table, select, **eqs):
+    """Read EVERY matching row, through the ONE paged-read home (`core.feed_read.read_all`).
 
-    A bare `.limit(200000)` is not a safety valve here, it is a silent wrong answer. Measured live:
-    `commcalc.raw_mi` holds **234,610** rows and `raw_payment_detail` **205,886**, so the old limit
-    dropped 34,610 and 5,886 rows respectively — with no ORDER BY, so WHICH rows vanished was
-    arbitrary from one call to the next.
+    THIS FUNCTION USED TO BE ITS OWN PAGE LOOP, and its own docstring already named the hazard it
+    then walked into: a `.limit(N)` shot dropped rows "with no ORDER BY, so WHICH rows vanished was
+    arbitrary from one call to the next" — and the loop that replaced the limit paged without an
+    ORDER BY either. Paging an unordered set serves some rows twice and others never (measured
+    2026-10-14: 49,080 duplicate copies and a third of a 137,374-row feed never served — see
+    `core/feed_read.py`), which is the same wrong answer by a different route.
 
     That matters more here than in a reporting scan. These reads build the `pay_by_imei` /
     `mi_by_serial` evidence dictionaries, and a device whose payment or activation row happened to
-    fall outside the truncation reads as "no evidence found" — which is precisely the input that
-    buckets an appeal as not_recoverable. Missing evidence and absent evidence are indistinguishable
-    downstream, so the engine cannot detect its own blind spot.
+    fall outside the read reads as "no evidence found" — precisely the input that buckets an appeal
+    as not_recoverable. Missing evidence and absent evidence are indistinguishable downstream, so
+    the engine cannot detect its own blind spot.
 
-    `cap` is a runaway guard set far above any real table, not a business limit; the loop exits on a
-    short page long before reaching it.
+    A list/tuple/set filter value becomes an IN (...) clause.
     """
-    out, start = [], 0
-    while start < cap:
+    def _make():
         q = client.schema("commcalc").table(table).select(select)
         for k, v in eqs.items():
             q = q.in_(k, list(v)) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
-        rows = (q.range(start, start + page - 1).execute().data) or []
-        out.extend(rows)
-        if len(rows) < page:
-            break
-        start += page
-    return out
+        return q
+    return _feed_read.read_all(_make)
 
 
 def build_recovery_ledger(client, org_id, cfg, today):
