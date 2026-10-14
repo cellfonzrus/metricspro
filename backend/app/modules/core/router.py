@@ -2568,19 +2568,37 @@ def list_users(org_id: str = ORG_ID):
     return {"users": rows, "ready": True}
 
 
+from app.modules.core import app_user_identity as _app_user_identity
+
+
 def _ensure_employee(client, org_id, email, full_name=None, store_code=None, emp_emails=None):
-    """Make sure a storeops.employees row exists for a person added via Roles, so they
-    propagate to the Employee list and become editable there. No-op if one already exists
-    (matched by email). Returns True if a new row was created."""
+    """Make sure a storeops.employees row exists for a person added via Roles, so they propagate to
+    the Employee list and become editable there, and answer WHICH person they are.
+
+    -> (created, employee_id). `created` is True only when a new roster row was inserted (callers
+    count it); `employee_id` is the person's business id either way, "" when it cannot be resolved.
+
+    THE LINK IS PART OF THE ANSWER (owner report 2026-10-14, index §CORE-07). A login is tied to its
+    person by `app_users.employee_id`, and with that column NULL the login is NOBODY:
+    `core/scope.py::visible_people_keyset` returns `set(me)` with `me` empty for a
+    people_visibility-'self' role, so the rep opens Schedule and sees an empty week, and
+    `closing/router.py::_closer_gate` refuses their closing with `closer_no_name`. Two of the three
+    create paths used to omit it (the Roles grid passed it, the add-a-person form and the spreadsheet
+    upload did not), so the id is resolved HERE — the one helper both write paths already call to put
+    the person on the roster — rather than at each call site. Measured live the same day: the one
+    Vzone rep login carries no employee_id and is exactly this instance.
+    """
     email = (email or "").strip().lower()
     if not email:
-        return False
+        return False, ""
     if emp_emails is None:
         existing = client.schema("storeops").table("employees").select("email") \
             .eq("org_id", org_id).execute().data or []
         emp_emails = {(e.get("email") or "").lower() for e in existing if e.get("email")}
     if email in emp_emails:
-        return False
+        # Already on the roster: resolve (and mint, if that row never got one) their business id, so a
+        # login assigned to an EXISTING employee is linked just as firmly as a newly created one.
+        return False, _employee_id_for_email(client, org_id, email)
     try:
         r = client.schema("storeops").table("employees").insert({
             "org_id": org_id, "name": (full_name or email), "email": email,
@@ -2588,18 +2606,43 @@ def _ensure_employee(client, org_id, email, full_name=None, store_code=None, emp
         }).execute()
         emp_emails.add(email)
     except Exception:
-        return False
+        return False, ""
     # THE ONE MINT (§19.45): a person added here used to get NO business employee_id — every other
     # create path minted E<pk>, this one did not, and such a person's first payroll change-log row was
     # written with employee_id NULL (Vzone id 237, 2026-10-02). Lazy import: core keeps no import-time
     # dependency on storeops; a failure leaves the row unminted (the change-log helper mints on use).
+    eid = ""
     try:
         from app.modules.storeops.router import _ensure_employee_id
         for rec in (getattr(r, "data", None) or []):
-            _ensure_employee_id(rec)
+            eid = str(_ensure_employee_id(rec).get("employee_id") or "").strip() or eid
     except Exception:
         pass
-    return True
+    return True, eid
+
+
+def _employee_id_for_email(client, org_id, email) -> str:
+    """The business employee_id of this org's employee with this email, minting one through THE ONE
+    MINT when the stored row never got one. "" when no such person, or on any read failure — never
+    guesses an id. Org-scoped (a cross-tenant match would link a login to a stranger)."""
+    email = (email or "").strip().lower()
+    if not email:
+        return ""
+    try:
+        rows = client.schema("storeops").table("employees").select("id,org_id,employee_id") \
+            .eq("org_id", org_id).eq("email", email).limit(1).execute().data or []
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    eid = str(rows[0].get("employee_id") or "").strip()
+    if eid:
+        return eid
+    try:
+        from app.modules.storeops.router import _ensure_employee_id
+        return str(_ensure_employee_id(rows[0]).get("employee_id") or "").strip()
+    except Exception:
+        return ""
 
 
 def _pay_visible(authorization: str, org_id: str) -> bool:
@@ -2646,7 +2689,9 @@ def list_employees(org_id: str = ORG_ID, authorization: str = Header(default="")
             continue
         if u.get("employee_id") and u.get("employee_id") in emp_eids:
             continue
-        if _ensure_employee(client, org_id, ue, u.get("full_name"), u.get("store_code"), emp_emails):
+        _made, _eid = _ensure_employee(client, org_id, ue, u.get("full_name"),
+                                        u.get("store_code"), emp_emails)
+        if _made:
             created += 1
     if created:
         emps = client.schema("storeops").table("employees").select(
@@ -3045,22 +3090,29 @@ def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
     cur = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .eq("email", email).limit(1).execute().data or []
     grant = _normalize_grant_write(client, org_id, body)
+    full_name = body.get("full_name") or (cur[0].get("full_name") if cur else None)
+    # Propagate to the Employee roster so the person is editable in the Employee list too — BEFORE the
+    # login row is written, because it is also what answers "which person is this" (§CORE-07). The
+    # Roles grid sends `employee_id`; the add-a-person form does not, and a login with none is nobody
+    # (empty Schedule, `closer_no_name` on a closing), so the helper's answer fills it in.
+    _made, linked_eid = _ensure_employee(client, org_id, email, full_name, grant["store_code"])
     row = {
         "org_id": org_id, "email": email,
-        "full_name": body.get("full_name") or (cur[0].get("full_name") if cur else None),
+        "full_name": full_name,
         "role": role or (cur[0].get("role") if cur else "sales_rep"),
         "market": grant["market"],
         "store_code": grant["store_code"],
         "store_codes": grant["store_codes"],
-        "employee_id": body.get("employee_id") or (cur[0].get("employee_id") if cur else None),
+        "employee_id": _app_user_identity.link_employee_id(
+            request_id=body.get("employee_id"),
+            stored_id=(cur[0].get("employee_id") if cur else None),
+            roster_id=linked_eid),
         "is_active": body.get("is_active", True if not cur else cur[0].get("is_active")),
     }
     if cur:
         res = client.schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
     else:
         res = client.schema("storeops").table("app_users").insert(row).execute()
-    # Propagate to the Employee roster so the person is editable in the Employee list too.
-    _ensure_employee(client, org_id, email, row["full_name"], row["store_code"])
     return (res.data or [{}])[0]
 
 
@@ -3114,13 +3166,21 @@ def bulk_assign(body: BulkAssignIn, org_id: str = ORG_ID, authorization: str = H
             "is_active": True,
         }
         try:
-            cur = client.schema("storeops").table("app_users").select("id") \
+            cur = client.schema("storeops").table("app_users").select("id,employee_id") \
                 .eq("org_id", org_id).eq("email", email).limit(1).execute().data or []
+            # Same link as /users/assign (§CORE-07): a spreadsheet carries no employee_id, and without
+            # one every uploaded rep gets an empty Schedule. Resolved before the write, from the one
+            # helper that already puts them on the roster.
+            _made, linked_eid = _ensure_employee(client, org_id, email, row["full_name"],
+                                                 row["store_code"], emp_emails)
+            row["employee_id"] = _app_user_identity.link_employee_id(
+                request_id=u.get("employee_id"),
+                stored_id=(cur[0].get("employee_id") if cur else None),
+                roster_id=linked_eid)
             if cur:
                 client.schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
             else:
                 client.schema("storeops").table("app_users").insert(row).execute()
-            _ensure_employee(client, org_id, email, row["full_name"], row["store_code"], emp_emails)
             assigned += 1
         except Exception as e:
             errors.append({"row": i + 1, "email": email, "error": str(e)})

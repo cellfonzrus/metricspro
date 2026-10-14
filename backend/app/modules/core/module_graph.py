@@ -43,6 +43,32 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    # ── §CORE-07 (owner report 2026-10-14) — which PERSON a login belongs to ─────────────────────
+    'app_user_employee_link': {
+        "question": 'Which EMPLOYEE does a login belong to, and in what order is that decided when '
+                    'an administrator names one, the row already carries one, and the roster '
+                    'resolves one by email? `storeops.app_users.employee_id` is the single column '
+                    'that ties a login to its person, and with it NULL the login is NOBODY: '
+                    '`core/scope.py::visible_people_keyset` narrows a people_visibility-\'self\' '
+                    'role to the empty set, so the rep opens Schedule to a blank week, and '
+                    '`closing/router.py::_closer_gate` refuses their closing `closer_no_name`. '
+                    'Three paths wrote such a row and each decided for itself: the Roles grid sent '
+                    'the id, the add-a-person form and the spreadsheet upload did not. Which '
+                    'writers are EXCUSED is part of the same fact and is written down — tenant '
+                    'creation and super-admin elevation mint an \'all\'-scope administrator, who '
+                    'is on no store\'s roster. Sibling of §19.45 THE ONE MINT, which gives the '
+                    'PERSON a business id; this one makes the LOGIN point at it.',
+        "homes": ('app/modules/core/app_user_identity.py',),
+        "index": ('CORE-07',),
+        "locks": ('harness_app_user_employee_link.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        # The lock verifies it against the real import graph.
+        "callers": {
+            # POST /users/assign and POST /users/bulk-assign — the two person-scoped login writers.
+            # `_ensure_employee` in the same module supplies the roster half of the answer.
+            'app/modules/core/router.py': ('_app_user_identity',),
+        },
+    },
     'stored_credential_column': {
         "question": 'Which stored COLUMNS hold a credential — a portal password, an authenticator '
                     'secret, a live browser session, a vendor API key — and therefore must be '

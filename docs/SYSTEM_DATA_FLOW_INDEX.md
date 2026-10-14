@@ -107,6 +107,7 @@ Primary code homes:
 | CORE-04 | **And the rows ALREADY stored** | "A column became encrypted on write — so what happened to the values written before that? Which encrypted column has a sweep that seals its old rows, which has none, and what stops the fifth encrypted column shipping half protected while every new write looks perfect?" |
 | CORE-05 | **A paged read is a read of the data** | "The takeover report says one subscriber account carries 27 activated lines and it carries nine — where did the other 18 come from? What does a read that pages 1,000 rows at a time promise about the rows it has not asked for yet, how many of this platform's reads make that promise, and which of them are reading a feed twice while missing a third of it?" |
 | CORE-06 | **A tile is a menu entry, so it answers the menu's question** | "I cannot see the schedule on the app — where are we at making that live to all employees? Which door leads to a `tileOnly` page, and does that door ask whether the person looking at it may walk through?" |
+| CORE-07 | **A login is nobody until it is linked to its person** | "All stores should see their schedules and submit their closing — what is the process to add app access to all of them? Which column ties a login to the employee it belongs to, and does every path that creates a login write it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25061,6 +25062,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-08 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
+| CORE-07 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -27817,4 +27819,90 @@ dereference it, with controls proving an un-wired hub goes red.
   checker and no test of the gate itself can see a caller that never calls it. §A the one home carries
   the whole stack, §B every `HubTiles` consumer dereferences it, §C nobody retypes it, §D the curated
   KPI rows are gated too, §E eight negative controls proving each check bites.
+
+
+## §CORE-07. A LOGIN IS NOBODY UNTIL IT IS LINKED TO ITS PERSON (owner report 2026-10-14)
+
+Owner: *"all stores should be able to see their dashboard with commissions earned and their schedules
+and submit their closing at night with their app, then send me the process to add app access to all of
+them"*. Writing that process meant reading the three paths that create a login. They did not agree.
+
+### CORE-07.1 THE ONE COLUMN, and what NULL costs
+
+A login is tied to its person by `storeops.app_users.employee_id`. With that column NULL the login is
+**nobody**, in two places that matter to exactly the request above:
+
+| surface | what a NULL link does | where |
+|---|---|---|
+| Schedule | `visible_people_keyset` resolves a people_visibility-'self' role to `set(self_employee_ids(app_user))`, which is EMPTY — the rep opens Schedule and sees a blank week | `app/core/scope.py` (§14w) |
+| Submit Closing | the submit is refused `closer_no_name` — the caller's own names are read from the employee record this column points at | `closing/router.py::_closer_gate` (§29.7) |
+
+`scope.py`'s own docstring already said it — *"a login with no employee_id on it is nobody and is
+shown nothing"* — so the fact was declared. What was missing was every writer honouring it.
+
+### CORE-07.2 THE CLASS, not the instance
+
+Three paths write an `app_users` row for a person, and each decided the link for itself:
+
+| path | sends `employee_id`? | result |
+|---|---|---|
+| `POST /users/assign` from the Roles **grid** (a row of the employee list) | yes | linked |
+| `POST /users/assign` from the **add-a-person form** | no | **NULL** |
+| `POST /users/bulk-assign` — the **spreadsheet upload** | no | **NULL** |
+
+So whether a newly provisioned rep could see their own schedule depended on which button the
+administrator pressed. Measured live 2026-10-14: the one Vzone `sales_rep` login carries no
+`employee_id` and is exactly this instance; Cellfonz's 34 and Luxelink's 39 are all linked only
+because they were provisioned from the grid. The spreadsheet path is the one the owner was about to
+use for ~23 new logins across NY LOGISTICS, Vzone and the ten un-emailed Cellfonz employees, which is
+why it was fixed in the same breath as answering him.
+
+This is the sibling of **§19.45** ("THE ONE MINT" — every `employees` insert passes
+`_ensure_employee_id`). That fix gave the *person* a business id; this one makes the *login* point at
+it. One without the other is the patchwork CLAUDE.md forbids.
+
+### CORE-07.3 THE FIX — one home, dereferenced, resolved before the write
+
+`app/modules/core/app_user_identity.py::link_employee_id` is the ONE home for the precedence, and it
+is **pure** (no client, no I/O, no imports — pinned):
+
+| # | source | why it is in this position |
+|---|---|---|
+| 1 | `request_id` | what the caller explicitly asked for (the grid, or a spreadsheet column) — an administrator naming the person outranks anything inferred |
+| 2 | `stored_id` | the link the row already carries; an upsert must never DROP it, or a re-assign that only changes a role blanks that person's schedule |
+| 3 | `roster_id` | the employee this email resolves to on **this org's** roster |
+
+`None` (never `""`) when all three are empty, so the column stays NULL rather than holding a falsy
+string `self_employee_ids` would read as a real id.
+
+The roster's answer comes from `_ensure_employee`, which was **extended rather than siblinged**: it is
+already the one helper both write paths call to put the person on the roster, so it now returns
+`(created, employee_id)` and resolves an ALREADY-rostered person too (through
+`_employee_id_for_email`, org-scoped, minting via the one mint — never inventing an id). Both handlers
+call it **before** writing the login row; resolving after the write leaves the column NULL, and
+§E3b of the lock proves that ordering bites.
+
+**The two `app_users` writers that are not people are excused on purpose**, and the lock pins the
+excuse: `_provision_tenant` and `create_super_admin` both mint an `'all'`-scope administrator, who is
+on no store's roster and whose `people_visibility` short-circuits before the column is read. (The
+owner's own super-admin login carries no `employee_id` for that reason, harmlessly.) A **fifth**
+insert site fails the build until somebody rules on it — §D1.
+
+### CORE-07.4 PROOF
+
+`backend/harness_app_user_employee_link.py` — **42 passed / 0 failed**, and **armed**: on pristine
+`origin/main` it reports **11 failed**, so it is a lock and not a description.
+
+- §A reproduces the consequence against `core/scope.py` **as shipped** (the client is passed as
+  `None` on purpose: the 'self' branch returns before any read, so the proof is DB-free and would
+  raise rather than quietly pass if that ever changed). A linked rep → `{'E229'}`; an unlinked rep →
+  `set()`, which is deny-all and not `None`.
+- §B the precedence table, pure. §C the wiring: the helper answers the link on every path, the email
+  resolver is org-scoped and mints through the one mint, and neither handler spells an `or` chain of
+  its own. §D the excused writers, named. §E nine negative controls, including both pre-fix row
+  literals transcribed from `main`.
+
+Not a migration: the column already exists and already has the right meaning. **Rows written before
+this ship are not retro-linked** — the one live instance (the Vzone rep) is repaired by re-assigning
+that person from the Roles grid, which is config, not a data fix.
 
