@@ -1,0 +1,70 @@
+# BRANCH-BASE GUARD — a pull request may not be cut from a stale starting point (index §CORE-10).
+#
+# Owner directive 2026-10-14: "dont jsut write down make a gate so nothing can passs thru unkowlingly,
+# you were smart may be the other might not be as asmart". Two near-misses on PR #475 were caught by
+# hand; this is the gate that catches them without anyone having to be sharp that day.
+#
+# WHY `pull_request_target` AND NOT `pull_request`. A `pull_request` run executes the workflow files
+# from the HEAD BRANCH, so a branch cut before main added a job simply never runs that job — which is
+# failure A4 below, and it would silently delete THIS GUARD along with the rest. `pull_request_target`
+# runs the workflow from the BASE branch instead, so a stale branch cannot drop it.
+#
+# THE SAFETY RULE THAT COMES WITH THAT TRIGGER, stated so nobody relaxes it: this job NEVER checks out
+# and NEVER executes code from the pull request. It fetches the head as git data, reads commit subjects
+# and parses workflow TEXT, and nothing else. Keep `permissions: contents: read`, keep every secret out
+# of it, and never add a step that runs a script, an install or a build from the PR's tree.
+name: branch-base-guard
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: A pull request number to check by hand
+        required: true
+
+permissions:
+  contents: read
+
+# Without pipefail a step's status is tee's, so a failing gate passes (harness_ci_pipefail_lock.py).
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  base:
+    name: The branch was cut from its base (no re-proposed commits, no lost CI job)
+    runs-on: ubuntu-latest
+    steps:
+      # The BASE branch's tree — this repository's own code, not the pull request's.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+
+      - name: Fetch the base branch and the pull request head as DATA (nothing is run from it)
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          PR: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/base-main"
+          git fetch --no-tags origin "+refs/pull/${PR}/head:refs/pr-head"
+
+      - name: The pull request body, as a file (never interpolated into a shell command)
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$BODY" > "$RUNNER_TEMP/pr-body.txt"
+
+      - name: Prove the branch's starting point
+        run: |
+          python3 scripts/check_branch_base.py \
+            --base refs/base-main --head refs/pr-head \
+            --body-file "$RUNNER_TEMP/pr-body.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: ...and that the guard itself still fires when the defect is planted
+        run: python3 scripts/check_branch_base.py --self-test | tee -a "$GITHUB_STEP_SUMMARY"

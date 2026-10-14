@@ -51,7 +51,11 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKFLOWS = os.path.join(HERE, "..", ".github", "workflows")
-RUNS_HARNESS = re.compile(r"^\s*(?:-\s*)?run:.*\bharness_\w+\.py", re.M)
+# A GATE, not just a harness: `scripts/check_*.py` is the same shape and the same defect — a gate
+# script piped to tee reports tee's status. 2026-10-14: the branch-base guard was the first gate
+# to live outside backend/, and the lock could not see it. The rule is about the PIPE, not the
+# folder, so the axis is widened rather than a second copy of the rule being written.
+RUNS_HARNESS = re.compile(r"^\s*(?:-\s*)?run:.*(?:\bharness_\w+\.py|scripts/check_\w+\.py)", re.M)
 DEFAULT_BASH = re.compile(r"^defaults:\s*\n\s+run:\s*\n\s+shell:\s*bash\s*$", re.M)
 
 
@@ -63,7 +67,7 @@ def violations(files):
         if not RUNS_HARNESS.search(text):
             continue
         if not DEFAULT_BASH.search(text):
-            out.append(f"{name}: runs a harness but does not declare `defaults: run: shell: bash` — without pipefail "
+            out.append(f"{name}: runs a harness or gate script but does not declare `defaults: run: shell: bash` — without pipefail "
                        "`python3 harness_x.py | tee …` passes even when the harness fails")
     return out
 
