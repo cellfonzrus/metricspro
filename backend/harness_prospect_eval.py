@@ -1167,6 +1167,132 @@ check("S17 the rules live in the ONE product-description home, not a second copy
       "_pm.product_breakup(" in _pcode and "def product_class_of" not in _pcode
       and "def product_breakup" not in _pcode)
 
+# The prospect screen, read as TEXT — the figures it prints must come from the statement rather than
+# from arithmetic done in the browser, which is what §T11 checks.
+_PAGE = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "src", "app",
+                          "(platform)", "commcalc", "store-takeover", "page.tsx")).read()
+# ONE daily-transaction spiff cash row, in the live feed's own shape (order type and account taken
+# from the live prospect's rows, 2026-10-14). It is the whole of §T8/§T9: whether this row books
+# anything at all, and to whom, is decided by config and nothing else.
+_TXSPIFF = {"order_type": "PostPaid Additional Spiff", "product_name": "TBV MONTH 2",
+            "retail_cost": -30.0, "merchant_discount": 0.0, "account_id": "169335",
+            "period": "August 2026"}
+
+print("=" * 98)
+print("T. THE ORG'S OWN BOOKING SWITCHES, NOT THE HOUSE DEFAULTS (owner report 2026-10-14)")
+print("=" * 98)
+# The defect: the evaluation booked through the company's own P&L functions while handing them
+# `default_config()`. Those functions are config-driven, so the house answers silently overrode this
+# tenant's declarations — hiding every month spiff and every MDF dollar, and keeping all airtime
+# money out of the store columns because store attribution was off. Measured on the live prospect's
+# own 65,491 daily-transaction rows: $435,121.34 of income under the org's rules, $112,740.46 under
+# the house defaults.
+_homes_fn = [n for n in _nodes if n.name == "_prospect_homes"][0]
+_homes_src = ast.get_source_segment(_rtext, _homes_fn) or ""
+
+
+def _calls_named(node, names):
+    out = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call):
+            f = n.func
+            nm = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+            if nm in names:
+                out.add(nm)
+    return out
+
+
+check("T1 the configs the evaluation BOOKS with are LOADED for the org — a default may be read "
+      "for the comparison, but never handed to a booking function",
+      '"ma_cfg": _msp.load_config(client, org_id),' in _homes_src
+      and '"ma_pnl_config": _rsub.load_ma_pnl_config(client, org_id),' in _homes_src
+      and '"ma_cfg": _msp.default_config()' not in _homes_src
+      and '"ma_pnl_config": _rsub.default_ma_pnl_config()' not in _homes_src
+      and _calls_named(_homes_fn, {"load_config", "load_ma_pnl_config"})
+      == {"load_config", "load_ma_pnl_config"})
+check("T2 …and it is ORG-SCOPED: the loaders get this org's id, from the one call site",
+      [a.arg for a in _homes_fn.args.args] == ["client", "org_id"]
+      and "load_config(client, org_id)" in _homes_src
+      and "load_ma_pnl_config(client, org_id)" in _homes_src
+      and _rtext.count("= _prospect_homes(client, org_id)") == 1)
+check("T3 the house answers ARE still read — from the modules that own them, for the comparison "
+      "only, and they are passed to rule_basis rather than booked with",
+      "_msp.default_config()" in _homes_src and "_rsub.default_ma_pnl_config()" in _homes_src
+      and 'homes["house_ma_cfg"], homes["house_ma_pnl_config"]' in _rtext)
+
+_BB_COLS = tuple(MSP.PL_CONFIG_COLUMNS) + tuple(RS.MA_PNL_CONFIG_COLUMNS)
+_BB_MIG = dict(MSP.PL_CONFIG_MIGRATION, **RS.MA_PNL_CONFIG_MIGRATION)
+_bb_house = P.rule_basis(MSP.default_config(), RS.default_ma_pnl_config(),
+                            MSP.default_config(), RS.default_ma_pnl_config(),
+                            config_columns=_BB_COLS, migration_of=_BB_MIG)
+check("T4 every column the switch list names is a column the LOADERS name — a renamed one would "
+      "otherwise read as set forever",
+      _bb_house["unknown_columns"] == [] and len(_bb_house["switches"]) == 8,
+      str(_bb_house["unknown_columns"]))
+check("T5 a config identical to the house answer claims NOTHING — 'declared' is only claimed where "
+      "the value DIFFERS, because a loader reports columns and never whether a row carried a value",
+      _bb_house["declared"] == 0 and _bb_house["house_default"] == 8)
+# The live shape: this tenant declares the spiff source, the MDF token and store attribution.
+_bb_org = P.rule_basis(
+    dict(MSP.default_config(), month_spiff_source="daily_tx", store_attribution=True,
+         mdf_product_tokens=["premium store spiff"], config_columns_missing=[]),
+    dict(RS.default_ma_pnl_config(), config_columns_missing=[]),
+    MSP.default_config(), RS.default_ma_pnl_config(),
+    config_columns=_BB_COLS, migration_of=_BB_MIG)
+check("T6 the live shape reads as three decisions, each naming what it moves",
+      _bb_org["declared"] == 3
+      and {sw["key"] for sw in _bb_org["switches"] if sw["basis"] == "declared"}
+      == {"month_spiff_source", "store_attribution", "mdf_product_tokens"}
+      and all(sw["answers"] for sw in _bb_org["switches"]))
+_bb_absent = P.rule_basis(
+    dict(MSP.default_config(), config_columns_missing=["pl_mdf_product_tokens"]),
+    RS.default_ma_pnl_config(), MSP.default_config(), RS.default_ma_pnl_config(),
+    config_columns=_BB_COLS, migration_of=_BB_MIG)
+_absent = [sw for sw in _bb_absent["switches"] if sw["basis"] == "column_absent"]
+check("T7 a column the table does not have yet says so, with the migration that would add it — "
+      "never 'house default', which would read as a choice",
+      len(_absent) == 1 and _absent[0]["key"] == "mdf_product_tokens"
+      and _absent[0]["migration"] == "314_pl_ma_store_attribution.sql"
+      and _bb_absent["migrations_missing"] == ["314_pl_ma_store_attribution.sql"])
+check("T8 ARMED — the spiff source really does decide whether the daily-transaction feed books a "
+      "spiff at all, so the two configs cannot produce one answer",
+      len(MSP.ma_tx_bookings([_TXSPIFF], RS.default_ma_pnl_config(),
+                             dict(MSP.default_config(), month_spiff_source="daily_tx",
+                                  spiff_order_types=["PostPaid Additional Spiff"]))) == 2
+      and len(MSP.ma_tx_bookings([_TXSPIFF], RS.default_ma_pnl_config(),
+                                 MSP.default_config())) == 1)
+check("T9 …and store attribution is what lets a store column carry that money at all",
+      MSP.ma_tx_bookings([_TXSPIFF], RS.default_ma_pnl_config(),
+                         dict(MSP.default_config(), store_attribution=True,
+                              month_spiff_source="daily_tx",
+                              spiff_order_types=["PostPaid Additional Spiff"]))[0][1] == "169335"
+      and MSP.ma_tx_bookings([_TXSPIFF], RS.default_ma_pnl_config(),
+                             MSP.default_config())[0][1] is None)
+check("T10 the statement says out loud that revenue is every carrier dollar these feeds carry, so "
+      "the reader is not left to assume what 'carrier-side' leaves out",
+      all(w in P.coverage_summary([])["bottom_line_note"]
+          for w in ("month spiffs", "residual", "market-development", "own declared rules")))
+check("T11 the store table shows GROSS PROFIT — the figure the accessory target comes off — read "
+      "from that store's own statement, never subtracted on the screen",
+      "{ header: 'Gross profit', get: (r: StoreRow) => r.grossProfit, money: true }" in _PAGE
+      and "grossProfit: t?.gross_profit ?? 0," in _PAGE
+      and "grossProfit: t?.revenue" not in _PAGE)
+check("T12 …and the screen shows the switches, so a figure resting on a fallback cannot read as a "
+      "decision",
+      "data?.rule_basis &&" in _PAGE and "sw.basis === 'declared'" in _PAGE
+      and "column_absent" in _PAGE)
+# A SWITCH THAT CANNOT BE SET IS A SETUP FACT, AND SETUP INTERNALS ARE NOT TENANT COPY (owner 2026-09-29,
+# §19.36). The first cut of this panel printed "needs migration <file>" on the screen every tenant opens,
+# which is the exact sentence that rule exists to stop. The consequence stays in plain words; the file name
+# goes through the ONE gated carrier, so the platform team still sees it and nobody else does.
+check("T13 the panel names no migration in tenant copy, and the file name rides the one gated carrier",
+      "migration" not in _PAGE.split("data?.rule_basis &&")[1].split("THE SUB-REPORT")[0].lower()
+         .replace("sw.migration", "").replace("detail={sw.", "")
+      and "<PlatformDetail detail={sw.migration}" in _PAGE
+      and "PlatformDetail } from '@/lib/setupNotice'" in _PAGE)
+check("T14 …and the backend's own explanation of the same fact names none either",
+      "migration" not in P.rule_basis(MSP.default_config())["reading"].lower())
+
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
 if FAIL:

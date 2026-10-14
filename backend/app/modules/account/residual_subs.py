@@ -216,6 +216,17 @@ def default_ma_pnl_config():
             "residual_order_types": list(_MA_RESIDUAL_ORDER_TYPES_DEFAULT)}
 
 
+# THE COLUMNS THIS READER TAKES FROM THE ORG'S ROW, each with the migration that adds it — the
+# mig-309 half of the same list `ma_store_pnl.PL_CONFIG_COLUMNS` owns for mig 314. Named so a caller
+# that must say "is this switch a decision or a fallback" can read the list instead of spelling the
+# column names a second time (§COMMCALC-03.22).
+MA_PNL_CONFIG_COLUMNS = (
+    ("pl_merchant_discount_own_line", "309_ma_tx_pnl_lines.sql"),
+    ("pl_ma_residual_order_types", "309_ma_tx_pnl_lines.sql"),
+)
+MA_PNL_CONFIG_MIGRATION = dict(MA_PNL_CONFIG_COLUMNS)
+
+
 def load_ma_pnl_config(client, org_id):
     """Per-org MA TX P&L config (commcalc.commission_org_config, mig 309), org-scoped, ADAPTIVE:
     a missing table/column (pre-309) or missing row degrades to `default_ma_pnl_config()`.
@@ -228,7 +239,7 @@ def load_ma_pnl_config(client, org_id):
         from app.core import column_tolerant as _ct
         rd = _ct.read_row(lambda: client.schema("commcalc").table("commission_org_config"),
                           lambda q: q.eq("org_id", org_id),
-                          expected=("pl_merchant_discount_own_line", "pl_ma_residual_order_types"))
+                          expected=[c for c, _m in MA_PNL_CONFIG_COLUMNS])
         cfg["config_columns_missing"] = list(rd.missing)
         if rd.row:
             own = rd.row.get("pl_merchant_discount_own_line")

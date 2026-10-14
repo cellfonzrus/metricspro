@@ -1030,6 +1030,130 @@ def coverage(spec, pl_section, booked_lines, expense_lines, feeds_present):
     return out
 
 
+# ── WHOSE RULES BOOKED THIS — the switches that move money, and who declared them ────────────────
+# OWNER REPORT 2026-10-14, verbatim: *"gross profit shoudl includea ll incoming income like reisduakl
+# merchant discoutn ayto pay , all spiff etc, recheck and fix"*.
+#
+# He was right, and the cause was not a missing booking rule. The evaluation books through the
+# company's own `ma_store_pnl` functions — and was handing them the HOUSE DEFAULT config instead of
+# the org's own declared one. Those functions are config-driven by design, so the defaults quietly
+# answered four questions differently from the way this tenant has answered them:
+#
+#   · `month_spiff_source`     house 'commission_sheet' vs the org's 'daily_tx' — so EVERY month-spiff
+#                              cash row in the daily-transaction feed booked NOTHING
+#   · `mdf_product_tokens`     house [] vs the org's own token — so MDF money booked nothing
+#   · `store_attribution`      house False vs the org's True — so all airtime margin, residual and
+#                              spiff money booked company-wide and NO store column could carry it,
+#                              which is why a store column read as carrier commission alone
+#   · `residual_order_types`   the mig-309 half of the same story
+#
+# MEASURED on the live prospect's own 65,491 daily-transaction rows (2026-10-14): the feed books
+# **$435,121.34** of income over eight months under the org's declared rules and **$112,740.46**
+# under the house defaults. Not a uniform increase — the spiff source also decides WHICH MONTH a
+# spiff lands in (the cash row's month, not the activation's), so April falls ~$35k while August
+# rises ~$74k. Both are coherent; only one is this tenant's declaration.
+#
+# THE CLASS: **an evaluation that books through the company's own code must book under the company's
+# own declared config. Injecting a default is a second, invisible declaration** — and one nobody can
+# see, because the figures it produces look exactly like figures.
+#
+# So the loaders are dereferenced (`ma_store_pnl.load_config`, `residual_subs.load_ma_pnl_config`),
+# and this function says ON THE SCREEN which switch each answer came from. A switch whose column is
+# absent from the org's row reads `house_default` with the migration that would add it — the §66
+# lesson: a value without its basis invites the reader to treat a fallback as a decision.
+def rule_basis(ma_cfg, ma_pnl_cfg=None, house_ma=None, house_pnl=None,
+                  config_columns=None, migration_of=None):
+    """PURE: the resolved booking switches that change what this statement says, each with its basis.
+
+    `ma_cfg` / `ma_pnl_cfg` are the RESOLVED configs (`ma_store_pnl.load_config` /
+    `residual_subs.load_ma_pnl_config` output); `house_ma` / `house_pnl` are those modules' OWN
+    defaults, injected so the comparison is against the real house answer and not a copy of it.
+    `config_columns` is the (column, migration) pair list the loaders own, and `migration_of` maps a
+    column to the migration that adds it.
+
+    THREE BASES, and the distinction is deliberate — a loader reports which COLUMNS the table has,
+    never whether this org's row carried a value, so "declared" can only be claimed where the
+    resolved value DIFFERS from the house answer:
+      · `declared`      — differs from the house answer, so somebody set it
+      · `house_default` — equals the house answer: declared as such, or never declared at all, and
+                          these two are genuinely indistinguishable from here
+      · `column_absent` — the table has no such column yet, so the house answer is the only possible
+                          one until the named migration runs
+
+    Returns `{switches, declared, house_default, column_absent, unknown_columns, columns_missing,
+    migrations_missing, reading}`.
+    """
+    cfg, pnl = dict(ma_cfg or {}), dict(ma_pnl_cfg or {})
+    hma, hpnl = dict(house_ma or {}), dict(house_pnl or {})
+    missing = set(cfg.get("config_columns_missing") or []) | set(pnl.get("config_columns_missing") or [])
+    mig = dict(migration_of or {})
+
+    def _list(v):
+        return list(v or ())
+
+    # WHICH SWITCH ANSWERS WHICH QUESTION — the money consequence in the tenant's own words, because
+    # a switch name tells a reader nothing about what it moves. `src` says which resolved config it
+    # comes from, so the house comparison reads the matching default.
+    spec = (
+        ("month_spiff_source", "pl_ma_month_spiff_source", "ma", None,
+         "which feed pays the month spiffs — the commission sheet's spiff columns, or the "
+         "daily-transaction cash rows (which also decides WHICH MONTH a spiff lands in)"),
+        ("spiff_order_types", "pl_ma_spiff_order_types", "ma", _list,
+         "which daily-transaction order families ARE month spiffs"),
+        ("mdf_product_tokens", "pl_mdf_product_tokens", "ma", _list,
+         "which product names are market-development money rather than a cost"),
+        ("store_attribution", "pl_ma_store_attribution", "ma", bool,
+         "whether this money is attributed to the store that earned it, or booked company-wide — "
+         "with it off, no store column can carry airtime margin, residual or spiff money"),
+        ("rebate_presentation", "pl_rebate_presentation", "ma", None,
+         "where a device purchase rebate presents — inside cost of goods, or as income"),
+        ("device_margin_presentation", "pl_device_margin_presentation", "ma", None,
+         "whether device margin gets its own block"),
+        ("residual_order_types", "pl_ma_residual_order_types", "pnl", _list,
+         "which order families ARE the airtime residual"),
+        ("merchant_discount_own_line", "pl_merchant_discount_own_line", "pnl", bool,
+         "whether airtime merchant discount gets its own P&L line"),
+    )
+    switches = []
+    for key, column, src, cast, answers in spec:
+        got = (cfg if src == "ma" else pnl).get(key)
+        house = (hma if src == "ma" else hpnl).get(key)
+        if cast is not None:
+            got, house = cast(got), cast(house)
+        if column in missing:
+            basis = "column_absent"
+        elif got != house:
+            basis = "declared"
+        else:
+            basis = "house_default"
+        switches.append({"key": key, "column": column, "value": got, "house_value": house,
+                         "basis": basis, "migration": (mig.get(column) if column in missing else None),
+                         "answers": answers})
+    cols = [c for c, _m in (config_columns or ())]
+    # A COLUMN THIS FUNCTION NAMES THAT THE LOADERS DO NOT IS A DRIFT, NOT A DETAIL: a renamed column
+    # would never appear in `columns_missing`, so its switch could never read `column_absent` again.
+    # Reported, and §T of the harness fails the build on a non-empty list against the real lists.
+    unknown = sorted({sw["column"] for sw in switches} - set(cols)) if cols else []
+    by = {}
+    for sw in switches:
+        by[sw["basis"]] = by.get(sw["basis"], 0) + 1
+    return {
+        "switches": switches,
+        "unknown_columns": unknown,
+        "declared": by.get("declared", 0),
+        "house_default": by.get("house_default", 0),
+        "column_absent": by.get("column_absent", 0),
+        "columns": cols,
+        "columns_missing": sorted(missing),
+        "migrations_missing": sorted({m for m in (mig.get(c) for c in missing) if m}),
+        "reading": ("These are the company's OWN booking switches, read from this organisation's "
+                    "configuration row — not this report's defaults. A switch reading "
+                    "'house_default' holds the house answer, which this organisation may have "
+                    "chosen or may simply never have set; one reading 'column_absent' cannot be "
+                    "set at all until this feature's setup is finished on this system."),
+    }
+
+
 def coverage_summary(cov):
     """PURE: the one-line honesty statement that goes at the top of the report."""
     by = {}
@@ -1042,11 +1166,14 @@ def coverage_summary(cov):
         "uploaded_feed_missing": by.get("uploaded_feed_missing", 0),
         "bottom_line_is": "carrier-side contribution",
         "bottom_line_note": (
-            "Revenue here is what the carrier and the distributor pay, plus the airtime margin. It "
-            "does NOT include retail device or accessory sales, bill-pay fees or any other counter "
-            "income, because a store we do not operate gives us no point-of-sale feed. Read the "
-            "result as the contribution the carrier side makes against a typical store's costs, not "
-            "as the prospect's net income."),
+            "Revenue here is EVERY dollar the carrier and the distributor pay that these three "
+            "feeds carry: activation commission and month spiffs, the airtime merchant discount "
+            "and the airtime residual, market-development money, fees and consumer financing — "
+            "each booked by the company's own P&L code under this organisation's own declared "
+            "rules (see the booking switches). It does NOT include retail device or accessory "
+            "sales, bill-pay fees or any other counter income, because a store we do not operate "
+            "gives us no point-of-sale feed. So read the result as the carrier side's contribution "
+            "against a typical store's costs, not as the prospect's net income."),
     }
 
 

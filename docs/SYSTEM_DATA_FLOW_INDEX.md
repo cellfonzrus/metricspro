@@ -26674,6 +26674,93 @@ feed produces an empty breakup rather than a zero claim.
 with its "share of lines" column declaring `agg: 'none'` (§COMMCALC-03.20 — a share does not add).
 
 
+### COMMCALC-03.22 Booked under the ORG'S OWN declared rules, not the house defaults (owner report 2026-10-14)
+
+Owner, verbatim: *"gross profit shoudl includea ll incoming income like reisduakl merchant discoutn
+ayto pay , all spiff etc, recheck and fix"* and *"the Store by store — 8 stores named by the uploaded
+sheets should have gross profit instead of carrier evenue to claculate accessories to be sold"*.
+
+He was right, and the cause was not a missing booking rule. §COMMCALC-03 books through the company's
+own `ma_store_pnl` functions — and `router._prospect_homes` handed them **`default_config()` /
+`default_ma_pnl_config()`**, the HOUSE answers, while the live P&L for the same organisation reads
+that organisation's own row. Those functions are config-driven by design, so four declarations were
+silently overridden:
+
+| switch | the org declares | the house default | what the default cost |
+|---|---|---|---|
+| `pl_ma_month_spiff_source` | `daily_tx` | `commission_sheet` | every month-spiff cash row in the daily-transaction feed booked **nothing** |
+| `pl_mdf_product_tokens` | one token | `[]` | market-development money booked **nothing** |
+| `pl_ma_store_attribution` | `true` | `false` | all airtime margin, residual, MDF and spiff money booked company-wide, so **no store column could carry one dollar of it** |
+| `pl_ma_residual_order_types` | one family | the mig-309 default | (identical in effect here, and that is why it must still be read rather than assumed) |
+
+**THE CLASS:** *an evaluation that books through the company's own code must book under the company's
+own declared config. Injecting a default is a second, invisible declaration* — invisible because the
+figures it produces look exactly like figures.
+
+### COMMCALC-03.22a MEASURED on the live prospect, both ways
+
+65,491 daily-transaction rows + 5,495 commission rows + the 66,388-row handset price list, 2026-10-14,
+read-only. The daily-transaction feed alone books **$435,121.34** of income over eight months under the
+org's declared rules against **$112,740.46** under the house defaults — $322,380.88 of month spiffs and
+MDF that the report was not showing.
+
+Whole-prospect revenue and gross profit, house default → the org's own rules:
+
+| month | revenue | gross profit |
+|---|---|---|
+| June 2026 | 89,632.45 → **98,357.97** | 64,776.79 → **73,502.31** |
+| July 2026 | 81,965.97 → **97,580.15** | 55,924.11 → **71,538.29** |
+| August 2026 | 46,730.96 → **103,543.54** | 56,917.31 → **113,729.89** |
+| September 2026 | 32,844.47 → **78,094.72** | 22,131.13 → **67,381.38** |
+
+**NOT A UNIFORM INCREASE, and the reason is stated rather than smoothed:** the spiff source also decides
+WHICH MONTH a spiff lands in — the commission sheet stamps it on the activation month, the cash rows on
+the month it was paid. April 2026 therefore **falls** about $35k while August rises about $57k. Both are
+coherent; only one is this tenant's declaration.
+
+Every one of the seven store columns gains airtime money it could not previously hold — e.g. 64 Graham
+Ave in August: revenue $8,311.48 → $18,034.26, gross profit $30,327.06 → $40,049.84.
+
+**A month whose gross profit EXCEEDS its revenue is not an error** and the screen now says so: with
+`rebate_presentation = contra_cogs` (the house ruling, unchanged) a device purchase rebate books negative
+inside cost of goods, so in a month whose rebates exceed its handset purchases cost of goods is negative.
+August is such a month (gross profit $113,729.89 on revenue $103,543.54).
+
+### COMMCALC-03.22b WHOSE RULES BOOKED THIS, ON THE SCREEN
+
+`prospect_eval.rule_basis` is the one home for the question, and it reports **three bases, not two**,
+because a loader reports which COLUMNS the table has and never whether this org's row carried a value:
+
+- `declared` — the resolved value DIFFERS from the house answer, so somebody set it;
+- `house_default` — it equals the house answer, which this org may have chosen or may never have set,
+  and those two are genuinely indistinguishable from here (said in those words, not glossed);
+- `column_absent` — the table has no such column yet, so the house answer is the only possible one until
+  the named migration runs.
+
+Each switch carries what it MOVES in the tenant's own words, because a switch name tells a reader
+nothing. `residual_subs.MA_PNL_CONFIG_COLUMNS` was named in this PR so the mig-309 half of the column
+list has a home too, and `rule_basis` reports `unknown_columns` — a column it names that the loaders do
+not — so a renamed column can never read as "set" forever.
+
+### COMMCALC-03.22c GROSS PROFIT ON THE STORE TABLE
+
+The store-by-store table gains a **Gross profit** column, read from that store's own statement
+(`totals.gross_profit`) — the same figure the P&L matrix row shows, never a subtraction done in the
+browser. The accessory requirement has always come off `net_income`, which IS gross profit less our
+average expenses (§COMMCALC-03.8), so nothing about the target's arithmetic changes; the column is what
+makes the basis visible, which is what the owner asked for.
+
+**PROOF** `harness_prospect_eval.py` — **268 passed / 0 failed** (§T1–T12). §T1 fails against the
+pre-fix wiring by construction (it requires the loaded config on the booking keys and forbids a default
+there), §T8/§T9 are armed on a live-shaped spiff row — the same row books one leg or two depending on the
+spiff source, and lands on account `169335` or company-wide depending on store attribution — §T5 proves
+nothing is claimed as declared when it equals the house answer, §T7 that an absent column names its
+migration instead of reading as a choice, §T11 that the screen reads gross profit off the statement.
+
+Same class: §66 (a value read without its basis), §19.18 (a registry written and its callers left
+unwired), §58 (one home for what a carrier dollar IS).
+
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back
