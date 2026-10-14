@@ -236,7 +236,26 @@ interface Evaluation {
   fraud?: FraudExposure
   break_even?: Record<string, BreakEven>
   rule_basis?: RuleBasis
+  our_stores?: OurStores
   error?: string
+}
+// ── COMPARE IT WITH A STORE WE ALREADY OWN (owner ask 2026-10-14) ───────────────────────────────
+// One of OUR stores, as its own stored monthly P&L reports it. `revenue_on_lines` is the comparable
+// figure: what that store earned on the SAME P&L revenue lines this takeover pack booked. The whole
+// `revenue` is larger on purpose — a store we own also sells accessories and takes bill payments,
+// and a takeover pack carries no feed for either.
+interface OurStore {
+  key: string; label: string; address: string
+  revenue: number; revenue_on_lines: number | null
+  cogs: number; gross_profit: number; expenses: number; net_income: number
+}
+interface OurStores {
+  stores: OurStore[]
+  lines: string[]
+  line_labels: string[]
+  computed_at: string | null
+  reading: string
+  comparable: boolean
 }
 interface ProspectStore {
   account: string | null; address: string | null; name: string | null
@@ -387,6 +406,77 @@ const FLAG_COLS: ExportColumn[] = [
 // ── THE NEW TABLES (owner ask 2026-10-13) ────────────────────────────────────────────────────────
 // Every one goes through ReportShell, which is the platform's ONE sorted/exportable table (owner
 // directive 2026-08-10, locked by harness_table_sort_lock) — never a hand-rolled <table>.
+// ── THE COMPARISON COLUMN (owner ask 2026-10-14) ───────────────────────────────────────────────
+// Owner: *"Add one more column to it with to pick our existing store to compare the sales of the
+// existing PNL with the new ones we might take over"*.
+//
+// The pick is PER ROW, because that is the question a takeover asks: this site looks like that site
+// of ours. Picking is the only interactive thing in the table and it is display-only — `get` returns
+// the store's name so an export carries the comparison that was on screen, and every figure beside
+// it is read from that store's own stored P&L rather than computed here.
+//
+// WHY THE FIRST MONEY COLUMN IS "on the same lines" AND NOT our store's revenue: a takeover pack
+// carries the target's carrier feeds and nothing else, so our store's whole revenue is not the
+// comparable number — the server narrows ours to the very P&L lines the target's statement booked
+// (see `prospect_eval.comparable_revenue_lines`). The whole revenue sits beside it so the counter
+// business a pack cannot show stays visible instead of reading as the target earning less.
+//
+// EVERY ONE OF THESE DECLARES `agg: 'none'`. They are figures about OUR stores, and the same store
+// can be picked on two rows — a total row would then count it twice and show a figure our business
+// never earned. (`report-totals` sums a money column unless the column says otherwise.)
+function comparisonCols(ours: OurStores,
+                        pick: Record<string, string>,
+                        onPick: (rowKey: string, storeKey: string) => void): ExportColumn[] {
+  const byKey = new Map(ours.stores.map(o => [o.key, o]))
+  const ourOf = (r: StoreRow) => byKey.get(pick[r.key] || '') || null
+  const sameLines = ours.line_labels.length
+    ? `the same P&L lines this pack booked (${ours.line_labels.join(', ')})`
+    : 'the same P&L lines this pack booked'
+  return [
+    {
+      header: 'Compare with our store',
+      field: 'compare_with',
+      get: (r: StoreRow) => ourOf(r)?.label || '',
+      render: (r: StoreRow) => (
+        <select value={pick[r.key] || ''} onChange={e => onPick(r.key, e.target.value)}
+                aria-label={`Compare ${r.label} with one of our stores`}
+                style={{ fontSize: 11, padding: '2px 4px', maxWidth: 190 }}>
+          <option value="">Pick one of our stores…</option>
+          {ours.stores.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+        </select>
+      ),
+      tip: 'Pick one of the stores we already own and its own monthly P&L appears in the columns to '
+         + 'the right, beside this one. Nothing is recomputed: those are the figures the Finance hub '
+         + 'computed for that store'
+         + (ours.computed_at ? `, last on ${ours.computed_at}.` : '.'),
+    },
+    { header: 'Our revenue on the same lines', get: (r: StoreRow) => ourOf(r)?.revenue_on_lines ?? null,
+      money: true, agg: 'none',
+      tip: `THE COMPARABLE FIGURE: what our store earned on ${sameLines}. This is the number to put `
+         + 'beside the carrier revenue on the left, because those are the only lines a takeover pack '
+         + 'carries any feed for.' },
+    { header: 'Revenue gap on those lines',
+      get: (r: StoreRow) => (ourOf(r)?.revenue_on_lines == null ? null
+                             : Math.round((r.revenue - (ourOf(r)!.revenue_on_lines as number)) * 100) / 100),
+      money: true, agg: 'none',
+      tip: 'This store less our store, on those same lines. Positive means the store we are looking '
+         + 'at took more carrier money than ours did in this month; negative means less. Both sides '
+         + 'are shown in this row, so the subtraction can be checked by eye.' },
+    { header: 'Our whole revenue', get: (r: StoreRow) => ourOf(r)?.revenue ?? null,
+      money: true, agg: 'none',
+      tip: 'Everything our store took that month, including accessories and bill payments. It is '
+         + 'deliberately the larger number: a takeover pack has no feed for counter business, so '
+         + 'read the difference as what this pack cannot show, never as the target earning less.' },
+    { header: 'Our gross profit', get: (r: StoreRow) => ourOf(r)?.gross_profit ?? null,
+      money: true, agg: 'none',
+      tip: 'Our store\u2019s gross profit for the month, straight off its P&L.' },
+    { header: 'Our net income', get: (r: StoreRow) => ourOf(r)?.net_income ?? null,
+      money: true, agg: 'none',
+      tip: 'Our store\u2019s bottom line for the month, after its OWN real expenses. The column on '
+         + 'the left is the target after one of our stores\u2019 AVERAGE expenses, so this is the '
+         + 'closest thing to a like-for-like answer to \u201ccould that site stand on its own\u201d.' },
+  ]
+}
 const STORE_COLS: ExportColumn[] = [
   { header: 'Store', get: (r: StoreRow) => r.label },
   { header: 'Account', get: (r: StoreRow) => r.account || '—' },
@@ -435,6 +525,9 @@ interface MatrixRow {
   all: number | null
 }
 interface StoreRow {
+  // THE BLOCK KEY, carried so the comparison column can remember which of OUR stores this row was
+  // compared with. A label is not an identity: two sites can read the same on screen.
+  key: string
   label: string; account: string | null; revenue: number; cogs: number; grossProfit: number
   contribution: number
   activations: number; needed: number | null; perBox: number | null
@@ -775,6 +868,7 @@ export default function StoreTakeoverPage() {
       const t = b.statements?.[shownMode]?.totals
       const be = b.break_even?.[shownMode]
       return {
+        key: k,
         label: b.store?.label || k,
         account: b.store?.account || null,
         revenue: t?.revenue ?? 0,
@@ -787,6 +881,24 @@ export default function StoreTakeoverPage() {
       }
     }).sort((a, b) => (b.contribution || 0) - (a.contribution || 0))
   }, [data?.store_scenarios, shownMode, storeFilter])
+
+  // ── WHICH OF OUR STORES EACH ROW IS COMPARED WITH (owner ask 2026-10-14) ──────────────────────
+  // Keyed by the prospect store's block key, so a pick survives sorting, filtering and a month
+  // change. Deliberately NOT defaulted to our first store: a comparison nobody asked for would read
+  // as a judgement the report never made.
+  const ours: OurStores | null = data?.our_stores || null
+  const [peerPick, setPeerPick] = useState<Record<string, string>>({})
+  const pickPeer = useCallback((rowKey: string, storeKey: string) => {
+    setPeerPick(prev => ({ ...prev, [rowKey]: storeKey }))
+  }, [])
+  // The column list is rebuilt when a pick changes because the cells close over the picks. It stays
+  // a useMemo all the same: a NEW array on every render re-mounts the table and the open dropdown
+  // would close under the pointer.
+  const storeColumns = useMemo<ExportColumn[]>(
+    () => (ours && ours.comparable
+           ? [...STORE_COLS, ...comparisonCols(ours, peerPick, pickPeer)]
+           : STORE_COLS),
+    [ours, peerPick, pickPeer])
 
   // The columns ARE the stores, in the order the store index names them, with the whole prospect
   // last. Built with useMemo because a column list that is rebuilt every render re-mounts the table.
@@ -1440,12 +1552,14 @@ export default function StoreTakeoverPage() {
             what makes the figure an answer to &ldquo;could this site stand on its own&rdquo;.
           </div>
           <ReportShell title="" filename={`takeover-stores-${data?.period || ''}`}
-                       columns={STORE_COLS} rows={storeRows} compact stickyHeader totals
+                       columns={storeColumns} rows={storeRows} compact stickyHeader totals
                        notice={<><b>Gross profit is the figure the accessory target comes off</b>
                          &mdash; carrier revenue less device cost, read from each store&rsquo;s own
                          statement rather than subtracted here. Carrier revenue is every incoming
                          carrier dollar these uploads carry, booked under your organisation&rsquo;s own
-                         declared rules.</>} />
+                         declared rules.
+                         {ours && <><br /><b>Compare any row with a store you already own</b> using
+                           the picker on the right. {ours.reading}</>}</>} />
         </div>}
 
       {/* ── THE HANDSETS ORDERED ─────────────────────────────────────────────────────────────── */}

@@ -26998,23 +26998,20 @@ def _spiff_impact_inputs(client, org_id: str, period: str):
         s = str(raw or "").strip()
         return (resolve_code(s) if s else "") or s
 
-    # THE STORED PER-STORE P&L — `statement_filter.store_snapshots` (§19.50's deduped read, shared
-    # with the filtered statement) and `analysis.pl_totals` (§4's one home for the four totals). A
-    # store with no snapshot is ABSENT from this map, which the pure module reports as not computed.
-    pl_by_store, pl_computed = {}, []
+    # THE STORED PER-STORE P&L — `statement_filter.store_pl_totals`, the ONE home for "what did this
+    # store of ours earn" (§19.50's deduped read + §4's `analysis.pl_totals`, with the store key
+    # INJECTED so this report keys by store_code and the takeover comparison can key by address).
+    # This loop used to live here inline; §COMMCALC-03.24 needed the same question answered a third
+    # time, so it moved next to the read it is made of rather than being copied. A store with no
+    # snapshot is ABSENT from the map, which the pure module reports as not computed.
+    pl_by_store, pl_computed_at = {}, None
     try:
-        from app.modules.account import statement_filter as _sf, analysis as _an
-        for r in _sf.store_snapshots(client, org_id, period, "pl"):
-            addr = str(r.get("scope_key") or "")[len("store:"):]
-            key = store_of(addr)
-            if not key:
-                continue
-            pl_by_store[key] = _an.pl_totals(r.get("payload") or {})
-            if r.get("computed_at"):
-                pl_computed.append(str(r["computed_at"]))
+        from app.modules.account import statement_filter as _sf
+        _pl = _sf.store_pl_totals(client, org_id, period, key_of=store_of)
+        pl_by_store = {k: v["totals"] for k, v in _pl["by_store"].items()}
+        pl_computed_at = _pl["computed_at_label"]
     except Exception as e:
         print(f"WARN spiff_impact per-store P&L unavailable: {e}")
-    pl_computed_at = (min(pl_computed)[:19].replace("T", " ") + " UTC") if pl_computed else None
     return (comp_rows, classify, component_line, _month_token, store_of, pl_by_store,
             pl_computed_at, component_line("COMMISSION"))
 
@@ -48763,6 +48760,28 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
         homes["ma_cfg"], homes["ma_pnl_config"],
         homes["house_ma_cfg"], homes["house_ma_pnl_config"],
         config_columns=homes["pl_config_columns"], migration_of=homes["pl_config_migration"])
+    # ── COMPARE IT WITH A STORE WE ALREADY OWN (owner ask 2026-10-14, §COMMCALC-03.24) ──────────
+    # "pick our existing store to compare the sales of the existing PNL with the new ones we might
+    # take over". Our side is the STORED monthly P&L per store, read through the ONE home
+    # (`statement_filter.store_pl_totals` — §19.50's deduped read plus `analysis.pl_totals`, the same
+    # read §60's spiff impact uses), keyed by canonical address because that is what a store scope is
+    # keyed by. Nothing recomputes our stores here: the figures a screen shows for our own business
+    # are the ones the Finance hub computed, or the list says the month was never computed.
+    #
+    # WHICH LINES the two sides are compared on comes from the TARGET's own statement
+    # (`_pev.comparable_revenue_lines` over the unexcluded scenario, the most complete one), never
+    # from a rule about which lines are carrier money — see the section comment in `prospect_eval`.
+    _cmp_lines = _pev.comparable_revenue_lines(statements.get(_pev.HOUSE_EXCLUSION_MODE) or {})
+    try:
+        from app.modules.account import statement_filter as _sf_peer
+        _ours = _sf_peer.store_pl_totals(client, org_id, period, revenue_lines=_cmp_lines)
+    except Exception as e:
+        print(f"WARN prospect comparison stores unavailable: {e}")
+        _ours = {"by_store": {}, "computed_at_label": None}
+    _pl_labels = _prospect_pl_labels(homes)
+    ev["our_stores"] = _pev.peer_store_options(
+        _ours.get("by_store") or {}, _cmp_lines, _ours.get("computed_at_label"),
+        [_pl_labels.get(k, k) for k in _cmp_lines])
     ev["prospect"] = prospect
     ev["period_basis"] = period_basis        # why the report opened on this month — stated, never implied
     return ev

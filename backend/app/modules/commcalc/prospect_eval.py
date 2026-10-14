@@ -1765,3 +1765,102 @@ def scenario_delta(statements, pl_totals):
     out["share_of_bottom_line_at_risk"] = (
         round(abs(moved) / abs(base) * 100.0, 2) if base else None)
     return out
+
+
+# ── COMPARE IT WITH A STORE WE ALREADY OWN (owner ask 2026-10-14) ─────────────────────────────────
+# Owner, verbatim: *"Add one more column to it with to pick our existing store to compare the sales
+# of the existing PNL with the new ones we might take over"*.
+#
+# WHAT MAKES THE TWO SIDES COMPARABLE, and it is not a classification. A takeover pack carries the
+# target's CARRIER feeds and nothing else — no accessory sale, no bill payment, no counter revenue of
+# any kind (§COMMCALC-03.7 says that out loud and this is the first surface where it would MISLEAD if
+# it did not). Our own store's P&L carries all of it. So putting our store's whole revenue beside the
+# target's would read as the target earning a fraction of what our store earns, when the real
+# difference is which lines each side's data can speak to at all.
+#
+# The comparable figure is therefore "what OUR store earned on the SAME P&L lines the target's
+# statement booked", and the line list comes from the target's OWN assembled statement rather than
+# from any rule about which lines are carrier money. Three reasons it is derived and not declared:
+#   · the two statements are assembled by ONE builder off ONE chart (`coa.PL_SPEC`), so a line key
+#     means the same thing on both sides by construction;
+#   · a pack that one day carries an accessory feed widens the comparison in the same upload, with
+#     no code change and no config row — the comparison follows the data;
+#   · a declared "these lines are carrier money" list would be a second answer to a question
+#     `carrier_dollar_class` and the chart already answer, and the obvious candidate for it
+#     (`GP_INCOME_COLUMNS`) files an UNRECOGNISED line into a carrier column, so asking it would
+#     call every counter line carrier money — a last-resort placement read as evidence (§66).
+#
+# PURE. The stores and their figures are read by the endpoint through the ONE home
+# (`statement_filter.store_pl_totals`); nothing here touches a database and nothing here re-sums a
+# statement — `pl_totals` is injected exactly as `scenario_delta` and `accessory_break_even` take it.
+
+def comparable_revenue_lines(statement):
+    """PURE: the revenue line keys the TARGET's own statement actually booked, in chart order.
+
+    "Actually booked" means the line carries a non-zero amount. A line the chart declares and this
+    pack never filled is not a line the target can be compared on, and including it would quietly
+    credit our own store's money to a comparison the target's data says nothing about.
+
+    Returns a tuple, possibly empty — a pack that booked no revenue at all compares on nothing, and
+    the caller reports that rather than falling back to the whole chart."""
+    out = []
+    for sec in (statement or {}).get("sections") or []:
+        if sec.get("type") != "revenue":
+            continue
+        for ln in sec.get("lines") or []:
+            if round(safe_float(ln.get("amount")), 2) and ln.get("key"):
+                out.append(str(ln["key"]))
+    return tuple(dict.fromkeys(out))
+
+
+def peer_store_options(by_store, lines=(), computed_at=None, line_labels=None):
+    """PURE: our own stores, as the screen's pick list — one row per store, newest figures first by
+    name, each carrying what that store earned beside what it earned on the comparable lines.
+
+    `by_store`   `statement_filter.store_pl_totals(...)["by_store"]` — {key: {label, address,
+                 totals, revenue_on_lines}}. A store with no stored P&L for the month is already
+                 ABSENT from it, and stays absent here: an un-computed month is never a $0 store.
+    `lines`      the comparable line keys (`comparable_revenue_lines`), for the reading only.
+    `computed_at` the label the read came back with — a stored snapshot does not recompute when the
+                 screen loads, and a comparison that does not say when it was computed invites a
+                 stale figure to be read as a current one.
+
+    Returns `{stores: [...], lines: [...], line_labels: [...], computed_at, reading, comparable}`.
+    `comparable` is False when the target booked no revenue line at all, which is the one case where
+    the pick list cannot answer anything and the screen must say so instead of drawing columns."""
+    rows = []
+    for key, blk in (by_store or {}).items():
+        t = (blk or {}).get("totals") or {}
+        rows.append({
+            "key": str(key),
+            "label": str((blk or {}).get("label") or key),
+            "address": str((blk or {}).get("address") or ""),
+            "revenue": round(safe_float(t.get("revenue")), 2),
+            "revenue_on_lines": (None if (blk or {}).get("revenue_on_lines") is None
+                                 else round(safe_float(blk.get("revenue_on_lines")), 2)),
+            "cogs": round(safe_float(t.get("cogs")), 2),
+            "gross_profit": round(safe_float(t.get("gross_profit")), 2),
+            "expenses": round(safe_float(t.get("expenses")), 2),
+            "net_income": round(safe_float(t.get("net_income")), 2),
+        })
+    rows.sort(key=lambda r: r["label"].lower())
+    labels = [str(l) for l in (line_labels or ())]
+    reading = (
+        "Our own store's figures come from its stored monthly P&L, not from this upload. The "
+        "comparable column is what that store earned on the SAME revenue lines this takeover pack "
+        "booked" + (" (" + ", ".join(labels) + ")" if labels else "") + " — its WHOLE revenue is "
+        "shown beside it and is deliberately the larger number, because a store we own also sells "
+        "accessories and takes bill payments and a takeover pack carries no feed for either. Read a "
+        "gap on the whole-revenue column as the counter business this pack cannot show, never as the "
+        "target earning less.")
+    if not lines:
+        reading = ("This takeover pack booked no revenue line at all for the month on screen, so "
+                   "there is nothing to compare one of our stores against. Upload its carrier feeds, "
+                   "or check the column mapping if one is loaded.")
+    if not rows:
+        reading = ("None of our own stores has a stored P&L for this month, so there is nothing to "
+                   "compare against. Run the month's statements from the Finance hub and this list "
+                   "fills itself — nothing here is a figure about your stores earning nothing.")
+    return {"stores": rows, "lines": list(lines or ()), "line_labels": labels,
+            "computed_at": computed_at, "reading": reading,
+            "comparable": bool(lines) and bool(rows)}

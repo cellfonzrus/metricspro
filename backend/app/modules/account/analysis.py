@@ -115,6 +115,22 @@ def pl_totals(payload):
             "net_income": _r2((payload or {}).get("net_income"))}
 
 
+def pl_revenue_lines_total(payload, keys):
+    """PURE: the total of the NAMED revenue lines inside a stored P&L payload.
+
+    The public face of `_line_amount` for the revenue section, because a caller that needs PART of
+    revenue (the carrier part, say) would otherwise either re-walk the sections itself or copy a
+    private helper — and a second walk of a statement payload is a second answer to "what does this
+    statement say". Missing keys sum as 0, exactly as `_line_amount` has always done: a line the
+    chart does not declare contributes nothing rather than raising.
+
+    Caller: `statement_filter.store_pl_totals` (§COMMCALC-03.24 — what one of OUR stores earned on
+    the SAME P&L lines a takeover pack can speak to). The KEY SET is never a literal and never a
+    classification: the takeover statement reports which lines IT booked
+    (`prospect_eval.comparable_revenue_lines`) and this reads those same lines out of ours."""
+    return _line_amount(payload, "revenue", keys)
+
+
 # ── THE P&L's OWN CROSSCHECK (owner report 2026-10-06) ──────────────────────────────────────────
 # OWNER: *"make sure all expenses and every commission and residual is assigned properly and p&l
 # calculated properly then the data for all reports should be aligned"*.

@@ -1394,6 +1394,156 @@ check("U16 the activations table carries a month-ROLED column, which is what giv
       and _PAGE.count("role: 'month'") >= 2
       and "actColumns" in _PAGE)
 
+# ══ §V COMPARE IT WITH A STORE WE ALREADY OWN (owner ask 2026-10-14, §COMMCALC-03.24) ═══════════
+# "Add one more column to it with to pick our existing store to compare the sales of the existing
+# PNL with the new ones we might take over."
+#
+# The two things that can go wrong here are both honesty failures, and both are armed below: our
+# store's WHOLE revenue standing in for a comparable figure (V1/V2 — a takeover pack has no counter
+# feed, so that comparison would read as the target earning a fraction of what our store earns), and
+# a month nobody computed reading as a store that earned nothing (V4/V5).
+from app.modules.account import statement_filter as _SF
+from app.modules.account import analysis as _AN
+_SFTEXT = open("app/modules/account/statement_filter.py").read()
+_ANTEXT = open("app/modules/account/analysis.py").read()
+
+_TARGET_ST = {"sections": [
+    {"type": "revenue", "lines": [{"key": "carrier_comm", "amount": 1200.0},
+                                  {"key": "mdf_income", "amount": 300.0},
+                                  {"key": "accessory_rev", "amount": 0.0},
+                                  {"key": "billpay_collected", "amount": 0.0}]},
+    {"type": "cogs", "lines": [{"key": "device_cost", "amount": 400.0}]},
+]}
+_OUR_ST = {"sections": [
+    {"type": "revenue", "subtotal": 4100.0,
+     "lines": [{"key": "carrier_comm", "amount": 900.0},
+               {"key": "mdf_income", "amount": 100.0},
+               {"key": "accessory_rev", "amount": 2500.0},
+               {"key": "billpay_collected", "amount": 600.0}]},
+    {"type": "cogs", "subtotal": 200.0, "lines": [{"key": "device_cost", "amount": 200.0}]},
+    {"type": "opex", "subtotal": 5000.0, "lines": [{"key": "store_opex", "amount": 5000.0}]},
+], "gross_profit": 3900.0, "net_income": -1100.0}
+
+
+class _StubQ:
+    """Every builder method returns self; `execute()` returns the rows. So the ONE home's read is
+    exercised DB-free — the point of the §G rule that nothing here may touch a database."""
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: self
+
+    def execute(self):
+        return type("R", (), {"data": self._rows})()
+
+
+class _StubClient:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def schema(self, _s):
+        return self
+
+    def table(self, _t):
+        return _StubQ(self._rows)
+
+
+_SNAPS = [
+    {"period": "September 2026", "statement_type": "pl", "scope_key": "store:1 Main St",
+     "scope_label": "1 Main St", "payload": _OUR_ST, "computed_at": "2026-10-14T14:18:06+00:00"},
+    {"period": "September 2026", "statement_type": "pl", "scope_key": "store:",
+     "scope_label": "", "payload": _OUR_ST, "computed_at": "2026-10-14T14:19:06+00:00"},
+]
+# The two new functions' OWN SOURCE — the prose above them explains which classifications were
+# rejected and why, so a scan of the whole file would trip over the explanation.
+_CMPSRC = (_PEVTEXT.split("def comparable_revenue_lines")[1].split("def peer_store_options")[0]
+           + _PEVTEXT.split("def peer_store_options")[1])
+_LINES = P.comparable_revenue_lines(_TARGET_ST)
+_READ = _SF.store_pl_totals(_StubClient(_SNAPS), "org", "September 2026", revenue_lines=_LINES)
+_OPTS = P.peer_store_options(_READ["by_store"], _LINES, _READ["computed_at_label"],
+                             ["Carrier commissions & incentives", "MDF (market spiffs)"])
+
+check("V1 the lines the two sides are compared on come from the TARGET's OWN statement and are the "
+      "ones it actually booked — a line the chart declares and this pack never filled is excluded, "
+      "so our store's counter money can never be credited to a comparison the pack is silent about",
+      _LINES == ("carrier_comm", "mdf_income"))
+check("V2 ARMED — nothing here CLASSIFIES a line as carrier money. The obvious candidate "
+      "(`GP_INCOME_COLUMNS`) files an unrecognised line into a carrier column, so asking it would "
+      "call every counter line carrier money (§66, a last-resort placement read as evidence)",
+      all(t not in _CMPSRC for t in ("GP_INCOME_COLUMNS", "pl_carrier_revenue_lines",
+                                     "carrier_comm", "mdf_income", "component"))
+      and '"revenue"' in _CMPSRC)
+check("V3 the COMPARABLE figure is our store's revenue on those same lines, and it is NOT our "
+      "store's whole revenue — the two differ by the counter business a takeover pack has no feed "
+      "for, and both are returned so the screen can show the difference rather than hide it",
+      _OPTS["stores"][0]["revenue_on_lines"] == 1000.0
+      and _OPTS["stores"][0]["revenue"] == 4100.0
+      and _OPTS["stores"][0]["net_income"] == -1100.0)
+check("V4 a month nobody computed is an EMPTY list with the reason, never a store that earned "
+      "nothing — the absence-is-never-a-finding rule, on the one surface where a $0.00 would read "
+      "as a judgement about our own business",
+      P.peer_store_options({}, _LINES)["stores"] == []
+      and P.peer_store_options({}, _LINES)["comparable"] is False
+      and "nothing to compare against" in " ".join(
+          P.peer_store_options({}, _LINES)["reading"].split()))
+check("V5 …and a pack that booked no revenue line at all says so instead of comparing on the whole "
+      "chart, which would have put our store's counter money against a target that named none",
+      P.peer_store_options(_READ["by_store"], ())["comparable"] is False
+      and "booked no revenue line" in " ".join(
+          P.peer_store_options(_READ["by_store"], ())["reading"].split()))
+check("V6 `revenue_on_lines` is None when no lines were asked for — not 0.00, because \"not asked\" "
+      "is not \"$0 earned\"",
+      _SF.store_pl_totals(_StubClient(_SNAPS), "org", "September 2026"
+                          )["by_store"]["1 Main St"]["revenue_on_lines"] is None
+      and P.peer_store_options(_SF.store_pl_totals(
+          _StubClient(_SNAPS), "org", "September 2026")["by_store"], ()
+          )["stores"][0]["revenue_on_lines"] is None)
+check("V7 the per-store P&L read is ONE home with the store key INJECTED: a scope key that resolves "
+      "to nothing is SKIPPED rather than filed under the empty string, which would collide every "
+      "unresolved store into one row",
+      set(_READ["by_store"]) == {"1 Main St"}
+      and set(_SF.store_pl_totals(_StubClient(_SNAPS), "org", "September 2026",
+                                  key_of=lambda a: a.upper())["by_store"]) == {"1 MAIN ST"})
+check("V8 …and the SECOND COPY OF THAT LOOP IS GONE — §60's spiff impact had it inline and now "
+      "dereferences the same home, so \"what did this store of ours earn\" has one answer",
+      "_sf.store_pl_totals(client, org_id, period, key_of=store_of)" in _rtext
+      and 'pl_by_store[key] = _an.pl_totals(' not in _rtext
+      and _rtext.count("store_pl_totals(") == 2
+      and _SFTEXT.count("def store_pl_totals") == 1)
+check("V9 the part-of-revenue read dereferences the statement walker the P&L totals already use "
+      "rather than re-walking the sections, and it reads the REVENUE section only",
+      "_line_amount(payload, \"revenue\", keys)" in _ANTEXT
+      and _AN.pl_revenue_lines_total(_OUR_ST, ("carrier_comm", "device_cost")) == 900.0)
+check("V10 the stored figures come back with WHEN they were computed — a snapshot does not "
+      "recompute when the screen loads, and a comparison that does not say so invites a stale "
+      "number to be read as a current one",
+      _READ["computed_at_label"] == "2026-10-14 14:18:06 UTC"
+      and _OPTS["computed_at"] == _READ["computed_at_label"])
+check("V11 the reading NAMES the counter business as the reason our store's whole revenue is the "
+      "larger number, so a gap cannot read as the target earning less",
+      "accessories" in _OPTS["reading"] and "bill payments" in _OPTS["reading"]
+      and "never as the target earning less" in " ".join(_OPTS["reading"].split()))
+check("V12 the endpoint compares against the UNEXCLUDED scenario (the most complete statement) and "
+      "reads OUR stores from the same organisation whose average expenses it already imported",
+      "_pev.comparable_revenue_lines(statements.get(_pev.HOUSE_EXCLUSION_MODE)" in _rtext
+      and "_sf_peer.store_pl_totals(client, org_id, period, revenue_lines=_cmp_lines)" in _rtext
+      and 'ev["our_stores"] = _pev.peer_store_options(' in _rtext)
+check("V13 the PICK is per row and display-only: the column's `get` returns our store's name so an "
+      "export carries the comparison that was on screen, and the picker is the `render`",
+      "comparisonCols(ours, peerPick, pickPeer)" in _PAGE
+      and "Compare with our store" in _PAGE
+      and "ourOf(r)?.label" in _PAGE)
+check("V14 every comparison column declares `agg: 'none'` — the same store can be picked on two "
+      "rows, and a summed total row would show a figure our business never earned",
+      _PAGE.split("function comparisonCols")[1].split("const STORE_COLS")[0].count("agg: 'none'")
+      == 5)
+check("V15 nothing is compared until a human picks it: no store is pre-selected, and the columns "
+      "are absent entirely when there is nothing to compare",
+      "pick[r.key] || ''" in _PAGE
+      and "ours && ours.comparable" in _PAGE
+      and "Pick one of our stores" in _PAGE)
+
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
 if FAIL:
