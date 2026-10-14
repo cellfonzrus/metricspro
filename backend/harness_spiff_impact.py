@@ -504,8 +504,15 @@ _router = open(f"{_here}/app/modules/commcalc/router.py").read()
 _ep = _router.split("def _spiff_impact_inputs", 1)[1].split("\n@router.get(\"/sales-diagnostics\")", 1)[0]
 ck("I6 the router reads the classification through §58's one home",
    "_cdc.classify(" in _ep and "_cdc.component_line(" in _ep and "_cdc.load_declarations(" in _ep)
-ck("I7 … the per-store P&L through §19.50's deduped read and §4's totals home",
-   "store_snapshots(" in _ep and "pl_totals(" in _ep)
+# 2026-10-14 (§COMMCALC-03.24): this loop used to be INLINE here — the deduped read, the store-key
+# resolution, `analysis.pl_totals` and the earliest `computed_at`. The takeover comparison needed the
+# same question answered a third time, so it moved to `statement_filter.store_pl_totals`, beside the
+# read it is made of, and this endpoint dereferences it. The check follows the home rather than the
+# old spelling, and fails if the loop ever comes back here.
+ck("I7 … the per-store P&L through the ONE home (§19.50's deduped read + §4's totals, with the "
+   "store key injected), never a copy of that loop here",
+   "store_pl_totals(" in _ep and "key_of=store_of" in _ep
+   and "store_snapshots(" not in _ep and "_an.pl_totals(" not in _ep)
 ck("I8 … the month token through its own home, not a regex here",
    "parse_payment_month" in _ep and "re.compile" not in _ep)
 ck("I9 … the store key through the SAME resolver §59 and Daily Targets use",

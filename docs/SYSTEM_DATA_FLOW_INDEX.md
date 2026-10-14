@@ -26868,6 +26868,102 @@ absent classes; §U7 an unknown value reported by name; §U9 `rows_by_period` de
 for a row's month; §U11 the deleted comparison; §U12 a declared map replaces the house one whole;
 §U14 RULE TWO on the token words; §U16 the month-roled column.
 
+### COMMCALC-03.24 COMPARE IT WITH A STORE WE ALREADY OWN (owner ask 2026-10-14)
+
+Owner, verbatim: *"Add one more column to it with to pick our existing store to compare the sales of
+the existing PNL with the new ones we might take over"*.
+
+The store-by-store table gains a **"Compare with our store"** picker per row, and five columns
+reading that store's own monthly P&L beside the target's. The pick is per ROW because that is the
+question a takeover asks — *this* site looks like *that* site of ours — and nothing is pre-selected: a
+comparison nobody asked for would read as a judgement the report never made.
+
+#### The duplicate check (the build gate)
+
+| what it needed | who already answers it | what was done |
+|---|---|---|
+| "what did this store of OURS earn this month" | `account/statement_filter.store_snapshots` (§19.50's deduped read) + `analysis.pl_totals` (§4) — and §60's spiff-impact prep held that LOOP INLINE | the loop moved to **`statement_filter.store_pl_totals`**, beside the read it is made of, with the store key INJECTED; the spiff endpoint now dereferences it. Two copies deleted to one. |
+| "what part of a statement's revenue is these lines" | `analysis._line_amount`, private | made public as `analysis.pl_revenue_lines_total` — never a second walk of a statement payload |
+| "which month's figures are these, and when were they computed" | the same read's `computed_at` | returned with the figures, and `computed_at_label` is the one wording both callers show |
+| a per-store P&L recompute | `statement_engine.statement(scope="store:…")` | **deliberately NOT used** — it rebuilds every input per call, so one call per picked store would recompute our whole business to fill a column. The STORED snapshot is the figure the Finance hub already published. |
+
+#### WHAT MAKES THE TWO SIDES COMPARABLE — and it is not a classification
+
+A takeover pack carries the target's CARRIER feeds and nothing else: no accessory sale, no bill
+payment, no counter revenue of any kind. §COMMCALC-03.7 has always said that out loud, and this is the
+first surface where saying it is not enough — our own store's P&L carries all of it, so putting its
+whole revenue beside the target's would read as *the target earning a fraction of what our store
+earns* when the real difference is which lines each side's data can speak to.
+
+So the comparable figure is **what our store earned on the SAME P&L revenue lines the target's
+statement booked**, and the line list comes from the target's own assembled statement
+(`prospect_eval.comparable_revenue_lines` — the lines carrying a non-zero amount, in chart order):
+
+- the two statements are assembled by ONE builder off ONE chart (`coa.PL_SPEC`), so a line key means
+  the same thing on both sides by construction;
+- a pack that one day carries an accessory feed widens the comparison in the same upload — no code
+  change, no config row;
+- a declared "these lines are carrier money" list would be a second answer to a question the chart
+  and §58 already answer, and the obvious candidate for it (`ma_store_pnl.GP_INCOME_COLUMNS`) files an
+  UNRECOGNISED revenue line into the carrier `unmapped` column — so asking it "is this carrier money?"
+  answers **yes for every counter line in the chart**. A last-resort placement read as evidence is
+  §66's defect exactly, and `harness_prospect_eval.py` §V2 is ARMED on it.
+
+The whole revenue sits in its own column beside the comparable one, with the reason on the notice bar:
+*read a gap there as the counter business this pack cannot show, never as the target earning less*.
+
+#### MEASURED on live data, September 2026
+
+The prospect `empire` (org `854f6d7b`), 7 store columns, against the 20 of our stores that have a
+stored September P&L (computed 2026-10-14 14:18 UTC):
+
+| | |
+|---|---|
+| lines the pack booked | 7 — carrier commissions & incentives, MI residual, merchant discount, device margin, fee income, consumer financing, MDF |
+| target revenue, all stores | $78,094.72 |
+| our stores, comparable revenue | $4,190.40 – $11,138.86 |
+| our stores, WHOLE revenue | $5,784.47 – $15,020.98 |
+| our stores, net income | mostly NEGATIVE (−$7,696.25 … +$1,091.09) |
+
+The last row is the comparison's whole point and it is honest arithmetic, not a defect: our store's
+bottom line carries its OWN real expenses, while a target store column carries one of our stores'
+AVERAGE monthly expense (§COMMCALC-03.19). The two bottom lines are therefore the closest thing this
+data can give to *"could that site stand on its own"*.
+
+#### The traps the columns are shaped around
+
+- **Every comparison column declares `agg: 'none'`.** They are figures about OUR stores and the same
+  store can be picked on two rows — a summed total row would show a figure our business never earned
+  (`report-totals` sums a money column unless the column says otherwise, §COMMCALC-03.20).
+- **A store with no stored P&L for the month is ABSENT from the pick list**, never a $0.00 row, and the
+  notice says the month was never computed. Absence is never a finding — and this is the one surface
+  where a zero would read as a judgement about our own business.
+- **`revenue_on_lines` is `None`, not 0.00, when no lines were asked for**: "not asked" is not "$0".
+- **A scope key that resolves to nothing is skipped**, never filed under `""`, which would collide
+  every unresolved store into one row.
+- **The picker is display-only.** The column's `get` returns our store's NAME, so an export carries the
+  comparison that was on screen; the `<select>` is the `render`.
+
+#### Where it is
+
+| | |
+|---|---|
+| one home, our side | `account/statement_filter.store_pl_totals` (+ `analysis.pl_revenue_lines_total`) |
+| one home, the comparison | `commcalc/prospect_eval.comparable_revenue_lines` / `peer_store_options` (PURE) |
+| endpoint | `GET /commcalc/prospects/{id}/evaluation` → `our_stores` |
+| screen | `commcalc/store-takeover` → `comparisonCols()` on the store-by-store table |
+| callers of the shared read | this, and §60's spiff impact (its inline copy deleted) |
+
+**Proof.** `backend/harness_prospect_eval.py` — **301 passed / 0 failed**, §V1–V15. §V2 is armed on the
+classification that was rejected; §V3 proves the comparable figure is not the whole revenue; §V4/§V5
+that an uncomputed month and an empty pack REPORT rather than compare; §V8 that the second copy of the
+per-store P&L loop is gone (and `harness_spiff_impact.py` §I7 now locks the home rather than the old
+spelling); §V14 the `agg: 'none'` trap; §V15 that nothing is compared until a human picks it.
+
+Same class: §19.18 (a registry written and its callers left unwired), §66 (a value read without its
+basis), §COMMCALC-03.7 (what this evaluation cannot answer, said out loud).
+
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back

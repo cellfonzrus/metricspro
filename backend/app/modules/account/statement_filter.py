@@ -468,6 +468,50 @@ def store_snapshots(client, org_id, period, st_type):
     return list(idx.values()) if idx else rows
 
 
+def store_pl_totals(client, org_id, period, key_of=None, revenue_lines=()):
+    """THE per-store P&L TOTALS for a period — {store key: the statement's own headline figures}.
+
+    ONE home, because a THIRD report now needs the same thing and the second one had written it
+    inline: §60's spiff-impact prep held this exact loop (read the per-store snapshots, key them
+    through the caller's store resolver, run `analysis.pl_totals`, keep the earliest `computed_at`)
+    and §COMMCALC-03.24's takeover comparison needs it again. Two copies of "what did this store of
+    ours earn" is the duplicate defect the house rules forbid, so the loop moved here, beside the
+    read it is made of, and both callers dereference it.
+
+    `key_of` is INJECTED, never chosen here: a caller that keys stores by `store_code` (the
+    Daily-Targets resolver) and one that keys them by canonical address must be able to ask the same
+    question. Default is the address verbatim. A key that resolves to nothing is SKIPPED rather than
+    filed under "" — a blank key collides every unresolved store into one row.
+
+    `revenue_lines`, when given, adds `revenue_on_lines`: what this store earned on JUST those P&L
+    revenue lines (`analysis.pl_revenue_lines_total`). That is how a report compares a store of ours
+    with a feed that can only speak to part of the chart — the caller names the lines, this never
+    classifies them. Absent ⇒ the key is None, never 0.00, because "not asked" is not "$0".
+
+    A store with NO stored snapshot for the period is ABSENT from `by_store` — never a zero row. The
+    figures do not recompute when a screen loads, so `computed_at` (the EARLIEST of the snapshots
+    read) comes back with them and `computed_at_label` is the one wording every caller shows."""
+    by_store, seen = {}, []
+    for r in store_snapshots(client, org_id, period, "pl"):
+        addr = str(r.get("scope_key") or "")[len("store:"):]
+        key = (key_of(addr) if key_of else addr) or ""
+        if not key:
+            continue
+        payload = r.get("payload") or {}
+        by_store[key] = {
+            "address": addr,
+            "label": str(r.get("scope_label") or addr) or addr,
+            "totals": _analysis.pl_totals(payload),
+            "revenue_on_lines": (_analysis.pl_revenue_lines_total(payload, revenue_lines)
+                                 if revenue_lines else None),
+        }
+        if r.get("computed_at"):
+            seen.append(str(r["computed_at"]))
+    first = min(seen) if seen else None
+    return {"by_store": by_store, "computed_at": first,
+            "computed_at_label": (first[:19].replace("T", " ") + " UTC") if first else None}
+
+
 def filtered_statement(client, org_id, period, st_type, scope, stores_csv, markets_csv):
     """Build the store/market-filtered P&L or Balance Sheet for a period.
 

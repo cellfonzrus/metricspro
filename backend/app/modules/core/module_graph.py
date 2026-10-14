@@ -1118,9 +1118,32 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_engine.py': ('_analysis',),
             'app/modules/account/statement_filter.py': ('_analysis',),
             'app/modules/account/valuation.py': ('analysis',),
-            # §60 — the spiff-impact endpoint reads each store's revenue / net income off the STORED
-            # per-store P&L through `analysis.pl_totals`, this module's one home for those totals.
+            # §COMMCALC-03 — the takeover evaluation's own statements get their totals from here, so
+            # a prospect's four figures and a store's four figures are the same four figures. §60's
+            # spiff impact used to read `pl_totals` here too; it goes through `store_pl_totals` now
+            # (the fact below), which dereferences this one on its behalf.
             'app/modules/commcalc/router.py': ('_an',),
+        },
+    },
+    'store_monthly_pl': {
+        "question": 'What did this store of OURS earn in this month — its revenue, its gross '
+                    'profit, its bottom line, and when was that computed?',
+        "homes": ('app/modules/account/statement_filter.py',),
+        "index": ('19.50', 'COMMCALC-03.24'),
+        "locks": ('harness_prospect_eval.py', 'harness_spiff_impact.py'),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            # TWO readers in one file, and the second is why this home exists: §60's spiff impact
+            # had the loop inline (the deduped read, the store key, `analysis.pl_totals`, the
+            # earliest `computed_at`) and §COMMCALC-03.24's takeover comparison needed the same
+            # question answered a third time. The store KEY is injected — spiff impact keys by
+            # store_code, the comparison by canonical address, one question either way.
+            'app/modules/commcalc/router.py': ('_sf', '_sf_peer', 'resolve_store_matcher',
+                                               'unbound_spellings'),
+            # The module's OTHER export — `filtered_statement`, the store/market-filtered P&L the
+            # Finance hub serves. It reads the same per-store snapshots, which is precisely why the
+            # totals loop belongs in that module and not in whichever report wanted it first.
+            'app/modules/account/router.py': ('statement_filter',),
         },
     },
     'complete_feed_read': {
