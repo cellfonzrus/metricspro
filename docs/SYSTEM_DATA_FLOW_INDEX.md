@@ -27317,7 +27317,8 @@ C2Wireless)` declaration stands in and these are therefore a FLOOR:
 literally stated. Surfaced for the owner rather than rounded away in code: a tolerance is a config
 decision, not something the engine should invent.
 
-Nothing is switched on. Migration 1079 is **surfaced for owner approval, not applied**, no rule declares
+Nothing is switched on. Migration 1079 was **applied to production 2026-10-13** (owner ran it; all eight
+columns present, three CHECK constraints created, **zero** rules declaring a qualifier), no rule declares
 a qualifier, and no stored payout is touched.
 
 ### COMMCALC-06.1 Cross-references
@@ -27325,7 +27326,8 @@ a qualifier, and no stored payout is touched.
 - **§16 (by TABLE):** `commcalc.commission_rule` — eight new columns (mig 1079), read by
   `attach_qualifier.resolve` and round-tripped by `router.save_commission_plan`.
 - **§17 (by FUNCTION):** `attach_qualifier.resolve` / `build_context` / `verdict` / `rule_view` /
-  `describe`; `commission_engine.preview` (the one caller).
+  `describe`; `commission_engine.preview` (the one caller); `plan_options.vocabulary` (the editor's
+  vocabulary, §COMMCALC-06.2); `router.list_commission_plans` (serves the derived sentence).
 - **§18 (by QUESTION):** "Did this sale earn the line its full rate, or the lesser one — and who decides
   what counts toward the condition?" → `attach_qualifier`, dereferencing
   `plan_pay_gate.accessory_predicate` for the accessory answer and `commission_engine._rule_matches` for
@@ -27336,6 +27338,42 @@ a qualifier, and no stored payout is touched.
   `management_incentive` (§9 — manager-level qualifier gates), `accessory_definition` (mig 257 — the
   definition this dereferences).
 - **§6f / §19.42:** the accessory-classifier divergence this deliberately does not add to.
+
+### COMMCALC-06.2 The screen that declares it (owner 2026-10-14: "Nothing is hardcoded")
+
+**The mechanism shipped without a way to reach it.** #457 delivered the module, the engine wiring, the
+save path and the columns — and **no input on the Commission Plans editor**. That is §19.18 in the shape
+that matters most: the only way to declare a qualifier was a hand-written `UPDATE`, and
+`router.save_commission_plan` is DELETE-THEN-INSERT over an explicit column list, so the **next plan save
+would have wiped the owner's money policy silently**. A capability an operator cannot reach is not
+shipped, and here reaching it by hand was actively unsafe.
+
+**One home, dereferenced three hops.** `plan_options.vocabulary()` serves `qualifier_measures`,
+`qualifier_scopes` and `qualifier_defaults` by reading `attach_qualifier.MEASURES`, `MEASURE_LABELS`,
+`SCOPES` and the new `DEFAULT_MATCH_FIELD` / `DEFAULT_MATCH_OP` / `DEFAULT_MATCH_VALUE` constants —
+which `resolve()` itself now reads, replacing the three inline literals it used to fall back to. The
+editor (`_lib/QualifierEditor.tsx`, imported by `commission-plans/page.tsx`) renders only what that
+endpoint served: it names **no measure, no default and no dollar figure**, so the owner's "nothing is
+hardcoded" holds through the browser and not just the engine.
+
+**The sentence has one renderer.** `attach_qualifier.describe` is called on `GET /commission-plans` and
+served per rule as `qualifier_requirement`; the editor DISPLAYS that string. A TypeScript rebuild of the
+same figures would be the second home that drifts, because nothing recomputes the stored one — and the
+owner reads that sentence as the rule.
+
+**Two refusals the screen states rather than swallows.** A `%`-of-basis rule cannot take a flat
+fallback (`_line_payout` prices it off `pct`, so the figure would be stored and never read): the input is
+disabled and the reason given. And when the vocabulary endpoint is unreachable the fields are **hidden**,
+not rendered against `FALLBACK_VOCAB` — a money condition is not editable against a guessed list of
+measures.
+
+**Locked** by `harness_attach_qualifier.py` §K (K0–K14, 105 checks total, verified **12 named failures
+and no traceback** against pre-fix `main`): the editor sends every one of the eight columns, a blank
+minimum goes as NULL and never 0, clearing clears all eight, the sentence is not rebuilt in the browser,
+no measure literal appears there, and a rule that already declares a qualifier is shown open rather than
+collapsed. K10's first draft flagged the owner's own directive quoted in a header comment — it now strips
+comments and matches `describe()`'s own phrases, with K10a failing the build if that phrase list drifts
+from the function.
 
 ---
 

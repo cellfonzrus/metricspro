@@ -1,11 +1,12 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useMtdCategories } from '../_lib/mtdCategories'
 import { api, fmt, apiDownload, apiFetchBase64, ORG_ID, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker from '@/components/EntityPicker'
+import QualifierEditor, { hasQualifier, qualifierVocabReady } from '../_lib/QualifierEditor'
 import {
   PlanOptions, MatchRule, MatchValuePicker, MatchWarnings, OptionsSourceNote,
   usePlanMatchStats, FALLBACK_VOCAB, countMatches,
@@ -28,6 +29,14 @@ import { SETUP_NOTICE, SetupNotice } from '@/lib/setupNotice'
 
 type Rule = { id?: string; label?: string; match_field: string; match_op: string; match_value: string
   qualifies: boolean; payout_kind: string; amount: number; pct: number; tiered: boolean
+  // ATTACH QUALIFIER (mig 1079, §COMMCALC-06): a minimum measured over the WHOLE SALE and the lesser
+  // rate a line earns when the sale falls short. All optional; absent everywhere means no condition.
+  qualifier_min?: number | string | null; qualifier_measure?: string | null
+  qualifier_scope?: string | null; qualifier_match_field?: string | null
+  qualifier_match_op?: string | null; qualifier_match_value?: string | null
+  qualifier_fallback_amount?: number | string | null; qualifier_label?: string | null
+  // DERIVED on the GET by attach_qualifier.describe — displayed, never rebuilt here.
+  qualifier_requirement?: string | null
   // PAY GATE (mig 260) — how often this rule pays inside ONE transaction. '' = auto.
   unit_basis?: string
   // RULE SCOPE (mig 262) — WHERE this rule applies. '' = everywhere (today's behaviour).
@@ -102,6 +111,10 @@ const ScopeBadge = ({ scope }: { scope: string }) => {
   const m = SCOPE_META[scope] || SCOPE_META.default
   return <span title={m.help} style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: m.bg, color: m.color, whiteSpace: 'nowrap' }}>{scope}</span>
 }
+
+// A qualifier figure the owner has not typed is NULL, not 0 — a 0 minimum is refused by mig 1079's
+// CHECK and read by the engine as "off", so sending 0 for "blank" would be a second spelling of off.
+const qNum = (v: number | string | null | undefined) => (v === '' || v === null || v === undefined ? null : Number(v))
 
 const blankRule = (): Rule => ({ label: '', match_field: 'contract_type', match_op: 'equals', match_value: '', qualifies: true, payout_kind: 'flat_per_unit', amount: 0, pct: 0, tiered: false, unit_basis: '', applies_scope_kind: '', applies_scope_value: '' })
 
@@ -341,6 +354,10 @@ export default function CommissionPlansPage() {
 
   // ── engine-served vocabulary (falls back to the previously hard-coded lists) ──
   const vocab = planOpts?.vocab || FALLBACK_VOCAB
+  // ATTACH QUALIFIER (§COMMCALC-06): which rule rows have the qualifier panel open. A rule that
+  // already declares one is shown open regardless, so a stored money condition is never hidden.
+  const [qOpen, setQOpen] = useState<Record<number, boolean>>({})
+  const qVocabReady = qualifierVocabReady(vocab)
   const usesPct = (k: string) => vocab.payout_kinds.find(p => p.value === k)?.uses === 'pct'
   const fieldHelp = (f: string) => vocab.match_fields.find(x => x.value === f)?.help || FIELD_HELP[f] || ''
   // ZERO-WIPE for the two metric dropdowns: a value already stored on THIS plan is always offered, even
@@ -502,7 +519,21 @@ export default function CommissionPlansPage() {
         tier_match_op: draft.tier_count_basis ? (draft.tier_match_op || 'equals') : '',
         tier_match_value: draft.tier_count_basis ? (draft.tier_match_value || '') : '',
         tier_below_min_multiplier: (draft.tier_below_min_multiplier === null || draft.tier_below_min_multiplier === undefined || draft.tier_below_min_multiplier === '') ? '' : Number(draft.tier_below_min_multiplier),
-        rules: (draft.rules || []).map((r, i) => ({ ...r, amount: Number(r.amount) || 0, pct: Number(r.pct) || 0, sort: i })),
+        // EVERY qualifier key is sent back explicitly. `save_commission_plan` DELETES the plan's rules
+        // and re-INSERTS them from this payload, so a key omitted here is not "left alone" — it is
+        // erased, and what it erases is money policy (§19.18). The keys are sent even when empty so
+        // clearing a qualifier works; the backend reads a blank/0 minimum as "no condition".
+        rules: (draft.rules || []).map((r, i) => ({
+          ...r, amount: Number(r.amount) || 0, pct: Number(r.pct) || 0, sort: i,
+          qualifier_min: qNum(r.qualifier_min),
+          qualifier_measure: r.qualifier_measure || '',
+          qualifier_scope: r.qualifier_scope || '',
+          qualifier_match_field: r.qualifier_match_field || '',
+          qualifier_match_op: r.qualifier_match_op || '',
+          qualifier_match_value: r.qualifier_match_value || '',
+          qualifier_fallback_amount: qNum(r.qualifier_fallback_amount),
+          qualifier_label: r.qualifier_label || '',
+        })),
         tiers: (draft.tiers || []).map((t, i) => ({ ...t, min_count: Number(t.min_count) || 0, multiplier: Number(t.multiplier) || 1, sort: i })),
         assignments: (draft.assignments || []).map(a => ({ ...a, priority: Number(a.priority) || 0 })),
         // mig 298 — persist the Exec-MTD basis + the per-category rate editor values (the backend ignores
@@ -827,10 +858,11 @@ export default function CommissionPlansPage() {
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Rules — which line items qualify + how they pay</div>
           <div style={{ overflowX: 'auto', marginBottom: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 920 }}>
-              <thead><tr>{['Label', 'Match field', 'Op', 'Value', 'Qualifies', 'Payout', 'Amount / %', 'Pays', 'Applies to', 'Tiered', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{['Label', 'Match field', 'Op', 'Value', 'Qualifies', 'Payout', 'Amount / %', 'Pays', 'Applies to', 'Tiered', 'Sale minimum', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
                 {(draft.rules || []).map((r, i) => (
-                  <tr key={i}>
+                  <Fragment key={i}>
+                  <tr>
                     <td style={td}><input style={{ ...sel, width: 110 }} placeholder="(optional)" value={r.label || ''} onChange={e => updRule(i, { label: e.target.value })} /></td>
                     <td style={td}>
                       <select style={{ ...sel, width: 130 }} value={r.match_field} title={fieldHelp(r.match_field)}
@@ -918,8 +950,31 @@ export default function CommissionPlansPage() {
                       )}
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={r.tiered} onChange={e => updRule(i, { tiered: e.target.checked })} /></td>
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      {/* ATTACH QUALIFIER (mig 1079, §COMMCALC-06). OWNER 2026-10-12: "Payment for edge
+                          on total which is defined as $25 must be accompanied with atleast $25 worth of
+                          accessories ... otherwise the commision falls back to $10". Every other gate in
+                          the engine can only turn a payment OFF; this is the one that pays a LESSER
+                          DECLARED rate because of a fact about the whole sale. No figure is typed in
+                          code — the minimum, the fallback and the measure are all entered here. */}
+                      {qVocabReady
+                        ? <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 6px' }}
+                            title="Require a minimum on the whole sale before this rule pays its full rate"
+                            onClick={() => setQOpen(o => ({ ...o, [i]: !qOpen[i] }))}>
+                            {hasQualifier(r) ? `min ${r.qualifier_min}` : '+ add'}
+                          </button>
+                        : <span style={{ fontSize: 10, color: 'var(--text3)' }} title="The plan vocabulary endpoint is unreachable, so the measures the engine understands cannot be confirmed. A money condition is not editable against a guessed vocabulary.">unavailable</span>}
+                    </td>
                     <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delRule(i)}>✕</button></td>
                   </tr>
+                  {qVocabReady && (qOpen[i] || hasQualifier(r)) && (
+                    <tr>
+                      <td style={{ ...td, background: 'var(--surface2)' }} colSpan={12}>
+                        <QualifierEditor rule={r} vocab={vocab} onChange={patch => updRule(i, patch)} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
