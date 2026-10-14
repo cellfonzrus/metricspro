@@ -112,8 +112,9 @@ check("B2 that source is the ALL-GROUPS set, not the single group's "
       "`continue`, so a cross-module pick simply vanished)",
       src_var == "allVisibleItems", f"resolved against `{src_var}`")
 check("B3 the all-groups set is built by flattening NAV, not one navGroup",
-      re.search(r"allVisibleItems\s*=\s*useMemo[^=]*=>\s*gateItems\(NAV(\.filter\(g => platformOK\(g, user\)\))?\.flatMap", hub)
-      is not None,  # index §38: platform-only groups are filtered by platformOK first, still ALL other groups
+      re.search(r"allVisibleItems\s*=\s*useMemo[^=]*=>\s*gateItems\(NAV(\.filter\((groupOK|g => platformOK\(g, user\))\))?\.flatMap", hub)
+      is not None,  # index §38: platform-only groups are filtered out FIRST (groupOK, the one home since
+                    # §CORE-06; previously platformOK inline), still ALL other groups
       "allVisibleItems is not derived from NAV.flatMap")
 
 print()
@@ -134,7 +135,7 @@ for pred, why in (("canSeeItem(permissions, it)", "RBAC"),
                   ("hidden[it.href]?.hidden", "tenant nav-layout hidden override")):
     check(f"C2 the gate still applies the {why} filter", pred in gate, gate[:200])
 check("C3 BOTH sets go through that one gate — the cross-module list is gateItems(...), never raw NAV",
-      bool(re.search(r"gateItems\(NAV(\.filter\(g => platformOK\(g, user\)\))?\.flatMap", hub))
+      bool(re.search(r"gateItems\(NAV(\.filter\((groupOK|g => platformOK\(g, user\))\))?\.flatMap", hub))
       and "gateItems(navGroup.items)" in hub)
 check("C4 the '/hub/…' self-link is still excluded (a dashboard must not tile a link to itself)",
       "startsWith('/hub/')" in gate)

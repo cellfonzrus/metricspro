@@ -39,8 +39,10 @@ export default function ComplianceDashboardPage() {
       .catch(e => { setSumErr(e?.message || String(e)); setSummary(null) })
   }, [])
 
-  const navGroup = useMemo(() => NAV.find(g => slugGroup(g.group) === SLUG) || null, [])
-  const { gateItems, navCfg } = useHubGate()
+  const { groupOK, gateItems, navCfg } = useHubGate()
+  // `groupOK` is the platform-only group gate (index §38), read from the one home rather than retyped
+  // — this page walked NAV without it before, and only the ITEM half was ever applied here.
+  const navGroup = useMemo(() => NAV.find(g => slugGroup(g.group) === SLUG && groupOK(g)) || null, [groupOK])
   const { data: tileResp } = useCachedApi<TileResp>(`/api/v1/commcalc/tile-layout?module=${SLUG}`, CONFIG)
 
   // THE VIEWER GATE is lib/hub-gate.ts — the ONE home, shared with the generic hub and the two

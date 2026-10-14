@@ -27,6 +27,7 @@
 // platform-only gate, the tenant capability flag, the active-carrier lens, the tenant vertical, and
 // the tenant nav-layout `hidden` override.
 //
+//   groupOK(group)     — the GROUP half: a platform-only group opens for the super admin alone (§38)
 //   gateItems(items)   — for a hub built from NAV items (the generic hub, /compliance)
 //   canOpen(href)      — for a hand-woven tile/KPI literal, whose items are hrefs, not NAV items
 //   gateHubGroups(gs)  — canOpen over a HubGroup[] literal, dropping a tile left empty by it
@@ -49,6 +50,8 @@ import type { HubGroup } from '@/components/HubTiles'
 export type HubNavCfg = { labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }
 
 export type HubGate = {
+  /** May this viewer see this NAV GROUP at all? The platform-only gate (index §38). */
+  groupOK: (group: { platformOnly?: boolean }) => boolean
   /** Filter NAV items to the ones this viewer may open. */
   gateItems: (items: NavItem[]) => NavItem[]
   /** May this viewer open this in-app href? For hand-woven tile/KPI literals. */
@@ -80,6 +83,10 @@ export function useHubGate(): HubGate {
     && !hidden[it.href]?.hidden
   ), [user, gated, permissions, caps, activeCarrier, tenant?.vertical, hidden])
 
+  // The GROUP half of the same question (index §38): a platform-only group opens for the platform
+  // super admin alone. Here rather than retyped per hub, for the same reason as the item half.
+  const groupOK = useCallback((group: { platformOnly?: boolean }) => platformOK(group, user), [user])
+
   const gateItems = useCallback((items: NavItem[]) => items
     .filter(it => !it.href.startsWith('/hub/'))   // a dashboard must not tile a link to itself
     .filter(itemOK), [itemOK])
@@ -100,5 +107,5 @@ export function useHubGate(): HubGate {
     .map(g => ({ ...g, items: g.items.filter(i => canOpen(i.href)) }))
     .filter(g => g.items.length > 0), [canOpen])
 
-  return { gateItems, canOpen, gateHubGroups, navCfg: navCfg || null }
+  return { groupOK, gateItems, canOpen, gateHubGroups, navCfg: navCfg || null }
 }

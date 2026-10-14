@@ -20,9 +20,8 @@
 import { useMemo } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { useAuth } from '@/lib/auth-context'
 import { useCachedApi, CONFIG } from '@/lib/cache'
-import { NAV, platformOK, type NavItem } from '@/lib/rbac'
+import { NAV, type NavItem } from '@/lib/rbac'
 import { useHubGate } from '@/lib/hub-gate'
 import HubTiles from '@/components/HubTiles'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, mergeUnplacedItems, subsFromNavLayout,
@@ -32,17 +31,17 @@ type TileResp = { module: string; layout: TileLayout | null; resolved_from: 'ten
 
 export default function HubDashboardPage() {
   const { group: slug } = useParams<{ group: string }>()
-  const { user } = useAuth()
+
+  // Best-effort + cached (the same nav-config entry the sidebar shares): a failed nav-config read
+  // means no caps/layout refinement, and a failed tile-layout read degrades to the auto-derived
+  // default — the hub still renders either way.
+  const { groupOK, gateItems, navCfg } = useHubGate()
 
   // A platform-only group (the Super Admin Toolbox, index §38) resolves for the platform super admin
   // alone; anyone else gets the same "no dashboard here" notice as an unknown slug.
   const navGroup = useMemo(
-    () => NAV.find(g => slugGroup(g.group) === slug && platformOK(g, user)) || null, [slug, user])
+    () => NAV.find(g => slugGroup(g.group) === slug && groupOK(g)) || null, [slug, groupOK])
 
-  // Both fetches are best-effort + cached (the same nav-config entry the sidebar shares). A failed
-  // tile-layout read degrades to the auto-derived default; a failed nav-config read means no
-  // caps/layout refinement — the hub still renders.
-  const { gateItems, navCfg } = useHubGate()
   const { data: tileResp, loading } = useCachedApi<TileResp>(
     navGroup ? `/api/v1/commcalc/tile-layout?module=${encodeURIComponent(slug)}` : null, CONFIG)
 
@@ -72,7 +71,7 @@ export default function HubDashboardPage() {
   // the viewer is not allowed to open: this widens what a DESIGNER may place, never what a VIEWER
   // may see.
   const allVisibleItems = useMemo<NavItem[]>(
-    () => gateItems(NAV.filter(g => platformOK(g, user)).flatMap(g => g.items)), [gateItems, user])
+    () => gateItems(NAV.filter(groupOK).flatMap(g => g.items)), [gateItems, groupOK])
 
   const groups = useMemo(() => {
     if (!navGroup) return []

@@ -27536,6 +27536,9 @@ login is enforced **and** a session exists (the open app shows everything, as th
 path does), then `platformOK`, the tenant capability flag, the active-carrier lens, the tenant
 vertical, and the tenant nav-layout `hidden` override.
 
+- `groupOK(group)` — the GROUP half of the same §38 question: a platform-only nav group opens for the
+  platform super admin alone. It lives here too because `/compliance` resolved its own group with no
+  group gate at all, and only the item half was ever applied there.
 - `gateItems(items)` — for a hub built from NAV items (the generic hub, `/compliance`).
 - `canOpen(href)` — for a hand-woven tile or KPI literal, whose entries are hrefs, not NAV items.
 - `gateHubGroups(groups)` — `canOpen` over a `HubGroup[]` literal, dropping a tile left with no
@@ -27553,6 +27556,13 @@ has one implementation instead of three.
 
 Both curated hubs also say so plainly when nothing is reachable, rather than rendering an empty page.
 
+**Three neighbouring locks pinned the gate at its OLD address and went red on the move** — which is
+the mechanism working, not a surprise: `harness_hub_cross_module_tiles.py` (§C, 20), `harness_tenant_vertical.py`
+(the `verticalOK` wire, 83) and `harness_super_admin_toolbox.py` (§38's E1/E2/G7). Each is repointed at
+the one home and each now pins something *wider* than before: the vertical and platform filters are
+pinned IN the gate, and all FOUR hubs — not the two that happened to carry a copy — are pinned to
+dereference it, with controls proving an un-wired hub goes red.
+
 ### CORE-06.4 PROOF
 
 - `frontend/scratchpad/prove_hub_gate.mjs` (38) — verbatim re-impl of `moduleGranted` / `canSeeItem`
@@ -27563,7 +27573,7 @@ Both curated hubs also say so plainly when nothing is reachable, rather than ren
   21/21, a store-scoped rep keeps the 10 that are genuinely theirs, Schedule among them); §3 pins
   that ticking Workforce on the one Luxelink role opens Schedule **without** bringing a manager-only
   page with it, plus the deep-link and fallback rules.
-- `backend/harness_hub_viewer_gate.py` (51) — the build lock. **Static on purpose**: the failure mode
+- `backend/harness_hub_viewer_gate.py` (53) — the build lock. **Static on purpose**: the failure mode
   is an ABSENT filter, so the page compiles, renders and simply offers links that bounce; no type
   checker and no test of the gate itself can see a caller that never calls it. §A the one home carries
   the whole stack, §B every `HubTiles` consumer dereferences it, §C nobody retypes it, §D the curated

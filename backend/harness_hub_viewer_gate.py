@@ -93,7 +93,7 @@ print("\n§A  lib/hub-gate.ts is the ONE home")
 check("the file exists", os.path.exists(GATE), GATE)
 gate = read(GATE) if os.path.exists(GATE) else ""
 check("exports useHubGate", "export function useHubGate" in gate)
-for fn in ("gateItems", "canOpen", "gateHubGroups"):
+for fn in ("groupOK", "gateItems", "canOpen", "gateHubGroups"):
     check("returns %s" % fn, re.search(r"\b%s:" % fn, gate) is not None)
 for pred in PREDICATES:
     check("dereferences %s" % pred, calls(gate, pred),
@@ -107,6 +107,9 @@ check("canOpen falls back to canAccessPath for an href NAV does not carry",
       "fail-closed would hide a page the route guard admits — a tile and the guard must agree")
 check("canOpen keys on navPath (query/anchor stripped)", calls(gate, "navPath"))
 check("gateItems never tiles a link to the hub itself", "'/hub/'" in gate)
+# §38: both halves of the platform-only question live here — the GROUP half as well as the item half,
+# so a hub resolving its own nav group cannot bypass it (that is how /compliance did, pre-fix).
+check("groupOK is the platform-only GROUP gate", "platformOK(group, user)" in gate)
 check("a tile left with no reachable page is dropped",
       re.search(r"items\.length\s*>\s*0", gate) is not None)
 

@@ -180,6 +180,17 @@ check("D5 TENANT_NAV = NAV without platform-only groups",
 hubs = code_only(read(HUBS))
 check("D6 tile-hubs.subsFromItemTiles exists", "export function subsFromItemTiles(" in hubs, "missing")
 hub_page = code_only(read(os.path.join(APP, "(platform)", "hub", "[group]", "page.tsx")))
+# The TILED-HUB viewer gate moved to its own home on 2026-10-14 (index §CORE-06) because four surfaces
+# needed it and the two CURATED hubs (/storeops, /payroll) had no gate at all. Both halves of the §38
+# question live there now — groupOK for a platform-only GROUP, gateItems for its ITEMS — so the gate is
+# pinned THERE and every hub is pinned to dereference it. Strictly wider than the two pages before.
+hub_gate = code_only(read(os.path.join(FE, "lib", "hub-gate.ts")))
+HUB_CONSUMERS = [
+    os.path.join("app", "(platform)", "hub", "[group]", "page.tsx"),
+    os.path.join("app", "(platform)", "compliance", "page.tsx"),
+    os.path.join("app", "(platform)", "storeops", "page.tsx"),
+    os.path.join("app", "(platform)", "payroll", "page.tsx"),
+]
 check("D7 hub precedence: saved layout, then menu subs, then item tiles",
       bool(re.search(r"layoutToHubGroups\(.*?subsFromNavLayout\(.*?menuSubs\.length \? menuSubs : subsFromItemTiles\(",
                      hub_page, re.S)), "precedence changed")
@@ -194,9 +205,10 @@ MUST_TENANT_NAV = [
 ] + [os.path.join("components", "ScreenLink.tsx")]
 MUST_PLATFORM_OK = [
     os.path.join("app", "(platform)", "layout.tsx"),
-    os.path.join("app", "(platform)", "hub", "[group]", "page.tsx"),
     os.path.join("app", "(platform)", "admin", "dashboards", "page.tsx"),
-    os.path.join("app", "(platform)", "compliance", "page.tsx"),
+    # The hub and /compliance ask it through lib/hub-gate.ts now; §CORE-06 pins that, and E3 below
+    # pins each hub dereferencing it.
+    os.path.join("lib", "hub-gate.ts"),
 ]
 imp_re = re.compile(r"import\s*\{([^}]*)\}\s*from\s*'@/lib/rbac'", re.S)
 consumers = []
@@ -214,12 +226,18 @@ for dp, _dn, fns in os.walk(FE):
             consumers.append((rel, code_only(src)))
 print("   %d file(s) import bare NAV" % len(consumers))
 for rel, src in consumers:
-    ok = "platformOK(" in src or rel in HREF_LOOKUP_OK
+    # Calling the predicate, or dereferencing the ONE home that calls it (index §CORE-06) — a hub
+    # that reads useHubGate() has asked platformOK, through groupOK and gateItems.
+    ok = "platformOK(" in src or "useHubGate(" in src or rel in HREF_LOOKUP_OK
     check("E1 %-44s gates platform-only groups" % rel, ok,
           "walks NAV without platformOK — use TENANT_NAV, or call platformOK(g, user)")
 for rel in MUST_PLATFORM_OK:
     check("E2 %-44s calls platformOK" % rel, rel in dict(consumers) and "platformOK(" in dict(consumers)[rel],
           "the sidebar/hub/designer lost the gate")
+for rel in HUB_CONSUMERS:
+    check("E4 %-44s dereferences the hub viewer gate" % rel,
+          "useHubGate(" in code_only(read(os.path.join(FE, rel))),
+          "a tiled hub that does not ask lib/hub-gate.ts offers pages its viewer cannot open (§CORE-06)")
 for rel in MUST_TENANT_NAV:
     src = code_only(read(os.path.join(FE, rel)))
     names = [n.strip() for m3 in imp_re.finditer(src) for n in m3.group(1).split(",")]
@@ -262,7 +280,13 @@ check("G4 platformPathOK exists and rides isPlatformAdmin",
 check("G5 the route guard bounces a platform-only path (effect + render)",
       lay.count("platformPathOK(pathname, user)") >= 2, "reachable by URL")
 check("G6 the sidebar filters ITEMS with platformOK(it, user)", "g.items.filter(it => platformOK(it, user))" in lay, "sidebar leak")
-check("G7 the hub filters ITEMS with platformOK(it, user)", ".filter(it => platformOK(it, user))" in hub_page, "hub leak")
+check("G7 the hub viewer gate filters ITEMS with platformOK(it, user)",
+      "platformOK(it, user)" in hub_gate, "hub leak")
+check("G7b ...and gates a platform-only GROUP through the same home",
+      "platformOK(group, user)" in hub_gate and "NAV.filter(groupOK)" in hub_page,
+      "a hub resolving its own group bypasses §38")
+check("G7c a hub that stops dereferencing that home goes RED",
+      "useHubGate(" not in hub_page.replace("useHubGate()", "noGate()"))
 cfg = code_only(read(os.path.join(APP, "(platform)", "configurations", "page.tsx")))
 check("G8 All Settings reads PLATFORM_ONLY_HREFS (no second list of platform pages)",
       "PLATFORM_ONLY_HREFS.has(" in cfg and "adminOnly" not in cfg, "a second copy of the fact")
