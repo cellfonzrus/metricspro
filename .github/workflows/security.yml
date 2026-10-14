@@ -112,3 +112,17 @@ jobs:
         with: { python-version: "3.11" }
       - name: harness_ci_pipefail_lock
         run: python backend/harness_ci_pipefail_lock.py
+
+  subject-set:
+    # Enforcing (index §CORE-10). The sibling of the pipefail lock above: that one fails a build when a
+    # guard goes RED unnoticed, this one fails a build when a guard goes BLIND unnoticed. A guard that
+    # derives its subjects by scanning the code must compare them with a DECLARED set, because a subject
+    # leaving the derived set takes its own assertions with it — silently (PR #477, 2026-10-14).
+    name: A guard that goes blind fails CI (derived subject sets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_subject_set_lock
+        run: python backend/harness_subject_set_lock.py

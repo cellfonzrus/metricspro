@@ -237,6 +237,14 @@ _LAUNCH_RE = re.compile(r"from\s+playwright|import\s+playwright|sync_playwright|
 # the ones that do not reach a browser must NOT (they would 503 for nothing).
 _BROWSER_CALLS = ("start_session(", "live_login_start(", "_live_pull(")
 SUPPLY_ROUTER = os.path.join(APP, "modules", "supply", "router.py")
+# DECLARED, not merely counted. Until 2026-10-14 this set was only asserted to have at least four
+# members, and PR #477 showed what that tolerates: read_vendor_catalog moved its browser call into a
+# helper, LEFT this set, and took its own guard assertion with it — the assertion did not fail, it
+# ceased to exist, and only the bound sitting exactly at four made anything go red. An endpoint that
+# stops reaching a browser, or starts, now has to be written down here by a person.
+# harness_subject_set_lock.py holds every scanning guard to this shape.
+SUPPLY_BROWSER_ENDPOINTS = {"capture_confirmation", "open_order_session", "read_vendor_catalog",
+                            "submit_order"}
 
 
 def _effective_body(name, fns, _seen=None):
@@ -295,7 +303,8 @@ def _browser_modules_elsewhere():
             continue
         eff = _effective_body(name, handlers)
         (reach if any(c in eff for c in _BROWSER_CALLS) else plain).append(name)
-    ok(len(reach) >= 4, "the supply router's browser endpoints were found", str(reach))
+    eq(set(reach), SUPPLY_BROWSER_ENDPOINTS,
+       "the supply endpoints that reach a live browser are exactly the declared set")
     for name in reach:
         ok("require_browser_service()" in _effective_body(name, handlers),
            "supply %s() reaches a live browser and calls require_browser_service()" % name)

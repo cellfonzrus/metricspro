@@ -110,6 +110,7 @@ Primary code homes:
 | CORE-07 | **A login is nobody until it is linked to its person** | "All stores should see their schedules and submit their closing — what is the process to add app access to all of them? Which column ties a login to the employee it belongs to, and does every path that creates a login write it?" |
 | CORE-08 | **Which person is this name** | "Why does the report show 2 reps who worked at the store — it should only show the actual person who worked, for all reporting, not the one with the home store. Which rule decides that a punch and a sale are the same human, how many rules did that, and which field is a record of who was there as against who the schedule expected?" |
 | CORE-09 | **A capability without a door is not a feature** | "Where do I reset an employee's login password, and why is the one screen that can do it a page my HR manager cannot open? Which surfaces offer it, and what stops the next one retyping the form?" |
+| CORE-10 | **A gate, not a note** | "This is a very critical finding — don't just write it down, make a gate so nothing can pass through unknowingly; you were smart, maybe the other might not be as smart. What checks that a branch was cut from a current base, and what checks that a guard is still guarding what it thinks it is?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -6920,6 +6921,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - *(no endpoint added)* — §CORE-03 changes nothing a caller can see: the credential columns were ALREADY stripped from every API read (`router._SOURCE_SECRETS`, each `_*_public_cfg`, `google_reviews.public_config`, `billing._pc_out`) and that stays the first line of defence. What changed is what a DATABASE dump holds. `portal_secret.protection_state()` is the one thing a screen may newly ask: `'protected'` once a key is configured, `'unprotected'` without one — so a page taking a portal password can SAY which, rather than let an operator assume (§CORE-03.5).
 - `POST /hr/onboarding/encrypt-existing` (§CORE-04) — unchanged to its caller, but it no longer holds the loop: it calls `encryption_backfill.backfill_intake_sensitive`, which `run_all()` also runs, so the `ENCRYPTION_BACKFILL_ON_BOOT=1` route now covers this family too. Before that it was the ONLY path, which is how two bank routing numbers stayed readable: nothing was wrong with the code, nobody had pressed the button.
 - *(no endpoint added)* — §CORE-09 adds no route: `POST /core/users/set-password` (`core/router.py::admin_set_password`) already set a SPECIFIC admin-chosen password, validated server-side by `validate_password`, toggling `app_users.must_reset_password` and audited as `password_admin_set`, gated on `_can_edit_setting(caller, "security")`. What changed is the number of SURFACES that offer it — one (`/admin/security`) became three (`+ /admin/roles` 👥 Assign people, `+ /hr/employee-password`), all rendering the one card `frontend/src/components/AssignPasswordCard.tsx`; `GET /core/security-settings` is the `can_edit` read each of them shows the form on (§CORE-09.3).
+- *(no endpoint added)* — §CORE-10 adds no route and no table: both gates are CI, not product. They run as the workflow jobs **The branch was cut from its base (no re-proposed commits, no lost CI job)** (`.github/workflows/branch-base-guard.yml` → `scripts/check_branch_base.py`) and **A guard that goes blind fails CI (derived subject sets)** (`.github/workflows/security.yml` → `backend/harness_subject_set_lock.py`). The first is the only workflow here triggered by `pull_request_target`, deliberately, and it never checks out or runs PR code (§CORE-10.3).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -7284,6 +7286,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile; lock `harness_assign_password_one_home.py` (47) + proof `prove_manage_employees_tile.mjs` (24) — §CORE-09 |
+| **Was this branch cut from a current base, and is each guard still guarding what it thinks it is?** (and therefore: does a green tick mean anything on this pull request?) | no table — git metadata read at CI time: the TWO-DOT diff `base..head` (lines deleted), commit SUBJECTS on both sides (a squash merge leaves no ancestry to read), and the job names declared by each `.github/workflows/*.yml` on both trees; plus every `backend/harness_*.py` that scans repo source | gate A `scripts/check_branch_base.py` (A2 mass deletion unless `BASE-DELETIONS-ACKNOWLEDGED` is in the PR body, A3 re-proposed merged subjects, A4 a CI job the base runs and the head does not declare; 10 armed controls) run from the BASE branch via `pull_request_target`; gate B `backend/harness_subject_set_lock.py` (+ `harness_subject_set_pending.txt`, 50 pinned, shrink-only) — §CORE-10 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Store-days started and not finished** (per store-day) — somebody submitted, the close gate sent them back to recount, and they did not return: `unfinished` / `unfinished_counts` on `GET /closing/rollup`, the `unfinished` block on each `GET /closing/summary` store card, the DM-verify banner. Carries the entered money and the gate's OWN recorded variance (never recomputed). **NOT a money figure**: an unfinished day writes no `commcalc.daily_closing` row, so it reaches no cash, recon or P&L total (owner chose "not until corrected", 2026-10-04). Distinct from **turned away** below (refused before the gate) and from **not submitted** (nobody tried) | `closing/unfinished_day.state_for`/`describe` over `commcalc.closing_attempt` + `commcalc.daily_closing` | §29.12 |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
@@ -25195,6 +25198,7 @@ status word rather than a blank that reads as nil.
 | CORE-07 | core |
 | CORE-08 | core |
 | CORE-09 | core |
+| CORE-10 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -28339,3 +28343,127 @@ that goes red if the label leaves.
 
 Same class: §CORE-06 (a tile that did not ask the menu's question), §19.18 (a mechanism written and
 its callers left unwired), §19.40 (the owner could not find the screen that already existed).
+
+
+## §CORE-10. A GATE, NOT A NOTE — the branch's base, and a guard that goes blind (owner 2026-10-14)
+
+Owner, on being told about two near-misses that had been caught by hand and written down:
+*"this is very creitical finding , dont jsut write down make a gate so nothing can passs thru
+unkowlingly , you were smart may be the other might not be as asmart"*.
+
+That is the whole ruling, and it generalises past these two bugs: **a lesson that lives in a note is
+enforced by whoever happens to remember it. A lesson that lives in CI is enforced.** Both failures
+below were silent — neither produced a red tick, and both were found by someone counting things by
+hand on a day they happened to be suspicious.
+
+### CORE-10.1 THE TWO FAILURES, and the one fact they share
+
+| | What happened | Why nothing went red |
+|---|---|---|
+| **The stale base** (PR #475, 2026-10-14) | `git checkout -b <branch>` was run with no start point, so the branch was cut from the session's already-merged branch instead of `origin/main`. The pull request carried 5 already-squash-merged commits and its two-dot diff against `main` **deleted 103,263 lines over 498 files**. | The conflict it created means GitHub starts **no `pull_request` workflow at all** (see §19 on `mergeable_state: dirty`), so the only green tick came from the preview deployment, which proves nothing about the guards. |
+| **The guard that went blind** (PR #477, 2026-10-14) | `harness_browser_sweep_kinds.py` DERIVES the endpoints that can reach a live browser by scanning `supply/router.py`, then asserts each one calls `require_browser_service()` — the `core/service_role.py` gate that keeps a
+`SERVICE_ROLE=api` deploy from faking a browser session. Moving that call into a helper made `read_vendor_catalog` leave the derived set — so its guard assertion **did not fail, it stopped existing**. | The only assertion about the set itself was `len(reach) >= 4`. It went red because the bound sat exactly at four. One more endpoint in the set and the hole ships green. |
+
+The shared fact: **a check decided for itself what it was checking.** One decided which tree it was
+proving; the other decided which subjects it was guarding. Where that judgement is implicit, it is
+also silent, so it is made explicit here and failed in CI when it is wrong.
+
+### CORE-10.2 GATE A — the branch was cut from its base
+
+`scripts/check_branch_base.py`, three failures, every one of them a symptom a human has to be looking
+for today:
+
+- **A2 mass deletion.** The TWO-DOT diff `base..head` removes more than 2,000 lines. A genuinely large
+  removal is still allowed — it must SAY SO, by carrying `BASE-DELETIONS-ACKNOWLEDGED` in the pull
+  request body, which puts the declaration where a reviewer reads it. Silence is the failure.
+- **A3 re-proposed merged work.** A commit on the branch whose SUBJECT already exists in the base
+  branch's history. Subjects, because this repo squash-merges: a merged commit is not an ancestor of
+  `main`, so ancestry cannot answer the question and `git diff main...branch` (three dots) actively
+  lies — its merge base lands before the squash, and merged content renders as new. Two agents were
+  misled by exactly that on 2026-09-29 (CLAUDE.md records it).
+- **A4 a lost CI job.** Any job name declared on the base branch and absent from the head branch's
+  workflow files, named. This is the 2026-10-10 trap on PR #440: a `pull_request` run executes the
+  workflow file **from the head branch**, so a branch cut before `main` added a job never runs that
+  job, forever, however often CI is re-run. 48 green checks next to main's 51 read as finished.
+
+### CORE-10.3 WHY GATE A RUNS ON `pull_request_target`, and the rule that comes with it
+
+A gate that lives in the branch's own workflow file is precisely what a stale branch drops — failure
+A4 would delete this guard itself. `.github/workflows/branch-base-guard.yml` is therefore triggered
+from the BASE branch, which is the only trigger here that is.
+
+**The safety rule, stated so nobody relaxes it:** that job never checks out and never executes code
+from the pull request. It fetches the head as git data, reads commit subjects, and parses workflow
+TEXT. It holds `permissions: contents: read`, `persist-credentials: false` and no secrets, and the PR
+body reaches the script through a file written from an env var, never interpolated into a shell
+command. Do not add a step to it that runs a script, an install or a build from the PR's tree.
+
+### CORE-10.4 GATE B — a guard may not quietly decide what it is still guarding
+
+`backend/harness_subject_set_lock.py`. **A guard whose subjects are derived from the code must compare
+them with a DECLARED set, both ways — not assert a lower bound on how many it found.** A lower bound
+tolerates substitution (one subject in, one out), tolerates the scan's own axis going blind, and never
+names what left. The right shape was already in the offending file, ten lines above the wrong one:
+`eq(derived, BROWSER_MODULES_ELSEWHERE, …)`.
+
+So `harness_browser_sweep_kinds.py` now declares `SUPPLY_BROWSER_ENDPOINTS` and compares the derived
+set to it. Proof that this is a tighter lock and not a restatement: renaming the browser call in one
+endpoint used to lower a count, and now reports *"got {open_order_session, submit_order,
+capture_confirmation} want {…, read_vendor_catalog}"* — it names the endpoint that left.
+
+**A ratchet, not a sweep.** 51 sites were measured across 41 harnesses on 2026-10-14; most are
+harmless fixture sanity, and rewriting all of them in one change is a diff nobody can review. The 50
+that remain are pinned in `backend/harness_subject_set_pending.txt` with their own assertion label as
+the reason, **a NEW site fails the build**, a stale pin fails the build (it would re-permit the weak
+form silently), and `PINNED_MAX` means the list may only shrink. Same shape as
+`harness_unrun_pending.txt` and `frontend/table_sort_pending.txt`.
+
+Gate B is the sibling of the pipefail lock and sits beside it in `security.yml` for that reason: that
+one fails a build when a guard goes **red** unnoticed, this one when a guard goes **blind** unnoticed.
+
+### CORE-10.5 WHAT WAS REUSED, NOT REBUILT (duplicate check — build gate)
+
+Searched the index and the harness tree for anything already answering "was this branch cut from a
+current base" and "is this guard still guarding its subjects". Nothing was: the branch-lifecycle rules
+in CLAUDE.md and the memory notes on both traps are **prose**, which is what the owner's ruling is
+about. What already existed and is dereferenced rather than copied:
+
+- `harness_ci_pipefail_lock.py` stays the ONE home for "a workflow that runs a gate declares
+  `defaults: run: shell: bash`". Its axis was **widened** from `harness_*.py` to gate scripts
+  (`scripts/check_*.py`) rather than given a second copy of the rule — the branch-base guard is the
+  first gate to live outside `backend/`, and the lock could not see it. `deploy-reachability.yml`
+  gained the default in the same change, since the widened axis covers it.
+- The debt-list idiom (a pinned, shrink-only list plus `PINNED_MAX`) is reused verbatim from that same
+  lock, not reinvented.
+- `harness_browser_sweep_kinds.py` keeps its own `eq()` / `_effective_body()`; Gate B holds no copy of
+  the browser rule, only the rule about the SHAPE of such a check.
+
+### CORE-10.6 LOCKED SO IT CANNOT UN-WIRE, and armed
+
+- **Gate A**: 10 negative controls, run in CI as its own step (`--self-test`). The planted defects are
+  the real shapes — a job deleted from the head's workflow file, a re-proposed squash subject, a file
+  the base added and the branch removed — built in a throwaway git repository, so they cannot rot.
+  Verified against the live remote: a real merged `claude/*` branch fails A2 (207,236 lines) and A4
+  (53 jobs named), and this branch passes all three.
+- **Gate B**: 7 negative controls, including two the first draft would have failed. The detector masks
+  string literals and comments before reading paren depth, because unmasked it found 35 of the 51 real
+  sites and would have pinned a short list and then silently passed what it could not see — the same
+  class of defect it exists to catch. `Z5` proves the weak form written in prose is not a site, `Z4`
+  that a site wrapped over four lines past a stray paren still is.
+- Neither bound was relaxed to go green. `PINNED_MAX` is 50 and may only fall.
+
+### CORE-10.7 WHAT THIS DOES NOT DO, STATED
+
+- A2 reads a THRESHOLD. A branch cut from a base two days old deletes nothing and passes, correctly —
+  what it can still lose is a CI job, which is A4's job to name.
+- A3 compares subjects, so a branch that rewrites a merged commit's message re-proposes it undetected.
+  A4 and A2 both still fire on that shape, and the structural fix for branch reuse is GitHub's
+  **Settings → General → "Automatically delete head branches"**, which is owner-only and still off.
+- Gate B reads a SHAPE, not a meaning: it cannot tell a fixture's size from a list of code sites. That
+  is why each pinned row carries its own assertion label — the reader tells them apart, and the
+  dangerous ones are the rows whose set is a list of code sites.
+- The 50 pinned sites are not fixed. They are declared, bounded and shrink-only.
+
+Same class: §19.25 (a failing harness that did not fail CI), §19.28 and the `vacuous-check-trap`
+instances (a check that cannot fail), §13a (a scanner blind to a second syntactic form), §19.18 (a
+mechanism written and its callers left unwired).
