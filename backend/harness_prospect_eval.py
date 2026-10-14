@@ -1544,6 +1544,60 @@ check("V15 nothing is compared until a human picks it: no store is pre-selected,
       and "ours && ours.comparable" in _PAGE
       and "Pick one of our stores" in _PAGE)
 
+# ══ §W THE FIRST SCREEN — what to do, and what we have evaluated so far (owner 2026-10-14) ══════
+# Owner: *"the main screen does nto tell you what to do it just sits tehre and it pops up teh dat
+# aautoamatically also it does not let you pick fromt eh drop down what we have evelauterd so far"*.
+#
+# ONE CAUSE, BOTH COMPLAINTS: the page selected `prospects[0]` on load, so it fetched a whole
+# evaluation nobody asked for AND `pid` was never empty, which made the only panel that says what to
+# do unreachable. The class is wider than this page and §W2 is the armed half of it: the page's two
+# intro paragraphs carry `pg-note`, which `globals.css` HIDES unless an approved role has help
+# switched on — so instructions a reader needs in order to USE the page must never live there.
+_START = _PAGE.split("{!pid &&")[1].split("{pid && data?.error &&")[0]
+
+check("W1 nothing is opened for you — the auto-select of the first evaluation is GONE, so the page "
+      "opens on its own first screen instead of a report nobody asked for",
+      "const first = (d?.prospects || [])[0]" not in _PAGE
+      and "setPid(p => p ||" not in _PAGE
+      and "setList(d))" in _PAGE)
+check("W2 ARMED — the first screen is NOT help text. `pg-note` is hidden by globals.css unless an "
+      "approved role turned help on, which is exactly how a page ends up 'just sitting there'",
+      "pg-note" not in _START
+      and "Start here" in _START
+      and _PAGE.count('className="pg-note"') == 2)
+check("W3 …and it says what to do, in order, with the file names read from the REGISTRY rather than "
+      "a count of files typed into the copy",
+      "three steps" in _START
+      and "Object.values(registry).map(f => f.label)" in _START
+      and "Open an evaluation" in _START)
+check("W4 what we have evaluated so far is a TABLE through the shared shell, not a dropdown you "
+      "cannot read: months, latest month, rows, what landed and what is still missing",
+      "ReportShell" in _START and "listColumns" in _START and "listRows" in _START
+      and all(h in _PAGE for h in ("Store being evaluated", "Months uploaded", "Rows uploaded",
+                                   "Still to upload", "Latest month"))
+      # Every column carries its own explanation, through the ONE home for what a column means
+      # (§COMMCALC-03.23b) — the point of the table is to be READ before anything is opened.
+      and _PAGE.split("function prospectCols")[1].split("\n}")[0].count("tip:") == 8)
+check("W5 …with one button per row, and ONE way in: the row button and the dropdown make the same "
+      "state change, so the two cannot drift",
+      "onOpen(r.id)" in _PAGE
+      and "const openProspect = useCallback((id: string) => {" in _PAGE
+      and "onChange={e => openProspect(e.target.value)}" in _PAGE
+      and _PAGE.count("setSf(emptyStandardFilter()); setMode(''); setRentFor('')") == 1)
+check("W6 \"still to upload\" is DERIVED from the feed registry, never a literal list of feed names — "
+      "a feed the registry does not name is a gap in the registry, not in somebody's upload",
+      "keys.filter(k => !present.has(k))" in _PAGE
+      and "const keys = Object.keys(registry)" in _PAGE
+      and "ma_commission" not in _PAGE.split("function prospectRows")[1].split("function prospectCols")[0])
+check("W7 the row counts are what LANDED, read from the list endpoint's own per-period feed counts, "
+      "rather than anything the uploaded file claimed about itself",
+      "p.feed_rows || {}" in _PAGE and "rows += Number(n) || 0" in _PAGE)
+check("W8 an evaluation with nothing in it reads as empty rather than as a store that earned "
+      "nothing, and a tenant with no evaluations at all is told how to start the first one",
+      "nothing yet" in _PAGE
+      and "has no P&amp;L" in _START
+      and "You have not evaluated any store yet" in _START)
+
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")
 if FAIL:

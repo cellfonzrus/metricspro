@@ -27037,6 +27037,64 @@ Same class: §19.18 (a registry written and its callers left unwired), §66 (a v
 basis), §COMMCALC-03.7 (what this evaluation cannot answer, said out loud).
 
 
+### COMMCALC-03.25 THE FIRST SCREEN TELLS YOU WHAT TO DO (owner report 2026-10-14)
+
+Owner, verbatim: *"the main screen does nto tell you what to do it just sits tehre and it pops up teh
+dat aautoamatically also it does not let you pick fromt eh drop down what we have evelauterd so far"*.
+
+**ONE CAUSE, BOTH COMPLAINTS.** `loadList` selected `prospects[0]` on load. That did two things at
+once: it fetched a whole evaluation nobody asked for ("it pops up the data automatically"), and
+because `pid` was never empty the `{!pid && …}` panel — the only thing on the page that says what to
+do — **could never render**. The dropdown did list every evaluation, but you were never looking at the
+dropdown, and a name in a `<select>` does not tell you whether that evaluation has anything in it.
+
+#### The class: instructions that live in help text are not instructions
+
+Both of this page's intro paragraphs carry `className="pg-note"`, and `globals.css` holds
+
+```css
+.pg-note { display: none !important; }
+html[data-help="on"] .pg-note { display: revert !important; }
+```
+
+so they are **hidden unless an approved role has help switched on**. That gate is deliberate and
+stays (the app reads as a finished product by default, §3h). What does not stay is a page whose
+*only* account of what to do sits behind it: with help off, this page was a title, a dropdown and
+nothing else. **Guidance a reader needs in order to USE a page is the page, not its help.**
+`harness_prospect_eval.py` §W2 is ARMED on it — the start panel may not carry `pg-note`, and the page
+may not grow a third one.
+
+#### What the first screen is now
+
+| | |
+|---|---|
+| **Start here — three steps** | pick one below or name a new one · upload its carrier reports (**named from the feed registry**, never a count typed into the copy) · type its actual rent, then read the P&L and compare it with one of your own stores |
+| **What you have evaluated so far** | one row per evaluation through `ReportShell`: months uploaded, latest month, rows uploaded, which reports landed, **what is still to upload**, status, and an **Open** button |
+| **No evaluations at all** | says so, and says how to start the first one — never an empty table |
+
+- **ONE WAY IN.** The row button and the dropdown both call `openProspect`, so the two cannot drift
+  (§W5 counts the state-setting once).
+- **"Still to upload" is DERIVED** from the registry (`keys.filter(k => !present.has(k))`), never a
+  literal list of feed names: a feed the registry does not name is a gap in the registry, not in
+  somebody's upload (§W6).
+- **The row counts are what LANDED** — the list endpoint's own per-period feed counts — not what an
+  uploaded file claimed about itself (§W7, the §COMMCALC-03.10 rule applied to the list).
+- **An evaluation with nothing in it reads as empty**, with "nothing yet" in Reports in and a notice
+  saying an evaluation with no commission report has no P&L yet (§W8). Never $0.00.
+- Every column carries its own `tip` through the §COMMCALC-03.23b one home, because the point of the
+  table is to be read BEFORE anything is opened.
+
+**A derived list must be memoised or the table re-mounts.** `list?.prospects || []` is a new array
+identity on every render, so the column and row memos rebuilt every time and the table re-mounted
+under the pointer. Both derivations are `useMemo` now; eslint had flagged exactly this.
+
+**Proof.** `backend/harness_prospect_eval.py` — **309 passed / 0 failed**, §W1–W8. Frontend
+`tsc --noEmit` and `eslint` clean on the page, with the two warnings the memo fix removed.
+
+Same class: §COMMCALC-03.7 (what the evaluation cannot answer, said out loud), §COMMCALC-03.10 (a row
+count is not a measure of what a file answered), §19.36 (the one home for a setup notice).
+
+
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
 Owner, relaying a tenant's user: *"user cannot upload the handset ordering report, fix it from back
