@@ -12,8 +12,9 @@
 // 'HR Communications' (/hr/letters) — previously menu-only — joins the Payroll Setup tile here.
 //
 // Tile taxonomy is the owner's spec verbatim: Payroll Setup (Add Employees, Onboarding Checklist,
-// Compliance, Who pays payroll, + HR Communications since W2.1) · Employees & Pay (2026-10-02, §19.40) ·
-// Employee Database · Payroll
+// Compliance, Who pays payroll, + HR Communications since W2.1) · Manage Employees (2026-10-14,
+// §CORE-08 — Employees & Pay, Employee Database and Employee Password Reset, the first two folded in
+// from their own single-link tiles) · Payroll
 // (Hours Approval, Payroll, Payroll Expenses, Payroll Tax — plus the two previously-orphaned
 // surfaces, Payroll Change Log and Salary Advances, which had no menu entry at all) · HR Total Comp.
 import HubTiles, { type HubGroup } from '@/components/HubTiles'
@@ -36,24 +37,28 @@ const GROUPS: HubGroup[] = [
       { href: '/storeops/payroll/payers', icon: '🏦', label: 'Who Pays Payroll', desc: 'The payer registry — which entity pays which store/person (admin only).' },
     ],
   },
-  // Owner 2026-10-02 (index §19.40): "Employees & Pay" is where pay is SET, per row — its own tile (and its own
-  // menu entry in rbac.ts NAV), a deep link to the HR tab. Single-link tile → the tile IS the link.
+  // ── MANAGE EMPLOYEES (owner 2026-10-14, index §CORE-08) ─────────────────────────────────────
+  // Owner: *"make a tile called Manage employee and move employee and pay and employee database
+  // along with password reset under that tile"*. Employees & Pay (its own tile since 2026-10-02,
+  // §19.40) and Employee Database (its own tile since Phase W2.1) were two single-link tiles sitting
+  // beside each other; they are now the first two items of ONE tile, joined by the password-reset
+  // door the owner asked for.
+  //
+  // THE MENU ENTRY IS UNTOUCHED. §19.40's ruling was about the SIDE MENU — NAV still carries
+  // 'Employees & Pay' → /hr?tab=employees as its own, non-tileOnly row, and harness_nav_deep_link_lock
+  // still pins it. This changes only which tile the hub groups its door under.
+  //
+  // Employee Password Reset is `module: 'hr'` like its two neighbours, so this tile's three doors are
+  // reachable by the same people (the hub gate drops any a viewer cannot open). The ABILITY to set a
+  // password stays the server's own gate — _can_edit_setting(caller, 'security').
   {
-    title: 'Employees & Pay',
+    title: 'Manage Employees',
     icon: '👥',
-    desc: 'Set each person\'s pay — hourly or salary — plus lunch and face settings, one Save per row.',
+    desc: 'Each person\u2019s pay, their full record, and their app login password.',
     items: [
-      { href: '/hr?tab=employees', icon: '👥', label: 'Employees & Pay', desc: 'Set each person\'s pay — hourly or salary — plus lunch and face settings, one Save per row.' },
-    ],
-  },
-  // The Employee Database is a read-only, exportable report and carries NO pay column (hr/router.py
-  // `hr_employee_database_route`) — it used to say "profile, pay, …", which sent people looking for pay here.
-  {
-    title: 'Employee Database',
-    icon: '🗄️',
-    desc: 'Every employee record in one exportable report — profile, contact, direct deposit, onboarding documents.',
-    items: [
+      { href: '/hr?tab=employees', icon: '👥', label: 'Employees & Pay', desc: 'Set each person\u2019s pay — hourly or salary — plus lunch and face settings, one Save per row.' },
       { href: '/hr/employee-database', icon: '🗄️', label: 'Employee Database', desc: 'Every employee record in one exportable report — profile, contact, direct deposit, onboarding documents.' },
+      { href: '/hr/employee-password', icon: '🔑', label: 'Employee Password Reset', desc: 'Give someone a new password for their login — type the one you want them to use.' },
     ],
   },
   {
@@ -87,7 +92,7 @@ export default function PayrollDashboardPage() {
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏠 Payroll</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Everything payroll in one place — setup, each person&apos;s pay, the employee database, the pay
+          Everything payroll in one place — setup, managing each employee, the pay
           run, and total compensation. Click a tile to see what&apos;s inside. Hours Approval, Payroll, Payroll Tax
           and Payroll Expenses all default to the same company pay period.
         </p>

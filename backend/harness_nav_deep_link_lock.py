@@ -567,8 +567,19 @@ for it in STRAYMOD:
         it["module"] = "vip"               # a module its page does not carry in that menu
 check("C9c control: a door whose module its own menu's page does not carry → RED",
       bool(deep_link_problems(STRAYMOD)))
-check("C10 the Payroll hub carries an Employees & Pay tile to the tab",
-      "href: '/hr?tab=employees'" in read(PAYROLL_HUB) and "title: 'Employees & Pay'" in read(PAYROLL_HUB))
+# C10 — RE-EXPRESSED 2026-10-14 (index §CORE-08). It used to assert the hub held a tile TITLED
+# "Employees & Pay". The owner then asked for a "Manage Employees" tile holding Employees & Pay, the
+# Employee Database and a password-reset door, so the tile's title is now the GROUP's name and the
+# door is one of its items. The RULING §19.40 made was never about the tile's title — it was that the
+# Payroll hub carries a door to the tab, and that it is LABELLED with the name the owner looked for.
+# That is what gets pinned, so it survives the next regrouping and still goes red if the door leaves.
+_HUB = read(PAYROLL_HUB)
+check("C10 the Payroll hub carries a door LABELLED \"Employees & Pay\" pointing at the tab",
+      re.search(r"href: '/hr\?tab=employees'[^\n]*label: 'Employees & Pay'", _HUB) is not None,
+      "the hub must keep a labelled door to /hr?tab=employees, whichever tile groups it")
+check("C10b control: a hub door that loses the label → RED",
+      re.search(r"href: '/hr\?tab=employees'[^\n]*label: 'Employees & Pay'",
+                _HUB.replace("label: 'Employees & Pay'", "label: 'Pay'")) is None)
 check("C11 ScreenLink registers the destination (so copy naming it links)",
       re.search(r"employees_pay: \{\s*href: '/hr\?tab=employees'", SL_SRC) is not None)
 check("C12 the HR page declares the tab the entry opens",

@@ -998,6 +998,15 @@ export const NAV: NavGroup[] = [
     { href: '/hr/onboarding', label: 'Onboarding Checklist', icon: '🧩', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
     { href: '/hr/compliance', label: 'Compliance', icon: '📋', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
     { href: '/hr/employee-database', label: 'Employee Database', icon: '🗄️', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    // Employee Password Reset (owner 2026-10-14, index §CORE-08): *"provide a link to reset the password
+    // for the employee login on payroll Dashboard … the admin should be able to assign a manual password"*.
+    // module 'hr' + ['all','market'], byte-identical in shape to its Employee Database sibling above, and
+    // tileOnly because its door is the Payroll hub's new Manage Employees tile. This adds NO permission
+    // surface: the page renders the shared AssignPasswordCard, whose server path
+    // (POST /core/users/set-password) gates independently on _can_edit_setting(caller, 'security') — a
+    // per-role grant at permissions.settings.security. An HR manager without that grant opens the page and
+    // is told so; the same NAV-tier-mirrors-a-server-gate precedent as MGMT_ONLY below.
+    { href: '/hr/employee-password', label: 'Employee Password Reset', icon: '🔑', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
     { href: '/hr/letters', label: 'HR Communications', icon: '✉️', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
     { href: '/hr', label: 'HR · Total Comp', icon: '📊', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
     { href: '/hr/payroll-expenses', label: 'Payroll Expenses', icon: '💼', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
