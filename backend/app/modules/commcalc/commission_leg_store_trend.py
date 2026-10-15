@@ -50,6 +50,12 @@ HONESTY RULES THIS FILE ENFORCES (they are the report, not decoration):
 """
 from app.modules.commcalc import commission_legs as _legs
 
+# `_legs._period_ym` is reached deliberately, underscore and all. It is the ONE parse of a month label
+# written either way ('June 2026' / '2026-06') that the leg split itself uses, and `partial_months`
+# must agree with it exactly or "is this month finished" would rest on a second spelling of the same
+# fact. A public copy here would be that second spelling; a re-implementation would be worse.
+_period_ym = _legs._period_ym
+
 # The store key for carrier money that matched NO store. '' is `_leg_store_index`'s own miss value and
 # `ma_store_pnl.ma_earned_month_ladder`'s, so this file does not invent a third spelling for "nobody".
 UNATTRIBUTED_KEY = ""
@@ -73,7 +79,7 @@ def partial_months(labels, now_year, now_month):
     out = []
     cut = int(now_year) * 12 + (int(now_month) - 1)
     for lab in labels or []:
-        ym = _legs._period_ym(lab)
+        ym = _period_ym(lab)
         if not ym:
             continue
         if ym[0] * 12 + (ym[1] - 1) >= cut:
