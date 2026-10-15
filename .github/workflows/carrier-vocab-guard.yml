@@ -697,6 +697,10 @@ on:
       - "frontend/src/components/EmployeeWidgets.impl.tsx"
       - "backend/harness_table_sort_lock.py"
       - "frontend/table_sort_pending.txt"
+      - "backend/harness_column_render_lock.py"
+      - "frontend/src/components/ReportShell.tsx"
+      - "frontend/src/components/DataGrid.tsx"
+      - "frontend/src/lib/export.tsx"
       - "frontend/src/components/SortableTh.tsx"
       - "frontend/src/lib/table-sort.ts"
       - "backend/harness_closing_filter_contract.py"
@@ -1168,6 +1172,9 @@ jobs:
       - name: Run the table-sort ratchet (a new data table cannot ship unsorted; the unsorted list only shrinks — owner 2026-08-10, index §19.29)
         working-directory: backend
         run: python3 harness_table_sort_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the column-render lock (a column that draws its own cell is DRAWN — every table taking an ExportColumn honours `render`, and an export still carries the figure — owner 2026-10-15, index §CORE-11)
+        working-directory: backend
+        run: python3 harness_column_render_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-receipt proof (the basis split, the short/over truth table and the envelope_short chargeback contract — owner 2026-09-02 / 2026-10-02, index §47)
         working-directory: backend
         run: python3 harness_envelope_report.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

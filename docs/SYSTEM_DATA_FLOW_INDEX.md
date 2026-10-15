@@ -111,6 +111,7 @@ Primary code homes:
 | CORE-08 | **Which person is this name** | "Why does the report show 2 reps who worked at the store — it should only show the actual person who worked, for all reporting, not the one with the home store. Which rule decides that a punch and a sale are the same human, how many rules did that, and which field is a record of who was there as against who the schedule expected?" |
 | CORE-09 | **A capability without a door is not a feature** | "Where do I reset an employee's login password, and why is the one screen that can do it a page my HR manager cannot open? Which surfaces offer it, and what stops the next one retyping the form?" |
 | CORE-10 | **A gate, not a note** | "This is a very critical finding — don't just write it down, make a gate so nothing can pass through unknowingly; you were smart, maybe the other might not be as smart. What checks that a branch was cut from a current base, and what checks that a guard is still guarding what it thinks it is?" |
+| CORE-11 | **A column that draws its own cell is drawn** | "It did not let me enter. Which component actually puts a report's cell on the screen, do both of them honour a column that draws its own, and what else was silently blank because one of them did not?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -6923,6 +6924,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `POST /hr/onboarding/encrypt-existing` (§CORE-04) — unchanged to its caller, but it no longer holds the loop: it calls `encryption_backfill.backfill_intake_sensitive`, which `run_all()` also runs, so the `ENCRYPTION_BACKFILL_ON_BOOT=1` route now covers this family too. Before that it was the ONLY path, which is how two bank routing numbers stayed readable: nothing was wrong with the code, nobody had pressed the button.
 - *(no endpoint added)* — §CORE-09 adds no route: `POST /core/users/set-password` (`core/router.py::admin_set_password`) already set a SPECIFIC admin-chosen password, validated server-side by `validate_password`, toggling `app_users.must_reset_password` and audited as `password_admin_set`, gated on `_can_edit_setting(caller, "security")`. What changed is the number of SURFACES that offer it — one (`/admin/security`) became three (`+ /admin/roles` 👥 Assign people, `+ /hr/employee-password`), all rendering the one card `frontend/src/components/AssignPasswordCard.tsx`; `GET /core/security-settings` is the `can_edit` read each of them shows the form on (§CORE-09.3).
 - *(no endpoint added)* — §CORE-10 adds no route and no table: both gates are CI, not product. They run as the workflow jobs **The branch was cut from its base (no re-proposed commits, no lost CI job)** (`.github/workflows/branch-base-guard.yml` → `scripts/check_branch_base.py`) and **A guard that goes blind fails CI (derived subject sets)** (`.github/workflows/security.yml` → `backend/harness_subject_set_lock.py`). The first is the only workflow here triggered by `pull_request_target`, deliberately, and it never checks out or runs PR code (§CORE-10.3).
+- *(no endpoint added)* — §CORE-11 adds no route and no table either. It is a component fix plus a CI gate: `frontend/src/components/ReportShell.tsx` grows ONE `bodyCell(c, r)` home for what a body cell shows (both row paths on it), `crm/reports/page.tsx` dereferences the same rule for its own bespoke table, and the gate runs as the workflow step **Run the column-render lock** (`carrier-vocab-guard.yml` → `backend/harness_column_render_lock.py`). Three already-shipped columns began rendering with no change of their own (§CORE-11.1).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -7289,6 +7291,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
 | **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile; lock `harness_assign_password_one_home.py` (47) + proof `prove_manage_employees_tile.mjs` (24) — §CORE-09 |
 | **Was this branch cut from a current base, and is each guard still guarding what it thinks it is?** (and therefore: does a green tick mean anything on this pull request?) | no table — git metadata read at CI time: the TWO-DOT diff `base..head` (lines deleted), commit SUBJECTS on both sides (a squash merge leaves no ancestry to read), and the job names declared by each `.github/workflows/*.yml` on both trees; plus every `backend/harness_*.py` that scans repo source | gate A `scripts/check_branch_base.py` (A2 mass deletion unless `BASE-DELETIONS-ACKNOWLEDGED` is in the PR body, A3 re-proposed merged subjects, A4 a CI job the base runs and the head does not declare; 10 armed controls) run from the BASE branch via `pull_request_target`; gate B `backend/harness_subject_set_lock.py` (+ `harness_subject_set_pending.txt`, 50 pinned, shrink-only) — §CORE-10 |
+| **Which component actually puts this report's cell on the screen, and does it honour a column that draws its own?** (and therefore: is a control an author declared actually there?) | no table — frontend source read at CI time: every file that draws a `<td` whose content it reads off a handed column (`c.get(`), which is the derived subject set | ONE home `ReportShell.bodyCell` + `DataGrid`'s own cell + `crm/reports`' bespoke table, all three honouring `ExportColumn.render`; `lib/export.tsx` excused by name and held to the opposite rule (an export carries the figure, never a control); lock `backend/harness_column_render_lock.py` (32) — §CORE-11 |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Store-days started and not finished** (per store-day) — somebody submitted, the close gate sent them back to recount, and they did not return: `unfinished` / `unfinished_counts` on `GET /closing/rollup`, the `unfinished` block on each `GET /closing/summary` store card, the DM-verify banner. Carries the entered money and the gate's OWN recorded variance (never recomputed). **NOT a money figure**: an unfinished day writes no `commcalc.daily_closing` row, so it reaches no cash, recon or P&L total (owner chose "not until corrected", 2026-10-04). Distinct from **turned away** below (refused before the gate) and from **not submitted** (nobody tried) | `closing/unfinished_day.state_for`/`describe` over `commcalc.closing_attempt` + `commcalc.daily_closing` | §29.12 |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
@@ -25278,6 +25281,7 @@ status word rather than a blank that reads as nil.
 | CORE-08 | core |
 | CORE-09 | core |
 | CORE-10 | core |
+| CORE-11 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -28644,3 +28648,85 @@ about. What already existed and is dereferenced rather than copied:
 Same class: §19.25 (a failing harness that did not fail CI), §19.28 and the `vacuous-check-trap`
 instances (a check that cannot fail), §13a (a scanner blind to a second syntactic form), §19.18 (a
 mechanism written and its callers left unwired).
+
+---
+
+## §CORE-11. A COLUMN THAT DRAWS ITS OWN CELL IS DRAWN — one body-cell home per table (owner report 2026-10-15)
+
+Owner, on the two seller-declared cells shipped the day before (§COMMCALC-03.26): *"it did not let
+is enter"*. There was nothing to type into. The box had never been on the screen.
+
+### CORE-11.1 THE CLASS — one question, two answers, one of them silently wrong
+
+`lib/export.tsx` declares `ExportColumn.render` — *"custom cell rendering"* — and it is how an
+interactive cell (a button, a picker, a box you type in) reaches the screen at all. Two components
+take that column definition:
+
+| | body cell | result |
+|---|---|---|
+| `components/DataGrid.tsx` | `c.render ? c.render(r) : defaultCell(c, r)` | honoured the contract |
+| `components/ReportShell.tsx` | `isMoney(c) ? money(c.get(r)) : str(c.get(r))`, in **two** row paths | ignored it |
+
+Nothing failed while that was true, which is why it lasted: the column was accepted, its callback
+was simply never called, and the page rendered the plain value where its author had put a control.
+**Three shipped columns were dead that way, all on `commcalc/store-takeover`:**
+
+- the evaluations list's **Open** button — with the page copy directly above it reading *"Press Open
+  on any row"*. The Prospect dropdown was the only way into an evaluation, which is how the hole
+  stayed invisible.
+- its **Compare with our store** picker (§COMMCALC-03.25, shipped 2026-10-14).
+- the two **seller-declared cells** (§COMMCALC-03.26, shipped 2026-10-14) — the one the owner hit.
+
+A fourth site was found by the same question and fixed in the same change: `crm/reports/page.tsx`
+renders its own bespoke table over the shared column type and dropped `render` too. It declared no
+renderer today, so no user had lost anything there yet — which is exactly the shape that goes wrong
+later, so it was wired rather than noted.
+
+### CORE-11.2 THE FIX — one home, both row paths on it
+
+`ReportShell` now holds ONE answer to "what does a body cell show":
+
+```ts
+const bodyCell = (c: Col, r: any) => (c.render ? c.render(r) : (isMoney(c) ? money(c.get(r)) : str(c.get(r))))
+```
+
+dereferenced by the plain-row path and the grouped-row path. The two inline copies are gone. All
+three takeover columns light up from that one change, because the defect was never in any of them.
+
+`render` stays **display only**. Sorting, filtering, grouping, subtotals, the total row and every
+export read `get`, so a downloaded file carries the figure the control was bound to rather than a
+control nobody can open. `lib/export.tsx`, which builds the PDF and Print HTML, must therefore NOT
+honour `render` — it is the one excused member of the subject set below, and the lock asserts the
+opposite rule on it rather than skipping it.
+
+### CORE-11.3 LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_column_render_lock.py` — 32 checks, DB-free, stdlib only, wired into
+`carrier-vocab-guard.yml` (its own step plus `ReportShell.tsx` / `DataGrid.tsx` / `export.tsx` in the
+paths filter).
+
+- **(a)** every table component in scope honours `render`. The subject set is **derived**: a file is
+  in scope because it draws a `<td` whose content it reads off a handed column (`c.get(`), never
+  because it is named — and the derived set is then held against a **named roster** of three, each
+  member with its reason, so a member that leaves says so instead of quietly losing its assertion
+  (§CORE-10's gate B; a bare `len(...) >= 2` was the first draft here and that lock caught it). It
+  deliberately does not catch a page
+  that hand-writes `<td>{r.day}</td>` per field while keeping an `ExportColumn` list for its export
+  (`closing/accountability`): that page reads no column accessor, so it has nothing to drop.
+- **(b)** exactly ONE `bodyCell` home in `ReportShell` and exactly two dereferences of it; the inline
+  `isMoney(c) ? money(c.get(r))` body cell — the copy that caused this — fails the build.
+- **(c)** `render` stays display-only: `lib/export.tsx` declares it and never calls it.
+- **(d)** every page declaring a renderer hands it to a component that honours one.
+- **(e)** negative controls plant each defect, including the excused member and the out-of-scope page
+  shape, and require the lock to catch or spare them correctly.
+- **(regression)** the three columns that were blank are asserted present by name.
+
+### CORE-11.4 WHY NOT A TYPE
+
+`render?:` is optional by design — most columns want none — so no compiler can tell "this component
+may be handed a column with a renderer" from "this component honours one". The distinction is
+behavioural, which is why it needs a behavioural check. Same reasoning as §CORE-10's gate B.
+
+Same class: §19.18 (a mechanism written and its callers left unwired — this is its fourth instance),
+§19.29 (218 tables that never reached the sorting mechanism that already existed), §CORE-10 (a lesson
+in a note is enforced by whoever remembers it).
