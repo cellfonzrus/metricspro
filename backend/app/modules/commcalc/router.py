@@ -40256,6 +40256,16 @@ def _strip_source_pw(row, policy_rows=None, scope_ctx=None):
         row["route_policy"] = None
     if scope_ctx is not None:
         row["connector_scope"] = _connector_scope(scope_ctx, row.get("processor"))
+    # AN IN-FLIGHT STATUS WITH NO PROCESS BEHIND IT (§COMMCALC-13). A live-login worker that is killed
+    # mid-login — a deploy, a container recycle — never writes its own ending, so the row keeps
+    # claiming "⏳ Logging in…" forever. The rule lives in live_login (the module that owns how long a
+    # live login may take) and is READ here, which is the one place a data_source row reaches a
+    # surface. Applied BEFORE session_health below, so the chip and the health line cannot disagree.
+    try:
+        from app.modules.commcalc import live_login as _ll
+        row["auth_status"] = _ll.present_auth_status(row)
+    except Exception:
+        pass
     # Durable-session health (mig 955) — computed, so a session that quietly died is visible on the
     # page BEFORE the overnight pull silently returns nothing. Runs on the ALREADY-STRIPPED row, so it
     # reads has_session/expiry/status only and can never surface session material.

@@ -228,6 +228,96 @@ def _captcha_present(vp, page):
     return bool(_human_check_kind(vp, page))
 
 
+# WHAT STATUS DOES A FINISHED SESSION LEAVE BEHIND (owner-visible defect found 2026-10-15,
+# index §COMMCALC-13)?
+#
+# `live_login_start` stamps `auth_status='authenticating'` / "Live login in progress…" on the row
+# before the worker starts, because that IS true while the worker runs. §COMMCALC-10 taught a session
+# that DIES to write 'error'. But a session that simply ENDS — the inactivity timeout, or the operator
+# pressing Close — wrote only `auth_message` and left the status saying 'authenticating'. The chip on
+# commcalc/email-imports maps that to "⏳ Logging in…", so the owner's screen claimed a login was in
+# progress an hour after the browser had closed. Same class as §COMMCALC-10 and §19.41: **a status is
+# a record of what IS, so a session that ends without signing in must leave the row saying what was
+# true BEFORE it started — never "in progress".**
+#
+# `_STATUS_IN_FLIGHT` is the status that means "a login is running right now". It is the one value
+# that may never be restored: a row already carrying it (a PREVIOUS session that ended before this
+# fix, or any future path that stamps it and dies un-persisted) would otherwise have the same lie
+# handed straight back to it. It becomes None, which the chip renders as "○ Not connected" — the
+# honest reading of a login that has credentials but no session.
+_STATUS_IN_FLIGHT = "authenticating"
+
+
+def terminal_status(phase, status_before):
+    """THE status a terminal live session leaves on the data_source row, or None to clear it.
+
+    `"error"` is the session's own verdict and owns the row. Every other terminal phase did not
+    change whether we are signed in, so the row goes back to what it said before — except
+    `_STATUS_IN_FLIGHT`, which is never restored (see above). A phase that is not terminal returns
+    None and writes nothing; `_persist_diag` is what decides to call this at all."""
+    if str(phase or "") == "error":
+        return "error"
+    before = str(status_before or "").strip().lower()
+    if not before or before == _STATUS_IN_FLIGHT:
+        return None
+    return before
+
+
+# THE READ SIDE OF THE SAME FACT. `terminal_status` can only speak for a session that reaches its own
+# end. A worker that is KILLED mid-login — and every merge to main redeploys both hosts, so this is
+# routine here, not exotic — never runs `_persist_diag` at all, and the row is left claiming a login
+# is in flight with no process anywhere running it. Nothing on the row can distinguish that from a
+# login genuinely still going, so the only honest discriminator is AGE: past the longest a live
+# session may legitimately stay in flight, an in-flight status is a leftover.
+#
+# The budget is DEREFERENCED, never a new number: the worst honest case is a session that reaches the
+# command loop and is held there by an operator for the full inactivity window, plus one pre-loop
+# budget before it. A margin is added because a clock here and a clock in Postgres are not the same
+# clock, and reading a LIVE session as stale would be the one regression this must not cause.
+_IN_FLIGHT_STALE_MARGIN_S = 5 * 60
+
+
+def in_flight_stale_after_s():
+    """How long an in-flight status may stand before it is a leftover. One expression over the two
+    homes that already answer "how long may this take", so a change to either moves this too."""
+    return float(_IDLE_CLOSE_SECONDS) + PRELOOP_PROGRESS_DEFAULT_S + float(_IN_FLIGHT_STALE_MARGIN_S)
+
+
+def in_flight_is_stale(auth_status, pending_started_at, now=None):
+    """True when this row's status claims a login is running but no session can still be running it.
+
+    PURE and never raises — an unparseable or missing timestamp reads as NOT stale, so an unknown
+    shape keeps the pre-2026-10-15 answer rather than clearing a status that might be live. Only
+    `_STATUS_IN_FLIGHT` can be stale; every other status is a settled verdict and is left alone."""
+    if str(auth_status or "").strip().lower() != _STATUS_IN_FLIGHT:
+        return False
+    try:
+        started = str(pending_started_at or "").strip()
+        if not started:
+            return False
+        t = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        ref = now or datetime.now(timezone.utc)
+        return (ref - t).total_seconds() > in_flight_stale_after_s()
+    except Exception:
+        return False
+
+
+def present_auth_status(row, now=None):
+    """The `auth_status` a SURFACE should show for this row — the stored one, or None once an in-flight
+    claim has gone stale. The chip on commcalc/email-imports renders None as "○ Not connected", which
+    is the honest reading of a login that holds credentials and no session."""
+    try:
+        stored = row.get("auth_status")
+    except Exception:
+        return None          # not a row at all — there is no status to present
+    try:
+        return None if in_flight_is_stale(stored, row.get("pending_started_at"), now=now) else stored
+    except Exception:
+        return stored        # anything unexpected keeps the STORED answer, never a cleared one
+
+
 def _clean_err(msg):
     """Strip Playwright's raw 'Call log:' block (and everything after) from an exception string so an
     operator NEVER sees the internal trace ("... Call log: - navigating to ... waiting until
@@ -322,6 +412,10 @@ class LiveLoginSession:
         self._finished_at = None
         self._thread = None
         self._watchdog = None                     # the no-progress watchdog thread (see _watch)
+        # What the row said BEFORE `live_login_start` stamped 'authenticating' over it — the row is
+        # read before that stamp, so this is the pre-login truth. `terminal_status` restores it when
+        # this session ends without signing in (§COMMCALC-13).
+        self._status_before = row.get("auth_status")
 
     # ── thread-safe shared-state access ──────────────────────────────────────────────────────────
     def _set(self, phase=None, message=None, touch=True):
@@ -365,7 +459,8 @@ class LiveLoginSession:
         """Persist the LAST live frame + a status line to the SAME data_source diag store the two-call
         begin_login/complete_2fa failures write — the frame via persist_shot (→ login_shot/login_shot_at,
         the store '📷 What the browser saw' reads) and the status line via persist (auth_message, plus
-        auth_status='error' on a hard stop, mirroring _do_portal_login's failure shape). This runs at
+        the status `terminal_status` answers — 'error' on a hard stop, mirroring _do_portal_login's
+        failure shape, and otherwise the row's PRE-LOGIN status restored, never left in flight). Runs at
         EVERY stop of the session — proxy_error, auth failure, idle timeout, operator Close, or a crash —
         so the panel reflects THIS live session's final screen instead of a stale earlier attempt's frame.
         Best-effort / never raises, like _store_login_shot and the other diag writes. 'authenticated' owns
@@ -375,9 +470,12 @@ class LiveLoginSession:
                 phase, message, shot = self.phase, self.message, self._shot
             if self.persist and phase in ("error", "cancelled"):
                 upd = {"auth_message": (message or "")[:400],
-                       "last_run_at": datetime.now(timezone.utc).isoformat()}
-                if phase == "error":
-                    upd["auth_status"] = "error"
+                       "last_run_at": datetime.now(timezone.utc).isoformat(),
+                       # Nothing is in flight any more, on either terminal phase. 'authenticated'
+                       # clears the same two fields in _on_authenticated, so a finished session
+                       # leaves one shape whichever way it finished.
+                       "auth_status": terminal_status(phase, self._status_before),
+                       "pending_started_at": None}
                 try:
                     self.persist(upd)
                 except Exception:

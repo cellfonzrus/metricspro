@@ -259,6 +259,10 @@ on:
       # already names further down this same list — so a change to either re-runs this job and with
       # it the human-check lock, and a check that gates the submit cannot go unseen again.
       - "backend/harness_human_check_kind.py"
+      # §COMMCALC-13 — a finished live login leaves an honest status. The homes are in live_login
+      # (named further down from §COMMCALC-10) and the one reader is the data_source row decorator in
+      # commcalc/router.py (already named above for §12a.2a), so both re-run this job.
+      - "backend/harness_terminal_status.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/merchant_portals.py"
       - "backend/app/modules/core/import_health.py"
@@ -959,6 +963,9 @@ jobs:
       - name: Run the human-check lock (a check that GATES the submit counts whether or not it is painted; each kind gets its own words)
         working-directory: backend
         run: python3 harness_human_check_kind.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the terminal-status lock (a session that ends restores the row's real status; an in-flight claim cannot outlive its worker - index COMMCALC-13)
+        working-directory: backend
+        run: python3 harness_terminal_status.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
         working-directory: backend
         run: python3 harness_mapping_key_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

@@ -304,7 +304,11 @@ class DriveVP:
         return url or default
 
     @staticmethod
-    def _goto_login(page, base):
+    def _goto_login(page, base, login_url=None):
+        # `login_url` added 2026-10-15 (§COMMCALC-10): _drive now names the connector's own login
+        # page. A fake whose signature lags the driver's raises TypeError INSIDE _drive's broad
+        # except, which aborted this scenario before its message was ever set — the two checks below
+        # then failed for a reason that had nothing to do with squid.
         pass
 
     @staticmethod
