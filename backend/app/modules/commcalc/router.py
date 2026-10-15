@@ -72,6 +72,7 @@ from app.modules.commcalc import data_lineage_registry as _lineage  # canonical 
 from app.modules.commcalc import url_guard as _url_guard   # SSRF guard for tenant URLs (C4)
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_legs as _commission_legs
+from app.modules.commcalc import commission_leg_store_trend as _leg_store_pivot  # pure per-store pivot (§COMMCALC-12)
 from app.modules.commcalc import commission_received as _commission_received
 from app.modules.commcalc import commission_engine
 from app.modules.commcalc import plan_options
@@ -25197,13 +25198,62 @@ def _leg_passes(ent, markets, stores):
 
 
 def _leg_blank_period(label):
+    # `by_store` is the STORE AXIS on this same period (owner ask 2026-10-15, index §COMMCALC-12).
+    # It is populated in the SAME pass over the SAME rows as the company figure, by the SAME
+    # `_leg_accumulate` below — so the per-store grid can never be a second derivation of the trend.
+    # Empty unless the caller asked for it, so `/commission-leg-trend` is byte-unchanged.
     return {'period': label, 'm1': 0.0, 'm2_12': 0.0, 'unsplit': 0.0, 'total': 0.0,
-            'ladder': {}, 'sources': {}}
+            'ladder': {}, 'sources': {}, 'by_store': {}}
+
+
+def _leg_store_cell(target, store_key):
+    """The per-store cell of a period row, created on first sight. Same shape as the period row
+    itself (minus `by_store`), so one accumulator serves both grains."""
+    by = target.setdefault('by_store', {})
+    c = by.get(store_key)
+    if c is None:
+        c = by[store_key] = {'period': target.get('period'), 'm1': 0.0, 'm2_12': 0.0,
+                             'unsplit': 0.0, 'total': 0.0, 'ladder': {}, 'sources': {}}
+    return c
+
+
+# The bucket name the leg classifier returns -> the public key on a period row. ONE map; the company
+# and the per-store grain both go through `_leg_accumulate`, so a dollar cannot land in one and miss
+# the other (the defect class the house rules call "two paths answering one question").
+_LEG_BUCKET_KEY = {'m1': 'm1', 'trailing': 'm2_12', 'unsplit': 'unsplit'}
+
+
+def _leg_accumulate(target, bucket, leg, amt, source_name, with_ladder=True):
+    """Add one classified dollar amount to a period row (company row OR a per-store cell).
+
+    `bucket` is the classifier's own bucket, `leg` its month-of-life (None = states none). The ladder
+    key comes from `commission_legs.ladder_key` — the ONE home for that convention — so this never
+    re-spells 'unknown' and never invents a rung.
+
+    `with_ladder=False` for the MA/VidaPay path ONLY, and for a reason that is not a shortcut: there
+    the bucket totals and the rung ladder come from `split_ma_components` as TWO separate read-outs of
+    the same columns (a margin column is in the `unsplit` bucket AND in the Unlabelled rung), so
+    adding the rung here as well would count that money twice. The ladder is merged from the split's
+    own `leg_ladder` immediately after, through the same `ladder_key`."""
+    target[_LEG_BUCKET_KEY[bucket]] = round(target[_LEG_BUCKET_KEY[bucket]] + amt, 2)
+    target['total'] = round(target['total'] + amt, 2)
+    if with_ladder:
+        lk = _commission_legs.ladder_key(leg)
+        target['ladder'][lk] = round(target['ladder'].get(lk, 0.0) + amt, 2)
+    if source_name:
+        target['sources'][source_name] = round(target['sources'].get(source_name, 0.0) + amt, 2)
 
 
 @router.get("/commission-leg-trend")
 def commission_leg_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
                                org_id: str = ORG_ID):
+    """See `_commission_leg_trend_compute` — this endpoint IS that compute, returned as it stands."""
+    require_org(org_id)
+    return _commission_leg_trend_compute(sb(), org_id, period, months, market, store)
+
+
+def _commission_leg_trend_compute(client, org_id, period="", months=12, market="", store="",
+                                  by_store=False):
     """Month-over-month decomposition of RECEIVED commission into the 1st-month leg vs the M2–M12
     trailing legs, plus the per-month-of-life LADDER that makes the owner's 3MR/6MR question answerable.
 
@@ -25219,9 +25269,13 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
     type maps to the 'Commission' payment category, plus (for ePay-less orgs, on the same emptiness
     gate _compute_gp uses) the VidaPay/MA commission components. Comprehensive Comp is returned
     alongside as its own series, never added in — the GP report keeps them as separate columns.
+
+    `by_store` adds the STORE AXIS to each period, in the same pass over the same rows (owner ask
+    2026-10-15, index §COMMCALC-12). It is off by default, so `/commission-leg-trend` returns exactly
+    what it always returned; `/commission-leg-store-trend` turns it on and PIVOTS this result. One
+    money path, two shapes — not two derivations.
     """
-    require_org(org_id)
-    client = sb(); sc = client.schema('commcalc')
+    sc = client.schema('commcalc')
     labels = _leg_window(period, months)
     pkey = _leg_period_key(labels)
     variants = sorted(pkey.keys())
@@ -25307,64 +25361,129 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
         else:
             continue
         bucket, leg, _why = legcls.label(label)
-        k = {'m1': 'm1', 'trailing': 'm2_12', 'unsplit': 'unsplit'}[bucket]
-        target[k] = round(target[k] + amt, 2)
-        target['total'] = round(target['total'] + amt, 2)
-        lk = 'unknown' if leg is None else str(int(leg))
-        target['ladder'][lk] = round(target['ladder'].get(lk, 0.0) + amt, 2)
         sname = 'ePay Payment Detail' if src == 'payment_detail' else 'Comprehensive Comp'
-        target['sources'][sname] = round(target['sources'].get(sname, 0.0) + amt, 2)
+        _leg_accumulate(target, bucket, leg, amt, sname)
+        if by_store:
+            # The SAME dollar, the SAME classification, one grain finer. A carrier address that
+            # matched no store keeps the honest '' key (`commission_leg_store_trend.UNATTRIBUTED_KEY`)
+            # and is REPORTED as its own row — never spread over the stores, never dropped.
+            _leg_accumulate(_leg_store_cell(target, str((ent or {}).get('store') or '')),
+                            bucket, leg, amt, sname)
 
     # ── 2. VidaPay / master-agent commission — only for months with NO payment detail, exactly the
     #      emptiness gate _compute_gp uses, so the two surfaces can never double-count the same month.
-    ma_rows = []
-    try:
-        ma_rows = (client.schema('commcalc')
-                   .rpc('commission_leg_ma_rollup', {'p_org_id': org_id, 'p_periods': variants})
-                   .execute().data) or []
-    except Exception:
-        if used_rpc:
-            for lab in labels:
-                try:
-                    mr = (sc.table('raw_ma_commission').select('*').eq('org_id', org_id)
-                          .in_('period', _pvariants(lab)).limit(100000).execute().data) or []
-                except Exception:
-                    mr = []
-                if mr:
-                    agg = {'period': lab}
-                    for c in _MA_LEG_COMPONENTS:
-                        agg[c] = sum(safe_float(x.get(c)) for x in mr)
-                    ma_rows.append(agg)
+    #
+    # STORE GRAIN, 2026-10-15 (index §COMMCALC-12). The note that used to stand here said the trend
+    # could not split MA per store "because the month rollup RPC aggregates the sheet per PERIOD
+    # without the account column". That diagnosis was right and the remedy was looking in the wrong
+    # place: the RPC is a PRE-AGGREGATION of rows that DO carry the account, so the store grain needs
+    # no schema change at all — it needs the rows. When a store/market FILTER or the store AXIS is
+    # asked for, the window's `raw_ma_commission` rows are read once (paged, §19.48), grouped per
+    # (period, resolved store) and bucketed with `legcls.ma` — the SAME function, over the SAME
+    # `_MA_LEG_COMPONENTS` list, that the per-period path uses. Because that function is linear in the
+    # column sums, Σ(per-store buckets) == the per-period rollup's buckets to the cent; the grain is
+    # strictly finer and the money cannot move (pinned by harness_commission_leg_store_trend.py).
+    #
+    # This fixes the CLASS, not the instance: the store/market filter — which silently EXCLUDED all MA
+    # money and merely apologised in `notes` — now selects it too. Both callers of the same missing
+    # fact, fixed in one change. The processor account -> store answer is dereferenced from
+    # `ma_store_pnl.canonical_store_index` (the ONE home, §314) and the account COLUMN from
+    # `data_lineage_registry.store_account_column` — neither is spelled here.
+    ma_rows, ma_store_rows, ma_store_ready = [], [], False
+    if by_store or markets or stores:
+        try:
+            _ma_acct = _lineage.store_account_column('raw_ma_commission')
+            _ma_sel = ','.join(['period', _ma_acct] + list(_MA_LEG_COMPONENTS))
+            _ma_raw = _feed_read.read_all(lambda: sc.table('raw_ma_commission').select(_ma_sel)
+                                          .eq('org_id', org_id).in_('period', variants))
+            from app.modules.account import ma_store_pnl as _msp_leg
+            _ma_idx = _msp_leg.canonical_store_index(client, org_id)
+            _grp = {}
+            for r in (_ma_raw or []):
+                lab = pkey.get(str(r.get('period') or '').strip())
+                if not lab:
+                    continue
+                acct = str(r.get(_ma_acct) or '').strip()
+                # An account the index does not know keeps the honest '' key — the same miss value
+                # `ma_earned_month_ladder` uses — so it reads as "(No store matched)" and is never
+                # guessed onto a store.
+                g = _grp.setdefault((lab, str(_ma_idx.get(acct) or '')), {})
+                for c in _MA_LEG_COMPONENTS:
+                    g[c] = g.get(c, 0.0) + safe_float(r.get(c))
+            ma_store_rows = [{'period': lab, 'store': st, **sums}
+                             for (lab, st), sums in _grp.items()]
+            ma_store_ready = bool(_ma_raw)
+        except Exception as _mae:
+            print(f'WARN commission-leg MA per-store read unavailable: {_mae}')
+            notes.append('VidaPay/master-agent commission could not be read per store for this '
+                         'window, so it is EXCLUDED here. It IS store-attributable (processor '
+                         'account -> store); see the Gross Profit report, the P&L, or '
+                         'MA Commission -> by store.')
+    if not ma_store_ready:
+        try:
+            ma_rows = (client.schema('commcalc')
+                       .rpc('commission_leg_ma_rollup', {'p_org_id': org_id, 'p_periods': variants})
+                       .execute().data) or []
+        except Exception:
+            if used_rpc:
+                for lab in labels:
+                    try:
+                        mr = (sc.table('raw_ma_commission').select('*').eq('org_id', org_id)
+                              .in_('period', _pvariants(lab)).limit(100000).execute().data) or []
+                    except Exception:
+                        mr = []
+                    if mr:
+                        agg = {'period': lab}
+                        for c in _MA_LEG_COMPONENTS:
+                            agg[c] = sum(safe_float(x.get(c)) for x in mr)
+                        ma_rows.append(agg)
     if ma_rows and (markets or stores):
-        # CORRECTED 2026-09-21. The old wording here — "carries no store address, so it is
-        # company-wide" — stopped being true at mig 314: every MA row carries a processor account and
-        # `ma_store_pnl.canonical_store_index` resolves it to a store (LuxeLink: 20/20). The REAL
-        # reason this trend still cannot split it is narrower and is now stated as itself: the
-        # month rollup RPC (`commission_leg_ma_rollup`) aggregates the sheet per PERIOD without the
-        # account column, so there is nothing per-store to filter on here yet. The surfaces that DO
-        # attribute it per store are named, so the answer is one click away instead of denied.
+        # Reached only when the per-store read above was unavailable: without the rows there is
+        # nothing to attribute, so the money is excluded and SAID to be, never silently dropped.
         notes.append('VidaPay/master-agent commission IS store-attributable (processor account -> '
-                     'store) but this month-over-month rollup aggregates it per period '
-                     'without the account, so it is EXCLUDED while a store or market filter is '
-                     'active. For MA commission per store see the Gross Profit report, the P&L, or '
-                     'MA Commission -> by store.')
-    for r in ma_rows:
+                     'store) but its rows could not be read for this window, so the per-period '
+                     'roll-up is all that is available and it is EXCLUDED while a store or market '
+                     'filter is active. For MA commission per store see the Gross Profit report, '
+                     'the P&L, or MA Commission -> by store.')
+    # ONE loop, both grains. A per-store row carries `store`; the per-period fallback carries None,
+    # which means "this money has no store grain" — it keeps the company figure and, under a filter,
+    # is excluded by the branch below. No second copy of the accumulation.
+    for r in (ma_store_rows or [{**x, 'store': None} for x in ma_rows]):
         lab = pkey.get(str(r.get('period') or '').strip())
-        if not lab or (markets or stores):
+        if not lab:
             continue
         if out[lab]['sources'].get('ePay Payment Detail'):
             continue                      # this month is an ePay month — MA is the ePay-less fallback
+        st = r.get('store')
+        if st is None:
+            if markets or stores:
+                continue
+            st = ''
+        else:
+            st = str(st)
+            if not _leg_passes(store_idx.get(st), markets, stores):
+                continue
         res = legcls.ma(r, _MA_LEG_COMPONENTS)
-        b = res['buckets']
-        out[lab]['m1'] = round(out[lab]['m1'] + b['m1'], 2)
-        out[lab]['m2_12'] = round(out[lab]['m2_12'] + b['trailing'], 2)
-        out[lab]['unsplit'] = round(out[lab]['unsplit'] + b['unsplit'], 2)
-        out[lab]['total'] = round(out[lab]['total'] + res['total'], 2)
-        for lk, lv in (res.get('leg_ladder') or {}).items():
-            k = 'unknown' if lk == 'unknown' else str(int(lk))
-            out[lab]['ladder'][k] = round(out[lab]['ladder'].get(k, 0.0) + lv, 2)
+        for _bk, _amt in (('m1', res['buckets']['m1']), ('trailing', res['buckets']['trailing']),
+                          ('unsplit', res['buckets']['unsplit'])):
+            if _amt:
+                _leg_accumulate(out[lab], _bk, None, _amt, None, with_ladder=False)
+                if by_store:
+                    _leg_accumulate(_leg_store_cell(out[lab], st), _bk, None, _amt, None,
+                                    with_ladder=False)
+        # The LADDER is the leg split's own rung map, not re-derived from the buckets.
+        for _lk, _lv in (res.get('leg_ladder') or {}).items():
+            k = _commission_legs.ladder_key(_lk)
+            out[lab]['ladder'][k] = round(out[lab]['ladder'].get(k, 0.0) + _lv, 2)
+            if by_store:
+                _c = _leg_store_cell(out[lab], st)
+                _c['ladder'][k] = round(_c['ladder'].get(k, 0.0) + _lv, 2)
         out[lab]['sources']['VidaPay/MA'] = round(
             out[lab]['sources'].get('VidaPay/MA', 0.0) + res['total'], 2)
+        if by_store:
+            _c = _leg_store_cell(out[lab], st)
+            _c['sources']['VidaPay/MA'] = round(_c['sources'].get('VidaPay/MA', 0.0)
+                                                + res['total'], 2)
 
     # ── 3. DLAR 3MR overlay (optional) — the ONE retention KPI this codebase actually has ────────
     tmr3 = {}
@@ -25412,6 +25531,65 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
         'retention_note': ('3MR here is the DLAR rep-average 3-month-retention KPI (raw_dlar_rep.tmr3) — '
                            'the only retention KPI this system stores. There is no stored 6MR KPI; the '
                            'M4–M6 rungs of the ladder are the payout-side view of 6-month retention.'),
+    }
+
+
+@router.get("/commission-leg-store-trend")
+def commission_leg_store_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
+                               org_id: str = ORG_ID):
+    """PER-STORE month-of-life commission, the months SIDE BY SIDE (owner ask 2026-10-15,
+    index §COMMCALC-12).
+
+    Owner, verbatim, on a prospect's M1..M12 rungs shown side by side for two months: *"this is a good
+    insight , this means we need to see these numbers as a report sisde by sie as shown above for each
+    store to analyze , create one"*. One row per store, one column per month, and the rung detail
+    underneath — so "which of my stores is running down, and in which rung" is readable rather than
+    reconstructed.
+
+    NOT A SECOND DERIVATION. This calls `_commission_leg_trend_compute` — the SAME read, the SAME
+    carrier classification (§58/§66), the SAME store identity (§64) and the SAME rung convention
+    (`commission_legs`) that `/commission-leg-trend` uses — with its store axis switched on, and then
+    PIVOTS it through the pure `commission_leg_store_trend` module. It computes no money of its own,
+    exactly as a multi-month P&L loops the single-month read (§4c).
+
+    READ-ONLY. Writes nothing, books nothing, moves no payout.
+    """
+    require_org(org_id)
+    res = _commission_leg_trend_compute(sb(), org_id, period, months, market, store, by_store=True)
+    series = res.get('company') or []
+    labels = res.get('months') or []
+    now = _datetime.now(_timezone.utc)
+    partials = _leg_store_pivot.partial_months(labels, now.year, now.month)
+    store_idx, _sfid, _res = _leg_store_index(sb(), org_id)
+    rows, ladder_keys = _leg_store_pivot.pivot(labels, series, store_idx, partials)
+    totals = _leg_store_pivot.totals_row(labels, rows, ladder_keys, partials)
+    ties = _leg_store_pivot.ties_to(labels, totals, series)
+    return {
+        'months': labels,
+        'partial_months': partials,
+        'stores': rows,
+        'totals': totals,
+        'company': series,
+        'ties': ties,
+        'all_ties': all(v.get('ok') for v in ties.values()),
+        **_leg_store_pivot.ladder_public(ladder_keys),
+        'unattributed_label': _leg_store_pivot.UNATTRIBUTED_LABEL,
+        'config': res.get('config'),
+        'notes': res.get('notes') or [],
+        'degraded': res.get('degraded'),
+        'money': True,
+        'basis': res.get('basis'),
+        'store_basis': ('One row per store, one column per month. The money is the leg trend\'s own — '
+                        'commission RECEIVED — attributed to the store the carrier wrote on the line, '
+                        'resolved through the one home for store identity. A line whose address '
+                        'matched no store is its own row, never spread over the stores. A month that '
+                        'has not finished is marked partial and is excluded from every delta, so half '
+                        'a month is never read as a collapse.'),
+        'reads_down_note': ('`worst_rung` is the month-of-life rung that fell hardest between the '
+                            'first and last COMPLETE month this store appears in. A store losing M1 '
+                            'is shrinking now; a store whose M1 holds while M4–M6 fall lost its '
+                            'activation cohort four to six months ago — different problems, and the '
+                            'rung is the only place the difference shows.'),
     }
 
 

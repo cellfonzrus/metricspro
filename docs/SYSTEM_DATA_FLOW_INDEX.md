@@ -122,6 +122,7 @@ Primary code homes:
 | COMMCALC-09 | **A stored pay slice nobody computed is not $0.00 earned** | "The rep incentive table shows ACC GP as zero and the drill-down link calculates a figure. Same source — so which read is stale, how does a surface tell a measured zero from a blank, and which months need recalculating?" |
 | COMMCALC-10 | **A live login that stops making progress must say so** | "I started the live login and it has not moved for five minutes. Is it still working, is it dead, and why has nothing told me either way?" |
 | COMMCALC-11 | **An invisible human check is still a check** | "The live login filled in my portal details and then told me the password was wrong. The password is right — so what actually refused the sign-in, and why did nothing on the screen say a human check was waiting?" |
+| COMMCALC-12 | **Which store's trailing commission legs are running down, and in which rung** | "Carrier commission fell. Was it this month's activations, or the M2–M6 legs still paying on a cohort that collapsed months ago — and at WHICH store? Show the month-of-life rungs per store with the months side by side." |
 
 ---
 
@@ -1230,6 +1231,12 @@ booking functions they read (the booking functions themselves are byte-identical
 - `GET /commission-leg-trend` note corrected: MA money IS store-attributable; the reason this
   rollup cannot filter by store is that `commission_leg_ma_rollup` aggregates per period WITHOUT the
   account column — stated as itself, with the surfaces that DO attribute it named.
+  **SUPERSEDED 2026-10-15 (§COMMCALC-12): the blocker was never the RPC.** It is a PRE-AGGREGATION of
+  rows that DO carry the account (`raw_ma_commission.merchant_account_id`), so the trend now reads
+  those rows when a store filter or the store axis is asked for, groups them per (period, store) and
+  buckets them with the SAME `legcls.ma` — Σ(per-store) == the rollup to the cent, because
+  `split_ma_components` is linear in the column sums. The filter no longer EXCLUDES MA money, no
+  schema changed, and the apology above now fires only when the rows genuinely cannot be read.
 
 **BOTH BASES, LABELLED (owner decision 2026-09-21).** The money column carries the basis the org
 BOOKS, so GP and the P&L are the same dollars; the other basis rides alongside as a display-only
@@ -6705,6 +6712,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `storeops.raw_clock_punch` (mig `1073`) — the B2B clock in / clock out report **as a CLAIM about a store-day**. Written only by `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) / the email sweep, through `_ingest_mapped_df` → `storeops/clock_feed.landing_rows`. Keeps the raw store and employee spellings, the LOCAL stamps **and** their UTC conversion, the file's own declared decimal, and `excluded` naming why a row is not a payable punch. **NEVER writes `storeops.timelog` or `shifts.actual_hours`.** Unique on (org, store_raw, employee_raw, business_date, clock_in_local), so a re-pull restates a day instead of duplicating it. Data-date column `business_date`, freshness column `arrived_at` (§14z).
 - `storeops.clock_variance_correction` (mig `1073`) — what a HUMAN decided about one clock variance, so "all clear" is an assertion by a named person and not an absence of rows. `resolution` ∈ `corrected` / `accepted_ours` / `accepted_feed`, plus the DM's per-row `override_hours` / `override_reason` / `override_by` / `override_at`, which OUT-RANK the org's `clock_source_rule`. A CHECK constraint refuses an override without a reason and a name, so no endpoint or hand-written UPDATE can land a bare number on a pay row (§14z).
 - `storeops.clock_feed_login_link` (mig `1073`) — which B2B login is which employee. **Only `status = 'approved'` binds** (`storeops/payroll_identity.match_is_binding`); a name-token match is a `proposed` row for a human to approve and NEVER an attribution, and a `rejected` row is a human saying "not this person", which is never re-proposed (§14z).
+- `commcalc.raw_ma_commission.merchant_account_id` — the dealer's PROCESSOR ACCOUNT on the master-agent commission sheet, and the reason the leg trend's per-store axis needed no migration: `commcalc.commission_leg_ma_rollup` (mig `274`) drops this column because it is `GROUP BY period`, but the ROWS carry it, so the trend reads them (paged, §19.48) and groups per (period, store). The column NAME is `data_lineage_registry.store_account_column('raw_ma_commission')` and the account → store answer is `account/ma_store_pnl.canonical_store_index` (mig `314`) — neither is spelled in the trend. `commcalc.commission_leg_label_rollup` (mig `274`, superseded by mig `1066`) already returns the raw store ADDRESS and is store-grained as it stands; this is its second reader (§COMMCALC-12).
 - `commcalc.account_config.device_cost_store_basis` (mig `1069`) — WHICH store carries a handset's cost: `stocking` (the distributor ledger's own store — today's behaviour) or `activating` (the store the carrier paid, for the devices §65 PROVED). NULL = not declared ⇒ `stocking`, byte-identical. Written by an owner through `PUT /account/config`; read in ONE place, `account/device_cogs.load_device_cost_store_basis` → `resolve_device_cost_store_basis`, and applied in ONE place, `device_cogs.cost_store`. Per-store only: the company total never moves, each store's gross profit restates, so a recompute follows (§70).
 - `commcalc.account_config.labour_vocabulary_mode` (mig `1061`) — the per-org opt-out for the platform's own labour-row vocabulary. Written by an owner; read in ONE place, `account/coa._account_config` → `commcalc/labour_vocabulary.resolve`, which also resolves `payroll_expense_names`, `labour_commission_expense_names`, `payroll_authority_grain` and `payroll_expense_routes` — absent column / unknown value ⇒ `'house'`, the correct default (§4e).
 - `commcalc.cash_pickup_config.cash_variance_band` / `.cash_variance_min_days` (mig `1070`) — the dollar band below which a cash difference is counting noise, and how many out-of-band days make a trend. Owner 2026-10-10, "we ignore upto $5 of variance". NULL ⇒ the house $5 / 3 days, NEVER zero. Written by an owner; read in ONE place, `closing/cash_variance.band` / `.min_days`, dereferenced by `GET /closing/cash-variance` and by nothing else (§72).
@@ -6987,6 +6995,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `GET /closing/cash-variance?date_from=&date_to=&markets=&stores=&reps=&verdict=` — shortage and overage AFTER management recon: what management received (`envelope_count` first, else `cash_pickup.actual_picked_amount`), the cash envelope the rep declared (`daily_closing.t_cash`) and the POS cash the close gate recorded (`closing_attempt.b2b_cash`), per store-day-rep — each figure carried WITH its basis, and a pair whose bases differ reported as NOT MEASURABLE rather than subtracted. Plus `by_store` / `by_employee` rollups off ONE summariser, the four trend kinds, and `blockers` naming what cannot be measured and why. Band + trend threshold are per-org config (mig `1070`); the verdict is `deposit_recon.status_for`; the POS figure is read, never re-derived from the feed. READ-ONLY, no writer (§72).
 - `POST /closing/pickup/open-count` · `POST /closing/billpay-pickup/open-count` — open a SEALED envelope and record the count, **or CORRECT a count already entered** (owner 2026-10-10). Optional `note` for why. Every changed field appends to `commcalc.cash_count_revision` through the one writer, and the reply carries `corrections` / `history_recorded` / `history_detail` so a trail that could not be written is stated rather than implied (§73.5). `POST /closing/pickup` and `POST /closing/envelope-count` return the same two keys.
 - `GET /account/config` · `PUT /account/config` — … plus `device_cost_store_basis` (mig 1069): WHICH store carries a handset's cost, `stocking` (today's behaviour, and the default for NULL) or `activating`. MONEY-TOUCHING and per-store: the company total does not move, each store's gross profit restates, so a recompute follows a declaration. Validated against `device_cogs.DEVICE_COST_STORE_BASES`; the read side returns the resolved basis and `moves_cost_to_activating_store` (§70).
+- `GET /commcalc/commission-leg-store-trend?period=&months=&market=&store=` — **the month-of-life (M1..M12) commission rungs PER STORE with the months side by side** (owner ask 2026-10-15): one row per store, one column per month, each cell carrying 1st-month / M2–M12 / Unsplit and that store's own rung ladder, plus `worst_rung` naming the rung that fell hardest between the first and last COMPLETE month — so a store shrinking NOW (M1 falling) is distinguishable from one echoing a cohort lost months ago (M1 flat, M4–M6 falling). It CALLS `router._commission_leg_trend_compute` with its store axis on and PIVOTS the result through the pure `commcalc/commission_leg_store_trend.py` — the same read, the same carrier classification (§58/§66), the same store identity (§64), the same rung convention (§4a.2) — so Σ(per-store) == the company figure to the cent (§A of the lock). An unfinished month is flagged `partial` and excluded from every delta; money matching no store is its own named row; `ties` states per month whether the displayed total equals the company series. READ-ONLY, no writer, no table, **no migration** (§COMMCALC-12).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET /closing/metric-catalog` — **what this business declares at the end of a day, and what a unit is worth**: every category with its `value_kind`, `declared_by`, `unit_price`, `in_revenue` and `storage`, plus `revenue_keys` / `employee_keys` and the vocabularies themselves. THE one answer; the closing form and the incentive-rule editor read it instead of listing categories. `GET /closing/declared/{date}?store_code=` folds both physical stores into one store-day (plus `by_employee`, `store_revenue`, `employee_revenue`); `PUT /closing/metric-lines` saves the money-bearing and per-employee lines (full replace per store-day, and a line naming an undeclared category is REFUSED, not stored) — `closing/metric_catalog.py`, mig `1072` (§76).
 - `GET /commcalc/incentive-rules` — the tenant's daily-incentive rules **with the catalog they may point at**, the three rule shapes, the split bases, the qualifier scopes and the comparisons. `PUT /commcalc/incentive-rules` upserts one (money-posture gated by `_require_commission_admin`; **refuses** a rule whose qualifier or payout names an undeclared category); `DELETE /commcalc/incentive-rules/{id}` switches it OFF rather than destroying its audit trail. `GET /commcalc/daily-incentive/{date}?store_code=` COMPUTES one store-day — per-employee lines, `by_employee` totals, `top_earner`, `unallocated`, and a `rules[]` why-trail carrying each qualifier verdict. **Computes only; nothing is persisted and nobody is paid by calling it** — `commcalc/daily_incentive.py`, mig `1072` (§76.4).
@@ -7308,6 +7317,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Reconciled paid hours**, and the sentence saying why | the window the two clock records agree on (house default), or the ruling read literally, or ours alone — declared per org | `payroll_hours_basis.reconcile_clock_records`. Measured 2026-10-09 across 16 pairs: today 146.42h/$2,156.45 · literal 143.63h/$2,113.60 · house default 142.98h/$2,102.63 (§14z) |
 | **Employees a payroll run would price at $0.00** | an active hourly employee with no `pay_rate` | `clock_variance.employees_without_rate` → `payroll_run_gate`, which REFUSES and names them. Measured 2026-10-10: 13 of 46 house hourly employees (§14z) |
 
+- **Which of my stores is running down, and in which month-of-life rung?** — ONE home `commcalc/commission_leg_store_trend` (`pivot` / `partial_months` / `totals_row` / `ties_to` / `ladder_public`), a PURE pivot of `router._commission_leg_trend_compute`'s own money; the rungs are `commission_legs.months_present`'s, from the DATA. Lock `harness_commission_leg_store_trend.py` (76). Live 2026-10-15, house org, May–Sep complete months: 28 stores, every month ties exactly; company **−$25,534.27 / −19.4%** of which M1 is only −3.7% — M2–M12 −17.9% and the Unlabelled rung **−50.6%**; `1710 W 4th St` −46.1% with its M1 −38.9% (shrinking now) against `117 E Burnside Ave` whose **M1 moved 0.0%** while M2–M12 fell 35.9% and **M4 fell $594.60** (a cohort lost four months ago) — §COMMCALC-12.
 - **Which expense rows are LABOUR the statement already books from its own source — so they must not be counted twice?** — ONE home `commcalc/labour_vocabulary.resolve` (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`; a non-empty tenant list wins wholesale; `mode='off'` opts out), dereferenced by `account/coa._account_config`, `commcalc/router._expense_apply_default_tokens` and the Expenses sheet's pinned mirror. Locks `harness_labour_vocabulary.py` (109). Live 2026-10-07: 2 of 3 tenants were double-counting; the house org by **$90,922.80 / $92,565.89 / $97,362.88** in July / August / September 2026 — §4e.
 - **What makes up THIS line, for THIS scope?** — `coa.accrue_detail` records every drill dollar at the store grain and `engine._scoped` sums the stores in its own scope (Σ `detail_by_store` + `detail_company_wide` == `detail`); `statement_filter.aggregate` already summed it and was unchanged. Before this, 39 of the house org's 40 stored August 2026 P&L scopes carried an EMPTY drill-down. Locks `harness_pl_drill_detail.py` (56); the panel and `prove_pl_drill_path.mjs` (58) land in PR #408 — §4e.
 - **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.16).
@@ -25351,6 +25361,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-09 | commcalc |
 | COMMCALC-10 | commcalc |
 | COMMCALC-11 | commcalc |
+| COMMCALC-12 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -29150,3 +29161,178 @@ Same class: §19.18 (a mechanism written and its callers left unwired), §19.41 
 record a failure is not a record), §COMMCALC-10 (the stall this made visible), §12a.2a (a connector
 kind carries no host, so its address is per-tenant config), §CORE-03 (where the portal credential is
 sealed), §COMMCALC-07 (the pull loop this login feeds).
+
+## §COMMCALC-12. WHICH STORE'S TRAILING COMMISSION LEGS ARE RUNNING DOWN, AND IN WHICH RUNG (owner ask 2026-10-15)
+
+Owner, verbatim, in the Store Takeover thread, on a prospect table that put the month-of-life rungs
+side by side for two months: *"this is a good insight , this means we need to see these numbers as a
+report sisde by sie as shown above for each store to analyze , create one"*.
+
+**What the insight was.** On that prospect, **96% of a 41% fall in carrier commission was M2–M5
+trailing legs** paying on an activation cohort that had collapsed (Activation Order lines 1,386 Jul →
+787 Aug → 557 Sep). The fall was not this month's selling; it was the echo of a cohort lost months
+earlier. **Per store, the same shape separates two different businesses**: a store whose M1 is falling
+is shrinking NOW; a store whose M1 holds while M4–M6 fall lost its cohort four to six months ago. The
+rung is the only place that difference is visible, and until this the ladder could be read across
+months (company-wide) or per store (one month at a time) — never both.
+
+### COMMCALC-12.1 Duplicate check (the build gate)
+
+Checked, and the answer is that NOTHING new computes money here.
+
+| already exists | what it answers | what this did |
+| --- | --- | --- |
+| `gp_report.calc_gp_report` → `comm_ladder` + `comm_month_<n>` on every store row; the GP page's 📅 Months toggle and "Commission by month-of-life" card (§4a.2) | per-store rungs, ONE month at a time | **not touched, not re-derived** — a different read of a different grain |
+| `GET /commcalc/commission-leg-trend` (`router._commission_leg_trend_compute`) | the ladder ACROSS months, company-wide, with `market` / `store` FILTERS but no store AXIS | **EXTENDED**: its compute now accumulates a `by_store` grain in the SAME pass over the SAME rows |
+| `commcalc/commission_legs` — `ladder_key` / `ladder_sort_key` / `months_present` / `ladder_column` / `ladder_label` | which rungs exist, what they are called, in what order | **dereferenced**; no second convention, no month count |
+| `router._leg_store_index` → `account/store_identity` (§64) | which store a carrier line belongs to | **dereferenced**; no street-number token |
+| `carrier_dollar_class` (§58) + `component_is_evidence` (§66) | which dollar is commission | **dereferenced**; the trend already resolves them once per request |
+| `account/ma_store_pnl.canonical_store_index` (mig `314`) | processor account → store | **dereferenced** for the MA grain |
+
+The new file is **`backend/app/modules/commcalc/commission_leg_store_trend.py`**, and it is a PURE
+PIVOT: it reshapes the trend's output store-major and derives the plain-English "running down"
+read-out. It computes no money. This is §4c's precedent (*a multi-month P&L loops THE single-month
+read; it computes no line*) applied to the leg trend: **one money path, two shapes.** §A of the lock
+fails the build the moment Σ(per-store) stops equalling the company figure to the cent.
+
+### COMMCALC-12.2 The blocker the index named was in the wrong place — and NO migration was needed
+
+Index line ~1227 said: *"the reason this rollup cannot filter by store is that
+`commission_leg_ma_rollup` aggregates per period WITHOUT the account column."* **That diagnosis was
+right and the remedy was being looked for in the wrong object.** Established here, plainly:
+
+- **`commcalc.commission_leg_label_rollup` (mig `274`, superseded by mig `1066`) CAN carry the store
+  key, and already does** — mig 1066 made it return the BTRIMMED RAW ADDRESS the feed carried, which
+  the backend resolves through §64. Verified live 2026-10-15 against production: the RPC returns
+  `store_num` as a full address (`"1 S 60th St Philadelphia, PA 19139"`), 3,717 rows over two months,
+  **28 distinct stores**. So the ePay Payment Detail and Comprehensive Comp sides — the entire
+  commission series for the acting org — are store-grained with **no schema change at all**.
+- **`commcalc.commission_leg_ma_rollup` (mig `274`) CANNOT** — it is `GROUP BY 1` on `period` and the
+  account column is not in its `RETURNS TABLE`. But **it is a PRE-AGGREGATION of rows that DO carry
+  the account** (`raw_ma_commission.merchant_account_id`, the column
+  `data_lineage_registry.store_account_column` already names). The store grain therefore needed the
+  **ROWS**, not a changed RPC: the window's rows are read once (paged, §19.48), grouped per
+  (period, resolved store), and bucketed with the SAME `legcls.ma` over the SAME `_MA_LEG_COMPONENTS`
+  list the per-period path uses. Because `split_ma_components` is **LINEAR in the component sums**,
+  Σ(per-store buckets) == the per-period rollup's buckets to the cent — the grain is strictly finer
+  and the money cannot move. §B of the lock proves exactly that equality.
+**VERIFIED LIVE, 2026-10-15, on the tenant that actually has MA rows** (3,981 rows carrying
+`merchant_account_id`; the acting org has none, so this path is only exercised there). Σ(per-store)
+against `commission_leg_ma_rollup`'s own per-period figure, four months, computed by calling both:
+
+| period | period rollup | Σ per-store | gap |
+| --- | --- | --- | --- |
+| June 2026 | $60,034.62 | $60,034.62 | **$0.00** |
+| July 2026 | $124,043.34 | $124,043.34 | **$0.00** |
+| August 2026 | $241,853.82 | $241,853.82 | **$0.00** |
+| September 2026 | $229,148.87 | $229,148.87 | **$0.00** |
+
+**20 stores, every processor account resolved** (no `(No store matched)` row), `all_ties` true on
+every month. This is precisely the money the index said this rollup could not split by store.
+
+- **Therefore: NO migration ships with this, and none is waiting.** The schema is untouched.
+
+**This fixed the CLASS, not the instance.** The note above was not only a gap in the new report: the
+existing `market` / `store` FILTER on `/commission-leg-trend` SILENTLY EXCLUDED all MA money and
+merely apologised in `notes`. Both callers of the same missing fact are fixed by the same change, and
+the apology now fires only when the rows genuinely cannot be read.
+
+### COMMCALC-12.3 Honesty rules that ARE the report
+
+1. **A partial month is marked and never an endpoint.** The window ends on the page's own period,
+   normally the CURRENT calendar month. Read on 2026-10-15, the house org's October was running at
+   roughly a quarter of September — as an endpoint it would have reported **all 28 stores collapsing
+   at once**. `partial_months` names it from the caller's clock, the money is still SHOWN, and every
+   derived delta uses the first and last COMPLETE month instead.
+2. **Money matching no store is its own named row** (`(No store matched)`), sorted last, never spread
+   over the stores and never dropped. Its presence is a mapping finding.
+3. **A negative rung keeps its sign.** Carrier withholding lands in whichever rung its label states;
+   nothing is flipped to make a store look better.
+4. **Arithmetic that would lie is refused.** A $0 baseline yields `pct` `None` — never 0, never
+   infinity. A store the window sees in one complete month gets `delta` `None`, not 0.
+5. **A gap is reported.** `ties_to` states, per month, whether the displayed all-stores total equals
+   the trend's company total, with both figures and the gap.
+6. **The rungs come from the DATA.** An M13 is a column the day it arrives; a rung a store has no
+   money in reads $0.00, not a hole; a rung nobody has is not invented.
+
+### COMMCALC-12.4 Live finding, 2026-10-15 (read-only, acting org, the endpoint's own output)
+
+Measured by calling `commission_leg_store_trend` itself, `period=October 2026&months=6`. **28 stores,
+`all_ties` true on every month** (the store axis places every dollar the company series carries; no
+`(No store matched)` row exists for this org), October correctly flagged partial and excluded from
+every Δ.
+
+**Company, May → September 2026 (complete months): −$25,534.27, −19.4%. Only −3.7% of that is M1.**
+M2–M12 is **−17.9%** and the Unlabelled rung is **−50.6%** ($15,126.55 → $7,477.85). So the owner's
+prospect insight holds for our own stores: the fall is the trailing legs and the unlabelled bucket, not
+this month's selling.
+
+**And per store it separates into two different problems**, which is the whole point of the rung axis:
+
+| store | Δ total | Δ M1 | Δ M2–M12 | rung running down | reading |
+| --- | --- | --- | --- | --- | --- |
+| `1710 W 4th St` | **−46.1%** | −38.9% | −15.6% | Unlabelled −$1,206.79 | the worst store overall, and it is shrinking NOW |
+| `1598 Mount Ephraim Ave` | −30.2% | **−73.5%** | −11.1% | M1 −$698.80 | activations collapsing this quarter |
+| `2509 Bergenline Ave` | −32.4% | −50.0% | −23.5% | M6 −$272.85 | both ends falling |
+| `117 E Burnside Ave` | −32.3% | **0.0%** | **−35.9%** | M4 −$594.60 | M1 flat — a cohort lost four months ago, nothing wrong with today's selling |
+| `4712 White Plains Rd` | −36.5% | −8.6% | **−39.3%** | M2 −$335.95 | same echo, one rung earlier |
+| `1800 Great Neck Rd` / `1115 Liberty Ave` | +3,263.9% / +39.5% | — | — | — | new stores ramping, not declining |
+
+**Two data findings, reported and not smoothed over:**
+
+- **`"Commission Withholding"` is unmapped on Commission Legs.** It carries **−$1,335.76** company-wide
+  in September 2026 and states no month-of-life, so it sits in the Unlabelled rung and drags it
+  negative at store level (`1710 W 4th St`: −$276 Aug, −$740 Sep). The Unlabelled rung's −50.6% is
+  the single largest component of the company's −19.4%, and it is a MAPPING gap, not a sales fall.
+  Map it on **Commission received over M1–M12** and the rest of the ladder becomes readable.
+- **`payment_categories` leaves 337 of 1,859** house-org payment-detail label-rows at category
+  `Unknown` over Aug–Sep 2026. Those dollars are excluded from the commission series by §58's ruling
+  on a declared category — exactly as the GP Commission column excludes them — so the number is
+  consistent, but the declaration is missing.
+
+### COMMCALC-12.5 The surface
+
+The GP report's existing **📈 Commission by leg** card (`frontend/src/app/(platform)/commcalc/gp/page.tsx`)
+gained a **🏪 Per store** toggle beside the existing ladder toggle: one row per store, one column per
+month, the partial month flagged in its header, and a per-store expander showing that store's rungs
+across the same months. **No new page and no new sidebar row or dashboard tile**, so no
+`reports.ts` / `rbac.ts` / `route-index.ts` entry — the report lives where the single-month ladder it
+extends already lives, which is also where the owner was reading these numbers.
+
+### COMMCALC-12.6 Locks
+
+`backend/harness_commission_leg_store_trend.py` — DB-free, **76 checks** in ten groups, its own CI step and
+paths filter in `carrier-vocab-guard.yml`. §A the pivot re-sums to the company figure on every month
+and every bucket; §B the MA per-store == MA per-period identity (why no migration was needed), with B5
+reproducing the exact double count §C guards; §C one accumulator (`router._leg_accumulate`) reached by
+both grains, the MA calls opting out of the ladder, and the call-site roster DECLARED not counted
+(§CORE-10); §D the partial-month regression with the real −72.5% it would otherwise have printed; §E
+unplaceable money; §F the rungs come from the data (an M13 arrives as a column); §G a decline named by
+rung; §H no invented trend; §I a reported gap; §J RULE TWO. Its own first draft failed §F6/§J2 on the
+pivot module's own DOCSTRINGS and §C4 missed the wrapped call site — both are fixed by scanning
+tokenizer-stripped CODE and paren-matched calls, and both failures are recorded in the file.
+
+Route count re-pinned **1788 → 1789** in `harness_db_resilience.py` with a dated note (one route added,
+none removed).
+
+### COMMCALC-12.7 Cross-references
+
+- **§16 (by TABLE):** `commcalc.raw_ma_commission.merchant_account_id` — read for the leg trend's
+  per-store MA grain, resolved through `ma_store_pnl.canonical_store_index`; the column is named by
+  `data_lineage_registry.store_account_column`, never spelled in the trend.
+  `commcalc.commission_leg_label_rollup` (mig `274`/`1066`) — already store-grained; this is its
+  second reader. `commcalc.commission_leg_ma_rollup` (mig `274`) — unchanged, still per-period, used
+  only as the fallback when the rows cannot be read.
+- **§17 (by FUNCTION):** `commission_leg_store_trend.pivot` / `partial_months` / `totals_row` /
+  `ties_to` / `ladder_public` / `_derive` / `_delta`; `router._commission_leg_trend_compute`
+  (the extracted compute), `router._leg_accumulate`, `router._leg_store_cell`.
+- **§17 (by ENDPOINT):** `GET /commcalc/commission-leg-store-trend`.
+- **§18 (by QUESTION):** "Which of my stores is running down, and in which month-of-life rung?" →
+  `commission_leg_store_trend`, module-graph fact `leg_store_trend_shape`.
+- **Same class:** §4a.2 (the rung convention's one home), §4c (a multi-month view LOOPS the
+  single-month read), §64 (store identity), §58/§66 (which dollar is commission), §19.18 (a mechanism
+  written, callers unwired — avoided here by wiring the filter in the same change),
+  §COMMCALC-03.27 (the prospect side of the same rungs).
+
+---
+
