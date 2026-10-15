@@ -1166,7 +1166,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # re-taken on a measured, fully-accounted addition; it was never relaxed to make CI green, and a
 # count that comes back HIGHER than this pin is still a failure.
 #
-# RE-PINNED 2026-10-15, 1788 -> 1789 (index §COMMCALC-10). Every record above stays. The delta is ONE
+# RE-PINNED 2026-10-15, 1788 -> 1789 (index §COMMCALC-11). Every record above stays. The delta is ONE
 # route and it is named: GET /commcalc/commission-leg-store-trend — the per-store, month-over-month
 # month-of-life (M1..M12) commission report (owner ask 2026-10-15). It is READ-ONLY, writes nothing,
 # books nothing, adds no table and no writer, and it is NOT a second derivation: it calls

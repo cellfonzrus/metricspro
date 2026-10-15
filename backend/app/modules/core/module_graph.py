@@ -249,7 +249,7 @@ FACTS: dict[str, dict] = {
         "question": 'For each STORE, what did every month-of-life rung (M1..M12) of received '
                     'commission pay in each month of the window — and which rung is running down?',
         "homes": ('app/modules/commcalc/commission_leg_store_trend.py',),
-        "index": ('COMMCALC-10',),
+        "index": ('COMMCALC-11',),
         "locks": ('harness_commission_leg_store_trend.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
@@ -899,7 +899,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/comp_trend.py': ('_msp', '_rs'),
             # §COMMCALC-03 added `_rsub` — `default_ma_pnl_config()` for the takeover evaluation,
             # so a prospect's MA TX rows book under the SAME resolved config the live P&L books under.
-            # `_msp_leg` (added 2026-10-15, index §COMMCALC-10): the leg trend's per-store MA grain
+            # `_msp_leg` (added 2026-10-15, index §COMMCALC-11): the leg trend's per-store MA grain
             # asks THIS home's `canonical_store_index` for processor account -> store, instead of the
             # trend deciding that mapping itself. One more dereference, not one more rule.
             'app/modules/commcalc/router.py': ('_MA_LEG_COMPONENTS', '_msp', '_msp_gp', '_msp_leg', '_msp_ma', '_rs_gp', '_rsub', 'load_store_index'),

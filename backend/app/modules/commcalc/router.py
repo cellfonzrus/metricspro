@@ -72,7 +72,7 @@ from app.modules.commcalc import data_lineage_registry as _lineage  # canonical 
 from app.modules.commcalc import url_guard as _url_guard   # SSRF guard for tenant URLs (C4)
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_legs as _commission_legs
-from app.modules.commcalc import commission_leg_store_trend as _leg_store_pivot  # pure per-store pivot (§COMMCALC-10)
+from app.modules.commcalc import commission_leg_store_trend as _leg_store_pivot  # pure per-store pivot (§COMMCALC-11)
 from app.modules.commcalc import commission_received as _commission_received
 from app.modules.commcalc import commission_engine
 from app.modules.commcalc import plan_options
@@ -25198,7 +25198,7 @@ def _leg_passes(ent, markets, stores):
 
 
 def _leg_blank_period(label):
-    # `by_store` is the STORE AXIS on this same period (owner ask 2026-10-15, index §COMMCALC-10).
+    # `by_store` is the STORE AXIS on this same period (owner ask 2026-10-15, index §COMMCALC-11).
     # It is populated in the SAME pass over the SAME rows as the company figure, by the SAME
     # `_leg_accumulate` below — so the per-store grid can never be a second derivation of the trend.
     # Empty unless the caller asked for it, so `/commission-leg-trend` is byte-unchanged.
@@ -25271,7 +25271,7 @@ def _commission_leg_trend_compute(client, org_id, period="", months=12, market="
     alongside as its own series, never added in — the GP report keeps them as separate columns.
 
     `by_store` adds the STORE AXIS to each period, in the same pass over the same rows (owner ask
-    2026-10-15, index §COMMCALC-10). It is off by default, so `/commission-leg-trend` returns exactly
+    2026-10-15, index §COMMCALC-11). It is off by default, so `/commission-leg-trend` returns exactly
     what it always returned; `/commission-leg-store-trend` turns it on and PIVOTS this result. One
     money path, two shapes — not two derivations.
     """
@@ -25373,7 +25373,7 @@ def _commission_leg_trend_compute(client, org_id, period="", months=12, market="
     # ── 2. VidaPay / master-agent commission — only for months with NO payment detail, exactly the
     #      emptiness gate _compute_gp uses, so the two surfaces can never double-count the same month.
     #
-    # STORE GRAIN, 2026-10-15 (index §COMMCALC-10). The note that used to stand here said the trend
+    # STORE GRAIN, 2026-10-15 (index §COMMCALC-11). The note that used to stand here said the trend
     # could not split MA per store "because the month rollup RPC aggregates the sheet per PERIOD
     # without the account column". That diagnosis was right and the remedy was looking in the wrong
     # place: the RPC is a PRE-AGGREGATION of rows that DO carry the account, so the store grain needs
@@ -25538,7 +25538,7 @@ def _commission_leg_trend_compute(client, org_id, period="", months=12, market="
 def commission_leg_store_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
                                org_id: str = ORG_ID):
     """PER-STORE month-of-life commission, the months SIDE BY SIDE (owner ask 2026-10-15,
-    index §COMMCALC-10).
+    index §COMMCALC-11).
 
     Owner, verbatim, on a prospect's M1..M12 rungs shown side by side for two months: *"this is a good
     insight , this means we need to see these numbers as a report sisde by sie as shown above for each
