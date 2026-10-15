@@ -12,7 +12,7 @@
 //
 // Run:  node frontend/prove_connector_scope.mjs      (no network, no DB, no browser, no React)
 
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -47,8 +47,20 @@ for (const [n, f] of Object.entries({ reportKindsVisible, kindCapOverride, conne
   must(typeof f === 'function', `${n} did not export a function`)
 must(CONNECTOR_CAP_PREFIX === 'connector:', 'the connector cap namespace')
 
-// ── THE REAL SEED, parsed out of the migration ───────────────────────────────────────────────────
-const body = readFileSync(join(HERE, '..', 'database', 'migrations', '1014_connector_registry.sql'), 'utf8').split('sort_order, notes) VALUES')[1].split('ON CONFLICT')[0]
+// ── THE REAL SEED, parsed out of the migrations ──────────────────────────────────────────────────
+// EVERY seed migration, DERIVED by name and applied in numeric order — 1014 created the table and
+// seeded the originals, 1084 (§12a.2a) appends the two dispatchable kinds, and a later feed appends
+// another. Reading only the first file is what let a connector ship with no row: the fixture below
+// would not have held the new kinds. The backend lock pins this glob against
+// `connector_registry.MIGRATIONS`, so a seed file this proof cannot see fails the build.
+const MIG_DIR = join(HERE, '..', 'database', 'migrations')
+const SEED_FILES = readdirSync(MIG_DIR)
+  .filter(f => /^\d+_connector_registry.*\.sql$/.test(f))
+  .sort((a, b) => Number(a.split('_')[0]) - Number(b.split('_')[0]))
+must(SEED_FILES.length >= 1, 'no connector-registry seed migration found')
+const body = SEED_FILES
+  .map(f => readFileSync(join(MIG_DIR, f), 'utf8').split('sort_order, notes) VALUES')[1].split('ON CONFLICT')[0])
+  .join('\n')
 const COLS = ['org_id', 'key', 'aliases', 'label', 'host', 'kind', 'applies_to_pos', 'applies_to_carrier', 'defined_by', 'sort_order', 'notes']
 const arr = s => typeof s === 'string' && s.startsWith('{') ? (s.slice(1, -1).match(/"((?:[^"\\]|\\.)*)"/g) || []).map(x => x.slice(1, -1)) : s
 const ROWS = []

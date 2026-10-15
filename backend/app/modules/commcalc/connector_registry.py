@@ -53,9 +53,20 @@ from urllib.parse import urlparse
 
 from app.modules.commcalc import report_kinds as _rk
 from app.modules.commcalc import merchant_portals as _mp
+# Each dispatchable connector KIND is spelled ONCE, by the module that owns it — the same dereference
+# `router._SOURCE_SCRAPERS` makes. A literal here would be the second copy, and the two copies
+# disagreeing is exactly how a feed ends up dispatchable with no door.
+from app.modules.commcalc.pos_report_sweep import CONNECTOR as POS_REPORT_CONNECTOR
+from app.modules.supply.portal import SUPPLY_PROCESSOR as SUPPLY_CONNECTOR
 
 HOUSE_ORG = _rk.HOUSE_ORG
-MIGRATION = "1014_connector_registry.sql"
+# THE SEED'S MIGRATIONS, in apply order. A LIST, not one file, and that is the point: a new house
+# connector used to mean EDITING an already-applied migration, because the lock compared the mirror
+# below against exactly one file. So the cheapest way to ship a feed was to leave it out of the
+# registry entirely — which is what happened twice (see POS_REPORT / SUPPLY below). A later migration
+# appends; `MIGRATION` stays as the first for the callers that name it.
+MIGRATIONS = ("1014_connector_registry.sql", "1084_connector_registry_dispatchable_kinds.sql")
+MIGRATION = MIGRATIONS[0]
 TABLE = "connector_registry"
 CAP_PREFIX = "connector:"                    # ui_label_override scope 'cap' namespace (beside kind:/carrier:/pos:)
 KINDS = ("portal", "mailbox", "ftp", "google_sa")
@@ -101,6 +112,22 @@ HOUSE_CONNECTORS = [
     _c(key="ftp", label="FTP / SFTP drop", kind="ftp", sort_order=110, notes="The FTP-pull sweep."),
     _c(key="google_closing", label="Daily-closing responses sheet", host="docs.google.com", kind="google_sa", sort_order=120,
        notes="The closing-form responses sheet (service account)."),
+    # ── mig 1084 appends from here (owner report 2026-10-15) ──────────────────────────────────────
+    # Owner, verbatim: *"as a new user how do i know where to integrate the teamportal to get the pos
+    # data to compare to teh daily closing"*. He could not, and the answer was not a missing screen:
+    # these two connector KINDS were dispatchable (`router._SOURCE_SCRAPERS`) and had no registry row,
+    # so the processor picker did not offer them, the Connectors page had no card for them, and
+    # `_connector_label` fell through to NEUTRAL_LABEL. The feed ran; nobody could reach it.
+    #
+    # NO HOST on either, deliberately, and not an omission: these are kinds, not vendors. The address
+    # is a value on the tenant's own `data_source` row (RULE TWO), so a host here would be the one
+    # vendor spelling this registry exists to keep out of code. `ftp` carries none for the same reason.
+    # ANY scope for the same reason: any tenant may run a back-office reports portal or order from a
+    # supply vendor, whatever POS or carrier they declared.
+    _c(key=POS_REPORT_CONNECTOR, label="Back-office POS reports", sort_order=90,
+       notes="A back-office POS reports portal — the daily report of what each worker sold, per declared category, for checking against what the reps declared at closing (index §COMMCALC-07). The address, the report list and the category mapping are declared per tenant on its own login row."),
+    _c(key=SUPPLY_CONNECTOR, label="Supply vendor portal (ordering)", sort_order=140,
+       notes="A supply vendor's own portal: the catalogue crawl and the draft order (index §36 / §51). Registered 2026-10-15 as the sibling of the POS-report kind — it had been dispatchable with no registry row since it shipped, so no tenant could pick it either."),
 ]
 HOUSE_CONNECTOR_KEYS = [r["key"] for r in HOUSE_CONNECTORS]
 

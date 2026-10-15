@@ -35,6 +35,7 @@ WHAT FAILS THE BUILD
 
   python3 backend/harness_connector_scope_lock.py
 """
+import ast
 import io
 import os
 import re
@@ -46,7 +47,11 @@ from app.modules.commcalc import connector_registry as CR   # stdlib-only: the m
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FE = os.path.join(ROOT, "frontend", "src")
 BE = os.path.join(ROOT, "backend", "app", "modules")
-MIG = os.path.join(ROOT, "database", "migrations", CR.MIGRATION)
+# The seed is spread over SEVERAL migrations, in apply order — 1014 created the table and seeded the
+# eleven original rows, and later ones append. One file was the shape that made leaving a feed out of
+# the registry cheaper than adding it: a new house connector meant editing an applied migration.
+MIGS = [os.path.join(ROOT, "database", "migrations", m) for m in CR.MIGRATIONS]
+MIG = MIGS[0]
 HOOK_FILE = "lib/connectors.ts"
 ENDPOINT = "/commcalc/connector-registry"
 
@@ -286,15 +291,104 @@ def be_sources():
     return out
 
 
+# ── §I: the dispatch table, read from source ──────────────────────────────────────────────────────
+ROUTER_SRC = os.path.join(BE, "commcalc", "router.py")
+
+# A dispatchable connector kind an operator is NOT meant to reach, each with its reason. EMPTY today:
+# both kinds that were doorless (pos_report, supply_vendor) are registered as of mig 1084, rather than
+# excused. An entry here is a deliberate statement that a feed runs without anybody being able to pick
+# it; the checks above also fail a STALE one, so it cannot outlive the dispatcher it excuses.
+DOORLESS_DISPATCH: dict = {}
+
+
+def dispatch_keys():
+    """Every key `router._SOURCE_SCRAPERS` dispatches on, and the ones that could not be resolved.
+
+    Two forms, both read structurally:
+      · the dict literal          `_SOURCE_SCRAPERS = {"vidapay": …, "b2bsoft": …}`
+      · a registered constant     `_SOURCE_SCRAPERS[_POS_REPORT_CONNECTOR] = …`
+    The second is the one that matters here. The router deliberately does NOT re-spell those kinds —
+    it imports each from the module that owns it — so this resolves the import back to that module and
+    reads the constant's literal there. A key this function failed to resolve is reported rather than
+    skipped: skipping it would be a hole in exactly the scan that is meant to catch a doorless feed.
+    """
+    keys, unresolved = set(), set()
+    try:
+        src = io.open(ROUTER_SRC, encoding="utf-8").read()
+        tree = ast.parse(src)
+    except Exception:                               # noqa: BLE001
+        return keys, {"<router unreadable>"}
+    # name bound by `from <module> import <CONST> as <name>` → (module, CONST)
+    bound = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for a in node.names:
+                bound[a.asname or a.name] = (node.module, a.name)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for t in node.targets:
+            # the dict literal
+            if isinstance(t, ast.Name) and t.id == "_SOURCE_SCRAPERS" and isinstance(node.value, ast.Dict):
+                for k in node.value.keys:
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                        keys.add(CR.slug(k.value))
+                    else:
+                        unresolved.add("<non-literal dict key>")
+            # _SOURCE_SCRAPERS[<something>] = handler
+            if (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                    and t.value.id == "_SOURCE_SCRAPERS"):
+                sl = t.slice
+                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                    keys.add(CR.slug(sl.value))
+                elif isinstance(sl, ast.Name) and sl.id in bound:
+                    mod, const = bound[sl.id]
+                    val = module_constant(mod, const)
+                    if isinstance(val, str) and val.strip():
+                        keys.add(CR.slug(val))
+                    else:
+                        unresolved.add("%s.%s" % (mod, const))
+                else:
+                    unresolved.add(getattr(sl, "id", None) or "<non-literal key>")
+    return keys, unresolved
+
+
+def module_constant(dotted, name):
+    """A module-level string constant, read from that module's SOURCE (no import)."""
+    rel = dotted.replace(".", os.sep) + ".py"
+    path = os.path.join(ROOT, "backend", rel)
+    if not os.path.exists(path):
+        return None
+    try:
+        tree = ast.parse(io.open(path, encoding="utf-8").read())
+    except Exception:                               # noqa: BLE001
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == name and isinstance(node.value, ast.Constant):
+                    return node.value.value
+    return None
+
+
 def main():
     print("=" * 78)
     print("CONNECTOR-SCOPE LOCK — every connector surface reads the registry; mirror = seed; one neutral line")
     print("=" * 78)
 
     print("\n— A. the mirror IS the seed —")
-    check("the migration exists: " + CR.MIGRATION, os.path.exists(MIG))
-    seed = seed_rows(io.open(MIG, encoding="utf-8").read()) if os.path.exists(MIG) else []
-    check("the seed parses into rows (%d)" % len(seed), len(seed) >= 8)
+    for m in CR.MIGRATIONS:
+        check("the seed migration exists: " + m,
+              os.path.exists(os.path.join(ROOT, "database", "migrations", m)))
+    seed = []
+    for path in MIGS:
+        if os.path.exists(path):
+            seed.extend(seed_rows(io.open(path, encoding="utf-8").read()))
+    check("the seed parses into rows (%d, concatenated over %d migrations)" % (len(seed), len(MIGS)),
+          len(seed) >= 8)
+    check("no key is seeded twice across the migrations (a second seed of one key is two homes)",
+          len([r["key"] for r in seed]) == len({r["key"] for r in seed}),
+          sorted({k for k in [r["key"] for r in seed] if [r["key"] for r in seed].count(k) > 1}))
     d = mirror_diffs(seed, CR.HOUSE_CONNECTORS)
     check("every column of every seeded row equals connector_registry.HOUSE_CONNECTORS", not d, d[:3])
     check("the merchant card portals mirror merchant_portals.PORTALS (one home for label / host)",
@@ -377,9 +471,91 @@ def main():
     if F:
         print("\nFAIL — the connector-scope lock is open. Fix: render the surface from useConnectors() / scopeState() "
               "(lib/connectors.ts), ask _connector_scope / _sweep_public_scope on the backend, move the fact into "
-              "the registry (mig 1014 seed / a tenant row), or add a REVIEWED allow entry with its reason.")
+              "the registry (the seed migrations in connector_registry.MIGRATIONS / a tenant row), or add a REVIEWED "
+              "allow entry with its reason.")
         sys.exit(1)
-    print("OK — every connector surface reads the registry; mirror = seed; one neutral line; no second list.")
+
+    # ══════════════════════════════════════════════════════════════════════════════════════════════
+    print("\n— I. a feed the platform DISPATCHES has a DOOR —")
+    # ══════════════════════════════════════════════════════════════════════════════════════════════
+    # Owner report 2026-10-15: "as a new user how do i know where to integrate the teamportal to get
+    # the pos data to compare to teh daily closing". He could not. The POS-report feed was fully
+    # dispatchable — `router._SOURCE_SCRAPERS` had a handler, the mig-956 cron would run it — and had
+    # no `connector_registry` row, so the processor picker did not offer the kind, the Connectors page
+    # had no card for it, and every surface naming it fell through to NEUTRAL_LABEL. The feed worked
+    # and was unreachable.
+    #
+    # THE CLASS: "the platform can run this feed" and "a tenant can find this feed" were two
+    # unrelated facts. Looking for the class found the sibling at once — `supply_vendor` had been
+    # dispatchable with no row since it shipped. So this section holds the dispatch table against the
+    # registry: every key the router dispatches on is a registry key or alias, or is excused HERE in
+    # writing, and a stale excuse fails too.
+    #
+    # Read from SOURCE, not imported: `commcalc.router` needs fastapi / openpyxl and this lock must
+    # start in CI's bare python. The two kinds added by `_SOURCE_SCRAPERS[CONST]` are resolved back
+    # through their import to the module that owns the constant, so a renamed kind is seen.
+    dispatch, unresolved = dispatch_keys()
+    check("the dispatch table parses (%d keys: %s)" % (len(dispatch), ", ".join(sorted(dispatch))),
+          len(dispatch) >= 7, sorted(dispatch))
+    check("every `_SOURCE_SCRAPERS[CONST]` key resolved to a literal — an unresolved one would be a "
+          "silent hole in this very scan", not unresolved, sorted(unresolved))
+    known = {CR.slug(r["key"]) for r in CR.HOUSE_CONNECTORS}
+    for r in CR.HOUSE_CONNECTORS:
+        known |= {CR.slug(a) for a in (r.get("aliases") or [])}
+    for key in sorted(dispatch):
+        if key in DOORLESS_DISPATCH:
+            continue
+        check("`%s` is dispatchable AND named by the registry, so an operator can pick it" % key,
+              key in known,
+              "add it to connector_registry.HOUSE_CONNECTORS + its seed migration, or excuse it in "
+              "DOORLESS_DISPATCH with the reason an operator is not meant to reach it")
+    for key, why in sorted(DOORLESS_DISPATCH.items()):
+        check("the excuse for `%s` is still needed (it is still dispatchable)" % key, key in dispatch,
+              "stale: nothing dispatches on it any more — drop the entry")
+        check("the excuse for `%s` is in writing" % key, bool(str(why or "").strip()))
+    # The reverse direction is NOT a failure and must not become one: a registry row with no
+    # dispatcher is a connector a tenant configures by hand (mailbox, ftp, google_sa) or one whose
+    # pull is not a data_source sweep. Reported, never enforced.
+    no_sweep = sorted(k for k in {CR.slug(r["key"]) for r in CR.HOUSE_CONNECTORS} if k not in dispatch)
+    print("     (registry rows with no data_source dispatcher, configured another way: %s)"
+          % (", ".join(no_sweep) or "none"))
+
+    # The frontend proof (frontend/prove_connector_scope.mjs) builds its fixture from the seed SQL and
+    # must see EVERY seed file, or a new connector's rows are absent from the predicate it proves.
+    # It DERIVES them by filename pattern rather than keeping a list; this pins that pattern against
+    # connector_registry.MIGRATIONS, so a seed file it cannot see fails the build here.
+    mjs = read(os.path.join(ROOT, "frontend", "prove_connector_scope.mjs"))
+    m = re.search(r"\.filter\(f => (/[^/]+/)\.test\(f\)\)", mjs)
+    check("the frontend proof derives its seed files by pattern, not a list", bool(m),
+          "expected a `.filter(f => /…/.test(f))` over readdirSync(MIG_DIR) in prove_connector_scope.mjs")
+    if m:
+        rx = re.compile(m.group(1)[1:-1].replace("\\d", r"\d"))
+        unseen = [os.path.basename(f) for f in MIGS if not rx.match(os.path.basename(f))]
+        check("every seed migration in connector_registry.MIGRATIONS matches it (%d file(s))" % len(MIGS),
+              not unseen,
+              "the frontend proof would not read: %s — widen the pattern or rename the migration" % unseen)
+
+    print("\n— I-controls —")
+    # The scan must see the defect it was written for: the state main() was in before this change.
+    check("a dispatchable kind with no registry row → RED",
+          not ({"a_brand_new_feed"} <= known),
+          "the control itself is broken: the registry already knows an invented key")
+    check("…and the resolver really does read the constant's VALUE, not its name",
+          "pos_report" in dispatch and "POS_REPORT_CONNECTOR" not in dispatch)
+    check("a stale excuse → RED (an excused key nothing dispatches on)",
+          "a_retired_feed" not in dispatch)
+    check("a seed migration the frontend proof cannot see → RED",
+          not re.compile(r"^\d+_connector_registry.*\.sql$").match("1099_connectors_extra.sql"),
+          "the control is broken: the pattern would have matched a name it must not")
+
+    print("\n%d passed, %d failed" % (P, F))
+    if F:
+        print("\nFAIL — a feed the platform can RUN that a tenant cannot FIND. Fix: add the kind to "
+              "connector_registry.HOUSE_CONNECTORS with a plain-words label AND to its seed migration, or "
+              "excuse it in DOORLESS_DISPATCH with the reason an operator is not meant to reach it.")
+        sys.exit(1)
+    print("\nOK — every connector surface reads the registry; mirror = seed; one neutral line; no second list; "
+          "every dispatchable feed has a door.")
     sys.exit(0)
 
 

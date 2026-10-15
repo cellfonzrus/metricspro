@@ -246,6 +246,12 @@ on:
       - "backend/harness_report_kind_lock.py"
       - "backend/harness_connector_scope_lock.py"
       - "backend/app/modules/commcalc/connector_registry.py"
+      # §12a.2a — the lock now reads the DISPATCH TABLE and the two modules that own a dispatched
+      # connector's key, so a feed wired up there must re-run it or the door check is bypassed.
+      - "backend/app/modules/commcalc/router.py"
+      - "backend/app/modules/commcalc/pos_report_sweep.py"
+      - "backend/app/modules/supply/portal.py"
+      - "database/migrations/1084_connector_registry_dispatchable_kinds.sql"
       - "backend/app/modules/commcalc/b2b_sweep.py"
       - "backend/app/modules/commcalc/vidapay_sweep.py"
       - "backend/app/modules/commcalc/import_audit.py"

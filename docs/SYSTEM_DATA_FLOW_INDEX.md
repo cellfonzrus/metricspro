@@ -4349,14 +4349,15 @@ back; (B) the eight pinned surfaces + any file reaching a connector endpoint imp
 reasons, stale fails); (C) no string-array of ≥3 connector keys / aliases in a page, no second fetch of the endpoint, no
 second caller with the connector namespace; (D) the neutral line's words equal in both homes; (E) every backend surface
 still asks (`_sweep_public_scope`, `_strip_source_pw`, health, evidence, scan, list, the two providers, the context, the
-copy call sites), `def scope(` once, no second applies-to intersection in the registry; (F) eleven negative controls.
+copy call sites), `def scope(` once, no second applies-to intersection in the registry; (F) eleven negative controls;
+**(I) every feed `router._SOURCE_SCRAPERS` dispatches has a registry row — a door — or a written excuse (§12a.2a).**
 `harness_report_kind_lock.py` admits `lib/connectors.ts` as the second (and last) caller of `reportKindsVisible` + a control
 that a third caller is RED. `harness_carrier_vocab_guard.py` derives its POS vocabulary from `HOUSE_CONNECTORS.applies_to_pos`
 too and scans `b2b_sweep.py`, `vidapay_sweep.py`, `import_audit.py` and `pos/receipt_formats/*` as payload copy (the #262
 seam closed; the two receipt-format LABEL declarations excused with a pinned reason).
 
 **Proof.** `harness_connector_registry.py` (69: §A the shared predicate, §B every backend surface over the real router,
-§C the copy, §D pre-migration, §E byte-identity); `harness_connector_scope_lock.py` (24); `frontend/prove_connector_scope.mjs`
+§C the copy, §D pre-migration, §E byte-identity); `harness_connector_scope_lock.py` (**43** — 26 §A–F + 17 §I, §12a.2a); `frontend/prove_connector_scope.mjs`
 (31, the REAL transpiled `carrier-scope.ts` + `report-kinds.ts` + `connectors.ts` over the seed parsed from mig 1014).
 Unchanged and green: report_kinds 121, report_kind_lock 21, carrier_vocab_guard, connector_route_policy 152,
 connector_runnable 27, connector_dispatch 31, browser_sweep_kinds 24, sweep_backlog_collapse 33, import_health 86,
@@ -4371,6 +4372,69 @@ tenant's own login rows (two ids, carrier-side, excused on that page in the carr
 registry's `kind` is a wording pass. (2) A tenant that declared its POS only through a `pos_profile` row reads the term's
 neutral noun in the neutral line (`posDeclared` is the term's fact, as in #262). (3) `dlar` is seeded any-scope on purpose
 (its report kinds are); narrowing it to a carrier is one registry UPDATE.
+
+##### 12a.2a A feed the platform can RUN that a tenant cannot FIND — the registry row IS the door (owner report 2026-10-15, mig `1084`)
+
+Owner, verbatim, three days after the POS-report pull shipped (§COMMCALC-07): **"as a new user how do i know where to
+integrate the teamportal to get the pos data to compare to teh daily closing"**. He could not, and the answer was not a
+missing screen. The feed was *fully dispatchable* — `router._SOURCE_SCRAPERS` carried its handler, the mig-956 cron would
+have run it when due — and it had **no `connector_registry` row**, so the processor-login picker on `commcalc/email-imports`
+(which builds its options by looping `connectors.visible`, never a list of its own) did not offer the kind, the Connectors
+page had no card for it, and `_connector_label` fell through to `NEUTRAL_LABEL` wherever it was named. The feed ran and was
+unreachable.
+
+**THE CLASS.** *"The platform can dispatch this feed" and "a tenant can find this feed" were two unrelated facts, with
+nothing holding them equal.* Looking for the class found the sibling immediately: **`supply_vendor`** (§36 / §51) had been
+dispatchable with no registry row **since it shipped** — nobody could pick it either. Both are registered here; neither is
+an instance fix.
+
+**Why the shape made omission the cheap path, stated so nobody restores it.** `harness_connector_scope_lock.py` §A compared
+the mirror against **one** migration file (`MIG = .../1014_connector_registry.sql`), so registering a new house connector
+meant **editing an already-applied migration** — which the house forbids. Omitting the row was the only move that passed.
+`connector_registry.MIGRATIONS` is now a TUPLE in apply order (`1014`, `1084`) and §A concatenates the seeds over all of
+them (plus a no-duplicate-key check), so a later feed appends a migration instead of rewriting history.
+
+**What was added.** Two rows on `HOUSE_CONNECTORS`, each dereferencing the owning module's own constant rather than
+re-spelling the key (`pos_report_sweep.CONNECTOR`, `supply.portal.SUPPLY_PROCESSOR`) — the same dereference
+`router._SOURCE_SCRAPERS[CONST]` makes, so a renamed kind moves both ends at once:
+
+| key | label (plain words, what an operator reads) | kind | scope | host |
+|---|---|---|---|---|
+| `pos_report` (`= pos_report_sweep.CONNECTOR`) | **Back-office POS reports** | portal | ANY | **none, deliberately** |
+| `supply_vendor` (`= supply.portal.SUPPLY_PROCESSOR`) | **Supply vendor portal (ordering)** | portal | ANY | **none, deliberately** |
+
+**No host on either, and that is not an omission.** These are connector KINDS, not vendors: the address is a value on the
+tenant's own `data_source` row (RULE TWO), so a host here would be the one vendor spelling this registry exists to keep out
+of code. `ftp` carries none for the same reason. ANY scope for the same reason — any tenant may run a back-office reports
+portal or order from a supply vendor, whatever POS or carrier it declared.
+
+**THE LOCK — §I of `harness_connector_scope_lock.py`.** The dispatch table is parsed from `commcalc/router.py` **source**
+(the lock must start in CI's bare python, and `router` needs fastapi / openpyxl): the dict-literal string keys plus the two
+`_SOURCE_SCRAPERS[NAME]` forms, each resolved back through its `from X import CONST as NAME` to the constant's **value** in
+the owning module — an unresolved key fails the build rather than becoming a silent hole in the scan itself. Then: every
+dispatchable key is a registry key or alias, or is excused in `DOORLESS_DISPATCH` **in writing**; a stale excuse (an excused
+key nothing dispatches on any more) fails too. `DOORLESS_DISPATCH` ships **empty**. The reverse direction is **reported and
+never enforced** — a registry row with no dispatcher is a connector a tenant configures by hand (`mailbox`, `ftp`,
+`google_sa`) or one whose pull is not a `data_source` sweep (`dlar`, `epay`, `vip`).
+
+**Proved red on the state `main` was in.** With both rows removed and `1084` dropped from `MIGRATIONS` — i.e. exactly today's
+shape — §I fails naming **both** feeds: *"`pos_report` is dispatchable AND named by the registry, so an operator can pick
+it"*, *"`supply_vendor` …"*. Green: **43 passed, 0 failed** (was 26 before §I).
+
+§I also pins the **frontend proof's** reach: `frontend/prove_connector_scope.mjs` built its fixture from `1014` alone, so
+the new rows would have been absent from the predicate it proves. It now DERIVES every seed file from
+`database/migrations/` by the pattern `^\d+_connector_registry.*\.sql$` in numeric order, and the lock holds that pattern
+against `connector_registry.MIGRATIONS` — a seed file the proof cannot see fails the build, with the filename named.
+
+**Nothing is switched on and no money moves.** The rows make the kinds *offerable*; the POS-report feed stays INERT until an
+operator declares a portal and one report on its own login row (§COMMCALC-07). Migration `1084` is **additive,
+`ON CONFLICT (org_id, key) DO NOTHING`** — mig 1014's own stated reason, so a scope an operator has since widened is never
+overwritten — and is **SURFACED FOR APPROVAL, NOT APPLIED**.
+
+**The door, in the operator's path:** `commcalc/email-imports` → *Payment-processor sources* → **＋ Add login** → the
+processor picker now offers `pos_report — Back-office POS reports` → enter the portal URL + login → declare one report. The
+same row gives it a card on `commcalc/connectors` and its live-login button (the picker and the button both gate on
+`kind === 'portal'`, which both rows carry).
 
 ---
 
@@ -6708,7 +6772,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.commission_bucket` (mig `1009`, **NOT applied**) — THE BUCKET REGISTRY: one row per bucket per org (`key` = `commission_ledger.category`, `label`, `kind` earned\|deduction, `sort_order`, `is_active`, `hint_words`, `pl_line_key`, `is_builtin`), house org = defaults (the five mig-071 buckets + `chargebacks` / `vendor_fee` / `misc_charges`), a tenant's row overrides per key | `POST /commcalc/commission-buckets` (admin-gated; key/kind/P&L line validated — `pl_line_key` must be a key of `account/coa.PL_SPEC`) · `DELETE /commcalc/commission-buckets/{key}` (never a column-backed key, never a key ledger lines use) · the 1009 house seed | `commission_ledger.load_buckets_meta` (both reads org-scoped) → `classify_line` / `build_row` / `summarize`, `onboarding_intake.suggest_buckets` (the `hint_words`) / `bucket_totals` / `rules_for_assignments`, `/commission-ledger/*` payloads (`buckets`, `bucket_meta`), `/commission-category-map` (the picker), `/onboarding/intake/*`. **The P&L link is BOOKED (mig `1013`, §4b):** `coa.build_inputs` reads the org's merged buckets through `load_buckets_meta` and books each bucket's `summarize` total to its `pl_line_key` when `pl_commission_source` resolves to the ledger; `ledger_pnl.covered_lines` derives the feed-suppression set from the same `pl_line_key`s; `ledger_pnl.pl_link` derives "this statement will show in" from them |
 | `commcalc.report_kind` (mig `1010`, **NOT applied**) — THE REPORT-KIND REGISTRY: one row per report kind per org (`key`, layman `label` / `what_in_it` / `recognisable_columns` / `source_hint`, `applies_to_pos[]` / `applies_to_carrier[]` codes ({} = any), `defined_by` house\|tenant + `defined_by_org`, `statement_type`, `landing`, `layout`, `signature_fields[]` (TARGET_FIELDS names), `requires_columns[]` / `excludes_columns[]`, `upload_types[]`, `custom_sheet_label`, `sort_order`, `is_active`); house org = the seed (mirror `report_kinds.HOUSE_KINDS`), a tenant row overrides per key | the 1010 house seed · `report_kinds.define_kind` (a 'something else' confirmed at the intake → a house row `defined_by='tenant'` under the tenant's carriers) | `report_kinds.load_registry` → `merge_rows` → `visible_kinds` (THE visibility function; frontend twin `carrier-scope.reportKindsVisible`) → `GET /commcalc/report-kinds` → every upload surface through `lib/report-kinds.useReportKinds`; `detect_report_kind`; `kind_key_for` (the learn hook). §30.9 |
 | `commcalc.report_signature` (mig `1010`, **NOT applied**) — header fingerprints CONFIRMED at an intake: `org_id`, `fingerprint` (normalised ORDERED header names, '\|'-joined), `report_kind_key`, `statement_type`, `layout`, `header_count`, `confirmations`, `first/last_confirmed_at`, `house_copy`. **Header names only — never a cell value, filename, store, rep or customer string** | `report_kinds.learn_signature` ← `router._intake_learn_signature` on a CONFIRMED `/onboarding/intake/commit` (org row + house copy, +1 per confirm) | `load_signatures` ({org, house}) → `detect_report_kind` (exact fingerprint first, "confirmed N times"; a fingerprint under two kinds = ambiguous → ask) → `POST /report-kinds/detect`; `confirmations_by_kind` → the "confirmed by you N times" provenance. §30.9 |
-| `commcalc.connector_registry` (mig `1014`, **NOT applied**) — THE CONNECTOR REGISTRY: one row per connector per org, keyed on the slug the dispatchers use (`key` + `aliases[]`), `label`, `host`, `kind` portal\|mailbox\|ftp\|google_sa, `applies_to_pos[]` / `applies_to_carrier[]` codes ({} = any), `defined_by` + `defined_by_org`, `sort_order`, `is_active`, `notes`; house org = the seed (mirror `connector_registry.HOUSE_CONNECTORS`), a tenant row overrides per key | the 1014 house seed only (a tenant override / the `connector:<key>` cap widen it — config, never code) | `connector_registry.load_registry` → `report_kinds.merge_rows(normalise=)` → `visible` / `hidden` / `scope` (= `report_kinds.visible_kinds` with the `connector:` namespace) → `GET /commcalc/connector-registry`, `connector_scope` on every sweep config / data-source row / connector instance, `_scan_connector_health`, `merchant_portal_health`, `control_box_api._portal_evidence`, `import_audit.p_connectors` / `p_portal_sessions` (via `collect_attention(connector_scope=)`); frontend `lib/connectors.useConnectors`. §12a.2 |
+| `commcalc.connector_registry` (mig `1014` **APPLIED** — 11 live house rows measured 2026-10-15; mig `1084` appends 2 more, surfaced not applied, §12a.2a) — THE CONNECTOR REGISTRY: one row per connector per org, keyed on the slug the dispatchers use (`key` + `aliases[]`), `label`, `host`, `kind` portal\|mailbox\|ftp\|google_sa, `applies_to_pos[]` / `applies_to_carrier[]` codes ({} = any), `defined_by` + `defined_by_org`, `sort_order`, `is_active`, `notes`; house org = the seed (mirror `connector_registry.HOUSE_CONNECTORS`), a tenant row overrides per key | the house seed in `connector_registry.MIGRATIONS` (`1014` + `1084`, in apply order — a tenant override / the `connector:<key>` cap widen it — config, never code) | `connector_registry.load_registry` → `report_kinds.merge_rows(normalise=)` → `visible` / `hidden` / `scope` (= `report_kinds.visible_kinds` with the `connector:` namespace) → `GET /commcalc/connector-registry`, `connector_scope` on every sweep config / data-source row / connector instance, `_scan_connector_health`, `merchant_portal_health`, `control_box_api._portal_evidence`, `import_audit.p_connectors` / `p_portal_sessions` (via `collect_attention(connector_scope=)`); frontend `lib/connectors.useConnectors`. §12a.2 |
 | `commcalc.commission_ledger` (mig `071`; provenance `251`; leg `274`) — **ONE IDENTITY PER STATEMENT (§30.15)**: `source_report` = `commission_ledger.ledger_source_report(base, statement_type)` = `<base>__<statement slug>` on every row a landing writes since 2026-09-22 (a pre-existing bare `<base>` row READS as that base's default statement type — its family), `period` = `_period.canonical_period` (the month-name form) | **ONLY `router._ledger_land_rows`** (the older wizard `POST /commission-ledger/import` and the multi-month `POST /commission-ledger/import-batch` — both through `_ledger_import_prepared`, one file at a time, §30.17 — the intake's 3.9 `_intake_commit_commission`, the MA refresh `POST /commission-ledger/ma-sync` with `origin=ma_sync`) — the family × every period spelling × origin wiped first through `_ledger_delete_scoped` (`_ledger_landings_present` measures what is replaced; the trace names it). Removals: `POST /commission-ledger/landings/retire` and `POST /onboarding/intake/retire` (a commission instance's slice = its statement × period family), both through `_intake_remove_landed`'s counted, confirmed, by-id core | every reader through `router._ledger_query` (org × family × `ledger_period_keys` × origin): `/commission-ledger/summary` (guarded), `/rows`, `/observed-types` (guarded), `/by-rep` (guarded), `/landings`, `/provenance` (per period: `canonical`, `orphan`, `landings`, `landing_conflict`), `_intake_reread`, `_ledger_existing_by_origin`, `_mcw_ledger_rows`, `_statement_buckets` (guarded), `_ledger_family_rows` (the family × every spelling, paged — the lander's measure `_ledger_landings_present` and the batch preview's "already landed" via `ledger_batch.plan_batch` → `commission_ledger.landings_for`, §30.17); `ledger_pnl.load_ledger_rows` (`period_keys`) → `ledger_bookings` (a conflicted statement × period books NOTHING and is reported under `unbooked`); `whatif._ledger_income_rows` (whole org, no period filter); `commission_ledger.list_templates` (folds a family onto its `template_key`) |
 | `commcalc.commission_category_map` (mig `071`; leg `274`) | `POST /commcalc/commission-category-map` (the Category Map editor) + the 071/072 house seeds | `commission_ledger.load_rules_meta` (org-scoped; `'*'` rules included) → `classify_line`/`build_row`; `ma_class_wiring.compile_rules` for `match_op='product_class'`. A template with no rows and no built-in defaults classifies NOTHING and says so — it never borrows another template's (§25.12) |
 | `pos.service_plans` · `pos.dealer_codes` (mig `726`, `742`) | POS settings CRUD; `POST /pos/dealer-codes/sync-from-reports`; the wizard's `apply_import` (ADDITIVE — a name/code already present is SKIPPED, never overwritten; plans from EVERY source the org's `plan_sources` rules name, through the one resolver — §23n.1) | the register, activations, and the wizard's `count` predicates (§23n) |
