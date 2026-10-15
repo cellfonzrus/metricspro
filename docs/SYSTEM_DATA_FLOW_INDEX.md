@@ -118,6 +118,7 @@ Primary code homes:
 | COMMCALC-06 | **An accessory attach decides which rate a line earns** | "The $25 edge payment is supposed to require $25 of accessories on the same sale, and to drop to the lesser rate when it is not there. Which record says the accessories were sold, what happens when the sale cannot be read, and why could no gate in this engine do this before?" |
 | COMMCALC-07 | **One pull loop, many feeds — and a report line is not a category until the tenant says so** | "The portal publishes its own daily report of what each worker sold, and the reps declare the same day at closing. Which code reaches a report on a portal and lands it, and which declared category is a report line — when the portal's words are not ours?" |
 | COMMCALC-08 | **A file that produced no rows is told why — the pairing, not the spreadsheet** | "My upload was refused and the message blamed my file. Which columns did the reader look for, which ones does my file actually carry, and if they are not the same — which feed does this file belong to?" |
+| COMMCALC-09 | **A stored pay slice nobody computed is not $0.00 earned** | "The rep incentive table shows ACC GP as zero and the drill-down link calculates a figure. Same source — so which read is stale, how does a surface tell a measured zero from a blank, and which months need recalculating?" |
 
 ---
 
@@ -25272,6 +25273,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-06 | commcalc |
 | COMMCALC-07 | commcalc |
 | COMMCALC-08 | commcalc |
+| COMMCALC-09 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -28004,6 +28006,117 @@ this one visible), §19.18 (a mechanism written and its callers left unwired), �
 without its basis), §64 (one home for "which store is this address").
 
 ---
+
+## §COMMCALC-09. A STORED PAY SLICE NOBODY COMPUTED IS NOT $0.00 EARNED (owner report 2026-10-15)
+
+Owner, verbatim: *"rep incentive report for luxelink shopws ACC GP as zero but calculates the
+commission when you click on teh linke 0 if the source for the data is teh same then why is the index
+not updateiong all areas when one is claculated , check for all such things in the commission module
+and the sales module so everywhere the same data is visible"*.
+
+**Both reads were right about their own source.** The Rep Incentive table reads the STORED
+`commcalc.rep_commissions` row (`router.get_commissions`); the 🔬 drill-down RE-COMPUTES from the plan
+engine. The accessory slice of a plan-mode row has only been written since the 2026-09-17 itemisation
+(§6b), and Luxelink's earlier months were last calculated on **2026-09-10** — so August's row carries
+`plan_comm = 957.36` beside `subtotal = 0` and `acc_comm = 0`: a correct total next to a breakdown
+that was never computed. Nothing on the screen said which, so $0.00 read as "this rep earned nothing
+on accessories".
+
+**Measured read-only, 2026-10-15.** Of 192 stored Luxelink rows, **102 contradict themselves** this
+way — August 45/46, July 42/44, June 10/10, May 3/8, March 2/8 — holding **$23,440.15** of correct
+total pay beside a $0.00 breakdown. September (45) and October (31) are clean: they were calculated
+after the itemisation shipped. The house (Boost) org: **0 of 379**, because `calculator.py` has always
+written every slice. Vzone has no rows.
+
+### COMMCALC-09.1 Duplicate check (the build gate)
+
+Searched the index and the module graph for an existing home for "may this stored figure be read as a
+figure". §66 (`carrier_dollar_class.component_is_evidence`) is the same RULING on a classified dollar
+and its allowlist posture is **reused verbatim here**, not re-invented; §19.28 (`kpi_failing`) is the
+same lesson for a KPI with no value — and lives three lines from one of the surfaces fixed below,
+which had learned it for KPIs and not for `subtotal`. The `not_measured` family (§29.12 unfinished
+closing day, the store-takeover lines) is the same posture on a computed read. None of them answers
+this question for a stored pay row, so `commcalc/payout_slice_evidence.py` is the new one home and
+every surface dereferences it.
+
+### COMMCALC-09.2 How a never-written slice is known — no migration, no new column
+
+In plan mode the writer (`router._apply_new_engines`) sets `subtotal` and `plan_comm` to the SAME
+figure in the same statement, and `tier_source` to `'plan'`. **A plan-mode row where `plan_comm` is
+positive and `subtotal` is zero therefore contradicts itself** — it says the plan paid money and that
+the subtotal of that pay was nothing. Only a row written before the itemisation can say both. That is
+the whole predicate and it reads two columns that already exist.
+
+Verified against every row shape that is actually in the table, not just the broken one:
+
+| shape | live rows (Luxelink) | verdict | why |
+| --- | --- | --- | --- |
+| plan mode, `plan_comm > 0`, `subtotal = 0` | 102 | `not_recorded` | contradicts itself |
+| plan mode, itemised | 70 | `recorded` | the slices were written |
+| plan mode, installment-only (`plan_comm = 0`) | 20 | `recorded` | a zero subtotal is TRUE — no plan paid them |
+| Boost (`tier_source != 'plan'`) | 379 (house org) | `recorded` | the calculator always wrote them |
+
+The installment-only row is why the predicate needs both halves: a test on `subtotal = 0` alone would
+withhold 20 rows whose zero is a measurement. Harness §A/Z1 pins exactly that.
+
+### COMMCALC-09.3 What is NOT done, and why
+
+**No backfill, and no recalculation.** Recomputing those five months writes stored pay, which is money
+and the owner's own button (CLAUDE.md: money-touching changes are surfaced, not applied). It would also
+leave the next surface unable to tell. The registry comes first; the report now NAMES the months to
+recalculate, so a backfill afterwards is visible rather than silent.
+
+**The sales module was checked and is not affected** (the owner asked for it explicitly). Its accessory
+figure comes from `router._compute_feed_actuals_py` → `_sales_cell_agg`, **recomputed on every read**
+from the sales feed — there is no stored snapshot to go stale. The one stored sales-side snapshot, the
+Account dashboard's, already differs from the live GP report BY DESIGN and already carries its own
+staleness cross-check (§23d `tie_delta`). Nothing to fix; stated here so the next reader does not
+re-derive it.
+
+### COMMCALC-09.4 The six readers and the one writer
+
+| surface | what it did | now |
+| --- | --- | --- |
+| `router._get_commissions_rows` | served the stored row raw | stamps `payout_slice_basis` + `payout_slice_reason` on the ONE read every Rep Incentive surface goes through |
+| `payout_audience.EMPLOYEE_REP_ROW_FIELDS` | an allow-list, so a new field would be stripped | carries the basis to every audience — a rep is entitled to know their breakdown was never computed |
+| `rep_incentive_range.assemble` | summed `subtotal` / `acc_comm` across months, adding an unknown as zero | sums named slices through `sum_slice`, reports `*_rows_not_recorded`, and names `periods_not_recorded` |
+| `whatif._boost_actuals` | BACK-DERIVED baseline sales (`acc_comm / acc_rate`), so a blank slice started a projection from the wrong baseline | excludes those rows from the slice aggregates, keeps their `total_payout`, reports `slices_not_recorded` |
+| `router` coaching card (§19.28's own file) | `at_risk = subtotal × (1 − tier)` on a never-computed subtotal | reads `slice_value`; withholds `at_risk` rather than printing $0.00 at risk |
+| `router` action plan | same, and emitted `subtotal` as $0.00 | same, and emits `None` with the basis |
+| `router._apply_new_engines` 2nd branch (WRITER) | wrote `subtotal` and NOT the slices, so it could store a positive subtotal beside a $0.00 breakdown — **undetectable after the fact** | itemises the row it creates (0 such rows exist live, 0 can be created now) |
+
+The screen (`reports/page.tsx`, three tables) renders an unrecorded slice as **—** with the server's
+reason on hover, never a figure of its own; the TOTAL column is never dashed, because `total_payout`
+has always been written. `repIncentiveRange.ts` skips unrecorded rows in its client-side slice sums
+(it imports nothing by design, so it reads the server's stamped verdict rather than re-deriving the
+test).
+
+### COMMCALC-09.5 Locks
+
+`harness_payout_slice_evidence.py` — **62 checks, 0 failures; verified 18 named failures and no
+traceback against pre-fix `main`** in a clean worktree. §G9 fails the build if any caller spells the
+contradiction test itself; §H fails it if either plan-mode writer stops itemising; §I pins the screen
+to the server's verdict; §C pins the allowlist (an unruled basis is not evidence). `F1`'s first draft
+flagged this module's own header, which names the tenant measured — it now scans CODE with docstrings
+and comments stripped, and `F1b` pins the one product-named string to the existing `acima_comm`
+column. `frontend/tools/rep-incentive-range-proof.mjs` grew 7 checks (17 total) for the client sums.
+
+### COMMCALC-09.6 Cross-references
+
+- **§16 (by TABLE):** `commcalc.rep_commissions` — the named slices (`subtotal`, `acc_comm`,
+  `setup_fee_comm`, `premium_comm`, `byod_comm`, `upgrade_comm`, `trade_in_comm`, `acima_comm`,
+  `custom_comm`) are read through `payout_slice_evidence`, never straight off the row.
+- **§17 (by FUNCTION):** `payout_slice_evidence.basis` / `slice_value` / `sum_slice` / `annotate` /
+  `periods_not_recorded`; `router._get_commissions_rows` (the one stamp), `router._pse_mod` (the one
+  import accessor), `rep_incentive_range.assemble`, `whatif._boost_actuals`.
+- **§18 (by QUESTION):** "Is this stored pay breakdown a figure at all, or a blank that prints as
+  $0.00?" → `payout_slice_evidence`, module-graph fact `payout_slice_evidence`.
+- **Same class:** §66 (a value read without its basis — the posture reused), §19.18 (a mechanism
+  written, callers unwired), §19.28 (`kpi_failing`: a metric with no value is `no_data`, not a 0%),
+  §6b (the 2026-09-17 itemisation this one is the read side of), §29.12 (a started day is never blank).
+
+---
+
 
 ## §CORE-05. A PAGED READ IS A READ OF THE DATA — one stable key, every row exactly once (owner report 2026-10-14)
 
