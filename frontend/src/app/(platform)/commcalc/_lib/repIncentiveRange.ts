@@ -10,7 +10,14 @@
 /** The widest range the page asks for — the backend's rep_incentive_range.MAX_MONTHS (12). */
 export const RANGE_MAX_MONTHS = 12
 
-export type RangeRow = { range_month: string; [k: string]: any }
+export type RangeRow = {
+  range_month: string
+  // WHETHER THIS ROW'S NAMED PAY SLICES ARE FIGURES AT ALL (§COMMCALC-09) — the server's verdict,
+  // named here so a range table reads it rather than treating a never-computed subtotal as $0.00.
+  payout_slice_basis?: string | null
+  payout_slice_reason?: string | null
+  [k: string]: any
+}
 
 export const RANGE_MONEY = ['subtotal', 'total_payout', 'final_payout'] as const
 export const RANGE_COUNTS = ['premium_acts', 'byod_acts', 'upgrade_acts'] as const
@@ -20,9 +27,26 @@ const cents = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 10
 
 export type MonthBlock = { month: string; rows: RangeRow[]; totals: Record<string, number> }
 
+/** The NAMED SLICES among RANGE_MONEY — the fields a plan-mode row only carries when the engine that
+ *  wrote it itemised the pay (§COMMCALC-09). `total_payout` and `final_payout` are not among them:
+ *  every writer has always written those, so they sum unconditionally and a month's total stays exact. */
+const RANGE_SLICES: readonly string[] = ['subtotal']
+
+/** Does this row's breakdown exist at all? READS the server's stamped verdict
+ *  (`commcalc/payout_slice_evidence`, the one home) — the test is not re-derived here, and a payload
+ *  without the stamp reads as recorded so an older server changes nothing. */
+const sliceRecorded = (r: RangeRow): boolean =>
+  String(r?.payout_slice_basis ?? 'recorded') === 'recorded'
+
 function totalsOf(rows: RangeRow[]): Record<string, number> {
   const t: Record<string, number> = { reps: rows.length }
-  for (const k of RANGE_MONEY) t[k] = cents(rows.reduce((s, r) => s + num(r[k]), 0))
+  for (const k of RANGE_MONEY) {
+    // A never-computed slice is NOT added in as zero: a window covering a month calculated before the
+    // breakdown existed used to print a Subtotal short by that month and say nothing.
+    const src = RANGE_SLICES.includes(k) ? rows.filter(sliceRecorded) : rows
+    t[k] = cents(src.reduce((s, r) => s + num(r[k]), 0))
+    if (RANGE_SLICES.includes(k)) t[`${k}_rows_not_recorded`] = rows.length - src.length
+  }
   for (const k of RANGE_COUNTS) t[k] = rows.reduce((s, r) => s + Math.trunc(num(r[k])), 0)
   return t
 }

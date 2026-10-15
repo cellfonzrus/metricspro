@@ -686,6 +686,13 @@ on:
       - "backend/harness_trade_in_basis.py"
       - "backend/app/modules/commcalc/trade_in_basis.py"
       - "database/migrations/1075_trade_in_basis_config.sql"
+      - "backend/harness_payout_slice_evidence.py"
+      - "backend/app/modules/commcalc/payout_slice_evidence.py"
+      - "backend/app/modules/commcalc/rep_incentive_range.py"
+      - "backend/app/modules/commcalc/whatif.py"
+      - "backend/app/modules/commcalc/payout_audience.py"
+      - "frontend/src/app/(platform)/commcalc/reports/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/_lib/repIncentiveRange.ts"
       - "backend/harness_attach_qualifier.py"
       - "backend/app/modules/commcalc/attach_qualifier.py"
       - "backend/app/modules/commcalc/commission_engine.py"
@@ -1163,6 +1170,10 @@ jobs:
       - name: Run the trade-in basis lock (WHICH RECORD pays the trade-in spiff is the org's declared fact with one home; the till is the house default; distinct transactions never lines; the case-folded declaration; a trade-in whose rep cannot be resolved is reported, never dropped — owner 2026-10-12, index §COMMCALC-01)
         working-directory: backend
         run: python3 harness_trade_in_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the stored-pay-slice evidence proof (a named slice of a stored pay row is a figure only when something computed it; a plan-mode row that says the plan paid while the subtotal of that pay is zero was never itemised, so its breakdown reads as UNKNOWN and never as $0.00 earned; no caller spells the test itself and neither plan-mode writer may stop itemising — owner report 2026-10-15, index §COMMCALC-09)
+        working-directory: backend
+        run: python3 harness_payout_slice_evidence.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Run the attach-qualifier proof (a condition measured over the WHOLE SALE decides which DECLARED rate a line earns; the accessory test and the rule matcher are INJECTED so the module owns no classifier and reads no classifying column; an unmeasurable sale pays the FULL rate and is reported; a flat fallback on a percentage rule is refused; the plan save round-trips all eight columns or it would wipe them — owner 2026-10-12, index §COMMCALC-06)
         working-directory: backend
         run: python3 harness_attach_qualifier.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

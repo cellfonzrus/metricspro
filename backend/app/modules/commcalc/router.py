@@ -16669,6 +16669,18 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
                 newrow["plan_comm"] = pv["amount"]
             if cols["plan_name"]:
                 newrow["plan_name"] = pv.get("plan_name")
+            # THE NAMED SLICES, HERE TOO (owner 2026-10-15, §COMMCALC-09). The sibling branch above has
+            # itemised a plan-mode row since 2026-09-17; THIS branch — the rep the calculator never
+            # emitted a skeleton row for — wrote `subtotal` and nothing else, so it could store a
+            # positive subtotal beside a $0.00 breakdown. Measured on live Luxelink data it has produced
+            # no such row (0 of 192), but a row it did produce would be UNDETECTABLE after the fact:
+            # `payout_slice_evidence` recognises a never-itemised row by the subtotal/plan_comm
+            # contradiction, and this branch sets both. So the writer is fixed rather than the reader
+            # taught to guess, which is the only order that closes it.
+            if "acc_comm" in pv:
+                newrow["acc_comm"] = safe_float(pv.get("acc_comm"))
+            if cols["setup_fee_comm"] and pv.get("setup_fee_comm"):
+                newrow["setup_fee_comm"] = safe_float(pv.get("setup_fee_comm"))
             if cols["residual_installment_comm"]:
                 newrow["residual_installment_comm"] = inst
             if cols["installment_comm_sale"]:
@@ -17687,6 +17699,16 @@ async def _get_commissions_rows(period, authorization, org_id):
     _resolve_market, _ = _store_market_resolver(client, org_id)
     for cr in comms:
         cr['market'] = _resolve_market(cr.get('store'))
+    # IS THIS BREAKDOWN A FIGURE, OR A BLANK THAT LOOKS LIKE $0.00 (owner 2026-10-15, §COMMCALC-09)?
+    # Stamped HERE, on the one read every Rep Incentive surface goes through (the table, the month
+    # range which loops this handler, the exports, the emailed report), so none of them decides for
+    # itself. It changes no stored figure: it adds the basis the surface must consult before printing
+    # a named slice as money. A plan-mode row written before the 2026-09-17 itemisation says the plan
+    # paid and that the subtotal of that pay was zero -- its slices were never computed, and $0.00 is
+    # the wrong way to say so.
+    from app.modules.commcalc import payout_slice_evidence as _pse
+    for cr in comms:
+        _pse.annotate(cr)
     # Apply chargeback deductions (deduct=true) per rep
     cb = client.schema('commcalc').table('chargeback_items').select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
     ded_by_rep = {}
@@ -17751,7 +17773,8 @@ async def get_commissions_range(period_from: str, period_to: str = "", authoriza
     per_month = {}
     for m in months:
         per_month[m] = await get_commissions(m, authorization=authorization, org_id=org_id, audience=audience)
-    return _rir.assemble(months, per_month)
+    # the slice-evidence verdict is handed to the assembler, which imports nothing itself (§COMMCALC-09)
+    return _rir.assemble(months, per_month, _pse_mod())
 
 
 @router.get("/multimonth/status")
@@ -23037,6 +23060,13 @@ def _commission_from_mtd_rows(emp_rows, rate_map, acc_pct):
                     "commission": round(ap + cp, 2), "by_category": by_cat})
     out.sort(key=lambda x: -x["commission"])
     return out
+
+
+def _pse_mod():
+    """The one home for "are this stored row's named slices figures at all" (§COMMCALC-09), imported
+    through one accessor so no surface in this 48,000-line router grows its own copy of the predicate."""
+    from app.modules.commcalc import payout_slice_evidence as _pse
+    return _pse
 
 
 def _override_plan_by_rep_with_mtd(plan_by_rep, mtd_plan_names, mtd_by_plan):
@@ -33354,7 +33384,13 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
         if market_sel and mk not in market_sel:
             continue
         tier = safe_float(cr.get('tier'))
-        subtotal = safe_float(cr.get('subtotal'))
+        # THE SAME LESSON AS THE KPI NOTE BELOW, ONE COLUMN ACROSS (owner 2026-10-15, §COMMCALC-09):
+        # `subtotal` is a NAMED SLICE, written on a plan-mode row only by the engine that itemises it,
+        # so a row calculated before that writer reads 0.00 and a coaching card then tells a manager
+        # this rep's pay subtotal was nothing. `slice_value` returns None for such a row; `at_risk`
+        # cannot be computed from an unknown and is withheld rather than printed as $0.00 at risk.
+        _sub_known = _pse_mod().slice_value(cr, 'subtotal')
+        subtotal = safe_float(_sub_known)
         kv = cr.get('kpi_values') or {}
         # ONE CLASSIFIER, EVERY SURFACE (owner defect 2026-09-26; index §19.28). `safe_float(None)`
         # returned 0.0, so a KPI nothing measured was shown to a rep — and to their manager on a
@@ -33368,7 +33404,8 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
         kpis_no_data = _knd
         kpis_met = cr.get('kpis_met')
         kpis_met = sum(1 for x in kpis if x['met']) if kpis_met is None else kpis_met
-        at_risk = round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0
+        at_risk = (round(subtotal * (1.0 - tier), 2)
+                   if (tier < 1.0 and _sub_known is not None) else 0.0)
         keys = {name.upper(), eslp.upper()} - {''}
         cbd = {'total': 0.0, 'count': 0, 'deducted': 0.0}
         fld = {'count': 0, 'high': 0, 'notes': []}
@@ -36967,7 +37004,9 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         if not cr:
             return None
         tier = safe_float(cr.get('tier'))
-        subtotal = safe_float(cr.get('subtotal'))
+        # §COMMCALC-09, exactly as /coaching above: a slice nobody computed is not $0.00 earned.
+        _sub_known = _pse_mod().slice_value(cr, 'subtotal')
+        subtotal = safe_float(_sub_known)
         kv = cr.get('kpi_values') or {}
         # THE SAME ONE CLASSIFIER as /coaching above (index §19.28) — a metric with no value is
         # `no_data`, never an action-plan item accusing the rep of a 0%.
@@ -36980,9 +37019,11 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         return {'tier': tier, 'kpis_met': kpis_met,
                 'total_kpis': (cr.get('total_kpis') if cr.get('total_kpis') is not None else len(kpis)),
                 'kpis_no_data': _knd,
-                'subtotal': round(subtotal, 2),
+                'subtotal': round(subtotal, 2) if _sub_known is not None else None,
+                'payout_slice_basis': _pse_mod().basis(cr),
                 'total_payout': round(safe_float(cr.get('total_payout')), 2),
-                'at_risk': round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0,
+                'at_risk': (round(subtotal * (1.0 - tier), 2)
+                            if (tier < 1.0 and _sub_known is not None) else 0.0),
                 'short_kpis': [x['label'] for x in kpis if not x['met']],
                 'kpis': kpis, 't100': t100, 't75': t75}
 

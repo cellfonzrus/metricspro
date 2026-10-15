@@ -304,10 +304,24 @@ def _boost_actuals(client, org_id, period, rates, rep=None):
     agg = {k: 0.0 for k in ("acc_comm", "setup_fee_comm", "trade_in_comm", "acima_comm", "subtotal", "total_payout")}
     cnt = {k: 0 for k in ("premium_acts", "byod_acts", "upgrade_acts")}
     tiers = []
+    # A SLICE THAT WAS NEVER COMPUTED IS NOT A ZERO (owner 2026-10-15, §COMMCALC-09). This function
+    # BACK-DERIVES the baseline sales from the stored pay (`acc_sales = acc_comm / acc_rate` below), so
+    # a plan-mode row whose itemisation predates the 2026-09-17 writer used to hand the simulator
+    # acc_sales = 0 and a subtotal short by that rep's whole plan -- a projection quietly started from
+    # the wrong baseline. Such rows are excluded from the SLICE aggregates and counted, while their
+    # `total_payout` (always written) still counts, so the baseline total stays exact.
+    from app.modules.commcalc import payout_slice_evidence as _pse
+    _slices = tuple(k for k in agg if k in _pse.NAMED_SLICES)
+    _not_recorded = 0
     for r in rc:
+        _ev = _pse.slices_are_evidence(r)
+        if not _ev:
+            _not_recorded += 1
         for k in cnt:
             cnt[k] += int(r.get(k) or 0)
         for k in agg:
+            if k in _slices and not _ev:
+                continue
             agg[k] += safe_float(r.get(k))
         if r.get("tier") is not None:
             tiers.append(safe_float(r.get("tier")))
@@ -324,6 +338,10 @@ def _boost_actuals(client, org_id, period, rates, rep=None):
         "subtotal": round(agg["subtotal"], 2), "total_payout": round(agg["total_payout"], 2),
         "avg_tier": round(sum(tiers) / len(tiers), 3) if tiers else 1.0,
         "reps": len(rc),
+        # LOUD, never silent: how many of those rep rows contributed no breakdown to this baseline.
+        # `periods_not_recorded` names the months to recalculate; nothing here repairs them.
+        "slices_not_recorded": _not_recorded,
+        "periods_not_recorded": _pse.periods_not_recorded(rc),
     }
 
 

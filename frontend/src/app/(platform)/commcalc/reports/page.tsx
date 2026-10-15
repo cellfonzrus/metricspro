@@ -52,6 +52,11 @@ interface Rep {
     gross_amount?: number; covered_amount?: number | null; remainder?: number
     overflow?: 'payroll' | 'next_cycle' | null; overflow_period?: string | null
   }[]
+  // WHETHER THE NAMED SLICES ABOVE ARE FIGURES AT ALL (§COMMCALC-09). Stamped by the server; absent
+  // on an older payload, which `sliceRecorded` reads as 'recorded' so nothing changes for a row that
+  // was itemised.
+  payout_slice_basis?: string | null
+  payout_slice_reason?: string | null
 }
 
 const TABS = [
@@ -63,6 +68,19 @@ const TABS = [
 
 // the carrier diagnostic this report links to (registered in backend payout_audience.MANAGER_ONLY_SURFACES)
 const EXPLAIN_PAGE = '/commcalc/commission-explain'
+
+// A NAMED SLICE NOBODY COMPUTED IS NOT $0.00 EARNED (owner 2026-10-15, §COMMCALC-09).
+// `payout_slice_basis` is stamped by the server on every rep row (commcalc/payout_slice_evidence —
+// the one home; this file decides nothing, it only reads the verdict). A row whose basis is not
+// 'recorded' has a correct `total_payout` and a breakdown that was never written, so each slice reads
+// as a dash with the reason rather than as zero dollars.
+type SliceRow = { payout_slice_basis?: string | null; payout_slice_reason?: string | null }
+const sliceRecorded = (r: SliceRow | null | undefined) =>
+  String(r?.payout_slice_basis || 'recorded') === 'recorded'
+const sliceReason = (r: SliceRow | null | undefined) =>
+  (sliceRecorded(r) ? '' : String(r?.payout_slice_reason || ''))
+const slice = (r: SliceRow, v: number | string | null | undefined, f: (n: number) => string) =>
+  sliceRecorded(r) ? f(Number(v) || 0) : '—'
 
 // ── PLAN-MODE (non-Boost) drill labels — mirrored from commission-explain/page.tsx so the same
 // installment status/basis reads identically on both surfaces. Display only.
@@ -177,6 +195,16 @@ export default function ReportsPage() {
     return [...names].sort((a, b) => a.localeCompare(b))
   }, [rangeData, reps])
   const rangeRepPick = rangeRep && rangeRepOptions.includes(rangeRep) ? rangeRep : (rangeRepOptions[0] || '')
+  // The months in the loaded range whose rows carry no computed breakdown, in range order — read off
+  // the server's per-row verdict (§COMMCALC-09), never re-decided here.
+  const notRecordedMonths = useMemo(() => {
+    const out: string[] = []
+    for (const r of (rangeData?.rows || []) as RangeRow[]) {
+      const m = String(r?.range_month || r?.period || '')
+      if (m && !sliceRecorded(r) && !out.includes(m)) out.push(m)
+    }
+    return out
+  }, [rangeData])
   function downloadRangeStatement(fmt: 'pdf' | 'csv') {
     if (!rangeRepPick) { alert('Pick an employee.'); return }
     apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(rangeRepPick)}`
@@ -978,16 +1006,17 @@ export default function ReportsPage() {
               {filtered.map((r, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 500 }}>{r.storeops_name || r.epay_salesperson}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.premium_comm)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.byod_comm)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.upgrade_comm)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.acc_comm)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.setup_fee_comm)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.trade_in_comm)}</td>
-                  <td style={{ textAlign: 'right', color: r.acima_comm > 0 ? '#7c3aed' : 'var(--text3)' }}>
+                  <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.premium_comm, fmt)}</td>
+                  <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.byod_comm, fmt)}</td>
+                  <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.upgrade_comm, fmt)}</td>
+                  <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.acc_comm, fmt)}</td>
+                  <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.setup_fee_comm, fmt)}</td>
+                  <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.trade_in_comm, fmt)}</td>
+                  <td style={{ textAlign: 'right', color: r.acima_comm > 0 ? '#7c3aed' : 'var(--text3)' }}
+                      title={sliceReason(r) || undefined}>
                     {r.acima_comm > 0 ? fmt(r.acima_comm) : '—'}
                   </td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.subtotal)}</td>
+                  <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.subtotal, fmt)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.total_payout)}</td>
                   {hasGoogle && <td><GoogleRatingChips list={googleFor(r.storeops_name || r.epay_salesperson)} compact /></td>}
                 </tr>
@@ -1038,6 +1067,19 @@ export default function ReportsPage() {
             </span>
           </div>
           {rangeErr && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 10 }}>{rangeErr}</div>}
+          {/* WHICH MONTHS ARE SHORT A BREAKDOWN, NAMED ONCE (§COMMCALC-09). A range is where this
+              mattered most: summing a month whose breakdown was never computed beside one that was
+              printed a Subtotal total that was quietly short. The server no longer adds those in, and
+              this says which months to recalculate. The months come from the server's own verdict on
+              each row — the test is not re-derived here. */}
+          {notRecordedMonths.length > 0 && (
+            <div style={{ fontSize: 12, color: '#b45309', marginBottom: 10, maxWidth: 760 }}>
+              Subtotal is blank for {notRecordedMonths.join(', ')} — those months were last calculated
+              before the pay breakdown existed, so only the total was stored. Each month&apos;s Payout
+              is correct and is still included. Run Calculation for those months to fill the breakdown
+              in; it does not change anyone&apos;s total.
+            </div>
+          )}
           {rangeData && (
             <div className="table-wrapper">
               <table>
@@ -1064,7 +1106,7 @@ export default function ReportsPage() {
                           <td style={{ textAlign: 'right' }}>{r.premium_acts ?? 0}</td>
                           <td style={{ textAlign: 'right' }}>{r.byod_acts ?? 0}</td>
                           <td style={{ textAlign: 'right' }}>{r.upgrade_acts ?? 0}</td>
-                          <td style={{ textAlign: 'right' }}>{fmt(r.subtotal)}</td>
+                          <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.subtotal, fmt)}</td>
                           <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.total_payout)}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(r.final_payout ?? r.total_payout)}</td>
                         </tr>

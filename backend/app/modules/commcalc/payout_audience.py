@@ -101,7 +101,12 @@ EMPLOYEE_REP_ROW_FIELDS = ("id", "org_id", "period", "period_month", "period_yea
                            "custom_comm", "acc_target", "subtotal", "total_payout", "plan_comm", "plan_name",
                            "residual_installment_comm", "installment_comm_sale", "carrier_statement_comm",
                            "chargeback_deduction", "ops_chargeback_deduction", "ops_chargeback_lines",
-                           "final_payout", "calculated_by", "created_at", "updated_at")
+                           "final_payout", "calculated_by", "created_at", "updated_at",
+                           # WHETHER THE NAMED SLICES ABOVE ARE FIGURES AT ALL (§COMMCALC-09). Allowed
+                           # for every audience including an employee: a rep is entitled to be told
+                           # that their breakdown was never computed, which is exactly what reading it
+                           # as $0.00 hid from them.
+                           "payout_slice_basis", "payout_slice_reason")
 # the Boost component drill (/commission-drill): a bucket and one of its items. Price / GP stay ONLY in the
 # buckets the rep is paid a PERCENTAGE of (their own sale's price / margin is the basis of that pay);
 # count-paid buckets carry the transaction, never its money.

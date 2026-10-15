@@ -981,6 +981,36 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/plan_options.py': ('_aq',),
         },
     },
+    'payout_slice_evidence': {
+        "question": 'Is this stored pay breakdown a figure at all, or a blank that prints as $0.00?',
+        "homes": ('app/modules/commcalc/payout_slice_evidence.py',),
+        "index": ('COMMCALC-09',),
+        "locks": ('harness_payout_slice_evidence.py',),
+        # SNAPSHOT — hand-written, not `--bless`-generated, because --bless rewrites a callers block to
+        # BARE lines and strips the per-caller comments (the caveat recorded in §COMMCALC-01). The
+        # derived edges were verified by RUNNING the guard afterwards.
+        "callers": {
+            # The ONE rep-row read. Every Rep Incentive surface goes through it (the table, the month
+            # range which loops this handler, the exports, the emailed report), so the basis is stamped
+            # here once instead of each surface deciding. Also the coaching card and the action plan,
+            # which read the stored `subtotal` and used to multiply a never-computed one into an
+            # "at risk" figure; and the plan-mode WRITER branch, which now itemises the row it creates
+            # so it cannot produce a row this predicate could never flag.
+            # `_pse` is the import inside the one read; `_pse_mod()` is the accessor the other
+            # surfaces in this 48,000-line file call so none of them grows its own copy. The binding
+            # below is the IMPORT alias the graph derives from the AST, not the accessor's name.
+            'app/modules/commcalc/router.py': ('_pse',),
+            # NOT LISTED, and deliberately: commcalc/rep_incentive_range.py is the fourth caller --
+            # a month range is where adding an unknown in as zero printed a wrong total -- but its own
+            # lock (harness_rep_incentive_range D5) forbids it ANY import, so `assemble(months,
+            # per_month, evidence)` takes the module as a REQUIRED argument from the router instead.
+            # There is no AST edge to declare; the dereference is locked by
+            # harness_payout_slice_evidence G4a/G4b/G4c rather than by this graph.
+            # The simulator BACK-DERIVES baseline sales from stored pay (acc_comm / rate), so a
+            # never-written slice silently started a projection from the wrong baseline.
+            'app/modules/commcalc/whatif.py': ('_pse',),
+        },
+    },
     'commission_ledger_identity': {
         "question": 'Which ledger row is this, and which period does it book into?',
         "homes": ('app/modules/commcalc/commission_ledger.py',),

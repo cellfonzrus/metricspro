@@ -46,7 +46,37 @@ ok('a filter sums only what is on screen (Rep A: $1,080.00)', onlyA.grand.total_
 ok('spanMonths: Jun–Aug = 3; reversed = 0; junk = 0; the cap is 12',
   M.spanMonths('2026-06', '2026-08') === 3 && M.spanMonths('2026-08', '2026-06') === 0 && M.spanMonths('x', '2026-06') === 0 && M.RANGE_MAX_MONTHS === 12)
 ok('monthInput: the default window ends this month', M.monthInput(new Date(2026, 8, 25), 0) === '2026-09' && M.monthInput(new Date(2026, 0, 5), 2) === '2025-11')
+// ── A NEVER-COMPUTED SLICE IS NOT ZERO (owner 2026-10-15, §COMMCALC-09) ─────────────────────────
+// A plan-mode row written before the pay breakdown existed carries a correct `total_payout` and a
+// `subtotal` of 0 that nobody computed. Summing it beside a real month printed a Subtotal short by
+// that month and said nothing. The helper now skips such rows for the SLICE fields only.
+const mixed = [
+  { range_month: '2026-08', epay_salesperson: 'Rep A', subtotal: 0, total_payout: 957.36,
+    final_payout: 957.36, payout_slice_basis: 'not_recorded' },
+  { range_month: '2026-09', epay_salesperson: 'Rep A', subtotal: 1122.58, total_payout: 1122.58,
+    final_payout: 1122.58, payout_slice_basis: 'recorded' },
+]
+const mv = M.monthBlocks(mixed, ['2026-08', '2026-09'])
+ok('a never-computed subtotal is not summed as zero (grand subtotal = the one real month)',
+  mv.grand.subtotal === 1122.58)
+ok("the month's own payout is UNAFFECTED — total_payout has always been written ($2,079.94)",
+  mv.grand.total_payout === 2079.94 && mv.grand.final_payout === 2079.94)
+ok('the count of rows it withheld is reported, never hidden',
+  mv.grand.subtotal_rows_not_recorded === 1 && mv.blocks[0].totals.subtotal_rows_not_recorded === 1
+  && mv.blocks[1].totals.subtotal_rows_not_recorded === 0)
+ok('a payload with no basis stamped still sums exactly as before (an older server changes nothing)',
+  M.monthBlocks([{ range_month: '2026-09', subtotal: 10, total_payout: 10, final_payout: 10 }],
+    ['2026-09']).grand.subtotal === 10)
+ok('ARMED: the same rows summed the old way WOULD have printed the short total',
+  mixed.reduce((s, r) => s + Number(r.subtotal), 0) === 1122.58
+  && mixed.filter(r => r.payout_slice_basis === 'not_recorded').length === 1)
+
 const page = readFileSync(path.join(SRC, 'reports/page.tsx'), 'utf8')
+ok('the page reads the server verdict and never re-derives it (no subtotal/plan_comm test in the page)',
+  page.includes('payout_slice_basis') && !/plan_comm[^\n]{0,40}===\s*0/.test(page)
+  && !/subtotal[^\n]{0,30}===\s*0\s*&&/.test(page))
+ok('the page shows the reason the server gave, rather than wording of its own',
+  page.includes('payout_slice_reason'))
 ok('the page reads /commissions-range (the looped per-month handler) and groups through monthBlocks',
   page.includes('/api/v1/commcalc/commissions-range?') && page.includes('monthBlocks('))
 ok('the page never sums a pay component itself beyond the helper (no second rate / tier arithmetic in the range tab)',

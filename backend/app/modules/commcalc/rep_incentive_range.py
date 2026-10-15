@@ -17,6 +17,17 @@ chargeback reads and the scope resolution), so a year is the widest window that 
 
 MAX_MONTHS = 12
 
+# WHETHER A NAMED SLICE MAY BE SUMMED AT ALL (owner 2026-10-15, §COMMCALC-09). A range is where this
+# bites hardest: `subtotal` and `acc_comm` are only written on a plan-mode row by the engine that
+# itemises it, so a window covering a month calculated before that itemisation added a never-computed
+# figure to a real one and printed one total. The month's own total is still exact (`total_payout` has
+# always been written) -- it is the SLICES that are unknown, and this says so instead of adding zero.
+#
+# The verdict is INJECTED, not imported: this module imports nothing (harness_rep_incentive_range D5
+# locks that, and the lock is right -- an assembler that can reach the app can grow a read of its own).
+# `assemble` therefore REQUIRES the `evidence` module and has no fallback: a caller that stops passing
+# commcalc/payout_slice_evidence raises rather than silently reverting to adding zeros (§19.18).
+
 # the money fields a range sums (every one is a field the single-month payload already carries)
 MONEY_FIELDS = ("subtotal", "total_payout", "chargeback_deduction", "ops_chargeback_deduction", "final_payout",
                 "plan_comm", "installment_comm_sale", "residual_installment_comm", "acc_comm")
@@ -40,9 +51,11 @@ def rep_key(row):
     return (str(r.get("storeops_name") or "").strip() or str(r.get("epay_salesperson") or "").strip()).upper()
 
 
-def assemble(months, per_month):
+def assemble(months, per_month, evidence):
     """`months` = the canonical month list (oldest first); `per_month` = {month: [row, …]} — each list
-    EXACTLY what the single-month read returned for that month. Returns
+    EXACTLY what the single-month read returned for that month. `evidence` = the
+    commcalc/payout_slice_evidence module, handed in by the caller (this module reaches for nothing) —
+    the ONE home for whether a stored row's named slices are figures at all. Returns
 
       {"months": [...],
        "rows": [row + {"range_month": month}, …]     — month order, then the per-month order kept,
@@ -61,7 +74,13 @@ def assemble(months, per_month):
             with_rows += 1
         mt = {"period": m, "reps": len(mrows)}
         for k in MONEY_FIELDS:
-            mt[k] = _r2(sum(_f(r.get(k)) for r in mrows))
+            if k in evidence.NAMED_SLICES:
+                _agg = evidence.sum_slice(mrows, k)
+                mt[k] = _agg["total"]
+                mt[k + "_complete"] = _agg["complete"]
+                mt[k + "_rows_not_recorded"] = _agg["rows_not_recorded"]
+            else:
+                mt[k] = _r2(sum(_f(r.get(k)) for r in mrows))
         for k in COUNT_FIELDS:
             mt[k] = int(sum(int(_f(r.get(k))) for r in mrows))
         month_totals.append(mt)
@@ -74,16 +93,32 @@ def assemble(months, per_month):
                                       "store": r.get("store"), "months": 0,
                                       **{k: 0.0 for k in MONEY_FIELDS}, **{k: 0 for k in COUNT_FIELDS}})
             t["months"] += 1
+            _r_ev = evidence.slices_are_evidence(r)
+            if not _r_ev:
+                # counted once per month, not once per field: this rep's across-the-range slice totals
+                # are short by this many months, and the number says so.
+                t["months_not_recorded"] = t.get("months_not_recorded", 0) + 1
             for k in MONEY_FIELDS:
+                if k in evidence.NAMED_SLICES and not _r_ev:
+                    continue          # never added as zero
                 t[k] = _r2(t[k] + _f(r.get(k)))
             for k in COUNT_FIELDS:
                 t[k] += int(_f(r.get(k)))
         for k in MONEY_FIELDS:
             grand[k] = _r2(grand[k] + mt[k])
+            if k in evidence.NAMED_SLICES:
+                grand[k + "_rows_not_recorded"] = (grand.get(k + "_rows_not_recorded", 0)
+                                                   + mt.get(k + "_rows_not_recorded", 0))
         for k in COUNT_FIELDS:
             grand[k] += mt[k]
     grand["reps"] = len(reps)
     grand["months_with_rows"] = with_rows
+    for k in MONEY_FIELDS:
+        if k in evidence.NAMED_SLICES:
+            grand[k + "_complete"] = not grand.get(k + "_rows_not_recorded", 0)
+    # WHICH MONTHS to recalculate, named once for the whole window rather than left for the reader to
+    # work out from a blank column. Reported, never repaired: a recalculation moves money.
+    grand["periods_not_recorded"] = evidence.periods_not_recorded(rows)
     return {"months": list(months), "rows": rows, "month_totals": month_totals,
             "rep_totals": sorted(reps.values(), key=lambda t: (-t["total_payout"], str(t["rep"] or ""))),
             "grand_total": grand, "max_months": MAX_MONTHS}
