@@ -255,10 +255,10 @@ on:
       - "backend/app/modules/commcalc/b2b_sweep.py"
       - "backend/app/modules/commcalc/vidapay_sweep.py"
       # §COMMCALC-11 — an invisible human check is still a check. The detector lives in
-      # vidapay_sweep (named just above) and the operator's words in live_login, so a change to
-      # either must re-run the human-check lock or a check that gates the submit goes unseen again.
+      # vidapay_sweep (named just above) and the operator's words in live_login, which §COMMCALC-10
+      # already names further down this same list — so a change to either re-runs this job and with
+      # it the human-check lock, and a check that gates the submit cannot go unseen again.
       - "backend/harness_human_check_kind.py"
-      - "backend/app/modules/commcalc/live_login.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/merchant_portals.py"
       - "backend/app/modules/core/import_health.py"
