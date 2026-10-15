@@ -1417,6 +1417,43 @@ FACTS: dict[str, dict] = {
             'app/modules/storevisit/visit_plan_router.py': ('_te',),
         },
     },
+    # ── §COMMCALC-11 (owner report 2026-10-15) — a check that GATES a sign-in ────────────────────
+    'human_check_on_sign_in': {
+        "question": 'Does a human check ("I\'m not a robot") gate THIS page\'s sign-in, and of '
+                    'which kind? Recognised by whether it is PAINTED was the defect: Google\'s '
+                    'documented invisible setup renders the widget `data-size="invisible"` with a '
+                    '`data-callback` and posts the form only from that callback, so it is present, '
+                    'armed and gating — and `is_visible()` is False. The live session read that as '
+                    'no check, auto-submitted past it, and reported a CORRECT password as a wrong '
+                    'one. Three states, not a bool, because the two kinds need different words to '
+                    'the operator: a visible challenge is on the screen, an invisible one appears '
+                    'only once Sign in is pressed. The same fact answers "why was this submit '
+                    'refused while still on the login form", which has two causes that send the '
+                    'operator to opposite places (`human_check_blocked_message`) — both '
+                    'post-submit sites dereference it before blaming the credentials.',
+        "homes": ('app/modules/commcalc/vidapay_sweep.py',),
+        "index": ('COMMCALC-11',),
+        "locks": ('harness_human_check_kind.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
+        # import graph.
+        "callers": {
+            # The live interactive login: `_human_check_kind` reads the kind and picks the
+            # operator's words out of `_HUMAN_CHECK_MESSAGE`, instead of auto-submitting.
+            'app/modules/commcalc/live_login.py': ('vp',),
+            # The four other importers of the home. Each reaches it for the UNATTENDED paths —
+            # `begin_login` / `begin_login_b2bsoft`, the browser primitives, `_classify` — and so
+            # each inherits the answer through those entry points rather than asking again. NONE of
+            # them may grow its own detector: a second "is a human check waiting" is the duplicate
+            # this fact exists to stop, and §E of the lock pins the two post-submit sites that DO
+            # ask. An unattended sweep CANNOT pass a check, which is why the honest message (not a
+            # bad-password verdict) is what these paths surface to the operator.
+            'app/modules/commcalc/merchant_portal_sweep.py': ('vp',),
+            'app/modules/commcalc/portal_report_pull.py': ('vp',),
+            'app/modules/commcalc/router.py': ('UnsafePortalUrlError', 'VidaPayAuthError',
+                                              '_AuthErr', 'vp'),
+            'app/modules/supply/portal.py': ('vp',),
+        },
+    },
 }
 
 def keys() -> tuple:

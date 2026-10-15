@@ -195,12 +195,37 @@ def _wall_note(vp, page):
     return "The login form may render differently than expected — check the screenshot."
 
 
-def _captcha_present(vp, page):
-    """Best-effort captcha detection that never raises (the driver may lack the helper in a fake)."""
+# What to tell the operator for each KIND of human check. One home, because the two need genuinely
+# different instructions and the wrong one sends them hunting for a box that is not on the page yet
+# (owner report 2026-10-15 — the UPS reporting portal arms an INVISIBLE reCAPTCHA, index §COMMCALC-11).
+_HUMAN_CHECK_MESSAGE = {
+    "visible": ("Human check detected. Complete the 'I'm not a robot' box on the screen, then click "
+                "Sign in — you're driving this login directly."),
+    "invisible": ("This portal runs a human check when you sign in. Your details are filled in — "
+                  "click Sign in on the screen yourself and complete the check if one appears. "
+                  "Signing in for you would be rejected as a bad password."),
+}
+
+
+def _human_check_kind(vp, page):
+    """THE kind of human check gating this page: "visible", "invisible" or "". Never raises — a driver
+    (or a test fake) without the helper reads as no check, which is the pre-2026-10-15 behaviour.
+    Falls back to the older boolean helper so a fake that only provides THAT still answers."""
     try:
-        return bool(vp._looks_like_captcha(page))
+        kind = vp.human_check(page)
     except Exception:
-        return False
+        try:
+            kind = "visible" if vp._looks_like_captcha(page) else ""
+        except Exception:
+            return ""
+    kind = str(kind or "")
+    return kind if kind in _HUMAN_CHECK_MESSAGE else ""
+
+
+def _captcha_present(vp, page):
+    """Back-compat boolean over `_human_check_kind` — kept because the proof scripts in
+    backend/scratchpad call it directly. Reads the SAME answer, so there is no second detector."""
+    return bool(_human_check_kind(vp, page))
 
 
 def _clean_err(msg):
@@ -700,20 +725,22 @@ class LiveLoginSession:
                 self._capture(page)
                 return
 
-            # HUMAN-DRIVEN-UNTIL-AUTH decision. If a captcha ('I'm not a robot') is present, or the human
-            # has already taken control, do NOT auto-submit — hand the login to the human on the live page.
-            captcha = _captcha_present(vp, page)
+            # HUMAN-DRIVEN-UNTIL-AUTH decision. If a human check gates the sign-in, or the human has
+            # already taken control, do NOT auto-submit — hand the login to the human on the live page.
+            # `_human_check_kind` answers "visible" / "invisible" / "", and the two kinds get DIFFERENT
+            # instructions: a visible challenge is already on screen, an invisible one appears only
+            # once Sign in is pressed, so telling the operator to "complete the box on the screen"
+            # would send them looking for something that is not there yet.
+            kind = _human_check_kind(vp, page)
             with self._lock:
                 human = self._human_driving
-            if captcha or human:
-                if captcha:
+            if kind or human:
+                if kind:
                     try:
                         vp.prefill_login(page, login_fr, pw_el, self.account_id, self.user, self.pw)
                     except Exception:
                         pass
-                    self._set(phase="human_action",
-                              message="Human check detected. Complete the 'I'm not a robot' box on the "
-                                      "screen, then click Sign in — you're driving this login directly.")
+                    self._set(phase="human_action", message=_HUMAN_CHECK_MESSAGE[kind])
                 else:
                     self._set(phase="login",
                               message="You're driving this login — click and type directly on the screen.")

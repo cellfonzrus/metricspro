@@ -121,6 +121,7 @@ Primary code homes:
 | COMMCALC-08 | **A file that produced no rows is told why — the pairing, not the spreadsheet** | "My upload was refused and the message blamed my file. Which columns did the reader look for, which ones does my file actually carry, and if they are not the same — which feed does this file belong to?" |
 | COMMCALC-09 | **A stored pay slice nobody computed is not $0.00 earned** | "The rep incentive table shows ACC GP as zero and the drill-down link calculates a figure. Same source — so which read is stale, how does a surface tell a measured zero from a blank, and which months need recalculating?" |
 | COMMCALC-10 | **A live login that stops making progress must say so** | "I started the live login and it has not moved for five minutes. Is it still working, is it dead, and why has nothing told me either way?" |
+| COMMCALC-11 | **An invisible human check is still a check** | "The live login filled in my portal details and then told me the password was wrong. The password is right — so what actually refused the sign-in, and why did nothing on the screen say a human check was waiting?" |
 
 ---
 
@@ -25349,6 +25350,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-08 | commcalc |
 | COMMCALC-09 | commcalc |
 | COMMCALC-10 | commcalc |
+| COMMCALC-11 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -29050,3 +29052,101 @@ behavioural, which is why it needs a behavioural check. Same reasoning as §CORE
 Same class: §19.18 (a mechanism written and its callers left unwired — this is its fourth instance),
 §19.29 (218 tables that never reached the sorting mechanism that already existed), §CORE-10 (a lesson
 in a note is enforced by whoever remembers it).
+
+---
+
+## §COMMCALC-11. AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15)
+
+Owner, in his own words, after declaring the UPS reporting-portal login: *"it has been over 5 minutes
+it is startying teh love login and does not move freom tehre"*. §COMMCALC-10 made that silence
+audible. This section is what the audible failure then revealed: the sign-in was **not** failing on
+the credentials, and the platform could not tell.
+
+**THE CLASS, NOT THE INSTANCE.** A human check was recognised by whether it was **PAINTED**, not by
+whether it **GATES THE SUBMIT**. `vidapay_sweep._looks_like_captcha` held the right selector list —
+`.g-recaptcha` was in it — and then asked `el.is_visible()`. Google's documented invisible-reCAPTCHA
+setup renders the widget `data-size="invisible"` (deliberately 0×0) and posts the form only from its
+`data-callback`, so the widget is present, armed, and gating — and invisible. It read as *no check*.
+The live session therefore took its fast path and **auto-submitted past exactly the check its own
+comment says it must never auto-submit past**; the portal refused the post, the page stayed on the
+form, and the caller reported *"Login was rejected — Account ID / User ID / Password not accepted"*.
+A correct password was reported as a wrong one. Same shape as §19.41: **a detector that cannot see a
+state is not a record of that state.**
+
+Measured on the real page, 2026-10-15: `renderCaptcha = 'True'`, one `div.g-recaptcha` with
+`data-sitekey`, `data-size="invisible"` and `data-callback="captchaSuccessCallback"`. Ruled out and
+recorded so nobody re-derives them — the portal answers a datacenter IP in ~1s and redirects cleanly
+to its sign-in page (**no IP block, no bot wall, so no proxy is needed**), the form is Username +
+Password only (an **empty** account id is correct for it), and the deep report URL 302s to sign-in
+rather than erroring.
+
+### COMMCALC-11.1 Duplicate check (the build gate)
+
+- **`_looks_like_captcha` / `_CAPTCHA_SELECTORS` / `_CAPTCHA_TEXT`** — the existing detector.
+  **EXTENDED, not forked**: `human_check(page)` is now the one reader, and `_looks_like_captcha` is a
+  boolean wrapper over it, so every existing caller sees the invisible case through the same code.
+- **`live_login._captcha_present`** — the live session's own wrapper. Also kept as a wrapper over the
+  new `_human_check_kind`, because the scratchpad proof scripts call it by name.
+- **`_wall_note` / the bot-wall detectors** — a different question ("is this an anti-automation
+  BLOCK page"), not "does a check gate this form". Untouched.
+- **The §COMMCALC-10 watchdog** — makes a stall visible; it does not say why. Complementary.
+- No new table, no new column, **no migration**, no new endpoint, no new report — so nothing to add
+  to §16, §17 or §18.
+
+### COMMCALC-11.2 One fact, one home, dereferenced
+
+| question | home | reader |
+|---|---|---|
+| does a human check gate this page, and of which kind? | `vidapay_sweep._CAPTCHA_SELECTORS` + `_CAPTCHA_TEXT` + `_INVISIBLE_MARK` / `_ARMED_MARK` | `vidapay_sweep.human_check(page)` → `"visible"` / `"invisible"` / `""` |
+| what do we TELL the operator, per kind? | `live_login._HUMAN_CHECK_MESSAGE` | `live_login._human_check_kind(vp, page)` |
+| why was a submit refused while still on the form? | `vidapay_sweep._HUMAN_CHECK_BLOCKED` | `vidapay_sweep.human_check_blocked_message(page)` |
+
+**Three states, not a bool, because the two kinds need different words.** A visible challenge is on
+the screen in front of the operator. An invisible one appears only once **Sign in is pressed** — so
+"complete the box on the screen" would send them hunting for something that is not there yet. Both
+stop an automatic submit.
+
+**Visible, or ARMED — not merely rendered.** A bare reCAPTCHA v3 `api.js` include needs no human and
+renders no widget element, so the element selectors already exclude it. A widget element that is
+neither visible nor carrying a `data-callback` is deliberately left as **not** a check: pushing every
+portal login into `human_action` would stop the carrier feeds that pay commission from signing in
+unattended.
+
+### COMMCALC-11.3 The siblings, fixed in the same change rather than excused
+
+"Still on the login form" has **two** causes that send the operator to opposite places: a bad
+credential, or a human check that silently refused the post. Both post-submit sites blamed the
+credential, and both are the same question, so both now dereference
+`human_check_blocked_message(page)` **before** wording the failure:
+
+- `vidapay_sweep.begin_login` — the master-agent portal family.
+- `vidapay_sweep.begin_login_b2bsoft` — the POS-reports portal family. **This is the path the owner
+  hit**, and fixing only it would have been the patchwork the house forbids.
+
+Each falls back to its own existing wording when no check gates the page, so a page this cannot
+inspect is never given an invented cause.
+
+### COMMCALC-11.4 Locked so it cannot un-wire
+
+`backend/harness_human_check_kind.py` — **45 checks**, DB-free, no browser, no network, loaded by
+`importlib` so it runs in CI's bare Python. §A the three states and their one home · §B the two marks
+are declared, never spelled at a call site · §C the operator's words live in `_HUMAN_CHECK_MESSAGE`
+and nowhere else · §D a widget that is neither visible nor armed stays *not a check* · §E **both**
+post-submit siblings ask the human-check question before blaming the credentials, through the same
+home · §F `_drive` reads the message from the one home, with none inlined · §G controls, including the
+owner's real widget attributes carried verbatim as a fixture.
+
+Wired into `carrier-vocab-guard.yml` as *"human-check lock"*, with `harness_human_check_kind.py` and
+`live_login.py` in the paths filter beside `vidapay_sweep.py`.
+
+**Proved red on the pre-change shape:** the visibility-only rule **misses** the owner's real widget
+(§G, armed as a control so it can never silently start passing); restoring main's shape at the two
+sibling sites and inlining the message again fails **5** checks, naming `begin_login`,
+`begin_login_b2bsoft` and the inlined wording.
+
+### COMMCALC-11.5 Cross-references
+
+Same class: §19.18 (a mechanism written and its callers left unwired), §19.41 (a status that cannot
+record a failure is not a record), §COMMCALC-10 (the stall this made visible), §12a.2a (a connector
+kind carries no host, so its address is per-tenant config), §CORE-03 (where the portal credential is
+sealed), §COMMCALC-07 (the pull loop this login feeds).

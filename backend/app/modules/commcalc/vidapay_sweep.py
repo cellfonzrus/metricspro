@@ -662,14 +662,49 @@ _CAPTCHA_TEXT = ("i'm not a robot", "i am not a robot", "i`m not a robot",
                  "complete the captcha to continue")
 
 
-def _looks_like_captcha(page):
-    """True if a captcha / 'I'm not a robot' human-check widget is present on the current page (across
-    frames) — by rendered element (visible where determinable) OR by human-facing text. Best-effort;
-    never raises. Used by the live session to enter human_action instead of auto-submitting past a check."""
+# AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15, index §COMMCALC-11).
+#
+# `data-size="invisible"` with a `data-callback` is Google's DOCUMENTED invisible-reCAPTCHA setup: the
+# page's submit handler calls `grecaptcha.execute()` and the form is only posted from that callback.
+# The widget is deliberately 0x0, so `is_visible()` is False and the detector above skipped it — and
+# the fast path then auto-submitted past exactly the check the comment above says it must never
+# auto-submit past, which the portal rejects as if the password were wrong.
+#
+# WHY THESE TWO MARKS AND NOT "any widget element". A bare reCAPTCHA v3 `api.js` include needs no
+# human and renders NO widget element, so the element-based selectors already exclude it (that is the
+# false-positive the comment above guards). A widget element that is neither visible NOR armed with a
+# callback is left as NOT a check, deliberately: pushing every portal login into human_action would
+# stop the carrier feeds that pay commission from ever signing in unattended. Visible, or armed — not
+# merely rendered.
+_INVISIBLE_MARK = ("data-size", "invisible")
+_ARMED_MARK = "data-callback"
+
+
+def _widget_is_armed_invisible(el):
+    """True when this widget element is an INVISIBLE check that gates the submit. Never raises: a
+    driver (or a test fake) without `get_attribute` reads as not-armed, which keeps the pre-2026-10-15
+    answer for every shape this cannot inspect."""
+    try:
+        size = (el.get_attribute(_INVISIBLE_MARK[0]) or "").strip().lower()
+        cb = (el.get_attribute(_ARMED_MARK) or "").strip()
+    except Exception:
+        return False
+    return size == _INVISIBLE_MARK[1] and bool(cb)
+
+
+def human_check(page):
+    """THE one answer to "does this page hold a human check that gates the sign-in?".
+
+    Returns "visible" (a rendered checkbox / challenge, or human-facing text saying so), "invisible"
+    (a widget armed to run on submit — see `_widget_is_armed_invisible`), or "" for neither. Three
+    states rather than a bool because they need DIFFERENT words to the operator: a visible challenge
+    is on screen in front of them, an invisible one has to be TRIGGERED by pressing Sign in before
+    anything appears. Both must stop an automatic submit. Best-effort; never raises."""
     try:
         frames = _frames(page)
     except Exception:
         frames = [page]
+    armed = ""
     for fr in frames:
         for sel in _CAPTCHA_SELECTORS:
             try:
@@ -680,15 +715,52 @@ def _looks_like_captcha(page):
                 continue
             try:
                 if el.is_visible():
-                    return True
+                    return "visible"
             except Exception:
-                return True   # present but visibility can't be resolved → treat as present
+                return "visible"   # present but visibility can't be resolved → treat as on screen
+            # Not visible. An armed invisible widget is still a check — keep looking for a visible
+            # one first, because that is the stronger answer and needs the clearer instruction.
+            if _widget_is_armed_invisible(el):
+                armed = "invisible"
     try:
         if any(t in _page_text(page) for t in _CAPTCHA_TEXT):
-            return True
+            return "visible"
     except Exception:
         pass
-    return False
+    return armed
+
+
+def _looks_like_captcha(page):
+    """Back-compat boolean over `human_check` — THE reader, so every existing caller now sees the
+    invisible case too. That widening IS the fix: before it, only a painted widget counted."""
+    return bool(human_check(page))
+
+
+# "Still on the login form" has TWO causes and they send the operator to opposite places: bad
+# credentials, or a human check that silently refused the submit. Blaming the credentials for the
+# second is the mistake the RATE-LIMIT GATE comments below already name — it sends someone to re-type
+# a perfectly good password. ONE home for that question, dereferenced by every post-submit site that
+# would otherwise blame the credentials.
+_HUMAN_CHECK_BLOCKED = {
+    "visible": ("The portal is showing a human check ('I'm not a robot') on the sign-in form, so an "
+                "automated sign-in cannot complete it. Open the live login and pass the check once; "
+                "the saved session then drives the pull."),
+    "invisible": ("The portal runs a human check when the sign-in is submitted, so an automated "
+                  "sign-in is refused before the credentials are ever judged — this is NOT a wrong "
+                  "password. Open the live login and press Sign in yourself once; the saved session "
+                  "then drives the pull."),
+}
+
+
+def human_check_blocked_message(page):
+    """The message for a submit that a human check refused, or "" when no check gates this page.
+
+    Returns "" on any error, so a driver this cannot inspect falls back to the caller's own wording
+    rather than inventing a cause."""
+    try:
+        return _HUMAN_CHECK_BLOCKED.get(human_check(page), "")
+    except Exception:
+        return ""
 
 
 def _wait_settle(page, timeout_s=30):
@@ -1737,9 +1809,12 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                     "VidaPay served an anti-automation page after the login submit — reach it from an "
                     "allow-listed / residential IP. Diagnostic: " + str(diag))
             if state == "login":
+                # Ask WHY we are still on the form before blaming the credentials (§COMMCALC-11).
+                blocked = human_check_blocked_message(page)
                 raise VidaPayLoginError(
-                    "Login was rejected — Account ID / User ID / Password not accepted (still on the "
-                    "login form). Double-check the three credentials. Diagnostic: " + str(diag))
+                    (blocked or "Login was rejected — Account ID / User ID / Password not accepted "
+                                "(still on the login form). Double-check the three credentials.")
+                    + " Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA or app; if no code field appears, send this diagnostic for calibration"})
         except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
             if getattr(e, "screenshot_b64", None) is None:
@@ -1922,10 +1997,15 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
                 raise VidaPayLoginError(
                     f"{lab} served an anti-automation page after login — set a residential proxy. Diagnostic: " + str(diag))
             if state == "login":
+                # The SAME question as begin_login's, through the same home (§COMMCALC-11): this is
+                # the path the POS-reports portal family takes, and it is the one the owner hit.
+                blocked = human_check_blocked_message(page)
                 raise VidaPayLoginError(
-                    "Login rejected — still on the login form. What was typed + the portal's own error are in the "
-                    "diagnostic (filled / portal_error) — if 'filled' shows your values, the creds/Access-Code are "
-                    "being refused; if empty, the form didn't accept the fill. Diagnostic: " + str(diag))
+                    (blocked or
+                     "Login rejected — still on the login form. What was typed + the portal's own error are in the "
+                     "diagnostic (filled / portal_error) — if 'filled' shows your values, the creds/Access-Code are "
+                     "being refused; if empty, the form didn't accept the fill.")
+                    + " Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA/app; send this diagnostic"})
         except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
             if getattr(e, "screenshot_b64", None) is None:
