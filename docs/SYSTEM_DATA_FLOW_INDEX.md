@@ -28269,6 +28269,20 @@ right and the remedy was being looked for in the wrong object.** Established her
   list the per-period path uses. Because `split_ma_components` is **LINEAR in the component sums**,
   Σ(per-store buckets) == the per-period rollup's buckets to the cent — the grain is strictly finer
   and the money cannot move. §B of the lock proves exactly that equality.
+**VERIFIED LIVE, 2026-10-15, on the tenant that actually has MA rows** (3,981 rows carrying
+`merchant_account_id`; the acting org has none, so this path is only exercised there). Σ(per-store)
+against `commission_leg_ma_rollup`'s own per-period figure, four months, computed by calling both:
+
+| period | period rollup | Σ per-store | gap |
+| --- | --- | --- | --- |
+| June 2026 | $60,034.62 | $60,034.62 | **$0.00** |
+| July 2026 | $124,043.34 | $124,043.34 | **$0.00** |
+| August 2026 | $241,853.82 | $241,853.82 | **$0.00** |
+| September 2026 | $229,148.87 | $229,148.87 | **$0.00** |
+
+**20 stores, every processor account resolved** (no `(No store matched)` row), `all_ties` true on
+every month. This is precisely the money the index said this rollup could not split by store.
+
 - **Therefore: NO migration ships with this, and none is waiting.** The schema is untouched.
 
 **This fixed the CLASS, not the instance.** The note above was not only a gap in the new report: the
