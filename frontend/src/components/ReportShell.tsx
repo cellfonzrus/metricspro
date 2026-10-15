@@ -50,6 +50,27 @@ const NOTICE = {
 const str = (v: any) => (v == null ? '' : String(v))
 const num = (v: any) => { const n = Number(String(v).replace(/[^0-9.-]/g, '')); return isNaN(n) ? null : n }
 const money = (n: any) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
+
+// ── WHAT A BODY CELL SHOWS — ONE HOME, dereferenced by both row paths ─────────────────────────────
+// `ExportColumn.render` is the declared way a column draws its own cell (lib/export.tsx: "custom
+// cell rendering"), and it is how an interactive cell — a button, a picker, a box you type in —
+// reaches the screen at all. This component used to ignore it and print `get` regardless, with
+// nothing failing: the column was accepted, the callback was never called, and the page simply
+// showed a number where its author had put a control. Three shipped columns were dead that way
+// (the takeover list's Open button, its compare-with-our-store picker, and the two seller-declared
+// cells of index §COMMCALC-03.26) before the owner reported the last of them on 2026-10-15.
+//
+// `render` is DISPLAY ONLY and deliberately not consulted anywhere else HERE: sorting, filtering,
+// grouping, subtotals, the total row and every export read `get`, so a file carries the figure the
+// control was bound to rather than a control nobody can open. This table's total row is computed by
+// `report-totals` into text and has no row object to hand a renderer, which is why it stays on
+// `get`; DataGrid synthesizes a total ROW and so can render one, and that difference is its own.
+// What `harness_column_render_lock.py` holds is the part that must not drift: every table component
+// that takes an `ExportColumn` honours `render` in its BODY cells.
+// A row is whatever a column's own accessor takes — derived from the column type rather than
+// restated, so the two cannot drift and this adds no fresh `any` to the lint register.
+type Row = Parameters<Col['get']>[0]
+const bodyCell = (c: Col, r: Row) => (c.render ? c.render(r) : (isMoney(c) ? money(c.get(r)) : str(c.get(r))))
 // A date column's value normalized to YYYY-MM-DD (best-effort; leaves non-dates as-is).
 function ymd(v: any): string {
   const s = str(v)
@@ -433,7 +454,7 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
               <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined}
                 style={{ ...(onRowClick ? { cursor: 'pointer' } : undefined), ...(rowStyle ? rowStyle(r) : undefined) }}
                 className={onRowClick ? 'rs-clickable' : undefined}>
-                {cols.map((c, i) => <td key={key(c)} className={pinBodyCls(i)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', ...(i === 0 ? pinFor('body') : {}) }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
+                {cols.map((c, i) => <td key={key(c)} className={pinBodyCls(i)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', ...(i === 0 ? pinFor('body') : {}) }}>{bodyCell(c, r)}</td>)}</tr>
             ))}
             {groups && groups.map(([g, rs]) => {
               const collapsed = isCollapsed(g)
@@ -463,7 +484,7 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
                   <tr key={g + i} onClick={onRowClick ? () => onRowClick(r) : undefined}
                     style={{ ...(onRowClick ? { cursor: 'pointer' } : undefined), ...(rowStyle ? rowStyle(r) : undefined) }}
                     className={onRowClick ? 'rs-clickable' : undefined}>
-                    {cols.map((c, i) => <td key={key(c)} className={pinBodyCls(i)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', ...(i === 0 ? pinFor('body') : {}) }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
+                    {cols.map((c, i) => <td key={key(c)} className={pinBodyCls(i)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', ...(i === 0 ? pinFor('body') : {}) }}>{bodyCell(c, r)}</td>)}</tr>
                 ))}
               </Fragment>
             )})}

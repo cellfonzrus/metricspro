@@ -126,7 +126,12 @@ export default function CrmReportsPage() {
           <tbody>
             {rows.map((r: any, i: number) => (
               <tr key={i}>{columns.map(c => (
-                <td key={c.header} style={cell}>{c.money ? fmtMoney(Number(c.get(r))) : String(c.get(r) ?? '—')}</td>
+                // A column that draws its own cell draws it here too. This table is the CRM's own
+                // rather than the shared report table, so it would otherwise be a second answer to "what does a
+                // body cell show" — the exact split that left three takeover columns blank until
+                // 2026-10-15. `harness_column_render_lock.py` holds every such table to this.
+                <td key={c.header} style={cell}>{c.render ? c.render(r)
+                  : (c.money ? fmtMoney(Number(c.get(r))) : String(c.get(r) ?? '—'))}</td>
               ))}</tr>
             ))}
             {!loading && rows.length === 0 && (
