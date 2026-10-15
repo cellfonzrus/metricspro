@@ -61,7 +61,7 @@ type LegSource = { key: string; label?: string; splits_on?: string; m1?: number;
                    earned?: { basis?: string; basis_label?: string; months?: Record<string, number>; total?: number }
                    received?: { basis?: string; basis_label?: string; months?: Record<string, number>; total?: number } }
 
-// ── PER-STORE MONTH-OF-LIFE TREND (owner ask 2026-10-15, index §COMMCALC-11) ─────────────────────
+// ── PER-STORE MONTH-OF-LIFE TREND (owner ask 2026-10-15, index §COMMCALC-12) ─────────────────────
 // Owner, verbatim, on the prospect table that showed the M1..M12 rungs side by side for two months:
 // "this is a good insight , this means we need to see these numbers as a report sisde by sie as shown
 // above for each store to analyze , create one".
@@ -161,7 +161,7 @@ export default function GPReportPage() {
   const [legTrend, setLegTrend] = useState<any>(null) // month-over-month M1 vs M2–M12 (owner 2026-08-04)
   const [legLadder, setLegLadder] = useState(false)   // expand the per-month-of-life ladder table
   const [showMonths, setShowMonths] = useState(false) // 📅 one column per month-of-life (owner 2026-09-21)
-  // 🏪 the per-store grid, months side by side (owner 2026-10-15, §COMMCALC-11). Fetched only when
+  // 🏪 the per-store grid, months side by side (owner 2026-10-15, §COMMCALC-12). Fetched only when
   // opened — the store axis costs an extra grain on the server, and nobody pays for it unopened.
   const [legStores, setLegStores] = useState(false)
   const [legStoreTrend, setLegStoreTrend] = useState<LegStoreTrend | null>(null)
@@ -796,7 +796,7 @@ export default function GPReportPage() {
             </div>
           )}
 
-          {/* ── 🏪 PER-STORE, MONTHS SIDE BY SIDE (owner ask 2026-10-15, index §COMMCALC-11) ──────
+          {/* ── 🏪 PER-STORE, MONTHS SIDE BY SIDE (owner ask 2026-10-15, index §COMMCALC-12) ──────
               One row per store, one column per month, the rung detail one click away. The server
               pivots the SAME money this card already charts — nothing here computes a dollar, a
               rung, a delta or a verdict, so the grid and the chart can never disagree. */}

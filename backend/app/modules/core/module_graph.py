@@ -249,7 +249,7 @@ FACTS: dict[str, dict] = {
         "question": 'For each STORE, what did every month-of-life rung (M1..M12) of received '
                     'commission pay in each month of the window — and which rung is running down?',
         "homes": ('app/modules/commcalc/commission_leg_store_trend.py',),
-        "index": ('COMMCALC-11',),
+        "index": ('COMMCALC-12',),
         "locks": ('harness_commission_leg_store_trend.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
@@ -899,7 +899,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/comp_trend.py': ('_msp', '_rs'),
             # §COMMCALC-03 added `_rsub` — `default_ma_pnl_config()` for the takeover evaluation,
             # so a prospect's MA TX rows book under the SAME resolved config the live P&L books under.
-            # `_msp_leg` (added 2026-10-15, index §COMMCALC-11): the leg trend's per-store MA grain
+            # `_msp_leg` (added 2026-10-15, index §COMMCALC-12): the leg trend's per-store MA grain
             # asks THIS home's `canonical_store_index` for processor account -> store, instead of the
             # trend deciding that mapping itself. One more dereference, not one more rule.
             'app/modules/commcalc/router.py': ('_MA_LEG_COMPONENTS', '_msp', '_msp_gp', '_msp_leg', '_msp_ma', '_rs_gp', '_rsub', 'load_store_index'),
@@ -1442,6 +1442,43 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_te', 'targets_engine'),
             # The visit-priority dropdown offers the axis as assignable deliverables.
             'app/modules/storevisit/visit_plan_router.py': ('_te',),
+        },
+    },
+    # ── §COMMCALC-11 (owner report 2026-10-15) — a check that GATES a sign-in ────────────────────
+    'human_check_on_sign_in': {
+        "question": 'Does a human check ("I\'m not a robot") gate THIS page\'s sign-in, and of '
+                    'which kind? Recognised by whether it is PAINTED was the defect: Google\'s '
+                    'documented invisible setup renders the widget `data-size="invisible"` with a '
+                    '`data-callback` and posts the form only from that callback, so it is present, '
+                    'armed and gating — and `is_visible()` is False. The live session read that as '
+                    'no check, auto-submitted past it, and reported a CORRECT password as a wrong '
+                    'one. Three states, not a bool, because the two kinds need different words to '
+                    'the operator: a visible challenge is on the screen, an invisible one appears '
+                    'only once Sign in is pressed. The same fact answers "why was this submit '
+                    'refused while still on the login form", which has two causes that send the '
+                    'operator to opposite places (`human_check_blocked_message`) — both '
+                    'post-submit sites dereference it before blaming the credentials.',
+        "homes": ('app/modules/commcalc/vidapay_sweep.py',),
+        "index": ('COMMCALC-11',),
+        "locks": ('harness_human_check_kind.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
+        # import graph.
+        "callers": {
+            # The live interactive login: `_human_check_kind` reads the kind and picks the
+            # operator's words out of `_HUMAN_CHECK_MESSAGE`, instead of auto-submitting.
+            'app/modules/commcalc/live_login.py': ('vp',),
+            # The four other importers of the home. Each reaches it for the UNATTENDED paths —
+            # `begin_login` / `begin_login_b2bsoft`, the browser primitives, `_classify` — and so
+            # each inherits the answer through those entry points rather than asking again. NONE of
+            # them may grow its own detector: a second "is a human check waiting" is the duplicate
+            # this fact exists to stop, and §E of the lock pins the two post-submit sites that DO
+            # ask. An unattended sweep CANNOT pass a check, which is why the honest message (not a
+            # bad-password verdict) is what these paths surface to the operator.
+            'app/modules/commcalc/merchant_portal_sweep.py': ('vp',),
+            'app/modules/commcalc/portal_report_pull.py': ('vp',),
+            'app/modules/commcalc/router.py': ('UnsafePortalUrlError', 'VidaPayAuthError',
+                                              '_AuthErr', 'vp'),
+            'app/modules/supply/portal.py': ('vp',),
         },
     },
 }

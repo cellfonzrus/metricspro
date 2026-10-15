@@ -1,5 +1,5 @@
 """PROOF — the per-store, month-over-month month-of-life (M1..M12) commission report (index
-§COMMCALC-11).
+§COMMCALC-12).
 
 OWNER ASK, verbatim (2026-10-15): *"this is a good insight , this means we need to see these numbers as
 a report sisde by sie as shown above for each store to analyze , create one"* — the M1..M12 rungs side
@@ -182,7 +182,7 @@ TOTALS = pivot.totals_row(LABELS, ROWS, RUNGS, PARTIALS)
 TIES = pivot.ties_to(LABELS, TOTALS, SERIES)
 ROW = {r["store_key"]: r for r in ROWS}
 
-print("\n§COMMCALC-11 — per-store month-of-life commission trend\n")
+print("\n§COMMCALC-12 — per-store month-of-life commission trend\n")
 
 # ── A. the pivot is a pivot ───────────────────────────────────────────────────────────────────────
 print("A. the store axis re-sums to the company figure")
