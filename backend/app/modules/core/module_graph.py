@@ -245,6 +245,30 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_pev',),
         },
     },
+    'leg_store_trend_shape': {
+        "question": 'For each STORE, what did every month-of-life rung (M1..M12) of received '
+                    'commission pay in each month of the window — and which rung is running down?',
+        "homes": ('app/modules/commcalc/commission_leg_store_trend.py',),
+        "index": ('COMMCALC-12',),
+        "locks": ('harness_commission_leg_store_trend.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        #
+        # NOTE WHAT IS NOT HERE. This home computes NO money. It is a PIVOT of the money
+        # `router._commission_leg_trend_compute` already produced — the same read, the same carrier
+        # classification (§58/§66), the same store identity (§64) — reshaped store-major with the
+        # months side by side. §A of the lock fails the build if Σ(per-store) ever stops equalling the
+        # company figure to the cent, which is the whole claim that this is a shape and not a sibling
+        # derivation of the leg trend.
+        #
+        # THE RUNG CONVENTION IS `commcalc/commission_legs`'s, dereferenced: `ladder_key`,
+        # `ladder_sort_key`, `months_present`, `ladder_column`, `ladder_label` and the Unlabelled
+        # bucket. §F of the lock fails the build on a `range(` or a month COUNT here, so a rung the
+        # feed carries can never be invisible — an M13 is a column the day it arrives.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_leg_store_pivot',),
+        },
+    },
     'peer_traffic_band': {
         "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), and how far is '
                     'each one behind the best and the median of its own band?',
@@ -875,7 +899,10 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/comp_trend.py': ('_msp', '_rs'),
             # §COMMCALC-03 added `_rsub` — `default_ma_pnl_config()` for the takeover evaluation,
             # so a prospect's MA TX rows book under the SAME resolved config the live P&L books under.
-            'app/modules/commcalc/router.py': ('_MA_LEG_COMPONENTS', '_msp', '_msp_gp', '_msp_ma', '_rs_gp', '_rsub', 'load_store_index'),
+            # `_msp_leg` (added 2026-10-15, index §COMMCALC-12): the leg trend's per-store MA grain
+            # asks THIS home's `canonical_store_index` for processor account -> store, instead of the
+            # trend deciding that mapping itself. One more dereference, not one more rule.
+            'app/modules/commcalc/router.py': ('_MA_LEG_COMPONENTS', '_msp', '_msp_gp', '_msp_leg', '_msp_ma', '_rs_gp', '_rsub', 'load_store_index'),
             'app/modules/commcalc/whatif.py': ('residual_subs',),
             'app/modules/marketing/router.py': ('_MA_COMPONENTS',),
             'app/modules/payables/engine.py': ('_msp',),
@@ -1454,7 +1481,7 @@ FACTS: dict[str, dict] = {
             'app/modules/supply/portal.py': ('vp',),
         },
     },
-    # ── §COMMCALC-12 (found 2026-10-15) — what a finished live login leaves on the row ───────────
+    # ── §COMMCALC-13 (found 2026-10-15) — what a finished live login leaves on the row ───────────
     'live_login_terminal_status': {
         "question": 'What `data_source.auth_status` does a live login leave behind, and when is an '
                     'in-flight claim a LEFTOVER? `live_login_start` stamps \'authenticating\' '
@@ -1470,7 +1497,7 @@ FACTS: dict[str, dict] = {
                     'DERIVED from the two homes that already answer "how long may this take" rather '
                     'than copied. `present_auth_status` is what a surface reads.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-12',),
+        "index": ('COMMCALC-13',),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.

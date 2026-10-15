@@ -1,4 +1,4 @@
-"""Proof harness: A FINISHED LIVE LOGIN LEAVES AN HONEST STATUS (index §COMMCALC-12).
+"""Proof harness: A FINISHED LIVE LOGIN LEAVES AN HONEST STATUS (index §COMMCALC-13).
 
 FOUND 2026-10-15 while reporting the live row back to the owner. `commcalc/live_login_start` stamps
 `auth_status='authenticating'` / "Live login in progress…" on the data_source row before the worker

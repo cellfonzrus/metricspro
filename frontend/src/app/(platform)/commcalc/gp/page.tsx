@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
@@ -60,6 +60,43 @@ type LegSource = { key: string; label?: string; splits_on?: string; m1?: number;
                    basis?: string; basis_label?: string
                    earned?: { basis?: string; basis_label?: string; months?: Record<string, number>; total?: number }
                    received?: { basis?: string; basis_label?: string; months?: Record<string, number>; total?: number } }
+
+// ── PER-STORE MONTH-OF-LIFE TREND (owner ask 2026-10-15, index §COMMCALC-12) ─────────────────────
+// Owner, verbatim, on the prospect table that showed the M1..M12 rungs side by side for two months:
+// "this is a good insight , this means we need to see these numbers as a report sisde by sie as shown
+// above for each store to analyze , create one".
+// The server does all of it (`GET /commcalc/commission-leg-store-trend` — the SAME money as the leg
+// trend below, pivoted store-major). These types mirror that payload exactly; nothing here computes a
+// dollar, a rung or a delta, and the rung COLUMNS come from the payload's own `ladder_months` so an
+// M13 is a column the day the feed carries one.
+type LegRungMap = Record<string, number>
+interface LegStoreCell {
+  period: string; m1: number; m2_12: number; unsplit: number; total: number
+  partial: boolean            // the month has not finished — shown, but never a trend endpoint
+  ladder: LegRungMap
+}
+interface LegWorstRung {
+  key: string; label: string; delta: number; from: number; to: number; delta_pct: number | null
+}
+interface LegStoreRow {
+  store_key: string | null; store: string; store_code: string; market: string
+  unattributed: boolean       // carrier money that matched NO store: its own row, never spread
+  months: Record<string, LegStoreCell>; ladder: LegRungMap
+  total: number; complete_total: number
+  first: string | null; last: string | null
+  delta: number | null; delta_pct: number | null
+  m1_delta: number | null; m1_delta_pct: number | null
+  m2_12_delta: number | null; m2_12_delta_pct: number | null
+  worst_rung: LegWorstRung | null
+}
+interface LegStoreTrend {
+  months: string[]; partial_months: string[]
+  stores: LegStoreRow[]; totals: LegStoreRow
+  ladder_months: string[]; ladder_labels: Record<string, string>
+  ties: Record<string, { shown: number; company: number; ok: boolean; gap: number }>
+  all_ties: boolean; notes: string[]
+  store_basis: string; reads_down_note: string; unattributed_label: string
+}
 
 // Owner directive 2026-08-04: the Commission column is split into the 1st-month leg and the M2–M12
 // trailing legs. They are SUB-columns of Commission (Commission itself stays, so nothing that read this
@@ -124,6 +161,11 @@ export default function GPReportPage() {
   const [legTrend, setLegTrend] = useState<any>(null) // month-over-month M1 vs M2–M12 (owner 2026-08-04)
   const [legLadder, setLegLadder] = useState(false)   // expand the per-month-of-life ladder table
   const [showMonths, setShowMonths] = useState(false) // 📅 one column per month-of-life (owner 2026-09-21)
+  // 🏪 the per-store grid, months side by side (owner 2026-10-15, §COMMCALC-12). Fetched only when
+  // opened — the store axis costs an extra grain on the server, and nobody pays for it unopened.
+  const [legStores, setLegStores] = useState(false)
+  const [legStoreTrend, setLegStoreTrend] = useState<LegStoreTrend | null>(null)
+  const [legStoreOpen, setLegStoreOpen] = useState<string | null>(null)  // the expanded store's rungs
   const cw = useColumnResize()                          // auto-fit + user-resizable columns
 
   useEffect(() => {
@@ -147,6 +189,16 @@ export default function GPReportPage() {
     if (selStores.length) qs.set('store', selStores.join(','))
     api(`/api/v1/commcalc/commission-leg-trend?${qs.toString()}`).then(setLegTrend).catch(() => setLegTrend(null))
   }, [period, selMarkets, selStores])
+  // The per-store grid — the SAME window and the SAME filters, so the grid and the chart above it can
+  // never be about different months or different stores.
+  useEffect(() => {
+    if (!legStores) return
+    const qs = new URLSearchParams({ period, months: '12', org_id: ORG_ID })
+    if (selMarkets.length) qs.set('market', selMarkets.join(','))
+    if (selStores.length) qs.set('store', selStores.join(','))
+    api(`/api/v1/commcalc/commission-leg-store-trend?${qs.toString()}`)
+      .then((d: LegStoreTrend) => setLegStoreTrend(d)).catch(() => setLegStoreTrend(null))
+  }, [legStores, period, selMarkets, selStores])
   // Net-profit + revenue trend for the chart on top (cross-period, fetched once).
   useEffect(() => { api(`/api/v1/commcalc/gp-trend?months=6&org_id=${ORG_ID}`).then(setGpTrend).catch(() => {}) }, [])
 
@@ -685,9 +737,18 @@ export default function GPReportPage() {
             <div style={{ fontSize: 13, fontWeight: 600 }}>
               📈 Commission by leg — last {legTrend.company.length} months{selMarkets.length ? ` · ${selMarkets.join(', ')}` : ' · all stores'}
             </div>
-            <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => setLegLadder(v => !v)}>
-              {legLadder ? 'Hide' : 'Show'} month-of-life ladder (3MR / 6MR)
-            </button>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => setLegLadder(v => !v)}>
+                {legLadder ? 'Hide' : 'Show'} month-of-life ladder (3MR / 6MR)
+              </button>
+              {/* 🏪 the owner's ask of 2026-10-15 — the same rungs, PER STORE, months side by side */}
+              <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 10px',
+                background: legStores ? 'var(--accent)' : undefined, color: legStores ? 'white' : undefined }}
+                title="One row per store, one column per month — which store's trailing legs are running down, and in which rung"
+                onClick={() => setLegStores(v => !v)}>
+                🏪 {legStores ? 'Hide' : 'Per store'}
+              </button>
+            </div>
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', padding: '2px 6px 6px', lineHeight: 1.5 }}>{legTrend.basis}</div>
           {(legTrend.notes || []).map((n: string) => (
@@ -732,6 +793,165 @@ export default function GPReportPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* ── 🏪 PER-STORE, MONTHS SIDE BY SIDE (owner ask 2026-10-15, index §COMMCALC-12) ──────
+              One row per store, one column per month, the rung detail one click away. The server
+              pivots the SAME money this card already charts — nothing here computes a dollar, a
+              rung, a delta or a verdict, so the grid and the chart can never disagree. */}
+          {legStores && (
+            <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+              {!legStoreTrend && (
+                <div style={{ fontSize: 12, color: 'var(--text3)', padding: '4px 6px' }}>Loading the per-store grid…</div>
+              )}
+              {legStoreTrend && (
+                <>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', padding: '0 6px 6px', lineHeight: 1.5 }}>
+                    {legStoreTrend.store_basis}
+                  </div>
+                  {legStoreTrend.partial_months.length > 0 && (
+                    <div style={{ fontSize: 11, color: '#b45309', padding: '0 6px 4px' }}>
+                      ⚠ {legStoreTrend.partial_months.map(shortPeriod).join(', ')} {legStoreTrend.partial_months.length > 1 ? 'have' : 'has'} not
+                      finished collecting. {legStoreTrend.partial_months.length > 1 ? 'They are' : 'It is'} shown but excluded from every Δ —
+                      a part-month compared against full ones reads as a collapse at every store at once.
+                    </div>
+                  )}
+                  {!legStoreTrend.all_ties && (
+                    <div style={{ fontSize: 11, color: '#b45309', padding: '0 6px 4px' }}>
+                      ⚠ Some money reached the company figure that the store axis could not place:
+                      {' '}{legStoreTrend.months.filter(m => !legStoreTrend.ties[m]?.ok)
+                        .map(m => `${shortPeriod(m)} ${fmt(legStoreTrend.ties[m]?.gap || 0)}`).join(' · ')}.
+                      It is reported here rather than spread over the stores.
+                    </div>
+                  )}
+                  {(legStoreTrend.notes || []).map(n => (
+                    <div key={n} style={{ fontSize: 11, color: '#b45309', padding: '0 6px 4px' }}>⚠ {n}</div>
+                  ))}
+                  <div className="table-wrapper">
+                    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                      <thead>
+                        <tr style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'right' }}>
+                          <th style={{ padding: '3px 8px', textAlign: 'left' }}>Store</th>
+                          {legStoreTrend.months.map(m => (
+                            <th key={m} style={{ padding: '3px 8px', opacity: legStoreTrend.partial_months.includes(m) ? 0.6 : 1 }}
+                              title={legStoreTrend.partial_months.includes(m) ? 'This month has not finished collecting' : m}>
+                              {shortPeriod(m)}{legStoreTrend.partial_months.includes(m) ? '*' : ''}
+                            </th>
+                          ))}
+                          <th style={{ padding: '3px 8px' }} title="Last complete month vs first complete month this store appears in">Δ</th>
+                          <th style={{ padding: '3px 8px', textAlign: 'left' }} title={legStoreTrend.reads_down_note}>Running down in</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {legStoreTrend.stores.map(s => {
+                          const key = s.store_key ?? ''
+                          const open = legStoreOpen === key
+                          return (
+                            // A keyed Fragment, not a bare <>: the row and its expanded rung table are
+                            // TWO siblings per store, so the key belongs on what wraps them.
+                            <Fragment key={key}>
+                              <tr style={{ fontSize: 12, borderTop: '1px solid var(--border)', cursor: 'pointer',
+                                background: open ? 'var(--bg2)' : undefined,
+                                color: s.unattributed ? '#b45309' : undefined }}
+                                onClick={() => setLegStoreOpen(open ? null : key)}>
+                                <td style={{ padding: '3px 8px' }}>
+                                  {open ? '▾ ' : '▸ '}{s.store}
+                                  {s.market ? <span style={{ color: 'var(--text3)', fontSize: 11 }}> · {s.market}</span> : null}
+                                </td>
+                                {legStoreTrend.months.map(m => {
+                                  const c = s.months[m]
+                                  return (
+                                    <td key={m} style={{ padding: '3px 8px', textAlign: 'right',
+                                      opacity: c?.partial ? 0.6 : 1,
+                                      color: c?.total ? 'inherit' : 'var(--text3)' }}>
+                                      {c?.total ? fmt(c.total) : '·'}
+                                    </td>
+                                  )
+                                })}
+                                <td style={{ padding: '3px 8px', textAlign: 'right',
+                                  color: s.delta == null ? 'var(--text3)' : (s.delta < 0 ? '#dc2626' : '#16a34a') }}
+                                  title={s.first && s.last ? `${s.first} → ${s.last}` : 'Seen in one complete month only — no trend'}>
+                                  {s.delta == null ? '—' : `${fmt(s.delta)}${s.delta_pct == null ? '' : ` (${s.delta_pct}%)`}`}
+                                </td>
+                                <td style={{ padding: '3px 8px', fontSize: 11 }}>
+                                  {s.worst_rung
+                                    ? <span style={{ color: '#dc2626' }}>
+                                        <b>{legStoreTrend.ladder_labels[s.worst_rung.key] || s.worst_rung.label}</b>
+                                        {' '}{fmt(s.worst_rung.from)} → {fmt(s.worst_rung.to)}
+                                        {s.worst_rung.delta_pct == null ? '' : ` (${s.worst_rung.delta_pct}%)`}
+                                      </span>
+                                    : <span style={{ color: 'var(--text3)' }}>no rung fell</span>}
+                                </td>
+                              </tr>
+                              {open && (
+                                <tr style={{ background: 'var(--bg2)' }}>
+                                  <td colSpan={legStoreTrend.months.length + 3} style={{ padding: '2px 8px 8px 22px' }}>
+                                    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                                      <thead>
+                                        <tr style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'right' }}>
+                                          <th style={{ padding: '2px 8px', textAlign: 'left' }}>Month of life</th>
+                                          {legStoreTrend.months.map(m => (
+                                            <th key={m} style={{ padding: '2px 8px', opacity: legStoreTrend.partial_months.includes(m) ? 0.6 : 1 }}>
+                                              {shortPeriod(m)}{legStoreTrend.partial_months.includes(m) ? '*' : ''}
+                                            </th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {legStoreTrend.ladder_months.map(rk => (
+                                          <tr key={rk} style={{ fontSize: 12 }}>
+                                            <td style={{ padding: '2px 8px' }}>{legStoreTrend.ladder_labels[rk] || rk}</td>
+                                            {legStoreTrend.months.map(m => {
+                                              const v = s.months[m]?.ladder?.[rk] || 0
+                                              return (
+                                                <td key={m} style={{ padding: '2px 8px', textAlign: 'right',
+                                                  opacity: legStoreTrend.partial_months.includes(m) ? 0.6 : 1,
+                                                  color: v ? (v < 0 ? '#b45309' : 'inherit') : 'var(--text3)' }}>
+                                                  {v ? fmt(v) : '·'}
+                                                </td>
+                                              )
+                                            })}
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                          )
+                        })}
+                        <tr style={{ fontSize: 12, borderTop: '2px solid var(--border)', fontWeight: 700 }}>
+                          <td style={{ padding: '3px 8px' }}>{legStoreTrend.totals.store}</td>
+                          {legStoreTrend.months.map(m => (
+                            <td key={m} style={{ padding: '3px 8px', textAlign: 'right',
+                              opacity: legStoreTrend.partial_months.includes(m) ? 0.6 : 1 }}>
+                              {fmt(legStoreTrend.totals.months[m]?.total || 0)}
+                            </td>
+                          ))}
+                          <td style={{ padding: '3px 8px', textAlign: 'right',
+                            color: (legStoreTrend.totals.delta || 0) < 0 ? '#dc2626' : '#16a34a' }}>
+                            {legStoreTrend.totals.delta == null ? '—'
+                              : `${fmt(legStoreTrend.totals.delta)}${legStoreTrend.totals.delta_pct == null ? '' : ` (${legStoreTrend.totals.delta_pct}%)`}`}
+                          </td>
+                          <td style={{ padding: '3px 8px', fontSize: 11, color: '#dc2626' }}>
+                            {legStoreTrend.totals.worst_rung
+                              ? `${legStoreTrend.ladder_labels[legStoreTrend.totals.worst_rung.key] || legStoreTrend.totals.worst_rung.label} ${fmt(legStoreTrend.totals.worst_rung.delta)}`
+                              : ''}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', padding: '6px 6px 0', lineHeight: 1.5 }}>
+                    {legStoreTrend.reads_down_note} Click a store for its rungs across the same months.
+                    {legStoreTrend.stores.some(s => s.unattributed)
+                      ? ` “${legStoreTrend.unattributed_label}” is carrier money whose address matched no store — shown as itself, never spread over the stores.`
+                      : ''}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

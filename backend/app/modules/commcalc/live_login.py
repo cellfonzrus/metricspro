@@ -229,7 +229,7 @@ def _captcha_present(vp, page):
 
 
 # WHAT STATUS DOES A FINISHED SESSION LEAVE BEHIND (owner-visible defect found 2026-10-15,
-# index §COMMCALC-12)?
+# index §COMMCALC-13)?
 #
 # `live_login_start` stamps `auth_status='authenticating'` / "Live login in progress…" on the row
 # before the worker starts, because that IS true while the worker runs. §COMMCALC-10 taught a session
@@ -414,7 +414,7 @@ class LiveLoginSession:
         self._watchdog = None                     # the no-progress watchdog thread (see _watch)
         # What the row said BEFORE `live_login_start` stamped 'authenticating' over it — the row is
         # read before that stamp, so this is the pre-login truth. `terminal_status` restores it when
-        # this session ends without signing in (§COMMCALC-12).
+        # this session ends without signing in (§COMMCALC-13).
         self._status_before = row.get("auth_status")
 
     # ── thread-safe shared-state access ──────────────────────────────────────────────────────────
