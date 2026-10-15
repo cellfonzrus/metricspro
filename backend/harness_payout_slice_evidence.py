@@ -179,9 +179,18 @@ ok("G1 the one rep-row read stamps the basis",
    "_pse.annotate(cr)" in RSRC or "payout_slice_evidence" in RSRC)
 ok("G2 the audience allow-list lets the basis through to the client",
    '"payout_slice_basis"' in ASRC and '"payout_slice_reason"' in ASRC)
+# The range assembler is the one caller that must NOT import (harness_rep_incentive_range D5 locks it
+# pure), so the verdict is INJECTED. That is still a dereference, not a copy -- and it has no fallback,
+# so a caller that stops passing it raises instead of quietly adding zeros again (§19.18).
 ok("G3 the month range sums named slices through this module",
-   "_pse.NAMED_SLICES" in RANGESRC and "_pse.sum_slice" in RANGESRC)
-ok("G4 the range names the months to recalculate", "_pse.periods_not_recorded" in RANGESRC)
+   "evidence.NAMED_SLICES" in RANGESRC and "evidence.sum_slice" in RANGESRC)
+ok("G4 the range names the months to recalculate", "evidence.periods_not_recorded" in RANGESRC)
+ok("G4a the assembler takes the verdict as a REQUIRED argument -- no default to un-wire to",
+   re.search(r"def assemble\(months, per_month, evidence\)", RANGESRC) is not None)
+ok("G4b the assembler still imports nothing, so it cannot reach the home behind the caller's back",
+   not re.search(r"(?m)^\s*(?:from|import)\s+(?!__future__)", RANGESRC))
+ok("G4c the router hands it the real module, not a stand-in",
+   "_rir.assemble(months, per_month, _pse_mod())" in RSRC)
 ok("G5 the simulator's baseline excludes a never-written slice",
    "slices_are_evidence" in WSRC and "slices_not_recorded" in WSRC)
 ok("G6 the coaching card and the action plan read the slice through this module",

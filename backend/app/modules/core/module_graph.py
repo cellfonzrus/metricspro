@@ -1000,9 +1000,12 @@ FACTS: dict[str, dict] = {
             # surfaces in this 48,000-line file call so none of them grows its own copy. The binding
             # below is the IMPORT alias the graph derives from the AST, not the accessor's name.
             'app/modules/commcalc/router.py': ('_pse',),
-            # A month range is where adding an unknown in as zero printed a wrong total: it sums the
-            # named slices through `sum_slice` and names the months to recalculate.
-            'app/modules/commcalc/rep_incentive_range.py': ('_pse',),
+            # NOT LISTED, and deliberately: commcalc/rep_incentive_range.py is the fourth caller --
+            # a month range is where adding an unknown in as zero printed a wrong total -- but its own
+            # lock (harness_rep_incentive_range D5) forbids it ANY import, so `assemble(months,
+            # per_month, evidence)` takes the module as a REQUIRED argument from the router instead.
+            # There is no AST edge to declare; the dereference is locked by
+            # harness_payout_slice_evidence G4a/G4b/G4c rather than by this graph.
             # The simulator BACK-DERIVES baseline sales from stored pay (acc_comm / rate), so a
             # never-written slice silently started a projection from the wrong baseline.
             'app/modules/commcalc/whatif.py': ('_pse',),

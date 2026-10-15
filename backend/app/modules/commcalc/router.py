@@ -17773,7 +17773,8 @@ async def get_commissions_range(period_from: str, period_to: str = "", authoriza
     per_month = {}
     for m in months:
         per_month[m] = await get_commissions(m, authorization=authorization, org_id=org_id, audience=audience)
-    return _rir.assemble(months, per_month)
+    # the slice-evidence verdict is handed to the assembler, which imports nothing itself (§COMMCALC-09)
+    return _rir.assemble(months, per_month, _pse_mod())
 
 
 @router.get("/multimonth/status")

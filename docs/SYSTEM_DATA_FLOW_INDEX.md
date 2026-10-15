@@ -28079,7 +28079,7 @@ re-derive it.
 | --- | --- | --- |
 | `router._get_commissions_rows` | served the stored row raw | stamps `payout_slice_basis` + `payout_slice_reason` on the ONE read every Rep Incentive surface goes through |
 | `payout_audience.EMPLOYEE_REP_ROW_FIELDS` | an allow-list, so a new field would be stripped | carries the basis to every audience — a rep is entitled to know their breakdown was never computed |
-| `rep_incentive_range.assemble` | summed `subtotal` / `acc_comm` across months, adding an unknown as zero | sums named slices through `sum_slice`, reports `*_rows_not_recorded`, and names `periods_not_recorded` |
+| `rep_incentive_range.assemble` | summed `subtotal` / `acc_comm` across months, adding an unknown as zero | sums named slices through `sum_slice`, reports `*_rows_not_recorded`, and names `periods_not_recorded` — the module is **injected**, see below |
 | `whatif._boost_actuals` | BACK-DERIVED baseline sales (`acc_comm / acc_rate`), so a blank slice started a projection from the wrong baseline | excludes those rows from the slice aggregates, keeps their `total_payout`, reports `slices_not_recorded` |
 | `router` coaching card (§19.28's own file) | `at_risk = subtotal × (1 − tier)` on a never-computed subtotal | reads `slice_value`; withholds `at_risk` rather than printing $0.00 at risk |
 | `router` action plan | same, and emitted `subtotal` as $0.00 | same, and emits `None` with the basis |
@@ -28091,9 +28091,21 @@ has always been written. `repIncentiveRange.ts` skips unrecorded rows in its cli
 (it imports nothing by design, so it reads the server's stamped verdict rather than re-deriving the
 test).
 
+**The range assembler is the one caller that is handed the module rather than importing it.**
+`harness_rep_incentive_range.py` D5 locks `rep_incentive_range.py` to ZERO imports — an assembler that
+can reach into `app` can grow a read of its own, which is the whole point of that lock — so `assemble`
+takes the verdict as its **required** third argument, `assemble(months, per_month, evidence)`, and the
+router hands it `payout_slice_evidence`. That is still a dereference and not a copy, and because the
+argument has **no default**, a caller that stops passing it raises instead of silently reverting to
+adding zeros (§19.18, the failure mode where a registry is written and the callers left un-wired).
+The consequence for §50: there is no AST import edge for this caller, so `core/module_graph.py` cannot
+declare it; the comment in the fact says so, and `harness_payout_slice_evidence` G4a/G4b/G4c hold the
+wiring instead — the argument is required, the assembler imports nothing, the router passes the real
+module.
+
 ### COMMCALC-09.5 Locks
 
-`harness_payout_slice_evidence.py` — **62 checks, 0 failures; verified 18 named failures and no
+`harness_payout_slice_evidence.py` — **65 checks, 0 failures; verified 18 named failures and no
 traceback against pre-fix `main`** in a clean worktree. §G9 fails the build if any caller spells the
 contradiction test itself; §H fails it if either plan-mode writer stops itemising; §I pins the screen
 to the server's verdict; §C pins the allowlist (an unruled basis is not evidence). `F1`'s first draft
