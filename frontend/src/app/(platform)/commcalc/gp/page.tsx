@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
@@ -848,8 +848,10 @@ export default function GPReportPage() {
                           const key = s.store_key ?? ''
                           const open = legStoreOpen === key
                           return (
-                            <>
-                              <tr key={key} style={{ fontSize: 12, borderTop: '1px solid var(--border)', cursor: 'pointer',
+                            // A keyed Fragment, not a bare <>: the row and its expanded rung table are
+                            // TWO siblings per store, so the key belongs on what wraps them.
+                            <Fragment key={key}>
+                              <tr style={{ fontSize: 12, borderTop: '1px solid var(--border)', cursor: 'pointer',
                                 background: open ? 'var(--bg2)' : undefined,
                                 color: s.unattributed ? '#b45309' : undefined }}
                                 onClick={() => setLegStoreOpen(open ? null : key)}>
@@ -883,7 +885,7 @@ export default function GPReportPage() {
                                 </td>
                               </tr>
                               {open && (
-                                <tr key={`${key}-rungs`} style={{ background: 'var(--bg2)' }}>
+                                <tr style={{ background: 'var(--bg2)' }}>
                                   <td colSpan={legStoreTrend.months.length + 3} style={{ padding: '2px 8px 8px 22px' }}>
                                     <table style={{ borderCollapse: 'collapse', width: '100%' }}>
                                       <thead>
@@ -917,7 +919,7 @@ export default function GPReportPage() {
                                   </td>
                                 </tr>
                               )}
-                            </>
+                            </Fragment>
                           )
                         })}
                         <tr style={{ fontSize: 12, borderTop: '2px solid var(--border)', fontWeight: 700 }}>
