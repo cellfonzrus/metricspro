@@ -254,6 +254,11 @@ on:
       - "database/migrations/1084_connector_registry_dispatchable_kinds.sql"
       - "backend/app/modules/commcalc/b2b_sweep.py"
       - "backend/app/modules/commcalc/vidapay_sweep.py"
+      # §COMMCALC-11 — an invisible human check is still a check. The detector lives in
+      # vidapay_sweep (named just above) and the operator's words in live_login, so a change to
+      # either must re-run the human-check lock or a check that gates the submit goes unseen again.
+      - "backend/harness_human_check_kind.py"
+      - "backend/app/modules/commcalc/live_login.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/merchant_portals.py"
       - "backend/app/modules/core/import_health.py"
@@ -949,6 +954,9 @@ jobs:
       - name: Run the connector-scope lock (every connector surface reads the registry; mirror = seed; one neutral line; no second list)
         working-directory: backend
         run: python3 harness_connector_scope_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the human-check lock (a check that GATES the submit counts whether or not it is painted; each kind gets its own words)
+        working-directory: backend
+        run: python3 harness_human_check_kind.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
         working-directory: backend
         run: python3 harness_mapping_key_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
