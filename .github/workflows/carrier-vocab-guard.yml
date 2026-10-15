@@ -415,6 +415,8 @@ on:
       - "backend/app/modules/commcalc/commission_legs.py"
       - "backend/app/modules/commcalc/commission_ledger.py"
       - "backend/app/modules/commcalc/gp_report.py"
+      - "backend/harness_commission_leg_store_trend.py"
+      - "backend/app/modules/commcalc/commission_leg_store_trend.py"
       - "backend/app/modules/account/ma_store_pnl.py"
       - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/asset/router.py"
@@ -1243,6 +1245,9 @@ jobs:
       - name: Run the honourable-declaration lock (a category the platform can place must be expressible as a COMPONENT — the org's own declaration places the dollar and `basis` reads `declared`, never a keyword guess standing where a declaration already exists; every Gross-Profit money column is reachable from a component and every component has one; the component vocabulary, its labels and "which components are the device-financing side" each exist in exactly ONE module; and $260,500.00 of declared market-development money stops booking on the device-financing reimbursement line while revenue and net profit move $0.00 — owner ruling 2026-10-10, index §69)
         working-directory: backend
         run: python3 harness_declared_category_honourable.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the per-store month-of-life commission lock (the store axis is a SHAPE of the leg trend rather than a second derivation — Sum(per-store) equals the company figure to the cent on every month and every bucket; MA/VidaPay per-store equals MA per-period, which is why the store grain needed no change to `commission_leg_ma_rollup`; one accumulator reached by both grains, and the MA path opts out of the ladder so the margin block is never counted twice; an unfinished month is marked and excluded from every delta; money matching no store is its own named row; the rungs come from the DATA so an M13 is a column the day it arrives — owner ask 2026-10-15, index §COMMCALC-10)
+        working-directory: backend
+        run: python3 harness_commission_leg_store_trend.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the GP carrier-classification dereference lock (the Gross Profit report classifies no carrier dollar of its own — the comp-report keyword guess and the four pay-category literal compares are gone, the trend's self-declared COPY of them is gone, and $418,922.21 of August 2026 declared reimbursement no longer renders as commission while gross profit itself moves $0.00 — owner 2026-10-08, index §58.7)
         working-directory: backend
         run: python3 harness_gp_carrier_class_dereference.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

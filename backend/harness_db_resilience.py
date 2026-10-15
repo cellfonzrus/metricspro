@@ -1165,7 +1165,18 @@ _all_routes = _flatten_routes(real_app.routes)
 # `'^-@router\.'` = 0 — one added, NONE removed, and the one added printed by name. The pin was
 # re-taken on a measured, fully-accounted addition; it was never relaxed to make CI green, and a
 # count that comes back HIGHER than this pin is still a failure.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1788"))
+#
+# RE-PINNED 2026-10-15, 1788 -> 1789 (index §COMMCALC-10). Every record above stays. The delta is ONE
+# route and it is named: GET /commcalc/commission-leg-store-trend — the per-store, month-over-month
+# month-of-life (M1..M12) commission report (owner ask 2026-10-15). It is READ-ONLY, writes nothing,
+# books nothing, adds no table and no writer, and it is NOT a second derivation: it calls
+# `_commission_leg_trend_compute` (the existing /commission-leg-trend compute, with its store axis
+# switched on) and pivots the result through the pure `commcalc/commission_leg_store_trend.py`.
+# Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1788 + 1 = 1789, the figure this harness measured on this tree. So the pin
+# was re-taken on a counted, named addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1789"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
