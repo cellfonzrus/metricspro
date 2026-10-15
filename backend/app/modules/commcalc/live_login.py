@@ -74,6 +74,58 @@ _HUMAN_ACTION_IDLE_SECONDS = 8 * 60  # a human_action (captcha) phase left untou
 # so a '▶ Pull now' can run on the SAME trusted page. The session becomes terminal only on error/cancel
 # (incl. the post-auth idle timeout, which flips it to 'cancelled').
 _TERMINAL = ("error", "cancelled")
+
+# ── HOW LONG MAY THIS SESSION STAY IN THIS PHASE? ONE HOME, two different questions ─────────────
+# Owner report 2026-10-15, on a brand-new Team Portal login: *"it has been over 5 minutes it is
+# startying teh love login and does not move freom tehre"*. He was right, and waiting would never
+# have helped: the session was in phase 'starting' with NO limit on it at all.
+#
+# THE CLASS. "How long may this phase go without progress" WAS answered — by one inline conditional
+# inside `_preauth_loop`. But that loop is only reached once the login is already WORKING, so every
+# phase before it (browser launch, the first navigation, the sign-in submit) had no limit of any
+# kind. A stall there sat in "Starting the live login session…" forever: no error written, the
+# data_source row left reading `auth_status='authenticating'` / "Live login in progress…", and the
+# operator staring at a frozen word with nothing ever arriving. A status that cannot say a session
+# died is not a record of what the session did.
+#
+# Two DIFFERENT questions, deliberately not merged — merging them would silently shorten the human's
+# window for fetching a 2FA code, which is the one place a long wait is CORRECT:
+#   · INACTIVITY (below): the session is healthy and waiting on the OPERATOR. Unchanged.
+#   · NO PROGRESS (this map): the session is waiting on ITSELF, before the command loop is entered,
+#     with no human expected to act. These are the phases that had no limit.
+#
+# The pre-loop budgets are generous against the real worst cases so a slow-but-working login is
+# never killed: `_launch` tries real Chrome then bundled Chromium (~30s Playwright launch timeout
+# each) before giving up, and `vidapay_sweep._goto_login` can spend two ladders of
+# 3 x 60s `_goto_with_retry` plus settles. Each phase change RESTARTS its own clock, so reaching
+# 'login' grants it the full navigation budget.
+PRELOOP_PROGRESS_LIMIT_S = {
+    "starting": 180.0,        # launch Chrome, fall back to Chromium, open a context + page: ~60s real
+}
+PRELOOP_PROGRESS_DEFAULT_S = 600.0   # navigating / signing in — covers the full _goto_login retry ladder
+_PROGRESS_POLL_S = 5.0               # how often the watchdog looks
+# The phase slug is ours, not the operator's. This is what each pre-loop phase was DOING, in words
+# they can act on — the stall message names the step, never 'phase=starting'.
+_PRELOOP_DOING = {
+    "starting": "opening a browser on the server",
+    "login": "loading the portal's sign-in page",
+    "verifying": "waiting for the portal to accept the sign-in",
+}
+
+
+def preloop_limit(phase):
+    """THE reader of the no-progress budget for a phase, used BEFORE the command loop is entered.
+    A phase nobody declared gets the default rather than no limit at all — "unlisted" must never
+    mean "may hang forever", which is the defect this map exists to close."""
+    return float(PRELOOP_PROGRESS_LIMIT_S.get(str(phase or ""), PRELOOP_PROGRESS_DEFAULT_S))
+
+
+def inactivity_limit(phase):
+    """THE reader of the OPERATOR-inactivity budget, used INSIDE the command loop. Factored out of
+    `_preauth_loop`'s inline conditional so the two questions above have one home each; the answers
+    are unchanged."""
+    return float(_HUMAN_ACTION_IDLE_SECONDS if str(phase or "") == "human_action"
+                 else _IDLE_CLOSE_SECONDS)
 _TERMINAL_TTL = 15 * 60       # keep a finished session's final state this long, then prune
 _POST_AUTH_IDLE_SECONDS = 15 * 60  # keep the authenticated browser open this long for a reuse-the-session pull
 
@@ -87,6 +139,9 @@ _FRAME_GUARANTEE_S = 1.5       # even in CDP mode, force a screenshot if no fram
 _CLASSIFY_POLL_S = 1.2         # pre-auth: how often to re-DETECT state (captcha / auth / proxy) for the status
 
 _B2B_PROCESSORS = ("b2bsoft", "b2b")
+# The master-agent portal under both the names its connector registry row carries. Spelled HERE and
+# read by _preauth_login_url, so the bot-wall fallback belongs to the portal it is for.
+_VIDAPAY_PROCESSORS = ("vidapay", "total_access")
 
 
 def _takes_stop(fn):
@@ -223,6 +278,13 @@ class LiveLoginSession:
         self._lock = threading.Lock()
         self.phase = "starting"
         self.message = "Starting the live login session…"
+        # The phase's OWN clock, restarted by every phase change — what the no-progress watchdog
+        # measures. Distinct from `_last_activity`, which the inactivity rule measures and which a
+        # frame or a human keystroke also touches.
+        self._phase_since = time.time()
+        # True once _preauth_loop / _post_auth_loop is running. From that moment the INACTIVITY rule
+        # owns the session and the watchdog stands down — so no human window is ever shortened.
+        self._loop_entered = False
         self._shot = None                         # latest base64 JPEG (no data-uri prefix)
         self._seq = 0                             # monotonic frame sequence — bumped on every new frame
         self._last_frame_at = 0.0                 # wall time of the last frame stored (liveness guarantee)
@@ -234,11 +296,14 @@ class LiveLoginSession:
         self._last_activity = time.time()
         self._finished_at = None
         self._thread = None
+        self._watchdog = None                     # the no-progress watchdog thread (see _watch)
 
     # ── thread-safe shared-state access ──────────────────────────────────────────────────────────
     def _set(self, phase=None, message=None, touch=True):
         with self._lock:
             if phase is not None:
+                if phase != self.phase:
+                    self._phase_since = time.time()   # a new phase gets its own full budget
                 self.phase = phase
                 if phase in _TERMINAL:
                     self._finished_at = time.time()
@@ -519,6 +584,45 @@ class LiveLoginSession:
     def start(self):
         self._thread = threading.Thread(target=self._run, name="live-login-%s" % self.sid, daemon=True)
         self._thread.start()
+        # A SECOND thread, because the first one is exactly what can be stuck. The worker cannot time
+        # itself out: a blocked `p.chromium.launch()` or `page.goto()` never returns to check a clock,
+        # which is why phase 'starting' could sit forever. Playwright gives no way to interrupt that
+        # call, so the watchdog does not try to kill it — it ENDS THE SESSION, writes the error to the
+        # row, and frees the operator to start a new one. The stuck call dies with the daemon thread.
+        self._watchdog = threading.Thread(target=self._watch, name="live-login-watch-%s" % self.sid,
+                                          daemon=True)
+        self._watchdog.start()
+
+    def _watch(self):
+        """Fail a session that stops making progress BEFORE the command loop is entered.
+
+        Stands down the moment `_loop_entered` is set, so the operator's own window (20 minutes to
+        fetch a code, 8 on a human check) is owned by `inactivity_limit` alone and is never shortened
+        by this. Best-effort and silent on its own errors — a watchdog that raises would be one more
+        way to hang."""
+        while True:
+            time.sleep(_PROGRESS_POLL_S)
+            try:
+                with self._lock:
+                    phase, entered, since = self.phase, self._loop_entered, self._phase_since
+                if phase in _TERMINAL or phase == "authenticated":
+                    return
+                if entered:
+                    return
+                stalled = time.time() - float(since or 0)
+                limit = preloop_limit(phase)
+                if stalled <= limit:
+                    continue
+                self._set(phase="error",
+                          message=("The live login stopped responding while %s — no progress for %d "
+                                   "seconds, so the session was ended rather than left waiting. Start "
+                                   "it again; if it stops at the same point, the server could not open "
+                                   "a browser or the portal did not answer it."
+                                   % (_PRELOOP_DOING.get(phase, "starting up"), int(stalled))))
+                self._persist_diag()
+                return
+            except Exception:
+                return
 
     def _run(self):
         try:
@@ -568,7 +672,7 @@ class LiveLoginSession:
                 self._capture(page)
                 return
             try:
-                vp._goto_login(page, base)
+                vp._goto_login(page, base, login_url=self._preauth_login_url(vp))
             except Exception as e:
                 # BROAD by design. _goto_login already converts a CONNECTION-CLASS proxy drop into a
                 # friendly VidaPayLoginError (named failure + attempts, NO Playwright 'Call log:'), and
@@ -775,6 +879,25 @@ class LiveLoginSession:
         except Exception:
             pass
 
+    def _preauth_login_url(self, vp):
+        """THIS connector's own pre-auth sign-in page, or None when it has not declared one.
+
+        The bot-wall fallback inside `vp._goto_login` navigates here. Passing nothing used to inherit
+        the master-agent portal's own id-server, so EVERY other connector — the POS-reports kind, the
+        supply-vendor kind — retried at a different vendor's login server, spending up to three
+        60-second attempts on an address that has nothing to do with the portal the operator
+        configured (owner's Team Portal live login, 2026-10-15, index §COMMCALC-10).
+
+        None for a connector KIND whose address is per-tenant config: `connector_registry` carries no
+        host for those rows BY DESIGN (RULE TWO), so there is no house default to fall back to and
+        inventing one is worse than not retrying. The caller then reports "could not find the login
+        form" against the page the operator actually configured, which is the honest answer."""
+        if self.processor in _VIDAPAY_PROCESSORS:
+            return getattr(vp, "LOGIN_URL", None)
+        if self._is_b2b:
+            return getattr(vp, "B2BSOFT_URL", None)
+        return None
+
     def _base_dest(self, vp):
         """The known-good https destination for squid recovery in a POST-submit context — the source's
         configured base (Main-Panel) URL, normalized (no new hardcode beyond vp's DEFAULT_URL/B2BSOFT_URL).
@@ -794,6 +917,8 @@ class LiveLoginSession:
         auto-submitting or racing the human. Services the convenience code box (SUBMIT_CODE / RESEND) too.
         Returns into _post_auth_loop the moment the login reaches 'authenticated'. Auto-closes after idle.
         All Playwright work stays on this (the worker) thread."""
+        with self._lock:
+            self._loop_entered = True     # the inactivity rule owns the session from here
         last_poll = 0.0
         while True:
             self._pump(page)
@@ -809,7 +934,7 @@ class LiveLoginSession:
             with self._lock:
                 idle = time.time() - self._last_activity
                 ph = self.phase
-            limit = _HUMAN_ACTION_IDLE_SECONDS if ph == "human_action" else _IDLE_CLOSE_SECONDS
+            limit = inactivity_limit(ph)
             if idle > limit:
                 self._set(phase="cancelled", message="Live session closed after inactivity.")
                 return
@@ -906,6 +1031,8 @@ class LiveLoginSession:
         AUTO-PULL: the due reports are fetched IMMEDIATELY on arrival here (once per session, switchable
         per source), because a trusted session that expires before anything is pulled is worth nothing —
         that is the owner's 2026-07-27 "logged in but no file imports" report."""
+        with self._lock:
+            self._loop_entered = True     # reachable straight from _drive on the fast path
         self._touch()
         if self.auto_pull and self.pull_fn is not None and not self._auto_pulled:
             self._auto_pulled = True
