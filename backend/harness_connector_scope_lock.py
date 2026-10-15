@@ -300,6 +300,21 @@ ROUTER_SRC = os.path.join(BE, "commcalc", "router.py")
 # it; the checks above also fail a STALE one, so it cannot outlive the dispatcher it excuses.
 DOORLESS_DISPATCH: dict = {}
 
+# EVERY key `router._SOURCE_SCRAPERS` dispatches on, DECLARED — a human wrote this set, and §I asserts
+# the scan's answer EQUALS it. Not `>= 7`: a bare lower bound is a guard that goes blind (the house
+# rule `harness_subject_set_lock.py` enforces), because a dispatcher that silently LEAVES the table
+# still passes a size floor, and this lock's whole job is to notice a feed changing shape. A key added
+# here must also be added to `connector_registry.HOUSE_CONNECTORS` + a seed migration (the door check
+# below), or be excused in DOORLESS_DISPATCH. A key removed from the router must be removed here, and
+# the diff says which feed stopped being dispatchable.
+DISPATCHED_KEYS = frozenset({
+    "b2b", "b2bsoft",      # the POS reports portal family (`b2b` is the alias)
+    "businesstrack", "payanywhere", "transfirst",   # the three merchant card portals
+    "pos_report",          # = pos_report_sweep.CONNECTOR     (§COMMCALC-07, registered 2026-10-15)
+    "supply_vendor",       # = supply.portal.SUPPLY_PROCESSOR (§36 / §51, registered 2026-10-15)
+    "total_access", "vidapay",      # the master-agent portal under both its names
+})
+
 
 def dispatch_keys():
     """Every key `router._SOURCE_SCRAPERS` dispatches on, and the ones that could not be resolved.
@@ -495,8 +510,13 @@ def main():
     # start in CI's bare python. The two kinds added by `_SOURCE_SCRAPERS[CONST]` are resolved back
     # through their import to the module that owns the constant, so a renamed kind is seen.
     dispatch, unresolved = dispatch_keys()
-    check("the dispatch table parses (%d keys: %s)" % (len(dispatch), ", ".join(sorted(dispatch))),
-          len(dispatch) >= 7, sorted(dispatch))
+    check("the dispatch table is EXACTLY the declared set (%d keys: %s)"
+          % (len(DISPATCHED_KEYS), ", ".join(sorted(DISPATCHED_KEYS))),
+          set(dispatch) == set(DISPATCHED_KEYS),
+          "router._SOURCE_SCRAPERS no longer dispatches the declared set — added %s, gone %s. A feed "
+          "that LEAVES must be removed from DISPATCHED_KEYS by hand, so it names itself here."
+          % (sorted(set(dispatch) - set(DISPATCHED_KEYS)) or "nothing",
+             sorted(set(DISPATCHED_KEYS) - set(dispatch)) or "nothing"))
     check("every `_SOURCE_SCRAPERS[CONST]` key resolved to a literal — an unresolved one would be a "
           "silent hole in this very scan", not unresolved, sorted(unresolved))
     known = {CR.slug(r["key"]) for r in CR.HOUSE_CONNECTORS}
@@ -544,6 +564,9 @@ def main():
           "pos_report" in dispatch and "POS_REPORT_CONNECTOR" not in dispatch)
     check("a stale excuse → RED (an excused key nothing dispatches on)",
           "a_retired_feed" not in dispatch)
+    check("a feed LEAVING the dispatch table → RED (the declared set is not a size floor)",
+          set(DISPATCHED_KEYS) - {"vidapay"} != set(dispatch),
+          "the control is broken: dropping a key still compared equal")
     check("a seed migration the frontend proof cannot see → RED",
           not re.compile(r"^\d+_connector_registry.*\.sql$").match("1099_connectors_extra.sql"),
           "the control is broken: the pattern would have matched a name it must not")

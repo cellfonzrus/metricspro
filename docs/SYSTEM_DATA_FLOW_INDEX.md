@@ -4357,7 +4357,7 @@ too and scans `b2b_sweep.py`, `vidapay_sweep.py`, `import_audit.py` and `pos/rec
 seam closed; the two receipt-format LABEL declarations excused with a pinned reason).
 
 **Proof.** `harness_connector_registry.py` (69: §A the shared predicate, §B every backend surface over the real router,
-§C the copy, §D pre-migration, §E byte-identity); `harness_connector_scope_lock.py` (**43** — 26 §A–F + 17 §I, §12a.2a); `frontend/prove_connector_scope.mjs`
+§C the copy, §D pre-migration, §E byte-identity); `harness_connector_scope_lock.py` (**44** — 26 §A–F + 18 §I, §12a.2a); `frontend/prove_connector_scope.mjs`
 (31, the REAL transpiled `carrier-scope.ts` + `report-kinds.ts` + `connectors.ts` over the seed parsed from mig 1014).
 Unchanged and green: report_kinds 121, report_kind_lock 21, carrier_vocab_guard, connector_route_policy 152,
 connector_runnable 27, connector_dispatch 31, browser_sweep_kinds 24, sweep_backlog_collapse 33, import_health 86,
@@ -4419,7 +4419,13 @@ never enforced** — a registry row with no dispatcher is a connector a tenant c
 
 **Proved red on the state `main` was in.** With both rows removed and `1084` dropped from `MIGRATIONS` — i.e. exactly today's
 shape — §I fails naming **both** feeds: *"`pos_report` is dispatchable AND named by the registry, so an operator can pick
-it"*, *"`supply_vendor` …"*. Green: **43 passed, 0 failed** (was 26 before §I).
+it"*, *"`supply_vendor` …"*. Green: **44 passed, 0 failed** (was 26 before §I).
+
+The dispatch set is **DECLARED**, not size-bounded: `DISPATCHED_KEYS` is a module-level frozenset a
+human wrote and §I asserts the scan's answer **equals** it. The first cut asserted `len(dispatch) >= 7`
+and `harness_subject_set_lock.py` §B1 rejected it, correctly — a size floor still passes when a
+dispatcher *leaves* the table, which is exactly the shape this lock exists to notice. A feed added to
+the router must be added here (and so meet the door check); a feed removed names itself in the diff.
 
 §I also pins the **frontend proof's** reach: `frontend/prove_connector_scope.mjs` built its fixture from `1014` alone, so
 the new rows would have been absent from the predicate it proves. It now DERIVES every seed file from
