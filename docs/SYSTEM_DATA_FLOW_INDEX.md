@@ -120,6 +120,7 @@ Primary code homes:
 | COMMCALC-07 | **One pull loop, many feeds — and a report line is not a category until the tenant says so** | "The portal publishes its own daily report of what each worker sold, and the reps declare the same day at closing. Which code reaches a report on a portal and lands it, and which declared category is a report line — when the portal's words are not ours?" |
 | COMMCALC-08 | **A file that produced no rows is told why — the pairing, not the spreadsheet** | "My upload was refused and the message blamed my file. Which columns did the reader look for, which ones does my file actually carry, and if they are not the same — which feed does this file belong to?" |
 | COMMCALC-09 | **A stored pay slice nobody computed is not $0.00 earned** | "The rep incentive table shows ACC GP as zero and the drill-down link calculates a figure. Same source — so which read is stale, how does a surface tell a measured zero from a blank, and which months need recalculating?" |
+| COMMCALC-10 | **A live login that stops making progress must say so** | "I started the live login and it has not moved for five minutes. Is it still working, is it dead, and why has nothing told me either way?" |
 
 ---
 
@@ -25347,6 +25348,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-07 | commcalc |
 | COMMCALC-08 | commcalc |
 | COMMCALC-09 | commcalc |
+| COMMCALC-10 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -28203,6 +28205,129 @@ column. `frontend/tools/rep-incentive-range-proof.mjs` grew 7 checks (17 total) 
 
 ---
 
+
+## §COMMCALC-10. A LIVE LOGIN THAT STOPS MAKING PROGRESS MUST SAY SO (owner report 2026-10-15)
+
+Owner, verbatim, minutes after declaring his first `pos_report` login (§12a.2a): *"it has been over 5
+minutes it is startying teh love login and does not move freom tehre"*. He was right, and waiting
+would never have helped — there was going to be no message, ever.
+
+**Measured read-only on the live row before changing anything.** `commcalc.data_source` /
+`processor='pos_report'`, label "Team Portal", `portal_url` the UPS Store FRS reporting page,
+password stored sealed (`enc:v1:`, 107 chars): `auth_status='authenticating'`,
+`auth_message='Live login in progress…'`, `pending_started_at=03:13:42Z`, `pending_state` empty,
+`login_shot` NULL. Two explanations ruled OUT and worth not re-deriving: it was not the SERVICE_ROLE
+split (browsers are allowed unless `SERVICE_ROLE=api` is explicitly set, and that path returns a
+clean 503 at the endpoint, not a wait), and it was not a deploy restarting underneath him (a lost
+in-memory session makes `/live-login/state` answer `phase:"idle"` with "No live session running",
+not a freeze). His own words named the phase: `starting`, which `live_login` sets once at
+construction and which **no code ever timed out**.
+
+**THE CLASS.** *"How long may this phase go without progress" WAS answered — by one inline
+conditional inside `_preauth_loop`. But that loop is only reached once the login is already WORKING,
+so every phase before it — launching the browser, the first navigation, the sign-in submit — had no
+limit of any kind.* The rule existed and did not cover the phases where a stall is most likely. A
+session that stalls there sits in "Starting the live login session…" indefinitely: no error written,
+the row left reading `authenticating` forever, and the operator staring at a frozen word. Same shape
+as §19.41 (`empty_ok` recording a broken filter as a successful zero-row run) and the owner's own
+2026-09-20 directive — **a status that cannot say a session died is not a record of what it did.**
+
+### COMMCALC-10.1 Duplicate check (the build gate)
+
+- **`live_login._IDLE_CLOSE_SECONDS` / `_HUMAN_ACTION_IDLE_SECONDS`** — the OPERATOR-inactivity rule.
+  **EXTENDED, not forked**: its inline conditional became `inactivity_limit(phase)`, same answers.
+  Widening it to cover `starting` was rejected — it would silently shorten the human's 20-minute
+  window for fetching a 2FA code, which is the one place a long wait is CORRECT.
+- **`_TERMINAL_TTL` / `_prune_locked`** — drops FINISHED sessions. A different question (how long to
+  keep a corpse), and it never fires on a session that never finishes. Untouched.
+- **`portal_session_health` / `portal_backoff`** — the DURABLE session's condition and the portal's
+  cooldown. Neither watches a live interactive session. Untouched.
+- **`job-run.ts` `POLL_GIVE_UP_MS` (§6q)** — the FRONTEND's "we stopped watching". Deliberately not
+  reused: a page giving up on polling must not be what ends a server-side session, and the row has to
+  be told either way. The two are complementary, not duplicates.
+- No new table, no new column, no migration.
+
+### COMMCALC-10.2 One fact, one home, dereferenced
+
+Two different questions, each with exactly one home and one reader:
+
+| question | home | reader | answers |
+|---|---|---|---|
+| no progress, **before** the command loop | `PRELOOP_PROGRESS_LIMIT_S` + `PRELOOP_PROGRESS_DEFAULT_S` | `preloop_limit(phase)` | `starting` 180s; everything else 600s |
+| waiting on the **operator**, inside it | `_IDLE_CLOSE_SECONDS` / `_HUMAN_ACTION_IDLE_SECONDS` | `inactivity_limit(phase)` | `human_action` 8 min; else 20 min |
+
+An **undeclared phase takes the default**, which is the whole point: "unlisted" must never mean "may
+hang forever", and that is exactly what the pre-change shape meant. The budgets are generous against
+the real worst cases they must not kill — `_launch` tries real Chrome then bundled Chromium (~30s
+Playwright launch timeout each), and `_goto_login` can spend two ladders of 3 × 60s `_goto_with_retry`
+plus settles, which is where the ~7-minute figure comes from. Every phase change **restarts that
+phase's clock**; re-setting the SAME phase does not, so a chatty message cannot refresh the budget
+forever. The phase clock is distinct from `_last_activity` (which a frame or a keystroke also
+touches).
+
+### COMMCALC-10.3 The watchdog is a SECOND thread, and it ends the session rather than the call
+
+The worker thread cannot time itself out: a blocked `p.chromium.launch()` or `page.goto()` never
+returns to look at a clock, which is precisely why `starting` could sit forever. Playwright offers no
+way to interrupt that call, so `LiveLoginSession._watch` does not try to kill it — it sets
+`phase="error"`, calls `_persist_diag()` (so the row flips from `authenticating` to `error` with the
+reason, instead of lying), and returns; the stuck call dies with its daemon thread. It **stands down**
+the moment `_loop_entered` is set by `_preauth_loop` / `_post_auth_loop`, so no operator window is
+ever shortened — the one regression this fix must not cause. The message names what the session was
+DOING in the operator's words (`_PRELOOP_DOING`: "opening a browser on the server", "loading the
+portal's sign-in page", "waiting for the portal to accept the sign-in"), never a phase slug.
+
+### COMMCALC-10.4 The sibling found while tracing — the bot-wall fallback named the WRONG VENDOR
+
+`vidapay_sweep._goto_login` is the pre-auth navigator **every** portal connector uses, and its
+bot-wall retry destination was the module constant `LOGIN_URL` — the master-agent portal's own
+id-server. So a `pos_report` or `supply_vendor` login that hit a bot wall retried at a **different
+vendor's login server**, spending up to three 60-second attempts on an address with nothing to do
+with the portal the operator configured. One vendor's URL reached through a shared path by every
+other vendor's connector is the RULE TWO defect wearing a hat.
+
+`_goto_login` now takes `login_url`, defaulting to this module's own constant only because this
+module's two entry points ARE that portal; both of them now name it explicitly. `live_login`
+dereferences `_preauth_login_url`, which answers from the connector: the master-agent family
+(`_VIDAPAY_PROCESSORS`) → its id-server, the POS-reports portal family (`_B2B_PROCESSORS`) → its own
+base, and **None for a connector KIND whose address is per-tenant config** — `connector_registry`
+carries no host for those rows by design (§12a.2a), so there is no house default to fall back to and
+`login_url=None` SKIPS the fallback rather than guessing. The caller then reports "could not find the
+login form" against the page the operator actually configured, which is the honest answer.
+
+### COMMCALC-10.5 The lock
+
+`backend/harness_live_login_progress.py` — **64 checks**, DB-free, no browser, no network (a
+`_FakeVp` whose hosts are deliberately NOT the real ones, so a check cannot pass by testing the
+constants instead of the branch). §A one home each + an undeclared phase takes the default; §B the
+operator's windows byte-for-byte unchanged; §C the budgets clear the real worst cases; §D the phase
+clock and its restart rule; §E the watchdog is a second daemon thread spelling no budget of its own;
+§F a stalled session becomes terminal AND the row is told, in plain words; §G it stands down on
+`_loop_entered`; §H controls; §I the fallback belongs to the portal it is for.
+
+**Proved red on the state `main` was in**, three ways: `PRELOOP_PROGRESS_LIMIT_S` emptied with no
+default → 4 fail (`preloop_limit` answers `None`, i.e. no limit); the inline conditional restored in
+`_preauth_loop` → 2 fail (two homes again); the watchdog thread removed from `start()` → 2 fail. And
+for §COMMCALC-10.4, the call site reverted to passing nothing → **8 fail**, including *"ARMED: the
+pre-change shape (inheriting the master-agent id-server) is RED"*.
+
+### COMMCALC-10.6 Cross-references
+
+- **§16 (by TABLE):** `commcalc.data_source` — `auth_status` / `auth_message` can no longer stay at
+  `authenticating` / "Live login in progress…" after a live session dies; `_persist_diag` is the one
+  writer of that stop.
+- **§17 (by FUNCTION):** `live_login.preloop_limit` / `inactivity_limit` / `_watch` /
+  `_preauth_login_url`, `LiveLoginSession._phase_since` / `_loop_entered`;
+  `vidapay_sweep._goto_login(login_url=)`.
+- **§18 (by QUESTION):** "How long may a live portal login sit in this phase before it is dead?" →
+  `live_login.preloop_limit` (no progress) / `inactivity_limit` (waiting on the operator) — two
+  questions, one home each, never merged. "Where does a bot-walled portal login retry?" →
+  `live_login._preauth_login_url`, never a module constant.
+- **Same class:** §19.41 (`empty_ok` recorded a broken filter as success — a status that is not a
+  record), §12a.2a (the connector this surfaced on), §6q (the UI treating "accepted" as "finished"),
+  §66 (a value read without its basis), §19.18 (a mechanism written, callers unwired).
+
+---
 
 ## §CORE-05. A PAGED READ IS A READ OF THE DATA — one stable key, every row exactly once (owner report 2026-10-14)
 

@@ -1474,17 +1474,29 @@ def _recover_from_proxy_error(page, attempts=2, dest_url=None):
     return not _is_squid()
 
 
-def _goto_login(page, base_url, markers=None):
+def _goto_login(page, base_url, markers=None, login_url=LOGIN_URL):
     """Navigate to the portal and settle. If it lands on the bot-wall (or the egress squid page) with no
-    form, retry straight at the id-server login endpoint (deep links are flagged more often than the login
-    URL itself, AND the https id-server is the real pre-auth destination — going there skips the www
-    http-redirect chain that produces the squid hop entirely).
+    form, retry straight at THIS portal's own pre-auth login endpoint (deep links are flagged more often
+    than the login URL itself, AND an https id-server is the real pre-auth destination — going there
+    skips the www http-redirect chain that produces the squid hop entirely).
+
+    `login_url` IS THAT PORTAL'S OWN ADDRESS, and it must be passed by every caller that is not the
+    master-agent portal. It defaults to this module's LOGIN_URL only because this module's own two
+    entry points are that portal; a caller for ANOTHER portal passing nothing would otherwise retry at
+    a DIFFERENT VENDOR'S login server, which is what happened to every non-master-agent connector
+    until 2026-10-15 (owner's Team Portal live login, index §COMMCALC-10). `login_url=None` means the
+    portal has declared no separate sign-in page, and the fallback navigation is SKIPPED rather than
+    guessed — a feed whose address is config (connector_registry carries no host for those kinds, by
+    design) has no house default to fall back to, and inventing one is worse than not retrying.
 
     Both navigations here are PRE-LOGIN entry navigations (nothing has been clicked/submitted — no 2FA
     has been dispatched), so each goes through _goto_with_retry: a transient connection-class drop through
     the residential proxy is retried, and an exhausted failure surfaces as a clean VidaPayLoginError (never
     a raw Playwright 'Call log:'). Non-connection errors are NOT retried. After each goto we also run
     _recover_from_proxy_error (the http-302→squid hop; GET-only, no resubmit)."""
+    # The recovery destination is this portal's own login page when it declared one, else the page we
+    # were asked to open — never another vendor's.
+    dest = login_url or base_url
     resp = _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
     # RATE-LIMIT GATE #1 — before Cloudflare settling, before the proxy-recovery ladder, before a single
     # keystroke. A throttled portal must cost exactly ONE navigation, not the up-to-10 page loads the
@@ -1492,19 +1504,21 @@ def _goto_login(page, base_url, markers=None):
     _raise_if_rate_limited(page, resp, markers=markers, where="The portal")
     _wait_settle(page)
     page.wait_for_timeout(2500)
-    # PRE-AUTH recovery destination is the https id-server LOGIN_URL (a clean https page with the login
-    # form — it never triggers the www returnto→http hop that produces squid).
-    _recover_from_proxy_error(page, dest_url=LOGIN_URL)
+    _recover_from_proxy_error(page, dest_url=dest)
     _raise_if_rate_limited(page, markers=markers, where="The portal")
     fr, pw = _wait_for_password(page, timeout_s=20)
     if pw:
         return
+    if not login_url:
+        # Nothing declared to fall back TO. Returning leaves the caller to report "could not find the
+        # login form" against the page the operator actually configured, which is the honest answer.
+        return
     if _looks_like_bot_wall(page) or _looks_like_proxy_error(page):
         try:
-            resp = _goto_with_retry(page, LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
+            resp = _goto_with_retry(page, login_url, timeout=60000, wait_until="domcontentloaded")
             _raise_if_rate_limited(page, resp, markers=markers, where="The portal's login server")
             _wait_settle(page)
-            _recover_from_proxy_error(page, dest_url=LOGIN_URL)
+            _recover_from_proxy_error(page, dest_url=login_url)
             _wait_for_password(page, timeout_s=20)
         except (VidaPayLoginError, PortalRateLimited):
             raise
@@ -1673,7 +1687,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
         ctx = _new_context(browser, proxy=proxy)
         page = ctx.new_page()
         try:
-            _goto_login(page, base_url)
+            _goto_login(page, base_url, login_url=LOGIN_URL)   # this module's own id-server
             login_fr, pw_el = _password_frame(page)
             if not pw_el:
                 diag = _snapshot(page)
@@ -1756,7 +1770,10 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
         ctx = _new_context(browser, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
-            _goto_login(page, base_url)
+            # The POS-reports portal has no separate id-server: its own base IS the sign-in page, so
+            # that is its fallback. Before 2026-10-15 this inherited the master-agent portal's
+            # LOGIN_URL default and retried at a DIFFERENT VENDOR (index §COMMCALC-10).
+            _goto_login(page, base_url, login_url=B2BSOFT_URL)
             page.wait_for_timeout(1800)
 
             def _blocked(pg):
