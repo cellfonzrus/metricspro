@@ -279,7 +279,9 @@ class DriveVP:
     def _norm_url(self, url, fallback):
         return url or fallback
 
-    def _goto_login(self, page, base):
+    def _goto_login(self, page, base, login_url=None):
+        # `login_url` added 2026-10-15 (§COMMCALC-10). Without it the call raises TypeError inside
+        # _drive's broad except and the scenario proves the WRONG exception's handling.
         raise self._goto_exc
 
     def egress_hint(self, proxy_url):
@@ -396,8 +398,12 @@ with open(os.path.join(_COMM, "vidapay_sweep.py"), "r", encoding="utf-8") as fh:
 _gl = vsrc[vsrc.index("def _goto_login("):vsrc.index("def drive_typed_login(")]
 check("7a: _goto_login uses _goto_with_retry for the base entry navigation",
       "_goto_with_retry(page, base_url" in _gl)
-check("7b: _goto_login uses _goto_with_retry for the bot-wall LOGIN_URL fallback",
-      "_goto_with_retry(page, LOGIN_URL" in _gl)
+# RE-ANCHORED 2026-10-15 (index §COMMCALC-10): the bot-wall fallback no longer hard-codes this
+# module's LOGIN_URL — it goes to the `login_url` the CALLER declared, so one vendor's connector can
+# never retry at another vendor's id-server. The claim being proved is unchanged (the fallback is
+# RETRIED, never a bare goto); only the destination's name moved from a constant to the parameter.
+check("7b: _goto_login uses _goto_with_retry for the bot-wall fallback, at the CALLER's login_url",
+      "_goto_with_retry(page, login_url" in _gl and "_goto_with_retry(page, LOGIN_URL" not in _gl)
 check("7c: _goto_login no longer does a bare single-attempt page.goto(", "page.goto(" not in _gl)
 
 # run_vidapay_sweep + run_b2bsoft_sweep: fresh ENTRY navigations of a cold-restore browser → retried.
@@ -420,7 +426,9 @@ check("7g: complete_2fa_b2bsoft 2FA navigation is LEFT single-attempt (no retry 
 # live_login._drive: the except around vp._goto_login is BROAD (Exception), not just VidaPayLoginError.
 with open(os.path.join(_COMM, "live_login.py"), "r", encoding="utf-8") as fh:
     lsrc = fh.read()
-_dr = lsrc[lsrc.index("vp._goto_login(page, base)"):]
+# RE-ANCHORED 2026-10-15: _drive now passes the connector's own login_url (§COMMCALC-10), so the
+# anchor is the CALL, not its old argument list.
+_dr = lsrc[lsrc.index("vp._goto_login(page, base"):]
 _dr = _dr[:_dr.index("self._capture(page)\n                return") + 40]
 check("7h: _drive catches a BROAD Exception around vp._goto_login (not just VidaPayLoginError)",
       "except Exception as e:" in _dr and "except vp.VidaPayLoginError" not in _dr)

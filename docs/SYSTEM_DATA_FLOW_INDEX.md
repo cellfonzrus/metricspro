@@ -122,6 +122,7 @@ Primary code homes:
 | COMMCALC-09 | **A stored pay slice nobody computed is not $0.00 earned** | "The rep incentive table shows ACC GP as zero and the drill-down link calculates a figure. Same source — so which read is stale, how does a surface tell a measured zero from a blank, and which months need recalculating?" |
 | COMMCALC-10 | **A live login that stops making progress must say so** | "I started the live login and it has not moved for five minutes. Is it still working, is it dead, and why has nothing told me either way?" |
 | COMMCALC-11 | **An invisible human check is still a check** | "The live login filled in my portal details and then told me the password was wrong. The password is right — so what actually refused the sign-in, and why did nothing on the screen say a human check was waiting?" |
+| COMMCALC-12 | **A finished live login leaves an honest status** | "The screen says the portal login is still in progress and the browser closed an hour ago. What writes that status when a session ends, and what clears it when the process that owned it is simply gone?" |
 
 ---
 
@@ -25351,6 +25352,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-09 | commcalc |
 | COMMCALC-10 | commcalc |
 | COMMCALC-11 | commcalc |
+| COMMCALC-12 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -29150,3 +29152,84 @@ Same class: §19.18 (a mechanism written and its callers left unwired), §19.41 
 record a failure is not a record), §COMMCALC-10 (the stall this made visible), §12a.2a (a connector
 kind carries no host, so its address is per-tenant config), §CORE-03 (where the portal credential is
 sealed), §COMMCALC-07 (the pull loop this login feeds).
+
+---
+
+## §COMMCALC-12. A FINISHED LIVE LOGIN LEAVES AN HONEST STATUS (found 2026-10-15)
+
+Found while reading the owner's live row back to him, not reported by him — which is the point: his
+screen said a login was in progress and he had no way to know it was not.
+
+**THE CLASS, NOT THE INSTANCE.** *A status is a record of what IS.* `router.live_login_start` stamps
+`auth_status='authenticating'` / "Live login in progress…" before the worker starts, which is true
+while the worker runs. §COMMCALC-10 taught a session that **dies** to write `'error'`. But a session
+that merely **ends** — the inactivity timeout, or the operator pressing Close — wrote only
+`auth_message` and left the status in flight. `_persist_diag` is the ONE place that writes a terminal
+status and it wrote one for only ONE of its two terminal phases. The chip on
+`commcalc/email-imports` (`authBadge`) maps `authenticating` to "⏳ Logging in…", so the row read
+*"Live session closed after inactivity."* and *"Logging in…"* at the same time, for an hour.
+
+Measured read-only on the live `pos_report` row, 2026-10-15 04:31Z: `auth_status='authenticating'`,
+`auth_message='Live session closed after inactivity.'`, `pending_started_at=03:27:13Z`,
+`session_state` empty. The session had been gone for 64 minutes.
+
+### COMMCALC-12.1 Duplicate check (the build gate)
+
+- **§COMMCALC-10's `PRELOOP_PROGRESS_LIMIT_S` / watchdog** — answers "has this phase stopped making
+  progress", and writes `'error'`. **EXTENDED, not forked**: that path still owns the row on `error`;
+  this change gives the *other* terminal phase an answer too, through the same `_persist_diag`.
+- **`_IDLE_CLOSE_SECONDS` / `PRELOOP_PROGRESS_DEFAULT_S`** — "how long may this take". **READ, never
+  copied**: `in_flight_stale_after_s()` is one expression over both, so changing either moves the
+  staleness budget with it. The lock fails on any three-digit duration spelled inside it.
+- **`portal_session_health.evaluate`** — the DURABLE session's health. A different question (is the
+  saved session still good), and it already reads `auth_status`, which is why the presenter runs
+  **before** it: the chip and the health line must not disagree.
+- **`_source_stamp` / `PENDING_TTL_MINUTES`** — the two-call flow's own staleness rule, on
+  `pending_state`. Untouched; it gates a different field and a different endpoint.
+- No new table, no new column, **no migration**, no new endpoint, no new report.
+
+### COMMCALC-12.2 One fact, one home, dereferenced
+
+| question | home | reader |
+|---|---|---|
+| what status does a terminal session leave? | `live_login._STATUS_IN_FLIGHT` | `live_login.terminal_status(phase, status_before)` |
+| how long may an in-flight claim stand? | `_IDLE_CLOSE_SECONDS` + `PRELOOP_PROGRESS_DEFAULT_S` + `_IN_FLIGHT_STALE_MARGIN_S` | `live_login.in_flight_stale_after_s()` |
+| what status should a SURFACE show? | the two above | `live_login.present_auth_status(row)` |
+
+`terminal_status` answers `'error'` for the session's own verdict and otherwise **restores the row's
+pre-login status** — captured in `__init__` from the row, which `live_login_start` reads *before* it
+stamps over it (the lock pins that order). The one value never restored is `_STATUS_IN_FLIGHT`: a row
+already carrying it would be handed the same lie back. It becomes `NULL`, which the chip renders
+"○ Not connected" — the honest reading of a login with credentials and no session.
+
+### COMMCALC-12.3 The sibling, fixed here rather than excused
+
+`terminal_status` can only speak for a session that reaches its own end. **A worker killed mid-login
+never runs `_persist_diag` at all** — and every merge to `main` redeploys both hosts, so that is
+routine here, not exotic. Nothing *on* the row distinguishes that from a login genuinely still
+going, so the only honest discriminator is **age**: `in_flight_is_stale` reads an in-flight claim
+older than the budget as a leftover, and `present_auth_status` presents it as cleared. Deliberately
+conservative — a missing, naive or unparseable timestamp reads as **not** stale, because reading a
+LIVE session as finished is the one regression this must not cause.
+
+### COMMCALC-12.4 Locked so it cannot un-wire
+
+`backend/harness_terminal_status.py` — **49 checks**, DB-free, no network, no browser, loaded by
+`importlib`. §A the one home answers for BOTH terminal phases · §B the in-flight status is never
+handed back, from any direction or spelling · §C a session that changed nothing leaves the row as it
+found it · §D the write happens and nothing is left pending · §E the endpoint still reads the row
+before stamping it (armed, because the capture depends on that order) · §F the read side, with the
+budget derived not copied · §G the surface dereferences it exactly once, before `session_health`, and
+the router holds no copy of the rule · §H controls.
+
+Wired into `carrier-vocab-guard.yml` as *"terminal-status lock"*.
+
+**Proved red on main's shape, two ways:** restoring the `if phase == "error"` write fails **5**
+checks; removing the presenter from the row decorator fails **3**.
+
+### COMMCALC-12.5 Cross-references
+
+Same class: §COMMCALC-10 (the phase that could stall forever), §19.41 (`empty_ok` recording a broken
+filter as a successful zero-row run), §19.18 (a mechanism written and its callers left unwired).
+Neighbours: §COMMCALC-11 (why that session could not sign in), §12a (the connector surfaces that read
+this row), §CORE-03 (where the credential on it is sealed).

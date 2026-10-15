@@ -1454,6 +1454,38 @@ FACTS: dict[str, dict] = {
             'app/modules/supply/portal.py': ('vp',),
         },
     },
+    # ── §COMMCALC-12 (found 2026-10-15) — what a finished live login leaves on the row ───────────
+    'live_login_terminal_status': {
+        "question": 'What `data_source.auth_status` does a live login leave behind, and when is an '
+                    'in-flight claim a LEFTOVER? `live_login_start` stamps \'authenticating\' '
+                    'before the worker starts; §COMMCALC-10 taught a session that DIES to write '
+                    '\'error\'; a session that merely ENDS (the inactivity timeout, or the operator '
+                    'pressing Close) wrote only `auth_message` and left the status in flight, so the '
+                    'chip read "Logging in…" for an hour after the browser had closed. A status is a '
+                    'record of what IS: `terminal_status` restores the row\'s PRE-LOGIN status and '
+                    'never hands back the in-flight one. The sibling is the worker KILLED mid-login, '
+                    'which never writes an ending at all — and every merge to main redeploys both '
+                    'hosts, so that is routine here; nothing on the row distinguishes it from a live '
+                    'login, so the discriminator is AGE (`in_flight_is_stale`), with the budget '
+                    'DERIVED from the two homes that already answer "how long may this take" rather '
+                    'than copied. `present_auth_status` is what a surface reads.',
+        "homes": ('app/modules/commcalc/live_login.py',),
+        "index": ('COMMCALC-12',),
+        "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py'),
+        # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
+        # import graph.
+        "callers": {
+            # The data_source row decorator — the ONE place a row reaches a surface, and therefore
+            # the only reader of `present_auth_status`. It also owns the stamp whose order the
+            # pre-login capture depends on (`live_login_start` reads the row BEFORE stamping it).
+            'app/modules/commcalc/router.py': ('_ll', 'live_login'),
+            # The vendor-ordering door onto the same live login (§51). It REUSES commcalc's
+            # endpoints — the commcalc ROUTER's `live_login_start` for the start, and `get_session` here to
+            # read state — so it inherits this answer rather than presenting its own. It may never grow a second
+            # presenter: a status is one fact, whichever page asks for it.
+            'app/modules/supply/router.py': ('live_login',),
+        },
+    },
 }
 
 def keys() -> tuple:
