@@ -44,6 +44,28 @@ SCHEMA = 1
 
 FACTS: dict[str, dict] = {
     # ── §CORE-07 (owner report 2026-10-14) — which PERSON a login belongs to ─────────────────────
+    'self_lockout': {
+        "question": 'Would THIS administrative write take away the authority that just made it? '
+                    'Every role / membership / role-permission write in `core/router.py` gates on '
+                    '`can_edit_setting(caller, \'security\')` and may then write the very row or '
+                    'role that answer was computed from — a one-way door, because no screen is left '
+                    'that could undo it (the `ss@1313global.us` Vzone membership, owner '
+                    '2026-10-16). The AUTHORITY ANSWER ITSELF is part of this fact and lives here '
+                    'too: `can_edit_setting` moved out of `core/router.py` and the router '
+                    'dereferences it, because a guard asking a different question than the gate '
+                    'protects a different door. Which writers are EXCUSED is part of the fact and '
+                    'is written down — provisioning, elevation, reinstatement and the deliberate '
+                    'self hand-over can only add authority or ARE the hand-over.',
+        "homes": ('app/modules/core/self_lockout.py',),
+        "index": ('CORE-12',),
+        "locks": ('harness_self_lockout.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # assign_role, bulk_assign, create_role, update_role, deactivate_user,
+            # revoke_super_admin and purge_app_user — every writer of authority in the module.
+            'app/modules/core/router.py': ('_self_lockout',),
+        },
+    },
     'app_user_employee_link': {
         "question": 'Which EMPLOYEE does a login belong to, and in what order is that decided when '
                     'an administrator names one, the row already carries one, and the roster '

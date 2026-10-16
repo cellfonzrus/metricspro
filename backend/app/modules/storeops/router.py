@@ -2554,7 +2554,7 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
 
 
 @router.delete("/employees/{emp_id}")
-def delete_employee(emp_id: str, org_id: str = ORG_ID):
+def delete_employee(emp_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Delete an employee (StoreOps Admin). 404 if missing; 409 if blocked by linked rows
     (shifts / app_users) — the UI can then deactivate (is_active=false) instead.
     Also cascades to the login (app_users row + Supabase Auth account) so the person doesn't
@@ -2596,7 +2596,10 @@ def delete_employee(emp_id: str, org_id: str = ORG_ID):
         # and, worse, scoped the lookup to the WRONG tenant. Use the local org_id (the tenant this
         # employee actually belongs to) — purge_app_user is already org_id-scoped internally.
         from app.modules.core.router import purge_app_user
-        login = purge_app_user(org_id, email=e.get("email"), employee_id=e.get("employee_id"), hard=True)
+        # §CORE-12: the token goes with it so the one home can refuse a caller deleting their own
+        # last administrator login — the roster is the other door onto the same row.
+        login = purge_app_user(org_id, email=e.get("email"), employee_id=e.get("employee_id"),
+                               hard=True, authorization=authorization)
     except Exception:
         pass
     return {"ok": True, "deleted": emp_id, "name": e.get("name"), "login": login,
@@ -2609,7 +2612,8 @@ class MergeEmployeesIn(LaxModel):
 
 
 @router.post("/employees/merge")
-def merge_employees(body: MergeEmployeesIn, org_id: str = ORG_ID):
+def merge_employees(body: MergeEmployeesIn, org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
     """Merge a DUPLICATE employee into a TARGET: reassign the duplicate's shifts + time-off to the
     target (by employee_id and by name), then delete the duplicate (deactivate if delete is blocked)."""
     dup_id = str(body.dup_id or "").strip()
@@ -2671,7 +2675,8 @@ def merge_employees(body: MergeEmployeesIn, org_id: str = ORG_ID):
     try:
         # Same fix as delete_employee: use the caller's own org_id, not the house ORG_ID constant.
         from app.modules.core.router import purge_app_user
-        login = purge_app_user(org_id, email=dup.get("email"), employee_id=dup.get("employee_id"), hard=deleted)
+        login = purge_app_user(org_id, email=dup.get("email"), employee_id=dup.get("employee_id"),
+                               hard=deleted, authorization=authorization)
     except Exception:
         pass
     return {"ok": True, "merged_into": tgt.get("name"), "moved": moved, "deleted_duplicate": deleted, "login": login}

@@ -113,6 +113,7 @@ Primary code homes:
 | CORE-09 | **A capability without a door is not a feature** | "Where do I reset an employee's login password, and why is the one screen that can do it a page my HR manager cannot open? Which surfaces offer it, and what stops the next one retyping the form?" |
 | CORE-10 | **A gate, not a note** | "This is a very critical finding — don't just write it down, make a gate so nothing can pass through unknowingly; you were smart, maybe the other might not be as smart. What checks that a branch was cut from a current base, and what checks that a guard is still guarding what it thinks it is?" |
 | CORE-11 | **A column that draws its own cell is drawn** | "It did not let me enter. Which component actually puts a report's cell on the screen, do both of them honour a column that draws its own, and what else was silently blank because one of them did not?" |
+| CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -7014,6 +7015,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - *(no endpoint added)* — §CORE-09 adds no route: `POST /core/users/set-password` (`core/router.py::admin_set_password`) already set a SPECIFIC admin-chosen password, validated server-side by `validate_password`, toggling `app_users.must_reset_password` and audited as `password_admin_set`, gated on `_can_edit_setting(caller, "security")`. What changed is the number of SURFACES that offer it — one (`/admin/security`) became three (`+ /admin/roles` 👥 Assign people, `+ /hr/employee-password`), all rendering the one card `frontend/src/components/AssignPasswordCard.tsx`; `GET /core/security-settings` is the `can_edit` read each of them shows the form on (§CORE-09.3).
 - *(no endpoint added)* — §CORE-10 adds no route and no table: both gates are CI, not product. They run as the workflow jobs **The branch was cut from its base (no re-proposed commits, no lost CI job)** (`.github/workflows/branch-base-guard.yml` → `scripts/check_branch_base.py`) and **A guard that goes blind fails CI (derived subject sets)** (`.github/workflows/security.yml` → `backend/harness_subject_set_lock.py`). The first is the only workflow here triggered by `pull_request_target`, deliberately, and it never checks out or runs PR code (§CORE-10.3).
 - *(no endpoint added)* — §CORE-11 adds no route and no table either. It is a component fix plus a CI gate: `frontend/src/components/ReportShell.tsx` grows ONE `bodyCell(c, r)` home for what a body cell shows (both row paths on it), `crm/reports/page.tsx` dereferences the same rule for its own bespoke table, and the gate runs as the workflow step **Run the column-render lock** (`carrier-vocab-guard.yml` → `backend/harness_column_render_lock.py`). Three already-shipped columns began rendering with no change of their own (§CORE-11.1).
+- *(no endpoint added)* — §CORE-12 adds no route, no table and no migration: the seven existing authority writers (`POST /core/users/assign`, `/users/bulk-assign`, `/users/deactivate`, `POST|PUT /core/roles`, `POST /core/revoke-super-admin`, and `purge_app_user` behind `POST /core/employees/purge` and the StoreOps employee delete/merge) each ask ONE new pure home, `core/self_lockout.py`, whether the write would remove the caller's own `security` authority in the tenant it affects, and refuse it with a 400 if so. `_can_edit_setting` MOVED into that home and `core/router.py` dereferences it. A write that names somebody else's row, or a caller who keeps the authority, is byte-identical to before (§CORE-12).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -7385,6 +7387,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile; lock `harness_assign_password_one_home.py` (47) + proof `prove_manage_employees_tile.mjs` (24) — §CORE-09 |
 | **Was this branch cut from a current base, and is each guard still guarding what it thinks it is?** (and therefore: does a green tick mean anything on this pull request?) | no table — git metadata read at CI time: the TWO-DOT diff `base..head` (lines deleted), commit SUBJECTS on both sides (a squash merge leaves no ancestry to read), and the job names declared by each `.github/workflows/*.yml` on both trees; plus every `backend/harness_*.py` that scans repo source | gate A `scripts/check_branch_base.py` (A2 mass deletion unless `BASE-DELETIONS-ACKNOWLEDGED` is in the PR body, A3 re-proposed merged subjects, A4 a CI job the base runs and the head does not declare; 10 armed controls) run from the BASE branch via `pull_request_target`; gate B `backend/harness_subject_set_lock.py` (+ `harness_subject_set_pending.txt`, 50 pinned, shrink-only) — §CORE-10 |
 | **Which component actually puts this report's cell on the screen, and does it honour a column that draws its own?** (and therefore: is a control an author declared actually there?) | no table — frontend source read at CI time: every file that draws a `<td` whose content it reads off a handed column (`c.get(`), which is the derived subject set | ONE home `ReportShell.bodyCell` + `DataGrid`'s own cell + `crm/reports`' bespoke table, all three honouring `ExportColumn.render`; `lib/export.tsx` excused by name and held to the opposite rule (an export carries the figure, never a control); lock `backend/harness_column_render_lock.py` (32) — §CORE-11 |
+| **Would this administrative write take away the authority that just made it?** (and therefore: can an administrator shut their own door with no screen left to undo it?) | no table — the caller's own `storeops.app_users` membership rows and the tenant's `storeops.roles` permissions, read before and after the proposed write | ONE home `app/modules/core/self_lockout.py` (`can_edit_setting` — MOVED there from `core/router.py`, which now dereferences it — plus `acting_caller` / `lockout_reason` / `rows_with_change` / `rows_without`, all pure); dereferenced by `assign_role`, `bulk_assign`, `create_role`, `update_role`, `deactivate_user`, `revoke_super_admin` and `purge_app_user`; five writers excused by name; lock + proof `harness_self_lockout.py` (45) — §CORE-12. Live 2026-10-16: `ss@1313global.us` demoted its own Vzone membership to `market_manager` and only a hand-written UPDATE could restore it |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Store-days started and not finished** (per store-day) — somebody submitted, the close gate sent them back to recount, and they did not return: `unfinished` / `unfinished_counts` on `GET /closing/rollup`, the `unfinished` block on each `GET /closing/summary` store card, the DM-verify banner. Carries the entered money and the gate's OWN recorded variance (never recomputed). **NOT a money figure**: an unfinished day writes no `commcalc.daily_closing` row, so it reaches no cash, recon or P&L total (owner chose "not until corrected", 2026-10-04). Distinct from **turned away** below (refused before the gate) and from **not submitted** (nobody tried) | `closing/unfinished_day.state_for`/`describe` over `commcalc.closing_attempt` + `commcalc.daily_closing` | §29.12 |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
@@ -25387,6 +25390,7 @@ status word rather than a blank that reads as nil.
 | CORE-09 | core |
 | CORE-10 | core |
 | CORE-11 | core |
+| CORE-12 | core |
 | POS-01 | pos |
 <!-- SECTION-REGISTER:END -->
 
@@ -29228,6 +29232,88 @@ Same class: §19.18 (a mechanism written and its callers left unwired — this i
 in a note is enforced by whoever remembers it).
 
 ---
+
+## §CORE-12. A WRITE MAY NOT SHUT THE DOOR ON ITS OWN AUTHOR — one self-lockout home (owner report 2026-10-16)
+
+Owner: *"i made my self market manager under vzone and cannot get admin privilidges anymore under
+ss, fix urgently"*.
+
+### CORE-12.1 THE INSTANCE, AND THE CLASS BEHIND IT
+
+The `ss@1313global.us` login holds FOUR memberships, one per tenant (`storeops.app_users` is keyed
+per `(auth_id, org_id)` since mig 706), three of them `admin`. Its **Vzone** membership was moved to
+`market_manager` through `POST /core/users/assign`. Vzone's Market Manager role carries
+`modules.admin: false` and `scope: 'market'`, and that login holds no `super_admin` flag on any row,
+so after the write **no screen inside Vzone could undo it and no other tenant could reach in**. A
+hand-written `UPDATE` in the database was the only way back.
+
+The class is not "market manager" and not "Vzone". Every role / membership / role-permission write
+in `core/router.py` gates on `_can_edit_setting(caller, 'security')` and then writes **whatever it
+was asked to write — including the row or the role that answer was computed from**. The house
+already refused three INSTANCES of exactly that question, each inline and each unaware of the
+others:
+
+| already there | what it protects |
+|---|---|
+| `PUT /core/auth-config` — "no active user has the Admin role" | the TENANT, at enforcement time |
+| `POST /core/revoke-super-admin` — "cannot remove the last platform super-admin" | the PLATFORM |
+| `DELETE /core/roles/{id}` — "The admin role can't be deleted." | the TENANT's role catalog |
+
+None of them asked it about the CALLER, which is the instance that actually happened.
+
+### CORE-12.2 THE FIX — one home, asked by every writer
+
+`backend/app/modules/core/self_lockout.py` (pure, stdlib only) answers **"would this write take away
+the authority that just made it?"**: it computes `can_edit_setting` for the affected tenant BEFORE
+and AFTER the proposed write and refuses only when the answer flips `True -> False`.
+
+**The authority answer moved INTO that home.** `_can_edit_setting` was `core/router.py`'s private
+function; the router now dereferences `self_lockout.can_edit_setting` and defines nothing. A copy
+would be the divergence the owner's design-fix directive forbids — a guard asking a different
+question than the gate protects a different door.
+
+What it therefore does NOT refuse, by construction:
+
+- demoting **somebody else**, whatever it does to them;
+- a caller who **never had** the authority (the gate already refused them);
+- demoting yourself while the authority survives another way — a `super_admin` flag on any
+  membership, or an explicit `settings.security` grant on the new role;
+- narrowing the role literally **named `admin`**, because the name is itself a rung of
+  `can_edit_setting` — the guard agrees with the gate rather than out-guessing it.
+
+### CORE-12.3 EVERY DOOR, NOT THE ONE THAT WAS REPORTED
+
+The same question is asked by all seven writers of authority in the module, and the subject set is
+DERIVED from the router source by the lock, so a new writer joins it by existing:
+
+| writer | the door it could shut |
+|---|---|
+| `POST /core/users/assign` | the reported instance — your own membership's role or `is_active` |
+| `POST /core/users/bulk-assign` | the same, from a spreadsheet (non-raising: the row fails, the sheet applies) |
+| `POST /core/roles` | an UPSERT on `(org_id, name)`, so it rewrites an existing role's permissions |
+| `PUT /core/roles/{id}` | your own role's permissions |
+| `POST /core/users/deactivate` | a login switched off cannot sign in to switch itself back on |
+| `POST /core/revoke-super-admin` | your own platform flag, where the role behind it does not carry the authority |
+| `purge_app_user` (`POST /core/employees/purge`, StoreOps employee delete / merge) | the row deleted outright — the bluntest form of the same door. The two roster callers now hand over the caller's token so the one home can refuse |
+
+EXCUSED, by name and with the reason (pinned by §D of the lock, so an excuse cannot become an
+oversight): `_provision_tenant`, `create_super_admin`, `reinstate_login`, `bulk_provision` (each can
+only ADD authority) and `disable_and_switch` (the user's own deliberate hand-over, which mints the
+replacement login FIRST). `reset_tenant_admin_password`, `set_2fa_settings` and `verify_phone` are
+not in the subject set at all — they write a password, a 2FA channel and a phone, never a role.
+
+### CORE-12.4 THE LOCK
+
+`backend/harness_self_lockout.py` — 45 checks, DB-free: §A reproduces the instance on the real
+membership shape and Vzone's real role permissions (before `True`, after `False`), §B the decision
+table including everything deliberately NOT refused, §C every authority writer dereferences the
+guard **and** `can_edit_setting` has no second copy anywhere under `backend/app`, §D the excused
+writers named, §E five armed negative controls. Runs in CI as the job **A write may not lock out its
+own author** (`.github/workflows/org-scope-guard.yml`).
+
+Neighbours: §CORE-07 (the login/person link, the other `app_users` write-path fix), §38.6 (the two
+platform-authority rungs), §14w (people visibility — the other question answered off a role row).
+
 
 ## §COMMCALC-11. AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15)
 

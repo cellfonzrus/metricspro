@@ -49,6 +49,7 @@ from app.core import impersonation as _impersonation
 # this is not a cycle — billing/pricing.py imports _require_super_admin from here, and both it
 # and this file share trial.py as the single source of how a trial is stamped and read.
 from app.modules.billing import trial as _trial
+from app.modules.core import self_lockout as _self_lockout
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -1065,6 +1066,17 @@ def revoke_super_admin(email: str = "", authorization: str = Header(default=""))
         raise HTTPException(400, "cannot remove the last platform super-admin")
     if not any((s.get("email") or "").lower() == email for s in supers):
         raise HTTPException(404, "no super-admin with that email")
+    # §CORE-12: the last-super-admin refusal above protects the PLATFORM; this one protects the
+    # CALLER. Stripping your own flag is legitimate (the operator-registry cutover) and stays
+    # allowed wherever the role behind it still carries the authority — it is refused only in a
+    # tenant where the flag was the only thing holding the door open.
+    _caller_uid = _uid_from_token(authorization)
+    _own = [r for r in _memberships(client, _caller_uid)
+            if (r.get("email") or "").lower() == email]
+    if _own:
+        _refuse_self_lockout(client, authorization, [r.get("org_id") for r in _own],
+                             row_changes={r["id"]: {"super_admin": False} for r in _own},
+                             detail="removing your own platform super-admin flag")
     (client.schema("storeops").table("app_users").update({"super_admin": False})
      .eq("super_admin", True).eq("email", email).execute())
     return {"email": email, "revoked": True}
@@ -1472,22 +1484,61 @@ def _resolve_caller(client, uid, active_org=None):
             "super_admin": any(r.get("super_admin") for r in rows), "perms": perms}
 
 
-def _can_edit_setting(caller, area):
-    """True if this caller may EDIT the given settings area. Precedence:
-      1. super_admin              -> always yes.
-      2. explicit role grant/deny -> permissions.settings[area] (true/false) wins, even for an admin
-         (so an owner can DISABLE a specific setting for a manager, or GRANT one setting to a manager).
-      3. default                  -> a full-scope admin (scope='all' or the 'admin' role) edits every
-         setting; anyone else cannot."""
-    if not caller:
-        return False
-    if caller.get("super_admin"):
-        return True
-    perms = caller.get("perms") or {}
-    s = perms.get("settings") or {}
-    if area in s:
-        return bool(s[area])
-    return (perms.get("scope") == "all") or ((caller.get("role") or "").lower() == "admin")
+# THE authority answer lives in `core/self_lockout.py` (index §CORE-12) and is DEREFERENCED here, not
+# copied: the self-lockout guard below has to ask the very same question this gate asks, or a refusal
+# would protect a door other than the one the write opens. Behaviour is byte-identical to the
+# definition that lived here (it moved unchanged); every caller in this module keeps the old name.
+_can_edit_setting = _self_lockout.can_edit_setting
+
+
+def _role_perms_map(client, org_id):
+    """{role name -> permissions dict} for one tenant — the second half of what the lockout guard
+    needs (the first is the caller's own membership rows). Best-effort: an unreadable roles table
+    yields {}, which makes the guard's before-answer False and therefore refuses nothing."""
+    try:
+        rows = (client.schema("storeops").table("roles").select("name,permissions")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return {}
+    return {r.get("name"): (r.get("permissions") or {}) for r in rows if r.get("name")}
+
+
+def _refuse_self_lockout(client, authorization, orgs, *, row_changes=None, row_deletes=None,
+                         role_change=None, detail="", raising=True):
+    """THE guard every role/membership/permission write in this module calls before writing
+    (index §CORE-12). Returns the refusal message, or None when the write is fine; raises 400 with
+    it when `raising` (the bulk path wants the string for its own per-row error list).
+
+    `orgs` are the tenants whose authority the write could move; `row_changes` is {app_users row id
+    -> changed fields} and `role_change` is (role name, new permissions). A write that names none of
+    the caller's own rows, or a role the caller does not hold, leaves before == after and is never
+    refused — so this can only ever bite the author of the change."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        return None
+    rows = _memberships(client, uid)
+    if not rows:
+        return None
+    for org_id in orgs:
+        if not any(r.get("org_id") == org_id for r in rows):
+            continue   # the caller holds nothing in this tenant; there is no authority of theirs to lose
+        perms = _role_perms_map(client, org_id)
+        rows_after = rows
+        for rid, changes in (row_changes or {}).items():
+            rows_after = _self_lockout.rows_with_change(rows_after, row_id=rid, changes=changes)
+        for rid in (row_deletes or []):
+            rows_after = _self_lockout.rows_without(rows_after, row_id=rid)
+        perms_after = perms
+        if role_change:
+            perms_after = {**perms, role_change[0]: (role_change[1] or {})}
+        reason = _self_lockout.lockout_reason(
+            rows_before=rows, rows_after=rows_after, org_id=org_id,
+            perms_before=perms, perms_after=perms_after, detail=detail)
+        if reason:
+            if raising:
+                raise HTTPException(400, reason)
+            return reason
+    return None
 
 
 @router.get("/setting-areas")
@@ -2496,6 +2547,10 @@ def create_role(body: CreateRoleIn, org_id: str = ORG_ID, authorization: str = H
     row = {"org_id": org_id, "name": name,
            "display_name": body.display_name or name.replace("_", " ").title(),
            "permissions": body.permissions or {}}
+    # §CORE-12: this is an UPSERT on (org_id, name), so posting an existing role's name rewrites its
+    # permissions — the same door as PUT /roles/{id}, and therefore the same guard.
+    _refuse_self_lockout(sb(), authorization, [org_id],
+                         role_change=(name, row["permissions"]), detail="role %s" % name)
     res = sb().schema("storeops").table("roles").upsert(row, on_conflict="org_id,name").execute()
     return (res.data or [{}])[0]
 
@@ -2516,6 +2571,15 @@ def update_role(role_id: int, body: UpdateRoleIn, org_id: str = ORG_ID, authoriz
         upd["permissions"] = body.permissions
     if not upd:
         raise HTTPException(400, "nothing to update")
+    # §CORE-12: editing a role's PERMISSIONS is the other way to shut your own door — the caller may
+    # hold this very role. Same question, same home; a role the caller does not hold is untouched.
+    if "permissions" in upd:
+        _cur_role = (sb().schema("storeops").table("roles").select("name")
+                     .eq("id", role_id).eq("org_id", org_id).limit(1).execute().data) or []
+        if _cur_role:
+            _refuse_self_lockout(sb(), authorization, [org_id],
+                                 role_change=(_cur_role[0].get("name"), upd["permissions"]),
+                                 detail="role %s" % _cur_role[0].get("name"))
     # role_id is a GLOBAL primary key (BIGSERIAL, enumerable 1,2,3…). WITHOUT an org filter the old
     # handler let a caller rewrite ANOTHER TENANT's role permissions by guessing an integer id —
     # cross-tenant privilege escalation. org_id is the tenant-middleware-rewritten query param (a
@@ -3110,6 +3174,12 @@ def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
         "is_active": body.get("is_active", True if not cur else cur[0].get("is_active")),
     }
     if cur:
+        # §CORE-12: this row may be the CALLER'S OWN. A write that leaves its author unable to make
+        # the same write again is a one-way door (the Vzone instance, owner 2026-10-16) — refused.
+        _refuse_self_lockout(client, authorization, [org_id],
+                             row_changes={cur[0]["id"]: {"role": row["role"],
+                                                         "is_active": row["is_active"]}},
+                             detail="role %s" % (row["role"] or "none"))
         res = client.schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
     else:
         res = client.schema("storeops").table("app_users").insert(row).execute()
@@ -3177,7 +3247,16 @@ def bulk_assign(body: BulkAssignIn, org_id: str = ORG_ID, authorization: str = H
                 request_id=u.get("employee_id"),
                 stored_id=(cur[0].get("employee_id") if cur else None),
                 roster_id=linked_eid)
+            # §CORE-12, the same door as the interactive path: a spreadsheet naming the uploader's
+            # own row demotes them just as thoroughly. NON-raising — the row fails, the sheet applies.
             if cur:
+                _locked = _refuse_self_lockout(
+                    client, authorization, [org_id],
+                    row_changes={cur[0]["id"]: {"role": row["role"], "is_active": row["is_active"]}},
+                    detail="role %s" % (row["role"] or "none"), raising=False)
+                if _locked:
+                    errors.append({"row": i + 1, "email": email, "error": _locked})
+                    continue
                 client.schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
             else:
                 client.schema("storeops").table("app_users").insert(row).execute()
@@ -4605,13 +4684,22 @@ def deactivate_user(body: DeactivateUserIn, org_id: str = ORG_ID, authorization:
     email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
-    res = sb().schema("storeops").table("app_users").update(
+    client = sb()
+    # §CORE-12: a login switched off cannot sign in to put itself back on — the same one-way door as
+    # a demotion, so it is the same guard (acting_caller supplies no role for an inactive row).
+    _target = (client.schema("storeops").table("app_users").select("id")
+               .eq("org_id", org_id).eq("email", email).execute().data) or []
+    if not bool(body.is_active) and _target:
+        _refuse_self_lockout(client, authorization, [org_id],
+                             row_changes={r["id"]: {"is_active": False} for r in _target},
+                             detail="deactivating %s" % email)
+    res = client.schema("storeops").table("app_users").update(
         {"is_active": bool(body.is_active)}) \
         .eq("org_id", org_id).eq("email", email).execute()
     return {"updated": len(res.data or [])}
 
 
-def purge_app_user(org_id, *, email=None, employee_id=None, hard=True):
+def purge_app_user(org_id, *, email=None, employee_id=None, hard=True, authorization=None):
     """Remove (or deactivate) the login(s) for a person, matched by email AND/OR employee_id.
 
     Called by employee delete/deactivate from BOTH the StoreOps roster and the Roles & Access
@@ -4641,6 +4729,16 @@ def purge_app_user(org_id, *, email=None, employee_id=None, hard=True):
     rows = list(found.values())
     if not rows:
         return {"matched": 0}
+    # §CORE-12: removing a LOGIN is the bluntest form of the same one-way door — the row that
+    # carried the caller's own administrator access is simply gone. Guarded here, in the one home
+    # for "remove a login", so every caller that hands over its token is covered at once; a caller
+    # that passes none (a cron, a backfill) is unchanged.
+    if authorization:
+        _refuse_self_lockout(
+            client, authorization, [org_id],
+            row_changes=({r["id"]: {"is_active": False} for r in rows} if not hard else None),
+            row_deletes=([r["id"] for r in rows] if hard else None),
+            detail=("deleting" if hard else "deactivating") + " this login")
     if not hard:
         for r in rows:
             tbl().update({"is_active": False}).eq("id", r["id"]).execute()
@@ -4702,7 +4800,8 @@ def purge_employee(body: PurgeEmployeeIn, org_id: str = ORG_ID, authorization: s
             else:
                 client.schema("storeops").table("employees").update({"is_active": False}) \
                     .eq("id", str(emp_pk)).execute()
-    login = purge_app_user(org_id, email=email, employee_id=employee_id, hard=hard)
+    login = purge_app_user(org_id, email=email, employee_id=employee_id, hard=hard,
+                           authorization=authorization)
     return {"ok": True, "mode": mode, "name": name, "login": login}
 
 
