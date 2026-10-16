@@ -27,8 +27,7 @@ import ProductFilters, {
 // THE product form (../product-form) — the same fields, defaults and payload the catalog's
 // New/Edit modal renders, so "create it from the register" cannot define a product differently.
 import ProductFormFields, {
-  EMPTY_PRODUCT_FORM, ProductFormValue, productFormFrom, productFormFromEntry, productFormPayload,
-  productFormReady,
+  ProductFormValue, productFormFrom, productFormFromEntry, productFormPayload, productFormReady,
 } from '../product-form'
 // THE suspended cart (lib/pos-held-sale) — restore on arrival, debounced autosave, clear on
 // checkout or discard, all keyed on this (store, register) terminal.
@@ -348,7 +347,6 @@ export default function PosSalesPage() {
       })
     }, AUTOSAVE_MS)
     return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart, selectedCustomer, isActivationSale, activeStore, heldRestored])
 
   /** Empty the cart — and the suspended copy with it, or coming back would restore what the cashier

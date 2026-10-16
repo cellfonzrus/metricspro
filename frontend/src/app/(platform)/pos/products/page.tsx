@@ -25,7 +25,6 @@ interface Category { id: string; name: string; department_id: string | null }
 // dropping everything into the catch-all "Regular", which is where 96 of 118 products had landed.
 interface SysCat { id: string; name: string; sort_order: number; is_active: boolean; is_builtin: boolean }
 const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text)', width: '100%', outline: 'none' }
-const label: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', marginBottom: 3, display: 'block' }
 const cell: React.CSSProperties = { padding: '7px 12px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const panel: React.CSSProperties = { background: 'var(--surface2)', borderRadius: 8, padding: 14, border: '1px solid var(--border)' }
 

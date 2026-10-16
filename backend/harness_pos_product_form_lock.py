@@ -45,6 +45,18 @@ INDEX = "docs/SYSTEM_DATA_FLOW_INDEX.md"
 FORM_LABELS = ("Short Name *", "Full Name", "UPC / Barcode", "Manufacturer / Provider", "Body Style")
 FORM_HELPERS = ("EMPTY_PRODUCT_FORM", "productFormFrom", "productFormPayload", "productFormReady")
 
+# DECLARED, not counted. A size check ("at least 15 fields") is satisfied by a list that has lost a
+# column and gained an unrelated one, so the set is written out by hand here: a field that leaves
+# either side names itself in the diff this harness prints, and a field ADDED to the form without
+# being added to the backend whitelist (where it would be silently dropped on save) goes red.
+BACKEND_PRODUCT_FIELDS = {
+    "upc", "short_name", "full_name", "department_id", "category_id", "system_category",
+    "inventory_type", "manufacturer", "cost", "retail_price", "msrp", "is_taxable",
+    "calculate_as_profit", "body_style", "is_active", "end_of_life",
+}
+# The form offers all of those except `msrp`, which no POS screen has ever exposed.
+FORM_PRODUCT_FIELDS = BACKEND_PRODUCT_FIELDS - {"msrp"}
+
 
 def check(name, cond, extra=""):
     global _pass, _fail
@@ -120,7 +132,11 @@ def rule_special_order_stays_narrow(src):
 
 
 def rule_helpers_dereferenced(src):
-    return all(h in src for h in FORM_HELPERS[:1]) and "productFormPayload(" in src and "productFormReady(" in src
+    """A page must get the save BODY and the save-enabled RULE from the form, not spell either.
+    Which other helpers a page needs differs — the catalog maps an existing row
+    (`productFormFrom`), the register also reads a scanned entry (`productFormFromEntry`) — so
+    those are checked where they belong (b5) rather than demanded of both."""
+    return "productFormPayload(" in src and "productFormReady(" in src
 
 
 def rule_held_one_client(files):
@@ -165,8 +181,13 @@ m = re.search(r"PRODUCT_FIELDS = \((.*?)\)", router, re.S)
 backend_fields = set(re.findall(r'"([a-z_]+)"', m.group(1))) if m else set()
 iface = re.search(r"export interface ProductFormValue \{(.*?)\n\}", form, re.S)
 form_fields = set(re.findall(r"^\s*([a-z_]+):", iface.group(1), re.M)) if iface else set()
-check("c1 the backend whitelist was found", len(backend_fields) >= 15, sorted(backend_fields))
-check("c2 every field the form offers is writable by the backend",
+check("c1 the backend whitelist is EXACTLY the declared set — a column that leaves names itself here, "
+      "rather than a size check that a shrinking list would still satisfy",
+      backend_fields == BACKEND_PRODUCT_FIELDS,
+      sorted(backend_fields ^ BACKEND_PRODUCT_FIELDS))
+check("c2 the form's own field set is EXACTLY what it is declared to offer",
+      form_fields == FORM_PRODUCT_FIELDS, sorted(form_fields ^ FORM_PRODUCT_FIELDS))
+check("c3 every field the form offers is writable by the backend",
       form_fields and form_fields <= backend_fields, sorted(form_fields - backend_fields))
 
 print("\n(d)  the not-found prompt")
@@ -231,7 +252,9 @@ check("neg-b2b a page spelling its own copy of the FULL empty-form defaults is R
 check("neg-b6 a special-order form that grew the full product field list is RED",
       not rule_special_order_stays_narrow(read(SPECIAL_ORDER_FORM)
                                           + "\nconst f = { inventory_type: 'standard' }\n"))
-check("neg-c2 a form field the backend does not whitelist is RED",
+check("neg-c1 a backend whitelist that LOST a column is RED (a size check would not have caught it)",
+      (backend_fields - {"msrp"}) != BACKEND_PRODUCT_FIELDS)
+check("neg-c3 a form field the backend does not whitelist is RED",
       not ({"made_up_field"} | form_fields) <= backend_fields)
 check("neg-e3 a create path that stopped landing stock is RED",
       "/api/v1/pos/inventory/standard" not in save.replace("/api/v1/pos/inventory/standard", "/nowhere"))
