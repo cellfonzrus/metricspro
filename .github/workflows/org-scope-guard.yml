@@ -267,6 +267,24 @@ jobs:
         working-directory: backend
         run: python3 harness_app_user_employee_link.py | tee -a "$GITHUB_STEP_SUMMARY"
 
+  self-lockout:
+    # §CORE-12 — "would this administrative write take away the authority that just made it?" is ONE
+    # home (backend/app/modules/core/self_lockout.py) that every role / membership / role-permission
+    # writer in core/router.py dereferences, and the AUTHORITY ANSWER ITSELF (can_edit_setting) lives
+    # there rather than in the router, so the guard and the gate cannot drift apart. The failure mode
+    # is an ABSENT call in a NEW writer, which nothing else can see, so the lock derives its subject
+    # set from the router source. Live instance 2026-10-16: the ss@1313global.us login demoted its own
+    # Vzone membership to market_manager and no screen was left that could undo it.
+    name: A write may not lock out its own author
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the self-lockout lock (stdlib only, no deps)
+        working-directory: backend
+        run: python3 harness_self_lockout.py | tee -a "$GITHUB_STEP_SUMMARY"
+
   hub-viewer-gate:
     # §CORE-06 — "may THIS viewer open THIS page from a tile" is ONE home (frontend/src/lib/hub-gate.ts)
     # that every HubTiles consumer dereferences. The two CURATED hubs (/storeops, /payroll) rendered a
