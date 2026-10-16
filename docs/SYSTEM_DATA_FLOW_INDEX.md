@@ -27519,6 +27519,25 @@ cannot pass.
 **Nothing was "fixed" by hiding a data gap.** Where a tenant has entered no expenses at all the
 report still says NOT MEASURED, in red, and names what to enter.
 
+**THE SIBLING, FOUND AND DELIBERATELY NOT "FIXED".** The other reader of this organisation's expense
+sheet is the live P&L / GP report, through `expenses_effective.effective_expense_rows` (§19.50) —
+and it has the same SHAPE of hole: its carry-forward rule carries the latest **strictly prior**
+month forward, so for this organisation April 2026 books **$0.00 of store opex** on the live P&L too.
+It is **excused, not fixed, and the reason is the whole distinction this section turns on:**
+
+| | what the figure means | what an absent month should read as |
+|---|---|---|
+| the takeover evaluation | our average store cost used as a **benchmark** — §COMMCALC-03.6, a yardstick with no month of its own | the nearest months we recorded, labelled |
+| the live P&L / GP report | **what this company actually spent in that month** | nothing entered — and saying so |
+
+Carrying August's actuals **backwards** into April on a real statement would invent a booking in the
+company's own books, which is exactly the patchwork the house rules forbid. So the live P&L keeps its
+forward-only carry, and the April gap there is a **DATA defect to report** (nobody has entered
+January–February 2026 or any month before March for the house org, and nothing before July 2026 for
+this one), never a code change. `expenses_effective` is untouched by this PR and still supplies every
+month's rows to both readers, which is what keeps the benchmark and the statement over the same
+figures.
+
 #### ASK 1: the month-over-month P&L, with the statement for a month or a range on the right
 
 Owner, verbatim: *"i also need to see the month over omont h p&l for each store in the same report
