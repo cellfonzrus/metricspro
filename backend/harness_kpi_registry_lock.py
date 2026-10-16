@@ -90,6 +90,7 @@ def fn_body(src, name):
 
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 from app.modules.commcalc import kpi_failing as _KF          # noqa: E402  (pure, stdlib)
+from app.modules.commcalc import dlar_sweep as _ds           # noqa: E402  (the declared field maps)
 
 ROUTER = read(os.path.join(BE, "router.py"))
 KPIF = read(os.path.join(BE, "kpi_failing.py"))
@@ -272,15 +273,34 @@ check("(h) every built-in KPI still has a feed: the rep-grain and store-grain ma
       | set(re.findall(r'"(\w+)":\s*"', KPIF.split("STORE_KPI_COLUMNS = {")[1].split("}")[0]))
       == set(KEYS))
 check("(h) the SWEEP derives its one rate through derived_rate — the `else 0` expression is gone",
-      "derived_rate(bounty, ga_prepaid)" in SWEEP_CODE
+      'row["boost_app_pct"] = derived_rate(' in SWEEP_CODE
       and "if ga_prepaid > 0 else 0" not in SWEEP_CODE)
-check("(h) every KPI RATE column on both DLAR reports is parsed by _rate, never _num",
-      not [c for c in ("atu_loading_rate", "insurance_take_rate", "byod_rate", "family_plan_percent",
+# Since 2026-10-16 the source field for each column is DECLARED (`dlar_sweep.FIELD_MAPS`) rather than
+# written as a `rec.get("…")` literal inside the normalizer, so this asks the declaration: every KPI
+# rate must be declared RATE. Scanning for the old literal would now pass vacuously, which is the way
+# a lock quietly stops locking.
+_RATE_SOURCE_FIELDS = ("atu_loading_rate", "insurance_take_rate", "byod_rate", "family_plan_percent",
                        "three_mr", "aal_conversion", "protect_total_attach", "atu_loading_percent")
-           if ("_num(rec.get(\"%s\"" % c) in SWEEP],
-      [c for c in ("atu_loading_rate", "insurance_take_rate", "byod_rate", "family_plan_percent",
-                   "three_mr", "aal_conversion", "protect_total_attach", "atu_loading_percent")
-       if ("_num(rec.get(\"%s\"" % c) in SWEEP])
+_DECLARED_KIND = {}
+for _m in (_ds.STORE_FIELDS, _ds.REP_FIELDS):
+    for _row in _m:
+        for _k in _row[2:]:
+            _DECLARED_KIND.setdefault(_k, set()).add(_row[1])
+check("(h) every KPI RATE field on both DLAR reports is DECLARED a rate, never a count",
+      not [c for c in _RATE_SOURCE_FIELDS if _DECLARED_KIND.get(c) != {_ds.RATE}],
+      {c: sorted(_DECLARED_KIND.get(c) or ()) for c in _RATE_SOURCE_FIELDS
+       if _DECLARED_KIND.get(c) != {_ds.RATE}})
+check("(h) and the UNIT COUNTS are declared counts, so an unsent count lands absent and not 0 "
+      "(owner report 2026-10-16: 28 stores filed October with 0 activations beside a 66.67% ATU)",
+      all(_DECLARED_KIND.get(c) == {_ds.COUNT}
+          for c in ("gross_activation_quantity", "upgrades", "prepaid_activations",
+                    "postpaid_activations", "activations", "atu_activations")),
+      {c: sorted(_DECLARED_KIND.get(c) or ())
+       for c in ("gross_activation_quantity", "upgrades", "prepaid_activations",
+                 "postpaid_activations", "activations", "atu_activations")})
+check("(h) NEITHER reading can turn an absent cell into a zero — both delegate to the one home",
+      _ds._num("") is None and _ds._num(None) is None and _ds._rate("") is None
+      and _ds._num("0") == 0.0 and _ds._rate("0") == 0.0)
 check("(h) each GRAIN carries its own as-of date — the rep report's import_date is no longer discarded",
       "rep_recs, rep_import_date = fetch_report" in SWEEP and "def vintage(" in SWEEP
       and '"as_of_date": as_of[tbl]' in SWEEP)
@@ -299,7 +319,18 @@ check("(h) WHICH COLUMNS MUST CARRY A VALUE lives in the lineage registry, and t
       and "REQUIRED_CONTENT_COLUMNS" not in SWEEP_CODE)
 check("(h) a column that stopped arriving CANNOT sit under a green OK",
       'gone = []' in SWEEP_CODE and 'COLUMN STOPPED ARRIVING' in SWEEP
-      and 'if not (skipped or gone)' in SWEEP_CODE)
+      and 'if not (skipped or gone or shape)' in SWEEP_CODE)
+check("(h) nor can a PORTAL FIELD that stopped arriving — and the fields the portal sends that "
+      "nothing reads are named beside it, which is where the new spelling is (owner 2026-10-16)",
+      'PORTAL FIELD CHANGED' in SWEEP and 'NOTHING READS' in SWEEP
+      and '_cell.field_arrival(' in SWEEP_CODE
+      and 'declared_source_fields("dlar")' in SWEEP_CODE
+      and 'declared_source_fields("advocate")' in SWEEP_CODE)
+check("(h) WHICH SOURCE FIELD FEEDS WHICH COLUMN has ONE home — the normalizers dereference the "
+      "declaration and no longer carry `rec.get(\"…\")` literals of their own",
+      'FIELD_MAPS = {' in SWEEP_CODE
+      and SWEEP_CODE.count('rec.get("') == 0,
+      SWEEP_CODE.count('rec.get("'))
 check("(h) THE CALCULATION RECORDS THE KPI VINTAGE IT TIERED ON — a mid-month slice is never paid on as "
       "a closed month in silence, and it is the ONE home of the question, not a re-derivation",
       "dlar_sweep.slice_vintage(" in ROUTER

@@ -29811,3 +29811,106 @@ and persisted nowhere, and no live statement asks for the split.
 Same class: §COMMCALC-12 (which rung is running down, per store), §COMMCALC-03.27 (the two halves
 named on a card), §4a.2 (the rung convention's one home), §19.18 (a mechanism written and its callers
 left unwired — what §V14 exists to prevent).
+
+---
+
+## §COMMCALC-16. A FIGURE THE PORTAL DID NOT SEND IS NOT A ZERO (owner report 2026-10-16)
+
+**Owner report 2026-10-16, verbatim:** *"Check why atu information for atu and other metrics is not
+pulling up same as in elevate go for boost , need to fix it asap"*.
+
+**Measured live 2026-10-16** (house org `00000000-…0001`, `commcalc.raw_dlar_store`, read-only via the
+Supabase REST API — the container cannot reach the carrier portal, whose password is `enc:v1:`
+ciphertext and whose key is the backend's):
+
+| period | pulled | `gross_adds` | `total_upgrades` | `total_acts` | the rate columns |
+|---|---|---|---|---|---|
+| September 2026 | 2026-10-02 | 1,061 | 494 | 1,555 | populated |
+| **October 2026** | **2026-10-16** | **0** | **0** | **0** | **populated** |
+
+Every rate arrived; every unit count landed as **zero**, in the same 28 rows, on the same pull. A
+store cannot attach 66.67% of nothing. Those zeros are the portal no longer sending those fields,
+**written down as a measurement** — and the run that wrote them was recorded `last_status = ok`.
+
+### COMMCALC-16.1 The class, not the instance
+
+> **An unsent figure is not a zero — for a COUNT exactly as much as for a RATE. And which source
+> field feeds which column is a DECLARATION, or a rename upstream arrives as data instead of as an
+> alarm.**
+
+`dlar_sweep._rate` already existed for the first half of that rule (§19.28, owner defect 2026-09-26:
+*no denominator is not a score of zero*). `_num` sat two functions away in the same file returning
+`0.0` for a cell that was never there, so the next shape change landed as 28 confident zeros. The
+second half is the deeper one: the only record of *this column comes from that portal field* was the
+`rec.get("…")` literal inside the normalizer, so when a portal **renames** a field the platform
+cannot say so — it reads the old name, gets nothing, and stores a zero.
+
+### COMMCALC-16.2 The one home
+
+`app/modules/commcalc/portal_cell.py` — *did the source SEND this figure, and which source field
+feeds which column*. PURE, stdlib only, no portal knowledge, no vendor word (RULE TWO).
+
+| function | the fact |
+|---|---|
+| `measured(v)` | THE parse. Absent / blank / `n/a` → `None`; a cell that SAYS `'0'` → `0.0`; `'1,061'`, `'66.67%'` and `'0% / 71.43%'` all understood |
+| `rate(v)` · `count(v)` | the two named readings, deliberately identical in behaviour — the distinction is what the caller MEANS, not how the text is read |
+| `total(*parts)` | a derived total of parts the source did not send is **absent**, not zero (`total_acts`) |
+| `as_int(v)` | an INT column gets an int or `None`, never a float Postgres rejects (22P02) |
+| `field_arrival(records, declared)` | `missing` / `blank` / `consumed` / `unconsumed` / `shape_changed`, one entry per FIELD (alternative spellings are ONE field, so a reader that accepts two is not missing the one it did not get) |
+
+`unconsumed` — the fields the source IS sending that nothing reads — is reported **only when
+something is missing or blank**. A feed ignores fields by design, so listing them on a healthy run
+would teach an operator to ignore the line; listing them beside a field that stopped arriving **is
+the renamed field's new name**, printed by the feed itself on the first run after a rename.
+
+### COMMCALC-16.3 The callers, wired (not a registry written and left unwired — §19.18)
+
+- `dlar_sweep._num` / `_rate` **dereference** `portal_cell.count` / `.rate`. One rule, one home.
+- `dlar_sweep.STORE_FIELDS` / `REP_FIELDS` / `FIELD_MAPS` / `declared_source_fields()` — the source
+  field → column mapping, declared once per report with its `kind` (`TEXT` / `COUNT` / `RATE`).
+  `normalize_store` / `normalize_rep` dereference it; **no `rec.get("…")` literal remains** in the
+  sweep, and the lock fails the build if one reappears.
+- `run_dlar_sweep` returns `fields` (the source-side arrival, per report) beside the existing
+  `content` (the column-side arrival). `status_sentence` prints `⚠ PORTAL FIELD CHANGED: …` and
+  `FIELDS THE PORTAL SENDS THAT NOTHING READS …`, capped at eight names plus a count, and a portal
+  field change **cannot sit under a green OK**.
+- `data_lineage_registry.REQUIRED_CONTENT_COLUMNS['raw_dlar_store']` gains `gross_adds`,
+  `total_upgrades`, `total_acts` — undeclared is why October's store grain drew no comment at all.
+- `core/module_graph.py` fact `portal_cell`.
+
+### COMMCALC-16.4 What this does NOT do, stated plainly
+
+It does **not** recover October's counts. The portal's new field spelling is not knowable from here
+(the carrier portal is unreachable from the container and its stored password is encrypted), and
+**guessing a key name on a feed that tiers pay is the §19.26 defect** — *missing beats wrong on a
+money gate*. What it does is make the next run NAME the new spelling, after which the mapping is one
+declared alternative spelling added beside the old one. Until then the counts read **absent**, which
+is true, instead of **zero**, which was not.
+
+### COMMCALC-16.5 Siblings checked (the §19.18 requirement)
+
+| sibling | verdict |
+|---|---|
+| `dlar_sweep._rate` | already correct (2026-09-26); now shares the home |
+| `dlar_vs_platform` | already correct on the READ side — `reported` / `measured_zero` / `not_reported`, *"the figure is None, NEVER 0"*. It was being handed a zero the landing point had invented, so this fix is what makes that vocabulary able to tell the truth |
+| `b2b_sweep._num` | **excused**: its portal client is stubs — no live pull lands through it |
+| `vendor_rebate_feed._num` | **excused**: it parses a workbook where a blank money cell legitimately means nothing owed, and its contract is explicitly "never raise on a totals row" |
+| `epay_sweep` (`safe_float`, `_comp_get`) | **not fixed here, named**: it lands MONEY from a file download whose headers are the field names, already reads two spellings per field (`_comp_get`), and a missing header there fails differently. Its own PR |
+
+### COMMCALC-16.6 Locks
+
+- `backend/harness_portal_cell.py` — 47 checks, DB-free. §B is the **October 2026 regression**, from
+  the real record shape; §F proves the declared maps produce **exactly** the columns and values the
+  hand-written normalizers produced for a record carrying every field; §E proves a healthy run stays
+  quiet. Red on the pre-change sweep.
+- `harness_kpi_registry_lock.py` — the rate-vs-count pin was re-pointed at the DECLARATION (scanning
+  for the retired `rec.get` literal would now pass **vacuously**, which is how a lock stops locking),
+  and gains the `rec.get("…")`-count-is-zero check and the green-OK check for a portal field change.
+- `harness_kpi_vintage.py` §B5 **pinned the opposite** — *"an absent count is still 0, because for a
+  count it is"*. The premise died on the measurement above; it now pins the rule, keeps a pre-fix
+  control, and adds the derived-total case.
+
+Same class: §19.28 (the three freshness axes — this is the fourth question, asked of the SOURCE's
+fields rather than our columns), §19.26 (missing beats wrong on a money gate), §66
+(`component_is_evidence` — a surface reading a value without reading how it was arrived at), §19.18
+(a mechanism written and its callers left unwired).

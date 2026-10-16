@@ -320,6 +320,8 @@ on:
       - "backend/harness_activation_event.py"
       - "backend/harness_ready_app_denominator.py"
       - "backend/harness_dlar_vs_platform.py"
+      - "backend/harness_portal_cell.py"
+      - "backend/app/modules/commcalc/portal_cell.py"
       - "backend/harness_portout_fraud.py"
       - "backend/app/modules/commcalc/portout_fraud.py"
       - "backend/app/modules/marketing/event_sales.py"
@@ -1217,6 +1219,9 @@ jobs:
       - name: Run the feed-vs-transactions proof (every difference attributed to a counting definition, held undecidable behind a stale slice, or reported as the finding; absence is never zero on either side — owner 2026-09-27, index §19.31)
         working-directory: backend
         run: python3 harness_dlar_vs_platform.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the portal-cell proof (a figure the portal did not send lands absent and never as a zero, for a count as much as for a rate; a renamed source field is named by the feed itself with the fields it IS sending beside it; a healthy run stays quiet; the declared field maps are byte-identical to the hand-written normalizers — owner report 2026-10-16, index §COMMCALC-16)
+        working-directory: backend
+        run: python3 harness_portal_cell.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the port-out fraud proof (a port-in that ports out inside the window; the three dating bases; a port-out BEFORE our sale is a recycled number and is never flagged; a port-out in an earlier month is not lost to the latest snapshot; the headline prints what it could not decide; the accessory floor is an attribution, not a trigger; the lookup is the retention report's own derivation — owner 2026-09-28, index §19.32)
         working-directory: backend
         run: python3 harness_portout_fraud.py | tee -a "$GITHUB_STEP_SUMMARY"
