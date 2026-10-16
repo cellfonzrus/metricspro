@@ -279,6 +279,35 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_leg_store_pivot',),
         },
     },
+    'prospect_feed_tally': {
+        "question": 'How many rows has each store being evaluated got, per uploaded feed, per '
+                    'month — and has that even been counted yet?',
+        "homes": ('app/modules/commcalc/prospect_feed_tally.py',),
+        "index": ('COMMCALC-14',),
+        "locks": ('harness_prospect_feed_tally.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
+        # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        #
+        # TWO READINGS, ONE SHAPE, ONE ACCUMULATOR. `from_grouped` takes counts the DATABASE grouped
+        # (migration 1085) and `from_rows` counts the rows here; both reach the shape through `_add`,
+        # and §A of the lock fails the build if they ever disagree on equivalent input. The fast
+        # reading is preferred and the slow one SAYS it was used, so a slow answer is never mistaken
+        # for a fast one.
+        #
+        # WHY IT EXISTS AT ALL. The evaluations list used to carry this tally inline and compute it by
+        # shipping every feed row here — 202,865 rows, 203 round trips, ~59 s on the acting org — so
+        # the two-row answer the owner asked for was withheld for a minute and the list read as empty
+        # (owner report 2026-10-16). The tally is a DECORATION and now loads beside that answer.
+        #
+        # UNKNOWN IS NOT ZERO. `missing_tally` is the one place "not counted yet" is distinguished
+        # from "counted, and empty"; §C of the lock holds both the payload and the screen to it,
+        # because printing 0 over 137,374 uploaded rows is the same wrongness in a cell.
+        # The binding is the import alias, DERIVED from the AST import graph like every other entry
+        # here (§50) — `router._prospect_tally_read` is the one function that uses it.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_pft',),
+        },
+    },
     'peer_traffic_band': {
         "question": 'Which stores see comparable FOOT TRAFFIC (bill-payment visits), and how far is '
                     'each one behind the best and the median of its own band?',

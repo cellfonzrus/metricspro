@@ -18,6 +18,8 @@ from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.core import portal_secret as _psec   # 2026-10-12 — THE registry of which stored columns hold a credential (index §CORE-03; pure)
+from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — THE per-feed,
+# per-month row tally, in the one shape both its readings produce (index §COMMCALC-TALLY)
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
@@ -48481,8 +48483,10 @@ def _prospect_cfg(client, org_id, prospect):
 
 @router.get("/prospects")
 def list_prospects(org_id: str = ORG_ID):
-    """Every store this organisation is evaluating, with how many rows each feed has per period —
-    so the screen can say what is still missing before anybody reads a bottom line."""
+    """Every store this organisation is evaluating — the list, and nothing that has to be counted.
+
+    How many rows each feed has per period is a DECORATION on this answer and is served by
+    `prospect_feed_tally` beside it, never ahead of it. See the comment below the read."""
     require_org(org_id)
     client = sb()
     try:
@@ -48491,27 +48495,77 @@ def list_prospects(org_id: str = ORG_ID):
                 .limit(500).execute().data) or []
     except Exception as e:
         raise HTTPException(500, f"prospect read failed: {type(e).__name__}: {e}")
-    counts = {}
-    try:
-        for r in _feed_read.read_all(
-                lambda: (client.schema("commcalc").table("prospect_feed_row")
-                         .select("prospect_id,feed_key,period").eq("org_id", org_id))):
-            k = (str(r.get("prospect_id")), str(r.get("feed_key")), str(r.get("period") or ""))
-            counts[k] = counts.get(k, 0) + 1
-    except Exception as e:
-        print(f"WARN prospect feed counts unavailable: {e}")
-    by_prospect = {}
-    for (pid, feed, period), n in counts.items():
-        by_prospect.setdefault(pid, {}).setdefault(period, {})[feed] = n
-    for r in rows:
-        r["feed_rows"] = by_prospect.get(str(r.get("id")), {})
-        r["periods"] = sorted(r["feed_rows"], reverse=True)
-    return {"prospects": rows, "feed_registry": _pev.feed_registry_view(),
+    # THE LIST DOES NOT COUNT (owner report 2026-10-16, index §COMMCALC-TALLY).
+    # This used to decorate every row with its per-feed, per-month tally by SHIPPING EVERY FEED ROW
+    # HERE AND COUNTING THEM — 202,865 rows / 203 round trips / ~59 s on the acting org, growing with
+    # every upload, with `gunicorn --timeout 120` and two workers behind it. So the two-row answer
+    # the owner actually asked for ("which stores am I evaluating") was withheld for a minute, which
+    # is why the list read as empty. The tally is a DECORATION and now loads beside the list, from
+    # `/prospects/feed-tally`, which prefers the database's own grouping.
+    # `feed_rows`/`periods` are deliberately NOT set to {} and [] here: an uncounted prospect must
+    # not render as an uploaded-nothing prospect (see `_pft.missing_tally`).
+    return {"prospects": rows, "tally_in": "/commcalc/prospects/feed-tally",
+            "feed_registry": _pev.feed_registry_view(),
             "config": _pev.load_config(client, org_id),
             "config_columns_missing": _pev.config_columns_missing(
                 _ct.present_columns(lambda: client.schema("commcalc").table("commission_org_config"),
                                     lambda q: q.eq("org_id", org_id),
                                     tuple(c for c, _m in _pev.CONFIG_COLUMNS)))}
+
+
+def _prospect_tally_read(client, org_id):
+    """`(tally, source, note)` — the per-(prospect, feed, month) tally for one org, ONCE.
+
+    THE ONE PLACE that decides how the tally is read, so the two surfaces that need it — the
+    evaluations list's companion endpoint and the evaluation's own "which month do I open on" —
+    cannot answer it two different ways or drift apart (owner report 2026-10-16, index
+    §COMMCALC-TALLY). The database groups it where the function exists (migration 1085); where it
+    does not, the rows are read and counted here and `source` SAYS SO, because a slow answer that
+    looks like a fast one is how this stayed unnoticed for a month.
+    """
+    try:
+        grouped = (client.schema("commcalc").rpc("prospect_feed_tally",
+                                                 {"p_org_id": org_id}).execute().data) or []
+        return _pft.from_grouped(grouped), "grouped_in_database", ""
+    except Exception as e:
+        note = (f"the database's own tally is unavailable ({type(e).__name__}), so every feed row was "
+                f"read and counted here; applying migration 1085 makes this one query")
+        try:
+            return (_pft.from_rows(_feed_read.read_all(
+                lambda: (client.schema("commcalc").table("prospect_feed_row")
+                         .select("prospect_id,feed_key,period").eq("org_id", org_id)))),
+                    "counted_row_by_row", note)
+        except Exception as e2:
+            return {}, "unavailable", f"{note}; and that read failed too: {e2}"
+
+
+@router.get("/prospects/feed-tally")
+def prospect_feed_tally(org_id: str = ORG_ID):
+    """How many rows each prospect has, per feed, per month — the tally, off the list's critical path.
+
+    TWO READINGS OF ONE FACT, through one shape (`_pft`, index §COMMCALC-TALLY):
+
+    - `commcalc.prospect_feed_tally(p_org_id)` (migration 1085) makes the DATABASE do the
+      `GROUP BY`, so one round trip returns a few dozen counted slices instead of 202,865 rows.
+    - Where that function is not applied yet, the paged read still answers — slowly, and SAYING SO
+      in `source`, so a slow tally is visible rather than mysterious.
+
+    `missing` names the prospects whose tally could not be read at all. A caller prints "nothing
+    uploaded yet" only for a prospect that is absent from `missing`: unknown is not zero.
+    """
+    require_org(org_id)
+    client = sb()
+    try:
+        ids = [str(r.get("id")) for r in ((client.schema("commcalc").table("store_prospect")
+                                           .select("id").eq("org_id", org_id)
+                                           .limit(500).execute().data) or [])]
+    except Exception as e:
+        raise HTTPException(500, f"prospect read failed: {type(e).__name__}: {e}")
+    tally, source, note = _prospect_tally_read(client, org_id)
+    return {"tally": tally,
+            "periods": {p: _pft.periods_of(tally.get(p)) for p in tally},
+            "missing": _pft.missing_tally(ids, tally),
+            "source": source, "note": note}
 
 
 @router.post("/prospects")
@@ -49027,15 +49081,14 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     period_basis = None
     if not period:
         try:
-            seen = _feed_read.read_all(
-                lambda: (client.schema("commcalc").table("prospect_feed_row")
-                         .select("feed_key,period")
-                         .eq("org_id", org_id).eq("prospect_id", prospect_id)))
+            # THE SAME TALLY, NOT A SECOND READ OF THE ROWS (owner report 2026-10-16, index
+            # §COMMCALC-TALLY). This used to read every row this prospect has — 137,374 of them and
+            # ~137 round trips for the biggest one, measured live — to look at two columns of each
+            # and decide which month to open on. It is the list's defect in the endpoint next door,
+            # so it dereferences the one home instead.
+            by_feed = _pft.by_feed(_prospect_tally_read(client, org_id)[0].get(str(prospect_id)))
         except Exception:
-            seen = []
-        by_feed = {}
-        for r in seen or []:
-            by_feed.setdefault(str(r.get("feed_key") or ""), []).append(r.get("period"))
+            by_feed = {}
         # The caller supplies the date; `default_period` reads no clock (it is pure). Without it a
         # month still in progress wins on recency alone and the whole report renders off a
         # part-month — 3 of 5,495 commission rows on 13 October (owner report 2026-10-13).
