@@ -124,6 +124,7 @@ Primary code homes:
 | COMMCALC-11 | **An invisible human check is still a check** | "The live login filled in my portal details and then told me the password was wrong. The password is right — so what actually refused the sign-in, and why did nothing on the screen say a human check was waiting?" |
 | COMMCALC-12 | **Which store's trailing commission legs are running down, and in which rung** | "Carrier commission fell. Was it this month's activations, or the M2–M6 legs still paying on a cohort that collapsed months ago — and at WHICH store? Show the month-of-life rungs per store with the months side by side." |
 | COMMCALC-13 | **A finished live login leaves an honest status** | "The screen says the portal login is still in progress and the browser closed an hour ago. What writes that status when a session ends, and what clears it when the process that owned it is simply gone?" |
+| COMMCALC-14 | **A cheap answer is never held hostage by an expensive decoration** | "The takeover list takes a minute and reads as empty while it does. What is it waiting for, where should a count of rows be computed, and what should a cell say about a figure nobody has counted yet?" |
 
 ---
 
@@ -25364,6 +25365,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-11 | commcalc |
 | COMMCALC-12 | commcalc |
 | COMMCALC-13 | commcalc |
+| COMMCALC-14 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -29417,3 +29419,102 @@ Same class: §COMMCALC-10 (the phase that could stall forever), §19.41 (`empty_
 filter as a successful zero-row run), §19.18 (a mechanism written and its callers left unwired).
 Neighbours: §COMMCALC-11 (why that session could not sign in), §12a (the connector surfaces that read
 this row), §CORE-03 (where the credential on it is sealed).
+
+## §COMMCALC-14. A CHEAP ANSWER IS NEVER HELD HOSTAGE BY AN EXPENSIVE DECORATION (found 2026-10-16)
+
+**Owner report 2026-10-16, verbatim:** *"Store Takeover Evaluation takes along time to load , and
+existing evaluation is not in the pull up list"*. **One cause, both complaints**, which is why they
+are one section.
+
+`GET /commcalc/prospects` (§COMMCALC-03) answers *which stores am I evaluating* — two rows, one
+indexed query, milliseconds. It then DECORATED each row with *and how many rows has each feed got in
+each month*, and computed that decoration by **shipping every feed row to Python and counting them**.
+
+**Measured live 2026-10-16** (read-only, Supabase REST, acting org):
+
+| | |
+|---|---|
+| `commcalc.prospect_feed_row`, this org | **202,865** rows (137,374 + 65,491 across two prospects) |
+| at the platform's 1,000-row page | **203 round trips** |
+| timed from a container, 10 pages | 0.289 s/page → **~59 s** for the count alone |
+| behind it | `gunicorn --timeout 120`, **two** workers |
+| growth | every upload makes it worse |
+
+So the list the owner came for was **empty for a minute**, which is exactly how a slow count reads as
+a missing evaluation — and the same read occupied half the platform's request capacity while it ran,
+on a path to being killed outright by the worker timeout as the feed grows. **Both prospects were
+present in the table the whole time** (verified: same org, both `evaluating`); nothing was lost.
+
+### COMMCALC-14.1 The class, not the instance
+
+> **A cheap primary answer must never be withheld until an expensive decoration beside it is ready —
+> and a count of rows belongs in the database, not in a loop that ships the rows.**
+
+### COMMCALC-14.2 Duplicate check (the build gate)
+
+| already exists | what it answers | what this did |
+|---|---|---|
+| `core/feed_read.read_all` (§19.48, §CORE-05) | *every row of a feed*, paged on a stable key | **left alone** — it is correct; it was being asked the wrong question |
+| `prospect_eval.default_period` (§COMMCALC-03) | which month an evaluation opens on | **dereferenced**, unchanged |
+| `router._prospect_feed_rows` | the prospect's rows, for the money | **left alone** — it genuinely needs the rows |
+| `_write_upload_trace` (§19.x) | *did this ingest happen* | **deliberately NOT used as the tally** — a log of what an upload did is not a record of what is in the table now, the same reason a sweep's status is not a record of what it swept |
+
+No sibling mechanism answered *how many rows per feed per month*, so this registers one home for it
+rather than a second derivation.
+
+### COMMCALC-14.3 One fact, one home, dereferenced
+
+`commcalc/prospect_feed_tally.py` is the one home for the shape
+
+    {prospect_id: {period: {feed_key: n}}}
+
+with **two readings of it and one accumulator** (`_add`), so they cannot drift:
+
+- `from_grouped` — counts the **database** grouped (`commcalc.prospect_feed_tally(p_org_id)`,
+  migration **1085**): one round trip, a few dozen counted slices instead of 202,865 rows.
+- `from_rows` — the same shape from the rows themselves, for a database where that function is not
+  applied yet. Correct, merely slow, and `source` **says which reading was used** so a slow answer is
+  never mistaken for a fast one.
+
+`router._prospect_tally_read` is the only place that choice is made. `periods_of` and `by_feed` are
+the same tally read the other two ways the screens want.
+
+### COMMCALC-14.4 The sibling, fixed here rather than excused
+
+`get_prospect_evaluation` did the same thing one endpoint over: with no month named it read **every
+row the prospect has** — 137,374 and ~137 round trips for the biggest — and looked at two columns of
+each, purely to decide which month to open on. It now dereferences `_pft.by_feed` over the same
+tally. Two surfaces, one fact, one reader.
+
+### COMMCALC-14.5 Unknown is not zero
+
+The decoration now arrives **after** the list, so for a moment every count on screen is unread. The
+old shape would have rendered that as `0 months · 0 rows · nothing yet` — a confident lie about
+137,374 uploaded rows, and the same wrongness as the original defect wearing a hat. So:
+
+- `missing_tally` is the one place *unread* is distinguished from *counted and empty*;
+- the payload carries `missing`, the row carries `tally_unknown`, and **every counted column on the
+  table goes through one guard** that prints `counting…`;
+- the store name and the **Open** button are deliberately NOT behind that guard — the list is the
+  answer, and it must be usable the instant it lands.
+
+### COMMCALC-14.6 Locked so it cannot un-wire
+
+`backend/harness_prospect_feed_tally.py` — DB-free, **61 checks**: §A the two readings produce one
+identical shape through one accumulator · §B `list_prospects` reads no feed rows, sets no
+`feed_rows`/`periods`, and exactly one place decides how a tally is read · §C unknown is not zero on
+both sides of the wire, with one guard · §D the sibling is wired and the money read is untouched ·
+§E the pre-fix shape reproduced and asserted **wrong** · §F RULE TWO, no DB or clock in the module,
+and the migration idempotent, org-scoped, `STABLE`, money-free, with a `-- REVERT:` note.
+
+Wired into `carrier-vocab-guard.yml` as *"prospect feed-tally lock"*.
+
+**Migration 1085 is not required for correctness** — the fallback answers without it — so the page
+is fixed on merge and the tally becomes one query when the owner applies it.
+
+### COMMCALC-14.7 Cross-references
+
+Same class: §19.48 / §CORE-05 (a read with a literal ceiling, and a paged read with no total order —
+both *quietly wrong*, where this one was *quietly slow*), §19.18 (a mechanism written and its callers
+left unwired), §CORE-11 (a column accepted and never drawn). Neighbours: §COMMCALC-03 (the
+evaluation this list opens), §4a.2 and §COMMCALC-12 (the other tallies read per store per month).

@@ -88,7 +88,17 @@ print("   " + "  ".join(f"{k}={v}" for k, v in VERS.items()))
 # ONE source-level fact DID change, and A4 below is rewritten to pin the new one: upstream fixed the
 # `"HTTP"` typo in should_retry's verb guard, so HEAD is now retried alongside GET. That widens
 # postgrest's own 503/520 retry very slightly and takes nothing away from ours.
-PINNED_STACK = {"supabase": "2.32.0", "postgrest": "2.32.0", "httpx": "0.28.1",
+# RE-PINNED 2026-10-16, supabase/postgrest 2.32.0 -> 2.33.0. NOT relaxed — RE-VERIFIED, which is
+# what this tripwire asks for. Upstream released 2.33.0 and `requirements.txt` says `supabase>=2.9.0`,
+# so CI resolved it on its next install and A1 went red on EVERY branch at once, this package's
+# changes having nothing to do with it (reproduced locally by installing 2.33.0: A1 and A1 only).
+# The re-verification: on 2.33.0 every OTHER check in this file still passes, 137 of 137 — and those
+# include the source-level ones that ARE the root-cause diagnosis (A2/A3 postgrest's
+# `send_with_retry` still cannot save a transport exception, A4 its verb guard, A5 the pool
+# construction, A6-A10 httpcore's HTTP/2 connection having no idle-socket probe). So the diagnosis
+# this package rests on is unchanged by the bump; nothing was re-read on faith and nothing was
+# switched off to get green. `httpx`, `httpcore` and `h2` did not move at all.
+PINNED_STACK = {"supabase": "2.33.0", "postgrest": "2.33.0", "httpx": "0.28.1",
                 "httpcore": "1.0.9", "h2": "4.4.1"}
 check("A1. pinned stack is the one the diagnosis was read from",
       VERS == PINNED_STACK,
@@ -1176,7 +1186,16 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1788 + 1 = 1789, the figure this harness measured on this tree. So the pin
 # was re-taken on a counted, named addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1789"))
+# RE-PINNED 2026-10-16, 1789 -> 1790 (index §COMMCALC-14). Every record above stays. The delta is ONE
+# route and it is named: GET /commcalc/prospects/feed-tally — the per-feed, per-month row tally for
+# the Store Takeover evaluations list, moved OFF that list so the two-row answer "which stores am I
+# evaluating" stops waiting on a count of 202,865 feed rows (~203 round trips, ~59 s; owner report
+# 2026-10-16). It is READ-ONLY, writes nothing, books nothing, and adds no writer; its migration
+# (1085) is one `STABLE` counting function. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1789 + 1 = 1790, the figure this harness measured on this tree. So the pin
+# was re-taken on a counted, named addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1790"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
