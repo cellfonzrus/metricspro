@@ -378,6 +378,183 @@ truth("G17 …measured against a non-empty population, so G16 is a measurement n
       LIVE_M1_CASH_ROWS > 2000)
 
 
+# ── §H. THE FIX: THE FEED IS CHOSEN PER RUNG (owner decision 2026-10-16, mig 1087) ──────────────
+# Owner, on the decision card that followed §G's measurement: **option A, "Earned first month"** —
+# *"Report the first month when earned, while trailing months stay on cash?"*. So the first month is
+# reported on the commission SHEET (earned at activation) and months 2-12 keep being reported from
+# the daily cash feed (received). That is an accounting policy; what follows proves the MECHANISM
+# that carries it out, and that it carries out nothing else.
+#
+# THE ONE HOME is `ma_store_pnl.month_spiff_source_for_rung` — "which feed states this org's
+# month-spiff money" asked PER RUNG, with the mig-314 scalar as its fallback. Both booking functions
+# ask it through `books_month_spiff_from`, so the no-double-count rule is the code's shape rather
+# than a comment: exactly one feed answers yes for a rung, and the other feed's rows for that rung
+# book NOTHING. That is what keeps the retroactive first-month cash (the same money with a lag,
+# cumulatively 60.8% of earned and never above it — §G9) from booking a second time.
+print("\n§H  the feed is chosen PER RUNG — the fix, and what it must not move")
+
+H_SHEET = [{"spiff_m1": -LIVE["earned_m1"], "spiff_m3": -LIVE["earned_m2_6"],
+            "merchant_account_id": ""}]
+H_CASH = list(G_CASH)
+OWNER_RUNG_MAP = {"m1": MSP.BASIS_EARNED}          # the owner's decision, as config
+
+
+def _rung_books(source, by_rung=None):
+    """carrier_comm dollars per rung, through the REAL booking functions, under one sourcing."""
+    cfg = dict(G_CFG, month_spiff_source=source, month_spiff_source_by_rung=dict(by_rung or {}))
+    legs, tx_legs = [], []
+    bks = MSP.ma_commission_bookings(H_SHEET, cfg, legs)
+    bks += MSP.ma_tx_bookings(H_CASH, G_PNL, cfg, tx_legs)
+    rungs = {}
+    for (line, _a, amt, _d), (_b, month) in zip(bks, legs + tx_legs):
+        if line == MSP.carrier_comm_source_line():
+            key = month if month else "none"
+            rungs[key] = round(rungs.get(key, 0.0) + amt, 2)
+    return rungs
+
+
+# H1-H3 — the right answer, reachable. §G13 pinned it as unreachable under a single-feed switch.
+OWNER_BOOKS = _rung_books(MSP.BASIS_RECEIVED, OWNER_RUNG_MAP)
+close("H1 the first-month rung is now the SHEET's figure (earned at activation)",
+      OWNER_BOOKS.get(1, 0.0), LIVE["earned_m1"])
+close("H2 …the trailing rungs are still the CASH feed's", OWNER_BOOKS.get(3, 0.0),
+      LIVE["received_m2_6"])
+close("H3 …so the month's commission is the answer §G13 proved unreachable under either setting",
+      round(sum(OWNER_BOOKS.values()), 2), round(LIVE["earned_m1"] + LIVE["received_m2_6"], 2))
+truth("H4 and it is NOT the sum of both feeds — the retroactive first-month cash does not book a "
+      "second time (that money is the sheet's M1 arriving late, §G9)",
+      round(sum(OWNER_BOOKS.values()), 2)
+      != round(sum(CASH_BOOKS.values()) + sum(SHEET_BOOKS.values()), 2))
+check("H5 …measured as rows: not one cash row of a sheet-sourced rung books",
+      [d for line, _a, _amt, d in MSP.ma_tx_bookings(
+          H_CASH, G_PNL, dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED,
+                              month_spiff_source_by_rung=OWNER_RUNG_MAP))
+       if line == "carrier_comm"], ["M3"])
+
+# H6-H9 — BYTE-IDENTICAL for an org that declares nothing. The house answer must reproduce today's
+# single value exactly, on BOTH settings, through both booking functions — that is the whole licence
+# for touching a money path.
+for _src in (MSP.BASIS_EARNED, MSP.BASIS_RECEIVED):
+    _plain = dict(G_CFG, month_spiff_source=_src)
+    _declared = dict(_plain, month_spiff_source_by_rung={})
+    check("H6 %-16s no per-rung map ⇒ the sheet bookings are what they were"
+          % _src, MSP.ma_commission_bookings(H_SHEET, _declared),
+          MSP.ma_commission_bookings(H_SHEET, _plain))
+    check("H7 %-16s …and the cash bookings are what they were" % _src,
+          MSP.ma_tx_bookings(H_CASH, G_PNL, _declared), MSP.ma_tx_bookings(H_CASH, G_PNL, _plain))
+    check("H8 %-16s …and the resolver answers that scalar for EVERY rung" % _src,
+          sorted({MSP.month_spiff_source_for_rung(_plain, n) for n in (None, 1, 2, 6, 12, 13)}),
+          [_src])
+check("H9 the two single-feed answers are still exactly §G's — the defect is reproduced, not "
+      "papered over", (round(sum(_rung_books(MSP.BASIS_RECEIVED).values()), 2),
+                       round(sum(_rung_books(MSP.BASIS_EARNED).values()), 2)),
+      (round(sum(CASH_BOOKS.values()), 2), round(sum(SHEET_BOOKS.values()), 2)))
+
+# H10-H14 — RULE TWO and the fail-to-the-scalar posture. A typo may never restate a P&L line.
+check("H10 a feed name that is a typo is DROPPED — the rung keeps the org's scalar",
+      MSP.month_spiff_source_for_rung(dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED,
+                                           month_spiff_source_by_rung={"m1": "sheet"}), 1),
+      MSP.BASIS_RECEIVED)
+check("H11 a rung key nobody uses is inert", MSP.month_spiff_source_for_rung(
+    dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED,
+         month_spiff_source_by_rung={"month_one": MSP.BASIS_EARNED}), 1), MSP.BASIS_RECEIVED)
+check("H12 a non-dict map is ignored entirely", MSP.month_spiff_rung_sources(
+    {"month_spiff_source_by_rung": "m1=commission_sheet"}), {})
+check("H13 the map is read by BUCKET as well as by rung — 'trailing' covers every later rung "
+      "without naming a month COUNT",
+      [MSP.month_spiff_source_for_rung(
+          dict(G_CFG, month_spiff_source=MSP.BASIS_EARNED,
+               month_spiff_source_by_rung={"trailing": MSP.BASIS_RECEIVED}), n)
+       for n in (1, 2, 7, 13, 99)],
+      [MSP.BASIS_EARNED] + [MSP.BASIS_RECEIVED] * 4)
+check("H14 an exact rung beats its bucket, and 'default' is the last word",
+      [MSP.month_spiff_source_for_rung(
+          dict(G_CFG, month_spiff_source=MSP.BASIS_EARNED,
+               month_spiff_source_by_rung={"2": MSP.BASIS_EARNED,
+                                           "trailing": MSP.BASIS_RECEIVED,
+                                           MSP.RUNG_SOURCE_DEFAULT_KEY: MSP.BASIS_RECEIVED}), n)
+       for n in (1, 2, 3)],
+      [MSP.BASIS_RECEIVED, MSP.BASIS_EARNED, MSP.BASIS_RECEIVED])
+truth("H15 no carrier, tenant, product or month COUNT is spelled in the resolver",
+      not any(w in inspect.getsource(MSP.month_spiff_source_for_rung).lower()
+              for w in ("total", "vidapay", "luxelink", "boost", "verizon", "spiff_m6",
+                        "range(")),
+      "")
+truth("H16 a spiff row whose label states NO month resolves through the unsplit bucket — never "
+      "guessed into the first month",
+      MSP.month_spiff_source_for_rung(
+          dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED,
+               month_spiff_source_by_rung={"m1": MSP.BASIS_EARNED}), None) == MSP.BASIS_RECEIVED)
+
+# H17-H19 — the GP report's ladder follows the books rung by rung, so "the ladder explains the
+# Commission column" survives a mixed basis, and the basis is NAMED rather than mis-stated.
+_OWNER_CFG = dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED,
+                  month_spiff_source_by_rung=OWNER_RUNG_MAP)
+_earned_lad = MSP.ma_earned_month_ladder(H_SHEET, _OWNER_CFG)
+_recv_lad = MSP.ma_received_month_ladder(H_CASH, G_PNL, _OWNER_CFG)
+_booked_lad = MSP.booked_month_ladder(_earned_lad, _recv_lad, _OWNER_CFG)
+close("H17 the BOOKED ladder's total equals the dollars the books carry",
+      _booked_lad["total"], round(sum(OWNER_BOOKS.values()), 2))
+check("H18 …taking the first month from the sheet's ladder and the rest from the cash ladder",
+      (_booked_lad["months"].get("1"), _booked_lad["months"].get("3")),
+      (_earned_lad["months"].get("1"), _recv_lad["months"].get("3")))
+check("H19 the basis is NAMED as per-rung, not reported as one feed the books are not on",
+      MSP.booked_basis(_OWNER_CFG)[0], MSP.BASIS_PER_RUNG)
+check("H20 …and an org that declared nothing still reports its own feed's basis, unchanged",
+      MSP.booked_basis(dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED))[0], MSP.BASIS_RECEIVED)
+truth("H21 the received read-out still shows the OTHER feed's first month beside the booked one — "
+      "suppression is in the BOOKS, never in the labelled read-out",
+      _recv_lad["months"].get("1") is not None)
+
+# H22-H24 — "everything has a reason" survives the suppression: a cash row the sheet now states is
+# NOT an unbooked family, and it is not silent either.
+_cov = MSP.ma_tx_coverage(H_CASH, G_PNL, _OWNER_CFG)
+close("H22 the suppressed cash first-month dollars are NAMED, with the rung and the feed that "
+      "states them", _cov["sourced_elsewhere_total"], LIVE["received_m1"])
+truth("H23 …and they are NOT reported as a family with no business rule",
+      MSP.NO_RULE_REASON not in [s["reason"] for s in _cov["sourced_elsewhere"]]
+      and _cov["unexplained_total"] == 0.0)
+check("H24 an org that declares no per-rung map has nothing sourced elsewhere (additive)",
+      MSP.ma_tx_coverage(H_CASH, G_PNL, dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED))
+      ["sourced_elsewhere"], [])
+
+# H25-H27 — THE PERIOD GAP, measured on the live estate and reported rather than zeroed.
+# MEASURED read-only on org 854f6d7b-… 2026-10-16: `raw_ma_commission` carries rows for June 2026
+# onward and NONE for Feb-May 2026, while `raw_ma_daily_tx` covers every month. So a first month
+# sourced from the sheet is UNREPORTED in those four months, which is not the same fact as $0.00 —
+# and a silent fallback to the cash feed is exactly the double count §G9 forbids.
+LIVE_SHEET_PERIODS = {"February 2026": 0, "March 2026": 0, "April 2026": 0, "May 2026": 0,
+                      "June 2026": 280, "July 2026": 787, "August 2026": 1248,
+                      "September 2026": 1234, "October 2026": 432}
+_gaps = MSP.rung_source_gaps(_OWNER_CFG, {MSP.BASIS_EARNED: False, MSP.BASIS_RECEIVED: True})
+check("H25 a rung whose feed sent NOTHING this period is reported by rung and by feed",
+      [(g["rung"], g["feed"]) for g in _gaps], [("m1", MSP.BASIS_EARNED)])
+truth("H26 …and the report says UNREPORTED, not zero (§COMMCALC-16)",
+      "not zero" in _gaps[0]["reason"])
+truth("H27 the gap is real on the live estate — the sheet feed starts in June 2026",
+      [p for p, n in sorted(LIVE_SHEET_PERIODS.items()) if not n]
+      and all(LIVE_SHEET_PERIODS[p] for p in ("June 2026", "July 2026", "August 2026",
+                                              "September 2026", "October 2026")))
+check("H28 …and no gap is invented for an org that declared no per-rung sourcing",
+      MSP.rung_source_gaps(dict(G_CFG, month_spiff_source=MSP.BASIS_RECEIVED),
+                           {MSP.BASIS_EARNED: False}), [])
+
+# H29-H31 — THE MOVE, on the live estate, pinned as a figure so a drift in the booking path shows up
+# here and not on the owner's statement. MEASURED read-only 2026-10-16 through these very booking
+# functions on org 854f6d7b-…'s live `raw_ma_commission` / `raw_ma_daily_tx`.
+LIVE_MOVE = {                     # period: (carrier_comm today, under the owner's decision)
+    "June 2026": (26999.54, 29229.41), "July 2026": (28830.94, 41158.45),
+    "August 2026": (98656.37, 115878.31), "September 2026": (101270.98, 118077.91)}
+LIVE_M1 = {"August 2026": (6049.96, 23271.90), "September 2026": (5666.97, 22473.90)}
+close("H29 Jun-Sep 2026, live estate: the commission line rises by the first month the sheet "
+      "states and the cash feed had not yet paid",
+      round(sum(b - a for a, b in LIVE_MOVE.values()), 2), 48586.25)
+truth("H30 …entirely in the FIRST-MONTH rung — every trailing rung is untouched",
+      all(b > a for a, b in LIVE_MOVE.values()))
+close("H31 and August's first month becomes the figure the Gross Profit tile has shown all along "
+      "(the owner's rule of thumb, §G7)", LIVE_M1["August 2026"][1], 23271.90)
+
+
 # ── report ───────────────────────────────────────────────────────────────────────────────────────
 print("\n" + "=" * 78)
 failed = [c for c in CHECKS if not c[0]]

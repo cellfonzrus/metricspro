@@ -186,7 +186,6 @@ harness_merchant_ids.py
 harness_merchant_portals.py
 harness_mi_resolve_fail_closed.py
 harness_module_billing.py
-harness_month_leg_resolution.py
 harness_mpc_confirm_creates.py
 harness_multifile_docs.py
 harness_multisheet_ingest.py

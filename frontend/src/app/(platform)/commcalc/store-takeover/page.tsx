@@ -1953,7 +1953,15 @@ export default function StoreTakeoverPage() {
                     <span style={{ fontFamily: 'ui-monospace, monospace' }}>
                       {Array.isArray(sw.value)
                         ? (sw.value.length ? sw.value.join(', ') : '(none declared)')
-                        : String(sw.value)}
+                        : (sw.value && typeof sw.value === 'object')
+                          // A switch whose value is a MAP (e.g. which feed states each month-of-life
+                          // rung, mig 1087) reads as its own pairs — never '[object Object]', which
+                          // would hide a declaration the reader is being asked to trust.
+                          ? (Object.keys(sw.value as Record<string, unknown>).length
+                              ? Object.entries(sw.value as Record<string, unknown>)
+                                  .map(([k, v]) => `${k} → ${String(v)}`).join(', ')
+                              : '(none declared)')
+                          : String(sw.value)}
                     </span>
                     <span style={{ color: sw.basis === 'column_absent' ? '#92400e' : 'var(--text3)' }}>
                       {sw.basis === 'declared'

@@ -415,6 +415,7 @@ on:
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       - "database/migrations/1018_pos_inventory_integrity.sql"
       - "backend/harness_ma_income_one_home_guard.py"
+      - "backend/harness_month_leg_resolution.py"
       - "backend/harness_ma_month_columns.py"
       - "backend/harness_mi_residual_store_grain.py"
       - "backend/app/modules/account/coa.py"
@@ -1024,9 +1025,18 @@ jobs:
       # convention each have ONE home. These locks shipped with #270/#272 but were never wired into
       # CI, so nothing failed the build when a caller stopped dereferencing them. Wiring them is the
       # "lock it so it cannot un-wire" half of the design-fix rule; both are stdlib-only and DB-free.
-      - name: Run the MA one-home guard (MA income · the month LEG · the ladder RUNG convention)
+      - name: Run the MA one-home guard (MA income · the month LEG · the ladder RUNG convention · which FEED states which rung)
         working-directory: backend
         run: python3 harness_ma_income_one_home_guard.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §COMMCALC-15 / §COMMCALC-17 — the month-of-life LEG a label states, and WHICH FEED states
+      # each rung (mig 1087, owner decision 2026-10-16 "Earned first month"). This harness carries the
+      # owner's two M1 reports as regressions (§D the August split, §G the two-feed defect) and §H the
+      # fix, including the byte-identity of an org that declares no per-rung sourcing. It shipped with
+      # #272/#494 and was never wired in, so nothing failed the build if a booking function stopped
+      # asking the one home. DB-free, stdlib + the backend package only.
+      - name: Run the month-of-life leg + per-rung feed proof (the two M1 regressions; one feed per rung; byte-identical for an undeclared org — index §COMMCALC-17)
+        working-directory: backend
+        run: python3 harness_month_leg_resolution.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the month-of-life column proof (data-driven rungs; August 2026 split pinned)
         working-directory: backend
         run: python3 harness_ma_month_columns.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

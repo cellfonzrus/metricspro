@@ -105,6 +105,33 @@ LADDER_COPY_SANCTIONED = {
     # the home itself is excluded by name below; nothing else is sanctioned today.
 }
 
+# ── CHECK 2d — "WHICH FEED STATES THIS RUNG" ALSO HAS ONE HOME (mig 1087, §COMMCALC-17) ─────────
+# Owner report 2026-10-16 ("something is wrong on teh m1 commmission it cannot be that low"), and the
+# decision that followed it: the first month is reported on the commission SHEET, the trailing months
+# on the daily cash feed. The question "which feed states this org's month-spiff money" is therefore
+# only answerable PER RUNG, and `ma_store_pnl.month_spiff_source_for_rung` is where it is answered.
+#
+# The failure mode this gate exists for is EXACTLY the one CLAUDE.md names: the registry written and
+# the callers left comparing the switch to a feed name themselves. A caller that writes
+# `cfg["month_spiff_source"] == "daily_tx"` is asking a question that no longer has a single answer,
+# and it would read a basis the books are not on — silently, on a money line.
+FEED_SOURCE_HOME = "app/modules/account/ma_store_pnl.py"
+FEED_SOURCE_RESOLVERS = ("month_spiff_source_for_rung", "books_month_spiff_from",
+                         "month_spiff_feeds_used", "booked_basis", "booked_month_ladder",
+                         "month_spiff_rung_sources", "rung_source_gaps")
+# a comparison of the switch against a feed name, in any spelling the repo can write it
+FEED_SOURCE_COMPARISON = re.compile(
+    r"""month_spiff_source["']?\]?\s*(?:==|!=|\sin\s|\snot\s+in\s)"""
+    r"""|(?:==|!=)\s*(?:["'](?:daily_tx|commission_sheet)["']|BASIS_(?:EARNED|RECEIVED))""")
+# …and the functions INSIDE the home that must keep asking the resolver, so the home itself cannot
+# quietly un-wire (the half of a design fix that has been forgotten three times here — §19.18).
+FEED_SOURCE_MUST_ASK = {
+    "ma_commission_bookings": "the SHEET side of the per-rung gate",
+    "ma_tx_bookings": "the CASH side of the per-rung gate",
+    "ma_tx_coverage": "the coverage read-out runs the same gate",
+    "gp_carrier_income": "the Gross-Profit report's basis and month ladder",
+}
+
 # ── CHECK 3 — INVENTORY (reported, not a build gate) ─────────────────────────────────────────────
 # The commission SHEET's export genuinely carries six spiff columns, so a surface that reconciles to
 # that export, or reads one device's spiff evidence, legitimately walks six. Those are named here so
@@ -274,6 +301,39 @@ def main():
         failures.append("%d local copy/copies of the ladder convention" % len(ladder_offenders))
     else:
         print("   PASS — every surface dereferences %s for the rung key, order and label" % LADDER_HOME)
+    print()
+
+    # CHECK 2d
+    print("CHECK 2d — \"which FEED states this rung\" has one home (mig 1087)")
+    feed_offenders = []
+    for rel, src in sources.items():
+        if rel == FEED_SOURCE_HOME:
+            continue
+        for lineno, text in _code_lines(src):
+            if FEED_SOURCE_COMPARISON.search(text):
+                feed_offenders.append((rel, lineno, text.strip()[:110]))
+    if feed_offenders:
+        for rel, lineno, text in feed_offenders:
+            print("   FAIL %s:%d compares the month-spiff switch to a feed itself" % (rel, lineno))
+            print("        %s" % text)
+            print("        -> ma_store_pnl.%s() — the question is per RUNG" % FEED_SOURCE_RESOLVERS[0])
+        failures.append("%d caller(s) decide the month-spiff feed themselves"
+                        % len(feed_offenders))
+    else:
+        print("   PASS — no caller compares the switch to a feed; every one asks the resolver.")
+    home_src = sources.get(FEED_SOURCE_HOME, "")
+    for fn, what in sorted(FEED_SOURCE_MUST_ASK.items()):
+        body = _function_source(home_src, fn)
+        if not body:
+            print("   FAIL %s:%s — function not found" % (FEED_SOURCE_HOME, fn))
+            failures.append("%s:%s missing" % (FEED_SOURCE_HOME, fn))
+            continue
+        hit = [t for t in FEED_SOURCE_RESOLVERS if (t + "(") in body]
+        if hit:
+            print("   PASS %-24s (%s) -> %s" % (fn, what, ", ".join(sorted(hit))))
+        else:
+            print("   FAIL %-24s (%s) no longer asks the per-rung resolver" % (fn, what))
+            failures.append("%s stopped dereferencing the per-rung feed resolver" % fn)
     print()
 
     # CHECK 3 — inventory, on the record, never a build gate

@@ -1241,11 +1241,11 @@ _bb_house = P.rule_basis(MSP.default_config(), RS.default_ma_pnl_config(),
                             config_columns=_BB_COLS, migration_of=_BB_MIG)
 check("T4 every column the switch list names is a column the LOADERS name — a renamed one would "
       "otherwise read as set forever",
-      _bb_house["unknown_columns"] == [] and len(_bb_house["switches"]) == 9,
+      _bb_house["unknown_columns"] == [] and len(_bb_house["switches"]) == 10,
       str(_bb_house["unknown_columns"]))
 check("T5 a config identical to the house answer claims NOTHING — 'declared' is only claimed where "
       "the value DIFFERS, because a loader reports columns and never whether a row carried a value",
-      _bb_house["declared"] == 0 and _bb_house["house_default"] == 9)
+      _bb_house["declared"] == 0 and _bb_house["house_default"] == 10)
 # The live shape: this tenant declares the spiff source, the MDF token and store attribution.
 _bb_org = P.rule_basis(
     dict(MSP.default_config(), month_spiff_source="daily_tx", store_attribution=True,
