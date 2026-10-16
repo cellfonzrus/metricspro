@@ -112,6 +112,7 @@ Primary code homes:
 | CORE-09 | **A capability without a door is not a feature** | "Where do I reset an employee's login password, and why is the one screen that can do it a page my HR manager cannot open? Which surfaces offer it, and what stops the next one retyping the form?" |
 | CORE-10 | **A gate, not a note** | "This is a very critical finding — don't just write it down, make a gate so nothing can pass through unknowingly; you were smart, maybe the other might not be as smart. What checks that a branch was cut from a current base, and what checks that a guard is still guarding what it thinks it is?" |
 | CORE-11 | **A column that draws its own cell is drawn** | "It did not let me enter. Which component actually puts a report's cell on the screen, do both of them honour a column that draws its own, and what else was silently blank because one of them did not?" |
+| CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -127,7 +128,7 @@ Primary code homes:
 | COMMCALC-13 | **A finished live login leaves an honest status** | "The screen says the portal login is still in progress and the browser closed an hour ago. What writes that status when a session ends, and what clears it when the process that owned it is simply gone?" |
 | COMMCALC-14 | **A cheap answer is never held hostage by an expensive decoration** | "The takeover list takes a minute and reads as empty while it does. What is it waiting for, where should a count of rows be computed, and what should a cell say about a figure nobody has counted yet?" |
 | COMMCALC-16 | **A figure the portal did not send is not a zero** | "The carrier portal's numbers and ours disagree — our stores show 0 activations beside a 66.67% attach rate. Which carrier field feeds which column, what happens when the portal renames one, and how does the platform say so instead of writing the absence down as a measurement?" |
-| COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way?" |
+| COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
 
 ---
 
@@ -6847,7 +6848,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates; **`kpi_boostapp_basis`** (mig `1029`, §19.31 — which basis the Ready App rate is measured on, per org PER PERIOD; NULL = the pre-ruling `feed_prepaid`) via `kpi_failing.resolve_boostapp_basis` |
 | `commcalc.dlar_sweep_config` | the admin sweep page via `router._dlar_cfg` (whole row) / `_dlar_public_cfg` (no password) | `_do_dlar_sweep` → `dlar_sweep.run_dlar_sweep`; **`reports`** (mig `1029`, §19.31 — which of `dlar_sweep.PORTAL_REPORTS` this org pulls; NULL = the default pair) via `dlar_sweep.resolve_report_set`. ⚠ `portal_pass` is the carrier portal password **in plaintext** — RLS-on/service_role-only, never browser-reachable, but it belongs in a secret store (§19.31 (9)) |
-| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1086` WRITTEN NOT APPLIED — `pl_carrier_comm_leg_split`, whether the commission line is shown as its first-month half plus an M2–M12 line or as one line carrying both, §COMMCALC-15; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with every other `pl_*` column in any order, house answer TRUE, and the feature works before it is applied because a missing column reads the house answer and is REPORTED as missing**, **`1033` WRITTEN NOT APPLIED — `pl_mi_store_attribution`, the raw_mi residual's store grain, §7b; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with 1013/1015 in any order**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **raw_mi residual store grain** `pl_mi_store_attribution`, mig 1033 — §7b, the twin of `pl_ma_store_attribution`; · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
+| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1087` WRITTEN NOT APPLIED — `pl_ma_month_spiff_source_by_rung` (jsonb `{rung key: feed}`), PER-RUNG sourcing of the month-spiff money: the first month reported on the commission SHEET when EARNED while the trailing months stay on the daily CASH feed (owner decision 2026-10-16, option A "Earned first month"), because each rung is reported by only ONE of the two feeds — §COMMCALC-17. Default `'{}'` = every rung on the mig-314 scalar, byte-identical to today for every org; the one org that reported it gets `{"m1":"commission_sheet"}` in the same file. `ADD COLUMN IF NOT EXISTS` on this same table, coexists with every other `pl_*` column in any order**, **`1086` (`pl_carrier_comm_leg_split`, whether the commission line is shown as its first-month half plus an M2–M12 line or as one line carrying both, §COMMCALC-15; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with every other `pl_*` column in any order, house answer TRUE, and the feature works before it is applied because a missing column reads the house answer and is REPORTED as missing**, **`1033` WRITTEN NOT APPLIED — `pl_mi_store_attribution`, the raw_mi residual's store grain, §7b; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with 1013/1015 in any order**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **raw_mi residual store grain** `pl_mi_store_attribution`, mig 1033 — §7b, the twin of `pl_ma_store_attribution`; · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
@@ -7031,6 +7032,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - *(no endpoint added)* — §CORE-09 adds no route: `POST /core/users/set-password` (`core/router.py::admin_set_password`) already set a SPECIFIC admin-chosen password, validated server-side by `validate_password`, toggling `app_users.must_reset_password` and audited as `password_admin_set`, gated on `_can_edit_setting(caller, "security")`. What changed is the number of SURFACES that offer it — one (`/admin/security`) became three (`+ /admin/roles` 👥 Assign people, `+ /hr/employee-password`), all rendering the one card `frontend/src/components/AssignPasswordCard.tsx`; `GET /core/security-settings` is the `can_edit` read each of them shows the form on (§CORE-09.3).
 - *(no endpoint added)* — §CORE-10 adds no route and no table: both gates are CI, not product. They run as the workflow jobs **The branch was cut from its base (no re-proposed commits, no lost CI job)** (`.github/workflows/branch-base-guard.yml` → `scripts/check_branch_base.py`) and **A guard that goes blind fails CI (derived subject sets)** (`.github/workflows/security.yml` → `backend/harness_subject_set_lock.py`). The first is the only workflow here triggered by `pull_request_target`, deliberately, and it never checks out or runs PR code (§CORE-10.3).
 - *(no endpoint added)* — §CORE-11 adds no route and no table either. It is a component fix plus a CI gate: `frontend/src/components/ReportShell.tsx` grows ONE `bodyCell(c, r)` home for what a body cell shows (both row paths on it), `crm/reports/page.tsx` dereferences the same rule for its own bespoke table, and the gate runs as the workflow step **Run the column-render lock** (`carrier-vocab-guard.yml` → `backend/harness_column_render_lock.py`). Three already-shipped columns began rendering with no change of their own (§CORE-11.1).
+- *(no endpoint added)* — §CORE-12 adds no route, no table and no migration: the seven existing authority writers (`POST /core/users/assign`, `/users/bulk-assign`, `/users/deactivate`, `POST|PUT /core/roles`, `POST /core/revoke-super-admin`, and `purge_app_user` behind `POST /core/employees/purge` and the StoreOps employee delete/merge) each ask ONE new pure home, `core/self_lockout.py`, whether the write would remove the caller's own `security` authority in the tenant it affects, and refuse it with a 400 if so. `_can_edit_setting` MOVED into that home and `core/router.py` dereferences it. A write that names somebody else's row, or a caller who keeps the authority, is byte-identical to before (§CORE-12).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -7400,6 +7402,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile; lock `harness_assign_password_one_home.py` (47) + proof `prove_manage_employees_tile.mjs` (24) — §CORE-09 |
 | **Was this branch cut from a current base, and is each guard still guarding what it thinks it is?** (and therefore: does a green tick mean anything on this pull request?) | no table — git metadata read at CI time: the TWO-DOT diff `base..head` (lines deleted), commit SUBJECTS on both sides (a squash merge leaves no ancestry to read), and the job names declared by each `.github/workflows/*.yml` on both trees; plus every `backend/harness_*.py` that scans repo source | gate A `scripts/check_branch_base.py` (A2 mass deletion unless `BASE-DELETIONS-ACKNOWLEDGED` is in the PR body, A3 re-proposed merged subjects, A4 a CI job the base runs and the head does not declare; 10 armed controls) run from the BASE branch via `pull_request_target`; gate B `backend/harness_subject_set_lock.py` (+ `harness_subject_set_pending.txt`, 50 pinned, shrink-only) — §CORE-10 |
 | **Which component actually puts this report's cell on the screen, and does it honour a column that draws its own?** (and therefore: is a control an author declared actually there?) | no table — frontend source read at CI time: every file that draws a `<td` whose content it reads off a handed column (`c.get(`), which is the derived subject set | ONE home `ReportShell.bodyCell` + `DataGrid`'s own cell + `crm/reports`' bespoke table, all three honouring `ExportColumn.render`; `lib/export.tsx` excused by name and held to the opposite rule (an export carries the figure, never a control); lock `backend/harness_column_render_lock.py` (32) — §CORE-11 |
+| **Would this administrative write take away the authority that just made it?** (and therefore: can an administrator shut their own door with no screen left to undo it?) | no table — the caller's own `storeops.app_users` membership rows and the tenant's `storeops.roles` permissions, read before and after the proposed write | ONE home `app/modules/core/self_lockout.py` (`can_edit_setting` — MOVED there from `core/router.py`, which now dereferences it — plus `acting_caller` / `lockout_reason` / `rows_with_change` / `rows_without`, all pure); dereferenced by `assign_role`, `bulk_assign`, `create_role`, `update_role`, `deactivate_user`, `revoke_super_admin` and `purge_app_user`; five writers excused by name; lock + proof `harness_self_lockout.py` (45) — §CORE-12. Live 2026-10-16: `ss@1313global.us` demoted its own Vzone membership to `market_manager` and only a hand-written UPDATE could restore it |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Store-days started and not finished** (per store-day) — somebody submitted, the close gate sent them back to recount, and they did not return: `unfinished` / `unfinished_counts` on `GET /closing/rollup`, the `unfinished` block on each `GET /closing/summary` store card, the DM-verify banner. Carries the entered money and the gate's OWN recorded variance (never recomputed). **NOT a money figure**: an unfinished day writes no `commcalc.daily_closing` row, so it reaches no cash, recon or P&L total (owner chose "not until corrected", 2026-10-04). Distinct from **turned away** below (refused before the gate) and from **not submitted** (nobody tried) | `closing/unfinished_day.state_for`/`describe` over `commcalc.closing_attempt` + `commcalc.daily_closing` | §29.12 |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
@@ -7439,7 +7442,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Commission per month-of-life, per STORE, on the Gross Profit report — EARNED (sheet) beside RECEIVED (cash) | `store_rows[].comm_ladder` `{rung: $}` + the flat `comm_month_<n>` / `comm_month_unlabelled` companions; `totals.comm_ladder`; `commission_legs.ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` | `gp_report.calc_gp_report` (fed from the same per-store parts already merged into the report-wide ladder — one derivation, read twice) → `GET /gp/{period}` → the GP page's 📅 Months toggle and 'Commission by month-of-life' card. §4a.2. August 2026: M1 6,049.96 + M2 18,776.69 + M3 20,256.94 + M4 19,792.24 + M5 15,931.79 + M6 17,778.75 + Unlabelled 70.00 = 98,656.37, 20/20 stores identity-clean. The Unlabelled rung is ALWAYS its own column and is never folded into a month |
 | The contract RATE each rung should pay, and the base it is a fraction of | `commission_org_config.ma_leg_rate_schedule` (jsonb `{rung: fraction of LIST MRC}`) + `ma_mrc_list_divisor` (0.915) — **mig `1015`, WRITTEN NOT APPLIED, surfaced for owner approval** | §4a.2. Measured today: trailing rungs pay exactly 75% of LIST MRC (modes 41.25/$55, 48.75/$65, 30.00/$40, 22.50/$30); the sheet's own M1 is a median of exactly 0.500 of list. LIST = `mrc_net_discount` / 0.915 — the netted column already has the 8.5% bill-pay commission out and deducting it twice understates every stated rate |
 | Whether a cash payment row can be traced to its ACTIVATION (the cohort question) | `raw_ma_daily_tx.order_number` vs `raw_ma_commission.activation_order` | **IT CANNOT — measured, reported, not papered over.** 0 of 13,087 spiff rows match any of 2,779 sheet activation orders (disjoint id spaces), and inside `raw_ma_daily_tx` every `order_type` family has its own disjoint order-number space. So a per-device cohort chain is not computable from these feeds, and "carrier short-paid M1" vs "the cash feed is missing M1 rows" cannot be distinguished. §4a.2; same honest-absence posture as `ma_store_pnl.ATTRIBUTION_NO_ACTIVATION_REASON` |
-| MA/VidaPay commission RECEIVED, on the Gross Profit report AND the P&L — and its M1..M12+ ladder | `raw_ma_commission` spiff columns (EARNED, activation month) and `raw_ma_daily_tx` spiff-family rows (RECEIVED, cash month); which one is MONEY is `commission_org_config.pl_ma_month_spiff_source`; store from the mig-314 account→store index | **ONE home** `ma_store_pnl.gp_carrier_income` → GP columns, and the same bookings → `coa.build_inputs` → the P&L. §4a. Both bases always reported, labelled; only the cash basis reaches M7..M12 (the sheet has six spiff columns). **The two bases are NOT the same money at the same time — the sheet states the first month at activation, the cash feed states the trailing months promptly and the first month retroactively, so a switch that picks one feed for ALL rungs drops a rung whichever way it is set: §COMMCALC-17.** Rebate and wallet funding are NOT commission on either report (owner 2026-09-08 / 2026-08-10) — `commission_received_lines()` is the ruling, and `assert_commission_column_is_commission()` the checked invariant **Since mig `1013` (§4b) this is the `feeds` source; under `pl_commission_source='ledger'` the covered lines book from `commcalc.commission_ledger` instead and these feed bookings are suppressed on them (recorded on the line's `commission_source`)** |
+| MA/VidaPay commission RECEIVED, on the Gross Profit report AND the P&L — and its M1..M12+ ladder | `raw_ma_commission` spiff columns (EARNED, activation month) and `raw_ma_daily_tx` spiff-family rows (RECEIVED, cash month); which one is MONEY is `commission_org_config.pl_ma_month_spiff_source`, asked **PER RUNG** since mig `1087` through the ONE home `ma_store_pnl.month_spiff_source_for_rung` (§COMMCALC-17.7: the first month on the sheet, the trailing months on cash — exactly one feed books a rung); store from the mig-314 account→store index | **ONE home** `ma_store_pnl.gp_carrier_income` → GP columns, and the same bookings → `coa.build_inputs` → the P&L. §4a. Both bases always reported, labelled; only the cash basis reaches M7..M12 (the sheet has six spiff columns). **The two bases are NOT the same money at the same time — the sheet states the first month at activation, the cash feed states the trailing months promptly and the first month retroactively, so a switch that picks one feed for ALL rungs drops a rung whichever way it is set: §COMMCALC-17.** Rebate and wallet funding are NOT commission on either report (owner 2026-09-08 / 2026-08-10) — `commission_received_lines()` is the ruling, and `assert_commission_column_is_commission()` the checked invariant **Since mig `1013` (§4b) this is the `feeds` source; under `pl_commission_source='ledger'` the covered lines book from `commcalc.commission_ledger` instead and these feed bookings are suppressed on them (recorded on the line's `commission_source`)** |
 | **Commission received — WHICH SOURCE books it (owner 2026-09-21: "p&l is not showing the commission received, it shows in the commission ledger but not populating the p&l")** | `commission_org_config.pl_commission_source` (`feeds` house default \| `ledger` \| `ledger_else_feeds`, mig `1013`) resolved per period by `ledger_pnl.resolve_source`. `ledger`: Σ per bucket per store from `commcalc.commission_ledger` via `commission_ledger.summarize` (the amounts are the commission module's — finance never re-sums `payout_total`) → the line each bucket's registry row names (`commission_bucket.pl_line_key`), the chart's sign per section (deductions positive on their expense line; rebates through `rebate_route`); the five commission-feed paths are suppressed on the covered lines (`ledger_pnl.covered_lines`, derived) and never elsewhere | `coa.build_inputs` (`add_comm` guarded adder + the ledger block) → `engine._assemble` `commission_source` passthrough → `/accounts/pl` ("from the feed tables" / "from the Commission Ledger" + the other source's figure and the difference in words + unbooked money with reasons + the way back to the ledger). Guard `ledger_pnl.double_booked` (raises). Proof `harness_pl_commission_source.py` (73); lock `harness_pl_commission_source_lock.py` (CI). The switch is READ through `ma_store_pnl.load_config` — the row whole, any subset of columns (§4b.1) |
 | **Which columns of a per-org config table exist on the live database — what to apply before a switch takes effect (2026-09-22)** | `commission_org_config` read WHOLE (`core.column_tolerant.read_row`) against `ma_store_pnl.PL_CONFIG_COLUMNS` (column ↔ migration) | `ma_store_pnl.load_config` → `cfg["config_columns_missing"]` / `cfg["config_migrations_missing"]`; surfaced by `GET /commcalc/pl-commission-source` (the panel) and on each commission line's `commission_source.words` / `switch_ready` (the P&L). §4b.1; proof `harness_any_columns.py`; lock `harness_any_columns_lock.py` |
 | Carrier commission EARNED on a rep's activations (dealer REVENUE) | shape A: `raw_ma_commission` money columns netted by `_ma_gate_index`, attributed device→sale→rep via `ma_recon`. shape B: `rep_commissions.boost_commission` (already per rep). Which shape is used is decided by WHICH FEED HAS ROWS, never a carrier name | `carrier_vs_pay.rollup_by_rep` → `GET /commcalc/carrier-vs-pay/{period}`; §31. Three states — `reported` / `measured_zero` / `not_reported`; a `not_reported` earned figure is `null` and yields NO margin, never `$0.00` |
@@ -7508,7 +7511,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | MA residual (P&L "MI residual income") | `raw_ma_daily_tx.retail_cost` sign-flipped (negative = paid to dealer) on rows in the `'%residual%'` product family ∪ `pl_ma_residual_order_types` order types (default `Postpaid Residual Order`) | `residual_subs.ma_residual_row_matcher` → `coa.build_inputs` (mig `309`; union dedup — each row books once) |
 | **MI/ATU residual on the P&L, PER STORE** (`mi_income` "MI residual income" + `atu_income`) | `raw_mi.actual_mi_payout` / `actual_atu_payout`, each row attributed to the store its `salesforce_id` resolves to; an ambiguous, unmapped or blank door books COMPANY-WIDE (never dropped, never guessed). Per-org switch `commission_org_config.pl_mi_store_attribution` (mig `1033`, code default OFF) | `residual_subs.mi_pnl_bookings` + `residual_subs.canonical_salesforce_store_index` → `coa.build_inputs` → `engine._assemble`. The CONSOLIDATED total is identical either way; the per-store / per-company / market-filtered views gain what they read as $0 before. §7b; pinned `harness_mi_residual_store_grain.py` |
 | Residual per subscriber (per store, per month) | **Components are per SOURCE, config, since 2026-09-08** (`residual_subs.residual_components`, override `commission_org_config.residual_report_components`, mig `992`). Boost `boost_mi_atu`: `raw_mi.actual_mi_payout + actual_atu_payout` (two halves of ONE booked `mi_income` line) ÷ distinct paid `phone_number`. MA/VidaPay `vidapay_ma`: −`retail_cost` on the SAME mig-309 residual union as the row above ONLY ÷ `raw_ma_commission` activated lines — the `merchant_discount` airtime margin is reported BESIDE it (`atu` in every series entry) and is NOT residual (it has had its own P&L line since mig 309 and recurs per transaction, not per subscriber) | `residual_subs.compute` → `GET /account/residual-per-sub` (§7a); store names via `ma_store_pnl.canonical_store_index`; pinned `harness_residual_per_sub.py` + `harness_commission_backoffice_recon.py` §A/§B |
-| MA month-spiff commission M1..M12+ (P&L `carrier_comm`, cash basis) | `raw_ma_daily_tx.retail_cost` sign-flipped on `order_type ∈ pl_ma_spiff_order_types` rows (default `PostPaid Additional Spiff`); month detail `M<n>` from `product_name` via `commission_ledger.parse_payment_month` (no token → 'Spiff (other)') | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; only when `pl_ma_month_spiff_source='daily_tx'`, which also suppresses the `raw_ma_commission.spiff_m1..m6` activation-month booking — never both, and that suppression is what reads the first month low: §COMMCALC-17) |
+| MA month-spiff commission M1..M12+ (P&L `carrier_comm`, cash basis) | `raw_ma_daily_tx.retail_cost` sign-flipped on `order_type ∈ pl_ma_spiff_order_types` rows (default `PostPaid Additional Spiff`); month detail `M<n>` from `product_name` via `commission_ledger.parse_payment_month` (no token → 'Spiff (other)') | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; a rung books here only when THIS org states THAT rung on the cash feed — `ma_store_pnl.books_month_spiff_from`, mig `1087` — and the sheet's matching `spiff_m*` column is then suppressed, never both. Before mig 1087 the choice was one feed for ALL rungs, and that is what read the first month low: §COMMCALC-17) |
 | MDF / market spiff (P&L `mdf_income`) | `raw_ma_daily_tx.retail_cost` sign-flipped on rows whose `product_name` contains a `pl_mdf_product_tokens` token (luxelink: `premium store spiff`, $1,000/store) | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; `auto_opt` line, per store; retail_cost precedence residual → MDF → month-spiff) |
 | MA processor account → store | `raw_ma_fulfillment.tspid` × `business_address` (derived, ambiguous dropped) ∪ `ma_account_store_map` (override wins) | `ma_store_pnl.account_store_index`/`load_store_index` → `coa.build_inputs` `_ma_store` + `device_cogs._ma_sold_cost` (mig `314`; gated by `pl_ma_store_attribution`; unmapped accounts book company-wide) |
 | Device-purchase rebate (P&L `device_rebate` contra-COGS OR `rebate_income` revenue) | `raw_ma_commission.rebate` (negative = paid to dealer) + `activation_rebate_ledger.device_rebate_amount` (positive money-in) | `ma_store_pnl.rebate_route` per `commission_org_config.pl_rebate_presentation` (mig `934`: `contra_cogs` default = K1 negative in COGS; `income` = positive revenue, luxelink) → `ma_store_pnl.ma_commission_bookings` + `coa.build_inputs` activation-ledger booking; store grain via the mig-314 account→store index |
@@ -25399,6 +25402,7 @@ status word rather than a blank that reads as nil.
 | CORE-09 | core |
 | CORE-10 | core |
 | CORE-11 | core |
+| CORE-12 | core |
 
 <!-- SECTION-REGISTER:END -->
 
@@ -27031,6 +27035,7 @@ silently overridden:
 | switch | the org declares | the house default | what the default cost |
 |---|---|---|---|
 | `pl_ma_month_spiff_source` | `daily_tx` | `commission_sheet` | every month-spiff cash row in the daily-transaction feed booked **nothing** — and in the other direction the sheet's `spiff_m1`, the ONLY place the first month is reported, books nothing (§COMMCALC-17) |
+| `pl_ma_month_spiff_source_by_rung` (mig `1087`) | `{"m1":"commission_sheet"}` | `{}` | with `{}` every rung reads the scalar, so the first month read the cash that had arrived instead of the sheet's `spiff_m1` — §COMMCALC-17.7 |
 | `pl_mdf_product_tokens` | one token | `[]` | market-development money booked **nothing** |
 | `pl_ma_store_attribution` | `true` | `false` | all airtime margin, residual, MDF and spiff money booked company-wide, so **no store column could carry one dollar of it** |
 | `pl_ma_residual_order_types` | one family | the mig-309 default | (identical in effect here, and that is why it must still be read rather than assumed) |
@@ -29241,6 +29246,88 @@ in a note is enforced by whoever remembers it).
 
 ---
 
+## §CORE-12. A WRITE MAY NOT SHUT THE DOOR ON ITS OWN AUTHOR — one self-lockout home (owner report 2026-10-16)
+
+Owner: *"i made my self market manager under vzone and cannot get admin privilidges anymore under
+ss, fix urgently"*.
+
+### CORE-12.1 THE INSTANCE, AND THE CLASS BEHIND IT
+
+The `ss@1313global.us` login holds FOUR memberships, one per tenant (`storeops.app_users` is keyed
+per `(auth_id, org_id)` since mig 706), three of them `admin`. Its **Vzone** membership was moved to
+`market_manager` through `POST /core/users/assign`. Vzone's Market Manager role carries
+`modules.admin: false` and `scope: 'market'`, and that login holds no `super_admin` flag on any row,
+so after the write **no screen inside Vzone could undo it and no other tenant could reach in**. A
+hand-written `UPDATE` in the database was the only way back.
+
+The class is not "market manager" and not "Vzone". Every role / membership / role-permission write
+in `core/router.py` gates on `_can_edit_setting(caller, 'security')` and then writes **whatever it
+was asked to write — including the row or the role that answer was computed from**. The house
+already refused three INSTANCES of exactly that question, each inline and each unaware of the
+others:
+
+| already there | what it protects |
+|---|---|
+| `PUT /core/auth-config` — "no active user has the Admin role" | the TENANT, at enforcement time |
+| `POST /core/revoke-super-admin` — "cannot remove the last platform super-admin" | the PLATFORM |
+| `DELETE /core/roles/{id}` — "The admin role can't be deleted." | the TENANT's role catalog |
+
+None of them asked it about the CALLER, which is the instance that actually happened.
+
+### CORE-12.2 THE FIX — one home, asked by every writer
+
+`backend/app/modules/core/self_lockout.py` (pure, stdlib only) answers **"would this write take away
+the authority that just made it?"**: it computes `can_edit_setting` for the affected tenant BEFORE
+and AFTER the proposed write and refuses only when the answer flips `True -> False`.
+
+**The authority answer moved INTO that home.** `_can_edit_setting` was `core/router.py`'s private
+function; the router now dereferences `self_lockout.can_edit_setting` and defines nothing. A copy
+would be the divergence the owner's design-fix directive forbids — a guard asking a different
+question than the gate protects a different door.
+
+What it therefore does NOT refuse, by construction:
+
+- demoting **somebody else**, whatever it does to them;
+- a caller who **never had** the authority (the gate already refused them);
+- demoting yourself while the authority survives another way — a `super_admin` flag on any
+  membership, or an explicit `settings.security` grant on the new role;
+- narrowing the role literally **named `admin`**, because the name is itself a rung of
+  `can_edit_setting` — the guard agrees with the gate rather than out-guessing it.
+
+### CORE-12.3 EVERY DOOR, NOT THE ONE THAT WAS REPORTED
+
+The same question is asked by all seven writers of authority in the module, and the subject set is
+DERIVED from the router source by the lock, so a new writer joins it by existing:
+
+| writer | the door it could shut |
+|---|---|
+| `POST /core/users/assign` | the reported instance — your own membership's role or `is_active` |
+| `POST /core/users/bulk-assign` | the same, from a spreadsheet (non-raising: the row fails, the sheet applies) |
+| `POST /core/roles` | an UPSERT on `(org_id, name)`, so it rewrites an existing role's permissions |
+| `PUT /core/roles/{id}` | your own role's permissions |
+| `POST /core/users/deactivate` | a login switched off cannot sign in to switch itself back on |
+| `POST /core/revoke-super-admin` | your own platform flag, where the role behind it does not carry the authority |
+| `purge_app_user` (`POST /core/employees/purge`, StoreOps employee delete / merge) | the row deleted outright — the bluntest form of the same door. The two roster callers now hand over the caller's token so the one home can refuse |
+
+EXCUSED, by name and with the reason (pinned by §D of the lock, so an excuse cannot become an
+oversight): `_provision_tenant`, `create_super_admin`, `reinstate_login`, `bulk_provision` (each can
+only ADD authority) and `disable_and_switch` (the user's own deliberate hand-over, which mints the
+replacement login FIRST). `reset_tenant_admin_password`, `set_2fa_settings` and `verify_phone` are
+not in the subject set at all — they write a password, a 2FA channel and a phone, never a role.
+
+### CORE-12.4 THE LOCK
+
+`backend/harness_self_lockout.py` — 45 checks, DB-free: §A reproduces the instance on the real
+membership shape and Vzone's real role permissions (before `True`, after `False`), §B the decision
+table including everything deliberately NOT refused, §C every authority writer dereferences the
+guard **and** `can_edit_setting` has no second copy anywhere under `backend/app`, §D the excused
+writers named, §E five armed negative controls. Runs in CI as the job **A write may not lock out its
+own author** (`.github/workflows/org-scope-guard.yml`).
+
+Neighbours: §CORE-07 (the login/person link, the other `app_users` write-path fix), §38.6 (the two
+platform-authority rungs), §14w (people visibility — the other question answered off a role row).
+
+
 ## §COMMCALC-11. AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15)
 
 Owner, in his own words, after declaring the UPS reporting-portal login: *"it has been over 5 minutes
@@ -29961,6 +30048,17 @@ sound on the REAL September labels below. The first month's money is reported on
 | where the M1 proof lives | `backend/harness_month_leg_resolution.py` | **EXTENDED** with §G rather than a new harness — the owner has now reported the same number twice and the evidence belongs in one place |
 | whether a second capture path is needed | no | no new table, endpoint, report or query; nothing to register in §§16–18 |
 
+And again for the FIX (§17.7), before building it:
+
+| asked of the index | found | what was reused |
+|---|---|---|
+| where "which feed states this org's month-spiff money" is decided | `commission_org_config.pl_ma_month_spiff_source` (mig 314), read by `ma_store_pnl.load_config` — one answer for all rungs | **EXTENDED in place**: the same switch, the same reader, the same config row; a per-rung map (mig 1087) with the scalar as its fallback. No sibling switch, no second config table |
+| whether a rung vocabulary already exists | `commission_legs.ladder_key` / `bucket_for_leg` / `LADDER_UNKNOWN` (§4a.2) | the map's KEYS are that vocabulary; nothing here spells a rung or a month count |
+| where the proof belongs | `backend/harness_month_leg_resolution.py` §A–§G | **EXTENDED with §H** — the fix is proved in the same home that reproduced the defect, not in a sibling harness |
+| where the one-home gate belongs | `backend/harness_ma_income_one_home_guard.py` (CHECK 2 / 2b / 2c already gate the MA money, the LEG and the RUNG homes) | **EXTENDED with CHECK 2d** rather than a new lock |
+| whether the P&L needed a new line | no — §COMMCALC-15's first-month / M2–M12 split already exists (mig 1086) | the movement lands on the EXISTING first-month line; `split_leg_bookings` is untouched |
+| whether the takeover evaluation needed its own copy | no | `prospect_eval.rule_basis` gains the switch as a declared-vs-house row; it books through `ma_store_pnl` as before |
+
 ### COMMCALC-17.2 Measured, read-only
 
 Prospect uploads of org `854f6d7b-…` (`commcalc.prospect_feed_row`, seven months) — and the same
@@ -30017,7 +30115,7 @@ the same time. They do not: the feeds are **complementary by rung and lagged by 
 **Neither setting can state the month.** The right answer, $7,899.24 + $38,451.50, is unreachable by
 either — pinned by name in `harness_month_leg_resolution.py` §G10–G13.
 
-### COMMCALC-17.5 The shape of the fix, and why it is WAITING
+### COMMCALC-17.5 The shape of the fix (decided 2026-10-16 — see §17.7 for what shipped)
 
 The design fix is **per-RUNG sourcing**: `pl_ma_month_spiff_source` becomes resolvable per
 month-of-life rung (a rung→source map, per org, with the house answer reproducing today's single
@@ -30027,11 +30125,80 @@ made **per rung, wholesale**: MEASURED, of the 2,661 first-month cash rows, **ze
 files a spiff payment under its own transaction number and the two feeds **cannot be matched row to
 row**. A fix cannot book the sheet's first month and suppress "the same" cash row later.
 
-**It is not shipped, and the reason is stated plainly:** whether the commission line states the
-first month on an **accrual** basis while its trailing months stay **cash** is an accounting policy
-for the owner, not a choice an agent makes — and it moves real money on the P&L. The mechanism, the
-measurement and the regression are ready; the policy decision and its migration are surfaced for
-approval.
+**It was not shipped with the finding, and the reason was stated plainly:** whether the commission
+line states the first month on an **accrual** basis while its trailing months stay **cash** is an
+accounting policy for the owner, not a choice an agent makes — and it moves real money on the P&L.
+The mechanism, the measurement and the regression were ready; the policy decision and its migration
+were surfaced for approval. **The owner answered the decision card on 2026-10-16 22:33 UTC: option
+A, "Earned first month"** — the first month reported on the commission SHEET (earned at activation),
+months 2–12 still from the daily cash feed (received). §17.7 is what that decision shipped as.
+
+### COMMCALC-17.7 THE FIX, SHIPPED: the feed is chosen PER RUNG (owner decision 2026-10-16)
+
+**Owner's decision, verbatim from the card:** option **A, "Earned first month"**, on *"Report the
+first month when earned, while trailing months stay on cash?"*. It is an accounting policy and it is
+not re-litigated here.
+
+**THE CLASS, named rather than the instance.** The instance is "this org's first month reads
+$1,237.99 instead of $7,899.24". The class is: **"which feed states this org's money" was asked once
+for ALL rungs, of two feeds that are complementary by rung and lagged by rung.** The fix is to the
+QUESTION: it is only answerable per rung, so that is the only form it is asked in now.
+
+| the fact | its ONE home | every caller |
+|---|---|---|
+| which feed states THIS rung | `account/ma_store_pnl.month_spiff_source_for_rung` (+ `books_month_spiff_from`, `month_spiff_feeds_used`, `month_spiff_rung_sources`) | `ma_commission_bookings` (sheet side), `ma_tx_bookings` (cash side), `ma_tx_coverage`, `gp_carrier_income` |
+| what the basis is CALLED | `ma_store_pnl.booked_basis` (`BASIS_PER_RUNG` + a label built from `BASIS_LABELS`) | `router._ma_summary_legs` (`booked_basis`), the GP payload / page |
+| the ladder the BOOKS carry | `ma_store_pnl.booked_month_ladder` — rung by rung from the feed that states it | `gp_carrier_income` (so "the ladder explains the Commission column" survives a mixed basis) |
+| a rung whose feed sent NOTHING this period | `ma_store_pnl.rung_source_gaps` | the GP/P&L payload (`rung_source_gaps`) |
+| the switch itself | `commission_org_config.pl_ma_month_spiff_source_by_rung` (mig **1087**), jsonb `{rung key: feed}` | `ma_store_pnl.load_config` (the only reader), `prospect_eval.rule_basis` (so the evaluation SHOWS the declaration) |
+
+**Config, never code.** A rung key is the vocabulary `commission_legs` already owns — a ladder key
+(`'1'`…`'13'`…), a bucket name (`'m1'` / `'trailing'` / `'unsplit'`) or `'default'`; resolution is
+exact rung → bucket → `default` → the mig-314 scalar. No carrier, tenant, product or month COUNT
+appears anywhere in the resolver, `'trailing'` covers an M13 the day it arrives, and an unknown key
+or a mistyped feed is DROPPED so that rung keeps the scalar — a typo can never restate a P&L line.
+**The house answer is `{}`**: every rung reads the scalar, which reproduces mig 314 byte-identically,
+so an org that declares nothing sees no change at all (pinned `harness_month_leg_resolution.py`
+§H6–H9, both settings, both booking functions).
+
+**NO DOUBLE COUNT, and it is the code's shape rather than a comment.** Exactly one feed answers yes
+for a rung; the other feed's rows for that rung book NOTHING. So when the first month is sourced
+from the sheet, the retroactive first-month CASH rows do not book — they are the same money with a
+lag (§17.2: cumulatively 60.8% of earned, never above it), and they cannot be netted row by row
+because ZERO of 2,661 of them join a sheet activation (§17.5). The suppressed rows are NAMED rather
+than silently dropped: `ma_tx_coverage` reports them under `sourced_elsewhere` with the rung and the
+feed that states them, so "everything has a reason" (owner 2026-09-08) still holds — they are never
+counted as a family with no business rule.
+
+**WHAT MOVES, measured read-only through these very booking functions (2026-10-16).** Org
+`854f6d7b-…` is the only org on the cash scalar, so it is the only live book that moves:
+
+| period | `carrier_comm` today | under the decision | Δ | first-month rung |
+|---|---|---|---|---|
+| Jun 2026 | 26,999.54 | 29,229.41 | **+2,229.87** | 2,605.54 → 4,835.41 |
+| Jul 2026 | 28,830.94 | 41,158.45 | **+12,327.51** | 1,275.19 → 13,602.70 |
+| Aug 2026 | 98,656.37 | 115,878.31 | **+17,221.94** | 6,049.96 → **23,271.90** |
+| Sep 2026 | 101,270.98 | 118,077.91 | **+16,806.93** | 5,666.97 → 22,473.90 |
+| **Jun–Sep** | **255,757.83** | **304,344.08** | **+48,586.25** | |
+| Oct 2026 (open) | 38,855.99 | 45,168.90 | +6,312.91 | 1,708.67 → 8,021.58 |
+
+Every trailing rung is unchanged to the cent in every month — the whole movement is the first-month
+rung. August's first month becomes **$23,271.90**, which is the figure the Gross Profit tile has
+shown all along (§4a) and the owner's rule of thumb (§17.2). On the LuxeLink takeover-evaluation
+uploads (§COMMCALC-03, the prospect's own feeds, not the live book): Jun +3,351.48, Jul +7,619.57,
+Aug +9,560.67, Sep +6,661.25 → **Jun–Sep +27,192.97** (Mar–Sep +33,225.12), first month
+1,237.99 → 7,899.24 in September, exactly §17.2's measured earned figure.
+
+**A PERIOD WITH NO SHEET UPLOAD IS UNREPORTED, NOT ZERO.** Measured on the same org:
+`raw_ma_commission` has rows from **June 2026** onward and **none** for Feb–May 2026, while
+`raw_ma_daily_tx` covers every month. So under this decision the first-month rung has no source in
+those four months. There is deliberately **no fallback** to the other feed (that would double-count
+the rung across periods), and the absence is REPORTED — `rung_source_gaps` names the rung, the feed
+and "UNREPORTED here, not zero" (§COMMCALC-16's rule). **Recompute Jun 2026 onward only;** recomputing
+Feb–May 2026 would publish a $0.00 first month for months whose sheet was never uploaded.
+
+**Statements are per-period snapshots** (`commcalc.account_statements`, 72 scopes × Feb–Oct for this
+org). Applying mig 1087 rewrites no stored row: Jun–Oct 2026 move when those periods are RECOMPUTED.
 
 ### COMMCALC-17.6 Locks
 
@@ -30041,5 +30208,23 @@ thumb as arithmetic on the sheet; **G10–G13 reproduce the wrong answer through
 functions** and assert the right one is unreachable under either setting; G14–G15 pin the data shape
 that causes it; G16–G17 pin the zero-join measurement the fix's shape depends on.
 
+`backend/harness_month_leg_resolution.py` §H — 34 further checks on the FIX, in the same home (no
+sibling harness): H1–H5 reach the answer §G13 proved unreachable and prove not one cash row of a
+sheet-sourced rung books; **H6–H9 pin BYTE-IDENTITY for an org that declares nothing**, on both
+settings and through both booking functions, and re-assert §G's two single-feed answers unchanged;
+H10–H16 pin RULE TWO and the fail-to-the-scalar posture (a mistyped feed, an unknown rung key, a
+non-dict map, bucket resolution with no month count, an unlabelled row never guessed into M1);
+H17–H21 pin the GP ladder following the books rung by rung and the basis being NAMED; H22–H24 pin
+"everything has a reason" under suppression; H25–H28 pin the UNREPORTED-not-zero period gap;
+H29–H31 pin the live movement as figures.
+
+`backend/harness_ma_income_one_home_guard.py` **CHECK 2d — the build gate that cannot un-wire:** no
+file under `backend/app` outside the home may compare the month-spiff switch to a feed name (any
+spelling: a literal, `BASIS_EARNED`/`BASIS_RECEIVED`, `in`/`not in`), and the four functions inside
+the home must keep calling the resolver. Verified to BITE (a planted
+`cfg["month_spiff_source"] == "daily_tx"` in another module fails the run). Wired into CI in the
+*MA one-home guard* step, with the proof harness beside it.
+
 Same class: §COMMCALC-16 (an absence written down as a measurement), §COMMCALC-15.2 (the rung is a
-fact about the booking), §19.26 (missing beats wrong on a money gate).
+fact about the booking), §19.26 (missing beats wrong on a money gate), §19.18 (a registry written
+and its callers left unwired — which is what CHECK 2d exists to prevent here).
