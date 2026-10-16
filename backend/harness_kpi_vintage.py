@@ -247,8 +247,21 @@ ck("B3 derived_rate computes normally when there IS a basis, and refuses every o
 ck("B4 a rate cell that SAYS zero still means zero; an ABSENT one is None",
    ds._rate("0") == 0.0 and ds._rate("0%") == 0.0 and ds._rate("") is None
    and ds._rate(None) is None and ds._rate("n/a") is None and ds._rate("71.43") == 71.43)
-ck("B5 the COUNT parser is untouched — an absent count is still 0, because for a count it is",
-   ds._num("") == 0.0 and ds._num(None) == 0.0 and ds._num("4") == 4.0)
+# B5 USED TO PIN THE OPPOSITE, and it was wrong. It read "the COUNT parser is untouched — an absent
+# count is still 0, because for a count it is", and that premise died on owner report 2026-10-16: the
+# store report stopped sending its unit counts and 28 stores filed October 2026 with 0 activations,
+# 0 upgrades and 0 total activity beside a populated 66.67% ATU. Measured, house org: September (pulled
+# 2026-10-02) 1061 gross adds / 494 upgrades / 1555 total acts; October (pulled 2026-10-16) 0 / 0 / 0.
+# A count obeys the same rule as a rate, and the two readings now share one home (`portal_cell`).
+ck("B5 an ABSENT count is None, exactly as an absent rate is — one rule, one home",
+   ds._num("") is None and ds._num(None) is None and ds._num("4") == 4.0
+   and ds._num("0") == 0.0)
+ck("B5b PRE-FIX CONTROL — the retired coercion filed that same unsent count as a measured zero",
+   (0.0 if "" in ("", None) else None) == 0.0)
+ck("B5c and the derived total of two unsent counts is absent, not a confident zero",
+   ds.normalize_store({"atu_loading_percent": "66.67"})["total_acts"] is None
+   and ds.normalize_store({"gross_activation_quantity": "61",
+                           "upgrades": "29"})["total_acts"] == 90)
 
 no_basis = dict(stale_vals, boostapp=None)
 met_nb, tot_nb, ev_nb, nd_nb = kf.score(no_basis, kf.BUILTIN_KPI_DEFS, TARGETS)

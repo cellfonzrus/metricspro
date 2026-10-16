@@ -270,8 +270,13 @@ REQUIRED_CONTENT_COLUMNS = {
     # the advocate (rep) DLAR: the door identity the store roll-down joins on, and the prepaid split the
     # Boost App attach rate is measured against.
     "raw_dlar_rep": ("store", "ga_prepaid", "gross_adds", "atu_pct"),
-    # the store DLAR: the join key and the three KPIs that are ONLY published at store grain.
-    "raw_dlar_store": ("address", "family_plan_pct", "tmr3", "aal_conversion"),
+    # the store DLAR: the join key, the three KPIs that are ONLY published at store grain, and — added
+    # 2026-10-16 — the UNIT COUNTS. Those three were not declared, so when the store report stopped
+    # sending them in October 2026 the sweep's status line said nothing about the store grain at all:
+    # 28 stores filed 0 activations, 0 upgrades and 0 total activity beside populated attach rates
+    # under a green "OK". A count is as much a declared column as a rate (index §COMMCALC-16).
+    "raw_dlar_store": ("address", "family_plan_pct", "tmr3", "aal_conversion",
+                       "gross_adds", "total_upgrades", "total_acts"),
 }
 
 

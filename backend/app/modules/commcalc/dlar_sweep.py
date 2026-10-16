@@ -23,6 +23,10 @@ from datetime import datetime, timezone
 
 # THE one home of "which columns must carry a value" (index §19.18 arrival/content, §19.28 completeness).
 from app.modules.commcalc import data_lineage_registry as _lineage
+# THE one home of "what does a source cell mean, and did the source send it at all" (index §COMMCALC-16).
+# Both readings below delegate: a count and a rate obey ONE rule about absence, in one place, so the
+# next shape change cannot land on a reading that was never taught it (owner report 2026-10-16).
+from app.modules.commcalc import portal_cell as _cell
 from app.modules.commcalc import empty_pull_verdict as _empty_verdict
 from app.modules.commcalc import auto_calc as _auto_calc   # the ONE post-landing hook (index §6l)
 
@@ -78,22 +82,14 @@ def _period_count(client, table, org_id, period):
 
 
 def _num(v):
-    """Coerce a DLAR cell ('71.43', '-100.00', '0', '', '0% / 71.43%', '55%') to float.
+    """A COUNT or amount cell → float, or **None when the portal sent no cell at all**.
 
-    Returns 0.0 for an ABSENT cell. Kept verbatim for the COUNT columns, where the portal omitting a
-    count and reporting a count of zero are the same fact and every reader treats them alike. For a
-    RATE column they are NOT the same fact — use `_rate`."""
-    if v is None:
-        return 0.0
-    s = str(v).strip().replace("%", "").replace(",", "")
-    if not s or s.lower() in ("n/a", "na", "-", "--", "none"):
-        return 0.0
-    if "/" in s:                                   # '0% / 71.43%' → take the period value
-        s = s.split("/")[-1].strip().replace("%", "")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
+    DEREFERENCES `portal_cell.count` — this used to return `0.0` for an absent cell, and that is the
+    defect of 2026-10-16: the store report stopped sending its unit counts and 28 stores landed
+    October 2026 with 0 activations, 0 upgrades and 0 total activity beside populated attach rates,
+    under a green status line. An unsent count is not a sold-nothing month. The parse is unchanged for
+    a cell the portal DID send, including a literal '0', which still reads as a measured zero."""
+    return _cell.count(v)
 
 
 def _rate(v):
@@ -103,18 +99,8 @@ def _rate(v):
     measurement; an absent measurement stored as `0.0` is indistinguishable from a rep who genuinely
     attached nothing, and it fails that rep against a target off a number nobody observed.
     `kpi_failing.score` reports a `None` as `no_data` and leaves it OUT of the met-count denominator.
-    Same parsing as `_num` otherwise — a cell that SAYS '0' still means zero."""
-    if v is None:
-        return None
-    s = str(v).strip().replace("%", "").replace(",", "")
-    if not s or s.lower() in ("n/a", "na", "-", "--", "none"):
-        return None
-    if "/" in s:
-        s = s.split("/")[-1].strip().replace("%", "")
-    try:
-        return float(s)
-    except ValueError:
-        return None
+    DEREFERENCES `portal_cell.rate` — the rule it states is now true of counts too, in one home."""
+    return _cell.rate(v)
 
 
 def derived_rate(numerator, denominator):
@@ -227,76 +213,157 @@ def fetch_report(session, name, page=100):
     return records, import_date
 
 
+# ── WHICH SOURCE FIELD FEEDS WHICH COLUMN — ONE DECLARATION PER REPORT ───────────────────────────
+# Owner report 2026-10-16: the store report's unit counts stopped arriving and landed as measured
+# zeros. The reason nothing could SAY so is that the only record of "this column comes from that
+# portal field" was the `rec.get("…")` literal inside the normalizer. A fact that exists only as an
+# argument cannot be checked, so a RENAME upstream reads as data: the old key returns nothing, the
+# coercion returned 0.0, and 28 stores filed a month of zero activations under a green status.
+#
+# So the mapping is DECLARED here, the normalizers DEREFERENCE it, and `field_arrival` compares it
+# against the records the portal actually sent — naming the fields that stopped arriving and, beside
+# them, the fields the portal IS sending that nothing reads. That second list is the renamed field's
+# new name, printed by the feed itself on the first run after a rename.
+#
+# `kind` decides the reading, and the readings differ only in what the caller MEANS (`portal_cell`):
+#   · TEXT   — identity; an absent field is '' (what every consumer already sees for a blank door).
+#   · COUNT  — units. Absent → None, NEVER 0 (the 2026-10-16 defect).
+#   · RATE   — a percentage. Absent → None (the 2026-09-26 defect, unchanged).
+# Several spellings may be declared for one column, most-preferred first; the first that CARRIES a
+# value wins, so a measured '0' under the first spelling is kept rather than falling through to the
+# second. RULE TWO: these are the SOURCE's own field names, not behaviour branched on a carrier.
+TEXT, COUNT, RATE = "text", "count", "rate"
+
+STORE_FIELDS = (
+    # (our column,            kind,  source field spelling(s) …)
+    ("salesforce_id",         TEXT,  "id"),
+    ("address",               TEXT,  "address"),
+    ("location",              TEXT,  "name"),
+    ("gross_adds",            COUNT, "gross_activation_quantity"),
+    ("pay_now_acts",          COUNT, "prepaid_activations"),
+    ("pay_later_acts",        COUNT, "postpaid_activations"),
+    ("total_upgrades",        COUNT, "upgrades"),
+    ("psa_projected",         RATE,  "projected_percent_to_target", "projected_pct_to_sales_quota"),
+    # the three KPIs published ONLY at store grain, which the pay engine rolls down to every rep
+    ("family_plan_pct",       RATE,  "family_plan_percent"),
+    ("tmr3",                  RATE,  "three_mr"),
+    ("aal_conversion",        RATE,  "aal_conversion"),
+    ("protect_pct",           RATE,  "protect_total_attach"),
+    ("atu",                   RATE,  "atu_loading_percent"),
+    ("byod_pct",              RATE,  "byod_adds_percent", "byod_total_percent"),
+    ("port_pct",              RATE,  "port_ins"),
+    ("conversion_rate",       RATE,  "conversion_rate"),
+    ("acc_attach_rate",       RATE,  "accessory_attach_rate"),
+    ("avg_first_mrc",         COUNT, "avg_first_mrc"),
+    ("sales_target",          COUNT, "sales_target"),
+    ("zero_selling_days",     COUNT, "zero_selling_days"),
+    ("shopper_trak_conversion", RATE, "shopper_trak_conversion"),
+)
+
+REP_FIELDS = (
+    ("salesforce_id",         TEXT,  "sfid"),
+    ("door_name",             TEXT,  "name"),
+    ("door_address",          TEXT,  "address"),
+    # the calculator joins a rep to a store on the LEADING NUMBER of this address
+    ("store",                 TEXT,  "address"),
+    ("door_city",             TEXT,  "city"),
+    ("door_state",            TEXT,  "state"),
+    ("door_zip",              TEXT,  "zip"),
+    ("advocate_name",         TEXT,  "sales_rep_name"),
+    ("rep_name",              TEXT,  "sales_rep_name"),
+    ("gross_adds",            COUNT, "activations"),
+    ("ga_prepaid",            COUNT, "prepaid_activations"),
+    ("ga_postpaid",           COUNT, "postpaid_activations"),
+    ("upgrades",              COUNT, "upgrades"),
+    ("byod_pct",              RATE,  "byod_rate"),
+    ("atu",                   COUNT, "atu_activations"),
+    ("atu_pct",               RATE,  "atu_loading_rate"),
+    ("protect_pct",           RATE,  "insurance_take_rate"),
+    ("device_insurance_pct",  RATE,  "insurance_take_rate"),
+    ("device_insurance_total", COUNT, "insurance_total"),
+    ("device_insurance_ga",   COUNT, "insurance_activations"),
+    ("device_insurance_upgrades", COUNT, "insurance_upgrades"),
+    ("platinum_pts",          COUNT, "platinum_points"),
+    ("avg_platinum_pts",      COUNT, "platinum_points_per_activation"),
+    ("platinum_pts_5plus",    COUNT, "platinum_sales"),
+    ("boost_ready_bounty",    COUNT, "boost_ready_bounty"),
+    ("tablet_ga",             COUNT, "tablet_activations"),
+)
+
+# A derived column is declared with the SOURCE fields it is derived FROM, so the arrival check covers
+# it too: `total_acts` is the sum of two source fields and `boost_app_pct` is a quotient of two, and
+# both used to go silently absent with the fields under them.
+STORE_DERIVED_FROM = ("gross_activation_quantity", "upgrades")
+REP_DERIVED_FROM = ("boost_ready_bounty", "prepaid_activations")
+
+FIELD_MAPS = {"dlar": STORE_FIELDS, "advocate": REP_FIELDS}
+
+
+def declared_source_fields(report_key):
+    """Every source FIELD the named report's mapping reads, one entry per field — the ONE list
+    `field_arrival` checks. A field with alternative spellings stays ONE entry (a tuple), because a
+    reader that accepts two spellings is not missing the one it did not get. PURE."""
+    out = []
+    for row in FIELD_MAPS.get(report_key) or ():
+        group = tuple(row[2:])
+        if group and group not in out:
+            out.append(group)
+    extra = {"dlar": STORE_DERIVED_FROM, "advocate": REP_DERIVED_FROM}.get(report_key) or ()
+    for key in extra:
+        if (key,) not in out:
+            out.append((key,))
+    return tuple(out)
+
+
+def _pick(rec, keys):
+    """The first declared spelling of a field that CARRIES a value → its raw cell; else the raw cell of
+    the first spelling the record has at all; else None (the source sent no such field). PURE."""
+    rec = rec or {}
+    present = None
+    for k in keys:
+        if k in rec:
+            if present is None:
+                present = rec.get(k)
+            if _cell.carries(rec.get(k)):
+                return rec.get(k)
+    return present
+
+
+def shape(rec, fields):
+    """One source record → our column values, by the declared mapping. PURE, no portal knowledge."""
+    out = {}
+    for row in fields:
+        col, kind, keys = row[0], row[1], row[2:]
+        raw = _pick(rec, keys)
+        if kind == TEXT:
+            out[col] = "" if raw is None else str(raw).strip()
+        elif kind == RATE:
+            out[col] = _rate(raw)
+        else:
+            out[col] = _num(raw)
+    return out
+
+
 def normalize_rep(rec):
-    """Advocate (rep) record → raw_dlar_rep row fields (matches the manual-upload mapping)."""
-    ga_prepaid = _num(rec.get("prepaid_activations"))
-    bounty = _num(rec.get("boost_ready_bounty"))
-    return {
-        "salesforce_id": rec.get("sfid", ""),
-        "door_name": rec.get("name", ""),
-        "door_address": rec.get("address", ""),
-        "door_city": rec.get("city", ""),
-        "door_state": rec.get("state", ""),
-        "door_zip": str(rec.get("zip", "")).strip(),
-        "advocate_name": rec.get("sales_rep_name", ""),
-        "rep_name": rec.get("sales_rep_name", ""),
-        "store": rec.get("address", ""),               # calculator join key = leading number of address
-        "gross_adds": _num(rec.get("activations")),
-        "ga_prepaid": ga_prepaid,
-        "ga_postpaid": _num(rec.get("postpaid_activations")),
-        "upgrades": _num(rec.get("upgrades")),
-        # RATE columns go through `_rate` — an absent rate stays absent (None), never a measured 0.
-        "byod_pct": _rate(rec.get("byod_rate")),
-        "atu": _num(rec.get("atu_activations")),
-        "atu_pct": _rate(rec.get("atu_loading_rate")),
-        "protect_pct": _rate(rec.get("insurance_take_rate")),
-        "device_insurance_total": _num(rec.get("insurance_total")),
-        "device_insurance_ga": _num(rec.get("insurance_activations")),
-        "device_insurance_upgrades": _num(rec.get("insurance_upgrades")),
-        "device_insurance_pct": _rate(rec.get("insurance_take_rate")),
-        "platinum_pts": _num(rec.get("platinum_points")),
-        "avg_platinum_pts": _num(rec.get("platinum_points_per_activation")),
-        "platinum_pts_5plus": _num(rec.get("platinum_sales")),
-        "boost_ready_bounty": bounty,
-        "tablet_ga": _num(rec.get("tablet_activations")),
-        # THE ONE derived rate on this feed. `None` when the portal reported no prepaid-activation
-        # denominator — a KPI with no basis, not a KPI failed at 0% (see `derived_rate`).
-        "boost_app_pct": derived_rate(bounty, ga_prepaid),
-    }
+    """Advocate (rep) record → raw_dlar_rep row fields, by the REP_FIELDS declaration."""
+    row = shape(rec, REP_FIELDS)
+    # THE ONE derived rate on this feed. `None` when the portal reported no prepaid-activation
+    # denominator — a KPI with no basis, not a KPI failed at 0% (see `derived_rate`).
+    row["boost_app_pct"] = derived_rate(_pick(rec, ("boost_ready_bounty",)),
+                                        _pick(rec, ("prepaid_activations",)))
+    return row
 
 
 def normalize_store(rec):
-    """DLAR (store) record → raw_dlar_store row fields (matches the manual-upload mapping)."""
-    return {
-        "salesforce_id": str(rec.get("id", "")),
-        "store_code": "",                              # boost has no metricspro code; joined via address
-        "address": rec.get("address", ""),
-        "location": rec.get("name", ""),
-        "gross_adds": _num(rec.get("gross_activation_quantity")),
-        "pay_now_acts": _num(rec.get("prepaid_activations")),
-        "pay_later_acts": _num(rec.get("postpaid_activations")),
-        "total_upgrades": _num(rec.get("upgrades")),
-        # raw_dlar_store.total_acts is INT (migration 002); _num() returns float, and
-        # Postgres rejects "0.0" for an integer column (22P02). Coerce to a whole number.
-        "total_acts": int(round(_num(rec.get("gross_activation_quantity")) + _num(rec.get("upgrades")))),
-        "psa_projected": _num(rec.get("projected_percent_to_target") or rec.get("projected_pct_to_sales_quota")),
-        # RATE columns — `_rate`, for the same reason as the rep report above. These seven are the
-        # store-grain KPI actuals `kpi_failing.STORE_KPI_COLUMNS` names, and three of them
-        # (familyplan / tmr3 / aal) are the values the Boost pay engine rolls DOWN to every rep.
-        "family_plan_pct": _rate(rec.get("family_plan_percent")),
-        "tmr3": _rate(rec.get("three_mr")),
-        "aal_conversion": _rate(rec.get("aal_conversion")),
-        "protect_pct": _rate(rec.get("protect_total_attach")),
-        "atu": _rate(rec.get("atu_loading_percent")),
-        "byod_pct": _rate(rec.get("byod_adds_percent") or rec.get("byod_total_percent")),
-        "port_pct": _rate(rec.get("port_ins")),
-        "conversion_rate": _rate(rec.get("conversion_rate")),
-        "acc_attach_rate": _num(rec.get("accessory_attach_rate")),
-        "avg_first_mrc": _num(rec.get("avg_first_mrc")),
-        "sales_target": _num(rec.get("sales_target")),
-        "zero_selling_days": _num(rec.get("zero_selling_days")),
-        "shopper_trak_conversion": _num(rec.get("shopper_trak_conversion")),
-    }
+    """DLAR (store) record → raw_dlar_store row fields, by the STORE_FIELDS declaration."""
+    row = shape(rec, STORE_FIELDS)
+    row["store_code"] = ""          # the carrier publishes no platform store code; joined via address
+    # raw_dlar_store.total_acts is an INT column (migration 002), and a total of fields the portal did
+    # not send is ABSENT, not zero: `portal_cell.total` returns None when neither part arrived, which
+    # is the difference between "this store sold nothing" and "nobody told us what it sold".
+    row["total_acts"] = _cell.as_int(_cell.total(_pick(rec, ("gross_activation_quantity",)),
+                                                 _pick(rec, ("upgrades",))))
+    return row
 
 
 def _period_from_import(import_date):
@@ -462,12 +529,39 @@ def status_sentence(res):
         c = (res.get("content") or {}).get(tbl) or {}
         for col in c.get("empty_columns") or []:
             gone.append(f"{tbl}.{col} (0 of {c.get('rows', 0)} rows)")
-    head = "OK" if not (skipped or gone) else "⚠ PARTIAL"
+    # A PORTAL FIELD THAT STOPPED ARRIVING IS NAMED, AND SO IS WHAT ARRIVED INSTEAD (owner report
+    # 2026-10-16). `gone` above watches OUR columns; this watches the SOURCE's own field names, which
+    # is the only thing that can tell a rename from a genuine zero. `unconsumed` is reported only
+    # beside a field that went missing — see `portal_cell.field_arrival` — and it is the renamed
+    # field's new name, so the mapping is corrected from evidence instead of guessed.
+    def _cap(items, limit=8):
+        """At most `limit` names, then a count — a status line a person reads, not a dump."""
+        items = list(items)
+        if len(items) <= limit:
+            return items
+        return items[:limit] + [f"+{len(items) - limit} more"]
+
+    shape, unknown = [], []
+    for rkey in ("dlar", "advocate"):
+        f = (res.get("fields") or {}).get(rkey) or {}
+        lbl = (PORTAL_REPORTS.get(rkey) or {}).get("label") or rkey
+        for k in f.get("missing") or ():
+            shape.append(f"{lbl}: '{k}' NOT SENT")
+        for k in f.get("blank") or ():
+            shape.append(f"{lbl}: '{k}' arrived EMPTY")
+        for k in f.get("unconsumed") or ():
+            unknown.append(f"{lbl}: '{k}'")
+    head = "OK" if not (skipped or gone or shape) else "⚠ PARTIAL"
     line = f"{head} — {period}: " + " · ".join(parts)
     if skipped:
         line += " · NOT REPLACED (partial-collapse guard, existing->pulled): " + ", ".join(skipped)
     if gone:
         line += " · ⚠ COLUMN STOPPED ARRIVING: " + ", ".join(gone)
+    if shape:
+        line += " · ⚠ PORTAL FIELD CHANGED: " + ", ".join(_cap(shape))
+    if unknown:
+        line += " · FIELDS THE PORTAL SENDS THAT NOTHING READS (the new spelling is in here): " \
+                + ", ".join(_cap(unknown))
     return line
 
 
@@ -506,6 +600,16 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
 
     store_rows = [{**base, **normalize_store(r)} for r in store_recs]
     rep_rows = [{**base, **normalize_rep(r)} for r in rep_recs]
+
+    # DID THE PORTAL'S OWN FIELDS ARRIVE (owner report 2026-10-16, index §COMMCALC-16). `content`
+    # below asks whether OUR columns carry values, which cannot tell a renamed field from a month in
+    # which nobody sold anything — the store report's unit counts stopped arriving in October 2026 and
+    # landed as measured zeros under a green status. This asks the question one step earlier, against
+    # the records as the portal returned them, and names the fields it is sending that nothing reads.
+    fields = {
+        "dlar": _cell.field_arrival(store_recs, declared_source_fields("dlar")),
+        "advocate": _cell.field_arrival(rep_recs, declared_source_fields("advocate")),
+    }
 
     # DO THE DECLARED COLUMNS STILL CARRY VALUES? The third freshness question (index §19.28): rows can
     # keep arriving and the data date keep moving while a column has silently stopped being sent. The
@@ -569,6 +673,8 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
             "pulled": {"raw_dlar_store": len(store_rows), "raw_dlar_rep": len(rep_rows)},
             "written": written,
             "content": content,
+            # the SOURCE side of the same question: which of the portal's own fields arrived
+            "fields": fields,
             # WHICH REPORTS THIS RUN PULLED, and every report the config named that could not be —
             # by name, with the reason. A refused report is part of the run's record, not a silence.
             "reports": list(report_keys),
