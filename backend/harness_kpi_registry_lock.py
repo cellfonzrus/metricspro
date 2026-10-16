@@ -89,6 +89,17 @@ def fn_body(src, name):
 
 
 sys.path.insert(0, os.path.join(ROOT, "backend"))
+import types
+# stdlib-only import of `dlar_sweep`: its portal I/O needs requests/bs4, its rules need nothing. Same
+# stub `harness_kpi_vintage.py` installs, for the same reason — this proof is DB-free AND wheel-free,
+# so it runs in the no-install job beside every other lock in it (`harness_ci_pipefail_lock.py` §2).
+for _n, _attrs in (("requests", ("Session",)), ("bs4", ("BeautifulSoup",))):
+    if _n not in sys.modules:
+        _m = types.ModuleType(_n)
+        for _a in _attrs:
+            setattr(_m, _a, lambda *a, **k: None)
+        sys.modules[_n] = _m
+
 from app.modules.commcalc import kpi_failing as _KF          # noqa: E402  (pure, stdlib)
 from app.modules.commcalc import dlar_sweep as _ds           # noqa: E402  (the declared field maps)
 
