@@ -152,21 +152,38 @@ class _RowClient:
         return SimpleNamespace(data=([self.row] if self.row is not None else []))
 
 
+# COMPARED BY ITS DECISIONS, for the reason stated in harness_ma_store_pnl.py §I: the reader also
+# returns what the READ found absent, which is a report and not a switch. `column_tolerant.switches`
+# is the one home for that distinction; the absence itself is asserted on its own below.
+from app.core import column_tolerant as _ct                                      # noqa: E402
+
 DEF = rs.default_ma_pnl_config()
+
+
+def _sw(cfg):
+    return _ct.switches(cfg)
+
+
 check("client raising entirely ⇒ defaults (never raises)",
-      rs.load_ma_pnl_config(_Raising(), "ORG") == DEF)
-check("mig 309 not run (missing column) ⇒ defaults",
-      rs.load_ma_pnl_config(_RowClient(missing_column=True), "ORG") == DEF)
-check("no org row ⇒ defaults", rs.load_ma_pnl_config(_RowClient(row=None), "ORG") == DEF)
+      _sw(rs.load_ma_pnl_config(_Raising(), "ORG")) == _sw(DEF))
+_missing = rs.load_ma_pnl_config(_RowClient(missing_column=True), "ORG")
+check("mig 309 not run (missing column) ⇒ defaults", _sw(_missing) == _sw(DEF))
+check("mig 309 not run … and the absent column is REPORTED, not hidden — and it is one the "
+      "loader's OWN column list names, never a literal spelled here",
+      _missing["config_columns_missing"] == ["pl_merchant_discount_own_line"]
+      and set(_missing["config_columns_missing"])
+      <= {c for c, _m in rs.MA_PNL_CONFIG_COLUMNS}, _missing)
+check("no org row ⇒ defaults", _sw(rs.load_ma_pnl_config(_RowClient(row=None), "ORG")) == _sw(DEF))
 got = rs.load_ma_pnl_config(_RowClient(
     row={"pl_merchant_discount_own_line": False,
          "pl_ma_residual_order_types": [" Postpaid Residual Order ", "Custom", "", "  "]}), "ORG")
 check("org row applies: toggle False + trimmed, blank-free order types",
-      got == {"merchant_discount_own_line": False,
-              "residual_order_types": ["Postpaid Residual Order", "Custom"]}, got)
+      _sw(got) == {"merchant_discount_own_line": False,
+                   "residual_order_types": ["Postpaid Residual Order", "Custom"]}, got)
 got = rs.load_ma_pnl_config(_RowClient(
     row={"pl_merchant_discount_own_line": "yes", "pl_ma_residual_order_types": "Postpaid"}), "ORG")
-check("malformed values (non-bool / non-list) keep the defaults, never guess", got == DEF, got)
+check("malformed values (non-bool / non-list) keep the defaults, never guess",
+      _sw(got) == _sw(DEF), got)
 got = rs.load_ma_pnl_config(_RowClient(
     row={"pl_merchant_discount_own_line": True, "pl_ma_residual_order_types": []}), "ORG")
 check("explicit empty order-type list is HONORED (label family only), not defaulted",

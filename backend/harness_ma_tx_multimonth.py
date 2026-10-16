@@ -36,17 +36,29 @@ CFG = {"gate_source": "ma_tx", "ma_tx_activation_order_type": "Activation Order"
        "ma_max_month": 16, "ma_min_amount": 0.01, "ma_payout_sign": -1,
        "ma_month_field_prefix": "spiff_m", "ma_month1_extra_fields": ["rebate", "device_margin"]}
 
-print("── A. 'MONTH n' parsing is the Commission Ledger's parser, REUSED — never a second regex ──")
-check("engine re-exports commission_ledger.parse_payment_month (same function object)",
-      eng.parse_payment_month is cl.parse_payment_month)
-check("'TBV MONTH 5 New Activation SPF' → 5", cl.parse_payment_month("TBV MONTH 5 New Activation SPF") == 5)
+print("── A. the month-of-life question is the Commission Ledger's, REUSED — never a second regex ──")
+# THE NAME MOVED WITH THE QUESTION (2026-09-21, §COMMCALC-15.2). The engine used to re-export
+# `parse_payment_month`, which answers only "does this label SAY a month"; the LEG question has a
+# second form (a label that is an activation commission and carries no token), and asking the token
+# parser instead read August's M1 as $2,300.40 against a real $6,049.96. `month_leg_of` is the one
+# home and the engine dereferences THAT. This section pinned the old name, so it died on import the
+# day the one home landed — a dead pin is a pin nobody is checking.
+check("engine dereferences commission_ledger.month_leg_of (same function object)",
+      eng.month_leg_of is cl.month_leg_of)
+check("…and it does NOT re-export the token parser, which stays private to its own module",
+      not hasattr(eng, "parse_payment_month") and callable(cl.parse_payment_month))
+check("'TBV MONTH 5 New Activation SPF' → 5", cl.month_leg_of("TBV MONTH 5 New Activation SPF") == 5)
 check("'TBV MONTH 2 New Activation Commission' → 2",
-      cl.parse_payment_month("TBV MONTH 2 New Activation Commission") == 2)
+      cl.month_leg_of("TBV MONTH 2 New Activation Commission") == 2)
 check("month 16 parses (the widened horizon)",
-      cl.parse_payment_month("TBV MONTH 16 New Activation Commission") == 16)
+      cl.month_leg_of("TBV MONTH 16 New Activation Commission") == 16)
 check("a plain product name ('Total STARTER Plan $40') carries no month → None",
-      cl.parse_payment_month("Total STARTER Plan $40") is None)
-check("empty / None → None", cl.parse_payment_month("") is None and cl.parse_payment_month(None) is None)
+      cl.month_leg_of("Total STARTER Plan $40") is None)
+check("empty / None → None", cl.month_leg_of("") is None and cl.month_leg_of(None) is None)
+check("the untokened ACTIVATION-commission form is month 1 — the form the token parser cannot see, "
+      "and the whole reason this question has its own home",
+      cl.month_leg_of("Total Wireless 5G Unlimited $55 New Activation Commission") == 1
+      and cl.parse_payment_month("Total Wireless 5G Unlimited $55 New Activation Commission") is None)
 
 print("── B. the TWO-HOP index builders (sale serial → ma_commission → activation_order → MA TX) ──")
 # Realistic fixture: device A activates on order AO-1 (with an Excel-float IMEI in the MA file and a

@@ -348,10 +348,18 @@ MONEY_MODULE_DELTA = {
     #   and a refused period RAISES rather than returning zeros. No resolver or attribution function
     #   moved: WHICH store money books to is untouched, only HOW MANY HOURS a day is worth, which is
     #   `payroll_hours_basis`'s decision. Locked by harness_payroll_hours_basis_lock.py §H.
+    # coa.py {is_side_entry, statement_lines} (2026-10-16, index §4b.1) — ADDED, nothing changed.
+    #   `build_inputs` returns the statement's lines PLUS `_`-prefixed SIDE ENTRIES carrying the
+    #   evidence a classified figure rests on. That convention lived in a comment, so a reader that
+    #   walked the mapping as if every entry were a line died with a `KeyError: 'detail'` the day the
+    #   first side entry shipped (`harness_pl_commission_source.py`, unrunnable until now). These two
+    #   are PURE predicates over a key — they book nothing, read nothing and change no existing
+    #   function; `build_inputs` itself is byte-identical here.
     f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store",
                                "derive_wage_cells", "derive_wage_cells_with_basis",
                                "store_resolver", "_squash_key", "_lead_num_key"},
-                              {"_lcov_mod", "build_inputs.add_comm"}),
+                              {"_lcov_mod", "build_inputs.add_comm",
+                               "is_side_entry", "statement_lines"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
     f"{MOD}/account/statement_filter.py": (set(), {"unbound_spellings"}),
 }

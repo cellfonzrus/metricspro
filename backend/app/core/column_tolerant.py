@@ -32,6 +32,36 @@ which is what the proof harnesses drive it with.
 """
 
 
+# ── WHAT THE READ FOUND ABSENT IS A REPORT ABOUT THE READ, NOT A SWITCH ─────────────────────────
+# Every config reader built on `read_row` returns its switches PLUS two keys saying what the row did
+# not have (`ma_store_pnl.load_config`, `residual_subs.load_ma_pnl_config`, `billpay_pl.load_config`,
+# the plan/prospect readers). Those two keys are a statement about the READ, so a caller comparing a
+# loaded config to its defaults must compare the DECISIONS and assert the report separately.
+#
+# THE CLASS this exists to close: three proof harnesses pinned a config by whole-dict equality
+# (`load_config(stub) == default_config()`), which was true before the readers started reporting
+# absence and silently false afterwards — 2 reds in `harness_ma_store_pnl.py`, 5 in
+# `harness_ma_tx_pnl.py`. A fourth caller had already written the same strip list by hand. One fact,
+# one home: the key NAMES live here, beside the reader that writes them, and every comparison
+# dereferences `switches` / `absence_report` instead of spelling them again.
+ABSENCE_KEYS = ("config_columns_missing", "config_migrations_missing")
+
+
+def switches(cfg):
+    """PURE: a resolved config's DECISIONS — the same mapping without the read's absence report.
+    Use it to compare a loaded config against its defaults; use `absence_report` to assert what the
+    read found missing. Neither key is a decision and neither may be compared as one."""
+    return {k: v for k, v in dict(cfg or {}).items() if k not in ABSENCE_KEYS}
+
+
+def absence_report(cfg):
+    """PURE: just the absence report — `{config_columns_missing, config_migrations_missing}`, each
+    defaulting to `[]` so a reader that predates the report reads as "nothing known absent" rather
+    than as a missing key."""
+    cfg = dict(cfg or {})
+    return {k: list(cfg.get(k) or ()) for k in ABSENCE_KEYS}
+
+
 class RowRead:
     """The result of `read_row`: the org's row (or None), the columns PRESENT, the expected columns
     MISSING (in the caller's order), and whether the table itself could be read."""
