@@ -126,6 +126,7 @@ Primary code homes:
 | COMMCALC-15 | **The first month and M2–M12 are two P&L lines** | "The commission line carries both the money this month’s activations earned and the trailing legs of cohorts sold months ago — which store is shrinking NOW and which lost its cohort months ago? Where are the two halves on the statement, what proves splitting the line moved no total, and where is M2–M12 per store with every month side by side?" |
 | COMMCALC-13 | **A finished live login leaves an honest status** | "The screen says the portal login is still in progress and the browser closed an hour ago. What writes that status when a session ends, and what clears it when the process that owned it is simply gone?" |
 | COMMCALC-14 | **A cheap answer is never held hostage by an expensive decoration** | "The takeover list takes a minute and reads as empty while it does. What is it waiting for, where should a count of rows be computed, and what should a cell say about a figure nobody has counted yet?" |
+| COMMCALC-16 | **A figure the portal did not send is not a zero** | "The carrier portal's numbers and ours disagree — our stores show 0 activations beside a 66.67% attach rate. Which carrier field feeds which column, what happens when the portal renames one, and how does the platform say so instead of writing the absence down as a measurement?" |
 
 ---
 
@@ -25369,6 +25370,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-13 | commcalc |
 | COMMCALC-14 | commcalc |
 | COMMCALC-15 | commcalc |
+| COMMCALC-16 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
