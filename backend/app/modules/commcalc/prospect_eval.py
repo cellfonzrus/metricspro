@@ -107,6 +107,7 @@ FEED_REGISTRY = {
         "carries_device": True,
         "answers": ("carrier commission, spiffs, device margin, fees, consumer financing, "
                     "device purchase rebate — and which lines sit on one subscriber account"),
+        "period_scope": "month",
     },
     "ma_daily_tx": {
         "label": "MA Daily Transactions",
@@ -115,6 +116,7 @@ FEED_REGISTRY = {
         "carries_account_identity": False,
         "carries_device": False,
         "answers": "airtime merchant discount, residual, MDF market spiffs, month-n spiff cash",
+        "period_scope": "month",
     },
     "ma_marketplace_orders": {
         "label": "MA Marketplace Handset Fulfillment Orders",
@@ -123,6 +125,13 @@ FEED_REGISTRY = {
         "carries_account_identity": False,
         "carries_device": True,
         "answers": "what each handset model cost — the price list the activated devices are costed at",
+        # READ WHOLE, NEVER SLICED BY MONTH. A handset ordered in June and activated in July must
+        # still be priced, exactly as `device_cogs.ma_unit_price_map` reads the live fulfilment sheet
+        # across periods: this feed is a PRICE LIST as much as a purchase log.
+        "period_scope": "all_periods",
+        "period_scope_reason": ("read across every month — the fulfilment sheet is the price list the "
+                                "activated devices are costed at, and a handset ordered in one month "
+                                "is activated in another"),
     },
 }
 FEED_KEYS = tuple(FEED_REGISTRY)
@@ -243,6 +252,28 @@ def rows_by_store(feeds, accounts=None):
 UNATTRIBUTED_STORE = "(no store named on the row)"
 
 
+def month_has_ended(period, today=None):
+    """PURE: has this month finished, as at `today`? THE one home for that comparison.
+
+    `today` is the caller's date (this module reads no clock). With `today` omitted the answer is
+    True for every parseable month — i.e. "no month counts as in progress" — which is exactly the
+    behaviour every caller had before this fact was given a home, so an un-dated caller is
+    byte-identical. An unparseable period has not "ended": it names no month at all.
+
+    WHY IT IS A HOME AND NOT AN INLINE COMPARISON. Two separate places need it and they must not
+    drift: `default_period` refuses to OPEN on a month that has not ended (§COMMCALC-03.17), and
+    `expense_window` refuses to AVERAGE one (§COMMCALC-03.28) — a part-month's expense sheet drags
+    every line down by however much of the month is left. One answer, one place, both dereference
+    it; `harness_prospect_eval.py` §Y fails the build if a second copy of the comparison appears.
+    """
+    k = period_sort_key(period)
+    if k == (0, 0):
+        return False
+    if today is None:
+        return True
+    return k < (today.year, today.month)
+
+
 def default_period(periods_by_feed, leading_feed="ma_commission", today=None):
     """PURE: the month a prospect's report should open on, and why.
 
@@ -276,12 +307,16 @@ def default_period(periods_by_feed, leading_feed="ma_commission", today=None):
 
     def _pick(months):
         """(month to open on, the later unfinished month it skipped). The latest month that has
-        ENDED; the latest month outright when none has, because a report must still open."""
+        ENDED; the latest month outright when none has, because a report must still open.
+
+        "Has ended" is `month_has_ended`, dereferenced — the SAME answer `expense_window` refuses to
+        average an unfinished month by, never a second comparison of its own."""
         if now is None:
             return months[-1], None
-        ended = [m for m in months if period_sort_key(m) < now]
+        ended = [m for m in months if month_has_ended(m, today)]
         if ended:
-            later = [m for m in months if period_sort_key(m) >= now]
+            later = [m for m in months
+                     if period_sort_key(m) != (0, 0) and not month_has_ended(m, today)]
             return ended[-1], (later[-1] if later else None)
         return months[-1], None
 
@@ -826,6 +861,124 @@ def rows_by_period(rows):
     return out
 
 
+# ── WHICH OF A PROSPECT'S ROWS BELONG TO A MONTH — ONE HOME (§COMMCALC-03.28) ─────────────────────
+# THE CLASS THAT WAS WRONG. "A prospect's rows for a month" was answered by a HAND-WRITTEN rule in
+# the router — `if feed != "ma_marketplace_orders" and stamped not in wanted` — with the exception
+# spelled as a feed name in code. That is two facts copied out of the registry: WHICH feeds are
+# sliced by month, and HOW two spellings of one month compare. The month-over-month P&L needs the
+# same answer for every month at once, and a second slicer would have drifted from the month report
+# the first time either changed. So the fact lives on the registry (`period_scope`) and both the
+# month report and the trend dereference THIS function; §Y of the harness fails the build if a
+# caller starts spelling a feed key or a period comparison of its own again.
+
+def feed_is_period_sliced(feed_key):
+    """PURE: is this feed's contribution narrowed to the evaluated month?
+
+    The registry's own `period_scope` answers it — "month" for the two money feeds, "all_periods"
+    for the handset fulfilment sheet, which is a PRICE LIST and must be read whole (a handset
+    ordered in June and activated in July still has to be costed). An unknown key is sliced, which
+    is the safe answer: a feed nobody has declared must not leak another month's rows into a month.
+    """
+    return (FEED_REGISTRY.get(feed_key, {}) or {}).get("period_scope", "month") != "all_periods"
+
+
+def feeds_for_months(every_month, months):
+    """PURE: `{feed_key: [rows]}` for a set of months — THE one home for the month slice.
+
+    `every_month` is `{feed_key: [rows]}` over the WHOLE upload, each row carrying its own `period`
+    stamp (the router stamps it on from the feed row, because the month is a fact about the table —
+    §COMMCALC-03.20). `months` are the month labels wanted, in ANY spelling.
+
+    Both spellings of a month collapse into one slot through `period_sort_key`, this module's only
+    period parser, so a file stamped `2026-04` and one stamped `April 2026` select the same rows —
+    the row-level reason the old string-variant comparison was replaced rather than reused.
+    A feed whose `period_scope` is not "month" is carried WHOLE, never sliced.
+    `months` empty selects no month, which is not the same as every month: a caller that means the
+    whole upload passes `every_month` itself.
+    """
+    wanted = {period_sort_key(m) for m in (months or ())} - {(0, 0)}
+    out = {}
+    for k in FEED_KEYS:
+        rows = list((every_month or {}).get(k) or [])
+        if not feed_is_period_sliced(k):
+            out[k] = rows
+            continue
+        out[k] = [r for r in rows if period_sort_key(_row_period(r)) in wanted]
+    return out
+
+
+def uploaded_months(every_month):
+    """PURE: every month this prospect has rows for, oldest first.
+
+    Only the MONTH-SCOPED feeds answer (`feed_is_period_sliced`): the fulfilment sheet is a price
+    list read whole, so a month that carries nothing but handset orders is not a month the P&L can
+    be taken for. One home, so the month-over-month table and the month picker cannot disagree
+    about which months exist."""
+    seen = {}
+    for k in FEED_KEYS:
+        if not feed_is_period_sliced(k):
+            continue
+        for r in ((every_month or {}).get(k) or []):
+            p = _row_period(r)
+            key = period_sort_key(p)
+            if key != (0, 0):
+                seen.setdefault(key, p)
+    return [seen[k] for k in sorted(seen)]
+
+
+def range_basis(months, expense_months):
+    """PURE: the one sentence a P&L over several months prints about its own expense side.
+
+    A range carries several months of carrier revenue, so it carries the same number of months of
+    running cost — our average is a MONTHLY figure and the only honest arithmetic is to charge it
+    once per month in the range (`expense_bookings(..., months=N)`). Said in one place, carried on
+    the payload, printed on the screen: a reader of a three-month bottom line is never left to work
+    out whether one month's rent or three came out of it."""
+    n = max(1, int(expense_months or 1))
+    if n == 1:
+        return ("one month — our average monthly store cost is charged once, exactly as the "
+                "single-month statement charges it")
+    return (f"{n} months ({', '.join(months or ())}) — carrier revenue and device cost are the "
+            f"window's own rows, and our average monthly store cost is charged {n} times, once for "
+            f"each month in the window. A seller's declared rent is a monthly figure and is charged "
+            f"the same {n} times.")
+
+
+def months_in_range(periods, start, end=None):
+    """PURE: which of `periods` a MONTH or a DATE RANGE selects, oldest first (owner ask 2026-10-16).
+
+    Owner, verbatim: *"a filter which gives the p&l on the righ tside for a particuklar monmth
+    selected or a data range selected"*. The platform's shared filter bar already carries both
+    shapes in one value — `period` alone is a month, `period` + `periodTo` is a range (RULE FIVE,
+    §3d) — so this function takes the same two strings and answers in MONTHS, because a P&L line is
+    a month-grained figure and no row here carries a day.
+
+    THE SEMANTICS, stated so they can be read off the screen:
+      · `start` only, spelled as a month (`2026-04` / `April 2026`) → THAT month alone.
+      · `start` and `end` → every uploaded month from `start`'s month to `end`'s month INCLUSIVE.
+        A range is inclusive of the months its two ends fall in even when the dates sit mid-month:
+        a P&L cannot be cut at the 14th, and silently dropping a half-covered month would understate
+        the window. The screen says the range covers whole months.
+      · `end` only → every uploaded month up to and including `end`'s month.
+      · neither → EVERY uploaded month. An absent filter does not narrow.
+    A month the prospect has no rows for is never invented: the answer is always a subset of
+    `periods`.
+    """
+    keyed = sorted({(period_sort_key(p), str(p)) for p in (periods or ())
+                    if period_sort_key(p) != (0, 0)})
+    lo, hi = period_sort_key(start), period_sort_key(end)
+    out = []
+    for k, p in keyed:
+        if lo != (0, 0) and k < lo:
+            continue
+        if hi != (0, 0) and k > hi:
+            continue
+        if lo != (0, 0) and hi == (0, 0) and k != lo:
+            continue
+        out.append(p)
+    return out
+
+
 def _activation_slice(rows, rules):
     """PURE: one month's rows → the activation picture for them, counted through `line_class`."""
     units = _lc.activation_units(rows, rules, txn_of=_activation_txn_of)
@@ -933,6 +1086,101 @@ def complete_months(periods, today_period):
         seen.add(k)
         out.append(p)
     return out
+
+
+# ── THE WINDOW OUR AVERAGE IS TAKEN OVER — THE NEAREST MONTHS, NOT ONLY THE EARLIER ONES ─────────
+# OWNER REPORT 2026-10-16, verbatim: *"also expenses only appear int eh sept statementr i was check
+# ing apr thre are not expenses showing up fir any store"*. He was right, and the data was never
+# missing: `commcalc.store_expenses` holds every month this organisation has ever recorded, and the
+# evaluation simply could not see any of them from April.
+#
+# MEASURED, live, 2026-10-16, before the fix:
+#   · this organisation's own expense sheet carries TWO months — July 2026 (304 rows, $225,080.58)
+#     and August 2026 (288 rows, $276,162.69). Nothing earlier was ever entered.
+#   · the prospect carries EIGHT months of uploads, March to October 2026.
+#   · the window was `complete_months(...)` — the months STRICTLY BEFORE the evaluated one — so:
+#         September / October 2026 → [August, July]   → expenses charged
+#         August 2026              → [July]           → expenses charged
+#         July, June, May, April, March 2026 → []     → NO EXPENSE ON ANY STORE, AND NO WORD SAID
+#     which is exactly the five months he could not find an expense in, and exactly the one he could.
+#
+# THE CLASS, NOT THE INSTANCE. The general fact that was wrong is not "April has no expenses". It is
+# that **our own average store cost was treated as a time series read backwards from the evaluated
+# month, when it is a BENCHMARK** — §COMMCALC-03.6's "the full average monthly expense of one of our
+# own stores". A benchmark has no month of its own: the question it answers is "what does a store of
+# ours cost to run", and the best available measurement of that is the months we actually recorded,
+# whichever side of the evaluated month they fall on. A window that can only look backwards answers
+# the question for recent months and silently answers NOTHING for every month before our first
+# expense sheet — and it would do so for every tenant, every prospect and every month, not just this
+# one. So:
+#   1. PRIOR MONTHS STILL LEAD, unchanged. Where enough complete months sit before the evaluated one
+#      the window is byte-identical to what it was (§Z2), because the nearest-in-time measurement of
+#      our cost base is the right one and recency is a tie-breaker worth keeping.
+#   2. A SHORTFALL IS FILLED FROM THE NEAREST MONTHS AFTER IT, nearest first, and only months that
+#      have ENDED — a part-month's sheet drags every line down by however much of the month is left,
+#      which is the same reason prior months must be complete (`month_has_ended`, dereferenced).
+#   3. THE DIRECTION IS REPORTED, NEVER IMPLIED. `direction` and `basis` say in words which months
+#      were averaged and whether any of them come after the month on screen, and the screen prints
+#      it — an expense figure measured after the fact is still a measurement, but the reader has to
+#      be told, exactly as §COMMCALC-03.17 names a part-month rather than hiding it.
+#   4. AN UNMEASURED EXPENSE SIDE SAYS SO INSTEAD OF BOOKING ZERO. `measured` is False with a reason
+#      naming what is missing, so a prospect whose organisation has entered no expenses at all reads
+#      as "not measured" rather than as a store with no costs — the second half of the defect, and
+#      the more dangerous half, because a zero expense line makes every takeover look profitable.
+
+def expense_window(periods, period, want, today=None):
+    """PURE: which of OUR OWN expense months the average is taken over, and in which direction.
+
+    `periods` every period `store_expenses` carries for the org (any spelling, duplicates fine).
+    `period`  the month being evaluated.  `want` how many months the average is taken over
+    (`expense_basis_months`, declared per org — RULE TWO).  `today` the caller's date; this module
+    reads no clock, and with it omitted no month counts as unfinished (`month_has_ended`).
+
+    Returns `{months, before, after, requested, direction, measured, basis}` — `months` oldest-last
+    (newest first, the order `complete_months` returns and `average_expense_matrix` is indifferent
+    to), `direction` one of `before` / `after` / `both` / `none`, and `basis` the one sentence the
+    screen prints. `months` is always a subset of `periods`: a month we never recorded is never
+    invented, and nothing here reads or scales a dollar.
+    """
+    want = max(1, int(want or 1))
+    before = complete_months(periods, period)[:want]
+    after = []
+    if len(before) < want:
+        keyed = sorted({(period_sort_key(p), str(p)) for p in (periods or ())
+                        if period_sort_key(p) != (0, 0)})
+        cur = period_sort_key(period)
+        seen = {period_sort_key(m) for m in before}
+        for k, p in keyed:                      # oldest first = NEAREST first, for months after
+            if cur != (0, 0) and k <= cur:
+                continue
+            if k in seen or not month_has_ended(p, today):
+                continue
+            seen.add(k)
+            after.append(p)
+            if len(before) + len(after) >= want:
+                break
+    months = list(before) + list(after)
+    direction = ("none" if not months else "before" if not after
+                 else "after" if not before else "both")
+    if not months:
+        basis = ("our own stores' expenses have no month this average could be taken over — nothing "
+                 "has been entered on the Expenses sheet, so the expense side of this evaluation is "
+                 "NOT MEASURED rather than zero")
+    elif direction == "before":
+        basis = ("our own stores' average monthly cost over " + ", ".join(before)
+                 + " — the complete months before this one")
+    elif direction == "after":
+        basis = ("our own stores' average monthly cost over " + ", ".join(after)
+                 + " — we had entered no expenses before " + str(period)
+                 + ", so the NEAREST months we did record are the benchmark; they fall AFTER the "
+                   "month on screen")
+    else:
+        basis = ("our own stores' average monthly cost over " + ", ".join(months)
+                 + " — only " + str(len(before)) + " complete month(s) sit before "
+                 + str(period) + ", so the nearest later month(s) make up the window")
+    return {"months": months, "before": list(before), "after": list(after),
+            "requested": want, "direction": direction, "measured": bool(months),
+            "basis": basis}
 
 
 def average_expense_matrix(rows_by_period, basis=HOUSE_AVERAGE_BASIS):
@@ -1113,19 +1361,28 @@ def apply_rent_override(matrix, rent_names, actual_rent):
                  "entered": round(rent, 2), "replaced_average": replaced}
 
 
-def expense_bookings(matrix, route_expense_line):
+def expense_bookings(matrix, route_expense_line, months=1):
     """PURE: the averaged matrix → P&L bookings, routed by coa's own router.
 
     `route_expense_line` is passed in rather than imported so this stays DB-free and the harness can
     prove the prospect books an expense to the SAME line the live P&L books it to (§D). A manual
-    line (no `source_key`) takes coa's historical default exactly as a hand-entered expense does."""
+    line (no `source_key`) takes coa's historical default exactly as a hand-entered expense does.
+
+    `months` is how many MONTHS of running cost this statement covers, and it is 1 for every
+    single-month statement — the default, so every existing caller is byte-identical (§Z8). A P&L
+    over a DATE RANGE (owner ask 2026-10-16) carries several months of carrier revenue, so it has to
+    carry the same number of months of running cost or the range would read as pure profit; the
+    matrix is a MONTHLY figure, so the only honest arithmetic is to charge it once per month in the
+    range. It multiplies AFTER the rent override, so a seller's declared rent — also a monthly
+    figure — is charged for the same months as everything else."""
+    n = max(1, int(months or 1))
     out = []
     for _key, e in sorted((matrix or {}).items()):
         amt = safe_float(e.get("amount"))
         if not amt:
             continue
         line, fallback = route_expense_line(e.get("source_key"))
-        out.append((line, round(amt, 2), e.get("expense_name") or fallback))
+        out.append((line, round(amt * n, 2), e.get("expense_name") or fallback))
     return out
 
 
@@ -1728,7 +1985,7 @@ def coverage_summary(cov):
 
 def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None,
              exclusion_mode=HOUSE_EXCLUSION_MODE, store_inputs=None, prospect_rent=None,
-             accessory_cogs_pct=None):
+             accessory_cogs_pct=None, expense_months=1, price_list=None):
     """PURE: one prospect month → the whole evaluation, under BOTH exclusion modes.
 
     `feeds`  {feed_key: [rows]} — prospect rows in the live tables' own column shape.
@@ -1749,6 +2006,16 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
              whole-prospect column, which has no single address.
     `accessory_cogs_pct` the ORG'S accessory cost rate from `coa` (mig 611), injected, never held
              here.
+    `expense_months` how many months of running cost this statement covers — 1 for every single
+             month, so a single-month evaluation is byte-identical (§Z8). A P&L over a date range
+             (§COMMCALC-03.28) passes the number of months in the range, because a window carrying
+             several months of carrier revenue must carry the same number of months of rent and
+             salaries. Handed straight to `expense_bookings`, which is the only place it is used.
+    `price_list` the handset price list, when the caller has already built it with the SAME home
+             (`homes['ma_unit_price_from_rows']`). It is a pure performance injection and nothing
+             else: the month-over-month trend evaluates every month off ONE price list instead of
+             rebuilding the same 65,491-row list once per month. Omitted, it is built here exactly
+             as before, and §Z9 proves injecting the home's own output changes no figure.
 
     BOTH modes are always computed. The owner asked for a sub-report that takes the flagged phones
     out "or leaves them", and a toggle that recomputes one of them would mean the two numbers never
@@ -1769,7 +2036,8 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
     summary = multi_line_summary(grouped, flagged, cfg["family_line_threshold"])
     drop_ids, drop_imeis = flagged_line_ids(flagged), flagged_imeis(flagged)
 
-    price = homes["ma_unit_price_from_rows"](ful_rows)
+    price = (price_list if price_list is not None
+             else homes["ma_unit_price_from_rows"](ful_rows))
     # THE RENT, RESOLVED ONCE PER COLUMN off the AVERAGED matrix. `_exp_for` is the only place a
     # column's expense bookings are built, so the whole-prospect column and a store column cannot be
     # costed by two different routines, and neither can be overridden twice.
@@ -1778,7 +2046,8 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
 
     def _exp_for(rent):
         mtx, meta = apply_rent_override(avg_matrix, rent_names, rent)
-        return expense_bookings(mtx, homes["route_expense_line"]), mtx, meta
+        return (expense_bookings(mtx, homes["route_expense_line"], expense_months),
+                mtx, meta)
 
     exp_bookings, expense_matrix, rent_meta = _exp_for(prospect_rent)
     exp_lines = {line for line, _amt, _lbl in exp_bookings}
@@ -2204,6 +2473,23 @@ def activation_count(comm_rows):
         else:
             blank += 1
     return len(seen) + blank
+
+
+def statement_line_amounts(statement):
+    """PURE: an assembled statement → `{line key: amount}`, for a table whose COLUMNS are months.
+
+    The month-over-month P&L (§COMMCALC-03.28) is a line down the side and a month across the top,
+    so it needs a month's figures by line key. This is a PROJECTION of the statement the assembler
+    built — it reads `sections[].lines[]` and invents no line, keeps no order of its own and sums
+    nothing, so a cell of the trend and the same cell of that month's own statement are the same
+    number by construction."""
+    out = {}
+    for sec in ((statement or {}).get("sections") or []):
+        for ln in (sec.get("lines") or []):
+            k = ln.get("key")
+            if k is not None:
+                out[k] = ln.get("amount")
+    return out
 
 
 def scenario_delta(statements, pl_totals):

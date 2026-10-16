@@ -588,7 +588,8 @@ _PROSPECT_FUNCS = {"list_prospects", "create_prospect", "update_prospect", "dele
                    "upload_prospect_feed", "_upload_prospect_feed_impl",
                    "prospect_evaluation", "_prospect_row", "_prospect_cfg",
                    "_prospect_feed_rows", "_prospect_expense_window", "_prospect_homes",
-                   "_prospect_num", "_prospect_pl_labels", "_period_keys_for_prospect"}
+                   "_prospect_num", "_prospect_pl_labels", "_prospect_assemble",
+                   "_prospect_rows_every_month", "prospect_pl_trend"}
 _rtree = ast.parse(_rtext)
 _nodes = [n for n in ast.walk(_rtree)
           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in _PROSPECT_FUNCS]
@@ -1218,11 +1219,16 @@ check("T1 the configs the evaluation BOOKS with are LOADED for the org — a def
       and '"ma_pnl_config": _rsub.default_ma_pnl_config()' not in _homes_src
       and _calls_named(_homes_fn, {"load_config", "load_ma_pnl_config"})
       == {"load_config", "load_ma_pnl_config"})
-check("T2 …and it is ORG-SCOPED: the loaders get this org's id, from the one call site",
+check("T2 …and it is ORG-SCOPED: EVERY call site hands the loaders this org's id",
       [a.arg for a in _homes_fn.args.args] == ["client", "org_id"]
       and "load_config(client, org_id)" in _homes_src
       and "load_ma_pnl_config(client, org_id)" in _homes_src
-      and _rtext.count("= _prospect_homes(client, org_id)") == 1)
+      # TWO READERS SINCE §COMMCALC-03.28 (the month report and the month-over-month P&L), so the
+      # check is no longer "one call site" but "EVERY call site is org-scoped" — which is the fact
+      # that was ever worth holding: a reader that assembled the homes any other way would be
+      # booking this organisation's prospect through the house defaults again.
+      and _rtext.count("_prospect_homes(client, org_id)") == _rtext.count("_prospect_homes(")
+      and _rtext.count("_prospect_homes(") >= 3)
 check("T3 the house answers ARE still read — from the modules that own them, for the comparison "
       "only, and they are passed to rule_basis rather than booked with",
       "_msp.default_config()" in _homes_src and "_rsub.default_ma_pnl_config()" in _homes_src
@@ -1873,6 +1879,251 @@ check("X28 with no declarations at all the evaluation is byte-identical to what 
       _tot(P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026")
            ["scenarios"]["keep"]["inputs"]) == _wholeX)
 
+print("=" * 98)
+print("Y. WHICH OF A PROSPECT'S ROWS BELONG TO A MONTH — ONE HOME (owner ask 2026-10-16)")
+print("=" * 98)
+# The month slice used to be a hand-written line in the router that spelled a feed key in code and
+# compared period STRINGS against a variant list. The month-over-month P&L needs the same answer for
+# every month at once, so it moved to the registry + `feeds_for_months`. These checks hold BOTH
+# halves: the slice is right, and the router has not un-wired from it.
+import datetime as _dt                                           # noqa: E402
+
+_EM = {
+    "ma_commission": [{"period": "May 2026", "bin": "B1"}, {"period": "June 2026", "bin": "B2"},
+                      {"period": "2026-07", "bin": "B3"}, {"period": "", "bin": "B4"}],
+    "ma_daily_tx": [{"period": "May 2026", "account_id": "1"},
+                    {"period": "July 2026", "account_id": "2"}],
+    "ma_marketplace_orders": [{"period": "May 2026", "sku": "A"}, {"period": None, "sku": "B"}],
+}
+check("Y1 a month-scoped feed is sliced to the month, and the fulfilment PRICE LIST is carried whole",
+      [r["bin"] for r in P.feeds_for_months(_EM, ["May 2026"])["ma_commission"]] == ["B1"]
+      and len(P.feeds_for_months(_EM, ["May 2026"])["ma_marketplace_orders"]) == 2)
+check("Y2 BOTH SPELLINGS of a month select the same rows — the row-level reason the string-variant "
+      "comparison was replaced rather than reused",
+      P.feeds_for_months(_EM, ["2026-05"]) == P.feeds_for_months(_EM, ["May 2026"])
+      and [r["bin"] for r in P.feeds_for_months(_EM, ["July 2026"])["ma_commission"]] == ["B3"])
+check("Y3 no month selects no month-scoped row — and is NOT read as every month",
+      P.feeds_for_months(_EM, [])["ma_commission"] == []
+      and P.feeds_for_months(_EM, [""])["ma_daily_tx"] == []
+      and len(P.feeds_for_months(_EM, [])["ma_marketplace_orders"]) == 2)
+check("Y4 a row whose month is unreadable is in NO month's slice, never silently in the one on screen",
+      all("B4" not in [r["bin"] for r in P.feeds_for_months(_EM, [m])["ma_commission"]]
+          for m in ("May 2026", "June 2026", "2026-07")))
+check("Y5 every feed DECLARES its period scope, so an undeclared feed cannot default into a month",
+      all("period_scope" in v for v in P.FEED_REGISTRY.values())
+      and P.feed_is_period_sliced("ma_commission") is True
+      and P.feed_is_period_sliced("ma_marketplace_orders") is False
+      and P.feed_is_period_sliced("something_nobody_declared") is True)
+check("Y6 the ROUTER dereferences the one home and no longer spells the exception as a feed key or "
+      "the month as a period-variant list",
+      "_pev.feeds_for_months(every_month, [period])" in _rtext
+      # over the CODE, not the prose: the comment above the rewire QUOTES the rule it replaced, and
+      # a lock that could be broken by explaining itself is a lock nobody keeps.
+      and 'feed != "ma_marketplace_orders"' not in py_code_only(_rtext)
+      and "_period_keys_for_prospect" not in py_code_only(_rtext))
+check("Y7 `month_has_ended` is the ONE comparison: `default_period` dereferences it and the module "
+      "holds no second month-against-now test",
+      "month_has_ended(m, today)" in _pcode
+      and _pcode.count("period_sort_key(m) < now") == 0
+      and _pcode.count("period_sort_key(m) >= now") == 0
+      and _pcode.count("def month_has_ended(") == 1)
+check("Y8 …and with no date supplied it answers exactly as the old rule did, so every existing "
+      "caller is byte-identical",
+      P.month_has_ended("May 2026") is True and P.month_has_ended("") is False
+      and P.default_period({"ma_commission": ["May 2026", "October 2026"]})["period"]
+      == "October 2026")
+check("Y9 a month that has NOT ended has not ended, and a future month is not 'complete' either",
+      P.month_has_ended("October 2026", _dt.date(2026, 10, 16)) is False
+      and P.month_has_ended("September 2026", _dt.date(2026, 10, 16)) is True
+      and P.month_has_ended("December 2026", _dt.date(2026, 10, 16)) is False)
+check("Y10 `uploaded_months` counts only the MONTH-SCOPED feeds, oldest first — a month carrying "
+      "nothing but handset orders is not a month a P&L can be taken for",
+      P.uploaded_months(_EM) == ["May 2026", "June 2026", "2026-07"],
+      str(P.uploaded_months(_EM)))
+
+print("=" * 98)
+print("Z. THE EXPENSE WINDOW IS A BENCHMARK, NOT A BACKWARD-ONLY SERIES (owner report 2026-10-16)")
+print("=" * 98)
+# OWNER, VERBATIM: *"also expenses only appear int eh sept statementr i was check ing apr thre are
+# not expenses showing up fir any store"*. MEASURED LIVE on 2026-10-16: this organisation's own
+# `store_expenses` carries TWO months (July 2026, 304 rows, $225,080.58; August 2026, 288 rows,
+# $276,162.69) while the prospect carries EIGHT months of uploads, March to October 2026. The window
+# was "the complete months STRICTLY BEFORE the evaluated one", so every month up to and including
+# July got NO expense at all — and said nothing about it.
+_LIVE_EXP_MONTHS = ["July 2026", "August 2026"]        # the live shape, exactly
+print("    ARMED CONTROL (the pre-fix window, which must now be the EMPTY one):")
+check("    Z1a the old rule finds NOTHING to average from April — the control fires",
+      P.complete_months(_LIVE_EXP_MONTHS, "April 2026") == []
+      and P.complete_months(_LIVE_EXP_MONTHS, "July 2026") == [])
+_WA = P.expense_window(_LIVE_EXP_MONTHS, "April 2026", 3, _dt.date(2026, 10, 16))
+check("Z1b THE DEFECT, FIXED: April now averages the nearest months we DID record",
+      _WA["measured"] is True and _WA["months"] == ["July 2026", "August 2026"]
+      and _WA["direction"] == "after", str(_WA))
+check("Z1c …and the direction is in the sentence the screen prints, never implied",
+      "AFTER" in _WA["basis"] and "July 2026" in _WA["basis"])
+check("Z2 WHERE ENOUGH COMPLETE MONTHS SIT BEFORE, THE WINDOW IS BYTE-IDENTICAL to what it was — "
+      "the fix adds a fallback and changes no existing answer",
+      all(P.expense_window(list(EXPENSES) + ["August 2026"], m, w)["months"]
+          == P.complete_months(list(EXPENSES) + ["August 2026"], m)[:w]
+          for m in ("August 2026", "September 2026", "2026-08") for w in (1, 2, 3)))
+check("Z3 a month still in progress is NEVER averaged in, on either side of the window",
+      P.expense_window(["October 2026"], "April 2026", 3, _dt.date(2026, 10, 16))["months"] == []
+      and P.expense_window(["October 2026"], "April 2026", 3)["months"] == ["October 2026"])
+check("Z4 NOTHING RECORDED AT ALL READS AS *NOT MEASURED*, never as a zero expense — the dangerous "
+      "half of the defect, because a zero expense line makes every takeover look profitable",
+      P.expense_window([], "April 2026", 3)["measured"] is False
+      and "NOT MEASURED" in P.expense_window([], "April 2026", 3)["basis"]
+      and P.expense_window([], "April 2026", 3)["direction"] == "none")
+check("Z5 the window is ALWAYS a subset of the months we actually recorded — no month is invented",
+      all(set(P.expense_window(ps, "June 2026", 3, _dt.date(2026, 10, 16))["months"]) <= set(ps)
+          for ps in ([], _LIVE_EXP_MONTHS, list(EXPENSES), ["junk", "July 2026"])))
+_WB = P.expense_window(["June 2026", "September 2026"], "July 2026", 3, _dt.date(2026, 10, 16))
+check("Z6 a SHORTFALL is made up from the nearest later month, and both sides are named",
+      _WB["before"] == ["June 2026"] and _WB["after"] == ["September 2026"]
+      and _WB["direction"] == "both" and _WB["requested"] == 3)
+check("Z7 an unparseable period never wins a place in the window",
+      P.expense_window(["junk", "", None], "April 2026", 3)["months"] == [])
+check("Z8 the ROUTER's window helper dereferences the one home and holds no window rule of its own",
+      "_pev.expense_window(" in _rtext
+      and _rtext.count("_pev.complete_months(") == 0
+      and "NOT MEASURED rather than zero" in _rtext)
+
+print("-" * 98)
+print("Z. A P&L OVER A RANGE CHARGES AS MANY MONTHS OF COST AS IT CARRIES OF REVENUE")
+print("-" * 98)
+_EB1 = P.expense_bookings(_EXPM, COA.route_expense_line)
+check("Z9 `months` defaults to 1, so every existing caller is byte-identical",
+      _EB1 == P.expense_bookings(_EXPM, COA.route_expense_line, 1)
+      and round(sum(a for _l, a, _lb in _EB1), 2) == 10000.0)
+check("Z10 three months charge exactly three times one month — the line labels unchanged",
+      [(l, round(a / 3, 2), lb)
+       for l, a, lb in P.expense_bookings(_EXPM, COA.route_expense_line, 3)] == _EB1)
+check("Z11 a nonsense month count degrades to one month, never to zero cost",
+      P.expense_bookings(_EXPM, COA.route_expense_line, 0) == _EB1
+      and P.expense_bookings(_EXPM, COA.route_expense_line, None) == _EB1)
+_EV3 = P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                  expense_months=3)
+_tot3 = _tot(_EV3["scenarios"]["keep"]["inputs"])
+check("Z12 …and `evaluate` carries it through to the statement: three months of cost, the same "
+      "revenue, and the bottom line lower by exactly the two extra months",
+      round(_tot3["expenses"], 2) == round(_wholeX["expenses"] * 3, 2)
+      and round(_tot3["revenue"], 2) == round(_wholeX["revenue"], 2)
+      and round(_wholeX["net_income"] - _tot3["net_income"], 2)
+      == round(_wholeX["expenses"] * 2, 2))
+check("Z13 a declared rent is a MONTHLY figure and is charged for the same months as everything else",
+      round(_tot(P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                            store_inputs=[], prospect_rent=1000.0,
+                            expense_months=2)["scenarios"]["keep"]["inputs"])["expenses"], 2)
+      == round(_tot(P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                               store_inputs=[], prospect_rent=1000.0
+                               )["scenarios"]["keep"]["inputs"])["expenses"] * 2, 2))
+check("Z14 the one sentence about it names the month count and is the only place it is said",
+      "2 months" in P.range_basis(["a", "b"], 2)
+      and "charged once" in P.range_basis(["a"], 1)
+      and _pcode.count("def range_basis(") == 1)
+
+print("-" * 98)
+print("Z. THE MONTH-OR-RANGE FILTER'S SEMANTICS (owner ask 2026-10-16)")
+print("-" * 98)
+_MONTHS = ["March 2026", "April 2026", "May 2026", "June 2026"]
+check("Z15 a MONTH alone selects that month and nothing either side of it",
+      P.months_in_range(_MONTHS, "April 2026") == ["April 2026"]
+      and P.months_in_range(_MONTHS, "2026-04") == ["April 2026"])
+check("Z16 a RANGE is inclusive of both ends",
+      P.months_in_range(_MONTHS, "2026-04", "2026-06")
+      == ["April 2026", "May 2026", "June 2026"])
+check("Z17 a range whose ends fall MID-MONTH still covers the whole months they fall in — a P&L "
+      "cannot be cut at the 14th, and dropping a half-covered month would understate the window",
+      P.months_in_range(_MONTHS, "2026-04-14", "2026-05-02") == ["April 2026", "May 2026"])
+check("Z18 an end alone reads as 'up to and including', and NO filter does not narrow",
+      P.months_in_range(_MONTHS, "", "2026-04") == ["March 2026", "April 2026"]
+      and P.months_in_range(_MONTHS, "", "") == _MONTHS
+      and P.months_in_range(_MONTHS, None, None) == _MONTHS)
+check("Z19 a month the prospect has no rows for is never invented into the answer",
+      P.months_in_range(_MONTHS, "2026-01", "2026-12") == _MONTHS
+      and P.months_in_range([], "2026-04", "2026-06") == [])
+check("Z20 the answer is oldest-first, whatever order the months arrive in",
+      P.months_in_range(list(reversed(_MONTHS)), "2026-03", "2026-06") == _MONTHS)
+
+print("-" * 98)
+print("Z. ONE BUILDER, ONE BOOKING PATH — THE TREND IS THE MONTH REPORT, N TIMES")
+print("-" * 98)
+_STX = _tot and None            # (the assembler itself is exercised through `_tot` below)
+_ST_ONE = ENG._assemble(_EVX["scenarios"]["keep"]["inputs"], [], COA.PL_SPEC, COA.PL_LABEL,
+                        [("Revenue", "revenue"), ("Cost of Goods Sold", "cogs"),
+                         ("Operating Expenses", "opex"), ("Other", "other")],
+                        "prospect", set(), True)
+_LINES = P.statement_line_amounts(_ST_ONE)
+check("Z21 `statement_line_amounts` is a PROJECTION — every key is a line the assembler built, and "
+      "nothing is summed, renamed or invented",
+      set(_LINES) == {l["key"] for sec in _ST_ONE["sections"] for l in sec["lines"]}
+      and all(_LINES[l["key"]] == l["amount"]
+              for sec in _ST_ONE["sections"] for l in sec["lines"]))
+check("Z22 an absent statement projects to nothing rather than to a zero claim",
+      P.statement_line_amounts(None) == {} and P.statement_line_amounts({}) == {})
+check("Z23 the ROUTER has ONE prospect assembler and both readers dereference it — the trend column "
+      "for a month and that month's own report cannot be built two ways",
+      _rtext.count("def _prospect_assemble(") == 1
+      and _rtext.count("_prospect_assemble(") >= 3
+      and _rtext.count("_eng._assemble(") == 1)
+_trend_fn = [n for n in _nodes if n.name == "prospect_pl_trend"]
+check("Z24 the trend endpoint exists, is org-scoped and books through the one evaluate",
+      len(_trend_fn) == 1
+      and "require_org(org_id)" in ast.unparse(_trend_fn[0])
+      and "_pev.evaluate(" in ast.unparse(_trend_fn[0])
+      and "_prospect_assemble(" in ast.unparse(_trend_fn[0]))
+_tsrc = ast.unparse(_trend_fn[0])
+check("Z25 …and it holds NO booking rule, NO expense rule and no month vocabulary of its own",
+      not any(t in _tsrc for t in ("ma_commission_bookings(", "ma_tx_bookings(",
+                                   "route_expense_line(", "complete_months(", "PL_SPEC",
+                                   "device_cost", 'period_sort_key('))
+      and "_pev.feeds_for_months(" in _tsrc and "_pev.months_in_range(" in _tsrc
+      and "_pev.uploaded_months(" in _tsrc)
+check("Z26 it reads the prospect's rows and our expense sheet ONCE each, not once per month",
+      _tsrc.count("_prospect_rows_every_month(") == 1
+      and _tsrc.count('table(\'store_expenses\')') == 1
+      and "expense_rows" in _tsrc)
+check("Z27 …and builds ONE price list for every month, with the company's own home",
+      _tsrc.count('ma_unit_price_from_rows') == 1 and "price_list=price" in _tsrc)
+_PX = DC.ma_unit_price_from_rows(_PFEEDS["ma_marketplace_orders"])
+check("Z28 injecting that price list changes NO figure — it is a cost saving and nothing else",
+      _tot(P.evaluate(_PFEEDS, P.default_config(), _homes_full, _EXPM, {}, "May 2026",
+                      price_list=_PX)["scenarios"]["keep"]["inputs"]) == _wholeX)
+# THE CLAIM THAT MAKES THE TREND A SHAPE AND NOT A SIBLING DERIVATION: a window over the months
+# carries the SAME revenue as those months booked one at a time, because it is the same rows through
+# the same path — only the expense side is multiplied, and §Z12 holds that separately.
+_EM2 = {"ma_commission": [dict(r, period="May 2026") for r in _PFEEDS["ma_commission"][:2]]
+                         + [dict(r, period="June 2026") for r in _PFEEDS["ma_commission"][2:]],
+        "ma_daily_tx": [dict(_PFEEDS["ma_daily_tx"][0], period="May 2026"),
+                        dict(_PFEEDS["ma_daily_tx"][1], period="June 2026")],
+        "ma_marketplace_orders": [dict(r, period="May 2026")
+                                  for r in _PFEEDS["ma_marketplace_orders"]]}
+
+
+def _rev_for(months, exp_months=1):
+    return _tot(P.evaluate(P.feeds_for_months(_EM2, months), P.default_config(), _homes_full,
+                           _EXPM, {}, months[-1], expense_months=exp_months,
+                           price_list=_PX)["scenarios"]["keep"]["inputs"])
+
+
+_both = _rev_for(["May 2026", "June 2026"], 2)
+_sum = {k: round(_rev_for(["May 2026"])[k] + _rev_for(["June 2026"])[k], 2)
+        for k in ("revenue", "cogs", "expenses")}
+check("Z29 the WINDOW is the months' own rows booked ONCE: its revenue and device cost equal the "
+      "monthly columns added up, to the cent — so the panel on the right and the grid cannot "
+      "disagree about what the store earned",
+      round(_both["revenue"], 2) == _sum["revenue"]
+      and round(_both["cogs"], 2) == _sum["cogs"],
+      f"window {round(_both['revenue'], 2)}/{round(_both['cogs'], 2)} vs columns "
+      f"{_sum['revenue']}/{_sum['cogs']}")
+check("Z30 …and its expense side is two months of cost, which is what the two columns carry between "
+      "them — each column charged with one whole store's month",
+      round(_both["expenses"], 2) == _sum["expenses"])
+check("Z31 the month-over-month table is EVERY month on purpose: the month/range filter narrows the "
+      "window panel and is never applied to the trend's own columns",
+      "by_month.append(blk)" in _tsrc and "months_in_range" in _tsrc
+      and _tsrc.index("for m in months") < _tsrc.index("months_in_range"))
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 98)
 print("V. THE FIRST MONTH AND M2-M12 AS TWO P&L LINES — AND THE MONEY DOES NOT MOVE (§COMMCALC-15)")
@@ -2171,6 +2422,10 @@ check("W11 the block is READ-ONLY and clock-free: it is handed the date, so 'has
       and "datetime" not in inspect.getsource(P.commission_leg_store_months)
       and 'today=datetime.now(timezone.utc).date()' in _rtext)
 
+check("W12 the endpoint costs NO extra query: the block is built from the rows the month read "
+      "already returned for every month",
+      "_pev.commission_leg_store_months(\n        every_month" in _rtext)
+
 check("W13 THE SCREEN: the block is its own card with a Month filter whose default is ALL months "
       "and a store filter that is the page's shared one, and it computes no dollar of its own",
       "commission_leg_store_months" in _PAGE
@@ -2187,9 +2442,6 @@ check("W14 …and the P&L split is NAMED on the screen where the two numbers are
       "Both halves are lines on the P&amp;L above" in _PAGE
       and "identical to the cent whether it is shown as one line or two" in _PAGE)
 
-check("W12 the endpoint costs NO extra query: the block is built from the rows the month read "
-      "already returned for every month",
-      "_pev.commission_leg_store_months(\n        every_month" in _rtext)
 
 print("\n" + "=" * 98)
 print(f"{len(PASS)} passed / {len(FAIL)} failed")

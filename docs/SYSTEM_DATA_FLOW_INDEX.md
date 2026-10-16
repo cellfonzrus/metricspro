@@ -26395,7 +26395,8 @@ clear with analysis"*
 **Module:** `backend/app/modules/commcalc/prospect_eval.py` (the one home; pure, DB-free) ·
 `backend/app/modules/commcalc/router.py` (six endpoints) ·
 `frontend/src/app/(platform)/commcalc/store-takeover/page.tsx`
-**Lock:** `backend/harness_prospect_eval.py` — 131 checks, run by `carrier-vocab-guard.yml`
+**Lock:** `backend/harness_prospect_eval.py` (380 checks) + `backend/harness_prospect_pl_trend.py`
+(25 checks, the ENDPOINT over a fake client) — both run by `carrier-vocab-guard.yml`
 **Migration:** `1077_store_prospect_eval.sql` (two new tables, five NULL config columns; moves no money)
 **Module-graph fact:** `store_takeover_evaluation` (§50)
 
@@ -26557,6 +26558,7 @@ reported as a measured zero.
 | the prospect list and its config | `GET /commcalc/prospects` |
 | open / change / drop an evaluation | `POST /commcalc/prospects`, `PUT`/`DELETE /commcalc/prospects/{id}` |
 | upload one feed (live reader + live mapping, prospect destination) | `POST /commcalc/prospects/{id}/upload` |
+| THE MONTH-OVER-MONTH P&L and the month-or-range window (§COMMCALC-03.28) | `GET /commcalc/prospects/{id}/pl-trend?period=&period_to=&mode=` |
 | THE evaluation — P&L both ways (the commission line in its two month-of-life parts, §COMMCALC-15), the flag list, the coverage, `commission_leg_store_months` (M2–M12 per store, every uploaded month, both bases) and `scenarios[mode].leg_split` (what the split moved, with its own identity proof) | `GET /commcalc/prospects/{id}/evaluation?period=` |
 
 **ONE ASSEMBLY, TWO SURFACES**: the P&L screen and the family-plan sub-report read the same payload
@@ -27434,6 +27436,149 @@ the activation month; the cash rows answer what landed. For a takeover those are
 basis with no rows reads as **not measured** rather than as a measured zero (§X14). A commission sheet
 that states no month-of-life keeps the rung **Unlabelled** and is never read as a first month (§X13) —
 reading a trailing book as fresh is precisely the error that would overprice a deal.
+
+### COMMCALC-03.28 THE MONTH-OVER-MONTH P&L, AND THE EXPENSE THAT WAS NOT THERE (owner, 2026-10-16)
+
+Two asks on the same screen, one of them a defect. **Carrier-neutral and platform-wide**: the owner
+said so explicitly at 14:49 — *"this stays a platofrm wide chaneg / report not a patch for any one
+carrier, this evaluation is specilfially for total"* — so nothing below names a carrier, and the
+commission the evaluation books is the prospect's OWN uploaded sheets and nothing else.
+
+**Endpoint:** `GET /commcalc/prospects/{id}/pl-trend?period=&period_to=&mode=`
+**Lock:** `backend/harness_prospect_pl_trend.py` (the endpoint, over a fake client) +
+`harness_prospect_eval.py` §Y/§Z (the pure rules). **No migration, no new table, no new column.**
+
+#### The duplicate check (the build gate), and what it changed
+
+| candidate | verdict |
+|---|---|
+| the per-store P&L matrix (§COMMCALC-03.18) | **REUSED whole.** The trend is `prospect_eval.evaluate` + `router._prospect_assemble` called once per month — the same booking path and the same assembler. §Z of the lock requires a column and that month's own report to agree on **every line, both totals and the activation count**, which is what makes this a shape and not a sibling derivation |
+| `GET /commcalc/commission-leg-store-trend` (§COMMCALC-12) | not this — it answers a COMMISSION question for stores we OWN, off live tables, and knows nothing of a prospect's uploads or of a P&L |
+| the per-month tables this report already carries (§COMMCALC-03.20/.23) | counts of accounts, activations and products. None of them is a statement |
+| the shared filter bar's period value (RULE FIVE, §3d) | **REUSED.** "A month OR a date range" is already one value (`period` + `periodTo`), so the window takes the same two strings rather than inventing a vocabulary |
+
+**Three one-homes came out of it, and each has a build-failing lock:**
+
+| the fact | the one home | who dereferences it |
+|---|---|---|
+| which of a prospect's rows belong to a month | `prospect_eval.feeds_for_months`, over the registry's own `period_scope` | the month report AND the trend (§Y6) |
+| has this month ended | `prospect_eval.month_has_ended` | `default_period` (which month to open on, §COMMCALC-03.17) AND `expense_window` (which month may be averaged) — §Y7 fails the build on a second copy |
+| which of OUR months the expense benchmark is taken over | `prospect_eval.expense_window` | `router._prospect_expense_window`, its only caller (§Z8) |
+| assembling a prospect statement | `router._prospect_assemble` | both endpoints; §Z23 holds that exactly one `_eng._assemble(` exists in the router's prospect section |
+
+The month slice **replaced two hand-written copies**: `if feed != "ma_marketplace_orders" and
+stamped not in wanted` spelled a feed key in code (RULE TWO) and compared period TEXT against a
+variant list. Both spellings of a month now collapse through `period_sort_key`, the module's single
+period parser, so a file stamped `2026-04` and one stamped `April 2026` select the same rows — and
+`_period_keys_for_prospect` is gone rather than left as a second answer (the `period_stored_spelling`
+module-graph fact lost its `_ap` binding in the same change).
+
+#### ASK 2, THE DEFECT: "expenses only appear in the Sept statement… there are no expenses showing up for any store"
+
+**He was right, and no data was missing.** Measured live on 2026-10-16, read-only over the REST API:
+
+| | what the live rows say |
+|---|---|
+| this organisation's own `commcalc.store_expenses` | **two months only** — July 2026 (304 rows, $225,080.58) and August 2026 (288 rows, $276,162.69). Nothing earlier was ever entered |
+| the prospect's own uploads | **eight months**, March to October 2026 (`empire`: 5,495 commission rows, 65,491 handset-order rows, 137,374 rows in all) |
+| the window the evaluation used | `complete_months(...)` — the months **strictly before** the evaluated one |
+
+So the window resolved to `[August, July]` for September and October, `[July]` for August, and
+**`[]` for July, June, May, April and March** — which is exactly the one month he could find an
+expense in and the five he could not. The HOUSE org has March–September, which is why this never
+showed up on the house platform: it is a per-ORGANISATION fact, and the fix had to be one too.
+
+**THE CLASS, NOT THE INSTANCE.** The general fact that was wrong is not "April has no expenses". It
+is that **our own average store cost was treated as a time series read backwards from the evaluated
+month, when §COMMCALC-03.6 defines it as a BENCHMARK** — "the full average monthly expense of one of
+our own stores". A benchmark has no month of its own: the question is *what does a store of ours cost
+to run*, and the best available measurement is the months we actually recorded, whichever side of the
+evaluated month they fall on. A backward-only window answers for recent months and silently answers
+**nothing** for every month before a tenant's first expense sheet — for every tenant, every prospect
+and every month, not just this one.
+
+`expense_window(periods, period, want, today)` is the fix, and it has four halves:
+
+1. **Prior months still lead, unchanged.** Where enough complete months sit before the evaluated one
+   the window is **byte-identical** to what it was — §Z2 asserts that against `complete_months`
+   itself for three window sizes, so this adds a fallback and changes no existing answer.
+2. **A shortfall is filled from the NEAREST months after it**, nearest first, and only months that
+   have ENDED (`month_has_ended`, dereferenced — a part-month's sheet drags every line down by
+   however much of the month is left, which is why prior months had to be complete too).
+3. **The direction is reported, never implied.** `direction` (`before`/`after`/`both`/`none`) and a
+   one-sentence `basis` ride on the payload and the screen prints them: *"we had entered no expenses
+   before April 2026, so the NEAREST months we did record are the benchmark; they fall AFTER the
+   month on screen"*.
+4. **An unmeasured expense side SAYS SO instead of booking zero.** `measured: false` with a reason,
+   because a zero expense line makes every takeover look profitable — the dangerous half of this
+   defect, and the half that had no symptom.
+
+**ARMED NEGATIVE CONTROLS, at both levels.** §Z1a asserts the pre-fix window is the empty one from
+April. `harness_prospect_pl_trend.py` §A7–A9 reinstates the old rule inside the ENDPOINT and asserts
+it reproduces the defect: every month `measured: false`, every store a flat `0.00` expense, and every
+column's bottom line **overstated by a whole store's running cost**. A regression to the old rule
+cannot pass.
+
+**Nothing was "fixed" by hiding a data gap.** Where a tenant has entered no expenses at all the
+report still says NOT MEASURED, in red, and names what to enter.
+
+**THE SIBLING, FOUND AND DELIBERATELY NOT "FIXED".** The other reader of this organisation's expense
+sheet is the live P&L / GP report, through `expenses_effective.effective_expense_rows` (§19.50) —
+and it has the same SHAPE of hole: its carry-forward rule carries the latest **strictly prior**
+month forward, so for this organisation April 2026 books **$0.00 of store opex** on the live P&L too.
+It is **excused, not fixed, and the reason is the whole distinction this section turns on:**
+
+| | what the figure means | what an absent month should read as |
+|---|---|---|
+| the takeover evaluation | our average store cost used as a **benchmark** — §COMMCALC-03.6, a yardstick with no month of its own | the nearest months we recorded, labelled |
+| the live P&L / GP report | **what this company actually spent in that month** | nothing entered — and saying so |
+
+Carrying August's actuals **backwards** into April on a real statement would invent a booking in the
+company's own books, which is exactly the patchwork the house rules forbid. So the live P&L keeps its
+forward-only carry, and the April gap there is a **DATA defect to report** (nobody has entered
+January–February 2026 or any month before March for the house org, and nothing before July 2026 for
+this one), never a code change. `expenses_effective` is untouched by this PR and still supplies every
+month's rows to both readers, which is what keeps the benchmark and the statement over the same
+figures.
+
+#### ASK 1: the month-over-month P&L, with the statement for a month or a range on the right
+
+Owner, verbatim: *"i also need to see the month over omont h p&l for each store in the same report
+with a filter which gives the p&l on the righ tside for a particuklar monmth selected or a data range
+selected"*.
+
+- **The grid** is one row per (store, P&L line) and **one column per month**, grouped by store with
+  **All stores** first as the row the others are checked against. The line vocabulary and the labels
+  are the server's own statement's (`coa.PL_LABEL` through `lineLabelOf`) — the screen names no line.
+  Through `ReportShell`, so it sorts, filters and exports like every other table.
+- **The panel on the right** is the selected month, or the selected date range, **booked ONCE over
+  all of its rows** — never the monthly columns added together. §Z29 and §C3 prove the window's
+  revenue and device cost equal the columns added up to the cent, which is the check that it is the
+  same rows through the same path.
+- **A range charges as many months of running cost as it carries of revenue.** Our average is a
+  MONTHLY figure, so `expense_bookings(matrix, route, months=N)` charges it once per month in the
+  window — after the rent override, so a seller's declared monthly rent is charged for the same N
+  months. `months=1` is the default and every existing caller is byte-identical (§Z9). The sentence
+  saying so is `prospect_eval.range_basis`, carried on the payload and printed under the figures.
+- **A range covers the WHOLE months its two ends fall in**, even when the dates sit mid-month: a P&L
+  cannot be cut at the 14th, and dropping a half-covered month would understate the window (§Z17).
+  An empty filter does not narrow — it is every month, not none (§Z18).
+- **The grid's columns are never narrowed by that filter.** A trend you can filter down to one column
+  is not a trend (§Z31), and the screen says so rather than leaving it to be noticed.
+- **The Stores filter narrows which stores appear**, through the page's existing `storeFilter` one
+  home, and the All-stores row is kept whatever it says.
+
+**ITS OWN REQUEST, off the first screen's critical path.** It costs one `evaluate` per month, so
+hanging it on `/evaluation` would make the month report wait for work nobody has asked for yet — the
+same reasoning that took the row tally off the list's critical path. Within the endpoint, the
+prospect's rows and our expense sheet are each read **once** (§Z26) and ONE handset price list serves
+every month (§Z27, injected through `evaluate(price_list=…)`, which §Z28 proves changes no figure).
+
+**Where it is:** `/commcalc/store-takeover`, a new card between the per-store P&L matrix and the
+store-by-store table — the grid on the left, the month-or-range statement on the right, with the two
+date boxes beside the panel they govern (empty = follow the page's **Month** filter).
+
+---
 
 ## §COMMCALC-04. WHETHER A ROW IS FILED UNDER A MONTH IS A FACT ABOUT THE TABLE (owner report 2026-10-12)
 
