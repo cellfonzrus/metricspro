@@ -1890,6 +1890,9 @@ def rule_basis(ma_cfg, ma_pnl_cfg=None, house_ma=None, house_pnl=None,
     def _list(v):
         return list(v or ())
 
+    def _map(v):
+        return dict(v or {})
+
     # WHICH SWITCH ANSWERS WHICH QUESTION — the money consequence in the tenant's own words, because
     # a switch name tells a reader nothing about what it moves. `src` says which resolved config it
     # comes from, so the house comparison reads the matching default.
@@ -1911,6 +1914,10 @@ def rule_basis(ma_cfg, ma_pnl_cfg=None, house_ma=None, house_pnl=None,
         ("carrier_comm_leg_split", "pl_carrier_comm_leg_split", "ma", bool,
          "whether the commission line is shown in two parts — this month's own activations, and "
          "the M2-M12 trailing legs of cohorts sold earlier — or as one line carrying both"),
+        ("month_spiff_source_by_rung", "pl_ma_month_spiff_source_by_rung", "ma", _map,
+         "which feed states each month-of-life rung — the first month can be reported when EARNED "
+         "on the commission sheet while the trailing months stay on the cash feed, because each "
+         "rung is reported by only one of the two feeds (mig 1087)"),
         ("residual_order_types", "pl_ma_residual_order_types", "pnl", _list,
          "which order families ARE the airtime residual"),
         ("merchant_discount_own_line", "pl_merchant_discount_own_line", "pnl", bool,
