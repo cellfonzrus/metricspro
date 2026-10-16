@@ -88,7 +88,17 @@ print("   " + "  ".join(f"{k}={v}" for k, v in VERS.items()))
 # ONE source-level fact DID change, and A4 below is rewritten to pin the new one: upstream fixed the
 # `"HTTP"` typo in should_retry's verb guard, so HEAD is now retried alongside GET. That widens
 # postgrest's own 503/520 retry very slightly and takes nothing away from ours.
-PINNED_STACK = {"supabase": "2.32.0", "postgrest": "2.32.0", "httpx": "0.28.1",
+# RE-PINNED 2026-10-16, supabase/postgrest 2.32.0 -> 2.33.0. NOT relaxed — RE-VERIFIED, which is
+# what this tripwire asks for. Upstream released 2.33.0 and `requirements.txt` says `supabase>=2.9.0`,
+# so CI resolved it on its next install and A1 went red on EVERY branch at once, this package's
+# changes having nothing to do with it (reproduced locally by installing 2.33.0: A1 and A1 only).
+# The re-verification: on 2.33.0 every OTHER check in this file still passes, 137 of 137 — and those
+# include the source-level ones that ARE the root-cause diagnosis (A2/A3 postgrest's
+# `send_with_retry` still cannot save a transport exception, A4 its verb guard, A5 the pool
+# construction, A6-A10 httpcore's HTTP/2 connection having no idle-socket probe). So the diagnosis
+# this package rests on is unchanged by the bump; nothing was re-read on faith and nothing was
+# switched off to get green. `httpx`, `httpcore` and `h2` did not move at all.
+PINNED_STACK = {"supabase": "2.33.0", "postgrest": "2.33.0", "httpx": "0.28.1",
                 "httpcore": "1.0.9", "h2": "4.4.1"}
 check("A1. pinned stack is the one the diagnosis was read from",
       VERS == PINNED_STACK,
