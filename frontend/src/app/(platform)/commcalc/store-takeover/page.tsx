@@ -54,6 +54,9 @@ interface Prospect {
   expense_basis_months?: number | null
   feed_rows?: Record<string, Record<string, number>>   // {period: {feed_key: rows}}
   periods?: string[]
+  // True while the tally has not been read for this prospect. Distinct from an EMPTY tally, which
+  // is a measured fact; see `FeedTally.missing`.
+  tally_unknown?: boolean
 }
 interface FlaggedDevice { sku: string; lines: number; imeis: string[] }
 interface FlaggedAccount {
@@ -387,6 +390,19 @@ interface ProspectList {
   config_columns_missing?: Record<string, string>
   error?: string
 }
+// HOW MUCH EACH EVALUATION HAS GOT, loaded BESIDE the list rather than inside it (owner report
+// 2026-10-16, index §COMMCALC-TALLY). The list used to carry these counts, which meant the two-row
+// answer "which stores am I evaluating" waited on a count of 202,865 feed rows — about a minute,
+// during which the list was empty. `missing` is the honest third state: a prospect whose tally has
+// not been read is NOT a prospect with nothing uploaded, and the table must not print zero over it.
+interface FeedTally {
+  tally?: Record<string, Record<string, Record<string, number>>>  // {prospect: {period: {feed: n}}}
+  periods?: Record<string, string[]>
+  missing?: string[]
+  source?: string
+  note?: string
+  error?: string
+}
 interface UploadResult {
   feed_label: string
   rows_written: number
@@ -501,6 +517,11 @@ interface ProspectRow {
   months: number; rows: number
   present: string[]; missing: string[]
   latest: string
+  // UNKNOWN IS NOT ZERO (owner report 2026-10-16, index §COMMCALC-TALLY). The tally loads beside
+  // the list, so every count on this row is still being read for the first moment it is on screen.
+  // Printing 0 months / 0 rows / "nothing yet" then is a confident lie about data that exists, and
+  // it is exactly how a slow count reads as a missing evaluation.
+  counting: boolean
 }
 function prospectRows(prospects: Prospect[], registry: Record<string, FeedInfo>): ProspectRow[] {
   const keys = Object.keys(registry)
@@ -519,6 +540,7 @@ function prospectRows(prospects: Prospect[], registry: Record<string, FeedInfo>)
       id: String(p.id),
       name: p.name || '(unnamed)',
       status: p.status || 'evaluating',
+      counting: !!p.tally_unknown,
       months: periods.length,
       rows,
       present: keys.filter(k => present.has(k)),
@@ -532,20 +554,26 @@ function prospectRows(prospects: Prospect[], registry: Record<string, FeedInfo>)
 function prospectCols(registry: Record<string, FeedInfo>,
                       onOpen: (id: string) => void): ExportColumn[] {
   const label = (k: string) => registry[k]?.label || k
+  // EVERY COUNTED CELL GOES THROUGH HERE, so none of them can print a confident zero while the
+  // tally is still being read (owner report 2026-10-16, index §COMMCALC-TALLY). The row's own
+  // `counting` flag is the one place that state is decided; a cell that reads `r.counting` itself
+  // would be a second copy of the rule and would drift from this one.
+  const counted = <T,>(of: (r: ProspectRow) => T) =>
+    (r: ProspectRow) => (r.counting ? 'counting…' : of(r))
   return [
     { header: 'Store being evaluated', get: (r: ProspectRow) => r.name,
       tip: 'The name you gave this evaluation. It is not a store on your platform and never becomes '
          + 'one — walking away from a deal leaves nothing behind.' },
-    { header: 'Months uploaded', get: (r: ProspectRow) => r.months, align: 'right',
+    { header: 'Months uploaded', get: counted(r => r.months), align: 'right',
       tip: 'How many different months its carrier reports cover. More months is a better read: one '
          + 'month can be a good month.' },
-    { header: 'Latest month', get: (r: ProspectRow) => r.latest || '—',
+    { header: 'Latest month', get: counted(r => r.latest || '—'),
       tip: 'The most recent month any uploaded file covers.' },
-    { header: 'Rows uploaded', get: (r: ProspectRow) => r.rows, align: 'right',
+    { header: 'Rows uploaded', get: counted(r => r.rows), align: 'right',
       tip: 'Every line read out of its files, across every month and every report.' },
-    { header: 'Reports in', get: (r: ProspectRow) => r.present.map(label).join(' · ') || 'nothing yet',
+    { header: 'Reports in', get: counted(r => r.present.map(label).join(' · ') || 'nothing yet'),
       tip: 'Which of its carrier reports have landed.' },
-    { header: 'Still to upload', get: (r: ProspectRow) => r.missing.map(label).join(' · ') || 'none',
+    { header: 'Still to upload', get: counted(r => r.missing.map(label).join(' · ') || 'none'),
       tip: 'Which reports this evaluation has never seen. The commission report is the one that '
          + 'carries the money, so an evaluation without it has no P&L to show.' },
     { header: 'Status', get: (r: ProspectRow) => r.status,
@@ -939,6 +967,7 @@ export default function StoreTakeoverPage() {
   // The prospect whose stored rent is in `rentDraft`. Compared rather than ignored, so a reload of
   // the same prospect never overwrites a figure the user is halfway through typing.
   const [rentFor, setRentFor] = useState('')
+  const [tally, setTally] = useState<FeedTally | null>(null)
 
   // NOTHING IS OPENED FOR YOU (owner report 2026-10-14: "the main screen does nto tell you what to
   // do it just sits tehre and it pops up teh dat aautoamatically also it does not let you pick fromt
@@ -952,6 +981,16 @@ export default function StoreTakeoverPage() {
       .catch(e => setList({ error: errText(e) }))
   }, [])
   useEffect(() => { loadList() }, [loadList])
+
+  // THE TALLY LOADS BESIDE THE LIST, NEVER AHEAD OF IT (owner report 2026-10-16). Two requests, not
+  // one, and deliberately NOT awaited together: the list paints as soon as it lands, so the thing
+  // the owner came for is on screen while the counts are still being read.
+  const loadTally = useCallback(() => {
+    api(`/api/v1/commcalc/prospects/feed-tally${orgParam1()}`)
+      .then((d: FeedTally) => setTally(d))
+      .catch(e => setTally({ error: errText(e) }))
+  }, [])
+  useEffect(() => { loadTally() }, [loadTally])
 
   // The evaluation read. `loadedKey` is what makes "loading" a DERIVED value rather than a state set
   // synchronously inside the effect — the latter triggers the cascading re-render React now rejects.
@@ -978,7 +1017,25 @@ export default function StoreTakeoverPage() {
   // MEMOISED, not just derived: `list?.prospects || []` is a NEW array identity on every render, so
   // the table's column and row memos below would rebuild every time and re-mount the table under the
   // pointer. Same for the registry.
-  const prospects = useMemo<Prospect[]>(() => list?.prospects || [], [list?.prospects])
+  // MEMOISED and MERGED. The tally arrives after the list, so each prospect gets its counts when
+  // they land and is marked `tally_unknown` until then — the table prints "counting…" rather than a
+  // confident zero over feeds it has not read (index §COMMCALC-TALLY).
+  const prospects = useMemo<Prospect[]>(() => {
+    const rows = list?.prospects || []
+    if (!tally) return rows.map(p => ({ ...p, tally_unknown: true }))
+    const byProspect = tally.tally || {}
+    const months = tally.periods || {}
+    const unread = new Set(tally.missing || [])
+    return rows.map(p => {
+      const id = String(p.id)
+      return {
+        ...p,
+        feed_rows: byProspect[id] || {},
+        periods: months[id] || [],
+        tally_unknown: unread.has(id) || !!tally.error,
+      }
+    })
+  }, [list?.prospects, tally])
   const prospect: Prospect | null = data?.prospect
     || prospects.find(p => String(p.id) === pid)
     || null
