@@ -48775,6 +48775,35 @@ async def _upload_prospect_feed_impl(prospect_id, feed_key, period, carrier_id,
                      "evaluation — no live report, payout or statement can see them.")}
 
 
+def _prospect_rows_every_month(client, org_id, prospect_id):
+    """I/O, ONE READ: `{feed_key: [rows]}` over the prospect's WHOLE upload, month stamped on.
+
+    Factored out of `_prospect_feed_rows` when the month-over-month P&L needed the same rows
+    (§COMMCALC-03.28). Two reads of one prospect's uploads is both a cost — 137,374 rows and ~137
+    round trips on the biggest one, measured live — and a chance for the month report and the trend
+    to disagree about what was uploaded. Org-scoped."""
+    every_month = {k: [] for k in _pev.FEED_KEYS}
+    rows = _feed_read.read_all(
+        lambda: (client.schema("commcalc").table("prospect_feed_row")
+                 .select("feed_key,period,row")
+                 .eq("org_id", org_id).eq("prospect_id", prospect_id)))
+    for r in rows:
+        feed = str(r.get("feed_key") or "")
+        if feed not in every_month:
+            continue
+        row = r.get("row")
+        if not isinstance(row, dict):
+            continue
+        # The month is stamped on the FEED ROW, not reliably inside the row itself, so it is carried
+        # onto the row — `account_groups` groups by `period` and a row whose month were blank would
+        # collapse every month into one group.
+        stamped = str(r.get("period") or "")
+        if stamped and not str(row.get("period") or "").strip():
+            row = dict(row, period=stamped)
+        every_month[feed].append(row)
+    return every_month
+
+
 def _prospect_feed_rows(client, org_id, prospect_id, period):
     """`(feeds, every_month)` — the prospect's rows for one month, and the same rows for ALL months.
 
@@ -48788,63 +48817,55 @@ def _prospect_feed_rows(client, org_id, prospect_id, period):
     than fetched again — the per-month multi-line rollup (owner ask 2026-10-13, "summarized at the
     bottom for each month") needs every month, and a second query for rows already in hand is both a
     cost and a chance for the two reads to disagree about what was uploaded."""
-    feeds = {k: [] for k in _pev.FEED_KEYS}
-    every_month = {k: [] for k in _pev.FEED_KEYS}
-    rows = _feed_read.read_all(
-        lambda: (client.schema("commcalc").table("prospect_feed_row")
-                 .select("feed_key,period,row")
-                 .eq("org_id", org_id).eq("prospect_id", prospect_id)))
-    wanted = {str(p) for p in _period_keys_for_prospect(period)}
-    for r in rows:
-        feed = str(r.get("feed_key") or "")
-        if feed not in feeds:
-            continue
-        row = r.get("row")
-        if not isinstance(row, dict):
-            continue
-        # The month is stamped on the FEED ROW, not reliably inside the row itself, so it is carried
-        # onto the row for the all-months read — `account_groups` groups by `period` and a row whose
-        # month were blank would collapse every month into one group.
-        stamped = str(r.get("period") or "")
-        if stamped and not str(row.get("period") or "").strip():
-            row = dict(row, period=stamped)
-        every_month[feed].append(row)
-        if feed != "ma_marketplace_orders" and stamped not in wanted:
-            continue
-        feeds[feed].append(row)
+    every_month = _prospect_rows_every_month(client, org_id, prospect_id)
+    # THE MONTH SLICE HAS ONE HOME (§COMMCALC-03.28). This used to be decided inline —
+    # `if feed != "ma_marketplace_orders" and stamped not in wanted` — which spelled a feed key in
+    # code (the registry's `period_scope` is the fact) and compared period STRINGS against a variant
+    # list. The month-over-month P&L needs the same answer for every month at once, so both now
+    # dereference `_pev.feeds_for_months`, which collapses the two spellings of a month through the
+    # module's single period parser instead of matching text.
+    feeds = _pev.feeds_for_months(every_month, [period])
     return feeds, every_month
 
 
-def _period_keys_for_prospect(period):
-    """Both spellings of a month ('August 2026' and '2026-08'), the platform's one period rule — a
-    prospect's file may be stamped either way and a read that matched one would silently find no rows."""
-    from app.modules.account import _period as _ap
-    try:
-        return list(_ap.period_keys(period))
-    except Exception:
-        return [period]
-
-
-def _prospect_expense_window(client, org_id, cfg, period):
+def _prospect_expense_window(client, org_id, cfg, period, today=None, expense_rows=None):
     """OUR OWN average expenses, read through the ONE carry-forward home.
 
-    The months are the last `expense_basis_months` COMPLETE months before the evaluated one — a month
-    still in progress has a partial sheet and averaging it in would drag every line down by however
-    much of the month is left. `expenses_effective.effective_series` is what supplies each month's
+    The months come from `_pev.expense_window` — the one home for "which of our own expense months
+    is this benchmark taken over": the last `expense_basis_months` COMPLETE months before the
+    evaluated one where they exist, and the NEAREST months after it to make up a shortfall, because
+    our average store cost is a benchmark and not a time series read backwards (§COMMCALC-03.28 —
+    owner report 2026-10-16: no store showed an expense in April, and the only reason was that our
+    own sheet starts in July). `expenses_effective.effective_series` is what supplies each month's
     rows, which is why the average is over the SAME figures the Expenses sheet and the live P&L book
-    rather than over the raw table."""
+    rather than over the raw table.
+
+    `today` is the caller's date, so a month still in progress is never averaged (purity: the pure
+    home reads no clock). `expense_rows` lets a caller that already read the sheet pass it in — the
+    month-over-month trend needs a window per month and must not re-read the same table once per
+    month.
+    """
     from app.modules.commcalc.expenses_effective import effective_series
-    try:
-        rows = _feed_read.read_all(
-            lambda: (client.schema("commcalc").table("store_expenses")
-                     .select("store_code,expense_name,expense_type,amount,period,source_key")
-                     .eq("org_id", org_id)))
-    except Exception as e:
-        print(f"WARN prospect expense read failed: {e}")
-        return {}, [], {"error": "our own expense sheet could not be read, so no average was taken"}
-    months = _pev.complete_months([r.get("period") for r in rows], period)[:cfg["expense_basis_months"]]
+    rows = expense_rows
+    if rows is None:
+        try:
+            rows = _feed_read.read_all(
+                lambda: (client.schema("commcalc").table("store_expenses")
+                         .select("store_code,expense_name,expense_type,amount,period,source_key")
+                         .eq("org_id", org_id)))
+        except Exception as e:
+            print(f"WARN prospect expense read failed: {e}")
+            return {}, [], {"measured": False, "direction": "none",
+                            "error": "our own expense sheet could not be read, so no average was taken",
+                            "basis": "our own expense sheet could not be read, so the expense side "
+                                     "of this evaluation is NOT MEASURED rather than zero"}
+    win = _pev.expense_window([r.get("period") for r in rows], period,
+                              cfg["expense_basis_months"], today)
+    months = win["months"]
     if not months:
-        return {}, [], {"error": "no complete month of our own expenses sits before this one"}
+        # NOT MEASURED, SAID OUT LOUD — never a silent zero. A zero expense line makes every
+        # takeover look profitable, which is the dangerous half of the owner's 2026-10-16 report.
+        return {}, [], dict(win, error=win["basis"])
     series = effective_series(rows, months)
     by_period = {p: (series.get(p) or {}).get("rows") or [] for p in months}
     carried = {p: (series.get(p) or {}).get("carried_from") for p in months
@@ -48852,6 +48873,9 @@ def _prospect_expense_window(client, org_id, cfg, period):
     matrix = _pev.average_expense_matrix(by_period, cfg["expense_average_basis"])
     notes = _pev.expense_window_notes(matrix, months)
     notes["carried_from"] = carried
+    # The window's own verdict rides WITH the notes, so the screen prints which months were
+    # averaged, on which side of the month on screen, from one place.
+    notes = dict(notes, **{k: v for k, v in win.items() if k != "months"})
     return matrix, months, notes
 
 
@@ -49028,7 +49052,10 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
         feeds, every_month = _prospect_feed_rows(client, org_id, prospect_id, period)
     except Exception as e:
         raise HTTPException(500, f"prospect feed read failed: {type(e).__name__}: {e}")
-    matrix, months, exp_notes = _prospect_expense_window(client, org_id, cfg, period)
+    # The DATE is supplied by the endpoint, never read inside the window home (purity) — so a month
+    # still in progress is never averaged into our own cost base (§COMMCALC-03.28).
+    matrix, months, exp_notes = _prospect_expense_window(
+        client, org_id, cfg, period, datetime.now(timezone.utc).date())
     # THE RENT IS NO LONGER OVERRIDDEN HERE (§COMMCALC-03.26). `evaluate` applies
     # `apply_rent_override` once per column, off this AVERAGED matrix, because a store that declares
     # its own rent must not inherit the whole-prospect override — and a second pass over an
@@ -49043,13 +49070,10 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     ev["expenses"]["window"] = exp_notes
     ev["expenses"]["months"] = months
 
-    from app.modules.account import engine as _eng, analysis as _an
+    from app.modules.account import analysis as _an
 
     def _assemble(inputs):
-        st = _eng._assemble(inputs, [], homes["spec"], _prospect_pl_labels(homes),
-                            PROSPECT_PL_SECTIONS, "prospect", set(), True)
-        st["totals"] = _an.pl_totals(st)
-        return st
+        return _prospect_assemble(inputs, homes)
 
     statements = {}
     for m, sc in ev["scenarios"].items():
@@ -49128,6 +49152,155 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
     ev["prospect"] = prospect
     ev["period_basis"] = period_basis        # why the report opened on this month — stated, never implied
     return ev
+
+
+# ── THE MONTH-OVER-MONTH P&L, AND THE WINDOW ON THE RIGHT (owner ask 2026-10-16) ─────────────────
+# Owner, verbatim: *"i also need to see the month over omont h p&l for each store in the same report
+# with a filter which gives the p&l on the righ tside for a particuklar monmth selected or a data
+# range selected"*.
+#
+# WHAT WAS CHECKED FOR DUPLICATION BEFORE BUILDING, and what is reused rather than rebuilt:
+#   · the P&L per store for ONE month is §COMMCALC-03.18's matrix, built by `_pev.evaluate` plus
+#     `_prospect_assemble`. This endpoint calls BOTH, once per month — it holds no booking rule, no
+#     expense rule and no assembler of its own, so a column of the trend IS that month's report.
+#   · "which rows belong to a month" is `_pev.feeds_for_months` (§COMMCALC-03.28), the same slice
+#     the month report takes.
+#   · "which months exist" is `_pev.uploaded_months`, and the month/range selection is
+#     `_pev.months_in_range` over the SAME two strings the platform's shared filter bar already
+#     carries (RULE FIVE, §3d) — no second filter vocabulary.
+#   · `GET /commcalc/commission-leg-store-trend` (§COMMCALC-12) is the near miss, and it is NOT
+#     this: it answers a commission question for stores WE OWN, from live tables, and knows nothing
+#     of a prospect's uploads or of a P&L.
+#   · the per-month tables this report already carries (§COMMCALC-03.20/.23) are counts of accounts,
+#     activations and products — none of them is a statement.
+#
+# WHY IT IS ITS OWN ENDPOINT. The month report is one month; this is every month plus a window, and
+# it costs an `evaluate` per month. Hanging it on `/evaluation` would make the first screen wait for
+# work nobody has asked for yet — the same reason the row tally was taken off the list's critical
+# path (§COMMCALC-TALLY).
+
+@router.get("/prospects/{prospect_id}/pl-trend")
+def prospect_pl_trend(prospect_id: str, period: str = "", period_to: str = "", mode: str = "",
+                      org_id: str = ORG_ID):
+    """Every uploaded month's P&L for this prospect and for each of its stores, plus ONE statement
+    for the month or date range selected.
+
+    `period` / `period_to` are the shared filter bar's own two values — `period` alone is a month,
+    both together are a date range, and neither means every month. They narrow the WINDOW statement
+    on the right; the month-over-month table is deliberately every month, because a trend you can
+    filter down to one column is not a trend.
+
+    `mode` is the flagged-account scenario (`keep` / `exclude`, §COMMCALC-03.5) and defaults to the
+    prospect's own. ONE mode is assembled here rather than both: the month report shows the two side
+    by side, which is where that comparison belongs, and assembling both for every month would
+    double the work for a figure nobody reads twice.
+
+    READ-ONLY. It writes nothing, books nothing and touches no live table.
+    """
+    require_org(org_id)
+    client = sb()
+    prospect = _prospect_row(client, org_id, prospect_id)
+    cfg = _prospect_cfg(client, org_id, prospect)
+    mode = (mode or prospect.get("exclusion_mode") or _pev.HOUSE_EXCLUSION_MODE).strip()
+    if mode not in _pev.EXCLUSION_MODES:
+        raise HTTPException(400, "mode must be " + " or ".join(_pev.EXCLUSION_MODES))
+    try:
+        every_month = _prospect_rows_every_month(client, org_id, prospect_id)
+    except Exception as e:
+        raise HTTPException(500, f"prospect feed read failed: {type(e).__name__}: {e}")
+    homes = _prospect_homes(client, org_id)
+    store_inputs = _prospect_store_inputs(client, org_id, prospect_id)
+    today = datetime.now(timezone.utc).date()
+    # OUR OWN EXPENSE SHEET, READ ONCE. Every month's window is taken off this one read: a window
+    # per month over a table read per month is the same question asked twice and a chance for two
+    # reads to disagree about what we spend.
+    try:
+        expense_rows = _feed_read.read_all(
+            lambda: (client.schema("commcalc").table("store_expenses")
+                     .select("store_code,expense_name,expense_type,amount,period,source_key")
+                     .eq("org_id", org_id)))
+    except Exception as e:
+        print(f"WARN pl-trend expense read failed: {e}")
+        expense_rows = []
+    # ONE PRICE LIST for every month, built with the company's own home — a handset ordered in June
+    # and activated in July must be costed the same way in both columns, and rebuilding the same
+    # 65,000-row list once per month is work for no answer.
+    price = homes["ma_unit_price_from_rows"](every_month.get("ma_marketplace_orders") or [])
+    months = _pev.uploaded_months(every_month)
+
+    def _book(window_months, ref_period, expense_months):
+        """One statement for a set of months — the SAME evaluate and the SAME assembler the month
+        report uses, so a column here and that month's report are one number."""
+        matrix, _mo, notes = _prospect_expense_window(
+            client, org_id, cfg, ref_period, today, expense_rows)
+        ev = _pev.evaluate(_pev.feeds_for_months(every_month, window_months), cfg, homes, matrix,
+                           None, ref_period, mode, store_inputs=store_inputs,
+                           prospect_rent=prospect.get("actual_rent_monthly"),
+                           accessory_cogs_pct=homes.get("accessory_cogs_pct"),
+                           expense_months=expense_months, price_list=price)
+        sc = (ev.get("scenarios") or {}).get(mode) or {}
+        st = _prospect_assemble(sc.get("inputs") or {}, homes)
+        out = {"statement": st, "totals": st.get("totals"),
+               "lines": _pev.statement_line_amounts(st),
+               "activations": sc.get("activations"),
+               "rows_by_feed": ev.get("rows_by_feed"),
+               "coverage_summary": sc.get("coverage_summary"),
+               "expenses": notes, "expense_months": expense_months,
+               "expense_basis": _pev.range_basis(window_months, expense_months),
+               "by_store": {}}
+        for key, blk in (ev.get("store_scenarios") or {}).items():
+            bsc = (blk.get("scenarios") or {}).get(mode) or {}
+            bst = _prospect_assemble(bsc.get("inputs") or {}, homes)
+            out["by_store"][key] = {
+                "store": blk.get("store"), "totals": bst.get("totals"),
+                "lines": _pev.statement_line_amounts(bst),
+                "activations": bsc.get("activations"),
+                "expenses_basis": blk.get("expenses_basis"),
+                "declared": blk.get("declared"),
+            }
+        return out
+
+    by_month = []
+    for m in months:
+        blk = _book([m], m, 1)
+        blk.pop("statement", None)      # the grid reads `lines`/`totals`; the full statement is the
+        blk["period"] = m               # window panel's payload, and 8 of them is payload for nobody
+        by_month.append(blk)
+    selected = _pev.months_in_range(months, period, period_to)
+    window = None
+    if selected:
+        window = _book(selected, selected[-1], len(selected))
+        window["months"] = selected
+        window["selection"] = {"period": period, "period_to": period_to}
+    return {
+        "prospect": prospect, "mode": mode, "months": months,
+        "by_month": by_month, "window": window,
+        "selected_months": selected,
+        "stores": {k: v.get("store") for b in by_month for k, v in (b.get("by_store") or {}).items()},
+        "basis": ("Every column is this prospect's own uploaded rows for that month, booked through "
+                  "the company's own P&L rules and assembled by the same builder as the month "
+                  "report above — nothing here is summed across months except where the window says "
+                  "it is. Each column, and each store inside it, is charged ONE whole store's "
+                  "average monthly cost (" + _pev.STORE_EXPENSE_BASIS + ")"),
+        "window_basis": ("The panel on the right is the months the filter selects, booked ONCE over "
+                         "all of their rows — never the monthly columns added together."),
+    }
+
+
+def _prospect_assemble(inputs, homes):
+    """THE one builder for a prospect statement — `account.engine._assemble`, the company's own.
+
+    It was a closure inside `prospect_evaluation` until the month-over-month P&L needed it too
+    (§COMMCALC-03.28). A second assembler in the trend endpoint is exactly the sibling derivation
+    the house rules forbid: the trend's column for September and the September report would have
+    been built by two different builders and could have disagreed about a line's sign, its label or
+    its section. One function, both callers, and §Z of the harness fails the build if either stops
+    dereferencing it."""
+    from app.modules.account import engine as _eng, analysis as _an
+    st = _eng._assemble(inputs, [], homes["spec"], _prospect_pl_labels(homes),
+                        PROSPECT_PL_SECTIONS, "prospect", set(), True)
+    st["totals"] = _an.pl_totals(st)
+    return st
 
 
 def _prospect_pl_labels(homes):

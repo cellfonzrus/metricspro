@@ -218,8 +218,9 @@ FACTS: dict[str, dict] = {
                     'expenses with ITS actual rent — and which of its subscriber accounts carry '
                     'more lines than one month should?',
         "homes": ('app/modules/commcalc/prospect_eval.py',),
-        "index": ('COMMCALC-03', 'COMMCALC-03.26', 'COMMCALC-03.27'),
-        "locks": ('harness_prospect_eval.py', 'harness_upload_trace_coverage.py'),
+        "index": ('COMMCALC-03', 'COMMCALC-03.26', 'COMMCALC-03.27', 'COMMCALC-03.28'),
+        "locks": ('harness_prospect_eval.py', 'harness_prospect_pl_trend.py',
+                  'harness_upload_trace_coverage.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         #
@@ -241,6 +242,15 @@ FACTS: dict[str, dict] = {
         #     called. §X15 fails the build if this module parses a month out of a label itself.
         # The per-store rent is the SAME `apply_rent_override` §COMMCALC-03.6 shipped, now applied
         # once per column instead of once per prospect; §X6 holds that exactly one call site exists.
+        #
+        # §COMMCALC-03.28 ADDED THREE ONE-HOMES AND NO SECOND DERIVATION. The month-over-month P&L is
+        # `evaluate` + `router._prospect_assemble` called once per month — the SAME booking path and
+        # the SAME assembler the month report uses, which §Z of the lock proves by requiring a
+        # column and that month's own report to agree on every line. `feeds_for_months` (which rows
+        # belong to a month, off the registry's `period_scope`), `month_has_ended` (which
+        # `default_period` now dereferences too) and `expense_window` (which of OUR months the
+        # benchmark is taken over, nearest-first in either direction) are the three, and §Y/§Z fail
+        # the build if a caller stops dereferencing any of them.
         "callers": {
             'app/modules/commcalc/router.py': ('_pev',),
         },
@@ -1253,9 +1263,14 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/discrepancy_appeals.py': ('_pd',),
             'app/modules/commcalc/ledger_batch.py': ('_pd',),
             'app/modules/commcalc/ma_recon.py': ('_pd',),
-            # §COMMCALC-03 added `_ap` — a prospect's uploaded rows may be stamped in either
-            # spelling, so the read asks this home for both rather than matching one.
-            'app/modules/commcalc/router.py': ('_ap', '_pd'),
+            # §COMMCALC-03 added `_ap` here — a prospect's uploaded rows may be stamped in either
+            # spelling, so the read asked this home for both and matched the row's text against the
+            # two. §COMMCALC-03.28 REMOVED that binding and did not replace it with another: the
+            # prospect's month slice now collapses the two spellings through
+            # `prospect_eval.period_sort_key` (its single period parser) instead of comparing
+            # strings, which is what let one slicer serve the month report and the month-over-month
+            # P&L. The spelling home is unchanged and still has every other caller it had.
+            'app/modules/commcalc/router.py': ('_pd',),
         },
     },
     'statement_crosscheck_verdict': {
