@@ -218,6 +218,166 @@ for name, src in SRC.items():
 truth("F3 the token parser's own module still defines it (it is not deleted)",
       callable(CL.parse_payment_month))
 
+# ── §G. THE FIRST MONTH AND THE TRAILING MONTHS ARE REPORTED ON DIFFERENT FEEDS ─────────────────
+# Owner, 2026-10-16, on the month-of-life split shipped the same day (§COMMCALC-15): *"something is
+# wrong on teh m1 commmission it cannot be that low, jsut a rule of thumb , if the store does 100
+# activation and an mrc of 50, teh first month payout is 25, so the month shoudl have 2500 plus any
+# spiff etc, recheck"*.
+#
+# He is right about the money and the vocabulary fix of §A-§F is NOT the reason. MEASURED read-only
+# on the uploaded feeds of prospect 8061a5b2-… / be73b0c4-… (org 854f6d7b-…), seven months:
+#
+#   period      activations   Σ mrc_net_discount   EARNED M1   RECEIVED M1   EARNED M2-6  RECEIVED M2-6
+#   Mar 2026             39             1,841.00    1,018.53      1,061.01      2,643.75        861.25
+#   Apr 2026            866            26,957.00   13,385.25     10,521.92     50,941.25     18,837.50
+#   May 2026          1,066            29,521.00   16,269.18     13,057.88     51,965.00     27,020.00
+#   Jun 2026          1,209            30,446.00   16,657.58     13,306.10     38,365.75     37,442.75
+#   Jul 2026          1,217            32,149.00   17,164.44      9,544.87     26,665.75     49,874.50
+#   Aug 2026            613            21,524.00   12,323.03      2,762.36      4,935.50     64,308.75
+#   Sep 2026            482            16,364.00    7,899.24      1,237.99        555.00     38,451.50
+#
+# EARNED = `ma_store_pnl.ma_earned_month_ladder` (the sheet's spiff_m1..m6).
+# RECEIVED = `ma_store_pnl.ma_received_month_ladder` (the cash rows, legs via `month_leg_of`).
+#
+# Read the two halves of that table as the two feeds answering ONE question each:
+#   • the SHEET states the first month at activation and almost nothing else — Sep: 410 of 482 rows
+#     carry a non-zero `spiff_m1`, only 26 carry any of `spiff_m2..m6`;
+#   • the CASH feed states the trailing months promptly and the first month RETROACTIVELY — the
+#     family that carries the untokened first-month cash is literally named "Retroactive Postpaid
+#     Spiff", and its row count collapses 582 → 467 → 139 → 60 over Jun→Sep while activations only
+#     halve. Cumulatively the cash M1 is 51,492.13 against 84,717.25 earned: 60.8%, never above.
+#
+# So M1 is not misclassified and no dollar is unlabelled: it is reported on the feed the org's
+# `pl_ma_month_spiff_source` switch SUPPRESSES. The switch chooses ONE feed for ALL rungs, which was
+# right when both feeds were assumed to carry the same money at the same time. They do not.
+print("\n§G  the first month and the trailing months are reported on DIFFERENT feeds")
+
+LIVE = {"acts": 482, "mrc": 16364.12,
+        "earned_m1": 7899.24, "earned_m2_6": 555.00,
+        "received_m1": 1237.99, "received_m2_6": 38451.50,
+        "sheet_rows_with_m1": 410, "sheet_rows_with_m2_6": 26,
+        "retro_rows": {6: 582, 7: 467, 8: 139, 9: 60},
+        "cum_earned_m1": 84717.25, "cum_received_m1": 51492.13}
+
+# G1-G4 — the labels the REAL feed carries in the month the owner is reading, through the REAL
+# booking function. Every form present in Sep 2026 is here; this is what kills "the activation test
+# reads the wrong field" as a theory rather than asserting it.
+G_CFG = dict(MSP.default_config(), month_spiff_source=MSP.BASIS_RECEIVED,
+             spiff_order_types=["PostPaid Additional Spiff", "Retroactive Postpaid Spiff"])
+G_PNL = {"merchant_discount_own_line": True, "residual_order_types": ["Postpaid Residual Order"]}
+G_TX = [
+    # the two spiff families, in their real label forms
+    {"order_type": "Retroactive Postpaid Spiff",
+     "product_name": "Total MAX 5G BYO Plan $30 New Activation Commission", "retail_cost": -15.00},
+    {"order_type": "PostPaid Additional Spiff",
+     "product_name": "BYO Activation SPF Month 1", "retail_cost": -5.00},
+    {"order_type": "PostPaid Additional Spiff",
+     "product_name": "TBV MONTH 3 New Activation Commission", "retail_cost": -32.50},
+    # and the families the feed books NOTHING to carrier_comm from — real labels, real signs.
+    # `Activation Order` is the row the "wrong field" theory points at: its money is POSITIVE
+    # (the dealer is CHARGED) and its label is a plan name, so it is not commission in either field.
+    {"order_type": "Activation Order", "product_name": "Total ALL ACCESS Plan $65",
+     "retail_cost": 32.90},
+    {"order_type": "Sales Order", "product_name": "Total Wireless Protection RTR",
+     "retail_cost": 7.00},
+    {"order_type": "Postpaid Promo Order", "product_name": "Subsidy", "retail_cost": -196.38},
+]
+g_det = {}
+for line, _a, amt, d in MSP.ma_tx_bookings([dict(r, merchant_discount=0.0, account_id="")
+                                            for r in G_TX], G_PNL, G_CFG):
+    if line == "carrier_comm":
+        g_det[d] = round(g_det.get(d, 0.0) + amt, 2)
+close("G1 the untokened first-month CASH label is read as M1 (not as 'no month')",
+      g_det.get("M1", 0.0), 20.00)
+close("G2 the tokened trailing label is read as its own rung", g_det.get("M3", 0.0), 32.50)
+truth("G3 nothing is unlabelled — every spiff row of the real month states its rung",
+      MSP._SPIFF_OTHER_DETAIL not in g_det)
+truth("G4 an `Activation Order` row books NO commission — its money is a CHARGE (positive "
+      "retail_cost) and its label is a plan name, so neither field makes it commission",
+      round(sum(g_det.values()), 2) == 52.50)
+from app.modules.commcalc import commission_legs as _CLEGS                 # noqa: E402
+check("G5 the sheet column that IS the first month resolves to rung 1 in the one home",
+      _CLEGS.ma_field_leg("spiff_m1"), (_CLEGS.M1, 1))
+truth("G6 `mrc_net_discount` is NOT a payout column — it is the MRC the payout is computed FROM, "
+      "so it is absent from the audited component list and books to no P&L line",
+      "mrc_net_discount" not in MSP._rs._MA_COMPONENTS
+      and "mrc_net_discount" not in MSP.MA_COMMISSION_HEADS)
+
+# G7-G9 — the rule of thumb, as arithmetic on the feed that reports the first month.
+close("G7 the owner's rule of thumb holds on the SHEET: first month ≈ half the MRC",
+      round(100.0 * LIVE["earned_m1"] / LIVE["mrc"], 1), 48.3)
+close("G8 …and the figure the report showed him is 15.7%% of it, because it is the other feed",
+      round(100.0 * LIVE["received_m1"] / LIVE["earned_m1"], 1), 15.7)
+truth("G9 the cash M1 never EXCEEDS the earned M1 cumulatively (60.8%%) — the two feeds carry the "
+      "same money with a lag, so booking both would double-count",
+      LIVE["cum_received_m1"] < LIVE["cum_earned_m1"])
+
+# G10-G12 — THE DEFECT, reproduced through the real booking functions on a month shaped like the
+# measured one. Each rung is reported by exactly ONE of the two feeds, so a switch that picks one
+# feed for ALL rungs drops a whole rung whichever way it is set.
+G_SHEET = [{"spiff_m1": -LIVE["earned_m1"], "spiff_m3": -LIVE["earned_m2_6"],
+            "merchant_account_id": ""}]
+G_CASH = [{"order_type": "Retroactive Postpaid Spiff", "account_id": "", "merchant_discount": 0.0,
+           "product_name": "Total ALL ACCESS Plan $65 New Activation Commission",
+           "retail_cost": -LIVE["received_m1"]},
+          {"order_type": "PostPaid Additional Spiff", "account_id": "", "merchant_discount": 0.0,
+           "product_name": "TBV MONTH 3 New Activation Commission",
+           "retail_cost": -LIVE["received_m2_6"]}]
+
+
+def _books(source):
+    """The carrier_comm dollars the books carry per rung under one `month_spiff_source`, taken from
+    the booking functions' OWN lockstep rung tags (§COMMCALC-15) — no label is re-parsed here."""
+    cfg = dict(G_CFG, month_spiff_source=source)
+    legs, tx_legs = [], []
+    bks = MSP.ma_commission_bookings(G_SHEET, cfg, legs)
+    bks += MSP.ma_tx_bookings(G_CASH, G_PNL, cfg, tx_legs)
+    rungs = {}
+    for (line, _a, amt, _d), (_b, month) in zip(bks, legs + tx_legs):
+        if line == MSP.carrier_comm_source_line():
+            rungs[month if month else "none"] = round(
+                rungs.get(month if month else "none", 0.0) + amt, 2)
+    return rungs
+
+
+CASH_BOOKS = _books(MSP.BASIS_RECEIVED)
+SHEET_BOOKS = _books(MSP.BASIS_EARNED)
+close("G10 DEFECT, cash basis: the first-month rung the books carry is the cash figure…",
+      CASH_BOOKS.get(1, 0.0), LIVE["received_m1"])
+close("G11 …and the %.2f the sheet states as this month's first month books NOWHERE"
+      % LIVE["earned_m1"],
+      round(sum(CASH_BOOKS.values()), 2),
+      round(LIVE["received_m1"] + LIVE["received_m2_6"], 2))
+close("G12 DEFECT, sheet basis: the mirror image — the trailing rungs collapse to the sheet's "
+      "near-empty columns…", round(sum(v for k, v in SHEET_BOOKS.items() if k != 1), 2),
+      LIVE["earned_m2_6"])
+truth("G13 …so NEITHER setting of a single-feed switch can state the month: the right answer "
+      "(%.2f + %.2f) is not reachable by either" % (LIVE["earned_m1"], LIVE["received_m2_6"]),
+      round(sum(CASH_BOOKS.values()), 2) != round(LIVE["earned_m1"] + LIVE["received_m2_6"], 2)
+      and round(sum(SHEET_BOOKS.values()), 2) != round(LIVE["earned_m1"]
+                                                       + LIVE["received_m2_6"], 2))
+truth("G14 and the cause is in the DATA's shape, not in a tenant: the sheet reports the first "
+      "month on 410 of 482 rows and the trailing months on 26",
+      LIVE["sheet_rows_with_m1"] > 10 * LIVE["sheet_rows_with_m2_6"])
+truth("G15 the retroactive first-month cash family thins out as the month gets recent — the lag "
+      "that makes the newest month read lowest",
+      LIVE["retro_rows"][9] < LIVE["retro_rows"][8] < LIVE["retro_rows"][7]
+      < LIVE["retro_rows"][6])
+
+# G16 — and the shape any fix MUST respect. MEASURED on the same uploads: of the 2,661 first-month
+# cash rows across all seven months, ZERO carry an `order_number` that appears as an
+# `activation_order` on any of the 5,495 sheet rows. The carrier files a spiff payment under its own
+# transaction number, so the two feeds cannot be matched row to row. A fix therefore cannot book the
+# sheet's first month and then suppress "the same" cash row later — the choice of feed has to be made
+# per RUNG, wholesale, which is exactly what a per-rung `month_spiff_source` is.
+LIVE_M1_CASH_ROWS, LIVE_M1_CASH_ROWS_MATCHING_A_SHEET_ROW = 2661, 0
+check("G16 first-month cash rows that join to a sheet activation (so a row-level de-duplication "
+      "is impossible and the choice must be per rung)",
+      LIVE_M1_CASH_ROWS_MATCHING_A_SHEET_ROW, 0)
+truth("G17 …measured against a non-empty population, so G16 is a measurement not an assumption",
+      LIVE_M1_CASH_ROWS > 2000)
+
+
 # ── report ───────────────────────────────────────────────────────────────────────────────────────
 print("\n" + "=" * 78)
 failed = [c for c in CHECKS if not c[0]]
