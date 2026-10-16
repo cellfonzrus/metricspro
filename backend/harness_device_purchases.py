@@ -448,8 +448,19 @@ if _msp_base.strip():
     # the convention, because a column per rung is only safe if every surface agrees what a rung is.
     # It is a read-out helper: it books nothing, and B2h below proves the keys it produces are
     # byte-identical to the local rule it replaced.
+    # ALSO SANCTIONED 2026-10-16 (mig 1087, §COMMCALC-17 — owner: "something is wrong on teh m1
+    # commmission it cannot be that low", and his decision "Earned first month"): "which feed states
+    # this org's month-spiff money" is now asked PER RUNG, through the one home
+    # `month_spiff_source_for_rung`. That touches the two booking functions (each asks the resolver
+    # instead of comparing the switch itself), the coverage read-out (same gate) and
+    # `gp_carrier_income` (the basis is NAMED and the ladder is taken rung by rung). It is a money
+    # change — deliberately, on ONE org's declared config row — so the sanction is paid for by a
+    # STRICTER claim than "the file did not change": B2i below pins both booking functions
+    # BYTE-IDENTICAL for an org that declares no per-rung map, on both settings, and
+    # harness_month_leg_resolution.py §H6-H9 pins the same identity beside the measurement.
     MSP_SANCTIONED = ("ma_tx_bookings", "ma_received_month_ladder", "default_config", "load_config",
-                      "_ladder_add")
+                      "_ladder_add", "ma_commission_bookings", "ma_tx_coverage",
+                      "gp_carrier_income")
     _msp_unsanctioned = [f for f in _msp_changed if f not in MSP_SANCTIONED]
     check("B2d ma_store_pnl.py — no pre-existing function changed except the two sanctioned by the "
           "2026-09-21 M1-leg correction and the config-reader pair sanctioned by mig 1013, so no MA "
@@ -483,13 +494,45 @@ if _msp_base.strip():
 
     # B2g (mig 1013) — the functions that decide WHERE an MA dollar books, other than the one B2f pins
     # by its money, are byte-identical to the branch point.
-    _MSP_BOOKING = ("ma_commission_bookings", "rebate_route", "account_store_index", "load_store_index",
-                    "canonical_store_index", "gp_carrier_income", "commission_received_lines",
+    # `ma_commission_bookings` / `gp_carrier_income` left this list on 2026-10-16 with the mig-1087
+    # sanction above; B2i replaces the byte-identity claim for them with the claim that actually
+    # matters — they book identically for every org that has declared no per-rung sourcing.
+    _MSP_BOOKING = ("rebate_route", "account_store_index", "load_store_index",
+                    "canonical_store_index", "commission_received_lines",
                     "device_margin_bookings", "device_margin_supersedes")
     _msp_booking_moved = sorted(f for f in _MSP_BOOKING if f in _b and f in _n and _b[f] != _n[f])
     check("B2g …and every other function that decides WHERE an MA dollar books is byte-identical to the "
           "branch point (the sheet booking rules, the rebate route, the account->store index, the GP "
           "read-out, the commission-received family)", _msp_booking_moved == [], _msp_booking_moved)
+
+    # B2i — what the mig-1087 sanction is worth: for an org that declares NO per-rung sourcing, both
+    # booking functions emit exactly what they emitted before, on BOTH settings of the mig-314
+    # scalar. The per-rung gate is then the scalar for every rung, which is the degenerate case.
+    _1087_SHEET = [{"spiff_m1": -100.0, "spiff_m3": -30.0, "merchant_account_id": "",
+                    "rebate": -5.0, "fees_margin": -1.0}]
+    _1087_CASH = [
+        {"account_id": "", "merchant_discount": 0.25, "order_type": "PostPaid Additional Spiff",
+         "product_name": "Total Wireless 5G Unlimited $55 New Activation Commission",
+         "retail_cost": -27.50},
+        {"account_id": "", "merchant_discount": 0.0, "order_type": "PostPaid Additional Spiff",
+         "product_name": "TBV MONTH 3 New Activation Commission", "retail_cost": -32.50},
+        {"account_id": "", "merchant_discount": 0.0, "order_type": "PostPaid Additional Spiff",
+         "product_name": "TW EDGE SPF", "retail_cost": -20.00},
+    ]
+    for _scalar in (_msp_live.BASIS_EARNED, _msp_live.BASIS_RECEIVED):
+        _plain = dict(_msp_live.default_config(), month_spiff_source=_scalar,
+                      spiff_order_types=["PostPaid Additional Spiff"])
+        _declared = dict(_plain, month_spiff_source_by_rung={})
+        check("B2i (%s) the per-rung gate with no map declared books EXACTLY what the single "
+              "switch booked — sheet side" % _scalar,
+              _msp_live.ma_commission_bookings(_1087_SHEET, _declared),
+              _msp_live.ma_commission_bookings(_1087_SHEET, _plain))
+        check("B2i (%s) …and cash side" % _scalar,
+              _msp_live.ma_tx_bookings(_1087_CASH, _pnl, _declared),
+              _msp_live.ma_tx_bookings(_1087_CASH, _pnl, _plain))
+        check("B2i (%s) …and the resolver answers that one feed for EVERY rung" % _scalar,
+              sorted({_msp_live.month_spiff_source_for_rung(_plain, n)
+                      for n in (None, 1, 2, 6, 12, 13)}), [_scalar])
 
     # B2h — what the `_ladder_add` sanction is worth: the rung KEY it writes is byte-identical to
     # the convention it replaced, for every input the old local rule could see, so no dollar moves

@@ -129,6 +129,196 @@ MDF_LINE = "mdf_income"
 _SPIFF_ORDER_TYPES_DEFAULT = ("PostPaid Additional Spiff",)
 _SPIFF_OTHER_DETAIL = "Spiff (other)"
 
+# ── WHICH FEED STATES WHICH RUNG — THE ONE HOME (owner decision 2026-10-16, mig 1087) ───────────
+# Owner, 2026-10-16: *"something is wrong on teh m1 commmission it cannot be that low, jsut a rule
+# of thumb , if the store does 100 activation and an mrc of 50, teh first month payout is 25, so the
+# month shoudl have 2500 plus any spiff etc, recheck"* — and, on the decision that followed the
+# measurement (index §COMMCALC-17): **"Earned first month"**, the first month reported on the
+# commission SHEET (earned at activation) while the trailing months stay on the daily cash feed.
+#
+# THE CLASS, named rather than the instance: `pl_ma_month_spiff_source` (mig 314) answered "which
+# feed is this org's month-spiff money" with ONE answer for ALL rungs, on the assumption that both
+# feeds carry the same money at the same time. MEASURED, they do not — they are complementary by
+# rung and lagged by rung: the sheet states the first month at activation and almost nothing else
+# (Sep 2026: 410 of 482 rows carry `spiff_m1`, 26 carry any of `spiff_m2..m6`), the cash feed states
+# the trailing months promptly and the first month RETROACTIVELY (cumulatively 60.8% of the earned
+# first month, never above it — the same money with a lag). So a single-feed switch drops a whole
+# rung whichever way it is set, and the right answer is unreachable under either (§COMMCALC-17.4).
+#
+# THE FIX IS THE QUESTION ITSELF: "which feed states this org's money" is only answerable PER RUNG,
+# so that is the only form the question is asked in now. `month_spiff_source_for_rung` is the ONE
+# home; the mig-314 scalar is its fallback, so an org that declares no per-rung sourcing gets its
+# scalar for every rung and books byte-identically to before. No caller compares the switch to a
+# feed name any more (locked by `harness_ma_income_one_home_guard.py` CHECK 2d).
+#
+# WHOLESALE, PER RUNG — and that is measured, not preferred. Of the 2,661 first-month cash rows,
+# ZERO carry an `order_number` that appears as an `activation_order` on any of the 5,495 sheet rows:
+# the carrier files a spiff payment under its own transaction number, so the two feeds cannot be
+# matched row to row and no row-level de-duplication is possible (§COMMCALC-17.5, harness §G16-G17).
+# A rung is therefore sourced from one feed and the OTHER feed's rows for that rung book NOTHING —
+# which is what keeps the retroactive first-month cash from booking a second time.
+#
+# RULE TWO: no carrier, tenant, product or month COUNT appears here. The rung keys are the ladder
+# and bucket vocabulary `commission_legs` already owns, and the map is a config row.
+BASIS_EARNED = "commission_sheet"
+BASIS_RECEIVED = "daily_tx"
+# The two feeds a month-spiff rung can be stated on, named once. A value outside this tuple is a
+# typo and is ignored (the org keeps its scalar) — a typo may never silently restate a P&L line.
+MONTH_SPIFF_SOURCES = (BASIS_EARNED, BASIS_RECEIVED)
+BASIS_LABELS = {
+    BASIS_EARNED: "earned (activation month, from the MA commission sheet's spiff columns)",
+    BASIS_RECEIVED: "received (cash month, from the daily-transaction rows)",
+}
+# What the BOOKED basis is called when the rungs do not share one feed. It is not a third feed: it
+# is the honest name for "read the per-rung map", and `booked_basis` builds its label from the map
+# so a surface can never spell the owner's policy in its own words.
+BASIS_PER_RUNG = "per_rung"
+# The key a per-rung map uses for "every rung not named above". Spelled once.
+RUNG_SOURCE_DEFAULT_KEY = "default"
+
+
+def month_spiff_rung_sources(cfg=None):
+    """PURE: the org's declared {rung key: feed} map, normalised — `{}` when nothing is declared.
+
+    Keys are the vocabulary `commission_legs` already owns, so no surface invents a second spelling
+    of a rung: a LADDER key (`'1'`, `'2'`, … `'12'`, `'13'`…, or `ladder_key`'s unknown key), a
+    BUCKET name (`'m1'` / `'trailing'` / `'unsplit'`), or `RUNG_SOURCE_DEFAULT_KEY`. A value that is
+    not one of `MONTH_SPIFF_SOURCES` is dropped, never guessed — the rung then falls back exactly as
+    if it had not been named, which is the same fail-to-the-scalar posture every other switch on
+    this config row takes."""
+    raw = (cfg or {}).get("month_spiff_source_by_rung")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for k, v in raw.items():
+        key = str(k or "").strip().lower()
+        val = str(v or "").strip().lower()
+        if key and val in MONTH_SPIFF_SOURCES:
+            out[key] = val
+    return out
+
+
+def month_spiff_source_for_rung(cfg=None, leg_month=None, leg_cfg=None):
+    """PURE — **THE ONE HOME**: which FEED states this month-of-life rung's commission for this org.
+
+    Resolution, most specific first: the exact rung (`'1'`) → its bucket (`'m1'` / `'trailing'` /
+    `'unsplit'`) → the map's `default` → the mig-314 scalar `month_spiff_source` → the house default.
+    `leg_month=None` is a spiff row whose label states no month at all; it resolves through the
+    `unsplit` bucket, never guessed into the first month.
+
+    With no per-rung map this returns the scalar for EVERY rung, which is why switching the callers
+    to it moved nothing: one feed for all rungs is the degenerate case of per-rung sourcing."""
+    scalar = str((cfg or {}).get("month_spiff_source") or "").strip().lower()
+    if scalar not in MONTH_SPIFF_SOURCES:
+        scalar = BASIS_EARNED
+    by_rung = month_spiff_rung_sources(cfg)
+    if not by_rung:
+        return scalar
+    for key in (_legs.ladder_key(leg_month), _legs.bucket_for_leg(leg_month, leg_cfg),
+                RUNG_SOURCE_DEFAULT_KEY):
+        got = by_rung.get(str(key or "").strip().lower())
+        if got:
+            return got
+    return scalar
+
+
+def books_month_spiff_from(feed, cfg=None, leg_month=None, leg_cfg=None):
+    """PURE: does THIS feed state THIS rung for this org? The predicate both booking functions ask.
+
+    Exactly one feed answers yes for a given rung, which is the no-double-count invariant stated as
+    code rather than as a comment: the sheet column books only when the rung is sourced from the
+    sheet, and the cash row books only when it is sourced from the cash feed."""
+    return month_spiff_source_for_rung(cfg, leg_month, leg_cfg) == feed
+
+
+def month_spiff_feeds_used(cfg=None):
+    """PURE: the feeds ANY rung of this org is sourced from — the gate a feed-wide read uses before
+    it bothers classifying rows at all (`ma_tx_bookings`'s order-type families, mig 314, are only
+    read when some rung is on the cash feed)."""
+    by_rung = month_spiff_rung_sources(cfg)
+    if not by_rung:
+        return frozenset([month_spiff_source_for_rung(cfg)])
+    return frozenset([month_spiff_source_for_rung(cfg)]) | frozenset(by_rung.values())
+
+
+def booked_basis(cfg=None):
+    """PURE: `(basis_key, basis_label)` — the name of the basis the org's books are on, for every
+    surface that reports it. One feed for all rungs keeps that feed's own key and label, so a
+    payload is byte-identical for an org that declared nothing; a per-rung org reads
+    `BASIS_PER_RUNG` with the map spelled out in the label, built from `BASIS_LABELS` so no surface
+    writes the owner's policy in its own words."""
+    by_rung = month_spiff_rung_sources(cfg)
+    feeds = month_spiff_feeds_used(cfg)
+    if not by_rung or len(feeds) == 1:
+        one = sorted(feeds)[0] if feeds else BASIS_EARNED
+        return one, BASIS_LABELS.get(one, one)
+    parts = ["%s: %s" % (k, BASIS_LABELS.get(v, v)) for k, v in sorted(by_rung.items())]
+    parts.append("every other rung: %s" % BASIS_LABELS.get(month_spiff_source_for_rung(cfg),
+                                                           month_spiff_source_for_rung(cfg)))
+    return BASIS_PER_RUNG, "per month-of-life rung — " + "; ".join(parts)
+
+
+def rung_source_gaps(cfg=None, feeds_present=None):
+    """PURE: the declared rungs whose FEED supplied no rows at all for this period.
+
+    `feeds_present` — `{feed: bool}`, the caller's own two row lists. Returns one entry per declared
+    rung sourced from a feed that sent NOTHING, so a rung the org deliberately moved onto the other
+    feed cannot read $0.00 in silence (§COMMCALC-16: a figure a feed did not send is not a zero).
+    This REPORTS; it never falls back to the other feed, because the two feeds carry the same money
+    at a lag and a silent fallback would double-count the rung across periods (§COMMCALC-17).
+    `[]` for an org that declares no per-rung sourcing — there is then nothing to be absent."""
+    by_rung = month_spiff_rung_sources(cfg)
+    if not by_rung:
+        return []
+    present = {str(k): bool(v) for k, v in (feeds_present or {}).items()}
+    out = []
+    for key, feed in sorted(by_rung.items()):
+        if present.get(feed, True):
+            continue
+        out.append({"rung": key, "feed": feed, "feed_label": BASIS_LABELS.get(feed, feed),
+                    "reason": "this org states rung %s on the %s feed (mig 1087) and that feed "
+                              "supplied no rows for this period — the rung is UNREPORTED here, "
+                              "not zero" % (key, feed)})
+    return out
+
+
+def booked_month_ladder(earned, received, cfg=None, leg_cfg=None):
+    """PURE: the month ladder the org's BOOKS carry, taken rung by rung from the feed that states it.
+
+    `earned` / `received` are the two labelled read-outs (`ma_earned_month_ladder` /
+    `ma_received_month_ladder`); this picks between them per rung instead of choosing one wholesale,
+    which is what keeps "the ladder explains the Commission column" true under per-rung sourcing.
+    With no per-rung map it returns the chosen read-out ITSELF (the same object), so every
+    single-feed org's payload is byte-identical to before."""
+    basis, label = booked_basis(cfg)
+    if basis != BASIS_PER_RUNG:
+        return received if basis == BASIS_RECEIVED else earned
+    out = {"basis": basis, "basis_label": label, "months": {}, "total": 0.0, "by_store": {}}
+    for feed, lad in ((BASIS_EARNED, earned or {}), (BASIS_RECEIVED, received or {})):
+        for key, amt in (lad.get("months") or {}).items():
+            if month_spiff_source_for_rung(cfg, _rung_of_key(key), leg_cfg) != feed:
+                continue
+            out["months"][key] = round(out["months"].get(key, 0.0) + amt, 2)
+            out["total"] = round(out["total"] + amt, 2)
+        for store, cell in (lad.get("by_store") or {}).items():
+            per = out["by_store"].setdefault(store, {"months": {}, "total": 0.0})
+            for key, amt in (cell.get("months") or {}).items():
+                if month_spiff_source_for_rung(cfg, _rung_of_key(key), leg_cfg) != feed:
+                    continue
+                per["months"][key] = round(per["months"].get(key, 0.0) + amt, 2)
+                per["total"] = round(per["total"] + amt, 2)
+    return out
+
+
+def _rung_of_key(ladder_key):
+    """PURE: the month-of-life a ladder KEY names, or None for the unknown rung. The inverse of
+    `commission_legs.ladder_key`, kept here next to its only caller: a ladder is keyed by string and
+    the source question is asked by rung."""
+    try:
+        return int(ladder_key)
+    except (TypeError, ValueError):
+        return None
+
 # ── THE MONTH-OF-LIFE SPLIT OF A COMMISSION LINE (owner ask 2026-10-16, index §COMMCALC-15) ──────
 # Owner, verbatim: *"the first month and m2-m12 commission should sow the m2-m12 as a part of the
 # p&l , if it sia part of teh p&l already then solit that category into two parts one whatever they
@@ -254,7 +444,11 @@ def default_config():
         # books company-wide, as it has since the first statement. See
         # `residual_subs.mi_pnl_bookings`.
         "mi_store_attribution": False,
-        "month_spiff_source": "commission_sheet",
+        "month_spiff_source": BASIS_EARNED,
+        # mig 1087 — PER-RUNG sourcing of the month-spiff money (owner decision 2026-10-16,
+        # §COMMCALC-17). EMPTY is the house answer: every rung reads the scalar above, which is
+        # exactly what mig 314 has always done, so no org's books move until it declares a map.
+        "month_spiff_source_by_rung": {},
         "spiff_order_types": list(_SPIFF_ORDER_TYPES_DEFAULT),
         "mdf_product_tokens": [],
         "line_labels": {},
@@ -289,6 +483,7 @@ PL_CONFIG_COLUMNS = (
     ("pl_commission_source", "1013_pl_commission_source.sql"),
     ("pl_mi_store_attribution", "1033_pl_mi_store_attribution.sql"),
     ("pl_carrier_comm_leg_split", "1086_pl_carrier_comm_leg_split.sql"),
+    ("pl_ma_month_spiff_source_by_rung", "1087_pl_ma_month_spiff_source_by_rung.sql"),
 )
 PL_CONFIG_MIGRATION = dict(PL_CONFIG_COLUMNS)
 
@@ -324,8 +519,16 @@ def load_config(client, org_id):
             if isinstance(r.get("pl_ma_store_attribution"), bool):
                 cfg["store_attribution"] = r["pl_ma_store_attribution"]
             src = str(r.get("pl_ma_month_spiff_source") or "").strip().lower()
-            if src in ("commission_sheet", "daily_tx"):
+            if src in MONTH_SPIFF_SOURCES:
                 cfg["month_spiff_source"] = src
+            # mig 1087 — the PER-RUNG map. Normalised through the one home, so an unknown rung key
+            # or a feed name that is a typo is dropped and that rung keeps the scalar above: a typo
+            # can never silently restate the first month on the other feed. A non-dict value is
+            # ignored entirely, the same posture every other switch on this row takes.
+            by_rung = month_spiff_rung_sources(
+                {"month_spiff_source_by_rung": r.get("pl_ma_month_spiff_source_by_rung")})
+            if by_rung:
+                cfg["month_spiff_source_by_rung"] = by_rung
             if isinstance(r.get("pl_ma_spiff_order_types"), list):
                 # explicit [] honoured: 'daily_tx' with no families books no month spiffs at all
                 cfg["spiff_order_types"] = [str(t).strip() for t in r["pl_ma_spiff_order_types"]
@@ -475,7 +678,6 @@ def ma_commission_bookings(rows, cfg=None, legs=None, leg_cfg=None):
     `(None, None)`, never guessed into a rung."""
     cfg = cfg if cfg is not None else default_config()
     attribute = bool(cfg.get("store_attribution"))
-    skip_spiffs = (cfg.get("month_spiff_source") == "daily_tx")
     reb_route = rebate_route(cfg)   # mig 934: ('device_rebate', -1) default / ('rebate_income', 1)
     out = []
 
@@ -497,16 +699,20 @@ def ma_commission_bookings(rows, cfg=None, legs=None, leg_cfg=None):
             head_sign = reb_route if c == "rebate" else MA_COMMISSION_HEADS.get(c)
             if not head_sign:
                 continue
-            if skip_spiffs and c in SPIFF_COMPONENTS:
+            # THE RUNG, asked of the one home BEFORE the dollar is placed — because for a month-spiff
+            # column the rung decides whether it is placed at all. Only a month-spiff component HAS a
+            # month-of-life; everything else is tagged as having none.
+            spiff_leg = _legs.ma_field_leg(c, leg_cfg) if c in SPIFF_COMPONENTS else (None, None)
+            # PER-RUNG SOURCING (mig 1087, §COMMCALC-17): a sheet spiff column books here only when
+            # THIS org states THIS rung on the sheet. With no per-rung map that is the mig-314 scalar
+            # for every rung, so `commission_sheet` books all six columns and `daily_tx` books none —
+            # byte-identical to the single `skip_spiffs` gate this replaces.
+            if c in SPIFF_COMPONENTS and not books_month_spiff_from(BASIS_EARNED, cfg,
+                                                                    spiff_leg[1], leg_cfg):
                 continue
             head, sign = head_sign
             out.append((head, acct, sign * -safe_float(r.get(c)), MA_HEAD_DETAIL.get(head)))
-            # THE RUNG, asked of the one home as the dollar is placed. Only a month-spiff component
-            # HAS a month-of-life; everything else is tagged as having none.
-            if c in SPIFF_COMPONENTS:
-                _tag(*_legs.ma_field_leg(c, leg_cfg))
-            else:
-                _tag(None, None)
+            _tag(*spiff_leg)
     return out
 
 
@@ -541,8 +747,10 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None, legs=None, leg_cfg=None):
                  else _rs._MA_PNL_LEGACY_DISCOUNT_LINE)
     attribute = bool(cfg.get("store_attribution"))
     mdf_tokens = [t.lower() for t in (cfg.get("mdf_product_tokens") or [])]
+    # The mig-314 order-type families are read when ANY rung is sourced from the cash feed; WHICH
+    # rungs actually book is then decided per row below, by the one home.
     spiff_types = ({str(t).strip().lower() for t in (cfg.get("spiff_order_types") or [])}
-                   if cfg.get("month_spiff_source") == "daily_tx" else set())
+                   if BASIS_RECEIVED in month_spiff_feeds_used(cfg) else set())
     out = []
 
     def _tag(bucket, month):
@@ -567,11 +775,18 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None, legs=None, leg_cfg=None):
             # states the first month in two forms and only one carries a token; asking for the
             # token alone is what read August's M1 as $2,300.40 against a real $6,049.96.
             n = month_leg_of(prod)
-            detail = ("M%d" % n) if n else _SPIFF_OTHER_DETAIL
-            out.append(("carrier_comm", acct, -safe_float(r.get("retail_cost")), detail))
-            # The SAME `n` the detail label is built from, handed out as the booking's rung rather
-            # than left for a downstream reader to slice back out of the string.
-            _tag(_legs.bucket_for_leg(n, leg_cfg), n)
+            # PER-RUNG SOURCING (mig 1087, §COMMCALC-17). A cash row books only when THIS org states
+            # THIS rung on the cash feed. When the rung is stated on the SHEET instead, this row
+            # books NOTHING: the retroactive first-month cash is the same money with a lag
+            # (cumulatively 60.8% of the earned first month, never above it), so booking both would
+            # double-count it, and the two feeds cannot be matched row to row to net them off
+            # (ZERO of 2,661 first-month cash rows join a sheet activation — harness §G16).
+            if books_month_spiff_from(BASIS_RECEIVED, cfg, n, leg_cfg):
+                detail = ("M%d" % n) if n else _SPIFF_OTHER_DETAIL
+                out.append(("carrier_comm", acct, -safe_float(r.get("retail_cost")), detail))
+                # The SAME `n` the detail label is built from, handed out as the booking's rung
+                # rather than left for a downstream reader to slice back out of the string.
+                _tag(_legs.bucket_for_leg(n, leg_cfg), n)
     return out
 
 
@@ -630,10 +845,10 @@ def ma_tx_coverage(rows, pnl_cfg=None, cfg=None, reasons=None):
     match = _rs.ma_residual_row_matcher(pnl_cfg)
     mdf_tokens = [t.lower() for t in (cfg.get("mdf_product_tokens") or [])]
     spiff_types = ({str(t).strip().lower() for t in (cfg.get("spiff_order_types") or [])}
-                   if cfg.get("month_spiff_source") == "daily_tx" else set())
+                   if BASIS_RECEIVED in month_spiff_feeds_used(cfg) else set())
     disc_line = (_rs._MA_PNL_DISCOUNT_LINE if pnl_cfg.get("merchant_discount_own_line", True)
                  else _rs._MA_PNL_LEGACY_DISCOUNT_LINE)
-    booked, unbooked = {}, {}
+    booked, unbooked, elsewhere = {}, {}, {}
     for r in rows or []:
         r = r or {}
         prod = str(r.get("product_name") or "")
@@ -649,6 +864,22 @@ def ma_tx_coverage(rows, pnl_cfg=None, cfg=None, reasons=None):
         elif mdf_tokens and any(t in prod.lower() for t in mdf_tokens):
             key = MDF_LINE
         elif spiff_types and ot.lower() in spiff_types:
+            # The SAME per-rung gate `ma_tx_bookings` applies (mig 1087). A rung this org states on
+            # the commission SHEET books nothing from the cash feed, and that is not an unbooked
+            # family — it is money reported by the other feed, NAMED here with the rung and the
+            # feed that states it, so "everything has a reason" stays true under per-rung sourcing.
+            n = month_leg_of(prod)
+            if not books_month_spiff_from(BASIS_RECEIVED, cfg, n):
+                rung = _legs.ladder_key(n)
+                slot = elsewhere.setdefault((ot, rung), {
+                    "order_type": ot, "rung": rung, "rows": 0, "amount": 0.0,
+                    "reason": "rung %s is stated on the other feed for this org — %s (mig 1087)"
+                              % (_legs.ladder_label(rung),
+                                 BASIS_LABELS.get(month_spiff_source_for_rung(cfg, n),
+                                                  BASIS_EARNED))})
+                slot["rows"] += 1
+                slot["amount"] += amt
+                continue
             key = "carrier_comm"
         else:
             slot = unbooked.setdefault(ot, {"order_type": ot, "rows": 0, "amount": 0.0})
@@ -662,11 +893,19 @@ def ma_tx_coverage(rows, pnl_cfg=None, cfg=None, reasons=None):
         slot["reason"] = reasons.get(ot.lower()) or NO_RULE_REASON
         out.append(slot)
     out.sort(key=lambda s: (-abs(s["amount"]), s["order_type"]))
+    other = []
+    for slot in elsewhere.values():
+        slot["amount"] = round(slot["amount"], 2)
+        other.append(slot)
+    other.sort(key=lambda s: (-abs(s["amount"]), s["order_type"], s["rung"]))
     return {"booked": {k: round(v, 2) for k, v in booked.items()},
             "unbooked": out,
             "unbooked_total": round(sum(s["amount"] for s in out), 2),
             "unexplained_total": round(sum(s["amount"] for s in out
-                                           if s["reason"] == NO_RULE_REASON), 2)}
+                                           if s["reason"] == NO_RULE_REASON), 2),
+            # EMPTY for every org that declares no per-rung map, so this is additive (mig 1087).
+            "sourced_elsewhere": other,
+            "sourced_elsewhere_total": round(sum(s["amount"] for s in other), 2)}
 
 
 # ── DEVICE MARGIN IS THE PROFIT, NOT THE REBATE (owner directive 2026-09-09, mig 996) ────────────
@@ -1117,13 +1356,10 @@ GP_NOT_REVENUE_REASONS = {
                              "sheet, not revenue (owner ruling 2026-08-10)"),
 }
 GP_NOT_REVENUE_DEFAULT_REASON = "not a P&L revenue line"
-# The two month-of-life bases, named once so no surface invents its own wording.
-BASIS_EARNED = "commission_sheet"
-BASIS_RECEIVED = "daily_tx"
-BASIS_LABELS = {
-    BASIS_EARNED: "earned (activation month, from the MA commission sheet's spiff columns)",
-    BASIS_RECEIVED: "received (cash month, from the daily-transaction rows)",
-}
+# The two month-of-life bases are named ONCE, at the head of this module beside the switch that
+# chooses between them and the per-rung resolver that reads it (`BASIS_EARNED` / `BASIS_RECEIVED` /
+# `BASIS_LABELS` / `BASIS_PER_RUNG`, §COMMCALC-17). They used to be declared here as well — two
+# copies of one fact, which is how a surface comes to name a basis the books are not on.
 # The unknown-rung key is commission_legs' to define; this alias exists so the existing readers of
 # `MONTH_UNKNOWN` in this module keep working, and it DEREFERENCES rather than restates it (§4a.2).
 from app.modules.commcalc.commission_legs import LADDER_UNKNOWN as MONTH_UNKNOWN
@@ -1268,6 +1504,10 @@ def ma_received_month_ladder(rows, pnl_cfg=None, cfg=None, store_index=None):
     only one of the two bases that can reach M7 and beyond."""
     cfg = dict(cfg if cfg is not None else default_config())
     cfg["month_spiff_source"] = BASIS_RECEIVED
+    # …and the per-rung map is cleared with it (mig 1087). A rung this org books from the SHEET is
+    # suppressed in the BOOKS, not in this read-out: the whole point of carrying both bases is that
+    # the other feed's figure stays visible beside the booked one.
+    cfg["month_spiff_source_by_rung"] = {}
     idx = {str(k).strip(): v for k, v in (store_index or {}).items() if str(k).strip()}
     attribute = bool(cfg.get("store_attribution"))
     out = _empty_ladder(BASIS_RECEIVED)
@@ -1310,7 +1550,7 @@ def gp_carrier_income(comm_rows, tx_rows, pnl_cfg=None, cfg=None, store_index=No
     rev = tuple(revenue_lines if revenue_lines is not None else pl_revenue_lines())
     idx = {str(k).strip(): v for k, v in (store_index or {}).items() if str(k).strip()}
     attribute = bool(cfg.get("store_attribution"))
-    basis = (cfg.get("month_spiff_source") or BASIS_EARNED)
+    basis, basis_label = booked_basis(cfg)
     columns = ("comm", "mi", "atu", "mdf", GP_INCOME_FALLBACK_COLUMN)
 
     by_store, totals, lines = {}, {c: 0.0 for c in columns}, {}
@@ -1342,7 +1582,11 @@ def gp_carrier_income(comm_rows, tx_rows, pnl_cfg=None, cfg=None, store_index=No
 
     earned = ma_earned_month_ladder(comm_rows, cfg, idx, leg_cfg)
     received = ma_received_month_ladder(tx_rows, pnl_cfg, cfg, idx)
-    booked = received if basis == BASIS_RECEIVED else earned
+    # The ladder the BOOKS carry, rung by rung from the feed that states it (mig 1087). With one
+    # feed for all rungs this IS the chosen read-out, so the payload does not move for an org that
+    # declared nothing; under per-rung sourcing it is the mix, which is what keeps "the ladder
+    # explains the Commission column" true (the identity asserted below).
+    booked = booked_month_ladder(earned, received, cfg, leg_cfg)
 
     # The month ladder explains the Commission column. `fee_income` carries no month-of-life at all,
     # so it sits in the SAME honest `unsplit` bucket the GP leg split has always used for money whose
@@ -1371,7 +1615,13 @@ def gp_carrier_income(comm_rows, tx_rows, pnl_cfg=None, cfg=None, store_index=No
         "unsplit_fields": unsplit_fields,
         "months": dict(booked["months"]),
         "basis": basis,
-        "basis_label": BASIS_LABELS.get(basis, basis),
+        "basis_label": basis_label,
+        # WHICH FEED states each rung, for a surface that must explain a mixed basis (mig 1087).
+        # `{}` for an org on one feed for all rungs.
+        "rung_sources": month_spiff_rung_sources(cfg),
+        # …and a declared rung whose feed sent NOTHING this period, named rather than read as 0.00.
+        "rung_source_gaps": rung_source_gaps(cfg, {BASIS_EARNED: bool(comm_rows),
+                                                   BASIS_RECEIVED: bool(tx_rows)}),
         "earned": earned,
         "received": received,
         "filed": sorted(filed.values(), key=lambda f: (-abs(f["amount"]), f["line"])),

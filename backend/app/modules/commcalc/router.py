@@ -25007,7 +25007,10 @@ def _ma_summary_legs(client, org_id, comps, comm_rows=None, tx_rows=None, store_
                "ladder": res["leg_ladder"],
                "identity_ok": abs(round(sum(res["buckets"].values()), 2) - total) < 0.01,
                "unsplit_fields": res.get("unsplit_fields") or [],
-               "booked_basis": cfg.get("month_spiff_source"),
+               # WHICH BASIS the books are on, asked of the one home (mig 1087, §COMMCALC-17) —
+               # never read off the switch here, because the switch is now per RUNG and a surface
+               # that reads the scalar would name a basis the books are not on.
+               "booked_basis": _msp.booked_basis(cfg)[0],
                "basis": ("1st Month = spiff_m1; M2–M12 = spiff_m2…m6 — the leg is the column name on "
                          "the MA Commission Details export. The activation-order margins "
                          "(rebate / device / consumer / financing / wallet funding / fees) are NOT "
