@@ -1195,7 +1195,16 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1789 + 1 = 1790, the figure this harness measured on this tree. So the pin
 # was re-taken on a counted, named addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1790"))
+# RE-PINNED 2026-10-16, 1790 -> 1791 (index §COMMCALC-03.28). Every record above stays. The delta is
+# ONE route and it is named: GET /commcalc/prospects/{id}/pl-trend — the month-over-month P&L for a
+# takeover prospect, plus the statement for the month or date range selected (owner asks 2026-10-16).
+# It is its own endpoint precisely so the month report does not wait on one evaluation per month, and
+# it is READ-ONLY: it books nothing, writes nothing, touches no live table and adds no writer, and it
+# ships with NO migration. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1790 + 1 = 1791, the figure this harness measured on this tree. So the pin
+# was re-taken on a counted, named addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1791"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
