@@ -135,6 +135,62 @@ interface ExpenseWindow {
   note?: string
   carried_from?: Record<string, string>
   error?: string
+  // §COMMCALC-03.28 — WHICH of our own months the benchmark was taken over, and on WHICH SIDE of the
+  // month on screen. `measured: false` means our sheet has no month to average at all, which the
+  // screen must say rather than render as a zero expense.
+  measured?: boolean
+  direction?: 'before' | 'after' | 'both' | 'none'
+  before?: string[]
+  after?: string[]
+  requested?: number
+  basis?: string
+}
+// ── THE MONTH-OVER-MONTH P&L (owner ask 2026-10-16, index §COMMCALC-03.28) ───────────────────────
+// Owner, verbatim: *"i also need to see the month over omont h p&l for each store in the same report
+// with a filter which gives the p&l on the righ tside for a particuklar monmth selected or a data
+// range selected"*. The server books each month through the SAME `evaluate` and the SAME assembler
+// the month report above uses, so a cell here IS that month's own statement — the screen transposes
+// and never recomputes.
+interface TrendStore {
+  store?: ProspectStore
+  totals?: Statement['totals']
+  lines?: Record<string, number | null>
+  activations?: number | null
+  expenses_basis?: string
+}
+interface TrendMonth {
+  period?: string
+  totals?: Statement['totals']
+  lines?: Record<string, number | null>
+  activations?: number | null
+  expenses?: ExpenseWindow
+  expense_months?: number
+  expense_basis?: string
+  by_store?: Record<string, TrendStore>
+}
+interface TrendWindow extends TrendMonth {
+  statement?: Statement
+  months?: string[]
+  selection?: { period?: string; period_to?: string }
+}
+interface PlTrend {
+  prospect?: Prospect
+  mode?: string
+  months?: string[]
+  by_month?: TrendMonth[]
+  window?: TrendWindow | null
+  selected_months?: string[]
+  stores?: Record<string, ProspectStore>
+  basis?: string
+  window_basis?: string
+  error?: string
+}
+interface TrendRow {
+  store: string
+  label: string
+  key: string
+  kind: 'line' | 'total' | 'count'
+  cells: Record<string, number | null>
 }
 interface RentMeta {
   applied: boolean
@@ -386,6 +442,11 @@ interface UploadResult {
 interface PlRow { section: string; label: string; amount: number; key: string }
 
 const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
+/** The LABEL the SERVER'S OWN statement gives a P&L line key. The grid names no line of its own —
+ *  same contract as the per-store matrix (§COMMCALC-03.18): if the chart of accounts renames a line,
+ *  every surface renames with it and none of them has to be found and edited. */
+const lineLabelOf = (st: Statement | null, key: string): string =>
+  (st?.sections || []).flatMap(sec => sec.lines || []).find(l => l.key === key)?.label || key
 const orgParam1 = () => { const o = getActiveOrg(); return o ? `?org_id=${encodeURIComponent(o)}` : '' }
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
@@ -984,7 +1045,6 @@ export default function StoreTakeoverPage() {
   }, [pid, period, rentKeyRef])
   useEffect(() => { load() }, [load])
   const loading = !!pid && loadedKey !== key
-
   // MEMOISED, not just derived: `list?.prospects || []` is a NEW array identity on every render, so
   // the table's column and row memos below would rebuild every time and re-mount the table under the
   // pointer. Same for the registry.
@@ -1017,6 +1077,46 @@ export default function StoreTakeoverPage() {
   const scenario: Scenario | null = data?.scenarios?.[shownMode] || null
   const statement: Statement | null = data?.statements?.[shownMode] || null
   const breakEven: BreakEven | null = data?.break_even?.[shownMode] || null
+
+  // ── THE MONTH-OVER-MONTH P&L (owner ask 2026-10-16, §COMMCALC-03.28) ─────────────────────────
+  // ITS OWN REQUEST, deliberately. It costs the server one evaluation PER MONTH, so hanging it on
+  // `/evaluation` would make the first screen wait for work nobody has asked for yet — the same
+  // reason the row tally came off the list's critical path. The month report renders the moment it
+  // arrives and this fills in underneath it.
+  //
+  // THE FILTER IS SENT, NOT APPLIED HERE. `period` / `periodTo` are the shared bar's own two values
+  // and they go to the server, which books the selected months ONCE over their own rows. Narrowing
+  // a returned payload on the screen would mean adding the monthly columns together, and a sum of
+  // statements is not a statement — the expense side alone would be wrong (one month's rent against
+  // three months of revenue).
+  // THE WINDOW'S OWN TWO DATES. The owner asked for "a particular month selected OR a date range
+  // selected", and the page's Month filter already gives the month — so these two give the RANGE,
+  // and while they are empty the panel simply FOLLOWS the Month filter. They are not a second
+  // period vocabulary: both are handed to the server and answered by the one home
+  // (`prospect_eval.months_in_range`), which is the same function that answers the bare month, so
+  // "which months does this cover" has exactly one implementation on the platform.
+  const [winFrom, setWinFrom] = useState('')
+  const [winTo, setWinTo] = useState('')
+  const winPeriod = winFrom || (winTo ? '' : period)
+  const [trendRaw, setTrendRaw] = useState<PlTrend | null>(null)
+  const [trendKey, setTrendKey] = useState('')
+  const trendWant = pid ? `${pid}|${winPeriod}|${winTo}|${shownMode}` : ''
+  useEffect(() => {
+    if (!pid) return
+    const qs = new URLSearchParams()
+    if (winPeriod) qs.set('period', winPeriod)
+    if (winTo) qs.set('period_to', winTo)
+    qs.set('mode', shownMode)
+    api(`/api/v1/commcalc/prospects/${pid}/pl-trend?${qs.toString()}${orgParam()}`)
+      .then((d: PlTrend) => setTrendRaw(d))
+      .catch(e => setTrendRaw({ error: errText(e) }))
+      .finally(() => setTrendKey(trendWant))
+  }, [pid, winPeriod, winTo, shownMode, trendWant])
+  const trendLoading = !!pid && trendKey !== trendWant
+  // DERIVED, never cleared in the effect: a payload is only shown when it is the payload for the
+  // prospect, the month/range and the mode currently on screen, so a stale grid can never be read
+  // as the new one (and no setState happens synchronously inside the effect, which React rejects).
+  const trend: PlTrend | null = trendLoading ? null : trendRaw
   // THE MONTH-OF-LIFE LEGS for the whole prospect. Null when the server could not read the two
   // ladder one-homes, which is reported as not measured rather than as a zero.
   const legs: CommissionLegs | null = data?.commission_legs || null
@@ -1278,6 +1378,75 @@ export default function StoreTakeoverPage() {
     })),
     { header: 'All stores', get: (r: MatrixRow) => r.all, money: true, field: 'all' },
   ]), [matrixStores])
+
+  // ── THE MONTH-OVER-MONTH GRID (owner ask 2026-10-16) ──────────────────────────────────────────
+  // ONE ROW PER (STORE, P&L LINE), ONE COLUMN PER MONTH. The lines and their order come from the
+  // whole-prospect statement the server assembled for the LATEST month — the screen names no
+  // account and invents no line, exactly as the per-store matrix does (§COMMCALC-03.18).
+  //
+  // "for each store" is the owner's own words, so the STORE is the leading dimension and the whole
+  // prospect is one more store named "All stores" — it is the row a reader checks the others
+  // against. The Stores filter narrows which stores appear, and the All-stores row is kept whatever
+  // it says, because a filtered grid with nothing to check against is worse than no filter.
+  const trendStoreKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const m of (trend?.by_month || [])) for (const k of Object.keys(m.by_store || {})) keys.add(k)
+    return Array.from(keys)
+      .filter(k => !storeFilter || storeFilter.keys.has(k))
+      .sort((a, b) => ((trend?.stores?.[a]?.label || a).localeCompare(trend?.stores?.[b]?.label || b)))
+  }, [trend?.by_month, trend?.stores, storeFilter])
+  const trendRows = useMemo<TrendRow[]>(() => {
+    const months = trend?.months || []
+    if (!months.length) return []
+    const byMonth: Record<string, TrendMonth> = {}
+    for (const m of (trend?.by_month || [])) if (m.period) byMonth[m.period] = m
+    // The LINE VOCABULARY is the server's, read off the latest month's own statement.
+    const latest = byMonth[months[months.length - 1]]
+    const lineKeys = Object.keys(latest?.lines || {})
+    const out: TrendRow[] = []
+    const push = (store: string, label: string, key: string, kind: TrendRow['kind'],
+                  pick: (m: TrendMonth | undefined) => number | null | undefined) => {
+      const cells: Record<string, number | null> = {}
+      let any = false
+      for (const p of months) {
+        const v = pick(byMonth[p])
+        cells[p] = v == null ? null : v
+        if (v) any = true
+      }
+      if (!any && kind === 'line') return
+      out.push({ store, label, key: store + ':' + key, kind, cells })
+    }
+    const block = (store: string, storeLabel: string,
+                   of: (m: TrendMonth | undefined) => TrendMonth | TrendStore | undefined) => {
+      for (const k of lineKeys) {
+        push(storeLabel, lineLabelOf(statement, k), 'line:' + k, 'line',
+             m => (of(m)?.lines || {})[k])
+      }
+      push(storeLabel, 'Gross profit', 'gp', 'total', m => of(m)?.totals?.gross_profit)
+      push(storeLabel, 'Expenses', 'exp', 'total', m => of(m)?.totals?.expenses)
+      push(storeLabel, 'Profit or loss on measured revenue', 'ni', 'total',
+           m => of(m)?.totals?.net_income)
+      push(storeLabel, 'Activated lines', 'acts', 'count', m => of(m)?.activations)
+      void store
+    }
+    // ALL STORES FIRST — it is the row the others are checked against.
+    block('', 'All stores', m => m)
+    for (const k of trendStoreKeys) {
+      const label = trend?.stores?.[k]?.label || k
+      block(k, label, m => (m?.by_store || {})[k])
+    }
+    return out
+  }, [trend, trendStoreKeys, statement])
+  const TREND_COLS = useMemo<ExportColumn[]>(() => ([
+    { header: 'Store', get: (r: TrendRow) => r.store, field: 'store', role: 'store' },
+    { header: 'P&L line', get: (r: TrendRow) => r.label, field: 'line' },
+    ...(trend?.months || []).map(m => ({
+      header: m,
+      field: 'month:' + m,
+      get: (r: TrendRow) => r.cells[m],
+      money: true,
+    })),
+  ]), [trend?.months])
 
   const expRows = useMemo<ExpenseCell[]>(() => {
     const m = data?.expenses?.matrix
@@ -1985,6 +2154,161 @@ export default function StoreTakeoverPage() {
                          the FULL average monthly expense of one of our own stores, because that is
                          the question &mdash; could this one site stand on its own &mdash; and a share
                          of a per-store cost would make every column look profitable.</>} />
+        </div>}
+
+      {/* ── THE MONTH OVER MONTH P&L, AND THE WINDOW ON THE RIGHT (owner ask 2026-10-16) ─────
+          Owner, verbatim: *"i also need to see the month over omont h p&l for each store in the
+          same report with a filter which gives the p&l on the righ tside for a particuklar monmth
+          selected or a data range selected"*. Two things on one row: the grid on the LEFT is every
+          month side by side for every store, and the panel on the RIGHT is the statement for
+          whatever the Month-or-range filter at the top of the page selects. */}
+      {pid && (trend || trendLoading) &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            Month over month &mdash; the P&amp;L for each store, every month
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+            {trend?.basis || 'Every uploaded month, booked through the company\u2019s own P&L rules.'}
+            {' '}The statement on the right follows the <b>Month</b> filter at the top of the page,
+            or the <b>date range</b> beside it &mdash; whichever you set last. The columns here are
+            always every month, because comparing them is the whole question this grid answers.
+          </div>
+          {trend?.error &&
+            <div style={{ fontSize: 12.5, color: '#991b1b', marginBottom: 10 }}>
+              The month-over-month P&amp;L could not be read: {trend.error}
+            </div>}
+          {trendLoading && !trend &&
+            <div style={{ fontSize: 13, color: 'var(--text3)', padding: 12 }}>
+              Working out every month&rsquo;s P&amp;L&hellip;
+            </div>}
+          {trend && !trend.error && (trend.months || []).length === 0 &&
+            <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+              No uploaded row names a month yet, so there is nothing to compare month to month.
+            </div>}
+          {trend && !trend.error && (trend.months || []).length > 0 &&
+            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 520px', minWidth: 0 }}>
+                <ReportShell title="" filename={`takeover-pl-month-over-month-${pid}`}
+                             columns={TREND_COLS} rows={trendRows} compact stickyHeader
+                             defaultGroupBy="store" collapsibleGroups
+                             groupPersistKey="takeover-pl-trend"
+                             notice={<><b>Each column is that month&rsquo;s own statement</b>,
+                               booked from this prospect&rsquo;s own rows for that month by the same
+                               code and assembled by the same builder as the P&amp;L above &mdash;
+                               so a cell here and that month&rsquo;s report are one number.
+                               {' '}<b>Every store, in every month, is charged one whole
+                               store&rsquo;s average monthly cost</b>, which is why the Expenses and
+                               bottom-line rows do not add across the stores.</>} />
+              </div>
+              {/* THE PANEL ON THE RIGHT — the selected month or range, booked ONCE over its own
+                  rows by the server. Never the monthly columns added together. */}
+              <div style={{ flex: '0 1 340px', minWidth: 280 }}>
+                <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius, 12px)',
+                              padding: '12px 14px', background: 'var(--surface2)' }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2 }}>
+                    {(trend.selected_months || []).length === 1
+                      ? trend.selected_months![0]
+                      : `${(trend.selected_months || []).length} months`}
+                    {' '}&mdash; P&amp;L
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>
+                    {(trend.selected_months || []).join(', ') || 'nothing selected'}
+                  </div>
+                  {/* THE FILTER THE OWNER ASKED FOR, beside the thing it governs. Empty = follow
+                      the page's Month filter, which is why clearing it is one button and not a
+                      guess. A range covers the WHOLE months its two ends fall in — a P&L cannot be
+                      cut at the 14th — and the panel says so under the figures. */}
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+                                marginBottom: 10 }}>
+                    <input type="date" style={{ ...sel, width: 136 }} value={winFrom}
+                           title="From this date — the whole month it falls in"
+                           onChange={e => setWinFrom(e.target.value)} />
+                    <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>to</span>
+                    <input type="date" style={{ ...sel, width: 136 }} value={winTo}
+                           title="To this date — the whole month it falls in"
+                           onChange={e => setWinTo(e.target.value)} />
+                    {(winFrom || winTo) &&
+                      <button className="btn btn-secondary" style={{ fontSize: 11.5 }}
+                              onClick={() => { setWinFrom(''); setWinTo('') }}>
+                        Follow the Month filter
+                      </button>}
+                  </div>
+                  {!winFrom && !winTo &&
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>
+                      Following the <b>Month</b> filter{period ? <> &mdash; {period}</> : null}. Pick
+                      two dates above for a range instead.
+                    </div>}
+                  {!trend.window
+                    ? <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>
+                        The month or range picked at the top of the page covers none of the uploaded
+                        months, so there is nothing to show here. Clear the filter to read every
+                        month together.
+                      </div>
+                    : <>
+                        {(trend.window.statement?.sections || []).map(sec => (
+                          <div key={sec.name} style={{ marginBottom: 8 }}>
+                            <div style={{ fontSize: 10.5, textTransform: 'uppercase',
+                                          letterSpacing: 0.4, color: 'var(--text3)',
+                                          marginBottom: 2 }}>{sec.name}</div>
+                            {(sec.lines || []).filter(l => l.amount).map(l => (
+                              <div key={l.key} style={{ display: 'flex', justifyContent: 'space-between',
+                                                        fontSize: 12, padding: '1px 0' }}>
+                                <span style={{ color: 'var(--text2)' }}>{l.label}</span>
+                                <span>{money(l.amount)}</span>
+                              </div>
+                            ))}
+                            <div style={{ display: 'flex', justifyContent: 'space-between',
+                                          fontSize: 12, fontWeight: 700, borderTop: '1px solid var(--line)',
+                                          paddingTop: 2, marginTop: 2 }}>
+                              <span>{sec.name} total</span><span>{money(sec.subtotal)}</span>
+                            </div>
+                          </div>
+                        ))}
+                        <div style={{ borderTop: '2px solid var(--border)', marginTop: 8,
+                                      paddingTop: 6 }}>
+                          {([['Gross profit', trend.window.totals?.gross_profit],
+                             ['Expenses', trend.window.totals?.expenses],
+                             ['Profit or loss on measured revenue', trend.window.totals?.net_income],
+                             ['Activated lines', trend.window.activations]] as [string, number | null | undefined][])
+                            .map(([lbl, v]) => (
+                            <div key={lbl} style={{ display: 'flex', justifyContent: 'space-between',
+                                                    fontSize: 12.5, fontWeight: 700, padding: '1px 0' }}>
+                              <span>{lbl}</span>
+                              <span>{lbl === 'Activated lines' ? num(v || 0) : money(v)}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10,
+                                      lineHeight: 1.5 }}>
+                          <b>Cost of running it:</b> {trend.window.expense_basis}
+                          {' '}{trend.window_basis}
+                        </div>
+                      </>}
+                </div>
+              </div>
+            </div>}
+          {/* WHICH OF OUR OWN MONTHS THE EXPENSE BENCHMARK CAME FROM, on every month shown — and
+              a month we could not measure at all SAYS SO rather than printing a zero. */}
+          {trend && !trend.error && (trend.by_month || []).some(m => m.expenses?.measured === false) &&
+            <div style={{ fontSize: 11.5, color: '#991b1b', marginTop: 10 }}>
+              ❌ <b>Not measured, not zero.</b> For{' '}
+              {(trend.by_month || []).filter(m => m.expenses?.measured === false)
+                .map(m => m.period).join(', ')}{' '}
+              our own Expenses sheet has no month this benchmark could be taken over, so those
+              columns charge <b>no running cost at all</b> and their bottom line is overstated by a
+              whole store&rsquo;s monthly cost. Enter a month on the Expenses sheet and these
+              columns fill in.
+            </div>}
+          {trend && !trend.error &&
+           (trend.by_month || []).some(m => m.expenses?.direction === 'after' || m.expenses?.direction === 'both') &&
+            <div style={{ fontSize: 11.5, color: '#92400e', marginTop: 10 }}>
+              ◻︎ <b>Our cost base was measured on months that come after some of these.</b> Our own
+              average store cost is a benchmark, not a figure belonging to the month on screen, so
+              where we had entered no expenses before a month the nearest months we DID record are
+              used &mdash; and said here rather than left to be discovered.{' '}
+              {(trend.by_month || []).filter(m => m.expenses?.direction === 'after' || m.expenses?.direction === 'both')
+                .map(m => `${m.period}: ${(m.expenses?.months || []).join(' + ')}`).join('; ')}.
+            </div>}
         </div>}
 
       {/* ── A COLUMN PER STORE, from the uploads ─────────────────────────────────────────────── */}

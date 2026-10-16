@@ -576,6 +576,11 @@ on:
       # change to any booking one-home the prospect P&L reads re-runs the proof that the two still
       # agree. The routers it AST-scans are already named by the globs below.
       - "backend/harness_prospect_eval.py"
+      # index §COMMCALC-03.28 — THE MONTH-OVER-MONTH P&L AND THE EXPENSE WINDOW. This lock runs the
+      # ENDPOINT over a fake client, because the owner's 2026-10-16 report ("no expenses showing up
+      # for any store" in April) was not a wrong rule — it was which months the endpoint could see.
+      # It names itself and the router, so a change to either re-runs the regression.
+      - "backend/harness_prospect_pl_trend.py"
       - "backend/harness_upload_trace_coverage.py"
       # The mapping-diagnosis lock names itself AND `column_mapping.py`, its one home, so a change to
       # the mapper's header key or to any landing path re-runs the proof that the cause is still named.
@@ -1863,6 +1868,12 @@ jobs:
       - name: Run the store-takeover evaluation proof (a prospect books through the company's own homes and writes none of them; the average survives a month that omits a line and a month with a wider roster; a line nothing can answer is never a measured zero - index COMMCALC-03)
         working-directory: backend
         run: python3 harness_prospect_eval.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE SAME JOB runs the month-over-month P&L proof: same dependencies, and it is the lock that
+      # stops a month before our own expense sheet begins charging a silent zero again
+      # (index §COMMCALC-03.28, owner report 2026-10-16).
+      - name: Run the takeover month-over-month P&L proof (a month-column IS that month's own report; a month before our own expense sheet begins is charged a measured benchmark, never a silent zero - index COMMCALC-03.28)
+        working-directory: backend
+        run: python3 harness_prospect_pl_trend.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # THE SAME JOB runs the upload-trace ratchet: it imports prospect_eval (so it needs these same
       # dependencies) and it is the lock that stops a writing upload endpoint going silent again,
       # which is what left a failed prospect upload with no record anywhere (owner report 2026-10-13).
