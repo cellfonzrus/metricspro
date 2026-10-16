@@ -1176,7 +1176,16 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1788 + 1 = 1789, the figure this harness measured on this tree. So the pin
 # was re-taken on a counted, named addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1789"))
+# RE-PINNED 2026-10-16, 1789 -> 1790 (index §COMMCALC-14). Every record above stays. The delta is ONE
+# route and it is named: GET /commcalc/prospects/feed-tally — the per-feed, per-month row tally for
+# the Store Takeover evaluations list, moved OFF that list so the two-row answer "which stores am I
+# evaluating" stops waiting on a count of 202,865 feed rows (~203 round trips, ~59 s; owner report
+# 2026-10-16). It is READ-ONLY, writes nothing, books nothing, and adds no writer; its migration
+# (1085) is one `STABLE` counting function. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1789 + 1 = 1790, the figure this harness measured on this tree. So the pin
+# was re-taken on a counted, named addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1790"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
