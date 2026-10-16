@@ -946,9 +946,12 @@ FACTS: dict[str, dict] = {
         },
     },
     'ma_reported_income': {
+        # NOTE: no migration number in this string — it is a backend string, and the §19.36
+        # setup-internals lock (rightly) refuses one in a shape the customer boundary cannot
+        # neutralize. The column and its migration live in `ma_store_pnl.PL_CONFIG_COLUMNS`.
         "question": ('What MA/VidaPay income does a report show, on what timing basis — asked PER '
-                     'month-of-life RUNG since mig 1087, because each rung is reported by only one '
-                     'of the two feeds — at what store grain?'),
+                     'month-of-life RUNG, because each rung is reported by only one of the two '
+                     'feeds — at what store grain?'),
         "homes": ('app/modules/account/ma_store_pnl.py', 'app/modules/account/residual_subs.py'),
         "index": ('4a', '4b', 'COMMCALC-17'),
         "locks": ('harness_ma_income_one_home_guard.py', 'harness_mi_residual_store_grain.py'),
