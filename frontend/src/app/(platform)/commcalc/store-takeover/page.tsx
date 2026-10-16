@@ -283,6 +283,7 @@ interface Evaluation {
   multi_line_by_month?: MultiLineByMonth
   products?: ProductBreakup
   activations_by_month?: ActivationsByMonth
+  commission_leg_store_months?: LegStoreMonths | null
   products_by_month?: { months: number; periods: string[]; by_month: ProductBreakupMonth[]; totals: ProductBreakup }
   expenses?: { matrix: Record<string, ExpenseCell>; rent: RentMeta; months?: string[]; window?: ExpenseWindow }
   default_mode?: string
@@ -379,6 +380,34 @@ interface CommissionLegs {
   trailing_total: number
   trailing_share: number | null
   reading: string
+}
+// ── THE M2–M12 BLOCK, PER STORE, EVERY MONTH (owner ask 2026-10-16, §COMMCALC-15) ───────────────
+// The shape is §COMMCALC-12's own pivot — the same rows, cells, deltas and worst-rung read-out the
+// live per-store leg trend renders — so this screen reads a payload it does not have to interpret.
+interface LegStoreCell {
+  period: string; m1: number; m2_12: number; unsplit: number; total: number
+  partial: boolean; ladder: Record<string, number>
+}
+interface LegStoreRow {
+  store_key: string; store: string; store_code: string; market: string; unattributed: boolean
+  months: Record<string, LegStoreCell>; ladder: Record<string, number>
+  total: number; complete_total: number; first: string | null; last: string | null
+  delta: number | null; delta_pct: number | null
+  m1_delta: number | null; m2_12_delta: number | null; m2_12_delta_pct: number | null
+  worst_rung: { key: string; label: string; delta: number; from: number; to: number } | null
+}
+interface LegStoreBasis {
+  rows: LegStoreRow[]; totals: LegStoreRow; measured: boolean
+  basis: string | null; basis_label: string | null
+  ties: Record<string, { shown: number; company: number; ok: boolean; gap: number }>
+  ladder_months: string[]; ladder_labels: Record<string, string>
+  ladder_columns: Record<string, string>; ladder_unknown_key: string
+}
+interface LegStoreMonths {
+  months: string[]; months_available: string[]; partial_months: string[]
+  rows_without_month: number; stores: number; unattributed_key: string
+  trailing_label: string; basis_default: string; reading: string
+  bases: Record<string, LegStoreBasis>
 }
 interface StoreBlock {
   store: ProspectStore
@@ -1448,6 +1477,62 @@ export default function StoreTakeoverPage() {
     })),
   ]), [trend?.months])
 
+  // ── THE SEPARATE M2–M12 BLOCK, PER STORE (owner ask 2026-10-16, §COMMCALC-15) ───────────────
+  // "give me a seaprate block with m2-m12 for each store with filters for all month and all
+  // stores". TWO FILTERS, and they are the two the owner named:
+  //   · STORES — the page's shared `storeFilter`, the same one record the P&L matrix and the store
+  //     table narrow by, so picking a store narrows this block to the same stores and not a
+  //     different set keyed another way.
+  //   · MONTHS — this block's own selector, because its months are COLUMNS rather than a column.
+  //     'All months' is the default and means every month the uploads name; the list of months
+  //     comes from the payload (`months_available`), so a month nobody uploaded can never be
+  //     offered. Narrowing hides a COLUMN and nothing else: no figure is recomputed on the screen.
+  const legStores: LegStoreMonths | null = data?.commission_leg_store_months || null
+  const [legBasis, setLegBasis] = useState('')
+  const [legMonth, setLegMonth] = useState('')
+  const legShownBasis = (legBasis && legStores?.bases?.[legBasis]) ? legBasis
+    : (legStores?.basis_default || 'received')
+  const legB: LegStoreBasis | null = legStores?.bases?.[legShownBasis] || null
+  const legMonths = useMemo<string[]>(
+    () => (legStores?.months || []).filter(m => !legMonth || m === legMonth),
+    [legStores?.months, legMonth])
+  // The rows are the server's, narrowed by the shared store filter. The unattributed row is kept
+  // whatever the filter says: money that names no store belongs to no store, so hiding it behind a
+  // store pick would make the rows stop adding to the figure above them without saying why.
+  const legRows = useMemo<LegStoreRow[]>(
+    () => (legB?.rows || []).filter(r => r.unattributed || !storeFilter
+                                         || storeFilter.keys.has(r.store_key)
+                                         || storeFilter.labels.has(r.store)),
+    [legB?.rows, storeFilter])
+  const LEG_COLS = useMemo<ExportColumn[]>(() => ([
+    { header: 'Store', get: (r: LegStoreRow) => r.store, field: 'store', role: 'store' },
+    ...legMonths.map(m => ({
+      header: m + (legStores?.partial_months.includes(m) ? ' (part month)' : ''),
+      field: 'm:' + m,
+      get: (r: LegStoreRow) => r.months[m]?.m2_12 ?? null,
+      money: true,
+      tip: `M2–M12 commission in ${m}`
+         + (legStores?.partial_months.includes(m)
+            ? ' — this month has not finished, so it is left out of every change figure below'
+            : ''),
+    })),
+    { header: 'M2–M12 total', get: (r: LegStoreRow) => r.total, money: true, field: 'trailing' },
+    { header: '1st month, latest', field: 'm1_last',
+      get: (r: LegStoreRow) => (r.last ? r.months[r.last]?.m1 ?? null : null), money: true,
+      tip: 'The first-month commission in the latest FINISHED month — shown beside the trailing '
+         + 'legs because a store whose 1st month is falling is shrinking now, while one whose 1st '
+         + 'month holds lost its cohort months ago' },
+    { header: 'M2–M12 change', get: (r: LegStoreRow) => r.m2_12_delta, money: true,
+      field: 'trailing_delta', agg: 'none',
+      tip: 'First to last FINISHED month the store appears in. Blank when it appears in only one' },
+    { header: 'Change %', get: (r: LegStoreRow) => r.m2_12_delta_pct, field: 'trailing_delta_pct',
+      agg: 'none', tip: 'Blank, never 0%, when the baseline month was $0 — "up from nothing" has '
+                      + 'no percentage' },
+    { header: 'Rung that fell hardest', field: 'worst_rung', agg: 'none',
+      get: (r: LegStoreRow) => (r.worst_rung
+        ? `${r.worst_rung.label} ${money(r.worst_rung.delta)}` : '') },
+  ]), [legMonths, legStores?.partial_months])
+
   const expRows = useMemo<ExpenseCell[]>(() => {
     const m = data?.expenses?.matrix
     if (!m) return []
@@ -2070,6 +2155,93 @@ export default function StoreTakeoverPage() {
               commission is trailing-leg money, {money(legs.trailing_total)} of it. Read that part as
               a wasting asset with a tail, not as revenue the site will keep earning.
             </div>}
+          {/* WHERE THESE TWO NUMBERS ARE ON THE STATEMENT (owner ask 2026-10-16). The split is a
+              presentation of the SAME dollars: both halves are revenue lines of the same section,
+              so revenue, gross profit and the bottom line are identical to the cent either way. */}
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8, lineHeight: 1.6 }}>
+            <b>Both halves are lines on the P&amp;L above.</b> The M2&ndash;M12 money now sits on its
+            own commission line there and in every store column, and the commission line above it is
+            everything else &mdash; this month&rsquo;s own activations, and any commission dollar
+            whose month-of-life the feed does not state. Splitting the line moves nothing: both are
+            revenue lines of the same section, so revenue, gross profit and the bottom line are
+            identical to the cent whether it is shown as one line or two.
+          </div>
+        </div>}
+
+      {/* ── M2–M12 PER STORE, EVERY MONTH SIDE BY SIDE (owner ask 2026-10-16, §COMMCALC-15) ──── */}
+      {/* "then give me a seaprate block with m2-m12 for each store with filters for all month and
+          all stores". The block above answers the whole prospect for one month; this one answers
+          every store for every month, which is the comparison that separates a site shrinking NOW
+          (its 1st month falling) from one echoing a cohort lost months ago (1st month flat, M4–M6
+          falling). Every figure is the server's, pivoted by the same module the live per-store leg
+          trend uses — nothing on this screen computes a dollar. */}
+      {pid && !loading && legStores && legB &&
+        <div className="card" style={{ padding: '14px 16px', marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+            {legStores.trailing_label} per store, month by month
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+            {legStores.reading}
+          </div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center',
+                        marginBottom: 10, fontSize: 12 }}>
+            <label>
+              <span style={{ color: 'var(--text3)', marginRight: 6 }}>Month</span>
+              <select style={sel} value={legMonth} onChange={e => setLegMonth(e.target.value)}>
+                <option value="">All months</option>
+                {legStores.months_available.map(m => (
+                  <option key={m} value={m}>
+                    {m}{legStores.partial_months.includes(m) ? ' (part month)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span style={{ color: 'var(--text3)', marginRight: 6 }}>Basis</span>
+              <select style={sel} value={legShownBasis}
+                      onChange={e => setLegBasis(e.target.value)}>
+                {(['received', 'earned'] as const).map(b => (
+                  <option key={b} value={b} disabled={!legStores.bases[b]?.measured}>
+                    {b === 'received' ? 'Cash received (month paid)'
+                                      : 'Earned (activation month)'}
+                    {legStores.bases[b]?.measured ? '' : ' — not measured'}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span style={{ color: 'var(--text3)' }}>
+              {legRows.length} store{legRows.length === 1 ? '' : 's'}
+              {storeFilter ? ' (filtered)' : ''} ·{' '}
+              {legMonths.length} month{legMonths.length === 1 ? '' : 's'} shown of{' '}
+              {legStores.months_available.length}
+            </span>
+          </div>
+          <ReportShell title="" filename={`takeover-m2-m12-by-store-${pid}`}
+                       columns={LEG_COLS} rows={legRows} compact stickyHeader pinFirst totals
+                       noticeTone={Object.values(legB.ties).every(t => t.ok) ? 'info' : 'warn'}
+                       notice={<>
+                         <b>What this table is.</b> One row per store, one column per month, each
+                         cell the {legStores.trailing_label} commission that store was paid (or
+                         earned) in that month — {legB.basis_label || legShownBasis}. The rungs come
+                         from your own file: {legB.ladder_months
+                           .map(k => legB.ladder_labels[k]).join(', ')}. A month that has not
+                         finished is marked a part month and is left out of every change figure,
+                         because half a month of cash reads exactly like a store falling off a
+                         cliff.
+                         {legStores.partial_months.length > 0 &&
+                           <> {' '}Part month{legStores.partial_months.length === 1 ? '' : 's'}:{' '}
+                             {legStores.partial_months.join(', ')}.</>}
+                         {legStores.rows_without_month > 0 &&
+                           <> {' '}<b>{num(legStores.rows_without_month)} uploaded row
+                             {legStores.rows_without_month === 1 ? '' : 's'} carry no month</b> and
+                             are in no column here — that is a finding about the upload, not a
+                             zero.</>}
+                         {!Object.values(legB.ties).every(t => t.ok) &&
+                           <> {' '}<b>These rows do not add to the company figure on{' '}
+                             {Object.keys(legB.ties).filter(k => !legB.ties[k].ok).join(', ')}</b> —
+                             money reached the total that the store axis could not place. It is
+                             reported, not smoothed over.</>}
+                       </>} />
         </div>}
 
       {/* ── WHAT THE COUNTER HAS TO SELL (owner ask 2026-10-13) ──────────────────────────────── */}

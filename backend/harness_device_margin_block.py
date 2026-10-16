@@ -227,8 +227,8 @@ check("the whole non-commission device family is declared in one place",
       set(msp.NON_COMMISSION_DEVICE_LINES) & set(comm) == set()
       and msp.DEVICE_MARGIN_LINE in msp.NON_COMMISSION_DEVICE_LINES)
 check("the commission family itself is unchanged by this directive",
-      set(comm) == {"carrier_comm", "mi_income", "atu_income", "ma_merchant_discount",
-                    "mdf_income", "fee_income"})
+      set(comm) == {"carrier_comm", msp.CARRIER_COMM_TRAILING_LINE, "mi_income", "atu_income",
+                    "ma_merchant_discount", "mdf_income", "fee_income"})
 check("REGRESSION: $251,946.31 of rebate cannot reach commission received through the new line",
       r2(sum(a for _l, _s, a, _d in msp.device_margin_bookings(COMPONENTS, LIVE)
              if _l in comm)) == 0.0)

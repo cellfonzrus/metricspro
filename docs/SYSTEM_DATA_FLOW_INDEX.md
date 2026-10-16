@@ -123,6 +123,7 @@ Primary code homes:
 | COMMCALC-10 | **A live login that stops making progress must say so** | "I started the live login and it has not moved for five minutes. Is it still working, is it dead, and why has nothing told me either way?" |
 | COMMCALC-11 | **An invisible human check is still a check** | "The live login filled in my portal details and then told me the password was wrong. The password is right — so what actually refused the sign-in, and why did nothing on the screen say a human check was waiting?" |
 | COMMCALC-12 | **Which store's trailing commission legs are running down, and in which rung** | "Carrier commission fell. Was it this month's activations, or the M2–M6 legs still paying on a cohort that collapsed months ago — and at WHICH store? Show the month-of-life rungs per store with the months side by side." |
+| COMMCALC-15 | **The first month and M2–M12 are two P&L lines** | "The commission line carries both the money this month’s activations earned and the trailing legs of cohorts sold months ago — which store is shrinking NOW and which lost its cohort months ago? Where are the two halves on the statement, what proves splitting the line moved no total, and where is M2–M12 per store with every month side by side?" |
 | COMMCALC-13 | **A finished live login leaves an honest status** | "The screen says the portal login is still in progress and the browser closed an hour ago. What writes that status when a session ends, and what clears it when the process that owned it is simply gone?" |
 | COMMCALC-14 | **A cheap answer is never held hostage by an expensive decoration** | "The takeover list takes a minute and reads as empty while it does. What is it waiting for, where should a count of rows be computed, and what should a cell say about a figure nobody has counted yet?" |
 
@@ -6825,7 +6826,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates; **`kpi_boostapp_basis`** (mig `1029`, §19.31 — which basis the Ready App rate is measured on, per org PER PERIOD; NULL = the pre-ruling `feed_prepaid`) via `kpi_failing.resolve_boostapp_basis` |
 | `commcalc.dlar_sweep_config` | the admin sweep page via `router._dlar_cfg` (whole row) / `_dlar_public_cfg` (no password) | `_do_dlar_sweep` → `dlar_sweep.run_dlar_sweep`; **`reports`** (mig `1029`, §19.31 — which of `dlar_sweep.PORTAL_REPORTS` this org pulls; NULL = the default pair) via `dlar_sweep.resolve_report_set`. ⚠ `portal_pass` is the carrier portal password **in plaintext** — RLS-on/service_role-only, never browser-reachable, but it belongs in a secret store (§19.31 (9)) |
-| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1033` WRITTEN NOT APPLIED — `pl_mi_store_attribution`, the raw_mi residual's store grain, §7b; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with 1013/1015 in any order**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **raw_mi residual store grain** `pl_mi_store_attribution`, mig 1033 — §7b, the twin of `pl_ma_store_attribution`; · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
+| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1086` WRITTEN NOT APPLIED — `pl_carrier_comm_leg_split`, whether the commission line is shown as its first-month half plus an M2–M12 line or as one line carrying both, §COMMCALC-15; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with every other `pl_*` column in any order, house answer TRUE, and the feature works before it is applied because a missing column reads the house answer and is REPORTED as missing**, **`1033` WRITTEN NOT APPLIED — `pl_mi_store_attribution`, the raw_mi residual's store grain, §7b; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with 1013/1015 in any order**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **raw_mi residual store grain** `pl_mi_store_attribution`, mig 1033 — §7b, the twin of `pl_ma_store_attribution`; · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
@@ -7320,6 +7321,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Employees a payroll run would price at $0.00** | an active hourly employee with no `pay_rate` | `clock_variance.employees_without_rate` → `payroll_run_gate`, which REFUSES and names them. Measured 2026-10-10: 13 of 46 house hourly employees (§14z) |
 
 - **Which of my stores is running down, and in which month-of-life rung?** — ONE home `commcalc/commission_leg_store_trend` (`pivot` / `partial_months` / `totals_row` / `ties_to` / `ladder_public`), a PURE pivot of `router._commission_leg_trend_compute`'s own money; the rungs are `commission_legs.months_present`'s, from the DATA. Lock `harness_commission_leg_store_trend.py` (76). Live 2026-10-15, house org, May–Sep complete months: 28 stores, every month ties exactly; company **−$25,534.27 / −19.4%** of which M1 is only −3.7% — M2–M12 −17.9% and the Unlabelled rung **−50.6%**; `1710 W 4th St` −46.1% with its M1 −38.9% (shrinking now) against `117 E Burnside Ave` whose **M1 moved 0.0%** while M2–M12 fell 35.9% and **M4 fell $594.60** (a cohort lost four months ago) — §COMMCALC-12.
+- **Where is the M2–M12 commission on the P&L, and which store's trailing legs are running down?** — the commission line is shown in TWO parts: the money this month's own activations earned, and `account/ma_store_pnl.CARRIER_COMM_TRAILING_LINE` ("Carrier commissions & incentives — M2–M12 (trailing legs, activated in an earlier month)"), an `auto_opt` revenue line INSERTED into `coa.PL_SPEC` beside the line it divides. ONE home for the split: `ma_store_pnl.split_leg_bookings`, re-pointing the trailing-rung dollars of bookings that already exist — the rung is the booking's OWN (`ma_commission_bookings` / `ma_tx_bookings` emit a lockstep `legs` tag from the `ma_field_leg` / `month_leg_of` call they already make), the bucket is `commission_legs.bucket_for_leg`, the switch is `pl_carrier_comm_leg_split` (mig `1086`, house answer ON). **Every P&L total is identical to the cent either way** — both halves are revenue lines of one section — and `harness_prospect_eval.py` §V2 (`no_total_moved`) asserts it by name. Per STORE with every uploaded month side by side: `prospect_eval.commission_leg_store_months`, which is §COMMCALC-12's own pivot fed by the prospect's uploads (no second pivot, no second money path). Today's only caller is the Store Takeover Evaluation; the live P&L is excused in writing — §COMMCALC-15.5. — §COMMCALC-15.
 - **Which expense rows are LABOUR the statement already books from its own source — so they must not be counted twice?** — ONE home `commcalc/labour_vocabulary.resolve` (`DEFAULT_PAYROLL_ROWS` / `DEFAULT_COMMISSION_ROWS`; a non-empty tenant list wins wholesale; `mode='off'` opts out), dereferenced by `account/coa._account_config`, `commcalc/router._expense_apply_default_tokens` and the Expenses sheet's pinned mirror. Locks `harness_labour_vocabulary.py` (109). Live 2026-10-07: 2 of 3 tenants were double-counting; the house org by **$90,922.80 / $92,565.89 / $97,362.88** in July / August / September 2026 — §4e.
 - **What makes up THIS line, for THIS scope?** — `coa.accrue_detail` records every drill dollar at the store grain and `engine._scoped` sums the stores in its own scope (Σ `detail_by_store` + `detail_company_wide` == `detail`); `statement_filter.aggregate` already summed it and was unchanged. Before this, 39 of the house org's 40 stored August 2026 P&L scopes carried an EMPTY drill-down. Locks `harness_pl_drill_detail.py` (56); the panel and `prove_pl_drill_path.mjs` (58) land in PR #408 — §4e.
 - **Open store-visit items** / **overdue plan steps** / **accessory units requested** — `storevisit/visit_alerts.summarize` + `accessory_lines`, reported in the digests and by `GET /storevisit/visits/{id}/todos` (§47.16).
@@ -25366,6 +25368,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-12 | commcalc |
 | COMMCALC-13 | commcalc |
 | COMMCALC-14 | commcalc |
+| COMMCALC-15 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -26555,8 +26558,8 @@ reported as a measured zero.
 | the prospect list and its config | `GET /commcalc/prospects` |
 | open / change / drop an evaluation | `POST /commcalc/prospects`, `PUT`/`DELETE /commcalc/prospects/{id}` |
 | upload one feed (live reader + live mapping, prospect destination) | `POST /commcalc/prospects/{id}/upload` |
-| THE evaluation — P&L both ways, the flag list, the coverage | `GET /commcalc/prospects/{id}/evaluation?period=` |
 | THE MONTH-OVER-MONTH P&L and the month-or-range window (§COMMCALC-03.28) | `GET /commcalc/prospects/{id}/pl-trend?period=&period_to=&mode=` |
+| THE evaluation — P&L both ways (the commission line in its two month-of-life parts, §COMMCALC-15), the flag list, the coverage, `commission_leg_store_months` (M2–M12 per store, every uploaded month, both bases) and `scenarios[mode].leg_split` (what the split moved, with its own identity proof) | `GET /commcalc/prospects/{id}/evaluation?period=` |
 
 **ONE ASSEMBLY, TWO SURFACES**: the P&L screen and the family-plan sub-report read the same payload
 (the §59.7 pattern), so the two can never disagree about which accounts were flagged or what
@@ -29663,3 +29666,148 @@ Same class: §19.48 / §CORE-05 (a read with a literal ceiling, and a paged read
 both *quietly wrong*, where this one was *quietly slow*), §19.18 (a mechanism written and its callers
 left unwired), §CORE-11 (a column accepted and never drawn). Neighbours: §COMMCALC-03 (the
 evaluation this list opens), §4a.2 and §COMMCALC-12 (the other tallies read per store per month).
+
+## §COMMCALC-15. THE FIRST MONTH AND M2–M12 ARE TWO P&L LINES (owner ask 2026-10-16)
+
+Owner, verbatim: *"the first month and m2-m12 commission should sow the m2-m12 as a part of the p&l ,
+if it sia part of teh p&l already then solit that category into two parts one whatever they ave righ
+tonw and the m2-m12 as a seaprate line, then give me a seaprate block with m2-m12 for each store with
+filters for all month and all stores"*, and on carrier neutrality the same day: *"make sure you are
+not mixing total commisison with bopost, but this stays a platofrm wide chaneg / report not a patch
+for any one carrier, this evaluation is specilfially for total"*.
+
+**THE CLASS, named rather than the instance.** *A P&L line that mixes money earned on THIS month's
+activations with money owed on cohorts already sold is one line answering two questions.* A store
+whose first-month commission is falling is shrinking **now**; a store whose first month holds while
+its M4–M6 fall lost its activation cohort **months ago**. Those are different problems with different
+fixes, and while the two families share a line the statement cannot tell them apart. §COMMCALC-12
+measured the size of it: 96% of a 41% fall on a takeover prospect, and of the house estate's own
+**−$25,534.27 / −19.4%** May→Sep 2026 only −3.7% was M1 — **−17.9% was M2–M12**.
+
+§COMMCALC-03.27 had already NAMED the two halves on a card. This puts them on the statement.
+
+| the question | the ONE home |
+|---|---|
+| which P&L line does a month spiff book to | `account/ma_store_pnl.MA_COMMISSION_HEADS` → `carrier_comm_source_line()` (DERIVED, never spelled) |
+| which line does the trailing half book to | `account/ma_store_pnl.CARRIER_COMM_TRAILING_LINE` + `CARRIER_COMM_TRAILING_SUFFIX` / `CARRIER_COMM_TRAILING_BASIS` |
+| is this rung the first month or trailing | `commcalc/commission_legs.bucket_for_leg` (the platform's three buckets) |
+| which month-of-life is THIS booking | the booking function's own `ma_field_leg` / `month_leg_of` call, handed out as a lockstep tag |
+| what is the trailing bucket CALLED | `commcalc/commission_ledger.LEG_LABELS['trailing']` — "M2–M12" |
+| the split itself | `account/ma_store_pnl.split_leg_bookings(bookings, legs, cfg)` |
+| whether an org gets two lines | `pl_carrier_comm_leg_split` (mig **1086**), house answer ON |
+
+### COMMCALC-15.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism before building: `m2-m12`, `month-of-life`, `trailing`,
+`leg`, `rung`, `split the commission line`, `per-store commission trend`.
+
+| already answers something near it | why it is not this | what this REUSED |
+|---|---|---|
+| §COMMCALC-03.27 `commission_leg_ladder` | names the two halves on a CARD; the statement still carried one line | **dereferenced** — the trailing line's amount is asserted equal to this ladder's trailing bucket (§V3), so the card and the line are two readings of ONE derivation |
+| §4a.2 `gp_report.calc_gp_report` `comm_ladder` | the rungs per store for ONE month on the Gross Profit report | untouched; the new line is registered in `GP_INCOME_COLUMNS` so GP revenue does not move (§V12) |
+| §COMMCALC-12 `GET /commcalc/commission-leg-store-trend` | the rungs per store across months **on OUR OWN live feed**. It must never read a prospect's uploads (§COMMCALC-03.2's AST lock) | its PURE PIVOT is **reused whole** — `commission_leg_store_trend.pivot` / `totals_row` / `ties_to` / `ladder_public` / `partial_months`. The prospect block computes no shape, no delta, no worst rung and no rung column list |
+| §4a `coa.build_inputs` (the live P&L) | books the same money for stores we own | **deliberately NOT wired — see .5** |
+
+**Nothing new derives money.** The split re-points bookings that already exist; the block pivots
+ladders that already exist.
+
+### COMMCALC-15.2 The month-of-life is a fact about the BOOKING
+
+The reason this is a design fix and not a report trick: `carrier_comm` is reached by the MA sheet's
+`spiff_m1..m6` columns (month = `ma_field_leg`) **and** by the daily-transaction cash rows (month =
+`month_leg_of`, carried in the drill-down detail as `M<n>`) **and** by other engines' ledger and POS
+dollars that have no month-of-life at all. A splitter that asked "which month is this dollar" after
+the fact would be a **second derivation** of a question the booking function had already answered —
+and for the sheet basis it could not even ask, because the booking's detail label is `SPIFF / bounty`
+with the month dropped.
+
+So the two booking functions now **emit the rung they used**:
+`ma_commission_bookings(rows, cfg, legs=None, leg_cfg=None)` and
+`ma_tx_bookings(rows, pnl_cfg, cfg, legs=None, leg_cfg=None)` append a `(bucket, leg_month)` tag per
+emitted booking, in lockstep, from the call they already make. **Omit `legs` and the emitted sequence
+is byte-identical** — that is why it is an out-parameter and not a tuple-shape change (§V7 pins both
+halves). A booking with no month-of-life concept is tagged `(None, None)` and **never moves** (§V6,
+§V8): the owner's *"whatever they ave righ tonw"* is literally everything that is not a trailing rung.
+
+### COMMCALC-15.3 THE MONEY DOES NOT MOVE, and that is asserted by name
+
+Both halves are **revenue lines of the same section**, so splitting one into two cannot move a
+subtotal. `harness_prospect_eval.py` §V2 is named **`no_total_moved`** and asserts that revenue, cost
+of goods, gross profit, expenses, the bottom line **and every section subtotal** are identical to the
+cent with the split on and off, and that the only difference anywhere is which line the trailing
+dollars sit on. §V11 carries the per-feed identity `moved + kept == source_total`, reported *with the
+money* on `scenarios[mode].leg_split`, so the split ships its own proof to the screen.
+
+The new chart line is `auto_opt`: `engine._assemble` materialises it only when it carries a value, so
+every statement that does not ask for the split is **line for line** what it was (§V1). It is
+INSERTED into `coa.PL_SPEC` beside the line it divides, with its label built from **that line's own
+label** and the trailing bucket's own name — so the two halves can never read as unrelated accounts,
+and a future ruling that renames or re-sections the commission line carries its twin with it.
+
+### COMMCALC-15.4 Carrier-neutral by construction (RULE TWO)
+
+The owner asked for this on the Total side and forbade a per-carrier patch in the same breath.
+Nothing in the mechanism names a carrier, a tenant or a product: the source line is derived from the
+component→head map, the destination is one declared key, the bucket comes from the platform's own
+`bucket_for_leg`, and the label comes from the platform's own `LEG_LABELS`. **There is no month count
+and no month ceiling** — "M2–M12" is the NAME of the trailing bucket, not a bound, so an M13 books on
+the trailing line the day it arrives. §V13 fails the build on a carrier word, on `range(`, on a month
+ceiling or on a spelled line key inside the split; §V14 is the anti-un-wiring check: the build fails
+if the evaluation stops calling the injected splitter, if the router stops injecting it, or if the
+chart stops deriving the twin from the source row.
+
+### COMMCALC-15.5 The sibling that is EXCUSED, in writing
+
+Every other path that books commission to this line was checked:
+
+| path | verdict |
+|---|---|
+| the Store Takeover Evaluation P&L (§COMMCALC-03) | **wired** — it asks for the split, for both the whole prospect and every store column |
+| the Gross Profit report (§4a.2) | already shows the rungs; the new line files into its existing commission column so no GP figure moves |
+| the LIVE P&L (`coa.build_inputs`) | **NOT wired, deliberately.** The mechanism is platform-wide and the switch is per org, but turning it on for live statements needs the destination line registered in `carrier_dollar_class.component_lines` and the Boost P&L classification one-homes, which another thread owns (session `cse_019HK7xiWRyHYfufPFsfKJaB`) and which this change does not touch. The dereference it needs is one call to `split_leg_bookings` beside the two booking calls in `build_inputs`, with the `legs` list those calls now accept. Until then a live statement is byte-identical and the trailing line does not render |
+
+### COMMCALC-15.6 The separate block: M2–M12 per store, every month
+
+`prospect_eval.commission_leg_store_months(every_month, stores, homes, today, months)` — PURE, and it
+is §COMMCALC-12's pivot fed by this prospect's own uploads. Each cell comes from
+`commission_leg_ladder`, so a cell here cannot disagree with the P&L line above it.
+
+- **One row per store, one column per month.** "All months" is the default, because the comparison IS
+  the answer; the month selector narrows the COLUMNS and nothing else, and its options are the
+  payload's own `months_available`, so a month nobody uploaded can never be offered.
+- **The store filter is the page's shared one** (§COMMCALC-03.20), keyed off the same store record as
+  the P&L matrix, so a pick narrows this block to the same stores.
+- **Both bases, always** — what the sheet says was EARNED and what the cash rows say was RECEIVED —
+  and an unmeasured basis reads *not measured* rather than as zeros. The block opens on cash, because
+  a takeover reader asks what is arriving.
+- **A month that has not finished is marked a part month** (`partial_months`, the pivot's own rule,
+  shared with the live leg trend) and is left out of every change figure: half a month of cash reads
+  exactly like a store falling off a cliff.
+- **Money naming no store is its own named row**, never spread and never dropped, and `ties` reports
+  per month whether the rows still add to the company figure — a mismatch is printed as a finding.
+- Through `ReportShell`, so it sorts, filters and exports like every other table; the change-% column
+  declares `agg: 'none'` and a $0 baseline gives a BLANK percentage, never 0% ("up from nothing" has
+  no percentage).
+
+**Where it is:** `/commcalc/store-takeover` — the P&L and the per-store matrix now carry two
+commission lines, the First-month/M2–M12 card says so in words, and the new "M2–M12 per store, month
+by month" card sits under it. **No extra query:** the endpoint already read every month in one pass.
+
+### COMMCALC-15.7 Files, locks, and what is waiting on the owner
+
+| thing | where |
+|---|---|
+| the split, the destination line, the switch | `backend/app/modules/account/ma_store_pnl.py` (`carrier_comm_source_line`, `leg_split_routes`, `split_leg_bookings`, `CARRIER_COMM_TRAILING_*`, `pl_carrier_comm_leg_split` in `PL_CONFIG_COLUMNS`) |
+| the chart line | `backend/app/modules/account/coa.py` — `_insert_leg_split_line(PL_SPEC)`, `auto_opt` revenue |
+| the rung tags | `ma_commission_bookings` / `ma_tx_bookings`, lockstep `legs` out-parameter |
+| the wiring + the per-store block | `backend/app/modules/commcalc/prospect_eval.py` (`_book`, `commission_leg_store_months`), `commcalc/router.py` (`_prospect_homes`, `get_prospect_evaluation`) |
+| the screen | `frontend/src/app/(platform)/commcalc/store-takeover/page.tsx` |
+| the lock | `backend/harness_prospect_eval.py` §V (14 checks) + §W (14 checks) — **365 passed / 0 failed**; run by `carrier-vocab-guard.yml` |
+| the migration | `database/migrations/1086_pl_carrier_comm_leg_split.sql` — **optional**, and NOT applied from a container. The feature works without it (a missing column reads the house answer and is REPORTED as missing by `rule_basis`); applying it only lets a tenant turn the second line OFF. It moves no money and rewrites no row |
+
+**No Recompute is required.** Nothing stored changes: the takeover evaluation is computed on demand
+and persisted nowhere, and no live statement asks for the split.
+
+Same class: §COMMCALC-12 (which rung is running down, per store), §COMMCALC-03.27 (the two halves
+named on a card), §4a.2 (the rung convention's one home), §19.18 (a mechanism written and its callers
+left unwired — what §V14 exists to prevent).

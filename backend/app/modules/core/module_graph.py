@@ -275,7 +275,18 @@ FACTS: dict[str, dict] = {
         # `ladder_sort_key`, `months_present`, `ladder_column`, `ladder_label` and the Unlabelled
         # bucket. §F of the lock fails the build on a `range(` or a month COUNT here, so a rung the
         # feed carries can never be invisible — an M13 is a column the day it arrives.
+        #
+        # TWO CALLERS, ONE PIVOT (added 2026-10-16, §COMMCALC-15). The owner asked for the same
+        # question of a store we do NOT own yet — "a seaprate block with m2-m12 for each store with
+        # filters for all month and all stores" — and the live endpoint cannot answer it, because it
+        # reads our own carrier feed and may never read a prospect's uploads (§COMMCALC-03.2's AST
+        # lock). So `prospect_eval.commission_leg_store_months` builds the per-(month, store) cells
+        # out of the two ladder one-homes and hands them to THIS pivot: the same rows, cells, deltas,
+        # worst-rung read-out, rung columns and partial-month rule. §W9 of
+        # `harness_prospect_eval.py` fails the build if that caller starts deriving any of them
+        # itself, which is what a second block would have been.
         "callers": {
+            'app/modules/commcalc/prospect_eval.py': ('_lst',),
             'app/modules/commcalc/router.py': ('_leg_store_pivot',),
         },
     },
@@ -930,7 +941,11 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_ma_income_one_home_guard.py', 'harness_mi_residual_store_grain.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            'app/modules/account/coa.py': ('_MA_COMPONENTS', '_msp', '_rs', '_rs_mi', '_rs_mi_idx'),
+            # `_msp_spec` added 2026-10-16 (§COMMCALC-15): the chart INSERTS the M2–M12 twin of the
+            # commission line, taking the destination key, the label suffix and — through
+            # `carrier_comm_source_line()` — which line it divides from THIS home, rather than
+            # typing a second line beside the first.
+            'app/modules/account/coa.py': ('_MA_COMPONENTS', '_msp', '_msp_spec', '_rs', '_rs_mi', '_rs_mi_idx'),
             'app/modules/account/ledger_pnl.py': ('_msp',),
             'app/modules/account/router.py': ('_msp', 'residual_subs'),
             'app/modules/account/statement_engine.py': ('_msp',),
@@ -1086,7 +1101,10 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/account/coa.py': ('_cl',),
             'app/modules/account/ledger_pnl.py': ('_cl',),
-            'app/modules/account/ma_store_pnl.py': ('month_leg_of',),
+            # `_LEG_LABELS` added 2026-10-16 (§COMMCALC-15): the M2–M12 P&L line's own label is
+            # built from `LEG_LABELS['trailing']`, so the statement line, the month-of-life card and
+            # the per-store block cannot spell the trailing bucket three different ways.
+            'app/modules/account/ma_store_pnl.py': ('_LEG_LABELS', 'month_leg_of'),
             'app/modules/commcalc/column_mapping.py': ('commission_ledger',),
             'app/modules/commcalc/commission_statement.py': ('CATEGORIES', 'CATEGORY_LABELS'),
             'app/modules/commcalc/ledger_batch.py': ('CL',),

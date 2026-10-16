@@ -75,6 +75,9 @@ DB-free. Proof: `backend/harness_prospect_eval.py`.
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc.expenses_effective import period_sort_key
 from app.modules.commcalc import product_mix as _pm
+# THE PER-STORE MONTH-OF-LIFE PIVOT (§COMMCALC-12), reused rather than re-derived — see
+# `commission_leg_store_months`. It is PURE and computes no money.
+from app.modules.commcalc import commission_leg_store_trend as _lst
 # THE activation classifier — what KIND of activation a sale line is (§6f/§19.31). Dereferenced,
 # never re-derived: a prospect counting activations on its own rule would be a second answer to a
 # question the platform already answers for every live store.
@@ -1576,6 +1579,159 @@ def commission_leg_ladder(earned, received, m1_month=None, leg_labels=None, ladd
     return out
 
 
+# ── THE M2-M12 LEGS, PER STORE, EVERY MONTH SIDE BY SIDE (owner ask 2026-10-16, §COMMCALC-15) ────
+# OWNER, VERBATIM: *"then give me a seaprate block with m2-m12 for each store with filters for all
+# month and all stores"*.
+#
+# DUPLICATE CHECK, and it decided the whole shape of this function. The platform ALREADY answers
+# "the month-of-life rungs per store with the months side by side": `GET
+# /commcalc/commission-leg-store-trend` (§COMMCALC-12), whose pure pivot is
+# `commcalc/commission_leg_store_trend`. That endpoint reads OUR OWN live carrier feed and must
+# never read a prospect's uploads (§COMMCALC-03.2's AST lock exists to keep those two apart), so the
+# ENDPOINT cannot serve this block — but its PIVOT can, and does. This function computes no shape, no
+# delta, no "worst rung" and no ladder column list of its own: it builds the per-(month, store) cells
+# out of the two ladder one-homes and hands them to that module. One pivot, two feeds behind it.
+#
+# AND IT DERIVES NO MONEY EITHER. Every cell comes from `commission_leg_ladder` — the same function
+# the month's own card and every store column already read (§COMMCALC-03.27) — so a figure in this
+# block cannot disagree with the figure above it. The rungs are the DATA's (`months_present` inside
+# the pivot); no month count and no month ceiling is written here or anywhere below.
+def _leg_cell(ladder_pair, basis):
+    """PURE: one `commission_leg_ladder` payload → the cell shape the store pivot reads."""
+    b = (ladder_pair or {}).get(basis) or {}
+    buckets = b.get("buckets") or {}
+    return {"m1": round(safe_float(buckets.get("m1")), 2),
+            # `m2_12` is the pivot's own name for the TRAILING bucket. The bucket is
+            # `commission_legs.TRAILING`, resolved by `bucket_for_leg` inside the ladder; the name is
+            # the owner's. Neither is a bound on the rungs: an M13 lands in trailing like any other.
+            "m2_12": round(safe_float(buckets.get("trailing")), 2),
+            "unsplit": round(safe_float(buckets.get("unsplit")), 2),
+            "total": round(safe_float(b.get("total")), 2),
+            "ladder": dict(b.get("months") or {}),
+            "measured": bool(b.get("measured"))}
+
+
+def commission_leg_store_months(every_month, stores, homes, today=None, months=None):
+    """PURE: the M2-M12 rungs PER STORE, every uploaded month side by side, both bases.
+
+    `every_month` — `{feed_key: [rows]}` over the WHOLE upload, each row carrying its month stamp.
+    `stores`      — `store_index()`'s output; a row naming no store it knows keeps the honest
+                    unattributed key, so the rows always sum back to the whole.
+    `homes`       — the injected one-homes (`ma_earned_month_ladder`, `ma_received_month_ladder`,
+                    `leg_labels`, `leg_m1_month`, `ladder_sort_key`).
+    `today`       — the caller's date. A month that has not ENDED is flagged `partial` through
+                    `month_has_ended`, this module's one home for that comparison, and the pivot
+                    excludes a partial month from every delta rather than reading 15 days as a
+                    collapse. No clock is read here.
+    `months`      — the month labels to show, default EVERY uploaded month. "All months" is what an
+                    absent filter means, and it is the default for the same reason the multi-line
+                    month table is never narrowed: the comparison IS the answer.
+
+    BOTH BASES ARE ALWAYS RETURNED and an unmeasured one says so rather than reading as zeros — the
+    sheet answers what was EARNED on the activation month, the cash rows what was RECEIVED, and for
+    a takeover those are different questions (what the book is worth against what is arriving now).
+    """
+    if not (homes or {}).get("ma_earned_month_ladder") or not homes.get("ma_received_month_ladder"):
+        return None
+    labels_all, no_month = [], 0
+    seen = {}
+    for feed in ("ma_commission", "ma_daily_tx"):
+        for r in (every_month or {}).get(feed) or []:
+            lab = _row_period(r)
+            k = period_sort_key(lab)
+            if k == (0, 0):
+                no_month += 1
+                continue
+            seen.setdefault(k, str(lab))
+    labels_all = [seen[k] for k in sorted(seen)]
+    want = {period_sort_key(m) for m in months} - {(0, 0)} if months is not None else None
+    labels = [l for l in labels_all if want is None or period_sort_key(l) in want]
+    # WHICH MONTH HAS NOT FINISHED — the PIVOT'S OWN RULE (`commission_leg_store_trend`), which the
+    # live per-store leg trend already flags its newest column with. Asking it here is what keeps the
+    # two store-trend surfaces agreeing about "this month is not over"; a comparison written in this
+    # file would be the second spelling of one fact. No clock is read: `today` is the caller's date.
+    partials = (_lst.partial_months(labels, today.year, today.month)
+                if today is not None else [])
+
+    def _pair(c_rows, t_rows):
+        return commission_leg_ladder(
+            homes["ma_earned_month_ladder"](c_rows, homes.get("ma_cfg")),
+            homes["ma_received_month_ladder"](t_rows, homes.get("ma_pnl_config"),
+                                              homes.get("ma_cfg")),
+            m1_month=homes.get("leg_m1_month"), leg_labels=homes.get("leg_labels"),
+            ladder_sort_key=homes.get("ladder_sort_key"))
+
+    # THE STORE SPLIT is `rows_by_store`'s — the same split the per-store P&L columns use, which is
+    # what makes Σ(rows) == the company row by construction rather than by arithmetic.
+    split = rows_by_store(every_month, set(stores or ()))
+    per_store_months = {}
+    for skey, per in split.items():
+        by_c, by_t = rows_by_period(per.get("ma_commission") or []), \
+            rows_by_period(per.get("ma_daily_tx") or [])
+        for lab in labels:
+            pair = _pair(_rows_for(by_c, lab), _rows_for(by_t, lab))
+            per_store_months.setdefault(skey, {})[lab] = pair
+    all_c, all_t = rows_by_period((every_month or {}).get("ma_commission") or []), \
+        rows_by_period((every_month or {}).get("ma_daily_tx") or [])
+    company = {lab: _pair(_rows_for(all_c, lab), _rows_for(all_t, lab)) for lab in labels}
+
+    meta = {}
+    for skey in per_store_months:
+        st = (stores or {}).get(skey) or {}
+        meta[_pivot_key(skey)] = {"store": st.get("label") or skey,
+                                  "store_code": str(st.get("account") or ""), "market": ""}
+    out = {"months": labels, "months_available": labels_all, "partial_months": partials,
+           "rows_without_month": no_month, "stores": len(per_store_months),
+           "unattributed_key": _pivot_key(UNATTRIBUTED_STORE),
+           "trailing_label": (homes.get("leg_labels") or {}).get("trailing", "trailing"),
+           "bases": {}}
+    for basis in ("received", "earned"):
+        series = [{"period": lab,
+                   "total": _leg_cell(company[lab], basis)["total"],
+                   "by_store": {_pivot_key(skey): _leg_cell(m[lab], basis)
+                                for skey, m in per_store_months.items()}}
+                  for lab in labels]
+        rows, ladder_keys = _lst.pivot(labels, series, meta, partials)
+        totals = _lst.totals_row(labels, rows, ladder_keys, partials)
+        lad = (company[labels[-1]] if labels else {}).get(basis) or {}
+        out["bases"][basis] = {
+            "rows": rows, "totals": totals, "ties": _lst.ties_to(labels, totals, series),
+            "measured": any(r["total"] for r in rows),
+            "basis": lad.get("basis"), "basis_label": lad.get("basis_label"),
+            **_lst.ladder_public(ladder_keys)}
+    # WHICH BASIS THE BLOCK OPENS ON — the measured one, cash first, because a takeover reader asks
+    # what is ARRIVING. Never a fold of the two, and never a silent zero: an unmeasured basis is
+    # reported as unmeasured and stays on screen as such.
+    out["basis_default"] = ("received" if out["bases"]["received"]["measured"]
+                            else ("earned" if out["bases"]["earned"]["measured"] else "received"))
+    out["reading"] = (
+        "M2-M12 is commission on lines activated in an EARLIER month. A store whose 1st-month "
+        "column is falling is shrinking now; a store whose 1st month holds while its M4-M6 fall "
+        "lost its activation cohort months ago. A month that has not finished is marked partial and "
+        "is left out of every change figure.")
+    return out
+
+
+def _rows_for(by_period, label):
+    """PURE: the rows filed under one month, whichever way the two spellings write it."""
+    k = period_sort_key(label)
+    out = []
+    for lab, rows in (by_period or {}).items():
+        if period_sort_key(lab) == k:
+            out.extend(rows)
+    return out
+
+
+def _pivot_key(store_key):
+    """PURE: the prospect's store key in the pivot's own namespace.
+
+    The unattributed bucket becomes the pivot's `UNATTRIBUTED_KEY` so money naming no store is the
+    pivot's own named row — reported as itself, never spread over the stores and never dropped —
+    while its LABEL stays this module's wording (`UNATTRIBUTED_STORE`), carried on the store meta.
+    Two spellings of "nobody" is the drift this translation exists to prevent."""
+    return _lst.UNATTRIBUTED_KEY if store_key == UNATTRIBUTED_STORE else str(store_key)
+
+
 # ── THE STATEMENT ─────────────────────────────────────────────────────────────────────────────────
 
 def empty_inputs(spec):
@@ -1611,6 +1767,9 @@ def add_booking(inputs, key, amount, detail_label=None, accrue_detail=None):
 # books is missing from this map), and declared only for the lines no prospect feed reaches.
 FEED_FOR_LINE = {
     "carrier_comm": ("ma_commission", "ma_daily_tx"),
+    # The M2-M12 half of the same line (§COMMCALC-15) — the same two feeds answer it, so the
+    # coverage read-out can never report the trailing line as a gap the uploads cannot fill.
+    "carrier_comm_trailing": ("ma_commission", "ma_daily_tx"),
     "ma_device_margin": ("ma_commission",),
     "fee_income": ("ma_commission",),
     "financing_income": ("ma_commission",),
@@ -1749,6 +1908,9 @@ def rule_basis(ma_cfg, ma_pnl_cfg=None, house_ma=None, house_pnl=None,
          "where a device purchase rebate presents — inside cost of goods, or as income"),
         ("device_margin_presentation", "pl_device_margin_presentation", "ma", None,
          "whether device margin gets its own block"),
+        ("carrier_comm_leg_split", "pl_carrier_comm_leg_split", "ma", bool,
+         "whether the commission line is shown in two parts — this month's own activations, and "
+         "the M2-M12 trailing legs of cohorts sold earlier — or as one line carrying both"),
         ("residual_order_types", "pl_ma_residual_order_types", "pnl", _list,
          "which order families ARE the airtime residual"),
         ("merchant_discount_own_line", "pl_merchant_discount_own_line", "pnl", bool,
@@ -1902,15 +2064,26 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
         kept, dropped = split_rows(c_rows, drop_ids if mode == "exclude" else ())
         inputs = empty_inputs(homes["spec"])
         booked = set()
-        for line, _acct, amt, detail in homes["ma_commission_bookings"](kept, homes.get("ma_cfg")):
-            add_booking(inputs, line, amt, detail, homes.get("accrue_detail"))
-            if round(safe_float(amt), 2):
-                booked.add(line)
-        for line, _acct, amt, detail in homes["ma_tx_bookings"](
-                t_rows, homes.get("ma_pnl_config"), homes.get("ma_cfg")):
-            add_booking(inputs, line, amt, detail, homes.get("accrue_detail"))
-            if round(safe_float(amt), 2):
-                booked.add(line)
+        # THE FIRST MONTH AND M2-M12, AS TWO P&L LINES (owner ask 2026-10-16, §COMMCALC-15).
+        # `lg` is the lockstep rung tag the booking function ITSELF emits, and `split_leg_bookings`
+        # re-points the trailing-rung dollars onto the trailing line. Nothing here decides a month:
+        # this file parses no label, reads no spiff column and slices no 'M' off a detail string —
+        # §V of the lock fails the build if it starts to. Both lines are revenue, so the statement's
+        # own arithmetic leaves every subtotal identical to the cent.
+        split_rep = {}
+        for which, call in (("ma_commission", lambda lg: homes["ma_commission_bookings"](
+                                kept, homes.get("ma_cfg"), lg)),
+                            ("ma_daily_tx", lambda lg: homes["ma_tx_bookings"](
+                                t_rows, homes.get("ma_pnl_config"), homes.get("ma_cfg"), lg))):
+            lg = []
+            bookings = call(lg)
+            if homes.get("split_leg_bookings"):
+                bookings, split_rep[which] = homes["split_leg_bookings"](
+                    bookings, lg, homes.get("ma_cfg"))
+            for line, _acct, amt, detail in bookings:
+                add_booking(inputs, line, amt, detail, homes.get("accrue_detail"))
+                if round(safe_float(amt), 2):
+                    booked.add(line)
         # The PRICE LIST stays the whole prospect's (`price`), deliberately: a handset ordered by one
         # store and activated in another must still be costed, exactly as the live device-costing home
         # reads the fulfilment sheet as a price list across periods.
@@ -1933,6 +2106,11 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
         return {
             "mode": mode,
             "inputs": inputs,
+            # WHAT THE SPLIT MOVED, and the proof it moved nothing else: `moved` + `kept` ==
+            # `source_total` on each feed it touched. Reported per FEED because the two feeds are the
+            # two BASES (what the sheet says was earned, what the cash rows say was received), and
+            # folding them would hide which of the two is carrying the trailing legs.
+            "leg_split": split_rep,
             "device_cost": round(safe_float(sold.get("cost")), 2),
             "device_cost_meta": sold.get("meta") or {},
             "commission_lines_kept": len(kept),

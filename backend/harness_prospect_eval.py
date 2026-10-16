@@ -1241,11 +1241,11 @@ _bb_house = P.rule_basis(MSP.default_config(), RS.default_ma_pnl_config(),
                             config_columns=_BB_COLS, migration_of=_BB_MIG)
 check("T4 every column the switch list names is a column the LOADERS name — a renamed one would "
       "otherwise read as set forever",
-      _bb_house["unknown_columns"] == [] and len(_bb_house["switches"]) == 8,
+      _bb_house["unknown_columns"] == [] and len(_bb_house["switches"]) == 9,
       str(_bb_house["unknown_columns"]))
 check("T5 a config identical to the house answer claims NOTHING — 'declared' is only claimed where "
       "the value DIFFERS, because a loader reports columns and never whether a row carried a value",
-      _bb_house["declared"] == 0 and _bb_house["house_default"] == 8)
+      _bb_house["declared"] == 0 and _bb_house["house_default"] == 9)
 # The live shape: this tenant declares the spiff source, the MDF token and store attribution.
 _bb_org = P.rule_basis(
     dict(MSP.default_config(), month_spiff_source="daily_tx", store_attribution=True,
@@ -2123,6 +2123,324 @@ check("Z31 the month-over-month table is EVERY month on purpose: the month/range
       "window panel and is never applied to the trend's own columns",
       "by_month.append(blk)" in _tsrc and "months_in_range" in _tsrc
       and _tsrc.index("for m in months") < _tsrc.index("months_in_range"))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 98)
+print("V. THE FIRST MONTH AND M2-M12 AS TWO P&L LINES — AND THE MONEY DOES NOT MOVE (§COMMCALC-15)")
+print("=" * 98)
+# OWNER, VERBATIM (2026-10-16): *"the first month and m2-m12 commission should sow the m2-m12 as a
+# part of the p&l , if it sia part of teh p&l already then solit that category into two parts one
+# whatever they ave righ tonw and the m2-m12 as a seaprate line"*.
+#
+# THE WHOLE POINT OF THIS SECTION IS V2. Splitting one line into two is a MONEY-TOUCHING change only
+# if a dollar moves, and none may: both halves are revenue lines of the same section, so every total
+# the owner reads — revenue, cost of goods, gross profit, expenses, the bottom line — must be
+# IDENTICAL TO THE CENT with the split on and off. V2 is named `no_total_moved` for that reason.
+import datetime as _dt                                                          # noqa: E402
+
+_VSTORE_A, _VSTORE_B = "900001", "900002"
+_VFUL = [{"tspid": _VSTORE_A, "business_address": "1 First St", "business_name": "A",
+          "order_type": "Branded Handset", "product_name": "iPhone 13", "price": 500.0,
+          "number_ordered": 1.0, "period": "June 2026", "date_ordered": "2026-06-02"},
+         {"tspid": _VSTORE_B, "business_address": "2 Second St", "business_name": "B",
+          "order_type": "Branded Handset", "product_name": "iPhone 16e", "price": 600.0,
+          "number_ordered": 1.0, "period": "June 2026", "date_ordered": "2026-06-03"}]
+# THE SHEET BASIS: a first-month spiff column and TWO trailing ones, on two stores and two months,
+# plus money that has NO month-of-life at all (a fee margin, a rebate) which must never move.
+_VCOMM = [
+    {"period": "May 2026", "merchant_account_id": _VSTORE_A, "activation_order": "V1", "bin": "V1",
+     "sku": "iPhone 13", "spiff_m1": -100.0, "spiff_m4": -40.0, "fees_margin": -5.0},
+    {"period": "May 2026", "merchant_account_id": _VSTORE_B, "activation_order": "V2", "bin": "V2",
+     "sku": "iPhone 16e", "spiff_m1": -50.0, "spiff_m6": -25.0, "rebate": -200.0},
+    {"period": "June 2026", "merchant_account_id": _VSTORE_A, "activation_order": "V3", "bin": "V3",
+     "sku": "iPhone 13", "spiff_m1": -10.0, "spiff_m2": -60.0},
+    # a sheet row stating NO month-of-life: its dollars are the Unlabelled rung and may NOT be read
+    # as either half (the §X13 rule, now at the P&L line level).
+    {"period": "June 2026", "merchant_account_id": _VSTORE_B, "activation_order": "V4", "bin": "V4",
+     "sku": "iPhone 16e", "device_margin": -70.0},
+]
+_VTX = [{"period": "May 2026", "account_id": _VSTORE_A, "order_type": "Airtime",
+         "product_name": "Top up 40", "retail_cost": 0.0, "merchant_discount": 12.0},
+        # the CASH basis of the same question — a month spiff paid in the month it arrived
+        {"period": "June 2026", "account_id": _VSTORE_B,
+         "order_type": "PostPaid Additional Spiff", "product_name": "TBV MONTH 3",
+         "retail_cost": -30.0, "merchant_discount": 0.0}]
+_VFEEDS = {"ma_marketplace_orders": _VFUL, "ma_commission": _VCOMM, "ma_daily_tx": _VTX}
+_VHOMES_OFF = dict(_homes_full, account_store_index=MSP.account_store_index,
+                   ma_earned_month_ladder=MSP.ma_earned_month_ladder,
+                   ma_received_month_ladder=MSP.ma_received_month_ladder,
+                   leg_labels=dict(_CLED.LEG_LABELS),
+                   leg_m1_month=_CLEGS.DEFAULT_CFG.get("m1_month"),
+                   ladder_sort_key=_CLEGS.ladder_sort_key)
+_VHOMES = dict(_VHOMES_OFF, split_leg_bookings=MSP.split_leg_bookings)
+_VTXCFG = dict(MSP.default_config(), month_spiff_source="daily_tx")
+_TRAIL = MSP.CARRIER_COMM_TRAILING_LINE
+_SRCLINE = MSP.carrier_comm_source_line()
+
+
+def _vev(homes, period="May 2026", cfg=None):
+    return P.evaluate(_VFEEDS, P.default_config(), dict(homes, ma_cfg=cfg or homes["ma_cfg"]),
+                      {}, {}, period)
+
+
+def _lines_of(inputs):
+    st = ENG._assemble(inputs, [], COA.PL_SPEC, COA.PL_LABEL, SECTIONS, "prospect", set(), True)
+    return ({ln["key"]: ln["amount"] for sec in st["sections"] for ln in sec["lines"]},
+            {sec["type"]: sec["subtotal"] for sec in st["sections"]}, AN.pl_totals(st))
+
+
+_VOFF = _vev(_VHOMES_OFF)
+_VON = _vev(_VHOMES)
+_LOFF, _SOFF, _TOFF = _lines_of(_VOFF["scenarios"]["keep"]["inputs"])
+_LON, _SON, _TON = _lines_of(_VON["scenarios"]["keep"]["inputs"])
+
+check("V1 the chart carries the M2-M12 line as an `auto_opt` REVENUE line next to the one it "
+      "splits, labelled off that line's own label — so the two halves can never read as unrelated "
+      "accounts, and a statement that books no trailing dollar does not render it at all",
+      [(k, sec, kind) for k, _l, sec, kind, _g in COA.PL_SPEC
+       if k in (_SRCLINE, _TRAIL)] == [(_SRCLINE, "revenue", "auto"),
+                                       (_TRAIL, "revenue", "auto_opt")]
+      and COA.PL_LABEL[_TRAIL].startswith(COA.PL_LABEL[_SRCLINE])
+      and _CLED.LEG_LABELS["trailing"] in COA.PL_LABEL[_TRAIL]
+      and _TRAIL not in _LOFF)
+
+check("V2 no_total_moved — splitting one line into two leaves EVERY total identical to the cent: "
+      "revenue, cost of goods, gross profit, expenses and the bottom line, and every section "
+      "subtotal with them. The only difference anywhere is which line the trailing dollars sit on",
+      _TON == _TOFF and _SON == _SOFF
+      and {k: v for k, v in _LON.items() if k not in (_SRCLINE, _TRAIL)} ==
+          {k: v for k, v in _LOFF.items() if k not in (_SRCLINE, _TRAIL)},
+      "totals %s vs %s" % (_TON, _TOFF))
+
+check("V3 the second line IS the month-of-life ladder's own trailing bucket — the P&L line and the "
+      "M1/M2-M12 card are two readings of one derivation, never two derivations",
+      round(_LON[_TRAIL], 2) == round(_VON["commission_legs"]["earned"]["buckets"]["trailing"], 2)
+      and _LON[_TRAIL] == 125.0,
+      str(_LON.get(_TRAIL)))
+
+check("V4 …and the FIRST line is exactly what it was, less that bucket — 'whatever they have right "
+      "now' minus the M2-M12 money, never a re-derived figure",
+      round(_LOFF[_SRCLINE] - _LON[_TRAIL], 2) == round(_LON[_SRCLINE], 2)
+      and _LON[_SRCLINE] == 160.0,
+      "%s - %s = %s" % (_LOFF.get(_SRCLINE), _LON.get(_TRAIL), _LON.get(_SRCLINE)))
+
+_VSTK = {k: _lines_of(b["scenarios"]["keep"]["inputs"])[0]
+         for k, b in _VON["store_scenarios"].items()}
+check("V5 the store columns add across to it: Σ(each store's M2-M12 line) is the whole prospect's, "
+      "so a column's trailing legs and the total's cannot be two different figures",
+      round(sum(v.get(_TRAIL, 0.0) for v in _VSTK.values()), 2) == round(_LON[_TRAIL], 2)
+      and len(_VSTK) == 2,
+      str({k: v.get(_TRAIL) for k, v in _VSTK.items()}))
+
+check("V6 a dollar with no month-of-life never moves. The fee margin, the rebate, the airtime "
+      "margin and the device margin book exactly where they always did — the owner's 'whatever "
+      "they have right now' is everything that is not a trailing rung",
+      all(_LON.get(k) == _LOFF.get(k) for k in
+          ("fee_income", "device_rebate", "ma_merchant_discount", "ma_device_margin")))
+
+_VLEGS, _VBK = [], None
+_VBK = MSP.ma_commission_bookings(_VCOMM, MSP.default_config(), _VLEGS)
+check("V7 the rung tag is emitted in LOCKSTEP with the bookings — one tag per booking, the "
+      "month-spiff components are the only ones that carry a rung, and the booking sequence itself "
+      "is byte-identical to a call that asks for no tags",
+      len(_VLEGS) == len(_VBK)
+      and _VBK == MSP.ma_commission_bookings(_VCOMM, MSP.default_config())
+      and {(b[0], t[0] is None) for b, t in zip(_VBK, _VLEGS)
+           if b[0] == _SRCLINE} == {(_SRCLINE, False)}
+      and all(t == (None, None) for b, t in zip(_VBK, _VLEGS) if b[0] != _SRCLINE))
+
+# A CASH SPIFF ROW WHOSE LABEL STATES NO MONTH — the honest Unlabelled rung. It is the one shape
+# that can reach the P&L with commission money and no month-of-life, and it must stay put.
+_VUN = [{"period": "May 2026", "account_id": _VSTORE_A, "order_type": "PostPaid Additional Spiff",
+         "product_name": "Retroactive Postpaid Spiff", "retail_cost": -45.0,
+         "merchant_discount": 0.0}]
+_VUNL = []
+_VUNB = MSP.ma_tx_bookings(_VUN, RS.default_ma_pnl_config(), _VTXCFG, _VUNL)
+_VUNS, _VUNR = MSP.split_leg_bookings(_VUNB, _VUNL, _VTXCFG)
+check("V8 a commission row stating no month-of-life stays on the EXISTING line and is never read "
+      "as either half — reading a trailing book as fresh is the error that would overprice a deal, "
+      "and reading a first month as trailing would understate what is arriving now",
+      _VUNR["moved"] == 0.0 and _VUNR["kept"] == 45.0
+      and _VUNL[-1] == (_CLEGS.UNSPLIT, None)
+      and not [b for b in _VUNS if b[0] == _TRAIL])
+
+_VCFG_OFF = dict(MSP.default_config(), carrier_comm_leg_split=False)
+check("V9 CONFIG, NEVER CODE: an org that declares one commission line gets one — the switch is "
+      "`pl_carrier_comm_leg_split` on the org's own config row, the house answer is the split, and "
+      "with it off the bookings are byte-identical and the second line never materialises",
+      MSP.leg_split_routes(_VCFG_OFF) == {}
+      and MSP.leg_split_routes() == {_SRCLINE: _TRAIL}
+      and MSP.split_leg_bookings(_VBK, _VLEGS, _VCFG_OFF)[0] == _VBK
+      and _TRAIL not in _lines_of(_vev(_VHOMES, cfg=_VCFG_OFF)
+                                  ["scenarios"]["keep"]["inputs"])[0]
+      and ("pl_carrier_comm_leg_split", "1086_pl_carrier_comm_leg_split.sql")
+      in MSP.PL_CONFIG_COLUMNS)
+
+_VTXL = []
+_VTXB = MSP.ma_tx_bookings(_VTX, RS.default_ma_pnl_config(), _VTXCFG, _VTXL)
+_VTXS, _VTXR = MSP.split_leg_bookings(_VTXB, _VTXL, _VTXCFG)
+check("V10 the CASH basis splits by the same rule and from the same derivation: the rung is the "
+      "`month_leg_of` answer the booking already made, not an 'M3' string sliced back apart",
+      len(_VTXL) == len(_VTXB) and _VTXR["moved"] == 30.0
+      and _VTXR["by_rung"] == {"3": 30.0}
+      and [b[0] for b in _VTXS if b[2]] == ["ma_merchant_discount", _TRAIL])
+
+check("V11 the identity is reported with the money, per feed, so the split carries its own proof: "
+      "moved + kept == the source line's whole total",
+      all(r["identity_ok"] and round(r["moved"] + r["kept"] - r["source_total"], 2) == 0.0
+          for r in _VON["scenarios"]["keep"]["leg_split"].values())
+      and set(_VON["scenarios"]["keep"]["leg_split"]) == {"ma_commission", "ma_daily_tx"})
+
+check("V12 the Gross Profit report does not move either: the new line is registered as commission "
+      "received and files into the SAME GP column as the line it split, so GP revenue still equals "
+      "the P&L's to the cent instead of landing in the unmapped column",
+      MSP.gp_income_column(_TRAIL)[0] == MSP.gp_income_column(_SRCLINE)[0]
+      and _TRAIL in MSP.commission_received_lines()
+      and MSP.assert_commission_column_is_commission() is True
+      and _TRAIL in MSP.pl_revenue_lines())
+
+_MSP_SRC = inspect.getsource(MSP)
+_SPLIT_SRC = (_MSP_SRC.split("def leg_split_routes")[1].split("\ndef ", 2)[0]
+              + _MSP_SRC.split("def split_leg_bookings")[1].split("\ndef ")[0])
+check("V13 RULE TWO and no month count: the split names no carrier, tenant or product, enforces no "
+      "month ceiling and spells no rung — the source line is DERIVED from the component→head map, "
+      "the destination is one declared key and the bucket is `commission_legs.bucket_for_leg`",
+      not [w for w in ("boost", "total by verizon", "luxelink", "vidapay", "t-cetra", "verizon",
+                       "cellfonz") if w in _SPLIT_SRC.lower()]
+      and "range(" not in _SPLIT_SRC
+      and not [t for t in ("max_leg_month", "ma_max_month", "m1_month") if t in _SPLIT_SRC]
+      and '"carrier_comm"' not in _SPLIT_SRC and "'carrier_comm'" not in _SPLIT_SRC
+      and "_legs.bucket_for_leg" in py_code_only(_MSP_SRC)
+      and "MA_COMMISSION_HEADS" in inspect.getsource(MSP.carrier_comm_source_line))
+
+_COA_SRC = inspect.getsource(COA)
+check("V14 ANTI-UN-WIRING: the evaluation re-points through the injected one home and derives no "
+      "month of its own; the router injects it; and the chart INSERTS the twin off the source "
+      "line's own spec row rather than typing a second line — the build fails if any of the three "
+      "stops dereferencing",
+      'homes["split_leg_bookings"](' in _PEV_SRC
+      and "ma_field_leg" not in py_code_only(_PEV_SRC)
+      and '"split_leg_bookings": _msp.split_leg_bookings' in _rtext
+      and "_msp_spec.CARRIER_COMM_TRAILING_LINE" in _COA_SRC
+      and "_msp_spec.carrier_comm_source_line()" in _COA_SRC
+      and py_code_only(_COA_SRC).count('"carrier_comm_trailing"') == 0
+      and py_code_only(_PEV_SRC).count('"carrier_comm_trailing"') == 1)
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 98)
+print("W. A SEPARATE BLOCK: M2-M12 PER STORE, EVERY MONTH, FILTERED (§COMMCALC-15)")
+print("=" * 98)
+# OWNER, VERBATIM: *"then give me a seaprate block with m2-m12 for each store with filters for all
+# month and all stores"*. The block is the §COMMCALC-12 PIVOT fed by this prospect's own uploads —
+# not a second pivot, not a second money path, not a second rung convention.
+_WTODAY = _dt.date(2026, 7, 15)          # June is a finished month; July is not
+_WB = P.commission_leg_store_months(_VFEEDS, _VON["stores"], _VHOMES, today=_WTODAY)
+_WR = _WB["bases"]["earned"]
+
+check("W1 every month the uploads name is a column, oldest first, and a month nobody uploaded is "
+      "never invented — the column list is the DATA's",
+      _WB["months"] == ["May 2026", "June 2026"] and _WB["months_available"] == _WB["months"])
+
+check("W2 the per-store rows add across to the company figure on EVERY month — reported as a tie "
+      "per month rather than asserted once, because money the store axis cannot place is a finding",
+      all(t["ok"] for t in _WR["ties"].values())
+      and round(_WR["totals"]["total"], 2) == round(
+          sum(r["total"] for r in _WR["rows"]), 2))
+
+check("W3 the M2-M12 cell is the ladder's own trailing bucket for that store-month, so a cell here "
+      "and the same store's P&L line are one derivation read twice",
+      round(sum(r["months"]["May 2026"]["m2_12"] for r in _WR["rows"]), 2) == 65.0
+      and round(sum(r["months"]["June 2026"]["m2_12"] for r in _WR["rows"]), 2) == 60.0
+      and round(sum(r["months"][m]["m2_12"] for r in _WR["rows"] for m in _WB["months"]), 2)
+      == round(_LON[_TRAIL], 2))
+
+check("W4 a store's own rungs come back as columns from the DATA — M1, M2, M4 and M6 here, in the "
+      "one platform ordering with the unlabelled rung last, and no M3 or M5 invented between them",
+      _WR["ladder_months"] == ["1", "2", "4", "6"]
+      and _WR["ladder_columns"]["4"] == "comm_month_4"
+      and _WR["ladder_labels"]["6"] == "M6")
+
+_WPART = P.commission_leg_store_months(_VFEEDS, _VON["stores"], _VHOMES,
+                                       today=_dt.date(2026, 6, 10))
+check("W5 a month that has not FINISHED is marked partial and left out of every change figure — "
+      "half a month of cash reads exactly like a store falling off a cliff, and the flag comes "
+      "from `month_has_ended`, this module's one home for that comparison",
+      _WPART["partial_months"] == ["June 2026"]
+      and _WPART["bases"]["earned"]["rows"][0]["months"]["June 2026"]["partial"] is True
+      and all(r["last"] != "June 2026" for r in _WPART["bases"]["earned"]["rows"])
+      and _WB["partial_months"] == [])
+
+_WONE = P.commission_leg_store_months(_VFEEDS, _VON["stores"], _VHOMES, today=_WTODAY,
+                                      months=["June 2026"])
+check("W6 the month filter narrows the COLUMNS and an absent filter means ALL months — 'all month "
+      "and all stores' is the default, and the months available are reported beside the ones shown",
+      _WONE["months"] == ["June 2026"] and _WONE["months_available"] == _WB["months"]
+      and round(sum(r["total"] for r in _WONE["bases"]["earned"]["rows"]), 2) == 70.0)
+
+_WNO = P.commission_leg_store_months(
+    {"ma_commission": [dict(_VCOMM[0], merchant_account_id=None)], "ma_daily_tx": [],
+     "ma_marketplace_orders": []}, {}, _VHOMES, today=_WTODAY)
+check("W7 money naming no store is its OWN row, never spread across the stores and never dropped — "
+      "its presence is a mapping finding, which is why the rows still add to the company figure",
+      [r["unattributed"] for r in _WNO["bases"]["earned"]["rows"]] == [True]
+      and _WNO["bases"]["earned"]["rows"][0]["store"] == P.UNATTRIBUTED_STORE
+      and all(t["ok"] for t in _WNO["bases"]["earned"]["ties"].values()))
+
+check("W8 BOTH bases are returned and an unmeasured one says so rather than reading as zeros: the "
+      "sheet says what was EARNED on the activation month, the cash rows what was RECEIVED, and a "
+      "takeover asks both questions",
+      set(_WB["bases"]) == {"earned", "received"}
+      and _WB["bases"]["earned"]["measured"] and _WB["bases"]["received"]["measured"]
+      and _WB["bases"]["earned"]["basis"] == MSP.BASIS_EARNED
+      and _WB["bases"]["received"]["basis"] == MSP.BASIS_RECEIVED
+      # cash first, because a takeover reader asks what is ARRIVING
+      and _WB["basis_default"] == "received"
+      # …and a basis with no rows reads as NOT MEASURED rather than as a measured zero
+      and P.commission_leg_store_months(dict(_VFEEDS, ma_daily_tx=[]), _VON["stores"], _VHOMES,
+                                        today=_WTODAY)["bases"]["received"]["measured"] is False
+      and P.commission_leg_store_months(dict(_VFEEDS, ma_daily_tx=[]), _VON["stores"], _VHOMES,
+                                        today=_WTODAY)["basis_default"] == "earned")
+
+check("W9 NOT A SECOND PIVOT: the block dereferences §COMMCALC-12's own module for the shape, the "
+      "deltas, the worst rung and the rung columns, and this file derives none of them",
+      all(t in _PEV_SRC for t in ("_lst.pivot(", "_lst.totals_row(", "_lst.ties_to(",
+                                  "_lst.ladder_public("))
+      and not [t for t in ("worst_rung", "delta_pct", "months_present", "ladder_column")
+               if t in py_code_only(inspect.getsource(P.commission_leg_store_months))]
+      and all(r.get("worst_rung") is not None or r["last"] is None for r in _WR["rows"]))
+
+check("W10 …and no second money path either: every cell comes from `commission_leg_ladder`, the "
+      "same function the month's own card and each store column already read",
+      "commission_leg_ladder(" in P.inspect_source_marker if False else
+      inspect.getsource(P.commission_leg_store_months).count("_pair(") == 3
+      and "commission_leg_ladder(" in inspect.getsource(P.commission_leg_store_months)
+      and "ma_earned_month_ladder" in inspect.getsource(P.commission_leg_store_months))
+
+check("W11 the block is READ-ONLY and clock-free: it is handed the date, so 'has this month "
+      "finished' is testable rather than true only today",
+      "today" in inspect.signature(P.commission_leg_store_months).parameters
+      and "datetime" not in inspect.getsource(P.commission_leg_store_months)
+      and 'today=datetime.now(timezone.utc).date()' in _rtext)
+
+check("W12 the endpoint costs NO extra query: the block is built from the rows the month read "
+      "already returned for every month",
+      "_pev.commission_leg_store_months(\n        every_month" in _rtext)
+
+check("W13 THE SCREEN: the block is its own card with a Month filter whose default is ALL months "
+      "and a store filter that is the page's shared one, and it computes no dollar of its own",
+      "commission_leg_store_months" in _PAGE
+      and "<option value=\"\">All months</option>" in _PAGE
+      and "legStores.months_available.map" in _PAGE
+      and "storeFilter.keys.has(r.store_key)" in _PAGE
+      and "r.months[m]?.m2_12" in _PAGE
+      # no arithmetic on the screen: no reduce, no + over the cells, and the total row is
+      # ReportShell's own
+      and "legRows.reduce" not in _PAGE)
+
+check("W14 …and the P&L split is NAMED on the screen where the two numbers are, with the fact that "
+      "it moves no total — a reader must not have to work out whether the statement changed",
+      "Both halves are lines on the P&amp;L above" in _PAGE
+      and "identical to the cent whether it is shown as one line or two" in _PAGE)
 
 
 print("\n" + "=" * 98)

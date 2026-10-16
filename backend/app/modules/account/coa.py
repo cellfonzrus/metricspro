@@ -255,6 +255,41 @@ BS_SPEC = [
     ("owner_capital",   "Owner capital / contributions",             "equity",    "manual",  None),
     ("retained",        "Retained earnings (accumulated net income)","equity",    "computed",None),
 ]
+# ── THE MONTH-OF-LIFE TWIN OF THE COMMISSION LINE (owner ask 2026-10-16, §COMMCALC-15) ───────────
+# *"if it sia part of teh p&l already then solit that category into two parts one whatever they ave
+# righ tonw and the m2-m12 as a seaprate line"*. The commission line carries BOTH money earned on
+# this month's own activations and the trailing legs of cohorts sold months ago, which is one line
+# answering two questions — a store shrinking NOW and a store echoing a lost cohort read identically
+# while they share it.
+#
+# INSERTED, NOT TYPED. The key, the trailing bucket and the suffix come from `ma_store_pnl` (which
+# owns the split) and the base label and section come from the SOURCE LINE'S OWN SPEC ROW, so the two
+# halves can never drift into reading like unrelated accounts, and a future ruling that renames or
+# re-sections the commission line carries its twin with it.
+#
+# `auto_opt` is load-bearing: `engine._assemble` materialises an auto_opt line ONLY when it carries a
+# value or drill-down detail, so every statement that does not ask for the split — which today is
+# every live P&L, because `ma_store_pnl.split_leg_bookings` must be CALLED — is byte-identical, line
+# for line, to before this shipped. When it is asked for, the dollars move from one revenue line to
+# another revenue line in the same section, so no subtotal moves by one cent.
+def _insert_leg_split_line(spec):
+    from app.modules.account import ma_store_pnl as _msp_spec
+    src = _msp_spec.carrier_comm_source_line()
+    if any(row[0] == _msp_spec.CARRIER_COMM_TRAILING_LINE for row in spec):
+        return spec
+    for i, row in enumerate(spec):
+        if row[0] != src:
+            continue
+        key, label, section, _kind, grain = row
+        spec.insert(i + 1, (_msp_spec.CARRIER_COMM_TRAILING_LINE,
+                            "%s — %s" % (label, _msp_spec.CARRIER_COMM_TRAILING_SUFFIX),
+                            section, "auto_opt", grain))
+        break
+    return spec
+
+
+_insert_leg_split_line(PL_SPEC)
+
 PL_LABEL = {k: lbl for k, lbl, *_ in PL_SPEC}
 BS_LABEL = {k: lbl for k, lbl, *_ in BS_SPEC}
 # {line_key: section} — what a booking's SIGN on the line is decided from (ledger_pnl.line_sign, mig 1013)
