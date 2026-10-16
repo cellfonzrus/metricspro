@@ -392,6 +392,13 @@ check("the fee heads are auto_opt opex at store grain", all(spec[k] == ("opex", 
 check("every P&L key the house vocabulary names is a line of the chart",
       {r["pl_line_key"] for r in R.HOUSE_ROYALTY_LINES if r["pl_line_key"]} <= set(spec))
 NEW_HEADS = {"service_sales", "shipping_sales", "merchandise_sales", "commission_income", "royalty_fee", "marketing_fee", "ad_fund_fee"}
+# §COMMCALC-15 (owner ask 2026-10-16) adds the month-of-life twin of the commission line as an
+# `auto_opt` revenue line. It is NAMED here, dereferenced from the module that owns it rather than
+# spelled, for exactly the reason this check exists: the chart minus the lines a change DECLARES
+# must still be the pre-change chart, in order. The twin books nothing in this fixture, so the
+# assembled oracle above is untouched — which is what `auto_opt` is for.
+from app.modules.account import ma_store_pnl as _msp_leg
+NEW_HEADS = NEW_HEADS | {_msp_leg.CARRIER_COMM_TRAILING_LINE}
 check("no existing line moved or changed: the chart minus the seven new heads IS the pre-change chart, in order",
       [list(x) for x in coa.PL_SPEC if x[0] not in NEW_HEADS] == OLD_SPEC and not (NEW_HEADS & {x[0] for x in OLD_SPEC}))
 

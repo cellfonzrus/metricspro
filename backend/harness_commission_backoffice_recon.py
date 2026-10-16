@@ -283,8 +283,8 @@ check("both rebate routes are covered by REBATE_LINES",
 check("device revenue / device margin are not commission either",
       "device_rev" not in comm and "ma_device_margin" not in comm)
 check("the commission family is exactly the carrier's own money heads",
-      set(comm) == {"carrier_comm", "mi_income", "atu_income", "ma_merchant_discount",
-                    "mdf_income", "fee_income"})
+      set(comm) == {"carrier_comm", msp.CARRIER_COMM_TRAILING_LINE, "mi_income", "atu_income",
+                    "ma_merchant_discount", "mdf_income", "fee_income"})
 sheet = [{"merchant_account_id": "170084", "rebate": -FEED["rebate_to_dealer"]}]
 inc = {l: r2(a) for l, _acct, a, _d in msp.ma_commission_bookings(sheet, LIVE_CFG) if a}
 cc = {l: r2(a) for l, _acct, a, _d in

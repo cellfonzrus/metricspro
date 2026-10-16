@@ -48896,6 +48896,12 @@ def _prospect_homes(client, org_id):
         # answer to "which month-of-life is this dollar".
         "ma_earned_month_ladder": _msp.ma_earned_month_ladder,
         "ma_received_month_ladder": _msp.ma_received_month_ladder,
+        # THE MONTH-OF-LIFE SPLIT OF THE COMMISSION LINE (§COMMCALC-15, owner ask 2026-10-16).
+        # The P&L's own splitter, injected like every other booking home: the evaluation re-points
+        # the trailing-rung dollars with the SAME function any other P&L caller would, under the
+        # SAME org switch (`pl_carrier_comm_leg_split`), so the two halves of the line cannot be
+        # computed one way here and another way anywhere else.
+        "split_leg_bookings": _msp.split_leg_bookings,
         "leg_labels": dict(_cled.LEG_LABELS),
         "leg_m1_month": _clegs.DEFAULT_CFG.get("m1_month"),
         "ladder_sort_key": _clegs.ladder_sort_key,
@@ -49096,6 +49102,16 @@ def prospect_evaluation(prospect_id: str, period: str = "", org_id: str = ORG_ID
         every_month.get("ma_commission") or [], cfg)
     ev["products_by_month"] = _pev.products_by_month(
         every_month.get("ma_commission") or [], cfg)
+    # ── THE M2-M12 LEGS PER STORE, EVERY MONTH SIDE BY SIDE (owner ask 2026-10-16, §COMMCALC-15) ─
+    # "give me a seaprate block with m2-m12 for each store with filters for all month and all
+    # stores". Computed by the pure one home over the WHOLE upload — no extra query, because
+    # `_prospect_feed_rows` already returned every month in the same read — and PIVOTED by
+    # §COMMCALC-12's own module rather than by a second pivot of its own. The date is passed in
+    # because `commission_leg_store_months` reads no clock: a month that has not finished is marked
+    # partial and left out of every change figure.
+    ev["commission_leg_store_months"] = _pev.commission_leg_store_months(
+        every_month, ev.get("stores") or {}, homes,
+        today=datetime.now(timezone.utc).date())
     # WHOSE RULES BOOKED THIS (owner report 2026-10-14, §COMMCALC-03.22). The switches come back
     # with the statement so the reader can see that the figures are the ORG'S declarations, and
     # which of them are still the house answer because nobody has declared one.

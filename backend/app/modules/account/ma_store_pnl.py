@@ -56,8 +56,13 @@ comm-sheet components are the audited `_MA_COMPONENTS`. A retail_cost books AT M
 (precedence residual → MDF → month-spiff); merchant_discount is separate money and always books.
 """
 from app.modules.commcalc.calculator import safe_float
-from app.modules.commcalc.commission_ledger import month_leg_of
+from app.modules.commcalc.commission_ledger import month_leg_of, LEG_LABELS as _LEG_LABELS
 from app.modules.account import residual_subs as _rs
+# The platform's ONE home for the month-of-life rung convention and the three leg
+# buckets (§4a.2). Imported module-wide because the month-of-life SPLIT of a commission
+# line below is decided by `bucket_for_leg` and keyed by `ladder_key` — never by a local
+# rule, and never by a month count.
+from app.modules.commcalc import commission_legs as _legs
 from app.core import column_tolerant as _ct      # the ONE reading rule for a config row (§4b.1)
 # WHICH COLUMN NAMES THE DEALER ACCOUNT on each master-agent feed. Dereferenced, never spelled here:
 # the three spellings used to be hand-written once per booking function below, and the takeover
@@ -124,6 +129,120 @@ MDF_LINE = "mdf_income"
 _SPIFF_ORDER_TYPES_DEFAULT = ("PostPaid Additional Spiff",)
 _SPIFF_OTHER_DETAIL = "Spiff (other)"
 
+# ── THE MONTH-OF-LIFE SPLIT OF A COMMISSION LINE (owner ask 2026-10-16, index §COMMCALC-15) ──────
+# Owner, verbatim: *"the first month and m2-m12 commission should sow the m2-m12 as a part of the
+# p&l , if it sia part of teh p&l already then solit that category into two parts one whatever they
+# ave righ tonw and the m2-m12 as a seaprate line"*.
+#
+# THE CLASS, named rather than the instance: a P&L line that mixes money earned on THIS month's
+# activations with money owed on cohorts already sold is ONE line answering TWO questions. A store
+# whose 1st-month commission is falling is shrinking now; a store whose 1st month holds while its
+# M4-M6 fall lost its cohort months ago. Both read as "carrier commission fell" while the two
+# families share a line, and §COMMCALC-12 measured the difference as 96% of a 41% fall on a
+# takeover prospect and -17.9% of the house estate's own -19.4%.
+#
+# CARRIER-NEUTRAL BY CONSTRUCTION. Nothing here names a carrier, a tenant or a product: the SOURCE
+# line is derived from `MA_COMMISSION_HEADS` (the one home for "which line does a month spiff book
+# to"), the DESTINATION is one declared key, and the bucket comes from
+# `commission_legs.bucket_for_leg` — the platform's one home for "is this rung the first month".
+# There is no month COUNT here and no `range(1, 13)`: "M2-M12" is the owner's NAME for the trailing
+# bucket (`commission_ledger.LEG_LABELS['trailing']`), never a bound this code enforces, so an M13
+# that arrives books on the trailing line the day it does.
+#
+# IT MOVES NO MONEY. The trailing dollars leave one revenue line and land on another revenue line in
+# the same section, so every subtotal — revenue, gross profit, expenses, net income — is identical
+# to the cent with the split on and off. `harness_prospect_eval.py` §V asserts exactly that by name
+# (V2 `no_total_moved`), and it is the whole reason this is a re-pointing of existing bookings rather
+# than a second derivation of the money.
+CARRIER_COMM_TRAILING_LINE = "carrier_comm_trailing"
+# The LEG bucket this line carries, in the vocabulary that already owns the three buckets. The LABEL
+# the line reads is `coa.PL_SPEC`'s, built from `commission_ledger.LEG_LABELS` so the P&L line, the
+# ladder card and the per-store block cannot spell the bucket three ways.
+CARRIER_COMM_TRAILING_BUCKET = _legs.TRAILING
+# HOW THE LINE READS, derived from the vocabulary that already names the three buckets — the owner's
+# own "M2–M12" — so the P&L line, the month-of-life card and the per-store block cannot spell it
+# three ways. `coa.PL_SPEC` appends this to the SOURCE line's own label.
+CARRIER_COMM_TRAILING_SUFFIX = "%s (trailing legs, activated in an earlier month)" % (
+    _LEG_LABELS.get(_legs.TRAILING, "M2-M12"),)
+# Why this line exists, in one sentence, for every surface that shows it (§COMMCALC-15).
+CARRIER_COMM_TRAILING_BASIS = (
+    "Commission on lines activated in an EARLIER month — the trailing legs of cohorts already sold. "
+    "It keeps arriving for a while and then stops, so it is not recurring revenue; the line above it "
+    "is the money this month's own activations earned.")
+
+
+def carrier_comm_source_line():
+    """PURE: the P&L line a month spiff books to — DERIVED from `MA_COMMISSION_HEADS`, never spelled.
+
+    This is the line the split divides. Deriving it is the point: if a future ruling re-files month
+    spiffs onto another line, the split follows them instead of quietly splitting a line that no
+    longer carries them."""
+    heads = {h for c, (h, _s) in MA_COMMISSION_HEADS.items() if c in SPIFF_COMPONENTS}
+    assert len(heads) == 1, (
+        "month-spiff components book to more than one P&L line (%r) — the month-of-life split has no "
+        "single source line to divide" % sorted(heads))
+    return heads.pop()
+
+
+def leg_split_routes(cfg=None):
+    """PURE: {source line: trailing line} the month-of-life split re-points, or {} when it is off.
+
+    CONFIG, NEVER CODE: `pl_carrier_comm_leg_split` (mig 1086) switches it per org. The HOUSE answer
+    is ON — the split is the platform's own answer to the owner's ask, and a tenant that wants one
+    commission line declares `false`. That default cannot move a live book, because the only caller
+    is the surface that asks for the split; see `split_leg_bookings`."""
+    cfg = cfg if cfg is not None else default_config()
+    if not bool(cfg.get("carrier_comm_leg_split", True)):
+        return {}
+    return {carrier_comm_source_line(): CARRIER_COMM_TRAILING_LINE}
+
+
+def split_leg_bookings(bookings, legs, cfg=None, leg_cfg=None):
+    """PURE: re-point the TRAILING-rung dollars of a split line onto the trailing line.
+
+    `bookings` — what `ma_commission_bookings` / `ma_tx_bookings` emitted.
+    `legs`     — the lockstep `(bucket, leg_month)` tags those same calls appended. ONE derivation:
+                 the tag comes from the booking function's own `ma_field_leg` / `month_leg_of` call,
+                 so nothing here (and nothing in any caller) re-reads a column, re-parses a label or
+                 slices an 'M' off a detail string to decide a month-of-life.
+
+    Returns `(bookings, report)`. `report` carries `moved` (the trailing dollars), `kept`, `by_rung`,
+    `source_total` and `identity_ok` — Σ(out) == Σ(in) on the source + trailing pair, which is the
+    proof that splitting a line moved no money. A booking with no leg tag (a rebate, a fee margin, a
+    residual, a dollar booked by another commission engine) is untouched and stays where it books:
+    the owner's "whatever they have right now" is everything that is not a trailing rung."""
+    routes = leg_split_routes(cfg)
+    rep = {"routes": dict(routes), "moved": 0.0, "kept": 0.0, "source_total": 0.0,
+           "by_rung": {}, "identity_ok": True, "bucket": CARRIER_COMM_TRAILING_BUCKET,
+           "basis": CARRIER_COMM_TRAILING_BASIS}
+    rows = list(bookings or ())
+    tags = list(legs or ())
+    if not routes:
+        return rows, rep
+    out = []
+    for i, bk in enumerate(rows):
+        line, acct, amt, detail = bk[0], bk[1], bk[2], bk[3] if len(bk) > 3 else None
+        dest = routes.get(line)
+        bucket, month = (tags[i] if i < len(tags) else (None, None)) or (None, None)
+        if dest is None:
+            out.append(bk)
+            continue
+        rep["source_total"] = round(rep["source_total"] + safe_float(amt), 2)
+        # A ZERO IS NEVER RE-POINTED. The component loop emits a booking per declared component, so
+        # a sheet row with no M4 still emits an M4 of $0.00; moving those would put empty trailing
+        # bookings in the stream for every row and make "this line was touched" unreadable.
+        if bucket == CARRIER_COMM_TRAILING_BUCKET and safe_float(amt):
+            key = _legs.ladder_key(month)
+            rep["by_rung"][key] = round(rep["by_rung"].get(key, 0.0) + safe_float(amt), 2)
+            rep["moved"] = round(rep["moved"] + safe_float(amt), 2)
+            out.append((dest, acct, amt, detail))
+            continue
+        rep["kept"] = round(rep["kept"] + safe_float(amt), 2)
+        out.append(bk)
+    rep["identity_ok"] = abs(round(rep["moved"] + rep["kept"] - rep["source_total"], 2)) < 0.01
+    return out, rep
+
+
 
 def default_config():
     """Mig-314 defaults — what every org gets before the migration runs / with no config row.
@@ -142,6 +261,11 @@ def default_config():
         "rebate_presentation": "contra_cogs",
         "device_margin_presentation": "off",
         "commission_source": COMMISSION_SOURCE_FEEDS,
+        # mig 1086 — the MONTH-OF-LIFE SPLIT of the commission line (owner ask 2026-10-16,
+        # §COMMCALC-15). ON by default, and that default cannot move a live book: splitting is done
+        # by `split_leg_bookings`, which a caller must ASK for, and the trailing dollars land on
+        # another line of the same section so every subtotal is identical either way.
+        "carrier_comm_leg_split": True,
         # what the reader found absent on the org's row (2026-09-22): [] until read, or complete
         "config_columns_missing": [],
         "config_migrations_missing": [],
@@ -164,6 +288,7 @@ PL_CONFIG_COLUMNS = (
     ("pl_device_margin_presentation", "996_pl_device_margin_presentation.sql"),
     ("pl_commission_source", "1013_pl_commission_source.sql"),
     ("pl_mi_store_attribution", "1033_pl_mi_store_attribution.sql"),
+    ("pl_carrier_comm_leg_split", "1086_pl_carrier_comm_leg_split.sql"),
 )
 PL_CONFIG_MIGRATION = dict(PL_CONFIG_COLUMNS)
 
@@ -227,6 +352,10 @@ def load_config(client, org_id):
             # so a typo can never silently re-grain a booked statement.
             if isinstance(r.get("pl_mi_store_attribution"), bool):
                 cfg["mi_store_attribution"] = r["pl_mi_store_attribution"]
+            # mig 1086 — the month-of-life split. A non-boolean keeps the house answer (ON), the
+            # same posture every other switch here takes: a typo can never silently restate a line.
+            if isinstance(r.get("pl_carrier_comm_leg_split"), bool):
+                cfg["carrier_comm_leg_split"] = r["pl_carrier_comm_leg_split"]
     except Exception:
         pass
     return cfg
@@ -322,7 +451,7 @@ def canonical_store_index(client, org_id):
 
 
 # ── pure booking functions ───────────────────────────────────────────────────────────────────────
-def ma_commission_bookings(rows, cfg=None):
+def ma_commission_bookings(rows, cfg=None, legs=None, leg_cfg=None):
     """PURE: raw_ma_commission rows + resolved mig-314 config → ordered bookings
     [(line_key, account_id_or_None, amount, detail_label), ...] for coa's `add()`.
 
@@ -333,12 +462,27 @@ def ma_commission_bookings(rows, cfg=None):
     account None (company-wide). Differences are config-gated:
       • store_attribution → account = row's merchant_account_id (caller maps it to a store);
       • month_spiff_source='daily_tx' → the spiff_m1..m6 columns are NOT booked here (the daily-tx
-        cash rows book them instead, see ma_tx_bookings) — everything else still books."""
+        cash rows book them instead, see ma_tx_bookings) — everything else still books.
+
+    `legs` — an OPTIONAL list this function appends a `(bucket, leg_month)` tag to, ONE PER EMITTED
+    BOOKING, in lockstep. Pass nothing and the emitted sequence is byte-identical to before, which is
+    why this is an out-parameter and not a shape change: every existing caller unpacks a 4-tuple.
+    The tag is the booking's own month-of-life, taken from `commission_legs.ma_field_leg` — the one
+    home for "which spiff column is which month" — at the moment the dollar is placed. That is the
+    whole design: a booking's month-of-life is a fact about the booking, so the splitter downstream
+    (`split_leg_bookings`) never re-derives it and no caller may (§COMMCALC-15). A booking with no
+    month-of-life concept — a rebate, a margin, a fee, the wallet clearing — is tagged
+    `(None, None)`, never guessed into a rung."""
     cfg = cfg if cfg is not None else default_config()
     attribute = bool(cfg.get("store_attribution"))
     skip_spiffs = (cfg.get("month_spiff_source") == "daily_tx")
     reb_route = rebate_route(cfg)   # mig 934: ('device_rebate', -1) default / ('rebate_income', 1)
     out = []
+
+    def _tag(bucket, month):
+        if legs is not None:
+            legs.append((bucket, month))
+
     for r in rows or []:
         r = r or {}
         acct = (str(r.get(_store_col("raw_ma_commission")) or "").strip()
@@ -348,6 +492,7 @@ def ma_commission_bookings(rows, cfg=None):
                 # Balance sheet clearing (owner ruling 2026-08-10) — settlement is entity-level
                 # cash, so it stays company-wide even under store attribution.
                 out.append(("distributor_clearing", None, safe_float(r.get(c)), None))
+                _tag(None, None)
                 continue
             head_sign = reb_route if c == "rebate" else MA_COMMISSION_HEADS.get(c)
             if not head_sign:
@@ -356,10 +501,16 @@ def ma_commission_bookings(rows, cfg=None):
                 continue
             head, sign = head_sign
             out.append((head, acct, sign * -safe_float(r.get(c)), MA_HEAD_DETAIL.get(head)))
+            # THE RUNG, asked of the one home as the dollar is placed. Only a month-spiff component
+            # HAS a month-of-life; everything else is tagged as having none.
+            if c in SPIFF_COMPONENTS:
+                _tag(*_legs.ma_field_leg(c, leg_cfg))
+            else:
+                _tag(None, None)
     return out
 
 
-def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
+def ma_tx_bookings(rows, pnl_cfg=None, cfg=None, legs=None, leg_cfg=None):
     """PURE: raw_ma_daily_tx rows + mig-309 config (`residual_subs.load_ma_pnl_config`) + mig-314
     config → ordered bookings [(line_key, account_id_or_None, amount, detail_label), ...].
 
@@ -377,7 +528,12 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
              cfg['spiff_order_types'] (case-insensitive) → `carrier_comm`, detail 'M<n>' via THE
              shared commission_ledger.month_leg_of resolver ('TBV MONTH 4', 'M1 Proration',
              'SPF Month 1' all parse; no month token → 'Spiff (other)'). M1..M12+ come from the
-             data, never from a hardcoded count."""
+             data, never from a hardcoded count.
+
+    `legs` — the same lockstep out-parameter `ma_commission_bookings` carries, for the same reason:
+    the month-of-life of a cash spiff row is decided HERE, by the `month_leg_of` call this function
+    already makes, and handed out so the month-of-life split never parses an 'M<n>' detail string
+    back into a number (§COMMCALC-15). Omitted ⇒ byte-identical to before."""
     pnl_cfg = pnl_cfg if pnl_cfg is not None else _rs.default_ma_pnl_config()
     cfg = cfg if cfg is not None else default_config()
     match = _rs.ma_residual_row_matcher(pnl_cfg)
@@ -388,16 +544,24 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
     spiff_types = ({str(t).strip().lower() for t in (cfg.get("spiff_order_types") or [])}
                    if cfg.get("month_spiff_source") == "daily_tx" else set())
     out = []
+
+    def _tag(bucket, month):
+        if legs is not None:
+            legs.append((bucket, month))
+
     for r in rows or []:
         r = r or {}
         acct = (str(r.get(_store_col(_MA_DAILY_TX_TABLE)) or "").strip()
                 or None) if attribute else None
         out.append((disc_line, acct, safe_float(r.get("merchant_discount")), None))
+        _tag(None, None)
         prod = str(r.get("product_name") or "")
         if match(r.get("product_name"), r.get("order_type")):
             out.append((_rs._MA_PNL_RESIDUAL_LINE, acct, -safe_float(r.get("retail_cost")), None))
+            _tag(None, None)
         elif mdf_tokens and any(t in prod.lower() for t in mdf_tokens):
             out.append((MDF_LINE, acct, -safe_float(r.get("retail_cost")), prod.strip() or None))
+            _tag(None, None)
         elif spiff_types and str(r.get("order_type") or "").strip().lower() in spiff_types:
             # THE leg question, asked of the one home — not the month-token parser. A carrier
             # states the first month in two forms and only one carries a token; asking for the
@@ -405,6 +569,9 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
             n = month_leg_of(prod)
             detail = ("M%d" % n) if n else _SPIFF_OTHER_DETAIL
             out.append(("carrier_comm", acct, -safe_float(r.get("retail_cost")), detail))
+            # The SAME `n` the detail label is built from, handed out as the booking's rung rather
+            # than left for a downstream reader to slice back out of the string.
+            _tag(_legs.bucket_for_leg(n, leg_cfg), n)
     return out
 
 
@@ -675,6 +842,9 @@ def carrier_device_margin_profile(rows, column="device_margin"):
 # as commission by accident.
 COMMISSION_RECEIVED_LINES = (
     "carrier_comm",           # M1..M12+ month spiffs / bounties paid by the carrier
+    CARRIER_COMM_TRAILING_LINE,   # …and its M2-M12 half once the line is split (§COMMCALC-15):
+                                  # still commission received, so neither this definition nor the
+                                  # Gross-Profit commission column moves when the split is on
     "mi_income",              # residual (labelled "Residual" on the MA side)
     "atu_income",             # legacy airtime fold (pre-mig-309 orgs)
     "ma_merchant_discount",   # airtime margin — its own line since mig 309
@@ -923,6 +1093,10 @@ def ma_payout_attribution(rows, activation_orders=None, store_index=None, activa
 # keys (structural), never carrier or tenant names — RULE TWO is untouched.
 GP_INCOME_COLUMNS = {
     "carrier_comm":         "comm",   # M1..M12+ month spiffs / bounties
+    # The trailing-leg half of the same money (§COMMCALC-15). It is the SAME commission in the SAME
+    # GP column: splitting the P&L line must not move one dollar of Gross-Profit revenue, and a
+    # revenue line this map does not know would land in the honest `unmapped` column instead.
+    "carrier_comm_trailing": "comm",
     "fee_income":           "comm",   # fee margin — commission_received_lines() counts it as commission
     "mi_income":            "mi",     # residual (labelled "Residual" on the MA side)
     "atu_income":           "atu",    # legacy airtime fold (pre-mig-309 orgs)
