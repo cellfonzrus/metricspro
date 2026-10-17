@@ -188,12 +188,17 @@ class StubClient:
 
 
 SENT = []
+FROM_NAMES = []
 
 
 def fake_senders(email_ok=True, wa_ok=True):
     """Replace the ONE channel seam. Nothing here touches a network."""
-    async def _send(ch, address, built, wa_filename):
+    async def _send(ch, address, built, wa_filename, from_name=""):
+        # `from_name` mirrors the real seam (§POS-02): a digest is the TENANT's mail, so the name
+        # the recipient sees it from rides this call. Recorded, not ignored, so the stub cannot
+        # quietly diverge from the signature it stands in for.
         SENT.append((ch, address, built["subject"]))
+        FROM_NAMES.append(from_name)
         return email_ok if ch == "email" else wa_ok
     return _send
 
@@ -215,6 +220,10 @@ row = run(D.deliver_recipient(cli, "org", "scope_x", addresses={"email": "a@b.c"
                               items=ITEMS, carried=set(), channels_ok=OK_BOTH, build=build,
                               to_name="Rana", wa_filename="x.txt"))
 check("C1 both channels were tried", sorted(c for c, _a, _s in SENT) == ["email", "whatsapp"])
+check("C1b every leg carried a from-name resolved from the ONE tenant-name home — a string, and "
+      "blank rather than a stand-in when the tenant has no name (§POS-02)",
+      len(FROM_NAMES) == 2 and all(isinstance(n, str) for n in FROM_NAMES)
+      and all(n == "" for n in FROM_NAMES))
 check("C2 only the channel that DELIVERED was recorded",
       sorted({r["channel"] for r in cli.rows}) == ["email"])
 check("C3 ...one row per item, naming the address it reached",
@@ -248,7 +257,7 @@ check("C8 a third run sends nothing: both channels are square", SENT == []
       and row3["already_sent"] is True)
 
 # a channel that RAISES is a channel that carried nothing
-async def _boom(ch, _address, _built, _fn):
+async def _boom(ch, _address, _built, _fn, from_name=""):
     if ch == "email":
         raise RuntimeError("transport down")
     return True

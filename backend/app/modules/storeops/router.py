@@ -3350,6 +3350,7 @@ def store_lease_doc_view(doc_id: str = "", authorization: str = Header(default="
 # outright and money-guarded fields unless a human ticks the money confirmation. Proof:
 # backend/harness_doc_intel.py.
 from app.modules.storeops import doc_intel as _di
+from app.modules.core import tenant_identity   # noqa: E402 — one home for the tenant's name (§POS-02)
 
 POLICY_FIELDS = ("policy_number", "insurer", "coverage_type", "coverage_start", "coverage_end",
                  "premium", "premium_frequency", "premium_due", "inclusions_summary", "extra_items",
@@ -4759,7 +4760,8 @@ def _notify_pending_clockin_managers(org_id, pending: dict, start_hhmm, deeplink
                 lines += [f"Add them to the schedule (pre-filled — you only enter the end time): {deeplink}", ""]
             else:
                 lines += [f"Add them to the schedule in {biz}: Store Ops → Schedule.", ""]
-            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines))
+            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines),
+                              org_id=org_id)
         except Exception:
             pass
 
@@ -6851,6 +6853,7 @@ async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: 
             from app.modules.notify.channels import email_resend
             if email_resend.is_configured():
                 await email_resend.send_email(
+                    org_id=org_id,
                     to=dm_email,
                     subject=f"Shift-extension approval needed — {row['employee_name'] or employee_id}",
                     html=(f"<p>{mgr.get('email')} requested to extend "
@@ -6942,8 +6945,7 @@ def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str
 
 def _tenant_display_name(org_id) -> str:
     try:
-        t = (sb().table("tenants").select("name").eq("org_id", org_id).limit(1).execute().data) or []
-        return ((t[0].get("name") if t else None) or "").strip() or "MetricsPro"
+        return tenant_identity.display_name(sb(), org_id) or "MetricsPro"
     except Exception:
         return "MetricsPro"
 
@@ -6964,7 +6966,7 @@ def _admin_fallback_emails(org_id):
         return []
 
 
-def _send_plain_email(*, emails, subject: str, body: str) -> bool:
+def _send_plain_email(*, emails, subject: str, body: str, org_id=None) -> bool:
     """Send a plain-text email through the notify module's Resend channel. Async send driven from a
     context with NO running loop (our notifier runs in its own daemon thread), so asyncio.run is safe —
     the same rule crm/router._notify documents. Returns True if any address was accepted; never raises."""
@@ -6984,7 +6986,7 @@ def _send_plain_email(*, emails, subject: str, body: str) -> bool:
             ok = False
             for addr in addrs:
                 try:
-                    await email_resend.send_email(addr, subject, html, [])
+                    await email_resend.send_email(addr, subject, html, [], org_id=org_id)
                     ok = True
                 except Exception:
                     pass
@@ -7046,7 +7048,8 @@ def _notify_permission_approvers(org_id, perm: dict, dm_email):
                 lines += [f"Reason given: {perm['reason']}", ""]
             lines += ["Until you approve it, this time does NOT count toward their hours.", "",
                       f"Approve or deny it in {biz}: Store Ops → Time-clock Permissions."]
-            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines))
+            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines),
+                              org_id=org_id)
         except Exception:
             pass
 
@@ -7462,6 +7465,7 @@ async def request_budget_override(body: BudgetOverrideRequestIn, authorization: 
             from app.modules.notify.channels import email_resend
             if email_resend.is_configured():
                 await email_resend.send_email(
+                    org_id=org_id,
                     to=dm_email,
                     subject=f"Hours-budget override needed — {store} (week of {week_start})",
                     html=(f"<p>{mgr.get('email')} requested to schedule <b>{store}</b> past its weekly "
@@ -10281,7 +10285,8 @@ def _do_google_reviews_sweep(org_id, store_codes=None):
                     for n in all_notes:
                         try:
                             await email_resend.send_email(to=n["email"], subject=n["subject"],
-                                                          html=f"<p>{n['body']}</p>")
+                                                          html=f"<p>{n['body']}</p>",
+                                                          org_id=org_id)
                         except Exception:
                             pass
                 asyncio.run(_send_all())

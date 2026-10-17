@@ -59,8 +59,10 @@ async def send_invite_email(email: str, code: str, tenant_name: str) -> tuple:
                  f'you\'ll use this code to set your password. If you already use MetricsPro, sign in with '
                  f'your existing password and enter this code to connect the company. The code expires in 30 days.</p>')
     try:
+        # The invite is the TENANT's mail and the tenant's name is already in hand here, so it is
+        # passed straight to the channel rather than re-read (owner 2026-10-17, §POS-02).
         mid = await email_resend.send_email(email, f"Your MetricsPro access code for {tenant_name or 'MetricsPro'}",
-                                            html, [])
+                                            html, [], from_name=tenant_name or None)
         return (True, "email", None)
     except Exception as e:
         return (False, "email", str(e)[:300])

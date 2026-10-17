@@ -34,6 +34,9 @@ import ProductFormFields, {
 import {
   AUTOSAVE_MS, clearHeldSale, fetchHeldSale, heldSaleBanner, suspendSale,
 } from '@/lib/pos-held-sale'
+// THE receipt (lib/pos-receipt) — rendered on the server so the till copy, the reprint and the
+// emailed copy are one thing; this screen prints what it is handed (§POS-02).
+import { emailSaleReceipt, fetchSaleReceipt, printReceiptHtml } from '@/lib/pos-receipt'
 
 interface Product {
   id: string
@@ -119,18 +122,6 @@ interface Sale {
 interface TaxCode { id: string; name: string; rate: number; store_code: string | null; is_active: boolean }
 interface Store { store_code: string; address?: string | null; market?: string | null }
 
-interface ReceiptTemplate {
-  header_text: string | null
-  footer_text: string | null
-  show_store_name: boolean
-  show_customer: boolean
-  show_serials: boolean
-  show_tax_breakdown: boolean
-  show_discounts: boolean
-  paper_width_mm: number
-  font_size_px: number
-}
-
 const inputStyle: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 7, padding: '7px 10px', fontSize: 13, color: 'var(--text)', outline: 'none' }
 const panel: React.CSSProperties = { background: 'var(--surface2)', borderRadius: 8, padding: 14, border: '1px solid var(--border)' }
 const modalOverlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }
@@ -195,7 +186,6 @@ export default function PosSalesPage() {
   const [amountTendered, setAmountTendered] = useState('')
   const [lastTransactionId, setLastTransactionId] = useState<number | null>(null)
   const [lastReceipt, setLastReceipt] = useState<ReceiptSnapshot | null>(null)
-  const [receiptTemplate, setReceiptTemplate] = useState<ReceiptTemplate | null>(null)
   const [saving, setSaving] = useState(false)
   const [voiding, setVoiding] = useState(false)
 
@@ -225,8 +215,12 @@ export default function PosSalesPage() {
   const autoPrintedTxn = useRef<number | null>(null)
   // receipt_prompt_email: customer id to offer an email capture for in the completion modal
   const [emailPromptCustomer, setEmailPromptCustomer] = useState<string | null>(null)
-  const [emailPromptValue, setEmailPromptValue] = useState('')
-  const [savingEmail, setSavingEmail] = useState(false)
+  // The emailed receipt (§POS-02): what the server says it would send, where, and from whom — all of
+  // it SHOWN before the cashier presses Send, and the address editable right there.
+  const [emailTo, setEmailTo] = useState('')
+  const [emailFromName, setEmailFromName] = useState('')
+  const [emailSending, setEmailSending] = useState(false)
+  const [emailSentTo, setEmailSentTo] = useState('')
 
   // POS Configuration — start from the code-side defaults so nothing flashes
   // blocked/hidden before the effective config loads.
@@ -244,7 +238,6 @@ export default function PosSalesPage() {
     loadProducts()
     apiCached('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/pos/tax-codes').then(r => setTaxCodes(r.tax_codes || [])).catch(() => setTaxCodes([]))
-    api('/api/v1/pos/receipt-template').then(r => setReceiptTemplate(r.template || null)).catch(() => {})
   }, [])
 
   // No store chosen on this device yet → fall back to the login's own store grant, then the
@@ -381,173 +374,73 @@ export default function PosSalesPage() {
   const taxAppliedOn: 'pre_discount' | 'post_discount' =
     cfg.tax_applied_on === 'pre_discount' ? 'pre_discount' : 'post_discount'
 
-  function escapeHtml(s: string) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  }
-
-  // Customer name as it goes onto the receipt. receipt_customer_short_name
-  // (POS Configuration): print "First L." instead of the full name — customers
-  // with only a company name on file keep the company name as is.
-  function receiptCustomerName(first: string | null, last: string | null, company: string | null): string | null {
-    const full = `${first || ''} ${last || ''}`.trim() || company
-    if (cfg.receipt_customer_short_name !== true || !full) return full
-    const f = (first || '').trim()
-    const l = (last || '').trim()
-    if (!f && !l) return full // company name only — leave as is
-    if (!l) return f
-    return `${f ? f + ' ' : ''}${l[0].toUpperCase()}.`
-  }
-
-  function buildReceiptHtml(r: ReceiptSnapshot) {
-    // Tenant-customizable format (GET /pos/receipt-template); safe defaults when absent.
-    const t = receiptTemplate
-    const showSerials = t?.show_serials ?? true
-    const showDiscounts = t?.show_discounts ?? true
-    const showTax = t?.show_tax_breakdown ?? true
-    const widthPx = (t?.paper_width_mm ?? 80) === 58 ? 220 : 300
-    const fontPx = t?.font_size_px ?? 12
-    const smallPx = Math.max(9, fontPx - 2)
-    // receipt_coupon_in_retail_price (POS Configuration): fold the line discount into the printed
-    // unit price — no separate −$x amounts and no Discounts subtotal row.
-    const foldDiscount = cfg.receipt_coupon_in_retail_price === true
-    // r.subtotal is NET of line discounts. When a separate Discounts row prints, the Subtotal
-    // line must show the GROSS amount so Subtotal − Discounts + Tax = TOTAL adds up exactly.
-    const showDiscountRow = !foldDiscount && showDiscounts && r.discountTotal > 0
-    const displaySubtotal = showDiscountRow ? r.subtotal + r.discountTotal : r.subtotal
-    // Receipt branding (POS Configuration): a configured company name replaces
-    // the store name; address lines + license/tax IDs print under it.
-    const brandName = String(cfg.brand_company_name || '').trim()
-    const brandAddress = [cfg.brand_address_line1, cfg.brand_address_line2, cfg.brand_address_line3, cfg.brand_address_line4, cfg.brand_address_line5]
-      .map(l => String(l || '').trim()).filter(l => l !== '')
-    const brandIds = String(cfg.brand_license_tax_ids || '').trim()
-    // Legal disclaimers (POS Configuration): blocks targeted at POS receipts
-    // print after the footer, each with an optional customer-signature line.
-    const disclaimerHtml = [1, 2].map(n => ({
-      text: String(cfg[`disclaimer${n}_text`] || '').trim(),
-      target: String(cfg[`disclaimer${n}_target`] || 'none'),
-      signature: cfg[`disclaimer${n}_signature`] === true,
-    })).filter(d => d.text !== '' && (d.target === 'pos' || d.target === 'both')).map(d =>
-      `<hr><div class="pre" style="font-size:${smallPx}px">${escapeHtml(d.text)}</div>` +
-      (d.signature ? `<div style="margin-top:16px">X ______________________<br><span style="font-size:${smallPx}px">Customer signature</span></div>` : '')
-    ).join('')
-    const rows = r.items.map(i => `
-      <tr><td colspan="3" class="desc">${escapeHtml(i.description)}${showSerials && i.serial ? `<br><span class="serial">S/N: ${escapeHtml(i.serial)}</span>` : ''}</td></tr>
-      <tr class="nums"><td>${i.qty} × $${(foldDiscount ? i.unit_price - i.discount : i.unit_price).toFixed(2)}${!foldDiscount && showDiscounts && i.discount > 0 ? ` −$${i.discount.toFixed(2)}` : ''}</td><td></td><td class="r">$${i.line_total.toFixed(2)}</td></tr>
-    `).join('')
-    return `<!doctype html><html><head><title>Receipt #${r.transactionId ?? ''}</title><style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { font-family: 'Courier New', monospace; font-size: ${fontPx}px; color: #000; width: ${widthPx}px; padding: 12px; }
-      .center { text-align: center; }
-      .store { font-size: ${fontPx + 2}px; font-weight: bold; }
-      .pre { white-space: pre-wrap; }
-      hr { border: none; border-top: 1px dashed #000; margin: 8px 0; }
-      table { width: 100%; border-collapse: collapse; }
-      td { padding: 1px 0; vertical-align: top; }
-      .r { text-align: right; }
-      .desc { font-weight: bold; }
-      .serial { font-weight: normal; font-size: ${Math.max(9, fontPx - 2)}px; }
-      .nums td { color: #333; }
-      .grand { font-size: ${fontPx + 2}px; font-weight: bold; }
-      @media print { body { width: auto; } }
-    </style></head><body>
-      <div class="center">
-        ${((t?.show_store_name ?? true) || brandName) ? `<div class="store">${escapeHtml(brandName || storeName || 'POS System')}</div>` : ''}${brandAddress.map(l => `<div>${escapeHtml(l)}</div>`).join('')}${brandIds ? `<div>${escapeHtml(brandIds)}</div>` : ''}
-        ${t?.header_text ? `<div class="pre">${escapeHtml(t.header_text)}</div>` : ''}
-        <div>Transaction #${r.transactionId ?? ''}</div>
-        <div>${escapeHtml(r.date)}</div>
-        ${(t?.show_customer ?? true) && r.customerName ? `<div>Customer: ${escapeHtml(r.customerName)}</div>` : ''}
-      </div>
-      <hr><table>${rows}</table><hr>
-      <table>
-        <tr><td>Subtotal</td><td class="r">$${displaySubtotal.toFixed(2)}</td></tr>
-        ${showDiscountRow ? `<tr><td>Discounts</td><td class="r">−$${r.discountTotal.toFixed(2)}</td></tr>` : ''}
-        ${showTax ? `<tr><td>Tax</td><td class="r">$${r.taxTotal.toFixed(2)}</td></tr>` : ''}
-        <tr class="grand"><td>TOTAL</td><td class="r">$${r.total.toFixed(2)}</td></tr>
-      </table><hr>
-      <table>
-        <tr><td>Paid (${escapeHtml(r.method)})</td><td class="r">$${(r.tendered ?? r.total).toFixed(2)}</td></tr>
-        ${r.change > 0 ? `<tr><td>Change</td><td class="r">$${r.change.toFixed(2)}</td></tr>` : ''}
-      </table>
-      <hr><div class="center pre">${escapeHtml(t?.footer_text || 'Thank you for your business!')}</div>${disclaimerHtml}
-    </body></html>`
-  }
-
-  function printHtml(html: string) {
-    const iframe = document.createElement('iframe')
-    iframe.style.position = 'fixed'
-    iframe.style.right = '-9999px'
-    document.body.appendChild(iframe)
-    const doc = iframe.contentWindow?.document
-    if (!doc) { alert('Could not open print view'); iframe.remove(); return }
-    doc.open(); doc.write(html); doc.close()
-    iframe.onload = () => {
-      iframe.contentWindow?.focus()
-      iframe.contentWindow?.print()
-      setTimeout(() => iframe.remove(), 2000)
+  // THE print path (§POS-02): the receipt is rendered on the server — one home for the till copy,
+  // the reprint and the emailed copy — and the register prints what it is handed. It used to build
+  // the HTML here, which is why an admin's template edits reached this screen and nothing else.
+  async function printSaleReceipt(saleId: string | null): Promise<boolean> {
+    if (!saleId) { alert('That sale has not been saved yet.'); return false }
+    try {
+      const rec = await fetchSaleReceipt(saleId)
+      printReceiptHtml(rec.html)
+      return true
+    } catch (err: any) {
+      alert(`Could not print the receipt: ${err?.message || err}`)
+      return false
     }
+  }
+
+  // The completion modal asks the server who the receipt would go to, so the screen shows the real
+  // address (the customer's own) rather than an empty box the cashier has to guess at. Called where
+  // the modal is OPENED rather than from an effect watching it: opening the modal is the event, and
+  // an effect would re-ask on every unrelated re-render while the modal is up.
+  async function loadReceiptEmailView(saleId: string) {
+    setEmailSentTo('')
+    setEmailTo('')
+    setEmailFromName('')
+    try {
+      const rec = await fetchSaleReceipt(saleId)
+      setEmailTo(rec.email.to)
+      setEmailFromName(rec.email.from_name)
+    } catch {
+      // The receipt box simply stays empty — the cashier can still type an address, and printing
+      // (which asks the server for the receipt itself) reports its own failure.
+    }
+  }
+
+  async function sendReceiptEmail() {
+    if (!lastSaleId) return
+    setEmailSending(true)
+    try {
+      const res = await emailSaleReceipt(lastSaleId, emailTo)
+      setEmailSentTo(res.to)
+      // An address the customer gave at the till is worth keeping on their profile, which is what
+      // the capture prompt (receipt_prompt_email) was asking for anyway.
+      if (emailPromptCustomer && emailTo.trim()) {
+        try {
+          await api(`/api/v1/pos/customers/${emailPromptCustomer}`, { method: 'PATCH', body: JSON.stringify({ email: emailTo.trim() }) })
+          setEmailPromptCustomer(null)
+        } catch { /* the receipt went out; saving it to the profile is the lesser half */ }
+      }
+    } catch (err: any) {
+      alert(`Could not email the receipt: ${err?.message || err}`)
+    }
+    setEmailSending(false)
   }
 
   // receipt_auto_print: when the completion modal opens, fire the same print path as the
   // Print Receipt button — once per sale (the ref guards against re-renders re-firing).
   useEffect(() => {
-    if (!showReceipt || !lastReceipt || cfg.receipt_auto_print !== true) return
+    if (!showReceipt || !lastReceipt || !lastSaleId || cfg.receipt_auto_print !== true) return
     if (autoPrintedTxn.current === lastReceipt.transactionId) return
     autoPrintedTxn.current = lastReceipt.transactionId
-    printHtml(buildReceiptHtml(lastReceipt))
+    printSaleReceipt(lastSaleId)
     setReceiptPrinted(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showReceipt, lastReceipt, cfg.receipt_auto_print])
-
-  // receipt_prompt_email: save the email typed in the completion modal onto the customer's profile.
-  async function saveCustomerEmail() {
-    if (!emailPromptCustomer) return
-    const email = emailPromptValue.trim()
-    if (!email) { alert('Enter an email address, or click Skip.'); return }
-    setSavingEmail(true)
-    try {
-      await api(`/api/v1/pos/customers/${emailPromptCustomer}`, { method: 'PATCH', body: JSON.stringify({ email }) })
-      setEmailPromptCustomer(null)
-    } catch (err: any) {
-      alert(`Could not save email: ${err?.message || err}`)
-    }
-    setSavingEmail(false)
-  }
+  }, [showReceipt, lastReceipt, lastSaleId, cfg.receipt_auto_print])
 
   async function printSelectedSale() {
     if (!selectedSale) { alert('Select a transaction in the list first.'); return }
-    try {
-      const r = await api(`/api/v1/pos/sales/${selectedSale.id}`)
-      const s = r.sale
-      // Prefer the receipt snapshot persisted at checkout — reprints are then exact.
-      const snap = s?.receipt as ReceiptSnapshot | null
-      if (snap && Array.isArray(snap.items)) {
-        printHtml(buildReceiptHtml({ ...snap, transactionId: snap.transactionId ?? s.transaction_id }))
-        return
-      }
-      // Older/imported sales without a snapshot: rebuild from the rows like the source did.
-      printHtml(buildReceiptHtml({
-        transactionId: s.transaction_id,
-        date: new Date(s.created_at).toLocaleString(),
-        customerName: selectedSale.customer_name || null,
-        items: (s.items || []).map((i: any) => ({
-          description: i.description || '',
-          serial: i.serial_number,
-          qty: i.qty,
-          unit_price: i.unit_price || 0,
-          discount: i.discount || 0,
-          line_total: i.extended_price || 0,
-        })),
-        subtotal: s.subtotal || 0,
-        discountTotal: s.discount_total || 0,
-        taxTotal: s.tax_total || 0,
-        total: s.total || 0,
-        method: s.payments?.[0]?.payment_method || '—',
-        tendered: null,
-        change: 0,
-      }))
-    } catch (err: any) {
-      alert(`Could not load the receipt: ${err?.message || err}`)
-    }
+    // The same one home as the till copy, so a reprint cannot differ from what was handed over.
+    await printSaleReceipt(selectedSale.id)
   }
 
   async function loadProducts() {
@@ -949,8 +842,12 @@ export default function PosSalesPage() {
     const receiptSnapshot: ReceiptSnapshot = {
       transactionId: null,
       date: new Date().toLocaleString(),
+      // The FULL name is recorded; whether a receipt PRINTS it short
+      // (receipt_customer_short_name) is a rendering rule and lives with the renderer (§POS-02), so
+      // changing that setting changes old reprints too instead of only new sales.
       customerName: selectedCustomer
-        ? receiptCustomerName(selectedCustomer.first_name, selectedCustomer.last_name, selectedCustomer.company_name)
+        ? ([selectedCustomer.first_name, selectedCustomer.last_name].filter(Boolean).join(' ').trim()
+           || selectedCustomer.company_name || null)
         : null,
       items: cart.map(i => ({
         description: i.description,
@@ -1026,7 +923,6 @@ export default function PosSalesPage() {
       cfg.receipt_prompt_email === true && selectedCustomer && !(selectedCustomer.email || '').trim()
         ? selectedCustomer.id : null
     )
-    setEmailPromptValue('')
     setLastReceipt({ ...receiptSnapshot, transactionId: sale.transaction_id })
     // The sale is rung: the suspended copy is finished, so drop it before the cart empties. Leaving
     // it would hand the next session a cart for a sale the customer has already paid for.
@@ -1037,6 +933,7 @@ export default function PosSalesPage() {
     setSelectedCustomer(null)
     setShowPayment(false)
     setShowReceipt(true)
+    loadReceiptEmailView(sale.id)
     setAmountTendered('')
     setIsActivationSale(false)
     setSaving(false)
@@ -1790,21 +1687,28 @@ export default function PosSalesPage() {
                   </div>
                 )}
               </div>
-              {emailPromptCustomer && (
-                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 12, textAlign: 'left' }}>
-                  <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>Customer email for receipts:</div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <input type="email" value={emailPromptValue} onChange={e => setEmailPromptValue(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && saveCustomerEmail()} placeholder="name@example.com" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
-                    <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 12px', cursor: savingEmail ? 'wait' : 'pointer', opacity: savingEmail ? 0.7 : 1 }} onClick={saveCustomerEmail} disabled={savingEmail}>
-                      {savingEmail ? 'Saving…' : 'Save'}
-                    </button>
-                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '7px 12px' }} onClick={() => setEmailPromptCustomer(null)}>
-                      Skip
-                    </button>
-                  </div>
+              {/* EMAIL THE RECEIPT (§POS-02) — the address is shown and editable, and the line under
+                  it says what name the customer will see it come from, so nobody has to send one to
+                  find out. */}
+              <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 12, textAlign: 'left' }}>
+                <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>Email the receipt to:</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input type="email" value={emailTo} onChange={e => { setEmailTo(e.target.value); setEmailSentTo('') }}
+                    onKeyDown={e => { if (e.key === 'Enter' && !emailSending) sendReceiptEmail() }}
+                    placeholder="name@example.com" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+                  <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 12px', cursor: emailSending ? 'wait' : 'pointer', opacity: emailSending || !emailTo.trim() ? 0.6 : 1 }}
+                    onClick={sendReceiptEmail} disabled={emailSending || !emailTo.trim()}>
+                    {emailSending ? 'Sending…' : 'Send'}
+                  </button>
                 </div>
-              )}
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                  {emailSentTo
+                    ? `Sent to ${emailSentTo}.`
+                    : emailFromName
+                      ? `The customer sees it from ${emailFromName}.`
+                      : 'No company name is set yet, so it arrives with the platform name — set one in POS → Settings → Receipt Template.'}
+                </div>
+              </div>
               {lastWasActivation && lastSaleId && (
                 <a href={`/pos/activations?sale=${lastSaleId}&customer=${lastSaleCustomerId || ''}`}
                   title={mustPrint ? mustPrintTitle : undefined}
@@ -1813,7 +1717,7 @@ export default function PosSalesPage() {
                 </a>
               )}
               <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginBottom: 8 }}
-                onClick={() => { if (lastReceipt) { printHtml(buildReceiptHtml(lastReceipt)); setReceiptPrinted(true) } }}>
+                onClick={async () => { if (await printSaleReceipt(lastSaleId)) setReceiptPrinted(true) }}>
                 🖨️ Print Receipt
               </button>
               <button onClick={() => { setShowReceipt(false); setActiveView('home') }} disabled={mustPrint} title={mustPrint ? mustPrintTitle : undefined}

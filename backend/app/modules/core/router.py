@@ -4564,7 +4564,7 @@ def reset_tenant_admin_password(org_id: str, body: ResetTenantAdminPasswordIn = 
     _require_super_admin(authorization)
     body = body or ResetTenantAdminPasswordIn()
     client = sb()
-    ten = (client.schema("storeops").table("tenants").select("org_id,name")
+    ten = (client.schema("storeops").table("tenants").select("org_id")
            .eq("org_id", org_id).limit(1).execute().data) or []
     if not ten:
         raise HTTPException(404, "no such tenant")
