@@ -403,6 +403,15 @@ on:
       - "backend/app/modules/pos/held_sale.py"
       - "backend/app/modules/pos/stock_landing.py"
       - "backend/harness_pos_held_sale.py"
+      - "backend/app/modules/pos/sale_receipt.py"
+      - "backend/app/modules/pos/pos_config_effective.py"
+      - "backend/app/modules/core/tenant_identity.py"
+      - "backend/app/modules/notify/channels/email_resend.py"
+      - "backend/harness_pos_receipt_render.py"
+      - "frontend/src/lib/pos-receipt.ts"
+      - "frontend/src/lib/pos-config.ts"
+      - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
+      - "database/migrations/1089_pos_receipt_layout.sql"
       - "backend/harness_pos_stock_landing.py"
       - "backend/harness_pos_product_form_lock.py"
       - "frontend/src/app/(platform)/pos/product-form.tsx"
@@ -1105,6 +1114,9 @@ jobs:
       - name: Run the suspended-sale proof (one held cart per register on the register_sessions triple; stored and restored verbatim with its age; not a sale; adaptive before mig 1088 — index §POS-01)
         working-directory: backend
         run: python3 harness_pos_held_sale.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the receipt-render proof (ONE renderer for the till copy, the reprint, the preview and the emailed copy; the browser/server POS-setting defaults pinned key by key; the layout declared with its fallback spoken aloud; the From name is the tenant's own and has one reader — index §POS-02)
+        working-directory: backend
+        run: python3 harness_pos_receipt_render.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the ledger statement-identity lock (one identity derivation, one period home, one lander; every ledger read on the family; N landings refused — index §30.15)
         working-directory: backend
         run: python3 harness_ledger_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

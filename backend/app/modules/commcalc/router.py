@@ -21416,9 +21416,7 @@ def payout_structure_document(fmt: str = "pdf", plan_id: str = "", period: str =
     # (untitled) document rather than a failure.
     tenant = ""
     try:
-        _t = (client.schema("storeops").table("tenants").select("name")
-              .eq("org_id", org_id).limit(1).execute().data) or []
-        tenant = (_t[0].get("name") or "") if _t else ""
+        tenant = _tenant_identity.display_name(client, org_id)
     except Exception:
         tenant = ""
 
@@ -21509,9 +21507,7 @@ def _statement_ctx(client, org_id, authorization):
         gate_cfg = None
     tenant = ""
     try:
-        _t = (client.schema("storeops").table("tenants").select("name")
-              .eq("org_id", org_id).limit(1).execute().data) or []
-        tenant = (_t[0].get("name") or "") if _t else ""
+        tenant = _tenant_identity.display_name(client, org_id)
     except Exception:
         tenant = ""
     # Held section is management-only, default-closed — carried only when the caller holds the grant.
@@ -47445,6 +47441,7 @@ def mi_resolve(body: MiResolveIn, org_id: str = ORG_ID):
 # Boost's owner-portal report. MA/VidaPay (Total) is the sibling with its own report (raw_ma_daily_tx);
 # same logic per carrier. Each line resolves to OUR store via the merchant-ID registry (processor 'epay').
 from app.modules.commcalc import epay_ingest as _epay  # noqa: E402
+from app.modules.core import tenant_identity as _tenant_identity  # noqa: E402 — one home for the tenant's name (§POS-02)
 
 
 def _epay_require_manager(authorization, org_id):

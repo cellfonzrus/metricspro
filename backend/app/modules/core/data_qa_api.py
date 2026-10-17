@@ -29,6 +29,7 @@ from app.core.schemas import LaxModel
 from app.modules.core import ai_gate as _gate
 from app.modules.core import data_qa_agent as _agent
 from app.modules.core import data_qa_registry as reg
+from app.modules.core import tenant_identity  # one home for the tenant's name (§POS-02)
 from app.modules.core.entitlements import module_enabled as _module_enabled
 
 # NO prefix: this router is included INTO `core/router.py`'s router, which already
@@ -53,10 +54,7 @@ def _tenant_context(client, org_id):
     so the failure can only lose the "we don't have that feed yet" nicety, never open anything."""
     name = "your company"
     try:
-        rows = (client.schema("storeops").table("tenants").select("name")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        if rows and rows[0].get("name"):
-            name = rows[0]["name"]
+        name = tenant_identity.display_name(client, org_id) or name
     except Exception:
         pass
     mods = None

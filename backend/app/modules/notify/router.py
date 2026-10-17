@@ -25,6 +25,18 @@ from app.modules.core import auth_security as _sec
 from . import report_registry, render, download_token, whatsapp_window, send_identity
 from .channels import email_resend, whatsapp_meta
 
+
+def _from_name(org_id) -> str:
+    """The DISPLAY NAME every email from this module carries — the tenant's own name as set up during
+    onboarding, through the one home for it (`core/tenant_identity`), never a second read of
+    `storeops.tenants.name` and never the platform's name on a tenant's mail (owner 2026-10-17,
+    §POS-02). Blank when the tenant has no name, which leaves the channel's own fallback in place."""
+    from app.modules.core import tenant_identity as _ti
+    try:
+        return _ti.display_name(get_supabase(), org_id)
+    except Exception:
+        return ""
+
 router = APIRouter(prefix="/notify", tags=["Notify"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -548,7 +560,8 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
         html = _email_html(payload, link, message)
         for addr in emails:
             try:
-                mid = await email_resend.send_email(addr, subject, html, email_attachments)
+                mid = await email_resend.send_email(addr, subject, html, email_attachments,
+                                                    from_name=_from_name(org_id))
                 _log("email", addr, "sent", mid=mid)
             except Exception as e:
                 _log("email", addr, "failed", err=str(e))
@@ -627,7 +640,8 @@ async def send_file(body: dict, org_id: str = ORG_ID):
         html = f"<p>{(message or 'Please find the attached report.')}</p><p style='color:#64748b;font-size:12px'>{title}</p>"
         for addr in emails:
             try:
-                mid = await email_resend.send_email(addr, title, html, attachments)
+                mid = await email_resend.send_email(addr, title, html, attachments,
+                                                    from_name=_from_name(org_id))
                 _log("email", addr, "sent", mid=mid)
             except Exception as e:
                 _log("email", addr, "failed", err=str(e))
@@ -801,7 +815,8 @@ async def send_email_plain(body: SendEmailPlainIn, org_id: str = ORG_ID):
     sent = []
     for addr in to:
         try:
-            mid = await email_resend.send_email(addr, subject, html, [])
+            mid = await email_resend.send_email(addr, subject, html, [],
+                                                from_name=_from_name(org_id))
             sent.append({"to": addr, "id": mid})
         except Exception as e:
             sent.append({"to": addr, "error": str(e)})

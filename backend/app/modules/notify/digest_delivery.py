@@ -54,12 +54,13 @@ def pending_by_channel(addresses, items, carried, channels_ok):
     return out
 
 
-async def _send(ch, address, built, wa_filename):
+async def _send(ch, address, built, wa_filename, from_name=""):
     """THE only place this codebase speaks to a channel on a digest's behalf. True when it really
     delivered — a transport that answers without a message id delivered nothing."""
     if ch == "email":
         from app.modules.notify.channels import email_resend
-        await email_resend.send_email(to=address, subject=built["subject"], html=built["html"])
+        await email_resend.send_email(to=address, subject=built["subject"], html=built["html"],
+                                     from_name=from_name)
         return True
     if ch == "whatsapp":
         from app.modules.notify.channels import whatsapp_meta
@@ -69,6 +70,16 @@ async def _send(ch, address, built, wa_filename):
             address, b"", "text/plain", wa_filename, built.get("text") or "")
         return bool((res or {}).get("message_id"))
     return False
+
+
+def _tenant_from_name(client, org_id) -> str:
+    """A digest is a tenant's own mail, so it carries the tenant's name — the one home for it
+    (`core/tenant_identity`), never a second read (owner 2026-10-17, §POS-02)."""
+    from app.modules.core import tenant_identity as _ti
+    try:
+        return _ti.display_name(client, org_id)
+    except Exception:
+        return ""
 
 
 async def deliver_recipient(client, org_id, scope, *, addresses, items, carried, channels_ok,
@@ -105,7 +116,8 @@ async def deliver_recipient(client, org_id, scope, *, addresses, items, carried,
             continue
         built = build(to_name, todo)
         try:
-            leg["delivered"] = await _send(ch, addr, built, wa_filename)
+            leg["delivered"] = await _send(ch, addr, built, wa_filename,
+                                           from_name=_tenant_from_name(client, org_id))
         except Exception as e:
             leg["error"] = str(e)[:200]
             print(f"WARN {scope} {ch} to {addr} failed: {e}")

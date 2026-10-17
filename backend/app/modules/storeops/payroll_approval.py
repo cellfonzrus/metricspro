@@ -38,6 +38,7 @@ from fastapi import APIRouter, Header, HTTPException
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.storeops import pay_visibility as _payvis
+from app.modules.core import tenant_identity  # one home for the tenant's name (§POS-02)
 
 router = APIRouter()
 
@@ -1096,8 +1097,7 @@ async def dispatch(body: PayrollDispatchIn, authorization: str = Header(default=
     payable = [r for r in rows if r["payable"]]
 
     try:
-        tname = ((sb().table("tenants").select("name").eq("org_id", org_id).limit(1)
-                  .execute().data) or [{}])[0].get("name") or "your company"
+        tname = tenant_identity.display_name(sb(), org_id) or "your company"
     except Exception:
         tname = "your company"
 
@@ -1135,7 +1135,8 @@ async def dispatch(body: PayrollDispatchIn, authorization: str = Header(default=
         tp = round(sum(x["pay_effective"] or 0 for x in g["rows"]), 2)
         html = _statement_html(tname, g["label"], s.isoformat(), e.isoformat(), g["rows"], th, tp)
         try:
-            await send_email(email, f"Payroll to disburse — {tname} — week of {s.isoformat()}", html)
+            await send_email(email, f"Payroll to disburse — {tname} — week of {s.isoformat()}", html,
+                             org_id=org_id)
             stamp = {"dispatch_status": "sent", "dispatched_at": _now(),
                      "dispatch_to": email, "dispatch_error": None}
             sent.append({"to": email, "employees": len(g["rows"]), "pay": tp})
@@ -1173,7 +1174,7 @@ async def run_weekly_notice(x_notify_secret: str = Header(default=""), eval_date
     from app.modules.storeops.router import _dm_for_store
 
     try:
-        tens = (sb().table("tenants").select("org_id,name").execute().data) or []
+        tens = [{"org_id": o, "name": n} for o, n in tenant_identity.display_names(sb()).items()]
     except Exception as ex:
         return {"tenants_checked": 0, "results": [], "note": f"tenants unreadable: {str(ex)[:200]}"}
 
@@ -1231,7 +1232,8 @@ async def run_weekly_notice(x_notify_secret: str = Header(default=""), eval_date
   </p>
 </div>"""
                 try:
-                    await send_email(email, f"Approve last week's hours — {tname}", html)
+                    await send_email(email, f"Approve last week's hours — {tname}", html,
+                                     org_id=oid)
                     emailed += 1
                 except Exception:
                     pass

@@ -342,13 +342,18 @@ export const POS_SETTING_SECTIONS: PosSettingSection[] = [
     icon: '✉️',
     subtitle: 'Templates for emailed receipts and card agreements',
     settings: [
+      // LIVE since 2026-10-17 (§POS-02): the register's completion screen emails the receipt, and
+      // these two are the words it carries. Blank = the house subject naming the company, and one
+      // line of body. The server reads them through pos_config_effective, which is why the default
+      // declared here is pinned against its copy by harness_pos_receipt_render.py.
       {
-        key: 'email_receipt_subject', label: 'Email receipt — subject', hint: '', type: 'text', default: '',
-        notYetEnforced: 'Sends once an email provider is configured (receipts share via mail client today).',
+        key: 'email_receipt_subject', label: 'Email receipt — subject',
+        hint: 'Blank uses "Your receipt from <your company> — #<transaction>".', type: 'text', default: '',
       },
       {
-        key: 'email_receipt_body', label: 'Email receipt — body', hint: '', type: 'textarea', default: '',
-        notYetEnforced: 'Sends once an email provider is configured (receipts share via mail client today).',
+        key: 'email_receipt_body', label: 'Email receipt — body',
+        hint: 'The words above the receipt in the email. Blank uses a one-line thank-you.',
+        type: 'textarea', default: '',
       },
       {
         key: 'cc_auth_agreement', label: 'Credit-card authorization agreement', hint: '', type: 'textarea', default: '',

@@ -35,6 +35,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.schemas import LaxModel
 from app.modules.core import operator as OP
+from app.modules.core import tenant_identity  # one home for the tenant's name (§POS-02)
 
 router = APIRouter(prefix="/operator", tags=["Core / Platform Operator"])
 
@@ -318,9 +319,8 @@ def _known_org_ids():
     refuse an entry into a company that does not exist; returns None (= 'do not check') on error so a
     transient read fault cannot block an operator, since the org id is a uuid either way."""
     try:
-        rows = (sb().schema("storeops").table("tenants").select("org_id,name")
-                .order("org_id").execute().data) or []
-        return {str(r["org_id"]): (r.get("name") or "") for r in rows if r.get("org_id")}
+        names = tenant_identity.display_names(sb())
+        return names or None
     except Exception:
         return None
 
