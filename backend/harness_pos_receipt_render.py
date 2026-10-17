@@ -351,8 +351,12 @@ check("H8 it previews the REAL renderer's output",
       "receipt-template/preview" in editor and "srcDoc={previewHtml}" in editor)
 check("H9 the editor offers the layout choice and shows the From name",
       "Receipt layout" in editor and "Emailed receipts come from" in editor)
-check("H10 and it says what to run when the layout column is not there yet",
-      "migration 1089" in editor)
+check("H10 and when the layout column is not there yet it says so through the ONE setup notice, so the "
+      "migration name reaches the platform team and never a tenant (§19.36)",
+      "SetupNotice" in editor and 'detail="1089_pos_receipt_layout.sql"' in editor
+      and not [ln for ln in editor.splitlines()
+               if "migration" in ln.lower() and not ln.strip().startswith("//")
+               and "detail=" not in ln])
 client = read(CLIENT)
 check("H11 the client home spells the receipt URLs once each",
       client.count("/receipt`") == 1 and client.count("/email-receipt`") == 1)

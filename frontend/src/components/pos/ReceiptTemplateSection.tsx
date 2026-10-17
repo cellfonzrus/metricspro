@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { friendlyError } from '@/components/pos/PosConfigSection'
+import { SetupNotice } from '@/lib/setupNotice'
 
 interface ReceiptTemplate {
   id: string
@@ -214,8 +215,11 @@ export default function ReceiptTemplateSection() {
                   .map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
               {!layoutReady && (
-                <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
-                  Choosing a layout needs migration 1089 applied. Everything else on this form saves normally.
+                // §19.36: the migration name is the PLATFORM's detail, so it rides the one sanctioned
+                // carrier (`detail=`) and a tenant reads the plain sentence instead.
+                <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4, lineHeight: 1.5 }}>
+                  <SetupNotice lead="The layout choice is not available yet; everything else on this form saves normally."
+                               detail="1089_pos_receipt_layout.sql" />
                 </div>
               )}
               {layoutNote && (
