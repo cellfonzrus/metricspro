@@ -186,8 +186,12 @@ L._require_hr_or_admin = lambda authorization: ("ORG-A", "hr@example.com", "admi
 SENT_EMAILS = []
 
 
-async def _fake_send_email(to, subject, html, attachments=None):
-    SENT_EMAILS.append({"to": to, "subject": subject, "html": html})
+async def _fake_send_email(to, subject, html, attachments=None, from_name=None, org_id=None):
+    # `from_name` / `org_id` mirror the real channel (§POS-02): a letter is the TENANT's mail, so the
+    # name the employee sees it from rides this call. Captured, not swallowed, so this stub cannot
+    # drift from the signature it stands in for.
+    SENT_EMAILS.append({"to": to, "subject": subject, "html": html,
+                        "from_name": from_name, "org_id": org_id})
     return "fake-message-id"
 
 

@@ -105,6 +105,8 @@ async def deliver_recipient(client, org_id, scope, *, addresses, items, carried,
         return row
     # The preview names the largest outstanding set, so a caller's existing `subject`/`items`
     # fields still describe what this recipient is about to be told.
+    # The tenant's name is read ONCE for this recipient, not once per channel leg.
+    from_name = _tenant_from_name(client, org_id)
     widest = max(work.values(), key=lambda p: len(p[1]))[1]
     built_preview = build(to_name, widest)
     row["subject"] = built_preview["subject"]
@@ -116,8 +118,7 @@ async def deliver_recipient(client, org_id, scope, *, addresses, items, carried,
             continue
         built = build(to_name, todo)
         try:
-            leg["delivered"] = await _send(ch, addr, built, wa_filename,
-                                           from_name=_tenant_from_name(client, org_id))
+            leg["delivered"] = await _send(ch, addr, built, wa_filename, from_name=from_name)
         except Exception as e:
             leg["error"] = str(e)[:200]
             print(f"WARN {scope} {ch} to {addr} failed: {e}")
