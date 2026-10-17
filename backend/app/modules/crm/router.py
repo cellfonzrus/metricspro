@@ -1516,12 +1516,20 @@ def _notify(org_id: str, *, emails, subject: str, body: str) -> bool:
             return False
         html = ("<pre style='font-family:system-ui,-apple-system,sans-serif;white-space:pre-wrap'>"
                 + _h.escape(body or "") + "</pre>")
+        # The reminder is the TENANT's mail, so it carries the tenant's own name through the one home
+        # for it (`core/tenant_identity`) — owner 2026-10-17, §POS-02.
+        from app.modules.core import tenant_identity as _ti
+        try:
+            _from_name = _ti.display_name(get_supabase(), org_id)
+        except Exception:
+            _from_name = ""
 
         async def _send_all():
             ok = False
             for addr in addrs:
                 try:
-                    await email_resend.send_email(addr, subject, html, [])
+                    await email_resend.send_email(addr, subject, html, [],
+                                                  from_name=_from_name)
                     ok = True
                 except Exception:
                     pass

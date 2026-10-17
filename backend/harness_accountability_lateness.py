@@ -106,7 +106,8 @@ async def main():
     from app.modules.notify import digest_delivery as _dd
     _real_send, _real_cfg = _dd._send, email_resend.is_configured
     email_resend.is_configured = lambda: True
-    async def _carried(ch, _addr, _built, _fn):
+    async def _carried(ch, _addr, _built, _fn, from_name=""):
+        # from_name mirrors the real seam (§POS-02) — the tenant's own name on its own mail.
         return True
     _dd._send = _carried
     log = []

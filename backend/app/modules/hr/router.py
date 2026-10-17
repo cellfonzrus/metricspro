@@ -2347,7 +2347,8 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, role_name=N
             if is_configured():
                 await send_email(email, "Complete your onboarding",
                                  _invite_email_html(first, method, result["portal_url"], email,
-                                                    result.get("temp_password"), labels))
+                                                    result.get("temp_password"), labels),
+                                 org_id=org_id)
                 result["emailed"] = True
             else:
                 result["email_note"] = "email not configured (RESEND_API_KEY unset) — hand the link/credentials over manually"
@@ -2577,7 +2578,8 @@ async def onboarding_provision(employee_id: str, body: OnboardingProvisionIn, or
                 first = (str(emp[0].get("name") or "").split() or [""])[0]
                 await send_email(email, "Your MetricsPro account is ready",
                                  _invite_email_html(first, "login", f"{settings.APP_PUBLIC_URL}/portal",
-                                                    email, login.get("temp_password"), None))
+                                                    email, login.get("temp_password"), None),
+                                 org_id=org_id)
                 emailed = True
         except Exception:
             pass
@@ -2620,7 +2622,8 @@ async def _notify_mandatory_added(org_id, employee_id, missing_labels, state_und
     try:
         from app.modules.notify.channels.email_resend import send_email, is_configured
         if is_configured():
-            await send_email(email, "Action needed: a new onboarding document is required", html)
+            await send_email(email, "Action needed: a new onboarding document is required", html,
+                             org_id=org_id)
             return True
     except Exception:
         pass
@@ -2967,7 +2970,8 @@ async def _notify_return(org_id, employee_id, task, missing, reason):
     try:
         from app.modules.notify.channels.email_resend import send_email, is_configured
         if is_configured():
-            await send_email(email, f"Action needed: {task.get('label') or 'onboarding document'}", html)
+            await send_email(email, f"Action needed: {task.get('label') or 'onboarding document'}", html,
+                             org_id=org_id)
             return True
     except Exception:
         pass
@@ -3377,7 +3381,7 @@ async def onboarding_forward_accounting(employee_id: str, body: OnboardingForwar
     sent, errors = [], []
     for to in emails:
         try:
-            await send_email(to, subject, html)
+            await send_email(to, subject, html, org_id=org_id)
             sent.append(to)
         except Exception as e:
             errors.append({"to": to, "error": str(e)[:200]})

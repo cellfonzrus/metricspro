@@ -16,11 +16,21 @@ one existed; no code read `modules`, so POS visibility was enforced only client-
 Adding it server-side has to land together with seeding `pos` into MODULE_CATALOG and the roles
 UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
+from datetime import datetime as _datetime, timezone as _timezone
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.core.database import get_supabase
+from app.modules.pos import held_sale as _held
+from app.modules.pos import stock_landing as _stock
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def _utcnow() -> str:
+    """The server's own time, ISO-8601 UTC. The pure helpers take a clock as an argument so a
+    harness can pin it; this is the one place the real clock is read."""
+    return _datetime.now(_timezone.utc).isoformat()
 
 
 def _require_pos_access(authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -888,7 +898,10 @@ TAX_CODE_FIELDS = ("name", "rate", "store_code", "market", "is_active")
 RECEIPT_TEMPLATE_FIELDS = ("name", "header_text", "footer_text", "show_store_name",
                            "show_customer", "show_employee", "show_serials",
                            "show_tax_breakdown", "show_discounts", "paper_width_mm",
-                           "font_size_px")
+                           "font_size_px", "layout")
+#: The template fields migration 1089 adds. A PATCH that sets one before the migration is applied is
+#: reported as exactly that, never as a plain 400 — the admin screen then says what to run.
+RECEIPT_TEMPLATE_MIG_1089 = ("layout",)
 
 
 def _clean_customer(body: dict) -> dict:
@@ -1366,6 +1379,59 @@ def list_inventory_standard(store_code: str = "", authorization: str = Header(de
     return {"stock": rows}
 
 
+@router.post("/inventory/standard")
+def receive_inventory_standard(body: dict, authorization: str = Header(default=""),
+                               org_id: str = ORG_ID):
+    """Put standard (qty-tracked) stock on hand at ONE store — the single-row entry the register's
+    "create this product and we have n of them" flow needs, and the first such path to exist
+    (before it, qty on hand only arrived through the CSV count importer or an inter-store transfer).
+
+    Body: {product_id, store_code, qty, mode?: add|set, qty_on_order?, qty_reserved?, bin_location?}.
+    `mode` declares WHICH fact is being recorded — `add` (default) is a receipt and adds to what is
+    on hand, `set` is a physical count and replaces it. THE arithmetic lives in
+    `pos/stock_landing.plan`, never here, so the register and any later caller cannot drift apart.
+
+    Refuses a serialised product: a serial-tracked unit lands through POST /pos/inventory/serial,
+    behind the duplicate-IMEI landing guard (index §11b). Writing a qty for it would create stock
+    with no unit behind it."""
+    _require_pos_perm(authorization, org_id, "pos_inventory_adjust")
+    body = body or {}
+    pid = (body.get("product_id") or "").strip()
+    store = (body.get("store_code") or "").strip()
+    if not pid:
+        raise HTTPException(400, "product_id required")
+    keyset = _caller_store_keyset(authorization, org_id)
+    if store and not _span_filter([{"store_code": store}], keyset):
+        raise HTTPException(403, "that store is outside your reporting span")
+    client = sb()
+    prod = (client.schema("pos").table("products").select("id,short_name,inventory_type")
+            .eq("org_id", org_id).eq("id", pid).limit(1).execute().data) or []
+    if not prod:
+        raise HTTPException(404, "product not found")
+    if (prod[0].get("inventory_type") or "standard") == "serial":
+        raise HTTPException(400, "this is a serial-tracked product — receive each unit through "
+                                 "POST /pos/inventory/serial so the duplicate-IMEI guard applies")
+    rows = (client.schema("pos").table("inventory_standard").select("*")
+            .eq("org_id", org_id).eq("product_id", pid).eq("store_code", store)
+            .limit(5).execute().data) or []
+    try:
+        planned = _stock.plan(rows, pid, store, body.get("qty"),
+                              mode=body.get("mode") or _stock.MODE_ADD, extra=body)
+    except _stock.StockError as e:
+        raise HTTPException(400, str(e)) from None
+    if planned["action"] == _stock.ACTION_INSERT:
+        client.schema("pos").table("inventory_standard").insert(
+            {**planned["row"], "org_id": org_id}).execute()
+    elif planned["action"] == _stock.ACTION_UPDATE:
+        (client.schema("pos").table("inventory_standard").update(planned["row"])
+         .eq("org_id", org_id).eq("product_id", pid).eq("store_code", store).execute())
+    return {"stock": {"product_id": pid, "store_code": store,
+                      "qty_on_hand": planned["after"]},
+            "landing": {"action": planned["action"], "before": planned["before"],
+                        "after": planned["after"], "mode": planned["mode"]},
+            "message": _stock.sentence(planned, prod[0].get("short_name"))}
+
+
 # ── Tax codes ──────────────────────────────────────────────────────────────────────────────────────
 # rate is a PERCENT (8.875); the register converts to a fraction for sale_items.tax_rate.
 @router.get("/tax-codes")
@@ -1793,6 +1859,108 @@ def register_close(body: dict, authorization: str = Header(default=""), org_id: 
     return {"session": r.data}
 
 
+# ── The suspended sale: ONE held cart per register (mig 1088, index §POS-01) ──────────────────────
+# Owner 2026-10-16: "if a person leaves the cash register it gets blank if you come back it shoudl
+# automatically store for the next session in suspensed state". The cart is a property of the
+# TERMINAL, keyed on the same (org, store, register) triple as register_sessions above — so "the
+# next session" is literal. All three endpoints dereference pos/held_sale.py; none of them writes a
+# sale, burns a transaction number or moves stock.
+#
+# ADAPTIVE: before migration 1088 is applied the table is absent. Every one of these answers
+# `available: false` instead of erroring, and the register then behaves exactly as it did before the
+# feature existed (a cart lost on reload) rather than refusing to work.
+_HELD_TABLE = "held_sales"
+
+
+def _held_unavailable(exc):
+    return {"held": None, "available": False,
+            "setup_note": f"apply migration 1088 ({str(exc)[:120]})"}
+
+
+def _held_terminal(store_code, register_number, authorization, org_id):
+    try:
+        t = _held.terminal(store_code, register_number)
+    except _held.HeldSaleError as e:
+        raise HTTPException(400, str(e)) from None
+    if not _span_filter([{"store_code": t["store_code"]}],
+                        _caller_store_keyset(authorization, org_id)):
+        raise HTTPException(403, "that store is outside your reporting span")
+    return t
+
+
+@router.get("/held-sale")
+def get_held_sale(store_code: str, register_number: int = 1,
+                  authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The cart left on this register, or null. Restored VERBATIM — the prices are the ones that
+    were on the lines when it was suspended, and `held_at` says how old they are."""
+    t = _held_terminal(store_code, register_number, authorization, org_id)
+    try:
+        rows = (sb().schema("pos").table(_HELD_TABLE).select("*")
+                .eq("org_id", org_id).eq("store_code", t["store_code"])
+                .eq("register_number", t["register_number"]).limit(1).execute().data) or []
+    except Exception as e:
+        return _held_unavailable(e)
+    held = _held.restore(rows[0] if rows else None)
+    return {"held": held, "available": True, "message": _held.sentence(held)}
+
+
+@router.put("/held-sale")
+def put_held_sale(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Suspend (or re-suspend) this register's cart. Body: {store_code, register_number?, cart: [],
+    customer_id?, is_activation_sale?, note?}.
+
+    An EMPTY cart with nothing attached CLEARS the hold rather than storing a row — otherwise every
+    visit to an idle register would leave a suspended sale behind. `held_by` is the caller's own
+    employee id, never a body field (the same anti-spoofing stance as the drawer sessions)."""
+    body = body or {}
+    t = _held_terminal(body.get("store_code"), body.get("register_number"), authorization, org_id)
+    try:
+        cart = _held.clean_cart(body.get("cart"))
+        ctx = _held.clean_context(body)
+        if _held.is_empty(cart, ctx):
+            return _delete_held(t, org_id)
+        row = _held.hold_row(t["store_code"], t["register_number"], cart, body,
+                             held_by=(_caller_employee(authorization, org_id) or None),
+                             now=_utcnow())
+    except _held.HeldSaleError as e:
+        raise HTTPException(400, str(e)) from None
+    client = sb()
+    try:
+        existing = (client.schema("pos").table(_HELD_TABLE).select("id")
+                    .eq("org_id", org_id).eq("store_code", t["store_code"])
+                    .eq("register_number", t["register_number"]).limit(1).execute().data) or []
+        if existing:
+            # held_at is the moment the sale was FIRST suspended — an autosave keeps it, so the age
+            # shown to the next cashier is the age of the sale and not of the last keystroke.
+            (client.schema("pos").table(_HELD_TABLE)
+             .update({k: v for k, v in row.items() if k != "held_at"})
+             .eq("org_id", org_id).eq("id", existing[0]["id"]).execute())
+        else:
+            client.schema("pos").table(_HELD_TABLE).insert({**row, "org_id": org_id}).execute()
+    except Exception as e:
+        return _held_unavailable(e)
+    stored = _held.restore({**row, "held_at": row.get("held_at")})
+    return {"held": stored, "available": True, "message": _held.sentence(stored)}
+
+
+def _delete_held(t, org_id):
+    try:
+        (sb().schema("pos").table(_HELD_TABLE).delete()
+         .eq("org_id", org_id).eq("store_code", t["store_code"])
+         .eq("register_number", t["register_number"]).execute())
+    except Exception as e:
+        return _held_unavailable(e)
+    return {"held": None, "available": True, "message": "No suspended sale on this register."}
+
+
+@router.delete("/held-sale")
+def delete_held_sale(store_code: str, register_number: int = 1,
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Drop this register's suspended cart — the cashier discarded it, or the sale checked out."""
+    t = _held_terminal(store_code, register_number, authorization, org_id)
+    return _delete_held(t, org_id)
+
+
 # ── POS settings (config kv) ───────────────────────────────────────────────────────────────────────
 # Raw rows out; the frontend registry (lib/pos-config.ts) resolves store override → org default →
 # code default and renders the inheritance badges.
@@ -1848,15 +2016,43 @@ def delete_setting(key: str, store_code: str = "",
 # ── Receipt template ───────────────────────────────────────────────────────────────────────────────
 @router.get("/receipt-template")
 def get_receipt_template(org_id: str = ORG_ID):
-    """The org's default template, created on first read (parity with the standalone app's
-    per-org seeded row)."""
-    rows = (sb().schema("pos").table("receipt_templates").select("*")
+    """The org's default template, created on first read (parity with the standalone app's per-org
+    seeded row) — plus what the ADMIN screen needs to edit it honestly (§POS-02): the two layouts it
+    may choose with the tenant's own POS named in the second, a sentence when the stored choice is
+    not what will print, and the company name a receipt and its emailed copy come FROM.
+    """
+    client = sb()
+    rows = (client.schema("pos").table("receipt_templates").select("*")
             .eq("org_id", org_id).eq("is_default", True).limit(1).execute().data) or []
     if rows:
-        return {"template": rows[0]}
-    r = sb().schema("pos").table("receipt_templates").insert(
-        {"org_id": org_id, "name": "Default", "is_default": True}).execute()
-    return {"template": (r.data or [{}])[0]}
+        template = rows[0]
+    else:
+        r = client.schema("pos").table("receipt_templates").insert(
+            {"org_id": org_id, "name": "Default", "is_default": True}).execute()
+        template = (r.data or [{}])[0]
+    try:
+        from app.modules.pos import sales_from_reports as _sfr_local
+        decl = _sfr_local.resolve_format(client, org_id) or {}
+    except Exception:
+        decl = {}
+    fmt = (decl.get("format") or {}) if isinstance(decl.get("format"), dict) else {}
+    tenant_name = _tenant.display_name(client, org_id)
+    brand = _poscfg.brand(_pos_settings_rows(client, org_id), "")
+    stored_layout = template.get("layout")
+    return {
+        "template": template,
+        "layout_options": _sr.layout_options(fmt.get("label") or ""),
+        "layout": _sr.clean_layout(stored_layout, format_available=bool(fmt)),
+        "layout_note": _sr.layout_note(stored_layout, format_available=bool(fmt)),
+        "pos_format": {"declared": decl.get("pos"), "label": fmt.get("label"),
+                       "reason": decl.get("reason")},
+        # What a customer sees a receipt come from — shown on the screen so the admin can tell
+        # whether onboarding named the business, rather than discovering it from a sent email.
+        "from_name": _sr.company_name(brand, tenant_name),
+        "from_name_source": ("receipt branding" if (brand.get("company_name") or "").strip()
+                             else ("onboarding" if tenant_name else "not set")),
+        "layout_column_ready": "layout" in (template or {}),
+    }
 
 
 @router.patch("/receipt-template/{template_id}")
@@ -1868,12 +2064,250 @@ def update_receipt_template(template_id: str, body: dict,
         raise HTTPException(400, "nothing to update")
     if "footer_text" in upd and upd["footer_text"] is None:
         upd["footer_text"] = ""   # column is NOT NULL; a cleared footer means empty
+    if "layout" in upd:
+        # Only the two declared layouts are storable, so a typo cannot leave a tenant printing
+        # something nobody chose (§POS-02 — the renderer falls back loudly, not silently).
+        want = str(upd["layout"] or "").strip().lower() or _sr.LAYOUT_THERMAL
+        if want not in _sr.LAYOUTS:
+            raise HTTPException(400, f"'{upd['layout']}' is not a receipt layout "
+                                     f"(choose one of: {', '.join(_sr.LAYOUTS)})")
+        upd["layout"] = want
     upd["updated_at"] = "now()"
-    r = (sb().schema("pos").table("receipt_templates").update(upd)
-         .eq("org_id", org_id).eq("id", template_id).execute())
+    try:
+        r = (sb().schema("pos").table("receipt_templates").update(upd)
+             .eq("org_id", org_id).eq("id", template_id).execute())
+    except Exception as e:
+        # ADAPTIVE: everything but the layout choice works before migration 1089 is applied, and the
+        # screen is told exactly that instead of showing a failed save it cannot explain.
+        if any(f in upd for f in RECEIPT_TEMPLATE_MIG_1089):
+            raise HTTPException(400, "the receipt layout choice needs migration 1089 "
+                                     f"(1089_pos_receipt_layout.sql) applied first — {str(e)[:160]}")
+        raise HTTPException(400, f"could not save the template: {str(e)[:200]}")
     if not r.data:
         raise HTTPException(404, "not found")
     return {"template": r.data[0]}
+
+
+# ── THE RECEIPT OF A SALE: one home for print, reprint and email (index §POS-02) ──────────────────
+# Owner 2026-10-17: "admin should be able to edit the receipt, teh template for the receipt for vzone
+# ahoul be same as uplaoded from rq, the email option should show which email to send to and it should
+# be editable, the from email address should show the company name Vzone Wireless or whatever name is
+# set up during onboarding".
+#
+# The HTML is built by `pos/sale_receipt.py` (PURE) and nowhere else — the register prints what this
+# returns instead of assembling its own copy in the browser, which is what let an admin's template
+# edits apply to one receipt and not the other. The format path hands the same structured Document an
+# IMPORTED receipt of that POS is parsed into to the same renderer (`receipt_formats.render`), so a
+# tenant printing "in its POS's layout" prints the layout its own uploads are reprinted in.
+from app.modules.pos import sale_receipt as _sr
+from app.modules.pos import pos_config_effective as _poscfg
+from app.modules.core import tenant_identity as _tenant
+
+
+def _pos_settings_rows(client, org_id: str, store_code: str = ""):
+    """The POS config rows this org (and optionally this store) has — read ONCE per receipt and
+    resolved through `pos_config_effective`, which is the server's one home for the store-override →
+    org-default → declared-default rule the browser applies."""
+    try:
+        q = (client.schema("pos").table("pos_settings").select("store_code,key,value")
+             .eq("org_id", org_id))
+        if store_code:
+            q = q.or_(f"store_code.is.null,store_code.eq.{store_code}")
+        return q.limit(1000).execute().data or []
+    except Exception:
+        return []
+
+
+def _receipt_template_row(client, org_id: str) -> dict:
+    try:
+        rows = (client.schema("pos").table("receipt_templates").select("*")
+                .eq("org_id", org_id).eq("is_default", True).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    return rows[0] if rows else {}
+
+
+def _declared_receipt_format(client, org_id: str):
+    """The format module of the POS this tenant declared, or None — through the SAME resolver the
+    rebuilt receipts use (`sales_from_reports.resolve_format`), so "my POS's layout" cannot come to
+    mean two different POSs on one tenant."""
+    try:
+        from app.modules.pos import sales_from_reports as _sfr_local
+        res = _sfr_local.resolve_format(client, org_id)
+    except Exception:
+        return None
+    fmt = (res or {}).get("format") if isinstance(res, dict) else res
+    if isinstance(fmt, dict):
+        return fmt.get("module")
+    return getattr(fmt, "module", None) or fmt
+
+
+def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None) -> dict:
+    """Everything a receipt needs, read once: the template, the effective POS config, the store
+    block, the customer, the tenant's name and the declared format. One reader, so the printed copy
+    and the emailed copy can never be built from different inputs."""
+    store_code = (sale.get("store_code") or "").strip()
+    rows = _pos_settings_rows(client, org_id, store_code)
+    template_row = _receipt_template_row(client, org_id)
+    template = _sr.template_view(template_row)
+    brand = _poscfg.brand(rows, store_code)
+    tenant_name = _tenant.display_name(client, org_id)
+    customer = {}
+    if sale.get("customer_id"):
+        try:
+            crows = (client.schema("pos").table("customers")
+                     .select("id,first_name,last_name,company_name,email")
+                     .eq("org_id", org_id).eq("id", sale["customer_id"]).limit(1).execute().data) or []
+            customer = crows[0] if crows else {}
+        except Exception:
+            customer = {}
+    store_lines, store_name = [], store_code
+    try:
+        srows = (client.schema("storeops").table("stores").select("store_code,name,address,phone")
+                 .eq("org_id", org_id).eq("store_code", store_code).limit(1).execute().data) or []
+        if srows:
+            store_name = (srows[0].get("name") or store_code or "").strip() or store_code
+            store_lines = [x for x in (store_name, (srows[0].get("address") or "").strip(),
+                                       (srows[0].get("phone") or "").strip()) if x]
+    except Exception:
+        pass
+    fmt = _declared_receipt_format(client, org_id)
+    snap = _sr.snapshot_view(sale.get("receipt"), sale)
+    settings_text = {k: _poscfg.text(rows, k, store_code)
+                     for k in ("email_receipt_subject", "email_receipt_body")}
+    html = _sr.html(
+        snap, template,
+        render_document=_rrender.render_html, fmt=fmt,
+        brand=brand, disclaimer_blocks=_poscfg.disclaimers(rows, store_code),
+        store_name=store_name, store_lines=store_lines,
+        fold_discount=_poscfg.flag(rows, "receipt_coupon_in_retail_price", store_code),
+        tenant_name=tenant_name,
+        employee_name=(sale.get("employee_id") or "") if template["show_employee"] else "",
+        short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", store_code),
+    )
+    return {
+        "html": html,
+        "layout": _sr.clean_layout(template["layout"], format_available=bool(fmt)),
+        "layout_note": _sr.layout_note(template["layout"], format_available=bool(fmt)),
+        "email": _sr.email_view(snap, brand, template, settings_text, customer=customer,
+                                typed=typed_email, tenant_name=tenant_name),
+        "snapshot": snap,
+        "tenant_name": tenant_name,
+        "company_name": _sr.company_name(brand, tenant_name),
+    }
+
+
+def _load_sale(client, org_id: str, sale_id: str) -> dict:
+    rows = (client.schema("pos").table("sales").select("*")
+            .eq("org_id", org_id).eq("id", sale_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "sale not found")
+    return rows[0]
+
+
+#: The sale the admin screen previews a template against. Not a tenant's data and not a real sale —
+#: a fixed set of lines chosen to exercise every toggle the editor offers (a serialised device, a
+#: discounted accessory, tax, change), so what the admin sees is this renderer's own output and not a
+#: hand-drawn imitation of it. RULE TWO: no carrier, tenant or store name appears in it.
+PREVIEW_SNAPSHOT = {
+    "transactionId": 4821,
+    "date": "08/06/2026 2:41 PM",
+    "customerName": "John Smith",
+    "items": [
+        {"description": "Smartphone 128GB", "serial": "358291470012345", "qty": 1,
+         "unit_price": 999.00, "discount": 50.00, "line_total": 949.00},
+        {"description": "Clear case", "serial": "", "qty": 1,
+         "unit_price": 19.99, "discount": 0, "line_total": 19.99},
+    ],
+    "subtotal": 968.99, "discountTotal": 50.00, "taxTotal": 86.00, "total": 1054.99,
+    "method": "card", "tendered": 1054.99, "change": 0,
+}
+
+
+@router.post("/receipt-template/preview")
+def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
+    """What a receipt would look like with the template the admin is EDITING — rendered by the same
+    one home that prints the real thing (§POS-02), against a fixed sample sale.
+
+    The screen used to draw its own imitation of a till slip, with a store's name hard-coded into it;
+    an imitation cannot tell an admin whether their change worked. Nothing is written here.
+    """
+    body = body or {}
+    client = sb()
+    draft = dict(_receipt_template_row(client, org_id))
+    draft.update({k: v for k, v in (body.get("template") or {}).items()
+                  if k in RECEIPT_TEMPLATE_FIELDS})
+    template = _sr.template_view(draft)
+    rows = _pos_settings_rows(client, org_id)
+    brand = _poscfg.brand(rows, "")
+    tenant_name = _tenant.display_name(client, org_id)
+    fmt = _declared_receipt_format(client, org_id)
+    snap = _sr.snapshot_view(PREVIEW_SNAPSHOT)
+    html = _sr.html(
+        snap, template, render_document=_rrender.render_html, fmt=fmt, brand=brand,
+        disclaimer_blocks=_poscfg.disclaimers(rows, ""),
+        store_name="Your store", store_lines=["Your store", "1 Example Street"],
+        fold_discount=_poscfg.flag(rows, "receipt_coupon_in_retail_price", ""),
+        tenant_name=tenant_name,
+        employee_name="A. Rep" if template["show_employee"] else "",
+        short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", ""),
+    )
+    return {"html": html, "sample": True,
+            "layout": _sr.clean_layout(template["layout"], format_available=bool(fmt)),
+            "layout_note": _sr.layout_note(template["layout"], format_available=bool(fmt))}
+
+
+@router.get("/sales/{sale_id}/receipt")
+def sale_receipt(sale_id: str, org_id: str = ORG_ID):
+    """THE receipt of this sale as print-ready HTML, plus what the email screen must show: the
+    address it would go to, whether that address is usable, the name it will come from and the
+    subject. The register prints this; it builds no receipt of its own."""
+    client = sb()
+    sale = _load_sale(client, org_id, sale_id)
+    try:
+        bundle = _receipt_bundle(client, org_id, sale)
+    except _sr.ReceiptError as e:
+        raise HTTPException(400, str(e))
+    return {"receipt": {k: bundle[k] for k in ("html", "layout", "layout_note", "email",
+                                               "company_name")},
+            "sale_id": sale_id}
+
+
+@router.post("/sales/{sale_id}/email-receipt")
+async def email_sale_receipt(sale_id: str, body: dict = None,
+                             authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Email this sale's receipt. `to` is the address the cashier SAW and could edit; blank falls back
+    to the customer's own email, and neither is invented — a receipt with no address to send to is
+    refused and says so rather than disappearing.
+
+    The From line carries the tenant's own company name (the receipt-branding override, else the name
+    set up at onboarding), through the one home for it — never the platform's name on a store's mail.
+    """
+    body = body or {}
+    client = sb()
+    sale = _load_sale(client, org_id, sale_id)
+    try:
+        bundle = _receipt_bundle(client, org_id, sale, typed_email=body.get("to"))
+    except _sr.ReceiptError as e:
+        raise HTTPException(400, str(e))
+    view = bundle["email"]
+    if not view["to"]:
+        raise HTTPException(400, "no email address — type one, or add one to the customer's profile")
+    if not view["valid"]:
+        raise HTTPException(400, f"'{view['to']}' does not look like an email address")
+    from app.modules.notify.channels import email_resend as _mail
+    if not _mail.is_configured():
+        raise HTTPException(503, "emailing receipts isn't switched on for this platform yet "
+                                 "(no mail provider configured)")
+    html = _sr.body_html(view["body_declared"], bundle["company_name"]) + bundle["html"]
+    try:
+        mid = await _mail.send_email(view["to"], view["subject"], html, [],
+                                     from_name=bundle["company_name"] or None)
+    except Exception as e:
+        raise HTTPException(502, f"the mail provider refused it: {str(e)[:200]}")
+    return {"sent": True, "to": view["to"], "from_name": view["from_name"],
+            "subject": view["subject"], "provider_message_id": mid or None,
+            "message": f"Receipt emailed to {view['to']}."}
 
 
 @router.get("/register/drawer-cash")

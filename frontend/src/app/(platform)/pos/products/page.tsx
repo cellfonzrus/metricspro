@@ -3,7 +3,10 @@
 // data access rewired from direct Supabase to the FastAPI /pos router, mig 724).
 import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/client'
-import ProductFilters, { EMPTY_PRODUCT_FILTERS, ProductFilterValue, fetchManufacturers, hasProductFilters, productFilterParams } from '../product-filters'
+import ProductFilters, { EMPTY_PRODUCT_FILTERS, ProductFilterOptions, ProductFilterValue, fetchManufacturers, hasProductFilters, productFilterParams } from '../product-filters'
+// THE product form (../product-form) — the same fields, defaults and payload shape the register's
+// create-this-product modal renders, so the two screens cannot drift on what a product IS.
+import ProductFormFields, { EMPTY_PRODUCT_FORM, ProductFormValue, productFormFrom, productFormPayload, productFormReady } from '../product-form'
 
 interface Product {
   id: string; product_code: number; upc: string | null
@@ -21,17 +24,7 @@ interface Category { id: string; name: string; department_id: string | null }
 // and switch-off-able, never deletable) — a tenant selling tablets can now add "Tablet" instead of
 // dropping everything into the catch-all "Regular", which is where 96 of 118 products had landed.
 interface SysCat { id: string; name: string; sort_order: number; is_active: boolean; is_builtin: boolean }
-const BODY_STYLES = ['Not Set', 'Bar', 'Flip', 'Slider', 'Tablet']
-
-const emptyForm = {
-  upc: '', short_name: '', full_name: '', department_id: '', category_id: '',
-  system_category: 'Accessory', inventory_type: 'standard', manufacturer: '',
-  cost: 0, retail_price: 0, is_taxable: true, calculate_as_profit: true,
-  body_style: 'Not Set', is_active: true, end_of_life: false,
-}
-
 const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text)', width: '100%', outline: 'none' }
-const label: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', marginBottom: 3, display: 'block' }
 const cell: React.CSSProperties = { padding: '7px 12px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const panel: React.CSSProperties = { background: 'var(--surface2)', borderRadius: 8, padding: 14, border: '1px solid var(--border)' }
 
@@ -50,7 +43,7 @@ export default function PosProductsPage() {
   const [selected, setSelected] = useState<Product | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editMode, setEditMode] = useState(false)
-  const [formData, setFormData] = useState({ ...emptyForm })
+  const [formData, setFormData] = useState<ProductFormValue>({ ...EMPTY_PRODUCT_FORM })
   const [formTab, setFormTab] = useState<'Details' | 'Summary'>('Details')
   const [saving, setSaving] = useState(false)
   const [showDeptCat, setShowDeptCat] = useState(false)
@@ -60,10 +53,6 @@ export default function PosProductsPage() {
   const [deptCatBusy, setDeptCatBusy] = useState(false)
   const [sysCats, setSysCats] = useState<SysCat[]>([])
   const [newSysCatName, setNewSysCatName] = useState('')
-
-  const filteredCats = formData.department_id
-    ? categories.filter(c => c.department_id === formData.department_id)
-    : categories
 
   async function loadCatalog() {
     // The two reads are independent — kick both off together (parallel, not a waterfall). system-categories
@@ -81,9 +70,11 @@ export default function PosProductsPage() {
     } catch { setSysCats([]) }
   }
 
-  // The picker only ever offers ACTIVE ones; a switched-off category stays on its existing
-  // products (nothing is silently recategorised) but can't be chosen again.
-  const activeSysCats = sysCats.filter(s => s.is_active)
+  // The option lists the shared form and the shared filters both take. A switched-off system
+  // category stays on its existing products (nothing is silently recategorised); this page keeps it
+  // SELECTABLE (includeInactiveSystemCategories) so such a product can still be found and edited,
+  // while the register offers only active ones.
+  const formOptions: ProductFilterOptions = { departments, categories, systemCategories: sysCats, manufacturers }
 
   async function addSystemCategory() {
     if (!newSysCatName.trim()) return
@@ -139,7 +130,7 @@ export default function PosProductsPage() {
 
   async function saveProduct() {
     setSaving(true); setMsg('')
-    const payload = { ...formData, body_style: formData.body_style === 'Not Set' ? null : formData.body_style }
+    const payload = productFormPayload(formData)
     try {
       if (editMode && selected) await api(`/api/v1/pos/products/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       else await api('/api/v1/pos/products', { method: 'POST', body: JSON.stringify(payload) })
@@ -188,17 +179,10 @@ export default function PosProductsPage() {
     catch (err: any) { setMsg('Failed to rename: ' + (err?.message || err)) }
   }
 
-  function openNew() { setFormData({ ...emptyForm }); setFormTab('Details'); setEditMode(false); setShowForm(true) }
+  function openNew() { setFormData({ ...EMPTY_PRODUCT_FORM }); setFormTab('Details'); setEditMode(false); setShowForm(true) }
   function openEdit() {
     if (!selected) return
-    setFormData({
-      upc: selected.upc || '', short_name: selected.short_name || '', full_name: selected.full_name || '',
-      department_id: selected.department_id || '', category_id: selected.category_id || '',
-      system_category: selected.system_category || 'Accessory', inventory_type: selected.inventory_type || 'standard',
-      manufacturer: selected.manufacturer || '', cost: selected.cost || 0, retail_price: selected.retail_price || 0,
-      is_taxable: selected.is_taxable, calculate_as_profit: selected.calculate_as_profit,
-      body_style: selected.body_style || 'Not Set', is_active: selected.is_active, end_of_life: selected.end_of_life,
-    })
+    setFormData(productFormFrom(selected))
     setFormTab('Details'); setEditMode(true); setShowForm(true)
   }
 
@@ -307,98 +291,8 @@ export default function PosProductsPage() {
 
             <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>
               {formTab === 'Details' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div>
-                    <label style={label}>Short Name *</label>
-                    <input value={formData.short_name} onChange={e => setFormData(f => ({ ...f, short_name: e.target.value }))} style={input} placeholder="e.g. iPhone 15 Pro" />
-                  </div>
-                  <div>
-                    <label style={label}>Full Name</label>
-                    <input value={formData.full_name} onChange={e => setFormData(f => ({ ...f, full_name: e.target.value }))} style={input} placeholder="Full description" />
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div>
-                      <label style={label}>UPC / Barcode</label>
-                      <input value={formData.upc} onChange={e => setFormData(f => ({ ...f, upc: e.target.value }))} style={input} placeholder="Scan or type UPC" />
-                    </div>
-                    <div>
-                      <label style={label}>Manufacturer / Provider</label>
-                      <input value={formData.manufacturer} onChange={e => setFormData(f => ({ ...f, manufacturer: e.target.value }))} style={input} placeholder="e.g. Apple" />
-                    </div>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div>
-                      <label style={label}>Department</label>
-                      <select value={formData.department_id} onChange={e => setFormData(f => ({ ...f, department_id: e.target.value, category_id: '' }))} style={input}>
-                        <option value="">-- Select --</option>
-                        {departments.map(d => <option key={d.id} value={d.id}>{d.short_name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label style={label}>Category</label>
-                      <select value={formData.category_id} onChange={e => setFormData(f => ({ ...f, category_id: e.target.value }))} style={input}>
-                        <option value="">-- Select --</option>
-                        {filteredCats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-                    <div>
-                      <label style={label}>System Category</label>
-                      <select value={formData.system_category} onChange={e => setFormData(f => ({ ...f, system_category: e.target.value }))} style={input}>
-                        {activeSysCats.map(c => <option key={c.id}>{c.name}</option>)}
-                        {/* Keep an inactive value the product already carries selectable, or
-                            opening the form would silently re-stamp it to the first option. */}
-                        {formData.system_category && !activeSysCats.some(c => c.name === formData.system_category) && (
-                          <option key="current">{formData.system_category}</option>
-                        )}
-                      </select>
-                    </div>
-                    <div>
-                      <label style={label}>Inventory Type</label>
-                      <select value={formData.inventory_type} onChange={e => setFormData(f => ({ ...f, inventory_type: e.target.value }))} style={input}>
-                        <option value="standard">Standard (qty-based)</option>
-                        <option value="serial">Serial Tracked (IMEI)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label style={label}>Body Style</label>
-                      <select value={formData.body_style} onChange={e => setFormData(f => ({ ...f, body_style: e.target.value }))} style={input}>
-                        {BODY_STYLES.map(s => <option key={s}>{s}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  <div style={panel}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pricing</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                      <div>
-                        <label style={label}>Cost</label>
-                        <input type="number" step="0.01" value={formData.cost} onChange={e => setFormData(f => ({ ...f, cost: parseFloat(e.target.value) || 0 }))} style={input} />
-                      </div>
-                      <div>
-                        <label style={label}>Retail Price</label>
-                        <input type="number" step="0.01" value={formData.retail_price} onChange={e => setFormData(f => ({ ...f, retail_price: parseFloat(e.target.value) || 0 }))} style={input} />
-                      </div>
-                    </div>
-                    {formData.cost > 0 && formData.retail_price > 0 && (
-                      <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text2)' }}>
-                        Margin: ${(formData.retail_price - formData.cost).toFixed(2)} ({(((formData.retail_price - formData.cost) / formData.retail_price) * 100).toFixed(1)}%)
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={formData.is_taxable} onChange={e => setFormData(f => ({ ...f, is_taxable: e.target.checked }))} />
-                      Taxable
-                    </label>
-                    {([['Calculate as profit', 'calculate_as_profit'], ['Active', 'is_active'], ['End of life', 'end_of_life']] as const).map(([lbl, key]) => (
-                      <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                        <input type="checkbox" checked={(formData as any)[key]} onChange={e => setFormData(f => ({ ...f, [key]: e.target.checked }))} />
-                        {lbl}
-                      </label>
-                    ))}
-                  </div>
-                </div>
+                <ProductFormFields value={formData} onChange={setFormData} options={formOptions}
+                  includeInactiveSystemCategories />
               )}
 
               {formTab === 'Summary' && (
@@ -424,7 +318,7 @@ export default function PosProductsPage() {
 
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
-              <button className="btn btn-primary" disabled={saving || !formData.short_name} onClick={saveProduct}>
+              <button className="btn btn-primary" disabled={saving || !productFormReady(formData)} onClick={saveProduct}>
                 {saving ? 'Saving…' : 'Save & Close'}
               </button>
             </div>

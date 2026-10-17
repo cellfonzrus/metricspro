@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Header
 from app.core.config import settings
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
+from app.modules.core import tenant_identity  # one home for the tenant's name (§POS-02)
 
 router = APIRouter(prefix="/helpdesk", tags=["Helpdesk"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -803,7 +804,7 @@ async def _notify_new_ticket(org_id: str, ticket: dict, requester: str):
                 f"<p>{(ticket.get('description') or '')[:500]}</p>")
         for addr in emails:
             try:
-                await email_resend.send_email(addr, subject, html, [])
+                await email_resend.send_email(addr, subject, html, [], org_id=org_id)
             except Exception:
                 pass
     except Exception:
@@ -1020,7 +1021,7 @@ async def _notify_escalation(org_id: str, ticket: dict, actor: str):
                 f"<p>Track it in the support console.</p>")
         for addr in emails:
             try:
-                await email_resend.send_email(addr, subject, html, [])
+                await email_resend.send_email(addr, subject, html, [], org_id=org_id)
             except Exception:
                 pass
     except Exception:
@@ -1196,7 +1197,7 @@ async def _notify_ticket_reply(org_id, ticket_id):
         subject = f"[Support] Update on {num}: {t.get('subject')}"
         html = f"<p>Tech support replied to your ticket <b>{num}</b>. Open the helpdesk to view the reply.</p>"
         try:
-            await email_resend.send_email(addr, subject, html, [])
+            await email_resend.send_email(addr, subject, html, [], org_id=org_id)
         except Exception:
             pass
     except Exception:
@@ -1411,7 +1412,8 @@ def support_failures(authorization: str = Header(default=""), x_active_org: str 
                           for k in (set(kind_meta.keys()) | row_kinds)), key=lambda x: x["label"])
     modules_facet = sorted({(m.get("module") or "admin") for m in kind_meta.values()})
     try:
-        all_tenants = client.schema("storeops").table("tenants").select("org_id,name").execute().data or []
+        all_tenants = [{"org_id": o, "name": n}
+                       for o, n in tenant_identity.display_names(client).items()]
     except Exception:
         all_tenants = []
     return {"groups": groups, "rows": flat, "total": len(rows),

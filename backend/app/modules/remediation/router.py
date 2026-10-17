@@ -271,7 +271,8 @@ async def _send_approval(req, approval_url):
         try:
             from app.modules.notify.channels import email_resend
             if email_resend.is_configured():
-                await email_resend.send_email(email, subject, html)
+                await email_resend.send_email(email, subject, html,
+                                              org_id=(req or {}).get("org_id"))
                 channels.append("email"); email_status = "sent"
             else:
                 email_status = "email (Resend) not configured"

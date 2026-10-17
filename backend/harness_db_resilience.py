@@ -1204,7 +1204,29 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1790 + 1 = 1791, the figure this harness measured on this tree. So the pin
 # was re-taken on a counted, named addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1791"))
+# RE-PINNED 2026-10-16, 1791 -> 1795 (index §POS-01). Every record above stays. The delta is FOUR
+# routes and each is named: POST /pos/inventory/standard (put standard stock on hand at ONE store —
+# the first single-row write path pos.inventory_standard has ever had, gated `pos_inventory_adjust`,
+# org-scoped and store-span checked) and GET / PUT / DELETE /pos/held-sale (the register's suspended
+# cart — read, suspend, discard; mig 1088, and all three answer `available: false` rather than
+# erroring before it is applied). One writer is added to pos.inventory_standard and one to the new
+# pos.held_sales; no existing writer changed, no existing route moved, and no report, statement or
+# commission figure gains an input. Verified the same way as every pin above:
+# `git diff origin/main HEAD -- backend/ | grep -E '^\+@router\.'` = 4 and `'^-@router\.'` = 0 —
+# four added, NONE removed, 1791 + 4 = 1795, the figure this harness measured on this tree. So the
+# pin was re-taken on counted, named additions, never relaxed to make CI green.
+# RE-PINNED 2026-10-17, 1795 -> 1798 (index §POS-02). Every record above stays. The delta is THREE
+# routes and each is named: GET /pos/sales/{sale_id}/receipt (that sale's receipt rendered by the ONE
+# renderer, org-scoped, READ-ONLY), POST /pos/sales/{sale_id}/email-receipt (emails that same
+# rendering through the existing notify channel — it writes nothing but the customer's email address
+# when the cashier types one) and POST /pos/receipt-template/preview (the admin editor's live preview
+# of its UNSAVED form, READ-ONLY, over a sample sale). No existing writer changed, no existing route
+# moved, and no report, statement, GP, commission or tax figure gains an input — a receipt restates a
+# sale already rung. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 3 and `'^-.*@router\.'` = 0 —
+# three added, NONE removed, 1795 + 3 = 1798, the figure this harness measured on this tree. So the
+# pin was re-taken on counted, named additions, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1798"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

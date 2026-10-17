@@ -1,16 +1,22 @@
 'use client'
-// POS module — Phase 1: Receipt Template editor (ported from the standalone pos-system
-// app's app/settings/page.tsx receipt-templates section). MetricsPro keeps a single
-// org-default template (auto-created by GET /api/v1/pos/receipt-template), so the
-// per-carrier list and the sample-image upload (storage bucket not ported) are skipped.
-// The live thermal-style preview is ported as-is.
+// POS module — the admin's Receipt Template editor. MetricsPro keeps a single org-default template
+// (auto-created by GET /api/v1/pos/receipt-template), so the per-carrier list and the sample-image
+// upload are skipped.
+//
+// THE PREVIEW IS THE REAL RENDERER (§POS-02, owner 2026-10-17). It used to be a hand-drawn imitation
+// of a till slip in this file — with a store's name hard-coded into it — so an admin could not tell
+// from it whether a change had worked, and a tenant printing in its POS's own layout saw a preview of
+// something else entirely. It now POSTs the template being edited to /pos/receipt-template/preview
+// and shows what the ONE renderer returns for a sample sale.
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { friendlyError } from '@/components/pos/PosConfigSection'
+import { SetupNotice } from '@/lib/setupNotice'
 
 interface ReceiptTemplate {
   id: string
   name: string
+  layout?: string | null
   header_text: string | null
   footer_text: string | null
   show_store_name: boolean
@@ -23,8 +29,11 @@ interface ReceiptTemplate {
   font_size_px: number
 }
 
+interface LayoutOption { value: string; label: string }
+
 interface ReceiptForm {
   name: string
+  layout: string
   header_text: string
   footer_text: string
   show_store_name: boolean
@@ -40,6 +49,7 @@ interface ReceiptForm {
 function toForm(t: ReceiptTemplate): ReceiptForm {
   return {
     name: t.name || '',
+    layout: t.layout || 'thermal',
     header_text: t.header_text || '',
     footer_text: t.footer_text || '',
     show_store_name: t.show_store_name,
@@ -64,6 +74,15 @@ export default function ReceiptTemplateSection() {
   const [rtError, setRtError] = useState('')
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState('')
+  // What the server says about this org: the layouts it may choose (the second one naming its own
+  // POS), a sentence when the stored choice is not what will print, and the name a customer sees a
+  // receipt come FROM — so the admin can see onboarding named the business.
+  const [layoutOptions, setLayoutOptions] = useState<LayoutOption[]>([])
+  const [layoutNote, setLayoutNote] = useState('')
+  const [fromName, setFromName] = useState('')
+  const [fromNameSource, setFromNameSource] = useState('')
+  const [layoutReady, setLayoutReady] = useState(true)
+  const [previewHtml, setPreviewHtml] = useState('')
 
   useEffect(() => {
     (async () => {
@@ -72,6 +91,11 @@ export default function ReceiptTemplateSection() {
         const t = r.template as ReceiptTemplate
         setTemplate(t)
         setForm(toForm(t))
+        setLayoutOptions((r.layout_options || []) as LayoutOption[])
+        setLayoutNote(String(r.layout_note || ''))
+        setFromName(String(r.from_name || ''))
+        setFromNameSource(String(r.from_name_source || ''))
+        setLayoutReady(r.layout_column_ready !== false)
       } catch (err) {
         setRtError(friendlyError(err, 'Could not load the receipt template'))
       }
@@ -80,6 +104,35 @@ export default function ReceiptTemplateSection() {
   }, [])
 
   const dirty = !!template && !!form && JSON.stringify(form) !== JSON.stringify(toForm(template))
+
+  // The preview follows the draft, debounced so typing a footer is one render and not one per key.
+  useEffect(() => {
+    if (!form) return
+    const t = setTimeout(() => {
+      api('/api/v1/pos/receipt-template/preview', {
+        method: 'POST',
+        body: JSON.stringify({
+          template: {
+            name: form.name,
+            header_text: form.header_text,
+            footer_text: form.footer_text,
+            show_store_name: form.show_store_name,
+            show_customer: form.show_customer,
+            show_employee: form.show_employee,
+            show_serials: form.show_serials,
+            show_tax_breakdown: form.show_tax_breakdown,
+            show_discounts: form.show_discounts,
+            paper_width_mm: form.paper_width_mm,
+            font_size_px: form.font_size_px,
+            layout: form.layout,
+          },
+        }),
+      })
+        .then(r => { setPreviewHtml(String(r?.html || '')); setLayoutNote(String(r?.layout_note || '')) })
+        .catch(() => setPreviewHtml(''))
+    }, 400)
+    return () => clearTimeout(t)
+  }, [form])
 
   async function saveTemplate() {
     if (!template || !form) return
@@ -103,6 +156,9 @@ export default function ReceiptTemplateSection() {
         show_discounts: form.show_discounts,
         paper_width_mm: form.paper_width_mm === 58 ? 58 : 80,
         font_size_px: fontSize,
+        // Only sent when the column exists, so a tenant that has not applied migration 1089 can
+        // still save everything else rather than being blocked by a field it cannot store.
+        ...(layoutReady ? { layout: form.layout } : {}),
       }
       const r = await api(`/api/v1/pos/receipt-template/${template.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       const t = r.template as ReceiptTemplate
@@ -152,6 +208,31 @@ export default function ReceiptTemplateSection() {
               <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Default" style={{ ...input, width: '100%', boxSizing: 'border-box' }} />
             </div>
             <div style={{ marginBottom: 10 }}>
+              <label style={label}>Receipt layout</label>
+              <select value={form.layout} onChange={e => setForm({ ...form, layout: e.target.value })}
+                disabled={!layoutReady} style={{ ...input, width: '100%', boxSizing: 'border-box' }}>
+                {(layoutOptions.length ? layoutOptions : [{ value: 'thermal', label: 'Till slip (58 / 80 mm thermal)' }])
+                  .map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              {!layoutReady && (
+                // §19.36: the migration name is the PLATFORM's detail, so it rides the one sanctioned
+                // carrier (`detail=`) and a tenant reads the plain sentence instead.
+                <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4, lineHeight: 1.5 }}>
+                  <SetupNotice lead="The layout choice is not available yet; everything else on this form saves normally."
+                               detail="1089_pos_receipt_layout.sql" />
+                </div>
+              )}
+              {layoutNote && (
+                <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4, lineHeight: 1.5 }}>{layoutNote}</div>
+              )}
+            </div>
+            <div style={{ marginBottom: 10, fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+              Emailed receipts come from <strong style={{ color: 'var(--text)' }}>{fromName || 'the platform name'}</strong>
+              {fromNameSource === 'onboarding' && ' — the company name set up during onboarding.'}
+              {fromNameSource === 'receipt branding' && ' — the company name set in POS Configuration.'}
+              {fromNameSource === 'not set' && ' — no company name is set yet, so set one in POS Configuration above.'}
+            </div>
+            <div style={{ marginBottom: 10 }}>
               <label style={label}>Header Text (printed above the store name)</label>
               <textarea value={form.header_text} onChange={e => setForm({ ...form, header_text: e.target.value })} rows={3}
                 placeholder={'e.g. Authorized Verizon Retailer\nTCC'} style={{ ...input, width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
@@ -195,50 +276,30 @@ export default function ReceiptTemplateSection() {
             </div>
           </div>
 
-          {/* LIVE PREVIEW */}
+          {/* LIVE PREVIEW — the real renderer's output for a sample sale, not an imitation. */}
           <div style={{ flex: '0 0 auto' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6, textTransform: 'uppercase' }}>Live Preview ({form.paper_width_mm}mm)</div>
-            <div style={{
-              width: form.paper_width_mm === 58 ? 220 : 300,
-              background: '#fdfdf8', color: '#111', borderRadius: 4, padding: '12px 10px',
-              fontFamily: "'Courier New', monospace", fontSize: Math.min(16, Math.max(9, form.font_size_px || 11)),
-              lineHeight: 1.35, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-            }}>
-              {form.header_text.trim() && (
-                <div style={{ textAlign: 'center', whiteSpace: 'pre-wrap' }}>{form.header_text.trim()}</div>
-              )}
-              {form.show_store_name && (
-                <div style={{ textAlign: 'center', fontWeight: 700 }}>
-                  VERIZON @ 28TH ST TCC
-                  <div style={{ fontWeight: 400 }}>2814 28th St, Queens NY</div>
-                </div>
-              )}
-              <div style={{ borderTop: '1px dashed #555', margin: '6px 0' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>08/06/2026 2:41 PM</span><span>#4821</span></div>
-              {form.show_customer && <div>Customer: John Smith</div>}
-              {form.show_employee && <div>Rep: Sanjot S.</div>}
-              <div style={{ borderTop: '1px dashed #555', margin: '6px 0' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>iPhone 15 Pro 128GB</span><span>999.00</span></div>
-              {form.show_serials && <div style={{ paddingLeft: 8 }}>IMEI 358291470012345</div>}
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Clear Case</span><span>19.99</span></div>
-              {form.show_discounts && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Promo Discount</span><span>-50.00</span></div>
-              )}
-              <div style={{ borderTop: '1px dashed #555', margin: '6px 0' }} />
-              {form.show_tax_breakdown && (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Subtotal</span><span>{form.show_discounts ? '968.99' : '1018.99'}</span></div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Tax (8.875%)</span><span>{form.show_discounts ? '86.00' : '90.44'}</span></div>
-                </>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
-                <span>TOTAL</span><span>{form.show_discounts ? '1054.99' : '1109.43'}</span>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6, textTransform: 'uppercase' }}>
+              Live preview {form.layout === 'thermal' ? `(${form.paper_width_mm}mm)` : '(your POS\u2019s layout)'}
+            </div>
+            {previewHtml ? (
+              <iframe title="Receipt preview" srcDoc={previewHtml}
+                style={{
+                  width: form.layout === 'thermal' ? (form.paper_width_mm === 58 ? 236 : 316) : 640,
+                  height: form.layout === 'thermal' ? 520 : 700,
+                  background: '#fdfdf8', border: 'none', borderRadius: 4,
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                }} />
+            ) : (
+              <div style={{
+                width: form.paper_width_mm === 58 ? 236 : 316, height: 200, borderRadius: 4,
+                border: '1px dashed var(--border)', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', color: 'var(--text3)', fontSize: 12, textAlign: 'center', padding: 12,
+              }}>
+                The preview will appear here once the receipt renders.
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>VISA ****4242</span><span>{form.show_discounts ? '1054.99' : '1109.43'}</span></div>
-              <div style={{ borderTop: '1px dashed #555', margin: '6px 0' }} />
-              {form.footer_text.trim() && (
-                <div style={{ textAlign: 'center', whiteSpace: 'pre-wrap' }}>{form.footer_text.trim()}</div>
-              )}
+            )}
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, maxWidth: 316, lineHeight: 1.5 }}>
+              A sample sale, printed exactly as the register prints a real one.
             </div>
           </div>
 

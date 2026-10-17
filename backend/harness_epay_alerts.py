@@ -98,8 +98,9 @@ class StoreopsFake:
 
 
 SENT = []
-async def _fake_send(to, subject, html, attachments=None):
-    SENT.append({"to": to, "subject": subject})
+async def _fake_send(to, subject, html, attachments=None, from_name=None, org_id=None):
+    # from_name / org_id mirror the real channel (§POS-02): the alert is the TENANT's own mail.
+    SENT.append({"to": to, "subject": subject, "from_name": from_name, "org_id": org_id})
     return "fake-id"
 
 
