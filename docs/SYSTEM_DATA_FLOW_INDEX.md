@@ -131,6 +131,7 @@ Primary code homes:
 | COMMCALC-14 | **A cheap answer is never held hostage by an expensive decoration** | "The takeover list takes a minute and reads as empty while it does. What is it waiting for, where should a count of rows be computed, and what should a cell say about a figure nobody has counted yet?" |
 | COMMCALC-16 | **A figure the portal did not send is not a zero** | "The carrier portal's numbers and ours disagree — our stores show 0 activations beside a 66.67% attach rate. Which carrier field feeds which column, what happens when the portal renames one, and how does the platform say so instead of writing the absence down as a measurement?" |
 | COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
+| COMMCALC-18 | **An accessory line and a rent line both move in dollars** | "Add accessory sales to the Sales Comparison so it compares month over month, and add expenses." Accessory dollars were already tallied — the table had no change column for a metric measured in money, only for units. And what did each store SPEND in those two months, read from the same sheet the P&L books, without an expense ever being added into the revenue beside it? |
 
 ---
 
@@ -25411,6 +25412,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-15 | commcalc |
 | COMMCALC-16 | commcalc |
 | COMMCALC-17 | commcalc |
+| COMMCALC-18 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
