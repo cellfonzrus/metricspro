@@ -416,6 +416,9 @@ on:
       - "database/migrations/1018_pos_inventory_integrity.sql"
       - "backend/harness_ma_income_one_home_guard.py"
       - "backend/harness_month_leg_resolution.py"
+      - "backend/harness_ma_store_pnl.py"
+      - "backend/harness_ma_tx_pnl.py"
+      - "backend/harness_ma_tx_multimonth.py"
       - "backend/harness_ma_month_columns.py"
       - "backend/harness_mi_residual_store_grain.py"
       - "backend/app/modules/account/coa.py"
@@ -1040,6 +1043,20 @@ jobs:
       - name: Run the month-of-life column proof (data-driven rungs; August 2026 split pinned)
         working-directory: backend
         run: python3 harness_ma_month_columns.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §4a / §4a.1 / §309 — the three MA booking/config PROOFS that sat RED for days because
+      # no workflow ran them: the whole-dict config pins broke when the readers started REPORTING
+      # what a row was missing, and the multi-month proof died on import against a function that had
+      # moved to its one home. A pin nobody runs is not a pin — that is the whole reason this class
+      # of red can live in the tree, so the repair is wired in rather than merely made green once.
+      - name: Run the MA store-P&L booking proof (store attribution · month spiffs · MDF · the adaptive config read)
+        working-directory: backend
+        run: python3 harness_ma_store_pnl.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the MA daily-tx P&L proof (the residual union, the discount line, the adaptive mig-309 config)
+        working-directory: backend
+        run: python3 harness_ma_tx_pnl.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the MA-TX multi-month proof (the two-hop join; the month-of-life question asked of its one home)
+        working-directory: backend
+        run: python3 harness_ma_tx_multimonth.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
       # index §7b — the raw_mi residual's STORE GRAIN (owner 2026-10-01). Proves the re-grain conserves
       # the money to the cent against the REAL engine._assemble, reproduces the reported $0-per-store
       # defect as a regression, and FAILS THE BUILD if coa stops dereferencing the one door→store home

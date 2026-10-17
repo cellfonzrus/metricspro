@@ -1488,7 +1488,26 @@ complete columns for every changed reader; §D the router readers, one accessory
 credential projections). **Lock** `harness_any_columns_lock.py` (CI, `carrier-vocab-guard.yml`): no ladder
 anywhere under `backend/app` (AST: for-ladder / try-fallback / tier table), the P&L reader on the rule and
 the panel's reader dereferencing it, one home for the three functions, every named reader on it, the two
-credential rows projected, registered — 10 negative controls. Re-baselined, named: `harness_device_purchases`
+credential rows projected, registered — 10 negative controls.
+
+**WHAT THE READ FOUND ABSENT IS A REPORT, NOT A SWITCH (2026-10-16).** Every reader on this rule returns
+its switches PLUS `config_columns_missing` / `config_migrations_missing`. Four callers wrote that
+distinction for themselves, three of them as whole-dict equality pins (`load_config(stub) ==
+default_config()`), which were TRUE before the readers began reporting and silently false after — and
+because no workflow ran them, they sat red: `harness_ma_store_pnl.py` (2), `harness_ma_tx_pnl.py` (5).
+**ONE home:** `core/column_tolerant.ABSENCE_KEYS` / `switches(cfg)` / `absence_report(cfg)`; every pin
+compares `switches(...)` and asserts the absence separately. **Locked** by rule **(h)** of
+`harness_any_columns_lock.py` — the key pair spelled anywhere else under `backend/app` OR in a backend
+harness fails the build (3 negative controls; the lock excuses only itself, by name). The three repaired
+proofs are now RUN in `carrier-vocab-guard.yml` and left `harness_unrun_pending.txt`, because a pin nobody
+runs is how this class survives. Same family, fixed with them: the shared P&L fixture row now DERIVES its
+column completeness from `PL_CONFIG_COLUMNS` + `MA_PNL_CONFIG_COLUMNS` (a hand-written copy went stale when
+migs 1033/1086 added columns — 10 reds in `harness_any_columns.py`), `harness_ma_tx_multimonth.py` asks
+`commission_ledger.month_leg_of` instead of the moved token parser it died importing (§COMMCALC-15.2), and
+`coa.is_side_entry` / `statement_lines` name the convention that a `_`-prefixed `build_inputs` entry is
+EVIDENCE and not a P&L line (`harness_pl_commission_source.py` died with a `KeyError: 'detail'` walking it).
+
+Re-baselined, named: `harness_device_purchases`
 (B2b `wages_by_store`, B3 `billpay_pl.py` / `residual_subs.py`), `harness_finance_sync_in_async` (coa
 `wages_by_store`), `harness_device_margin_block` (pins `PL_CONFIG_COLUMNS` instead of the ladder).
 

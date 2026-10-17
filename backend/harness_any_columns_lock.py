@@ -254,6 +254,39 @@ def rule_registered(files):
     return a and b, f"index={a} ci={b}"
 
 
+# ── (h) THE ABSENCE REPORT HAS ONE HOME ─────────────────────────────────────────────────────────
+# Every reader on the rule returns its switches PLUS what the READ found absent. Those two keys are a
+# report, not switches, so a caller comparing a loaded config to its defaults must set them aside —
+# and FOUR callers wrote that strip list by hand, three of them as whole-dict equality pins that
+# simply went red when the readers started reporting (`harness_ma_store_pnl.py` 2,
+# `harness_ma_tx_pnl.py` 5). `core.column_tolerant.ABSENCE_KEYS` / `switches` / `absence_report` is
+# the home. A second copy of the pair — anywhere under backend/app OR in a harness at the backend
+# root, since the harnesses are where the copies were — fails the build here.
+ABSENCE_HOME = "core/column_tolerant.py"
+ABSENCE_PAIR = re.compile(
+    r"""["']config_columns_missing["']\s*,\s*["']config_migrations_missing["']"""
+    r"""|["']config_migrations_missing["']\s*,\s*["']config_columns_missing["']""")
+
+
+def rule_absence_one_home(be, harnesses):
+    """(h) the two absence-report key names are spelled as a PAIR in exactly one place."""
+    bad = []
+    # THIS FILE is excused by name: its negative controls below must spell the pair in order to
+    # prove the gate bites. Nothing else is excused.
+    for label, srcs, home in (("backend/app", be, ABSENCE_HOME),
+                              ("backend harness", harnesses, os.path.basename(__file__))):
+        for rel, src in sorted(srcs.items()):
+            if home and rel == home:
+                continue
+            for i, line in enumerate(src.splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                if ABSENCE_PAIR.search(line):
+                    bad.append("%s %s:%d spells the absence-report pair itself — ask "
+                               "column_tolerant.switches / absence_report" % (label, rel, i))
+    return (not bad), "; ".join(bad[:6])
+
+
 def main():
     print("ANY-SUBSET COLUMN READS — THE LOCK")
     print("=" * 78)
@@ -266,6 +299,12 @@ def main():
     ok, d = rule_readers(be);      check("(d) every named reader dereferences the rule or reads the row whole", ok, d)
     ok, d = rule_projected(be);    check("(e) the two credential-holding rows are projected, never returned whole", ok, d)
     ok, d = rule_registered(files); check("(f) registered: the index names §4b.1 and this lock; CI runs it", ok, d)
+    hn = {os.path.basename(p): read(p)
+          for p in walk(os.path.join(ROOT, "backend"), (".py",))
+          if os.path.basename(p).startswith("harness_")}
+    ok, d = rule_absence_one_home(be, hn)
+    check("(h) the absence report (config_columns_missing / config_migrations_missing) is spelled as "
+          "a pair in ONE home; every caller asks column_tolerant.switches / absence_report", ok, d)
 
     print("\n(g) NEGATIVE CONTROLS — each rule must go RED on a broken source")
     b2 = dict(be); b2["modules/x/ladder.py"] = (
@@ -298,6 +337,18 @@ def main():
     b2 = dict(be); b2[ROUTER] = be[ROUTER].replace("return {k: row[k] for k in _CONNECTOR_STATUS_COLS if k in row}", "return row")
     check("g9 _connector_status returning the whole sweep-config row (credentials and all) → (e) RED", not rule_projected(b2)[0])
     check("g10 the lock missing from CI → (f) RED", not rule_registered({**files, "ci": ""})[0])
+    b2 = dict(be); b2["modules/x/strip.py"] = (
+        'def strip(cfg):\n    return {k: v for k, v in cfg.items() '
+        'if k not in ("config_columns_missing", "config_migrations_missing")}\n')
+    check("g11 a second copy of the absence-report pair under backend/app → (h) RED",
+          not rule_absence_one_home(b2, {})[0])
+    check("g12 …and in a harness, which is where the copies actually were → (h) RED",
+          not rule_absence_one_home(be, {"harness_x.py":
+                                         'D = ("config_migrations_missing", "config_columns_missing")\n'})[0])
+    check("g13 a caller that mentions ONE of the two keys (an assertion on what was reported) → "
+          "(h) stays GREEN",
+          rule_absence_one_home(be, {"harness_y.py":
+                                     'assert cfg["config_columns_missing"] == []\n'})[0])
 
     print("\n" + "=" * 78)
     failed = [r for r in RESULTS if not r[0]]

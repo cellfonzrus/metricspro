@@ -49,6 +49,7 @@ from app.modules.account import coa                                   # noqa: E4
 from app.modules.account import engine as _engine                     # noqa: E402
 from app.modules.account import ledger_pnl as LP                      # noqa: E402
 from app.modules.account import ma_store_pnl as msp                   # noqa: E402
+from app.modules.account import residual_subs as RS                   # noqa: E402
 from app.modules.commcalc import commission_ledger as CL              # noqa: E402
 from app.modules.commcalc import landing_identity as LI               # noqa: E402
 from app.modules.commcalc import column_mapping as CM                 # noqa: E402
@@ -194,11 +195,24 @@ P = "July 2026"
 STORE_A, STORE_B = "100 Main St", "200 Oak Ave"
 ACC_A, ACC_B = "170084", "168876"
 
-FEED_CFG = {"org_id": ORG, "pl_ma_store_attribution": True, "pl_ma_month_spiff_source": "daily_tx",
-            "pl_ma_spiff_order_types": ["PostPaid Additional Spiff"], "pl_mdf_product_tokens": ["premium store spiff"],
-            "pl_line_labels": {"mi_income": "Residual"}, "pl_rebate_presentation": "contra_cogs",
-            "pl_device_margin_presentation": "off", "pl_commission_source": "feeds",
-            "pl_merchant_discount_own_line": True, "pl_ma_residual_order_types": ["Postpaid Residual Order"]}
+# THE LIVE ROW, and "complete" is DERIVED, never counted by hand. The switches this fixture cares
+# about are spelled out; every OTHER column the two loaders name is present and NULL, because
+# "which columns does this table have" is the loaders' own fact (`ma_store_pnl.PL_CONFIG_COLUMNS` +
+# `residual_subs.MA_PNL_CONFIG_COLUMNS`) and a hand-written copy of it goes stale the day a column
+# is added — which is exactly what happened: migs 1033 and 1086 landed and ten checks in
+# `harness_any_columns.py` went red reporting those columns as "missing" from a row that was only
+# missing them because this literal had not been updated. A NULL column is PRESENT (the reader
+# takes what is there and keeps its default for a null), so a new column needs no edit here and
+# cannot silently read as an absent one.
+_FEED_CFG_DECLARED = {
+    "org_id": ORG, "pl_ma_store_attribution": True, "pl_ma_month_spiff_source": "daily_tx",
+    "pl_ma_spiff_order_types": ["PostPaid Additional Spiff"], "pl_mdf_product_tokens": ["premium store spiff"],
+    "pl_line_labels": {"mi_income": "Residual"}, "pl_rebate_presentation": "contra_cogs",
+    "pl_device_margin_presentation": "off", "pl_commission_source": "feeds",
+    "pl_merchant_discount_own_line": True, "pl_ma_residual_order_types": ["Postpaid Residual Order"]}
+_FEED_CFG_COLUMNS = tuple(c for c, _m in (tuple(msp.PL_CONFIG_COLUMNS)
+                                          + tuple(RS.MA_PNL_CONFIG_COLUMNS)))
+FEED_CFG = dict({c: None for c in _FEED_CFG_COLUMNS}, **_FEED_CFG_DECLARED)
 
 COMM_ROWS = [
     {"org_id": ORG, "period": P, "merchant_account_id": ACC_A, "spiff_m1": -200.0, "spiff_m2": -50.0, "rebate": -1000.0,
@@ -296,8 +310,15 @@ def tables(cfg_overrides=None, ledger=True, raw_mi=False, ma=True):
 
 
 def lines_of(L):
-    """{line: (by_store, company_wide, detail)} — the money shape of coa's output, no meta keys."""
-    return {k: (dict(v["by_store"]), money(v["company_wide"]), dict(v["detail"])) for k, v in L.items()}
+    """{line: (by_store, company_wide, detail)} — the money shape of coa's output, LINES only.
+
+    "no meta keys" used to be a claim in this docstring and nothing in the code: this walked every
+    entry, so it died with a KeyError the day `build_inputs` grew its first `_`-prefixed SIDE ENTRY
+    (`_carrier_class_coverage`, owner 2026-10-08) — a pin that cannot run is a pin nobody is
+    checking. `coa.statement_lines` is the one home for "which entries are lines".
+    """
+    return {k: (dict(v["by_store"]), money(v["company_wide"]), dict(v["detail"]))
+            for k, v in coa.statement_lines(L).items()}
 
 
 def total(L, key):
@@ -348,7 +369,8 @@ def run():
     L_feeds_noledger = coa.build_inputs(Client(tables(ledger=False)), ORG, P)
     orc = oracle_feeds()
     check("A1 pre-1013 database (no column, no ledger table) == explicit 'feeds' with ledger lines present — every line's by_store / company_wide / detail",
-          lines_of(L_pre) == lines_of(L_feeds), [k for k in L_pre if lines_of(L_pre)[k] != lines_of(L_feeds)[k]])
+          lines_of(L_pre) == lines_of(L_feeds),
+          [k for k in lines_of(L_pre) if lines_of(L_pre)[k] != lines_of(L_feeds).get(k)])
     check("A2 … == 'feeds' with an empty ledger", lines_of(L_feeds) == lines_of(L_feeds_noledger))
     bad = [k for k, v in orc.items() if not same(total(L_feeds, k), v)]
     check("A3 every feed shape lands exactly as the pure booking functions say (MA sheet, MA daily-tx month spiff/residual/MDF/merchant discount, comp report, activation report, rebate contra-COGS)",

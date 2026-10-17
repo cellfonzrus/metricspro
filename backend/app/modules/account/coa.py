@@ -1169,6 +1169,27 @@ def _lcov_mod():
 
 
 # ── per-line aggregation: each store-keyed line → {store_address: amount}; company-wide → scalar
+# ── A SIDE ENTRY IS NOT A P&L LINE (the convention, named once) ──────────────────────────────────
+# `build_inputs` returns the statement's LINES plus a few `_`-prefixed SIDE ENTRIES carrying the
+# evidence a classified figure rests on (`_carrier_class_coverage`, `_distributor_reimb_claim`).
+# `engine._assemble` never trips over them because it builds the statement from `PL_SPEC`, but every
+# OTHER reader that walks the mapping has to know the convention — and one that assumed every entry
+# was a line (a proof harness reading `v["detail"]`) died the day the first side entry shipped.
+# So the convention gets a name and a predicate; callers ask instead of spelling a `_` test.
+SIDE_ENTRY_PREFIX = "_"
+
+
+def is_side_entry(key):
+    """PURE: is this `build_inputs` key a SIDE ENTRY (evidence) rather than a P&L line?"""
+    return str(key or "").startswith(SIDE_ENTRY_PREFIX)
+
+
+def statement_lines(inputs):
+    """PURE: `{line_key: cell}` for the P&L LINES only — side entries left out. The one way to walk
+    `build_inputs`' output as lines."""
+    return {k: v for k, v in (inputs or {}).items() if not is_side_entry(k)}
+
+
 def build_inputs(client, org_id, period):
     """Aggregate every chart-of-accounts line for `period`. Returns a dict:
        { line_key: {"by_store": {store: amt}, "company_wide": amt, "detail": {label: amt}} }
@@ -2352,7 +2373,7 @@ def build_inputs(client, org_id, period):
     except Exception as e:
         _warn("bill-pay pass-through carve-out skipped", e)
 
-    # ── THE CARRIER-DOLLAR SIDE ENTRIES (owner 2026-10-08) ───────────────────────────────────────
+    # ── THE CARRIER-DOLLAR SIDE ENTRIES (owner 2026-10-08) — see `is_side_entry` ─────────────────
     # Neither of these is a P&L line: `engine._assemble` builds the statement from PL_SPEC, so a
     # `_`-prefixed entry rides alongside as evidence. They exist because a classified figure must be
     # able to say what it rests on, and a de-recognised claim must stay VISIBLE.

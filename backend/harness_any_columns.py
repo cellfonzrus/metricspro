@@ -87,7 +87,9 @@ def old_ladder_source(client, org_id):
 
 
 def strip_new(cfg):
-    return {k: v for k, v in cfg.items() if k not in ("config_columns_missing", "config_migrations_missing")}
+    """A config's DECISIONS, without the read's absence report — the ONE home for that distinction
+    (`core.column_tolerant.switches`), not a second copy of the two key names here."""
+    return ct.switches(cfg)
 
 
 def run():
@@ -199,11 +201,18 @@ def run():
     # ── §C BYTE-IDENTICAL under complete columns ───────────────────────────────────────────────
     print("\n§C byte-identical when every column exists — every reader that changed")
     cfg = msp.load_config(Client(tables()), ORG)
-    check("C1 load_config on the complete row: exactly the values the row carries, nothing missing",
-          strip_new(cfg) == {"store_attribution": True, "month_spiff_source": "daily_tx",
-                             "spiff_order_types": ["PostPaid Additional Spiff"], "mdf_product_tokens": ["premium store spiff"],
-                             "line_labels": {"mi_income": "Residual"}, "rebate_presentation": "contra_cogs",
-                             "device_margin_presentation": "off", "commission_source": "feeds"}
+    # EXPECTED = the house defaults with the fixture row's OWN declarations on top. Not a literal
+    # dict of every switch: that was a second copy of "which switches exist", and it went red the
+    # day a new switch was added (migs 1033 / 1086) even though nothing about the READ had changed.
+    # A switch the fixture does not declare must read its house default — which is the claim.
+    DECLARED = {"store_attribution": True, "month_spiff_source": "daily_tx",
+                "spiff_order_types": ["PostPaid Additional Spiff"],
+                "mdf_product_tokens": ["premium store spiff"],
+                "line_labels": {"mi_income": "Residual"}, "rebate_presentation": "contra_cogs",
+                "device_margin_presentation": "off", "commission_source": "feeds"}
+    check("C1 load_config on the complete row: exactly the values the row carries, the house answer "
+          "for every switch it does not declare, nothing missing",
+          strip_new(cfg) == strip_new(dict(msp.default_config(), **DECLARED))
           and cfg["config_columns_missing"] == [] and cfg["config_migrations_missing"] == [], cfg)
     check("C2 the P&L books exactly the figures harness_pl_commission_source pins: feeds 730.00 / ledger 2,130.00 on carrier_comm",
           same(total(coa.build_inputs(Client(tables()), ORG, P), "carrier_comm"), 730.0)

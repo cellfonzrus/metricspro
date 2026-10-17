@@ -173,9 +173,6 @@ harness_ma_handset_cogs.py
 harness_ma_income_heads.py
 harness_ma_recon.py
 harness_ma_slice_replace.py
-harness_ma_store_pnl.py
-harness_ma_tx_multimonth.py
-harness_ma_tx_pnl.py
 harness_management_incentive.py
 harness_management_incentive_chicago.py
 harness_market_enumeration_guard.py

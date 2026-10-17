@@ -248,15 +248,29 @@ class _Stub:
         return SimpleNamespace(data=self._rows)
 
 
+# A LOADED CONFIG IS COMPARED BY ITS DECISIONS. The two `config_*_missing` keys are a report about
+# the READ, not switches (`core.column_tolerant.switches` / `absence_report` — the one home for that
+# distinction), so a whole-dict equality here asserted something the reader never promised: it broke
+# the day the readers started reporting absence, and these two pins went red for a reason that has
+# nothing to do with the money they guard.
+from app.core import column_tolerant as _ct                                      # noqa: E402
+
+_pre314 = msp.load_config(_Stub(raise_=True), "org")
 check("pre-314 (missing columns) -> defaults",
-      msp.load_config(_Stub(raise_=True), "org") == msp.default_config())
-check("no row -> defaults", msp.load_config(_Stub(rows=[]), "org") == msp.default_config())
+      _ct.switches(_pre314) == _ct.switches(msp.default_config()))
+check("pre-314 … and the absence is REPORTED, with every mig-314+ column named",
+      _pre314["config_columns_missing"] == [c for c, _m in msp.PL_CONFIG_COLUMNS]
+      and _pre314["config_migrations_missing"]
+      == msp.config_migrations_missing(_pre314["config_columns_missing"]))
+_norow = msp.load_config(_Stub(rows=[]), "org")
+check("no row -> defaults", _ct.switches(_norow) == _ct.switches(msp.default_config()))
 bad = msp.load_config(_Stub(rows=[{"pl_ma_store_attribution": "yes",
                                    "pl_ma_month_spiff_source": "weird",
                                    "pl_ma_spiff_order_types": "not-a-list",
                                    "pl_mdf_product_tokens": 7,
                                    "pl_line_labels": ["not", "a", "dict"]}]), "org")
-check("malformed values keep the defaults", bad == msp.default_config())
+check("malformed values keep the defaults",
+      _ct.switches(bad) == _ct.switches(msp.default_config()))
 good = msp.load_config(_Stub(rows=[{"pl_ma_store_attribution": True,
                                     "pl_ma_month_spiff_source": "daily_tx",
                                     "pl_ma_spiff_order_types": [" PostPaid Additional Spiff "],
