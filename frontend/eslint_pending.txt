@@ -303,7 +303,7 @@
 13	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/inventory/page.tsx
 18	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/onboarding/page.tsx
 3	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/onboarding/plan-sources-logic.ts
-11	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/products/page.tsx
+10	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/products/page.tsx
 10	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/reports/page.tsx
 10	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/sales/page.tsx
 2	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/settings/page.tsx
@@ -576,7 +576,6 @@
 1	react-hooks/immutability	src/app/(platform)/crm/lookup/page.tsx
 1	react-hooks/immutability	src/app/(platform)/hr/letters/send/page.tsx
 2	react-hooks/immutability	src/app/(platform)/pos/receipts/page.tsx
-1	react-hooks/immutability	src/app/(platform)/pos/sales/page.tsx
 1	react-hooks/immutability	src/app/(platform)/vision/page.tsx
 1	react-hooks/incompatible-library	src/components/DataGrid.tsx
 2	react-hooks/preserve-manual-memoization	src/app/(platform)/accounts/liabilities-due/page.tsx

@@ -400,6 +400,14 @@ on:
       - "backend/app/modules/pos/catalog_suggest.py"
       - "backend/harness_pos_product_filters.py"
       - "backend/harness_pos_product_filters_lock.py"
+      - "backend/app/modules/pos/held_sale.py"
+      - "backend/app/modules/pos/stock_landing.py"
+      - "backend/harness_pos_held_sale.py"
+      - "backend/harness_pos_stock_landing.py"
+      - "backend/harness_pos_product_form_lock.py"
+      - "frontend/src/app/(platform)/pos/product-form.tsx"
+      - "frontend/src/lib/pos-held-sale.ts"
+      - "database/migrations/1088_pos_held_sale.sql"
       - "backend/app/modules/pos/router.py"
       - "backend/app/modules/pos/vendor_rebate_report.py"
       - "backend/app/modules/crm/router.py"
@@ -1088,6 +1096,15 @@ jobs:
       - name: Run the POS product-filters lock (one filter helper behind GET /pos/products; one filter component on both POS product screens; one spelling of the params — index §33)
         working-directory: backend
         run: python3 harness_pos_product_filters_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the POS product-form lock (one product form on both POS screens; one payload rule; the not-found prompt lands in one place; opening stock through the inventory endpoints; one suspended-cart client — index §POS-01)
+        working-directory: backend
+        run: python3 harness_pos_product_form_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the POS standard-stock landing proof (one home for a single-row receipt; the receipt/count distinction declared not guessed; the in-database and CSV siblings pinned — index §POS-01)
+        working-directory: backend
+        run: python3 harness_pos_stock_landing.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the suspended-sale proof (one held cart per register on the register_sessions triple; stored and restored verbatim with its age; not a sale; adaptive before mig 1088 — index §POS-01)
+        working-directory: backend
+        run: python3 harness_pos_held_sale.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the ledger statement-identity lock (one identity derivation, one period home, one lander; every ledger read on the family; N landings refused — index §30.15)
         working-directory: backend
         run: python3 harness_ledger_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

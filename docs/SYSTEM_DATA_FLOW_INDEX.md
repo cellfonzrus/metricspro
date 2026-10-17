@@ -75,6 +75,7 @@ Primary code homes:
 | 31 | **Carrier earned vs employee paid** | "What did the carrier actually pay us on this rep's activations, against what we paid that rep? Is every tenant computing commission off the same kind of feed? What would this tenant report on the other one's configuration?" |
 | 11a | **Inventory vs Sold** | "My snapshot says this phone is in stock — was it already sold? Which units do I clear out, which sales do I adjust, and why is a sold-then-refunded unit not on the list?" |
 | 11b | **Inventory integrity (POS units)** | "383 phones say in stock — which were really sold (sales report by invoice, commission report), to WHICH customer, and how do I move one out with one click and have a manager confirm it? Why did receiving this IMEI pop up a duplicate warning? How do I adjust a unit in or out, and where is that recorded?" |
+| POS-01 | **The register enters a product it does not have, and never loses a cart** | "A customer brings something the catalog has never heard of — how do I create it at the till, put it in this store's inventory and ring it up without leaving the register? How do I fix a line's description, or the product itself? And when someone walks away mid-sale, why is the cart still there when the next person comes back?" |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -6980,6 +6981,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.email_processed.status` — the sweep's dedup journal, now including **`'superseded'`** | `router._run_email_sweep` — one row per processing attempt, plus one per backlogged copy that a NEWER copy of the same report (same `upload_type`+filename+month) makes redundant, carrying the winner's message-id in `detail` | `router._sweep_dedup_sets` via `SWEEP_TERMINAL_ZERO_STATUSES` — `superseded` is TERMINAL, so a collapsed message is never re-fetched. Which reports may be collapsed is declared ONCE in `data_lineage_registry.FULL_REPLACE_UPLOAD_TYPES` / `replaces_whole_period()`; an undeclared type is never collapsed. §19.19. Proof `harness_sweep_backlog_collapse.py` (33 checks) |
 | `commcalc.daily_sales_feed.uploaded_at` · `vip_paygo_payments.swept_at` · `vip_credit_memos.swept_at` — the ARRIVAL columns (as opposed to each table's DATA date) | the ingest that lands the row | `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column(table)` is the ONE declaration; `router._table_feed_freshness` dereferences it to fill `last_ingest_at`, and `account/autocompute._PERIOD_SOURCES` must agree with it. Consumed by `_data_freshness_monitor` to tell **"the report email stopped arriving"** (old ingest) from **"the file arrives, its CONTENT is frozen"** (recent ingest, old data date) — a distinction that was structurally impossible for every table-backed feed until 2026-09-20, see §19.18. Proof `harness_ingest_freshness.py` (31 checks) |
 | `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
+| `pos.held_sales` (mig `1088`, **WRITTEN NOT APPLIED** — surfaced for owner approval; additive, idempotent, carries its REVERT) — THE suspended sale: ONE held cart per register, keyed `(org_id, store_code, register_number)`, the SAME triple `pos.register_sessions` is keyed on, so "the next session" is literal. Not a sale: no transaction number, no stock movement, no money, which is why the register may save it automatically without asking | `PUT /pos/held-sale` (the register's debounced autosave) · `DELETE /pos/held-sale` (discard, or a completed checkout) | **ONE home** `pos/held_sale.py` behind `GET/PUT/DELETE /pos/held-sale`; one client home `frontend/src/lib/pos-held-sale.ts`. ADAPTIVE — a database without mig 1088 answers `available: false` and the register behaves exactly as it did before the feature existed. Proof `harness_pos_held_sale.py` (68) — §POS-01 |
 | `pos.products` (mig `724`; `system_category` free per-org since `745`) · read with `pos.inventory_serial` (`status = 'in_stock'`) + `pos.inventory_standard` (`qty_on_hand > 0`) (mig `725`) for "in stock" | `POST /pos/products` · `PATCH /pos/products/{id}` (the catalog page, the wizard) — unchanged | **THE product filters (§33):** `GET /pos/products` → `pos/product_filters.list_rows` (`clean` / `apply` over `EQ_FILTERS`, `search_clause`, `in_stock_product_ids`); `GET /pos/products/manufacturers` → `product_filters.manufacturers`; the special-order catalog's search → `product_filters.search_clause` |
 | `commcalc.vendor_catalog_price` (mig `1021`, **NOT applied**, §36; **+`min_order_qty`, +`order_multiple` mig `1032`, written NOT applied** — the vendor's order rules per item, probed per column by `land_catalog`) — THE vendor price snapshot: org, vendor_id → po_vendor, run_id (one per read), source `upload`\|`portal`, item_key (`s:<item #>` / `u:<hash link+name>`), sku, name, price (> 0), list_price, pack_qty, availability (in_stock\|backorder\|out_of_stock\|unknown), stock_qty, stock_text, url, description, seen_at; RLS on, service-role only | ONLY `supply/store.land_catalog` — from `POST /supply/catalog/upload` (the kit's products file) and `supply/portal.catalog_pull_on_page` (live `live_login` pull / scheduled `_SOURCE_SCRAPERS[SUPPLY_PROCESSOR]`) | `store.latest_rows` (newest run per vendor) → `GET /supply/compare`, `GET /supply/vendors/{id}/catalog`; `store.catalog_rows_by_ids` → `POST /supply/cart/optimize|place`; `store.latest_run` → vendor attention / `GET /supply/summary`. Locked: harness_supply_ordering §L1–L3 |
 | `commcalc.supply_favorite` (mig `1032`, written NOT applied, §36.f) — a starred supply item per company: vendor_id → po_vendor (ON DELETE CASCADE), item_key (the catalog's stable identity), label, reorder_qty, created_by; UNIQUE (org, vendor, item_key); RLS on, service-role only | `supply/store.add_favorites` / `remove_favorites` / `set_favorite_qty` / `remove_vendor` (`POST /supply/favorites`, `/favorites/remove`, `/favorites/qty`, `DELETE /supply/vendors/{id}`) | `store.load_favorites` → `ordering_logic.mark_favorites` inside `GET /supply/compare` (the favourites list IS the comparison filtered, `?favorites=true`). Locked: harness_supply_favorites_moq §D/§G |
@@ -7311,6 +7313,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `POST /core/operator/enter` / `POST /core/operator/exit` (the AUDITED, time-boxed tenant entry — wraps the EXISTING cross-tenant switcher, adds no second bypass; **mig `985` can make it MANDATORY**, at which point every other cross-tenant request is refused 403 `operator_entry_session_required` until one is open) · `GET /core/operator/entry` (drives the in-tenant banner) | `core/operator_api.py` (`enter_tenant`/`exit_tenant`); pure `operator.entry_decision`/`banner_payload` | §22 tenant entry |
 | `GET /core/operator/enforcement` (the OWNER PREVIEW for the mig-`984` scope cutover: per operator, the mapped route prefixes they would LOSE, who holds `policy.write`, and the exempt list) · `POST /core/operator/policy` also carries `enforce_scoped_roles` | `core/operator_api.py`; pure `operator.enforcement_preview` / `endpoint_decision` / `policy_change_decision` | §22 scoped-role enforcement |
 | `GET /core/platform-notice` (tenant-facing status banner — any signed-in user; org from the VERIFIED membership) · `GET /core/tenant-operator-access` (a TENANT admin's "who from the platform was in my company", gated by the existing `_require_setting(..., 'security')`) | `core/operator_api.py` `public_router` (mounted WITHOUT the /operator prefix) | §22 tenant-facing transparency |
+| `POST /pos/inventory/standard` — put standard (qty-tracked) stock on hand at ONE store: `{product_id, store_code, qty, mode?: add|set, qty_on_order?, qty_reserved?, bin_location?}`. `mode` DECLARES which fact is being recorded — `add` (default) is a receipt and adds to on hand, `set` is a count and replaces it; the writer never guesses from whether a row happened to exist. The first single-row write path this table has ever had (before it, qty arrived only via the CSV count importer or an inter-store transfer). Refuses a serial-tracked product — those land through `POST /pos/inventory/serial`, behind the duplicate-IMEI guard (§11b). Gated `pos_inventory_adjust`, org-scoped, store-span checked; answers `before` AND `after` so a double entry is visible | `pos.router.receive_inventory_standard` → `pos/stock_landing.plan` | §POS-01 |
+| `GET /pos/held-sale?store_code=&register_number=` · `PUT /pos/held-sale` · `DELETE /pos/held-sale` — the cart left on this register, suspend it, drop it. Restored VERBATIM (the agreed price, the override it overrode, the discount and the serial), with `held_at` so the screen can say how old the prices are; `held_by` is the CALLER's employee id, never a body field. An EMPTY cart with no customer CLEARS the hold instead of storing a row, so an idle register leaves nothing behind. All three org-scoped and store-span checked; all three answer `available: false` rather than erroring before mig `1088` | `pos.router.get_held_sale` / `put_held_sale` / `delete_held_sale` → `pos/held_sale.py` | §POS-01 |
 | `GET /pos/products` — the org's products newest first, capped at 500; optional filters (blank = any) `department_id`, `category_id`, `system_category`, `manufacturer` (exact), `inventory_type` (`standard` / `serial`, else 400), `in_stock` (+ `store_code`: a serial unit `in_stock` or standard `qty_on_hand > 0` at that store, else any store), combined (AND) with `search` (name / full name / UPC); `active_only` as before. **No new param = the query and answer it always gave** (§33) | `pos.router.list_products` → `pos/product_filters.list_rows` | §33 |
 | `GET /pos/products/manufacturers` (`active_only`, default true) — the Manufacturer filter's options: the org's distinct non-blank manufacturers A→Z, exactly as stored | `pos.router.list_product_manufacturers` → `product_filters.manufacturers` (org-scoped paged read through `catalog_suggest._page`) | §33 |
 | `GET /supply/vendors` · `POST /supply/vendors` · `PATCH /supply/vendors/{id}` (§36) — the vendor roster with its portal terms; a portal vendor is refused without its free-shipping threshold + delivery time; each row carries `login` (presence flags only), `catalog_seen_at`, `recipe` status, `attention` | `supply/router.list_vendors / create_vendor / update_vendor` → `ordering_logic.validate_vendor`, `normalize_portal_config`, `vendor_attention`; admin gate = asset `_require_po_admin` | `supply/vendors` |
@@ -7576,6 +7580,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Event-register sales + activations (per store, per event day) | `raw_sales` rows whose `register` is in `marketing_config.event_sales_registers` (house `{RSK}`) — the predicate is `commcalc/sales_register.is_event_register`, SHARED with `flags.py`'s RSK_ACTIVATIONS flag. RSK is a REGISTER, not a tender | `marketing/event_sales.sales_summary`; counts from `_compute_feed_actuals_py(rows=<register-filtered>)` — the shared pass, given a pre-filtered row set, so nothing is re-classified. `GET /marketing/event-sales`; §23s |
 | Subscriber retention of event-activated lines (30/60/90 + still-active-now) | `raw_mi` `subscriber_status`, matched from `raw_sales.mdn`→`serial_1` through the paid gate's `sale_installment_engine._mi_index`/`_match_mi` | `event_sales.retention_report`; denominator is MATCHED lines only — an unmatched line is reported with its reason and is NEVER churn, and an all-unmatched window is `null`, never 0% (§23s.5) |
 | Event ROI (per store, per event day) | commission: **`paid_against_activated_numbers`** — the commission ACTUALLY PAID against the numbers/IMEIs the day activated, summed per line from the per-line feeds and deduped on the source row so a line reachable by both keys counts once (owner 2026-09-09 *"needs to tbe total of teh commisison paid on each number"*). Labels are classified through the org's `payment_categories` — the SAME gate `commission_received.add_label_rows` uses. A FLOOR AS OF A DATE (`commission_as_of`, `paid_to_date_by_period`): commission on a new line keeps arriving for months. The store-month ALLOCATION is DEMOTED to a labelled fallback for unmatchable lines only. cost: `marketing_event.planned_spend` ∪ `marketing_event_cost` ∪ hours from `salary_expense.day_measurement` × `employees.pay_rate` ∪ handset count × `raw_catalog.cost` | `event_sales.paid_against_lines` / `index_commission_events` / `commission_fallback` + `roi_compute` → `GET /marketing/event-sales/roi`; reader `router._es_commission_events`. THREE line states — paid / matched-but-unpaid (a MEASURED zero) / unmatchable-with-a-reason (never zero-earning). A single unknown cost withholds the ROI; nothing is ever rendered as $0.00 (§23s.6, §23s.8) |
+| **What a POS product IS — the fields, the defaults, the save body** (the catalog's New/Edit modal and the register's create-this-product modal; owner 2026-10-16) | `pos.products` × the router's `PRODUCT_FIELDS` whitelist | **ONE component** `frontend …/pos/product-form.tsx` (`ProductFormFields`, `EMPTY_PRODUCT_FORM`, `productFormFrom`, `productFormPayload`, `productFormReady`, `productFormFromEntry`) on both screens — the `body_style === 'Not Set' → null` rule and the default set exist in exactly one place; the special-order admin item is the DECLARED narrower exception, pinned to stay narrow. Lock `harness_pos_product_form_lock.py` (40) — §POS-01 |
+| **"A single-row entry puts standard stock on hand at this store"** (the register's opening stock; owner 2026-10-16) | `pos.inventory_standard` keyed `(org, product, store)` | **ONE home** `pos/stock_landing.py` (`plan`, `clean_qty`, `existing_row`, `MODE_ADD` / `MODE_SET`, `sentence`) behind `POST /pos/inventory/standard`. Siblings: the CSV count importer (deliberately SKIPS a duplicate — folding it in would double a re-uploaded count file) and mig 726's in-database `pos.receive_transfer` (PL/pgSQL, cannot dereference Python — its ON CONFLICT is PINNED to mean ADD). Proof `harness_pos_stock_landing.py` (46) — §POS-01 |
+| **"What is still in this register's cart"** (the suspended sale; owner 2026-10-16) | `pos.held_sales` keyed `(org, store_code, register_number)` — the `pos.register_sessions` triple | **ONE home** `pos/held_sale.py` (`terminal`, `clean_cart`, `hold_row`, `restore`, `is_empty`, `sentence`); ONE client `frontend/src/lib/pos-held-sale.ts` (`fetchHeldSale` / `suspendSale` / `clearHeldSale` / `AUTOSAVE_MS`) — the register spells no held-sale URL and keeps no cart in browser storage. Proof `harness_pos_held_sale.py` (68), lock `harness_pos_product_form_lock.py` §f — §POS-01 |
 | **Which products match the POS product filters — and which are in stock at this store** (the register's product picker and the product catalog; owner 2026-09-24) | `pos.products.department_id / category_id / system_category / manufacturer / inventory_type` + `pos.inventory_serial.status = 'in_stock'` / `pos.inventory_standard.qty_on_hand > 0` | **ONE home** `pos/product_filters.py` (`list_rows`, `apply`, `EQ_FILTERS`, `in_stock_product_ids`) behind `GET /pos/products`; ONE component `frontend …/pos/product-filters.tsx` (`ProductFilters`, `productFilterParams`) on both pages — §33 |
 
 ---
@@ -25403,7 +25410,7 @@ status word rather than a blank that reads as nil.
 | CORE-10 | core |
 | CORE-11 | core |
 | CORE-12 | core |
-
+| POS-01 | pos |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -30228,3 +30235,144 @@ the home must keep calling the resolver. Verified to BITE (a planted
 Same class: §COMMCALC-16 (an absence written down as a measurement), §COMMCALC-15.2 (the rung is a
 fact about the booking), §19.26 (missing beats wrong on a money gate), §19.18 (a registry written
 and its callers left unwired — which is what CHECK 2d exists to prevent here).
+
+---
+
+## §POS-01. THE REGISTER ENTERS A PRODUCT IT DOES NOT HAVE, AND NEVER LOSES A CART (owner ask 2026-10-16)
+
+Owner, verbatim, in two messages the same evening:
+
+> "in the pos menu , let the user edit the product descriptinon fields and add a product to the
+> ineventory if a new product is being entered manually, promtp the user to create the new product
+> if the product is not found."
+
+> "also if a person leaves the cash register it gets blank if you come back it shoudl automatically
+> store for the next session in suspensed state"
+
+Three gaps at the till, one screen (`pos/sales/page.tsx`):
+
+1. **A line's description could not be touched.** The cart showed the product's name and type as
+   plain text. A customer buying "the blue one, 64GB" went onto the receipt as whatever the catalog
+   happened to call it, and the only way to correct a product's own name was to leave the sale,
+   open Products & Services, and start the sale again.
+2. **A product the catalog had never heard of was a dead end.** A scan or a search that matched
+   nothing opened the picker with the term filled in and showed "No products match." — and that was
+   the whole of it. Nothing offered to create the item, and nothing could put it in inventory, so
+   the sale was rung against the nearest wrong product or not at all.
+3. **The cart lived only in the browser's memory.** A reload, a navigation, a crashed tab or the end
+   of a shift erased a part-rung sale with no trace. The customer was then re-rung from memory —
+   where the things remembered wrong are the discounts and the serial numbers.
+
+### POS-01.1 Duplicate check (the build gate)
+
+Searched the index for every existing mechanism before building anything:
+
+| the question | what already answered it | what was done |
+|---|---|---|
+| which products match, and are they in stock here | §33 `pos/product_filters.py` + `pos/product-filters.tsx` | REUSED untouched — the create prompt hangs off the picker §33 already owns, and the form takes §33's own `ProductFilterOptions` option lists |
+| what are the fields of a POS product | the catalog page's INLINE form (`pos/products/page.tsx`) | EXTRACTED to `pos/product-form.tsx` and dereferenced by both screens. The register did NOT get a second field list |
+| how does a product get created | `POST /pos/products` (§33's row, unchanged) | REUSED as-is, so the till and the catalog create identical rows |
+| how does a serialised unit get into stock | §11b `inventory_integrity_router.receive_unit`, behind THE duplicate-IMEI landing guard | REUSED — the register posts to `POST /pos/inventory/serial` and gets the same 409 evidence. The register writes no inventory table of its own |
+| how does STANDARD (qty) stock get on hand | **nothing, for a single row.** Only the CSV count importer (`router.import_entity`, entity `inventory`) and mig 726's in-database `pos.receive_transfer` | NEW one home `pos/stock_landing.py` + `POST /pos/inventory/standard`. Both siblings checked below |
+| is there a suspended / held / parked sale | **nothing.** `pos.sales.status` is `completed`\|`voided` only; no held-cart table, no browser persistence | NEW one home `pos/held_sale.py` + `pos.held_sales` (mig `1088`) |
+
+### POS-01.2 One fact, one home, dereferenced
+
+- **"What a POS product IS"** → `frontend …/pos/product-form.tsx`. The field list, the defaults
+  (`EMPTY_PRODUCT_FORM`), the row→form mapper (`productFormFrom`), the POST/PATCH body
+  (`productFormPayload`), the save-enabled rule (`productFormReady`) and the "is this a barcode or a
+  name" split (`productFormFromEntry`) are spelled once. The catalog page's inline form is DELETED
+  and it now renders the shared component — this is a replacement, not a parallel copy
+  (the §19.18 failure mode: a registry written and left unwired).
+- **"A single-row entry puts standard stock on hand at this store"** → `pos/stock_landing.py`.
+  The identity is `(org, product, store)` — the table's own unique key — and the arithmetic is
+  **declared, not guessed**: `MODE_ADD` is a receipt and adds to on hand, `MODE_SET` is a count and
+  replaces it. A writer that inferred the mode from whether a row happened to exist would turn a
+  recount into a doubling. A 0-unit receipt onto an existing row writes NOTHING, so an idempotent
+  retry cannot double anything, and the endpoint answers `before` AND `after` so a double entry is
+  visible at the till rather than discovered at the next count.
+- **"What is still in this register's cart"** → `pos/held_sale.py` + `pos.held_sales`, with
+  `frontend/src/lib/pos-held-sale.ts` as the one client home. The cart is a property of the
+  **terminal**, keyed on `(org, store_code, register_number)` — the SAME triple
+  `pos.register_sessions` is keyed on, which is what makes the owner's "the next session" literal.
+
+### POS-01.3 Why the held cart is on the server and not in the browser
+
+`localStorage` answers "what did THIS browser profile have", which is not the question. A tablet
+swapped between staff, a second browser, a private window or cleared site data all lose the cart,
+and no other screen could ever see that a sale is part-rung. The hold belongs to the register, so it
+lives where the register's other state lives. The lock asserts no POS page keeps a cart in browser
+storage.
+
+### POS-01.4 Restored VERBATIM — and what that does and does not mean
+
+The agreed **unit price**, the **list price it overrode**, the **discount**, the **serial** and the
+**description** come back exactly as they were left. Nothing is re-read from the catalog: quietly
+moving a figure is how a $99 line becomes $199 between the two halves of one sale.
+
+Stated plainly because it is the one exception: each line's **tax** IS re-derived from the store's
+live rate on restore, by the same effect that already re-taxes the cart when the store is switched
+mid-sale. A tax rate is a legal fact about the store, not a figure the cashier negotiated.
+
+The age travels with the cart (`held_at`, kept across autosaves so it is the age of the SALE and not
+of the last keystroke), and the banner says it: *"Resumed a suspended sale from this register — 3
+lines, $1,081.49 · suspended 24 minutes ago by E42. These are the prices that were on the lines when
+it was suspended."* Resuming is then a decision, with Keep it / Discard it beside it.
+
+### POS-01.5 A suspended cart is not a sale
+
+Nothing in `pos.held_sales` is a transaction: no transaction number is burned, no row reaches
+`pos.sales`, no stock moves and no money is recorded. That is precisely why the register may save it
+**automatically**, without asking, and why a cart nobody ever resumes has cost nothing. An empty
+cart with no customer attached CLEARS the hold rather than storing a row, so an idle register leaves
+nothing behind; a selected customer with no lines yet IS held, because that is a sale in progress.
+
+The autosave is **gated on the restore having run** (`heldRestored`). Saving before it would
+overwrite the cart the last session left with this session's empty one — the exact loss the feature
+exists to stop — so the gate is asserted by the lock, with its negative control.
+
+### POS-01.6 Siblings checked, fixed or EXCUSED in writing
+
+| sibling | same question? | outcome |
+|---|---|---|
+| `router.import_entity(entity="inventory")` — the CSV count importer | yes, the same upsert | **EXCUSED.** It answers a different fact: a counted sheet, where a product already counted at a store is SKIPPED as a duplicate ROW OF THE SHEET. Folding the two would make a re-uploaded count file double every figure. Pinned by `harness_pos_stock_landing.py` §D3 |
+| mig 726 `pos.receive_transfer` / `ship_transfer` — stock between stores | yes, the same arithmetic | **EXCUSED, and LOCKED.** PL/pgSQL inside one transaction with the transfer's status machine; it cannot dereference a Python helper. §D2 pins that its `ON CONFLICT` still means ADD, so a divergence fails the build rather than going unnoticed |
+| §11b `receive_unit` — a serialised unit | no: a different table and a landing guard | **REUSED.** The register posts to `POST /pos/inventory/serial`; `POST /pos/inventory/standard` REFUSES a serial-tracked product, so qty stock with no unit behind it cannot be created |
+| `pos/special-orders/manage/page.tsx` — also creates a catalogue row | no: a narrower entity | **EXCUSED BY NAME.** A hidden-vendor special-order item (mig 864/865) through `POST /pos/special-orders/catalog`: 6 customer-facing fields plus the vendor linkage, with no department, category, inventory type, body style or cost, because a special-order item has none. Lock rule `b6` pins that it stays narrow — the day it grows the full field list, the lock goes red and the two are made one |
+
+### POS-01.7 What the cashier now does
+
+- **Fix a line.** Product type and description are inputs on the cart line. They are the LINE's own
+  wording — what prints on the receipt and lands in `pos.sale_items` — so a correction changes this
+  sale only. A ✎ beside the description opens the shared form to change the **catalogue product**
+  instead; a rename then follows onto the open cart lines, while the agreed price does not.
+- **Create what is not there.** The picker's empty state names what was searched for — *"'Anker
+  65W charger' is not in the catalog"* — and offers to create it; a quick scan that matches nothing
+  lands in that same picker with the scanned text in it, so there is ONE prompt and not two. A pure
+  barcode fills the UPC and leaves the name to type; anything else is read as the name.
+- **Put it in inventory.** The create modal carries an opening-stock block: a quantity for a standard
+  product, the first unit's serial / IMEI for a serial-tracked one. Blank is legitimate — "created,
+  none on hand yet" — and is never guessed into a 1. Then the product is rung up, which is why the
+  cashier opened the form. The three facts are reported separately: if the stock does not land, the
+  product still exists, the sale still rings, and the reason is said out loud rather than read as a
+  silent zero.
+- **Walk away.** The cart suspends itself 1.2s after the last change, and the next session on that
+  register is handed it back with its age. Checking out, or Clear Cart, drops the hold — otherwise
+  coming back would restore a sale the customer has already paid for.
+
+### POS-01.8 Files, locks, and what is waiting on the owner
+
+| | |
+|---|---|
+| backend one homes | `backend/app/modules/pos/held_sale.py` (PURE — no DB, no clock, no org id), `backend/app/modules/pos/stock_landing.py` (PURE) |
+| endpoints | `POST /pos/inventory/standard`; `GET` / `PUT` / `DELETE /pos/held-sale` (`pos/router.py`) |
+| frontend one homes | `…/pos/product-form.tsx`, `frontend/src/lib/pos-held-sale.ts` |
+| frontend changed | `…/pos/sales/page.tsx` (editable line fields, the create prompt, the create/edit modal, restore + autosave), `…/pos/products/page.tsx` (its inline form REPLACED by the shared one) |
+| migration | `database/migrations/1088_pos_held_sale.sql` — **WRITTEN, NOT APPLIED**, surfaced for owner approval. Additive, idempotent, carries its REVERT, touches no existing row of any table |
+| proofs | `harness_pos_held_sale.py` (68 checks), `harness_pos_stock_landing.py` (46) |
+| lock | `harness_pos_product_form_lock.py` (40) — one form on both screens, one payload rule, one not-found prompt, stock through the endpoints, one suspended-cart client |
+| ADAPTIVE | every held-sale endpoint answers `available: false` before mig 1088 is applied, and the register then behaves exactly as it did before the feature existed (a cart lost on reload) instead of erroring. So applying the migration turns the feature ON; it is not a precondition for the register working |
+| RULE TWO | no carrier, tenant, store, product or register number appears in either module; the register number defaults to 1 only to agree with `pos.register_sessions.register_number`'s own default |
+
+Same class: §33 (one filter helper, one filter component), §19.18 (a registry written and left
+unwired is not a fix), §11b (a landing guard belongs to the landing, not to its callers).

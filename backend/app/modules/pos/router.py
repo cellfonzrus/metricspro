@@ -16,11 +16,21 @@ one existed; no code read `modules`, so POS visibility was enforced only client-
 Adding it server-side has to land together with seeding `pos` into MODULE_CATALOG and the roles
 UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
+from datetime import datetime as _datetime, timezone as _timezone
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.core.database import get_supabase
+from app.modules.pos import held_sale as _held
+from app.modules.pos import stock_landing as _stock
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def _utcnow() -> str:
+    """The server's own time, ISO-8601 UTC. The pure helpers take a clock as an argument so a
+    harness can pin it; this is the one place the real clock is read."""
+    return _datetime.now(_timezone.utc).isoformat()
 
 
 def _require_pos_access(authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -1366,6 +1376,59 @@ def list_inventory_standard(store_code: str = "", authorization: str = Header(de
     return {"stock": rows}
 
 
+@router.post("/inventory/standard")
+def receive_inventory_standard(body: dict, authorization: str = Header(default=""),
+                               org_id: str = ORG_ID):
+    """Put standard (qty-tracked) stock on hand at ONE store — the single-row entry the register's
+    "create this product and we have n of them" flow needs, and the first such path to exist
+    (before it, qty on hand only arrived through the CSV count importer or an inter-store transfer).
+
+    Body: {product_id, store_code, qty, mode?: add|set, qty_on_order?, qty_reserved?, bin_location?}.
+    `mode` declares WHICH fact is being recorded — `add` (default) is a receipt and adds to what is
+    on hand, `set` is a physical count and replaces it. THE arithmetic lives in
+    `pos/stock_landing.plan`, never here, so the register and any later caller cannot drift apart.
+
+    Refuses a serialised product: a serial-tracked unit lands through POST /pos/inventory/serial,
+    behind the duplicate-IMEI landing guard (index §11b). Writing a qty for it would create stock
+    with no unit behind it."""
+    _require_pos_perm(authorization, org_id, "pos_inventory_adjust")
+    body = body or {}
+    pid = (body.get("product_id") or "").strip()
+    store = (body.get("store_code") or "").strip()
+    if not pid:
+        raise HTTPException(400, "product_id required")
+    keyset = _caller_store_keyset(authorization, org_id)
+    if store and not _span_filter([{"store_code": store}], keyset):
+        raise HTTPException(403, "that store is outside your reporting span")
+    client = sb()
+    prod = (client.schema("pos").table("products").select("id,short_name,inventory_type")
+            .eq("org_id", org_id).eq("id", pid).limit(1).execute().data) or []
+    if not prod:
+        raise HTTPException(404, "product not found")
+    if (prod[0].get("inventory_type") or "standard") == "serial":
+        raise HTTPException(400, "this is a serial-tracked product — receive each unit through "
+                                 "POST /pos/inventory/serial so the duplicate-IMEI guard applies")
+    rows = (client.schema("pos").table("inventory_standard").select("*")
+            .eq("org_id", org_id).eq("product_id", pid).eq("store_code", store)
+            .limit(5).execute().data) or []
+    try:
+        planned = _stock.plan(rows, pid, store, body.get("qty"),
+                              mode=body.get("mode") or _stock.MODE_ADD, extra=body)
+    except _stock.StockError as e:
+        raise HTTPException(400, str(e)) from None
+    if planned["action"] == _stock.ACTION_INSERT:
+        client.schema("pos").table("inventory_standard").insert(
+            {**planned["row"], "org_id": org_id}).execute()
+    elif planned["action"] == _stock.ACTION_UPDATE:
+        (client.schema("pos").table("inventory_standard").update(planned["row"])
+         .eq("org_id", org_id).eq("product_id", pid).eq("store_code", store).execute())
+    return {"stock": {"product_id": pid, "store_code": store,
+                      "qty_on_hand": planned["after"]},
+            "landing": {"action": planned["action"], "before": planned["before"],
+                        "after": planned["after"], "mode": planned["mode"]},
+            "message": _stock.sentence(planned, prod[0].get("short_name"))}
+
+
 # ── Tax codes ──────────────────────────────────────────────────────────────────────────────────────
 # rate is a PERCENT (8.875); the register converts to a fraction for sale_items.tax_rate.
 @router.get("/tax-codes")
@@ -1791,6 +1854,108 @@ def register_close(body: dict, authorization: str = Header(default=""), org_id: 
     except Exception as e:
         raise HTTPException(400, f"close failed: {e}")
     return {"session": r.data}
+
+
+# ── The suspended sale: ONE held cart per register (mig 1088, index §POS-01) ──────────────────────
+# Owner 2026-10-16: "if a person leaves the cash register it gets blank if you come back it shoudl
+# automatically store for the next session in suspensed state". The cart is a property of the
+# TERMINAL, keyed on the same (org, store, register) triple as register_sessions above — so "the
+# next session" is literal. All three endpoints dereference pos/held_sale.py; none of them writes a
+# sale, burns a transaction number or moves stock.
+#
+# ADAPTIVE: before migration 1088 is applied the table is absent. Every one of these answers
+# `available: false` instead of erroring, and the register then behaves exactly as it did before the
+# feature existed (a cart lost on reload) rather than refusing to work.
+_HELD_TABLE = "held_sales"
+
+
+def _held_unavailable(exc):
+    return {"held": None, "available": False,
+            "setup_note": f"apply migration 1088 ({str(exc)[:120]})"}
+
+
+def _held_terminal(store_code, register_number, authorization, org_id):
+    try:
+        t = _held.terminal(store_code, register_number)
+    except _held.HeldSaleError as e:
+        raise HTTPException(400, str(e)) from None
+    if not _span_filter([{"store_code": t["store_code"]}],
+                        _caller_store_keyset(authorization, org_id)):
+        raise HTTPException(403, "that store is outside your reporting span")
+    return t
+
+
+@router.get("/held-sale")
+def get_held_sale(store_code: str, register_number: int = 1,
+                  authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The cart left on this register, or null. Restored VERBATIM — the prices are the ones that
+    were on the lines when it was suspended, and `held_at` says how old they are."""
+    t = _held_terminal(store_code, register_number, authorization, org_id)
+    try:
+        rows = (sb().schema("pos").table(_HELD_TABLE).select("*")
+                .eq("org_id", org_id).eq("store_code", t["store_code"])
+                .eq("register_number", t["register_number"]).limit(1).execute().data) or []
+    except Exception as e:
+        return _held_unavailable(e)
+    held = _held.restore(rows[0] if rows else None)
+    return {"held": held, "available": True, "message": _held.sentence(held)}
+
+
+@router.put("/held-sale")
+def put_held_sale(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Suspend (or re-suspend) this register's cart. Body: {store_code, register_number?, cart: [],
+    customer_id?, is_activation_sale?, note?}.
+
+    An EMPTY cart with nothing attached CLEARS the hold rather than storing a row — otherwise every
+    visit to an idle register would leave a suspended sale behind. `held_by` is the caller's own
+    employee id, never a body field (the same anti-spoofing stance as the drawer sessions)."""
+    body = body or {}
+    t = _held_terminal(body.get("store_code"), body.get("register_number"), authorization, org_id)
+    try:
+        cart = _held.clean_cart(body.get("cart"))
+        ctx = _held.clean_context(body)
+        if _held.is_empty(cart, ctx):
+            return _delete_held(t, org_id)
+        row = _held.hold_row(t["store_code"], t["register_number"], cart, body,
+                             held_by=(_caller_employee(authorization, org_id) or None),
+                             now=_utcnow())
+    except _held.HeldSaleError as e:
+        raise HTTPException(400, str(e)) from None
+    client = sb()
+    try:
+        existing = (client.schema("pos").table(_HELD_TABLE).select("id")
+                    .eq("org_id", org_id).eq("store_code", t["store_code"])
+                    .eq("register_number", t["register_number"]).limit(1).execute().data) or []
+        if existing:
+            # held_at is the moment the sale was FIRST suspended — an autosave keeps it, so the age
+            # shown to the next cashier is the age of the sale and not of the last keystroke.
+            (client.schema("pos").table(_HELD_TABLE)
+             .update({k: v for k, v in row.items() if k != "held_at"})
+             .eq("org_id", org_id).eq("id", existing[0]["id"]).execute())
+        else:
+            client.schema("pos").table(_HELD_TABLE).insert({**row, "org_id": org_id}).execute()
+    except Exception as e:
+        return _held_unavailable(e)
+    stored = _held.restore({**row, "held_at": row.get("held_at")})
+    return {"held": stored, "available": True, "message": _held.sentence(stored)}
+
+
+def _delete_held(t, org_id):
+    try:
+        (sb().schema("pos").table(_HELD_TABLE).delete()
+         .eq("org_id", org_id).eq("store_code", t["store_code"])
+         .eq("register_number", t["register_number"]).execute())
+    except Exception as e:
+        return _held_unavailable(e)
+    return {"held": None, "available": True, "message": "No suspended sale on this register."}
+
+
+@router.delete("/held-sale")
+def delete_held_sale(store_code: str, register_number: int = 1,
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Drop this register's suspended cart — the cashier discarded it, or the sale checked out."""
+    t = _held_terminal(store_code, register_number, authorization, org_id)
+    return _delete_held(t, org_id)
 
 
 # ── POS settings (config kv) ───────────────────────────────────────────────────────────────────────
