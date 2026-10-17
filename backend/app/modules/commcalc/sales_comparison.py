@@ -166,11 +166,23 @@ def _financing_status(vendors):
                   key=lambda s: order.get(s, 9))[0]
 
 
-def category_defs(vendors):
+# ── STORE EXPENSES (owner ask 2026-10-17) ─────────────────────────────────────────────────────────
+# Expenses are NOT an item sold, and they are deliberately a line of their own: they never enter the
+# revenue totals, the transaction count or any per-item tile. The figure is the month's EFFECTIVE
+# store expenses — `expenses_effective`'s carry-forward rule, the same rule the P&L and the GP report
+# book — handed in already folded per store, so this module states no expense rule of its own.
+EXPENSE_KEY = "expenses"
+EXPENSE_LABEL = "Store expenses"
+
+
+def category_defs(vendors, with_expenses=False):
     """The ordered list of category keys + labels + primary metric this report tracks. OWNER ORDER +
     METRIC (exact): Phones (units), BYOD (units), Activation (units), Tablets (units), Accessories ($),
     Financing (units AND $). `vendors` is the ALREADY carrier-scoped vendor list — the single Financing
-    row is present whenever the tenant has any financing vendor for the active carrier. PURE."""
+    row is present whenever the tenant has any financing vendor for the active carrier.
+
+    `with_expenses` appends the Store expenses line (owner ask 2026-10-17) — flagged `expense: True`
+    so no caller can mistake it for revenue. PURE."""
     defs = [
         {"key": "phone", "label": "Phones", "metric": "units"},
         {"key": "byod", "label": "BYOD", "metric": "units"},
@@ -181,6 +193,9 @@ def category_defs(vendors):
     if vendors:
         defs.append({"key": "financing", "label": "Financing", "metric": "both", "financing": True,
                      "detection_status": _financing_status(vendors)})
+    if with_expenses:
+        defs.append({"key": EXPENSE_KEY, "label": EXPENSE_LABEL, "metric": "dollars",
+                     "expense": True})
     return defs
 
 
@@ -279,15 +294,46 @@ def _combine(cur_m, prev_m):
     }
 
 
+def _expense_cell(cur, prev):
+    """PURE: one store's base-vs-compare EXPENSE dollars in the same row shape every other row uses,
+    with the unit fields pinned at 0 — an expense has no unit, and a 0 there is the honest answer, not
+    a missing one. `pct` mirrors `rev_pct` so a caller sorting the table on 'Change %' sorts this row
+    on the only change it has."""
+    cur = round(float(cur or 0.0), 2)
+    prev = round(float(prev or 0.0), 2)
+    return {
+        "current": 0, "previous": 0, "delta": 0, "pct": _pct(cur, prev),
+        "current_rev": cur, "previous_rev": prev,
+        "rev_delta": round(cur - prev, 2), "rev_pct": _pct(cur, prev),
+        "current_gp": 0.0, "previous_gp": 0.0,
+    }
+
+
 def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
           base_period, compare_period, mode, window_label, resolve_market=None, params=None,
-          line_rules=None):
-    """The whole report payload. PURE apart from the injected `resolve_market(store)`.
+          line_rules=None, expenses=None, store_key_of=None):
+    """The whole report payload. PURE apart from the injected `resolve_market(store)` /
+    `store_key_of(store)`.
 
     Returns per-(store × category) rows (each with current / previous / Δ / Δ%), a totals-by-category
     roll-up for the summary tiles, and an overall transactions/revenue/gp comparison.
+
+    STORE EXPENSES (owner ask 2026-10-17). `expenses`, when given, is
+    `{'base': {store key: $}, 'compare': {store key: $}, 'base_carried_from': …,
+    'compare_carried_from': …}` — ALREADY folded per store by `expenses_effective.totals_by_store`
+    under the carry-forward rule the P&L and the GP report book, so no expense rule lives here. It is
+    reported as its own `expenses` line and NEVER enters revenue, GP or the transaction count: an
+    expense added into a revenue total would be a lie in both directions.
+
+    `store_key_of(store)` is the store-identity fold (`account.store_identity.store_key` partially
+    applied) — REQUIRED for the expense join to be right, because the sale feed spells a store by its
+    ADDRESS and `store_expenses` spells it by its CODE. Without it the join is identity and the two
+    vocabularies cannot meet. When several sale spellings fold to ONE store the expense is reported
+    ONCE, on that store's canonical row, and the spellings it covers are named in
+    `expense_store_merges` — reporting it per spelling would multiply one month's rent.
     """
-    cats = category_defs(vendors)
+    cats = category_defs(vendors, with_expenses=expenses is not None)
+    sale_keys = [c["key"] for c in cats if not c.get("expense")]
     cat_keys = [c["key"] for c in cats]
     cat_label = {c["key"]: c["label"] for c in cats}
     cat_metric = {c["key"]: c.get("metric", "units") for c in cats}
@@ -297,7 +343,7 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
     stores = sorted(set(base) | set(comp))
 
     rows = []
-    cat_tot = {k: {"cur": _blank_metric(), "prev": _blank_metric()} for k in cat_keys}
+    cat_tot = {k: {"cur": _blank_metric(), "prev": _blank_metric()} for k in sale_keys}
     store_summ = []
     over_cur_txn = over_prev_txn = 0
     over_cur_rev = over_prev_rev = 0.0
@@ -308,7 +354,7 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
         over_cur_txn += b["txns"]
         over_prev_txn += c["txns"]
         s_cur_rev = s_prev_rev = 0.0
-        for k in cat_keys:
+        for k in sale_keys:
             cm = _combine(b["cats"].get(k), c["cats"].get(k))
             # drop a store×category with zero activity in BOTH windows (keeps the table honest + small)
             if cm["current"] == 0 and cm["previous"] == 0:
@@ -336,19 +382,72 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
             "rev_pct": _pct(s_cur_rev, s_prev_rev),
         })
 
+    # ── STORE EXPENSES, folded on the store-identity key, reported ONCE per store ─────────────────
+    exp_rows, exp_merges = [], {}
+    exp_cur_tot = exp_prev_tot = 0.0
+    if expenses is not None:
+        fold = store_key_of or (lambda v: str(v or "").strip())
+        exp_base = {str(k): float(v or 0.0) for k, v in (expenses.get("base") or {}).items()}
+        exp_cmp = {str(k): float(v or 0.0) for k, v in (expenses.get("compare") or {}).items()}
+        groups = {}
+        for store in stores:
+            groups.setdefault(fold(store), []).append(store)
+        label_of, market_of = {}, {}
+        for ckey, spellings in groups.items():
+            uniq = sorted(set(spellings))
+            # One sale spelling → label the row with it, so the expense lands in that store's group in
+            # the table. Several → the canonical key, and the spellings are NAMED rather than summed
+            # over (one month of rent must not be reported once per spelling).
+            label_of[ckey] = uniq[0] if len(uniq) == 1 else (ckey or "—")
+            market_of[ckey] = (resolve_market(uniq[0]) if resolve_market else "") or ""
+            if len(uniq) > 1:
+                exp_merges[ckey] = uniq
+        for ckey in sorted(set(exp_base) | set(exp_cmp)):
+            cur, prev = exp_base.get(ckey, 0.0), exp_cmp.get(ckey, 0.0)
+            cell = _expense_cell(cur, prev)
+            cell.update({
+                "store": label_of.get(ckey) or ckey or "—",
+                "market": market_of.get(ckey) or (resolve_market(ckey) if resolve_market else "") or "",
+                "category_key": EXPENSE_KEY, "category": EXPENSE_LABEL, "metric": "dollars",
+                "expense": True,
+            })
+            exp_rows.append(cell)
+            exp_cur_tot += cell["current_rev"]
+            exp_prev_tot += cell["previous_rev"]
+        rows.extend(exp_rows)
+        # the per-store roll-up carries the expense beside the revenue it was spent to earn
+        by_label = {r["store"]: r for r in exp_rows}
+        for ss in store_summ:
+            r = by_label.pop(ss["store"], None)
+            ss["current_exp"] = r["current_rev"] if r else None
+            ss["previous_exp"] = r["previous_rev"] if r else None
+            ss["exp_pct"] = r["rev_pct"] if r else None
+        # a store that spent money and sold nothing in BOTH windows is still a store that spent money
+        for lbl, r in sorted(by_label.items()):
+            store_summ.append({
+                "store": lbl, "market": r["market"],
+                "current_txns": 0, "previous_txns": 0, "txns_delta": 0, "txns_pct": None,
+                "current_rev": 0.0, "previous_rev": 0.0, "rev_pct": None,
+                "current_exp": r["current_rev"], "previous_exp": r["previous_rev"],
+                "exp_pct": r["rev_pct"],
+            })
+
     totals_by_category = []
     for c in cats:
         k = c["key"]
-        m = _combine(cat_tot[k]["cur"], cat_tot[k]["prev"])
+        if c.get("expense"):
+            m = _expense_cell(exp_cur_tot, exp_prev_tot)
+        else:
+            m = _combine(cat_tot[k]["cur"], cat_tot[k]["prev"])
         m.update({"key": k, "label": c["label"], "metric": c.get("metric", "units"),
-                  "financing": bool(c.get("financing")),
+                  "financing": bool(c.get("financing")), "expense": bool(c.get("expense")),
                   "detection_status": c.get("detection_status")})
         totals_by_category.append(m)
 
     rows.sort(key=lambda r: (r["store"], cat_keys.index(r["category_key"])))
     store_summ.sort(key=lambda r: -(r["current_txns"] + r["previous_txns"]))
 
-    return {
+    out = {
         "base_period": base_period,
         "compare_period": compare_period,
         "mode": mode,
@@ -368,3 +467,21 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
                  "No sales in either window. Sales come from the imported Sales Transaction Details — "
                  "check the month(s), or that the daily feed / monthly upload has loaded."),
     }
+    # The expense side says out loud what it measured and whether either month was CARRIED FORWARD —
+    # a carried month is the P&L's own rule, not an estimate, but the reader is told which month it
+    # came from rather than left to assume the sheet was re-entered.
+    out["expenses_meta"] = (None if expenses is None else {
+        "measured": True,
+        "current_total": round(exp_cur_tot, 2),
+        "previous_total": round(exp_prev_tot, 2),
+        "pct": _pct(round(exp_cur_tot, 2), round(exp_prev_tot, 2)),
+        "base_carried_from": expenses.get("base_carried_from"),
+        "compare_carried_from": expenses.get("compare_carried_from"),
+        "stores": len(exp_rows),
+        "store_merges": exp_merges,
+    })
+    out["overall"]["current_exp"] = round(exp_cur_tot, 2) if expenses is not None else None
+    out["overall"]["previous_exp"] = round(exp_prev_tot, 2) if expenses is not None else None
+    out["overall"]["exp_pct"] = (_pct(round(exp_cur_tot, 2), round(exp_prev_tot, 2))
+                                 if expenses is not None else None)
+    return out

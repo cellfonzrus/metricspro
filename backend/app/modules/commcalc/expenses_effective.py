@@ -118,6 +118,37 @@ def effective_series(rows, periods):
     return out
 
 
+def totals_by_store(rows, store_key_of=None, *, store_col="store_code", amount_col="amount"):
+    """PURE: effective `store_expenses` rows -> {store key: total $}. THE one home for
+    "what did this store spend that month", given the rows the carry-forward rule above already chose.
+
+    WHY IT IS HERE AND NOT AT EACH CALL SITE (owner directive 2026-09-20, the design-fix rule).
+    `effective_series` / `effective_expense_rows` answer WHICH rows a month books; summing them per
+    store was then re-spelled by every reader — the expenses trend, the GP report, the P&L — and a
+    reader that spells the fold differently gets a different store. That already bit this platform
+    twice: `coa._norm_store` only STRIPS, so `'b-1115'` and `'B-1115'` became two stores holding one
+    store's money (2026-10-09), and the leading-street-number joins dropped money whose token no
+    store row led with (§64). So the fold is injected, once, and it is the SAME one every other money
+    report uses: `store_key_of` is `account.store_identity.store_key(resolve, …)` partially applied —
+    THE store-identity home since 2026-10-09.
+
+    `store_key_of` None keeps the raw stripped spelling (what a reader keyed on a store CODE already
+    does, byte-identical). A row with no store at all is kept under `''` rather than dropped — the
+    money is visible on a row of its own instead of vanishing, exactly as `store_key` does.
+
+    Amounts are summed verbatim; this never invents, scales or signs a dollar."""
+    key = store_key_of or (lambda v: str(v or "").strip())
+    out = {}
+    for r in (rows or []):
+        k = key(r.get(store_col))
+        try:
+            amt = float(str(r.get(amount_col) or 0).replace(",", "").replace("$", "").strip() or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        out[k] = out.get(k, 0.0) + amt
+    return out
+
+
 def effective_expense_rows(client, org_id, period, pvariants, select_cols):
     """I/O: the period's effective store_expenses rows under the carry-forward rule above.
 

@@ -131,6 +131,7 @@ Primary code homes:
 | COMMCALC-14 | **A cheap answer is never held hostage by an expensive decoration** | "The takeover list takes a minute and reads as empty while it does. What is it waiting for, where should a count of rows be computed, and what should a cell say about a figure nobody has counted yet?" |
 | COMMCALC-16 | **A figure the portal did not send is not a zero** | "The carrier portal's numbers and ours disagree — our stores show 0 activations beside a 66.67% attach rate. Which carrier field feeds which column, what happens when the portal renames one, and how does the platform say so instead of writing the absence down as a measurement?" |
 | COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
+| COMMCALC-18 | **An accessory line and a rent line both move in dollars** | "Add accessory sales to the Sales Comparison so it compares month over month, and add expenses." Accessory dollars were already tallied — the table had no change column for a metric measured in money, only for units. And what did each store SPEND in those two months, read from the same sheet the P&L books, without an expense ever being added into the revenue beside it? |
 
 ---
 
@@ -6913,7 +6914,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
-| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses`; **salary coverage** `labour_coverage.authoritative_codes`/`allocated_names`/`commission_collisions` (2026-09-08, §4); **commission double-book SUPPRESSION** `labour_coverage.suppression_plan`/`suppresses_row` — a row named in `account_config.labour_commission_expense_names` stops booking on BOTH readers because `rep_commissions` is authoritative (owner 2026-09-08, mig `994`, §4) |
+| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); **the per-store fold is `expenses_effective.totals_by_store`** — the one home the expenses trend and the Sales Comparison's expense line both dereference, with `store_identity.store_key` injected because this table spells a store by CODE and the sale feed by ADDRESS (§COMMCALC-18); `_cr_resolve_store_expenses`; **salary coverage** `labour_coverage.authoritative_codes`/`allocated_names`/`commission_collisions` (2026-09-08, §4); **commission double-book SUPPRESSION** `labour_coverage.suppression_plan`/`suppresses_row` — a row named in `account_config.labour_commission_expense_names` stops booking on BOTH readers because `rep_commissions` is authoritative (owner 2026-09-08, mig `994`, §4) |
 | `commcalc.subscriber_installments` | `installment_engine._persist` via `compute_installments(persist=True)` `9200` — **ADAPTIVE key** (`LEDGER_CONFLICT_KEYS`: mig `1059`'s `(org, subscriber, activation_type, month_index, pay_period)` first, mig `057`'s narrow key as the fallback) and adaptive `month_basis` column via `column_tolerant.present_columns`; RETURNS `{conflict_key, written, error}` instead of `except: pass` | the residual multi-month audit trail; `residual_installment_comm`. ⚠ On a pre-`1059` database the narrow key means one pay period OVERWRITES another's record of the same instalment — §19.51 |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
 | `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), **residual-per-subscriber report §7a** (`residual_subs._aggregate_ma` — ONE sweep: residual = −`retail_cost` on the mig-309 `ma_residual_row_matcher` union, airtime margin = `merchant_discount`; stores via the mig-314 account index), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4), **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `retail_cost` sign = debit/credit to the dealer, §15) |
@@ -7057,6 +7058,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
+| `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18) |
 | `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
 | `GET /storeops/payroll/clock-variances` | `storeops/clock_variance_api.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
 | `POST /storeops/payroll/clock-variances/resolve` | `storeops/clock_variance_api.py` → `storeops.clock_variance_correction` | one human decision about one variance — including the DM's per-row override, which out-ranks the declared rule and is audited to `payroll_change_log` (§14z) |
@@ -7463,7 +7465,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Which month of a multi-month curve is this subscriber / sale in — and is that month PROVEN?** — the ROW'S OWN anchor (`mi_activation_date`, or the row's own origin month), never the oldest month the reader happened to pull; the basis is reported with every row (`activation_date` / `origin_period` / `window_edge`) and an unanchored row is counted AND priced, never absorbed | `commcalc.raw_mi.mi_activation_date` per subscriber; the sale path's own `sale_period` | ONE home `commcalc/installment_month.resolve_month` (+ `in_schedule` / `horizon`), dereferenced by BOTH multi-month engines; `month_basis` on the ledger row and `month_basis.unanchored_amount` on the result; lock `harness_installment_month_anchor.py` (151) — §19.51. Live 2026-10-06: the window-edge derivation put **16,757 rows / $119,887.50 of $177,462.50** at month 6 of a 6-month curve, payable again every month, and disagreed with the rows' own activation date on **11,780 of 15,337 (76.8%)** anchored subscribers |
 | **Did the multi-month residual engine actually pay nothing, or could it not place anything?** — an unresolved schedule, an unanchored month, payout naming no rep and an incomplete ledger write are each REPORTED with their counts and dollars; a raised engine is a CRITICAL notice, never a $0.00 | the org's own `payout_schedule` rows (RULE TWO) × what the feed stamps on its rows | `installment_engine`'s `unresolved_schedule` / `month_basis` / `totals.amount_no_rep` / `persisted` → `router._apply_new_engines` notices (the SAME channel the sale engine has used since mig 245/247); lock `harness_installment_month_anchor.py` §I/§J — §19.51. Live 2026-10-06: `residual_installment_comm` is **$0.00 across all 571 rep_commissions rows** and `subscriber_installments` is **empty**, because `raw_mi.carrier_id` is NULL on **326,051/326,051** rows while all 14 active schedules name a carrier that is not in this org's `carrier` table |
 | **Was this statement actually crosschecked, and did it pass?** — `passed` / `failed` / `not_measured`; an absence is never a pass | the statement payload's own sections (P&L: `gross_profit == revenue − cogs` and `net_income == gross_profit − expenses`), `balanced` for a balance sheet, `tied` for a cash flow | `analysis.statement_crosscheck` → the stored `account_statements.crosscheck_ok` and the flag `account/router` serves; lock `harness_statement_crosscheck_earned.py` (63) — §19.49. Live 2026-10-06: all **329** stored P&L snapshots pass at a **$0.00** total gap (the arithmetic is SOUND, proven not assumed), while the flag had been an unconditional `True` that checked nothing; `balance_sheet` fails 327/329 and `cash_flow` 159/166, both already surfaced by the Journal note |
-| **What did this store spend in this month — including a month it never saved?** — the carry-forward rule, for one month or a whole axis of them; a carried month is labelled, never silent | `commcalc.store_expenses` (own rows win; else the latest strictly-prior month's MANUAL rows) | ONE home `commcalc/expenses_effective` (`effective_expense_rows` for a month, `effective_series` for an axis — proved equivalent); dereferenced by the P&L `coa.build_inputs`, the GP report `router._compute_gp` and `GET /commcalc/expenses-trend`; lock `harness_expense_one_path.py` (129) — §19.50. Live 2026-10-06: the trend had no October while the P&L booked $379,108.81 of carried October opex |
+| **What did this store spend in this month — including a month it never saved?** — the carry-forward rule, for one month or a whole axis of them; a carried month is labelled, never silent | `commcalc.store_expenses` (own rows win; else the latest strictly-prior month's MANUAL rows) | ONE home `commcalc/expenses_effective` (`effective_expense_rows` for a month, `effective_series` for an axis — proved equivalent); dereferenced by the P&L `coa.build_inputs`, the GP report `router._compute_gp`, `GET /commcalc/expenses-trend` and `GET /commcalc/sales-comparison`'s expense line (§COMMCALC-18); the per-store FOLD is `totals_by_store`, store rule injected; lock `harness_expense_one_path.py` (137, §G) — §19.50. Live 2026-10-06: the trend had no October while the P&L booked $379,108.81 of carried October opex |
 | **Did this check actually RUN, or is its clean result just an empty config?** — `measured` / `not_configured`; a gated detector that did not measure says so, and reports None rather than 0.00 | the org's OWN `account_config.labour_commission_expense_names` (RULE TWO) | `labour_coverage.VERDICT_MEASURED` / `VERDICT_NOT_CONFIGURED` → `commission_collisions` → the GP payload; lock `harness_expense_one_path.py` (129) — §19.50. Live 2026-10-06: $0.00 reported against a real $19,860.23 of double-booked labour |
 | **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
@@ -25470,6 +25472,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-15 | commcalc |
 | COMMCALC-16 | commcalc |
 | COMMCALC-17 | commcalc |
+| COMMCALC-18 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -30447,6 +30450,128 @@ Same class: §33 (one filter helper, one filter component), §19.18 (a registry 
 unwired is not a fix), §11b (a landing guard belongs to the landing, not to its callers).
 
 ---
+
+## §COMMCALC-18. AN ACCESSORY LINE AND A RENT LINE BOTH MOVE IN DOLLARS (owner ask 2026-10-17)
+
+Owner, verbatim: *"add accessories sales in the sales comparoison to cpomapre month over month and
+also addexpenses"*.
+
+### §COMMCALC-18.1 WHAT WAS ACTUALLY WRONG, and the class
+
+The Sales Comparison already tallied accessory **dollars** (`sales_comparison.tally` → the shared
+`_is_accessory`), and `_combine` already returned `rev_delta` / `rev_pct` for every category. The
+**table rendered neither**: its only change columns were `Change` and `Change %`, both read off the
+UNIT pair. So the one category whose headline metric is money — Accessories — was the one category
+whose month-over-month change the grid could not show, and the payload had been carrying the answer
+all along.
+
+**THE CLASS:** *a period-over-period report must carry a change column for every metric it reports
+on, not only for the metric most of its rows happen to use.* A row whose headline is dollars and a
+row whose headline is units cannot share one change column. Fixed for every category at once — the
+`$ Change` / `$ Change %` pair sits beside the unit pair for all of them, from the same two payload
+fields the tiles headline, so a tile and its rows cannot disagree.
+
+Store expenses were genuinely absent, and are the second half of the ask.
+
+### §COMMCALC-18.2 DUPLICATE CHECK (build gate) — WHAT WAS REUSED, NOT REBUILT
+
+Searched the index for every fact this needed before writing anything. **Nothing new derives a
+dollar:**
+
+| what the expense line needs | the ONE home it reads | new? |
+| --- | --- | --- |
+| which rows a month books, incl. a month nobody re-entered | `commcalc/expenses_effective.effective_series` (§19.50 — the carry-forward rule the P&L `coa.build_inputs` and the GP report `_compute_gp` both book) | no |
+| those rows folded per store | `commcalc/expenses_effective.totals_by_store` | **NEW — §COMMCALC-18.3** |
+| which store a spelling IS | `account/store_identity.store_key` over `coa.store_resolver` (§64) | no |
+| the store→market stamp | `core.scope.store_market_resolver` via `router._store_market_resolver` | no |
+| accessory dollars | the shared `_is_accessory` classifier via `sales_comparison.tally` | no |
+| the % change | `sales_comparison._pct` | no |
+
+No migration, no new endpoint, no new table, no route-pin change. The commission engine is not
+touched (that thread owns it); the Peer Sales Comparison is not touched (its accessory column is
+`peer_comparison._ratio`, a per-box ratio inside one month — a different question).
+
+### §COMMCALC-18.3 ONE FACT, ONE HOME: `expenses_effective.totals_by_store`
+
+`effective_series` said WHICH rows a month books; summing them **per store** was then re-spelled at
+every call site. That is the copy-not-dereference shape the house rules forbid, and the fold is
+exactly where this platform has been bitten twice — `coa._norm_store` only STRIPS, so `'b-1115'`
+and `'B-1115'` became two stores holding one store's money (2026-10-09), and the leading-street-number
+joins dropped money whose token no store row led with (§64).
+
+So the fold is **one pure function with the store-identity fold INJECTED**:
+
+```
+expenses_effective.totals_by_store(rows, store_key_of=None) -> {store key: total $}
+```
+
+`store_key_of` is `store_identity.store_key(resolve, …)` partially applied. `None` keeps the raw
+stripped spelling, which is byte-identical to what a code-keyed reader already did — so
+`GET /commcalc/expenses-trend` was wired to it with **no change in output**, and the Sales Comparison
+passes the real fold because **it has to**: the sale feed spells a store by its **ADDRESS**
+(`5619 N. Broad St.`) and `store_expenses` spells it by its **CODE** (`B-103`). Without the fold the
+two vocabularies cannot meet at all. Measured live (house org, September 2026): **28 of 28** expense
+stores join a store with sales, **$381,345.94 of $381,345.94**, nothing stranded.
+
+### §COMMCALC-18.4 AN EXPENSE IS NOT AN ITEM SOLD
+
+The expense line is reported BESIDE the sales, never inside them. Pinned, not asserted
+(`harness_sales_comparison.py` §E5 runs the same fixture with and without expenses and requires
+every per-item total, the revenue, the GP and the transaction count to come back **byte-identical**):
+
+- It is its own category, flagged `expense: True`, last in the order, and **absent** from the payload
+  entirely when no expenses are handed in — so every existing caller is unchanged.
+- It never enters `overall.current_rev`, any per-item tile, or the transaction count. Its totals live
+  on their own keys (`overall.current_exp` / `previous_exp` / `exp_pct`, and `expenses_meta`).
+- Its unit fields are **0**, because an expense has no unit; `pct` mirrors `rev_pct` so sorting the
+  table on *Change %* sorts this row on the only change it has.
+- On screen it is a tile beside Revenue, with the change colour **inverted** — spending more is not
+  the green that selling more is.
+- **Reported ONCE per store.** When several sale spellings fold to one store the expense lands on
+  that store's canonical row and the spellings it covers are named in `expenses_meta.store_merges`;
+  a row per spelling would multiply one month of rent (§E7 is the regression).
+- **A store that spent money and sold nothing is still reported** (§E8), with `rev_pct: None` rather
+  than a fabricated 0%.
+- **A carried month says so.** `expenses_meta.base_carried_from` / `compare_carried_from` name the
+  month the figures came from, and the screen prints it — a carried month is the P&L's own rule, not
+  an estimate, but the reader is told rather than left to assume the sheet was re-entered. Live: the
+  house org has **Mar–Sep** entered, so a base month of **2026-10** carries September's
+  $381,345.94 and the notice names it.
+- **An expense read that FAILS leaves the line off, never $0.00.** A zero expense makes every store
+  look profitable — the dangerous half of §COMMCALC-03.28, which had no symptom.
+- The same RBAC keyset and store / market picks that filter the sale rows filter these, tried on the
+  store CODE, its canonical spelling, and the kept sale stores' canonical set (the picker's options
+  are sale-feed spellings).
+
+### §COMMCALC-18.5 LOCKED SO IT CANNOT UN-WIRE
+
+`harness_expense_one_path.py` §G (now **137 passed / 0 failed**, was 129):
+
+- **G4/G5/G6** — the expenses trend dereferences `totals_by_store`; the Sales Comparison dereferences
+  `effective_series`, `totals_by_store` **and** `store_key`. A caller that stops fails the build.
+- **G1/G2/G3** — the fold is pure, takes its store rule as an argument, and states no identity rule
+  of its own (no `.upper()`, no squash, no token split).
+- **G7** — **no second copy**: a scan for the retired shape (a `store_code` read feeding an `amount`
+  sum) anywhere in the router or the chart of accounts.
+- **G8** — the negative control: G7's scanner is proved to FIND that shape in a control string, so
+  G7 cannot pass blind.
+
+`harness_sales_comparison.py` §E1–§E8 proves the fold, the carry rule (incl. a `source_key` system
+row NOT carrying), the leak test, the accessory dollar change, the merge regression and the
+sold-nothing store — DB-free.
+
+### §COMMCALC-18.6 MEASURED LIVE (house org, read-only, 2026-10-17)
+
+September vs August 2026, the real modules over the real feed: **accessory sales $93,692.94 vs
+$107,432.72 = −$13,739.78 (−12.8%)** while **store expenses rose $370,394.59 → $381,345.94
+(+3.0%)** across 28 stores — the comparison the owner asked for, and it reads the wrong way on both
+sides. Revenue and transaction counts came back identical with and without the expense line.
+
+Files: `commcalc/expenses_effective.py` (`totals_by_store`), `commcalc/sales_comparison.py`
+(`category_defs(with_expenses=)`, `_expense_cell`, `build(expenses=, store_key_of=)`),
+`commcalc/router.py` (`sales_comparison` expense read; `expenses_trend` rewired),
+`frontend/…/commcalc/sales-comparison/page.tsx`, `frontend/src/lib/reports.ts`,
+`backend/harness_sales_comparison.py` §E, `backend/harness_expense_one_path.py` §G.
 
 ## §POS-02. THE RECEIPT AN ADMIN EDITS, PRINTS AND EMAILS (owner ask 2026-10-17)
 
