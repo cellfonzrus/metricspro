@@ -369,5 +369,51 @@ ok("F5 analysis still imports only _period, so the statement proofs keep running
    [ln for ln in _code_only(_src(ANALYSIS)).splitlines()
     if ln.startswith(("import ", "from "))] == ["from app.modules.account import _period"])
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§G THE PER-STORE FOLD HAS ONE HOME (owner ask 2026-10-17, index §COMMCALC-18)")
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# `effective_series` says WHICH rows a month books; folding them per store was then re-spelled at
+# every call site, and a reader that spells the fold differently gets a different store (the `b-1115`
+# case-drift phantom, and the leading-street-number joins of §64). `totals_by_store` is that fold's
+# ONE home. These locks fail the build if a caller stops dereferencing it, or if a second copy of the
+# sum appears anywhere in the backend.
+import re as _re
+
+ok("G1 totals_by_store exists and is pure — no client, no clock, no I/O",
+   not any(t in _fn_src(EXPFX, "totals_by_store") for t in ("client", "datetime", "execute(")))
+ok("G2 the fold is INJECTED, so it is the store-identity home and never a second rule",
+   "store_key_of" in _fn_src(EXPFX, "totals_by_store"))
+ok("G3 totals_by_store states no store-identity rule of its own (no upper/squash/token split)",
+   not any(t in _fn_src(EXPFX, "totals_by_store") for t in (".upper()", "squash", ".split()")))
+
+_ro = _code_only(_src(ROUTER))
+ok("G4 the expenses trend dereferences the fold instead of summing store_expenses itself",
+   "totals_by_store(" in _fn_src(ROUTER, "expenses_trend"))
+ok("G5 the Sales Comparison expense line dereferences BOTH homes — the carry rule and the fold",
+   "effective_series(" in _fn_src(ROUTER, "sales_comparison")
+   and "totals_by_store(" in _fn_src(ROUTER, "sales_comparison"))
+ok("G6 ...and the store-identity home, because the sale feed spells a store by ADDRESS and "
+   "store_expenses by CODE",
+   "store_key(" in _fn_src(ROUTER, "sales_comparison"))
+
+# NO SECOND COPY: a per-store sum over store_expenses rows, spelled anywhere but the one home. The
+# shape searched for is the loop that was deleted — a `store_code` read feeding an `amount` sum.
+_SECOND_COPY = _re.compile(
+    r"get\(\s*['\"]store_code['\"]\s*\)[^\n]*\n(?:[^\n]*\n){0,3}?[^\n]*"
+    r"(?:\+=\s*safe_float\(\s*r?\.?get\(\s*['\"]amount['\"]|\+=\s*amt\b)")
+_hits = []
+for _rel in (ROUTER, "app/modules/account/coa.py"):
+    for _m in _SECOND_COPY.finditer(_code_only(_src(_rel))):
+        _hits.append((_rel, _m.group(0).strip().splitlines()[0][:70]))
+ok("G7 no second per-store expense fold anywhere in the router or the chart of accounts",
+   not _hits, str(_hits))
+# NEGATIVE CONTROL: the pattern the lock hunts for must actually be findable, or G7 passes blind.
+ok("G8 G7's scanner is armed (it finds the retired loop in a control string)",
+   bool(_SECOND_COPY.search(
+       "        for r in cell['rows']:\n"
+       "            code = str(r.get('store_code') or '').strip()\n"
+       "            amt = safe_float(r.get('amount'))\n"
+       "            by[code][p]['total'] += amt\n")))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

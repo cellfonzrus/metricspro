@@ -75,11 +75,17 @@ export default function SalesComparisonPage() {
   }, [period, mode, comparePeriod, week, asOf, selStores, selMarkets, activeCarrier])
   useEffect(() => { load() }, [load])
 
-  const cats: any[] = data?.totals_by_category || []
+  // Per-ITEM tiles only. Store expenses are a cost, not an item sold, and get their own tile beside
+  // Revenue below — never a tile in the row of things the stores sold.
+  const cats: any[] = (data?.totals_by_category || []).filter((c: any) => !c.expense)
   const rows: any[] = data?.rows || []
   const baseLbl = data?.base_period || period
   const cmpLbl = data?.compare_period || ''
 
+  // Accessories are a DOLLARS item and Store expenses have no unit at all, so a table that changed
+  // only on units could not show either one moving month over month (owner ask 2026-10-17). The $
+  // change and $ change % sit beside the unit pair, from `rev_delta` / `rev_pct` the payload already
+  // carries — the same two figures the tiles headline, so a tile and its rows cannot disagree.
   const cols = useMemo<ExportColumn[]>(() => [
     { header: 'Store', get: r => r.store, role: 'store' },
     { header: 'Market', get: r => r.market || '—' },
@@ -90,6 +96,8 @@ export default function SalesComparisonPage() {
     { header: 'Change %', get: r => pctLabel(r.pct, r.current), align: 'right' },
     { header: `$ ${baseLbl}`, get: r => r.current_rev, money: true },
     { header: `$ ${cmpLbl}`, get: r => r.previous_rev, money: true },
+    { header: '$ Change', get: r => r.rev_delta, money: true },
+    { header: '$ Change %', get: r => pctLabel(r.rev_pct, r.current_rev), align: 'right' },
   ], [baseLbl, cmpLbl])
 
   const storeOpts: string[] = data?.stores || []
@@ -132,12 +140,14 @@ export default function SalesComparisonPage() {
     )
   }
 
-  const OverTile = ({ label, cur, prev, pct, money }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean }) => (
+  // `invert` is for a COST: spending more is not the green that selling more is, so the colour of the
+  // change is flipped while the number and the sign are untouched.
+  const OverTile = ({ label, cur, prev, pct, money, invert }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean; invert?: boolean }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150, background: 'var(--surface2)' }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
         <div style={{ fontSize: 22, fontWeight: 700 }}>{money ? fmt(cur) : cur}</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(pct, cur) }}>{pctLabel(pct, cur)}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(invert && pct !== null && pct !== undefined ? -pct : pct, cur) }}>{pctLabel(pct, cur)}</div>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>was {money ? fmt(prev) : prev}</div>
     </div>
@@ -151,6 +161,9 @@ export default function SalesComparisonPage() {
           Period-over-period change per item sold — <b>Phones, BYOD, Activation, Tablets</b> (units),
           <b> Accessories</b> ($) and <b>Financing</b> (units &amp; $) — across all stores. Compare
           month-over-month, year-over-year, or week-1-over-week-1, aligned to the same day of the month.
+          Each row carries both the unit change and the <b>$ change</b>, so accessory sales compare on
+          dollars. <b>Store expenses</b> are shown per store on the same two months — the same figures the
+          P&amp;L books, never added into the revenue beside them.
           The Financing line reflects only the active carrier’s financing.
         </p>
       </div>
@@ -201,11 +214,34 @@ export default function SalesComparisonPage() {
           {cats.map(c => <Tile key={c.key} c={c} />)}
         </div>}
 
-      {/* overall tiles */}
+      {/* overall tiles. Store expenses sit HERE, not with the per-item tiles: an expense is not an
+          item sold, and it is never added into the revenue beside it. */}
       {!loading && !data?.error && data?.overall &&
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
           <OverTile label="Transactions" cur={data.overall.current_txns} prev={data.overall.previous_txns} pct={data.overall.txns_pct} />
           <OverTile label="Revenue" cur={data.overall.current_rev} prev={data.overall.previous_rev} pct={data.overall.rev_pct} money />
+          {data?.expenses_meta?.measured &&
+            <OverTile label="Store expenses" cur={data.overall.current_exp || 0} prev={data.overall.previous_exp || 0}
+                      pct={data.overall.exp_pct} money invert />}
+        </div>}
+
+      {/* An expense month the tenant has not re-entered is CARRIED FORWARD — the same rule the P&L
+          books. Say which month it came from rather than let the reader assume it was entered. */}
+      {!loading && !data?.error && data?.expenses_meta?.measured &&
+        (data.expenses_meta.base_carried_from || data.expenses_meta.compare_carried_from) &&
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12, color: 'var(--text2)' }}>
+          ℹ︎ Store expenses carried forward — {baseLbl} {data.expenses_meta.base_carried_from
+            ? <>uses <b>{data.expenses_meta.base_carried_from}</b></> : <>has its own entered expenses</>}
+          {' · '}{cmpLbl} {data.expenses_meta.compare_carried_from
+            ? <>uses <b>{data.expenses_meta.compare_carried_from}</b></> : <>has its own entered expenses</>}.
+          {' '}A month with no saved expenses inherits the latest earlier month, exactly as the P&amp;L books it —
+          enter that month on the Expenses sheet to compare the real figures.
+        </div>}
+
+      {!loading && !data?.error && data && !data.expenses_meta?.measured &&
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12, color: 'var(--text2)' }}>
+          ℹ︎ <b>Store expenses not measured</b> for this selection — the expense sheet could not be read, so the
+          expense line is left off rather than shown as $0.00.
         </div>}
 
       {loading ? (

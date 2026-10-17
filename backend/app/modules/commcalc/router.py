@@ -24689,9 +24689,11 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
         cell = eff.get(p) or {'rows': [], 'carried_from': None}
         if cell.get('carried_from'):
             carried[p] = cell['carried_from']
-        for r in cell['rows']:
-            code = str(r.get('store_code') or '').strip()
-            amt = safe_float(r.get('amount'))
+        # THE per-store fold (index §COMMCALC-18): `expenses_effective.totals_by_store`, the same
+        # home the Sales Comparison's expense columns read, so the two can never fold a month's rows
+        # into different stores. Keyed on the raw store CODE here, byte-identical to the loop it
+        # replaced — this trend is already code-keyed and `_trend_market_by_code` expects codes.
+        for code, amt in _expfx.totals_by_store(cell['rows']).items():
             by.setdefault(code, {}).setdefault(p, {'total': 0.0})
             by[code][p]['total'] += amt
             comp[p]['total'] += amt
@@ -26681,7 +26683,9 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
                      as_of_day: int = -1, week: int = 0, stores: str = "", markets: str = "",
                      carrier: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Period-over-period sales comparison, ALL stores, % change per item sold — Phones, BYOD,
-    Activation, Tablets, Accessories ($) and a single carrier-scoped Financing line (units AND $).
+    Activation, Tablets, Accessories ($) and a single carrier-scoped Financing line (units AND $) —
+    plus the month's STORE EXPENSES per store (owner ask 2026-10-17), on the same base-vs-compare
+    windows. The expense line never enters revenue, GP or the transaction count.
 
     Scenarios (`mode`): `mom` = vs last month · `yoy` = vs the same month last year · `custom` = vs the
     explicit `compare_period`. `week` (1-5) compares one week-of-month across BOTH periods (week-1 over
@@ -26789,11 +26793,68 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
     acfg = _accessory_config(client, org_id)
     is_acc = lambda r: _is_accessory(r.get("department"), r.get("category"), r.get("product_desc"), acfg)  # noqa: E731
 
+    # ── STORE EXPENSES, month over month (owner ask 2026-10-17, index §COMMCALC-18) ───────────────
+    # NO NEW DERIVATION. The month's effective expense rows come from THE carry-forward rule
+    # (`expenses_effective.effective_series`, the rule the P&L and the GP report book — §19.50), the
+    # per-store fold from THE one home (`totals_by_store`), and the store identity from THE one home
+    # (`store_identity.store_key` over `coa.store_resolver`) — which the join NEEDS, because the sale
+    # feed spells a store by its ADDRESS and `store_expenses` by its CODE. The same RBAC keyset and
+    # store / market picks that filter the sale rows filter these, so a tile can never carry an
+    # expense for a store the table does not show.
+    expenses_arg = None
+    exp_fold = None
+    try:
+        from app.modules.commcalc import expenses_effective as _expfx
+        from app.modules.account import coa as _coa
+        _esc = client.schema('commcalc')
+        _ecols = 'period,store_code,amount'
+        if 'source_key' in _ct.present_columns(lambda: _esc.table('store_expenses'),
+                                               lambda q: q.eq('org_id', org_id), ('source_key',)):
+            _ecols += ',source_key'
+        _erows = _feed_read.read_all(
+            lambda: _esc.table('store_expenses').select(_ecols).eq('org_id', org_id))
+        _resolve = _coa.store_resolver(client, org_id)
+        exp_fold = lambda v: _store_identity.store_key(_resolve, v)                        # noqa: E731
+        _eff = _expfx.effective_series(_erows, [base_p, cmp_p])
+        _kept_ckeys = {exp_fold(st) for st in
+                       {str(r.get("store")) for r in (brows + crows) if r.get("store")}}
+
+        def _keep_exp(code):
+            # An expense row's store must pass the SAME gates the sale rows passed — tried on the
+            # store CODE, on its canonical spelling, and (for the picker, whose options are sale-feed
+            # spellings) on membership in the kept sale stores' canonical set.
+            ck = exp_fold(code)
+            if ks is not None and in_keyset is not None and not in_keyset(ks, str(code or ''), ck):
+                return False
+            if sel_stores and not (str(code or '').strip() in sel_stores or ck in sel_stores
+                                   or ck in _kept_ckeys):
+                return False
+            if sel_markets and (resolve_market(ck) or resolve_market(str(code or '')) or '') \
+                    not in sel_markets:
+                return False
+            return True
+
+        def _fold_period(label):
+            cell = _eff.get(label) or {'rows': [], 'carried_from': None}
+            keep = [r for r in cell['rows'] if _keep_exp(r.get('store_code'))]
+            return _expfx.totals_by_store(keep, exp_fold), cell.get('carried_from')
+
+        _b_tot, _b_carried = _fold_period(base_p)
+        _c_tot, _c_carried = _fold_period(cmp_p)
+        expenses_arg = {'base': _b_tot, 'compare': _c_tot,
+                        'base_carried_from': _b_carried, 'compare_carried_from': _c_carried}
+    except Exception as e:
+        # An expense read that fails leaves the report WITHOUT an expense line rather than showing
+        # $0.00 — a zero expense makes every store look profitable (the §COMMCALC-03.28 lesson).
+        print(f"WARN sales-comparison expenses unavailable: {type(e).__name__}: {e}")
+        expenses_arg = None
+
     try:
         out = _salescmp.build(
             brows, crows, rules, is_acc, vendors,
             base_period=base_p, compare_period=cmp_p, mode=mode, window_label=window_label,
             resolve_market=resolve_market, line_rules=_line_rules_of(_accessory_config(client, org_id)),
+            expenses=expenses_arg, store_key_of=exp_fold,
             params={"period": base_p, "mode": mode, "compare_period": cmp_p,
                     "as_of_day": eff_as_of, "week": week, "carrier": active_carrier,
                     "stores": sorted(sel_stores), "markets": sorted(sel_markets)})
