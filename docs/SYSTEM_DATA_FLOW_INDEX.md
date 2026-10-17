@@ -465,6 +465,16 @@ commissions, expenses.
 **Source tables:** `raw_sales`/`daily_sales_feed`, `raw_payment_detail`, `raw_mi`, `raw_catalog`,
 `rep_commissions`, `store_expenses`, `store_mapping`. **GP snapshot:** mig `102_gp_snapshot.sql`.
 
+- **SALES COME FROM THE ONE TRANSACTION-GRAIN UNION (owner report 2026-10-17, §4a.3):** `_compute_gp`'s
+  sales read was `commcalc.raw_sales` ALONE — the month-END archive — so on any month the promote step
+  had not run on, this report's whole sales half read **zero** while the P&L read the month in full
+  through its own `coa._sales_union_rows`. It now dereferences **THE** transaction-grain union
+  `router._sales_rows_union_txn(client, org_id, period, cols='*')`; `cols='*'` is load-bearing (`sku`
+  is raw_sales-only and the union swallows a failed per-table select to `[]`). Byte-identical for a
+  closed, fully-promoted month. The payload carries `sales_source` (which table led, rows each side,
+  other-only transactions) so a silent zero is impossible. Lock: §I of
+  `harness_gp_pnl_commission_parity.py`.
+
 **Endpoints:** `/gp/{period}` `router.py:14750`; `/gp-trend` `14847`; `/gp-departments` `14934`;
 `/expenses-trend` `14784`; `/commission-trend` `14808`. **Frontend:** `commcalc/gp/page.tsx`,
 `gp-category-map/page.tsx`.
@@ -1389,6 +1399,54 @@ columns, or if `_compute_gp` / `_ma_summary_legs` / `ma_commission_summary` stop
 home; it also keeps a named inventory of the six-column SHEET sites, which are not income figures).
 
 ---
+
+### 4a.3 GP report ↔ P&L — THE BOTH-WAY LINE INVENTORY (owner report 2026-10-17)
+
+**Answers:** "how come the gross profit is shoiwing - 88056 for the month of sept for both markets",
+"accessory sales are not there, device margin and other fields are also missing fromt eh gross profit
+report" and "may be more fields are missing they should be mirror copies of each other as the source
+is t he same, if there is somehting extra on gross profit and not on p&l then highlight both and fix".
+Luxelink / org `854f6d7b-…`, September 2026, consolidated, both markets.
+
+**THE FIGURE.** −88,056.65 is `GET /gp/{period}` → `totals.net_profit`, rendered on the **Gross Profit
+Report** page as the header's "Net:" and the "Net Profit" tile. It is an **after-expenses** figure
+(`total_rev − rep_pay − exp_total − net_phone_cost`) and is NOT the P&L's gross profit (260,027.43) nor
+its net income (−29,403.84). The columns are already labelled "Net Profit"; the page TITLE is what
+reads as "gross profit".
+
+**THE TERMS THAT AGREE, EXACTLY** (the "mirror copies"): `acc_gp` ≡ `accessory_rev`; `comm` ≡
+`carrier_comm` + `fee_income` (fee income is FOLDED, not missing); `mi` ≡ `mi_income`; `atu` ≡
+`ma_merchant_discount`; `mdf` ≡ `mdf_income`; `unmapped` ≡ `ma_device_margin`; `rep_pay` ≡ `rep_comm`;
+`exp_total` ≡ `store_opex`.
+
+**THE TERMS THAT DIFFER — the complete list, and the bridges prove there is no other:**
+
+| term | Sept | which report | why |
+|---|---|---|---|
+| `accessory_rev` | 53,639.38 | P&L only, BEFORE the fix | the archive-only sales read (§4 bullet) — **FIXED** |
+| `plan_gp` | 20,211.46 | GP only | `(blank)`-department lines booked at `gp`. The P&L's classifier claims nothing AND its `_unbooked_sales` tally is gated on `ext_price`, so 1,709 lines carrying 20,658.11 of `gp` against 0.09 of ext are neither booked NOR reported — the silent-zero class inside the hole-reporting itself. **REPORTED, not coded around** |
+| `other_gp` | 5,571.53 | GP only | the `System` department. The P&L reports 47,549.90 of it on `_unbooked_sales`; the GP report reports it on `unmapped_departments`. Both say so; only GP books it. A config hole (`pl_sales_line_map` / `gp_category_map`), never code |
+| `device_rev` | 18.00 | P&L only, net | GP's `phone_sales` 17,434.65 is cancelled dollar-for-dollar by `net_phone_cost` (= `phone_sales + reimb`), so the device leg contributes **0.00** to GP net profit by construction — deliberate, not a double count |
+| the whole COGS section | −6,112.84 | P&L only | GP has no `accessory_cost` (10,729.60), `device_cost` (222,525.36) or `device_rebate` (−239,367.80) term at all. The rebate EXCEEDS the device cost, which is why the P&L's COGS is negative and its gross profit exceeds its revenue |
+| `wages` | 1,117.41 | P&L only | GP's `−Expenses` reads `store_expenses`; wages is its own P&L line from payroll |
+| `billpay_collected` / `billpay_offset` | +43,151.05 / −43,151.05 | P&L only | `account/billpay_pl` from `storeops.daily_closing`; nets to EXACTLY zero. The GP report shows **NEITHER** leg and excludes the `Rtr` POS department by the org's own `gp_category_map` row, so it cannot overstate by the 43,151.05 one leg alone would add |
+| `comp_*` columns | 0.00 | GP only | the comp-report view; deliberately not terms of `total_rev` (§58.7) |
+
+**THE BRIDGES** (§J of `harness_gp_pnl_commission_parity.py`, both closing to the penny):
+P&L net income −29,403.84 **−** accessory 53,639.38 **−** device_rev 18.00 **−** COGS benefit 6,112.84
+**+** wages 1,117.41 = **−88,056.65** (the reported figure; gap −58,652.81). After the fix:
+−29,403.84 **+** plan_gp 20,211.46 **+** other_gp 5,571.53 **−** device_rev 18.00 **−** COGS benefit
+6,112.84 **+** wages 1,117.41 = **−8,634.28** (gap +20,769.56).
+
+**SURFACED FOR OWNER APPROVAL, NOT APPLIED — the SECOND HOME for "is this a device department".**
+The GP report (config mode, `accessory_config.apply_to_gp`) honours `accessory_config.box_departments`;
+the P&L's `coa._sales_classifier`'s `is_device` reads `gp_report._dept_classifier(gp_category_map)`
+ALONE and has never read that declaration. Luxelink declares `BrandedHandset` a box department, so
+September's **17,416.65** of BrandedHandset sales are device revenue on the GP report and
+`_unbooked_sales` on the P&L. This is exactly the §58.7 duplicate-derivation shape, returned in the
+CLASSIFICATION the profit arithmetic rests on. Wiring the P&L to the same declaration RESTATES THE
+BOOKS (+17,416.65 revenue plus a POS device-cost stage), so it is money and therefore the owner's
+call. Armed in §K of the same harness so it cannot be forgotten.
 
 ## 4b. THE P&L COMMISSION SOURCE — the Commission Ledger books the P&L when the org says so (owner 2026-09-21, mig 1013)
 
@@ -7092,6 +7150,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /commcalc/carrier-category-options` — serves `components` (the canonical component vocabulary) alongside `categories` and `subtypes`, so the Carrier Mapping screen has ONE source for the kinds of money it offers instead of an array of its own. ADDITIVE; an existing caller that ignores the key is unaffected | `router.carrier_category_options` → `carrier_map.COMPONENTS` | §69 |
 | `GET /commcalc/device-line-reimbursement` — **unchanged output, on a re-founded fact** (§69): "which components ARE the device-financing side" was inferred from "everything this org routed off the generic commission line", which held only while exactly one component was routed. It now asks the home. Measured: identical today, and it is what keeps $91,000.00 a month of per-store lump sums OUT of a per-device report once a second component is routed | `router._device_line_reimb_run` → `carrier_dollar_class.device_reimb_components` | §69 |
 | `GET /commcalc/commission-leg-trend` and `GET /commcalc/commission-received-breakout` — **the Comprehensive-Comp series is the org's declaration, not a keyword guess**. `router._leg_comp_is_commission` was a self-declared COPY of `gp_report`'s rule (*"IDENTICAL to gp_report's"*, its own docstring); both endpoints now resolve the §58 posture once per request and ask the home, so the trend explains exactly the money the GP column shows. Declared reimbursement leaves the comp commission series — August 2026: $418,922.21 — and the ePay side's `!= 'Commission'` compare is the home's ruling on the declared category | `router._leg_carrier_class` → `_leg_comp_commission_predicate` / `_leg_pay_commission_predicate` → `carrier_dollar_class.gp_column_of_classification` (§66) / `.gp_column_of_declared_category`; the two per-month fallbacks read `payment_categories` through §57 instead of privately | §58.7 + §66 |
+| `GET /gp/{period}` — **the SALES half comes from the ONE transaction-grain union, not the month-end archive** (owner report 2026-10-17, *"accessory sales are not there, device margin and other fields are also missing fromt eh gross profit report"*): the read was `commcalc.raw_sales` ALONE, so on any month the promote step had not run on, FIVE columns at once (Acc Sales, Setup, Phone Sales, Plan GP, Other GP) read $0.00 with nothing on screen saying why, while the P&L read the month in full. Live Luxelink September 2026: raw_sales **0** rows against daily_sales_feed **9,514**, and $53,639.38 of accessory revenue absent from a report whose net profit therefore read $58,652.81 below the books' (the owner's −88,056.65). Byte-identical for a closed, fully-promoted month; the payload now carries `sales_source` so a silent zero is impossible | `router._compute_gp` → `router._sales_rows_union_txn(…, cols='*')` (`cols='*'` is load-bearing: `sku` is raw_sales-only and the union swallows a failed per-table select to `[]`) | §4a.3 — lock + armed control §I of `harness_gp_pnl_commission_parity.py` |
 | `GET /gp/{period}` — **the month-of-life COLUMNS** (owner report 2026-09-21): every store row carries `comm_ladder` `{rung: $}` plus flat `comm_month_<n>` / `comm_month_unlabelled` companions, `totals.comm_ladder` is summed rung by rung, and `commission_legs` carries `ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` — the COLUMN LIST from the data, never a hardcoded 6 or 12 | `router._compute_gp` → `gp_report.calc_gp_report` → `commission_legs.months_present` / `ladder_to_public` (the one home) | §4a.2 — rendered by the GP page's 📅 Months toggle and its 'Commission by month-of-life' card (EARNED sheet above RECEIVED cash, booked basis marked); both exports follow the visible columns (WYSIWYG) and a 'Commission by month-of-life' sheet always ships. Locked by `harness_ma_month_columns.py` + CHECK 2c |
 | `DELETE /commcalc/commission-plans/{plan_id}/assignments/{assignment_id}` — THE single-assignment remover: ONE `commission_plan_assignment` row of that plan and org, 404 otherwise; gated `'commission_plans'`; drops the config memo | `router.delete_commission_plan_assignment` → `_remove_plan_assignment` (`_require_commission_plans_edit`) | §6n |
 | `GET /commcalc/commission-mtd/categories` — THE Exec-MTD pay categories + labels (incl. `tablet`, `watch`) the rate editors render; static | `router.commission_mtd_categories` → `activation_bucketing.MTD_CATEGORIES` | §6n |
@@ -7370,6 +7429,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **How do I READ this chart — what does moving up or down mean?** | the chart card itself (no data source; the copy is passed by the page) | ONE home `frontend/src/components/ChartNote.tsx`; dereferenced by all four chart cards on `accounts/trends/page.tsx`; ungated (NOT `.pg-note`, which is Master-admin-only); lock `harness_trends_chart_notes.py` (17) — §56 |
 | **Has this month closed, so is its month-end archive due — and may a live feed be compared against that archive at all?** — a FUTURE month is OPEN, both period spellings and the abbreviated forms resolve, and `today` is INJECTED so nothing reads a hidden clock | the calendar against the period label; then `commcalc.raw_sales` vs `commcalc.daily_sales_feed` line counts | ONE home `commcalc/feed_period.month_state` / `.archive_due`, dereferenced by `router._is_open_month`, `router.sales_derive_gap` and `sales_recon.comparability` (which is itself the one home for the five verdicts + `REPORTABLE_BUCKETS`, read by `run_sales_recon`, `sync_recon_flags`, `derive_gap` and `notify/report_registry._sales_recon`); locks `harness_sales_recon_basis.py` (66) + `harness_feed_day_grain.py` §H2 — §19.52. Live 2026-10-06: **October 3,001** and **September 11,233** critical `sales_leak` flags against a `raw_sales` of **0 lines** in both months |
 | **Which STORE does this money belong to?** — asked by the GP report, the commission-leg trend/breakout, the residual report, flags 7/8, the closing store-day match, the P&L's store grain and the MA account index. Answered by the org's OWN declared spellings; AMBIGUITY RESOLVES TO NOTHING and unplaceable money is reported on its own row, never dropped and never guessed | `commcalc.store_mapping` × `commcalc.store_aliases` (config rows; a new spelling is ONE alias row, never code) | ONE home `account/store_identity.py` (`build_store_resolver` / `store_key` / `store_identity_index` / `ambiguous_identities`) behind the I/O wrapper `coa.store_resolver`; lock `harness_store_identity_lock.py` (523 checks), proof `harness_gp_store_identity.py` (50) — §64. Measured live Jul–Oct 2026: the token join it replaced was dropping **$106,400.37** of house revenue out of the Gross Profit report |
+| **What did this month SELL?** — asked by the Gross Profit report, the P&L's accessory/device lines, the Sales Report, the tax report and the pay engines. Answered by `raw_sales` ∪ `daily_sales_feed` deduped by `trans_id`, NEVER by either table alone: the archive is the month-END record and the feed is where a day's lines arrive, so a reader bound to one goes blind exactly when the other is the truth | `commcalc.raw_sales` × `commcalc.daily_sales_feed` | ONE transaction-grain home `router._sales_rows_union_txn` (per-day display sibling `_sales_rows_union`, NOT pay-eligible; the P&L's own `coa._sales_union_rows` is the same union's rule inside the statement engine), dereferenced by `router._compute_gp` (§4a.3, 2026-10-17), the tax report, the sales report and `commission_engine._read_sales` under `sales_source='union'`. Measured live Luxelink September 2026: the archive-only read silenced **$53,639.38** of accessory revenue and five GP columns | §4, §4a.3 — lock §I of `harness_gp_pnl_commission_parity.py` |
 | **Is this carrier dollar a commission, a spiff, a residual or a reimbursement — and is that the ORG'S OWN declaration or a guess the platform made?** The basis is part of every answer: `declared` / `inferred_prior_year_twin` / `keyword_rule` / `declared_category_unmapped` / `unresolved`, each with its reason in words. An inference never passes as a declaration | `commcalc.payment_categories` (the declaration) × `commcalc.carrier_category_map` (the fallback ladder) × `commission_org_config.carrier_class_*` | ONE home `commcalc/carrier_dollar_class.py` (`classify` / `tally` / `component_line` for the P&L line, `gp_column_of_classification` / `gp_column_of_declared_category` for the GROSS-PROFIT column, and `component_is_evidence` — §66 — for "is this component evidence about the dollar, or a placement of last resort", which a per-device caller answers by DECLINING the dollar and a statement by NAMING a column for it), dereferenced by `account/coa.py`, `commcalc/gp_report.py` and `commcalc/router.py`; locks `harness_carrier_dollar_class.py` (88 checks, the owner's 103 Fulton figures armed as a negative control) and `harness_gp_carrier_class_dereference.py` (§58.7, the GP dereference and `harness_component_basis_evidence.py` (§66, the basis→reliability rule, its caller inventory and its one-copy check); module-graph fact `carrier_dollar_component` — §58. Measured live Mar–Oct 2026: **$2,784,846.76** booked as commission against the org's own declaration, $1,078,862.83 of the reclassification resting on an inference. **§69: the declaration must be EXPRESSIBLE** — `carrier_map.COMPONENTS` covers every category `PLACEABLE_CATEGORIES` names, because a category it could not express left a keyword guess booking $260,500.00 of the house org's own declared MDF money on the device-financing reimbursement line; `component_label`, `device_reimb_line` and `device_reimb_components` are the same fact and live here too; lock `harness_declared_category_honourable.py` (74) |
 | **Did the carrier actually pay what the distributor claims it paid?** One payment, two sides: the carrier statement is the money, `asset_ledger.reimbursement` is a claim about it. The claim books NO revenue under `device_reimb_source='carrier_paid'` and is HELD, per store, with the difference named | `commcalc.raw_comp_report` (REIMBURSEMENT component) vs `commcalc.asset_ledger.reimbursement` | `account/coa.py` → `L["_distributor_reimb_claim"]` (`claim_total`, `carrier_paid_total`, `difference`, `status`). 103 Fulton Sept 2026: claimed $7,999.93 vs paid $7,583.96, gap $415.97. Reconciling the gap and flagging it is a SEPARATE mechanism — §58.3 |
 | **May this caller SET an employee's pay?** (adding a person, a bulk sheet, an edit, a payscale upload) | `storeops.tenants.pay_visibility` / `pay_visible_roles` + the `employee_pay_rates` grant (the same config that decides who SEES pay) | `storeops/router.py::gate_pay_write` (one gate, every writer) → `pay_visibility.can_see_pay`; the page reads the reply through `lib/rowSave.ts::notSavedFields` / `notSavedNote`; lock `harness_pay_write_gate_lock.py` (§19.44) |

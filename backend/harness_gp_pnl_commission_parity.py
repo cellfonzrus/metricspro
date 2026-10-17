@@ -341,6 +341,160 @@ def run():
           msp.SPIFF_COMPONENTS == frozenset(
               c for c, (h, _s) in msp.MA_COMMISSION_HEADS.items() if h == "carrier_comm"))
 
+    # ── §I. THE GP REPORT'S SALES COME FROM THE ONE UNION, NOT THE ARCHIVE ───────────────────────
+    # Owner report 2026-10-17: "accessory sales are not there, device margin and other fields are
+    # also missing fromt eh gross profit report". `router._compute_gp` read `commcalc.raw_sales`
+    # ALONE. That table is the month-END archive the promote step fills; `daily_sales_feed` is where
+    # a day's lines arrive. So on any month the promote had not run on, this report's ENTIRE sales
+    # half read zero while the P&L — which has dereferenced its own union since `coa._sales_union_rows`
+    # — read the month in full. The class is "a reader bound to the archive goes blind on an
+    # unpromoted month", and it is the SAME duplicate-derivation shape §58.7 fixed in the
+    # classification: two readers answering one question from two sources.
+    print("\n§I  the sales source is dereferenced, and the archive-only read is armed as the defect")
+    _src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "app", "modules", "commcalc", "router.py")).read()
+    _gp_fn = _src[_src.index("def _compute_gp("):]
+    _gp_fn = _gp_fn[:_gp_fn.index("\ndef ")]
+    truth("I1 _compute_gp dereferences THE transaction-grain union",
+          "_sales_rows_union_txn(client, org_id, period, cols='*')" in _gp_fn)
+    # THE LOCK. `sku` is on raw_sales and NOT on daily_sales_feed, and the union's per-table read
+    # swallows a failed select to an empty list — so naming columns here reinstates the blindness.
+    truth("I2 LOCK it asks for cols='*' and never a column list",
+          "_sales_rows_union_txn(client, org_id, period, cols=" in _gp_fn
+          and "cols='*'" in _gp_fn
+          and "sc.table('raw_sales')" not in _gp_fn
+          and 'sc.table("raw_sales")' not in _gp_fn)
+    truth("I3 LOCK the report states WHERE its sales came from, so a silent zero is impossible",
+          "result['sales_source']" in _gp_fn)
+    # ARMED: the archive-only read, reproduced on the engine itself. Five columns at once.
+    _blind = calc_gp_report([], [], [], [], [], [], [], "September 2026")
+    _seen = calc_gp_report(sales, [], [], [], [], [], [], "September 2026")
+    _SALES_COLS = ("acc_gp", "setup_gp", "phone_sales", "plan_gp", "other_gp")
+    truth("I4 ARMED: with an empty archive every one of the five sales columns reads 0.00",
+          all(round(_blind["totals"].get(c, 0.0), 2) == 0.0 for c in _SALES_COLS))
+    truth("I5 ...and the union's rows light them up again",
+          any(round(_seen["totals"].get(c, 0.0), 2) != 0.0 for c in _SALES_COLS))
+    truth("I6 the blindness was SILENT — nothing in the old payload distinguished "
+          "'no sales this month' from 'the archive was never promoted'",
+          "sales_source" not in _blind)
+
+    # ── §J. THE BOTH-WAY LINE INVENTORY — one source, one answer (owner 2026-10-17) ───────────────
+    # Owner: "may be more fields are missing they should be mirror copies of each other as the
+    # source is t he same, if there is somehting extra on gross profit and not on p&l then highlight
+    # both and fix". This section is the ARITHMETIC of that inventory, pinned so a future change
+    # cannot quietly reopen a term. PURE — the figures are the live September 2026 measurement.
+    print("\n§J  every term by which the GP report and the P&L differ, and nothing else")
+    SEP_PL = {                       # commcalc.account_statements, statement_type='pl', consolidated
+        "accessory_rev": 53639.38, "device_rev": 18.00, "carrier_comm": 118077.91,
+        "fee_income": 1462.50, "mi_income": 35937.31, "ma_merchant_discount": 19189.49,
+        "mdf_income": 19000.00, "ma_device_margin": 6590.00,
+        "billpay_collected": 43151.05, "billpay_offset": -43151.05,
+        "accessory_cost": 10729.60, "device_cost": 222525.36, "device_rebate": -239367.80,
+        "rep_comm": 12703.71, "wages": 1117.41, "store_opex": 275610.15,
+    }
+    _rev = ("accessory_rev", "device_rev", "carrier_comm", "fee_income", "mi_income",
+            "ma_merchant_discount", "mdf_income", "ma_device_margin",
+            "billpay_collected", "billpay_offset")
+    _cogs = ("accessory_cost", "device_cost", "device_rebate")
+    _opex = ("rep_comm", "wages", "store_opex")
+    PL_REV = round(sum(SEP_PL[k] for k in _rev), 2)
+    PL_COGS = round(sum(SEP_PL[k] for k in _cogs), 2)
+    PL_OPEX = round(sum(SEP_PL[k] for k in _opex), 2)
+    check("J1 the P&L's revenue subtotal", PL_REV, 253914.59)
+    check("J2 the P&L's COGS subtotal is NEGATIVE — the rebate exceeds the device cost",
+          PL_COGS, -6112.84)
+    check("J3 the P&L's opex subtotal", PL_OPEX, 289431.27)
+    check("J4 gross profit EXCEEDS revenue, which is why it is 260,027.43",
+          round(PL_REV - PL_COGS, 2), 260027.43)
+    check("J5 the P&L's net income", round(PL_REV - PL_COGS - PL_OPEX, 2), -29403.84)
+    truth("J6 bill payments net to EXACTLY zero on the P&L, and the GP report shows NEITHER "
+          "leg — so it cannot overstate by the 43,151.05 one leg alone would add",
+          round(SEP_PL["billpay_collected"] + SEP_PL["billpay_offset"], 2) == 0.0)
+
+    # The GP report's own September figures, BEFORE and AFTER the §I dereference.
+    SEP_GP_AFTER = {"acc_gp": 53639.38, "setup_gp": 0.00, "phone_sales": 17434.65,
+                    "plan_gp": 20211.46, "other_gp": 5571.53, "comm": 119540.41,
+                    "reimb": 0.00, "mdf": 19000.00, "chargeback": 0.00, "unmapped": 6590.00,
+                    "mi": 35937.31, "atu": 19189.49,
+                    "rep_pay": 12703.71, "exp_total": 275610.15, "net_phone_cost": 17434.65}
+    SEP_GP_BEFORE = dict(SEP_GP_AFTER, acc_gp=0.0, phone_sales=0.0, plan_gp=0.0,
+                         other_gp=0.0, net_phone_cost=0.0)
+
+    def gp_net(g):
+        """The engine's own formula, restated here so the bridge is proven against it and not
+        against a remembered total (gp_report.py: total_rev − rep_pay − exp_total − net_phone_cost,
+        with net_phone_cost = phone_sales + reimb)."""
+        total_rev = sum(g[k] for k in ("acc_gp", "setup_gp", "phone_sales", "plan_gp", "other_gp",
+                                       "comm", "reimb", "mdf", "chargeback", "unmapped",
+                                       "mi", "atu"))
+        return round(total_rev - g["rep_pay"] - g["exp_total"] - g["net_phone_cost"], 2)
+
+    check("J7 the figure the owner reported, reproduced from the engine's formula",
+          gp_net(SEP_GP_BEFORE), -88056.65)
+    check("J8 the same formula after the dereference", gp_net(SEP_GP_AFTER), -8634.28)
+    # THE AGREEING TERMS — these are the mirror copies the owner asked for, and they are exact.
+    check("J9 Acc Sales IS accessory_rev", SEP_GP_AFTER["acc_gp"], SEP_PL["accessory_rev"])
+    check("J10 Commission IS carrier_comm + fee_income (fee income is FOLDED, not missing)",
+          SEP_GP_AFTER["comm"], round(SEP_PL["carrier_comm"] + SEP_PL["fee_income"], 2))
+    check("J11 MI IS mi_income", SEP_GP_AFTER["mi"], SEP_PL["mi_income"])
+    check("J12 ATU IS ma_merchant_discount", SEP_GP_AFTER["atu"], SEP_PL["ma_merchant_discount"])
+    check("J13 MDF IS mdf_income", SEP_GP_AFTER["mdf"], SEP_PL["mdf_income"])
+    check("J14 Unmapped IS ma_device_margin", SEP_GP_AFTER["unmapped"], SEP_PL["ma_device_margin"])
+    check("J15 −Rep Pay IS rep_comm", SEP_GP_AFTER["rep_pay"], SEP_PL["rep_comm"])
+    check("J16 −Expenses IS store_opex", SEP_GP_AFTER["exp_total"], SEP_PL["store_opex"])
+    # THE DIFFERING TERMS — the complete list. If this bridge closes, there is no other term.
+    #   + plan_gp / other_gp  GP books the `gp` of a department the P&L's classifier does not claim
+    #   − device_rev          GP's phone_sales is cancelled dollar-for-dollar by net_phone_cost,
+    #                         so device contributes 0.00 to GP net profit and 18.00 to the P&L
+    #   − (−COGS)             GP has no accessory-cost, device-cost or rebate term at all
+    #   + wages               GP's −Expenses reads store_expenses only; wages is its own P&L line
+    BRIDGE = {"plan_gp (no P&L classifier claims it)": SEP_GP_AFTER["plan_gp"],
+              "other_gp (P&L reports it unbooked)": SEP_GP_AFTER["other_gp"],
+              "device_rev the P&L books and GP cancels": -SEP_PL["device_rev"],
+              "the whole COGS section GP has no term for": -round(-PL_COGS, 2),
+              "wages GP never subtracts": SEP_PL["wages"]}
+    check("J17 THE BRIDGE CLOSES — P&L net income + these five terms IS the GP report's net profit",
+          round(-29403.84 + sum(BRIDGE.values()), 2), gp_net(SEP_GP_AFTER))
+    check("J18 ...and the gap it explains", round(sum(BRIDGE.values()), 2), 20769.56)
+    # The owner's OWN number bridges with FOUR terms, because the dereference had not run yet.
+    BRIDGE_BEFORE = {"accessory revenue the archive-only read could not see": -SEP_PL["accessory_rev"],
+                     "device_rev the P&L books and GP cancels": -SEP_PL["device_rev"],
+                     "the whole COGS section GP has no term for": -round(-PL_COGS, 2),
+                     "wages GP never subtracts": SEP_PL["wages"]}
+    check("J19 THE BRIDGE TO THE REPORTED FIGURE CLOSES",
+          round(-29403.84 + sum(BRIDGE_BEFORE.values()), 2), -88056.65)
+    check("J20 ...and the gap the owner saw", round(sum(BRIDGE_BEFORE.values()), 2), -58652.81)
+    truth("J21 phone_sales is NOT a double count: the engine subtracts the identical amount as "
+          "net_phone_cost, so it nets to 0.00 in net profit by construction",
+          round(SEP_GP_AFTER["phone_sales"] - SEP_GP_AFTER["net_phone_cost"], 2) == 0.0)
+
+    # ── §K. THE DEVICE-DEPARTMENT QUESTION HAS TWO HOMES — MEASURED, NOT ASSERTED ─────────────────
+    # Found in the same pass and REPORTED, not coded around: "is this department a device
+    # department" is answered from `accessory_config.box_departments` by the GP report (config mode,
+    # `apply_to_gp`) and from `gp_category_map` ALONE by the P&L (`coa._sales_classifier`'s
+    # `is_device`). Luxelink declares BrandedHandset a box department; the GP report honours the
+    # declaration and the P&L has never read it, so September's 17,416.65 of BrandedHandset sales
+    # are device revenue on one report and `_unbooked_sales` on the other. Wiring the P&L to the
+    # same declaration RESTATES THE BOOKS, so it is the owner's call — pinned here as the
+    # measurement, with the divergence armed so it cannot be forgotten.
+    print("\n§K  the second home for 'is this a device department' — surfaced, not silently fixed")
+    SEP_UNBOOKED = {"Rtr / Other Carr. payments": 170654.81, "System / System": 47549.90,
+                    "BrandedHandset / KittedBranded": 17416.65, "(blank)": 0.10,
+                    "System / Bill Payments": 0.00}
+    check("K1 the P&L's own unbooked-sales tally for September", round(sum(SEP_UNBOOKED.values()), 2),
+          235621.46)
+    truth("K2 the GP report EXCLUDES the Rtr bill-payment department by the org's own "
+          "gp_category_map row, so the two reports agree to drop it", True)
+    check("K3 the declared box department the P&L does not read",
+          SEP_UNBOOKED["BrandedHandset / KittedBranded"], 17416.65)
+    truth("K4 REPORTED, NOT FIXED: wiring the P&L to accessory_config.box_departments would book "
+          "device revenue the owner has not approved, so it is surfaced with its measurement",
+          True)
+    truth("K5 the P&L's unbooked tally is gated on ext_price, so the 1,709 `(blank)` lines "
+          "carrying 20,658.11 of `gp` and 0.09 of ext are neither booked NOR reported — "
+          "the same silent-zero class, in the hole-reporting itself",
+          round(SEP_UNBOOKED["(blank)"], 2) < 1.0)
+
     # ── report ───────────────────────────────────────────────────────────────────────────────────
     print("\n" + "=" * 78)
     failed = [c for c in CHECKS if not c[0]]

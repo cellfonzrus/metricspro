@@ -24222,12 +24222,29 @@ def _compute_gp(client, org_id, period, market=""):
     # / net_profit) do NOT read them and are byte-identical. Defensive fallback to the pre-⑦ select so a
     # tenant/table without those columns can never break the GP page (composition then counts every line,
     # exactly as it did before).
-    _sales_cols = 'store,department,category,gp,product_desc,ext_price,salesperson,product_id,sku,voided,trans_type'
-    try:
-        sales  = sc.table('raw_sales').select(_sales_cols).eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
-    except Exception as _sce:
-        print(f'WARN gp sales select fell back (no voided/trans_type columns?): {_sce}')
-        sales  = sc.table('raw_sales').select('store,department,category,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    # ── SALES COME FROM THE ONE TRANSACTION-GRAIN UNION, NOT THE ARCHIVE (owner report 2026-10-17,
+    # "accessory sales are not there, device margin and other fields are also missing fromt eh gross
+    # profit report") ────────────────────────────────────────────────────────────────────────────────
+    # This read was `raw_sales` ALONE. `commcalc.raw_sales` is the month-END archive that the promote
+    # step fills; `commcalc.daily_sales_feed` is where a day's lines actually ARRIVE. So for every
+    # month the promote has not run on, this report's whole sales half read ZERO while the P&L — which
+    # has dereferenced the union since its own `coa._sales_union_rows` — read the month in full. That
+    # is not a Luxelink fact and not an accessory fact: it is the CLASS "a reader bound to the archive
+    # goes blind on an unpromoted month", and it silenced FIVE columns at once here (Acc Sales, Setup,
+    # Phone Sales, Plan GP, Other GP) plus every department in the composition map. Measured live,
+    # Luxelink September 2026: raw_sales 0 rows, daily_sales_feed 9,514 rows, $53,639.38 of accessory
+    # revenue absent from a report whose own net profit therefore read $58,652.81 below the books'.
+    #
+    # `_sales_rows_union_txn` is THE transaction-grain union (raw_sales u daily_sales_feed, deduped by
+    # trans_id, the open-month primary winning a whole transaction) and it is pay-eligible, so this is a
+    # dereference of an existing home and NOT a second derivation. For a closed, fully-promoted month
+    # every feed trans_id already exists in raw_sales, the dedup drops every feed row and the merged set
+    # IS raw_sales -> byte-identical to the read it replaces, for every tenant.
+    #
+    # `cols='*'` is LOAD-BEARING, exactly as it is on the other money-path callers: `sku` exists on
+    # raw_sales and NOT on daily_sales_feed, and the union's per-table read swallows a failed select to
+    # an empty list, so naming a feed-absent column here would reinstate the blindness it fixes.
+    sales, _sales_union_meta = _sales_rows_union_txn(client, org_id, period, cols='*')
     # PAGED (index §19.48): this was `.limit(50000)` and July 2026 holds 82,999 payment-detail
     # rows, so the GP report's commission column silently dropped ~33,000 of them.
     pay_detail = _feed_read.read_all(lambda: sc.table('raw_payment_detail')
@@ -24474,6 +24491,11 @@ def _compute_gp(client, org_id, period, market=""):
                             carrier_declarations=_gp_cc_decl, carrier_rules=_gp_cc_rules,
                             carrier_class_config=_gp_cc_cfg)
     result['expenses_carried_from'] = _exp_carried_from
+    # WHERE THIS REPORT'S SALES CAME FROM — stated on the payload, never inferred from an empty column.
+    # The failure this replaces was SILENT: five columns read $0.00 and nothing on screen said the
+    # archive had not been promoted. A reader can now see which table led, how many rows each held, and
+    # how many transactions the other source contributed.
+    result['sales_source'] = dict(_sales_union_meta or {})
     # LABOUR COVERAGE (owner directive 2026-09-08: "salaries … not getting updated for a lot of
     # stores … actual hours if we have them, else scheduled hours, FOR THAT MONTH"). DISPLAY-ONLY —
     # every figure above is byte-identical with or without this block; it only says whether a
