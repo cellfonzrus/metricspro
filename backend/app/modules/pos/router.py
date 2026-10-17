@@ -1856,14 +1856,14 @@ def register_close(body: dict, authorization: str = Header(default=""), org_id: 
     return {"session": r.data}
 
 
-# ── The suspended sale: ONE held cart per register (mig 1087, index §POS-01) ──────────────────────
+# ── The suspended sale: ONE held cart per register (mig 1088, index §POS-01) ──────────────────────
 # Owner 2026-10-16: "if a person leaves the cash register it gets blank if you come back it shoudl
 # automatically store for the next session in suspensed state". The cart is a property of the
 # TERMINAL, keyed on the same (org, store, register) triple as register_sessions above — so "the
 # next session" is literal. All three endpoints dereference pos/held_sale.py; none of them writes a
 # sale, burns a transaction number or moves stock.
 #
-# ADAPTIVE: before migration 1087 is applied the table is absent. Every one of these answers
+# ADAPTIVE: before migration 1088 is applied the table is absent. Every one of these answers
 # `available: false` instead of erroring, and the register then behaves exactly as it did before the
 # feature existed (a cart lost on reload) rather than refusing to work.
 _HELD_TABLE = "held_sales"
@@ -1871,7 +1871,7 @@ _HELD_TABLE = "held_sales"
 
 def _held_unavailable(exc):
     return {"held": None, "available": False,
-            "setup_note": f"apply migration 1087 ({str(exc)[:120]})"}
+            "setup_note": f"apply migration 1088 ({str(exc)[:120]})"}
 
 
 def _held_terminal(store_code, register_number, authorization, org_id):

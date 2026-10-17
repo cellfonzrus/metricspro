@@ -1208,7 +1208,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # routes and each is named: POST /pos/inventory/standard (put standard stock on hand at ONE store —
 # the first single-row write path pos.inventory_standard has ever had, gated `pos_inventory_adjust`,
 # org-scoped and store-span checked) and GET / PUT / DELETE /pos/held-sale (the register's suspended
-# cart — read, suspend, discard; mig 1087, and all three answer `available: false` rather than
+# cart — read, suspend, discard; mig 1088, and all three answer `available: false` rather than
 # erroring before it is applied). One writer is added to pos.inventory_standard and one to the new
 # pos.held_sales; no existing writer changed, no existing route moved, and no report, statement or
 # commission figure gains an input. Verified the same way as every pin above:

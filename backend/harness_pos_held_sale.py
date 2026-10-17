@@ -19,7 +19,7 @@ automatically store for the next session in suspensed state"). stdlib only, DB-f
      are instead of being shown a cart that looks current.
   §G ENDPOINT WIRING — the three endpoints dereference this module, are org-scoped and store-span
      checked, stamp held_by from the CALLER (never a body field), and degrade to
-     `available: false` before migration 1087 is applied.
+     `available: false` before migration 1088 is applied.
   §H REGISTERED — index rows, and the migration carries its REVERT.
   Negative controls prove each rule goes red.
 """
@@ -35,7 +35,7 @@ from app.modules.pos import held_sale as hs  # noqa: E402
 
 _pass = _fail = 0
 ROUTER = "backend/app/modules/pos/router.py"
-MIGRATION = "database/migrations/1087_pos_held_sale.sql"
+MIGRATION = "database/migrations/1088_pos_held_sale.sql"
 INDEX = "docs/SYSTEM_DATA_FLOW_INDEX.md"
 NOW = "2026-10-16T18:40:00+00:00"
 LATER = "2026-10-16T19:05:00+00:00"
@@ -193,11 +193,11 @@ check("G7 the store span is checked before a cart is read or written",
       "_caller_store_keyset(" in router.split("def _held_terminal")[1][:700])
 check("G8 all three go through the one terminal resolver",
       all("_held_terminal(" in e for e in (get_ep, put_ep, del_ep)))
-check("G9 ADAPTIVE — a database without migration 1087 answers available: false, never a 500",
+check("G9 ADAPTIVE — a database without migration 1088 answers available: false, never a 500",
       "_held_unavailable(" in get_ep and "_held_unavailable(" in put_ep
       and "available" in router.split("def _held_unavailable")[1][:300])
 check("G10 the setup note names the migration to apply",
-      "1087" in router.split("def _held_unavailable")[1][:300])
+      "1088" in router.split("def _held_unavailable")[1][:300])
 check("G11 an autosave KEEPS the original held_at (the age is the sale's, not the keystroke's)",
       'k != "held_at"' in put_ep)
 check("G12 the PUT writes the server's clock, not a client timestamp",
@@ -236,4 +236,4 @@ print(f"\n{_pass} passed, {_fail} failed")
 if _fail:
     sys.exit(1)
 print("OK — one suspended cart per register, keyed on the register_sessions triple, stored and restored "
-      "verbatim with its age; not a sale; adaptive before migration 1087.")
+      "verbatim with its age; not a sale; adaptive before migration 1088.")

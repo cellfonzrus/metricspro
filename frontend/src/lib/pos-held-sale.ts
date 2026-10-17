@@ -12,7 +12,7 @@
 // NOT browser storage. localStorage answers "what did THIS browser have"; a tablet swapped between
 // staff, a second browser or a cleared profile all lose the cart, and no manager could ever see
 // that a sale is part-rung. The hold belongs to the register, so it lives on the server
-// (pos.held_sales, mig 1087).
+// (pos.held_sales, mig 1088).
 import { api } from '@/lib/client'
 
 /** A suspended cart line — exactly the register's own cart-line fields, which are the fields
@@ -51,7 +51,7 @@ export interface HeldSale {
 
 export interface HeldSaleResult {
   held: HeldSale | null
-  /** false until migration 1087 is applied — the register then behaves exactly as it did before
+  /** false until migration 1088 is applied — the register then behaves exactly as it did before
    *  the feature existed (a cart lost on reload) rather than showing an error. */
   available: boolean
   message?: string

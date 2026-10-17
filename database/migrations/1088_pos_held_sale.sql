@@ -1,4 +1,4 @@
--- MIGRATION 1087: THE SUSPENDED SALE — one held cart per register
+-- MIGRATION 1088: THE SUSPENDED SALE — one held cart per register
 -- (owner 2026-10-16; docs/SYSTEM_DATA_FLOW_INDEX.md §POS-01). Idempotent, additive. OWNER-RUN — not applied by the agent.
 --
 -- Owner, verbatim: "also if a person leaves the cash register it gets blank if you come back it
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS pos.held_sales (
 );
 
 COMMENT ON TABLE pos.held_sales IS
-  'The suspended sale: ONE held cart per register (mig 1087, index §POS-01). Keyed (org_id, store_code, '
+  'The suspended sale: ONE held cart per register (mig 1088, index §POS-01). Keyed (org_id, store_code, '
   'register_number) — the same triple as pos.register_sessions — so the next session on that terminal is handed '
   'back what the last one left. Not a sale: no transaction number, no stock movement, no money. Lines are stored '
   'and restored verbatim; held_at says how old the prices are. One home: pos/held_sale.py.';
@@ -90,4 +90,4 @@ GRANT ALL ON pos.held_sales TO service_role;
 COMMIT;
 
 NOTIFY pgrst, 'reload schema';
-SELECT 'Migration 1087 complete — pos.held_sales (one suspended cart per register).' AS status;
+SELECT 'Migration 1088 complete — pos.held_sales (one suspended cart per register).' AS status;
