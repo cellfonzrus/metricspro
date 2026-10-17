@@ -861,7 +861,6 @@
 11	react-hooks/static-components	src/app/(platform)/commcalc/imei-recon/page.tsx
 5	react-hooks/static-components	src/app/(platform)/commcalc/mdf-entitlement-coverage/page.tsx
 4	react-hooks/static-components	src/app/(platform)/commcalc/product-mix/page.tsx
-2	react-hooks/static-components	src/app/(platform)/commcalc/sales-comparison/page.tsx
 8	react-hooks/static-components	src/app/(platform)/commcalc/sales-report/page.tsx
 19	react-hooks/static-components	src/app/(platform)/commcalc/settings/page.tsx
 5	react-hooks/static-components	src/app/(platform)/commcalc/spiff-impact/page.tsx

@@ -30,6 +30,23 @@ function pctColor(pct: number | null, current: number): string {
   return 'var(--text3)'
 }
 
+// An overall comparison tile. It closes over nothing, so it lives at MODULE scope — a component
+// defined inside the page body is re-created on every render (react-hooks/static-components).
+// `invert` is for a COST: spending more is not the green that selling more is, so the colour of the
+// change is flipped while the number and the sign are untouched.
+function OverTile({ label, cur, prev, pct, money, invert }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean; invert?: boolean }) {
+  return (
+    <div className="card" style={{ padding: '12px 16px', minWidth: 150, background: 'var(--surface2)' }}>
+      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
+        <div style={{ fontSize: 22, fontWeight: 700 }}>{money ? fmt(cur) : cur}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(invert && pct !== null && pct !== undefined ? -pct : pct, cur) }}>{pctLabel(pct, cur)}</div>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>was {money ? fmt(prev) : prev}</div>
+    </div>
+  )
+}
+
 const MODES = [
   { key: 'mom', label: 'Month over month' },
   { key: 'yoy', label: 'Year over year' },
@@ -77,7 +94,7 @@ export default function SalesComparisonPage() {
 
   // Per-ITEM tiles only. Store expenses are a cost, not an item sold, and get their own tile beside
   // Revenue below — never a tile in the row of things the stores sold.
-  const cats: any[] = (data?.totals_by_category || []).filter((c: any) => !c.expense)
+  const cats: any[] = (data?.totals_by_category || []).filter((c: { expense?: boolean }) => !c.expense)
   const rows: any[] = data?.rows || []
   const baseLbl = data?.base_period || period
   const cmpLbl = data?.compare_period || ''
@@ -139,19 +156,6 @@ export default function SalesComparisonPage() {
       </div>
     )
   }
-
-  // `invert` is for a COST: spending more is not the green that selling more is, so the colour of the
-  // change is flipped while the number and the sign are untouched.
-  const OverTile = ({ label, cur, prev, pct, money, invert }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean; invert?: boolean }) => (
-    <div className="card" style={{ padding: '12px 16px', minWidth: 150, background: 'var(--surface2)' }}>
-      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
-        <div style={{ fontSize: 22, fontWeight: 700 }}>{money ? fmt(cur) : cur}</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(invert && pct !== null && pct !== undefined ? -pct : pct, cur) }}>{pctLabel(pct, cur)}</div>
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>was {money ? fmt(prev) : prev}</div>
-    </div>
-  )
 
   return (
     <div>
