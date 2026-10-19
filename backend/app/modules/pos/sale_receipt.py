@@ -478,6 +478,78 @@ def html(snap, template_v, *, render_document=None, fmt=None, brand=None, discla
                         tenant_name=tenant_name, employee_name=employee_name)
 
 
+# ── WHAT THIS PRINT USES ──────────────────────────────────────────────────────────────────────────
+# Owner 2026-10-19, verbatim: *"all stores should have the option to print the print in the required
+# format from the print receipt screen as there are receipts from the thermal printer also"*.
+#
+# WHAT WAS WRONG. The layout was a per-ORG stored setting and nothing else. One counter prints the
+# same sale on a thermal roll and, minutes later, on the office laser — and had no way to say so:
+# whichever layout the org had stored was the only one it could produce. An admin changing the org
+# setting to serve one counter changed it for every store.
+#
+# THE FIX IS ONE RESOLVER, not a second path. `print_choice` answers "which layout and which paper
+# does THIS print use", from three inputs in order: what the screen ASKED for, else what this STORE
+# declared, else what the ORG's template says. The asked-for value is validated against the SAME
+# `LAYOUTS` / `PAPER_PX` vocabularies the stored one is, so a request cannot reach a layout a
+# setting could not, and `source` names which of the three won so the screen can say it.
+
+
+def paper_options() -> list[dict]:
+    """The paper widths this renderer can produce — derived from PAPER_PX, never a second list."""
+    return [{"value": mm, "label": f"{mm} mm roll" if mm != DEFAULT_PAPER_MM else f"{mm} mm roll (standard)"}
+            for mm in sorted(PAPER_PX)]
+
+
+def clean_paper(value, default=DEFAULT_PAPER_MM) -> int:
+    """A requested paper width, or `default` when it is blank, unreadable or not one this renderer
+    can set. Never raises: an unusable width must not stop a store printing a receipt."""
+    try:
+        mm = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return mm if mm in PAPER_PX else default
+
+
+def print_choice(template_v, *, want_layout=None, want_paper=None, store_layout=None,
+                 store_paper=None, format_available: bool = True) -> dict:
+    """Which layout and paper THIS print uses, and where that came from.
+
+    Precedence: the screen's request (one print, nothing stored) → this store's own declaration →
+    the org's template. A request for something unusable does not fail and does not silently
+    substitute something else either: it resolves the same way a stored setting would and
+    `layout_note` carries the sentence saying what will actually come out of the printer.
+    """
+    layout_src = "request"
+    raw_layout = want_layout
+    if not str(raw_layout or "").strip():
+        raw_layout, layout_src = store_layout, "store"
+    if not str(raw_layout or "").strip():
+        raw_layout, layout_src = template_v.get("layout"), "org"
+    paper_src = "request"
+    raw_paper = want_paper
+    if not str(raw_paper or "").strip():
+        raw_paper, paper_src = store_paper, "store"
+    if not str(raw_paper or "").strip():
+        raw_paper, paper_src = template_v.get("paper_width_mm"), "org"
+    return {
+        "layout": clean_layout(raw_layout, format_available=format_available),
+        "layout_note": layout_note(raw_layout, format_available=format_available),
+        "layout_source": layout_src,
+        "paper_width_mm": clean_paper(raw_paper, template_v.get("paper_width_mm") or DEFAULT_PAPER_MM),
+        "paper_source": paper_src,
+    }
+
+
+def with_choice(template_v, choice) -> dict:
+    """The template as the renderer should read it for THIS print — the chosen layout and paper laid
+    over the stored row. A copy, so one counter's choice cannot leak into the next print or into the
+    emailed copy of a different sale."""
+    out = dict(template_v)
+    out["layout"] = choice["layout"]
+    out["paper_width_mm"] = choice["paper_width_mm"]
+    return out
+
+
 def layout_options(format_label="") -> list[dict]:
     """What the admin screen offers, with the tenant's own POS named in the second one so the choice
     reads as "print like my POS does" rather than as a code word."""
