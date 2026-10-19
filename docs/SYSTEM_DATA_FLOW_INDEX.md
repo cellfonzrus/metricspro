@@ -13878,7 +13878,7 @@ $78,047.63); the other three companies are unchanged. `totals.excluded_voided_*`
 `payable_including_voided` report exactly what left, and the page renders it, so the figure the owner
 saw in writing stays explainable.
 
-**Proof:** `backend/harness_device_payable.py` (**93 checks**, stdlib-only, DB-free) — §A the join
+**Proof:** `backend/harness_device_payable.py` (**104 checks**, stdlib-only, DB-free) — §A the join
 key, with the negative control that swapping to the column named `imei` collapses the match to zero
 **without erroring**; §B the definition, including that an absent payment date is never read as
 payment; §C the owner's 2025-12-31 numbers reproduced exactly, per company, from a cent-exact
@@ -13894,6 +13894,71 @@ left. Third occurrence of that class (Cash/ePay Pickup 2026-09-10, Device Purcha
 the `alive` flag, its teardown and each guarded setter are asserted, and a bare `.then(setData)` is
 asserted ABSENT. The live per-company figures are pinned as a **dated snapshot** — they are the report's
 definition made arithmetic.
+
+### 23z.1 THE LEADING-EDGE MONTH IS STILL ARRIVING — a part-arrived month is not a prune (2026-10-19)
+
+**Owner, verbatim:** *"Device Payable as at a date — VidaPay / T-CETRA is not showing anything as of
+today, check and fix for good"*.
+
+**It was showing nothing at EVERY date, his own 2025-12-31 year-end included.** Measured live, house
+org, 2026-10-19: `coverage_scan` returned `start_month=None`, so `coverage_state` answered
+`not_measured` for any `as_at` and the page rendered its "not measured at this date" card instead of
+a figure — for months whose coverage ratio is 0.99–1.08.
+
+**THE CLASS — a ratio only measures a prune over a period BOTH feeds have finished.** The invoice
+feed and the unit ledger do not land together: for 2026-10 the invoice feed held 400 units (newest
+`created_on` the 15th) while the ledger snapshot had reached the 8th and carried 222 of them. Ratio
+**0.555**, below `COVERAGE_RATIO` 0.70 — indistinguishable, to the scan, from the genuinely pruned
+2023–2024 months (0.02–0.09). So the current month was judged a COLLAPSE and became `last_gap`;
+`start_month` is the first covered month strictly AFTER the last gap, and no month can follow the
+newest month there is, so the window collapsed to nothing. **The real prune boundary is unchanged
+and plainly visible: 2024-12 at 0.5755, then 2025-01 onward covered.** Feed freshness was read as
+pruning, and the report refused 22 months of evidenced history to say so.
+
+**THE FIX, at the mechanism:** `coverage_scan` judges a month only when it is **strictly before**
+the month holding the ledger's newest row (`m < end_month`, was `<=`). That month is incomplete by
+construction — every month, for every tenant, forever — so it can never be evidence either way.
+The freshness it represents is reported, not used to refuse: `coverage_state` now flags the stale
+tail for a date **in or after** the leading-edge month (`m >= end`, was `>`), and the page says so.
+`cov["leading_edge_month"]` is the ONE named home for "which month is the ledger still filling", so
+no caller re-derives it from `end_month`.
+
+| house org, measured 2026-10-19 | before | after |
+|---|---|---|
+| `coverage.start_month` | `None` | **2025-01** |
+| payable at **2025-12-31** (the owner's question) | *not measured* | **$484,096.80** on 1,593 units |
+| payable at **2026-09-30** | *not measured* | **$318,002.01** on 2,178 units |
+| payable at **today** | *not measured* | **$0.00** on 1,027 units — see 23z.2 |
+| months judged | 2023-04 … 2026-10 | 2023-04 … 2026-09 (leading edge unjudged) |
+
+**Siblings checked (duplicate gate).** `coverage_scan` / `coverage_state` / `stale_tail` have exactly
+one home and one caller each — `device_payable.aggregate` and the page's note; a tree-wide grep finds
+no second coverage derivation to fix or excuse. Only the house org holds this feed (0 rows for every
+other org in `vip_invoice_devices` and `asset_ledger`), so there is no second tenant carrying the
+defect. No migration, no config row, no money moved.
+
+**The lock:** `harness_device_payable.py` §D13–D17 — D13 reproduces the live shape (dense covered
+history + one part-arrived current month) and asserts the window opens at the real prune boundary;
+D17 is a **property** across ten leading-edge shapes (thin, fat, above and below the ratio) asserting
+the leading-edge month is judged in none of them. Relaxing the comparison back to `<=` fails D13,
+D14, D16 and D17. §J13 pins the page's wording.
+
+### 23z.2 A PAYABLE UNIT THE FEED PUTS NO MONEY ON — declared, never inferred (2026-10-19)
+
+Found while verifying the fix above, and reported rather than papered over. **Every one of the 1,027
+units unpaid as at today carries `owed_to_vip` 0.00.** The distributor states nothing owed while a
+unit sits inside its reimbursement window (`category` *"Sold Within 10 Days. Pending
+Reimbursement"*, `due_date` in the future) and books the amount when that window closes — 3 of 1,593
+at 2025-12-31, 838 of 2,178 at 2026-09-30, 1,027 of 1,027 today. So a payable asked for TODAY is
+legitimately a count with no money against it, and printing the count alone reads exactly like the
+blank report that was reported.
+
+`totals.payable_devices_without_amount` publishes the count beside the figure and the page declares
+it in the reader's own terms. The units still count as payable DEVICES — a unit with no amount is
+unpaid, not absent. **The feed's `raw_row` does carry a device `Price` and this report does not read
+it:** the §E licence is for `owed_to_vip` measured against the distributor's own settled batches, and
+nothing licenses a price as a debt. `harness_device_payable.py` §G8–G10 pins all three claims,
+including the absence of any price identifier from the module.
 
 ## 23aa. DISTRIBUTOR CHARGEBACKS — two separate charges, both P&L expense (owner directive 2026-09-11)
 

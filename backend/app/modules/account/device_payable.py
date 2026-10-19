@@ -272,7 +272,8 @@ def coverage_scan(ledger_rows, device_rows, ratio=COVERAGE_RATIO, min_devices=CO
     month makes the prune visible as an arithmetic collapse, and the boundary falls out of the data:
 
       covered month   = ledger rows acquired that month / units invoiced that month >= `ratio`,
-                        judged only on months with at least `min_devices` invoiced units;
+                        judged only on months with at least `min_devices` invoiced units AND only
+                        on months the ledger has FINISHED — see `leading_edge_month` below;
       start_month     = the first judged, COVERED month after the last collapse — the first month
                         the ledger can actually evidence. Deliberately not "the month after the
                         gap": that month may hold no rows at all, and a window opening on a month
@@ -280,6 +281,20 @@ def coverage_scan(ledger_rows, device_rows, ratio=COVERAGE_RATIO, min_devices=CO
       end_month       = the last month the ledger holds any row for. Beyond it the snapshot simply
                         has not caught up yet — that is FRESHNESS, not pruning, so it is reported as
                         a stale tail rather than refusing the whole answer.
+
+    THE LEADING-EDGE MONTH IS STILL ARRIVING, AND A MONTH STILL ARRIVING IS NOT EVIDENCE OF A
+    PRUNE (measured defect, house org, 2026-10-19). The two feeds do not land together: the invoice
+    feed held 400 units for 2026-10 while the ledger snapshot had reached only the 8th and carried
+    222 of them. Ratio 0.555 — indistinguishable, to this scan, from a pruned month, so 2026-10 was
+    judged a COLLAPSE, became `last_gap`, and since no covered month can follow the newest month,
+    `start_month` fell to None and EVERY date came back 'not_measured' — not just today, but the
+    owner's own 2025-12-31 question, whose months are covered 0.99-1.08.
+
+    The general fact that was wrong: a ratio only measures a prune over a period BOTH feeds have
+    finished. So the month holding the ledger's own newest row is never judged — it is incomplete
+    by construction, every month, for every tenant. Freshness at the leading edge is reported as a
+    stale tail (`coverage_state`), which is what this module already does beyond `end_month`; the
+    bug was that the boundary fell one month short of the data.
 
     No year, no tenant and no carrier appears here: an org whose ledger is complete from 2022 gets
     2022, and one with no ledger at all gets `start_month=None`, which is "not measured" everywhere.
@@ -299,7 +314,10 @@ def coverage_scan(ledger_rows, device_rows, ratio=COVERAGE_RATIO, min_devices=CO
     rows, last_gap = [], None
     for m in months:
         lc, ic = led.get(m, 0), inv.get(m, 0)
-        judged = ic >= min_devices and (end_month is None or m <= end_month)
+        # `m < end_month`, STRICTLY: the month carrying the ledger's newest row is still filling,
+        # so its ratio compares a part-month of ledger against a fuller month of invoices. Judging
+        # it reads feed freshness as pruning (the 2026-10 defect in the docstring).
+        judged = ic >= min_devices and (end_month is None or m < end_month)
         r = lc / ic if ic else None
         covered = (r is not None and r >= ratio) if judged else None
         rows.append({"month": m, "ledger_rows": lc, "invoiced_devices": ic,
@@ -318,8 +336,10 @@ def coverage_scan(ledger_rows, device_rows, ratio=COVERAGE_RATIO, min_devices=CO
         if r["judged"] and r["covered"] and (last_gap is None or r["month"] > last_gap):
             start = r["month"]
             break
-    return {"start_month": start, "end_month": end_month, "months": rows,
-            "ratio_threshold": ratio, "min_devices_judged": min_devices}
+    # ONE home for "which month is the ledger still filling". `end_month` is the same month under
+    # a name that says what it is FOR, so a caller asking about freshness never re-derives it.
+    return {"start_month": start, "end_month": end_month, "leading_edge_month": end_month,
+            "months": rows, "ratio_threshold": ratio, "min_devices_judged": min_devices}
 
 
 def coverage_state(cov, as_at):
@@ -340,7 +360,11 @@ def coverage_state(cov, as_at):
                 "%s, so a payable at this date would be confidently wrong rather than merely "
                 "uncertain" % start,
                 False)
-    return ("measured", None, bool(end and m > end))
+    # `>=`, not `>`: the leading-edge month is part-arrived, so a date INSIDE it has the same stale
+    # tail as a date beyond it — units billed since the ledger's newest row have no ledger row yet
+    # and land in "not in the unit ledger" rather than in the payable. Saying so is the honest form
+    # of no longer refusing the answer.
+    return ("measured", None, bool(end and m >= end))
 
 
 # ── THE AGGREGATION (pure) ────────────────────────────────────────────────────────────────────────
@@ -400,7 +424,15 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
     cells, unmatched_units, unplaced = {}, [], {}
     tot = {"payable_amount": 0.0, "payable_devices": 0, "paid_amount": 0.0, "paid_devices": 0,
            "unknown_devices": 0, "unknown_amount": 0.0, "unmatched_devices": 0,
-           "invoiced_devices": 0, "before_coverage_devices": 0}
+           "invoiced_devices": 0, "before_coverage_devices": 0,
+           # A PAYABLE DEVICE THE FEED PUTS NO MONEY ON. Measured house org 2026-10-19: every one
+           # of the 1,027 units unpaid today carries `owed_to_vip` 0 — the distributor states no
+           # amount while a unit is inside its reimbursement window ("Sold Within 10 Days. Pending
+           # Reimbursement"), and books one when that window closes. So a payable AT TODAY is
+           # legitimately $0.00 on a thousand devices, and printing that alone reads as a broken
+           # report. Counted and declared, never inferred from a price column this report has no
+           # licence for.
+           "payable_devices_without_amount": 0}
     seen_payable, repeat = set(), {"rows": 0, "amount": 0.0}
 
     if state == "measured":
@@ -466,6 +498,8 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
                 repeat["rows"] += 1           # the ledger owes for it ONCE, so the extra row is
                 repeat["amount"] += amt       # declared rather than silently doubling the figure
             seen_payable.add(unit_key)
+            if amt == 0:
+                tot["payable_devices_without_amount"] += 1
             tot["payable_amount"] += amt
             tot["payable_devices"] += 1
             c["payable_amount"] += amt
@@ -567,6 +601,11 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             "payment_date_unknown_devices": tot["unknown_devices"] if measured else None,
             "payment_date_unknown_amount": r2(tot["unknown_amount"]) if measured else None,
             "before_coverage_devices": tot["before_coverage_devices"] if measured else None,
+            # The honest companion to `payable_amount`: how many of the unpaid units the feed puts
+            # no money on at all. A zero payable beside a large count here is the feed's own
+            # position, not an empty report.
+            "payable_devices_without_amount": (tot["payable_devices_without_amount"]
+                                               if measured else None),
             "repeat_serial_rows": repeat["rows"] if measured else None,
             "repeat_serial_amount": r2(repeat["amount"]) if measured else None,
             "distinct_device_payable_amount": (r2(tot["payable_amount"] - repeat["amount"])
