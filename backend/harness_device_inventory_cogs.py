@@ -853,5 +853,118 @@ check("H7  the store basis is a per-org CONFIG value, never a tenant or carrier 
                if w in " | ".join(_deciding_strings(SRCS[BASIS_HOME])).lower()])
 
 
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+# §I — A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, on LuxeLink September 2026: *"how come the device cost is less than the device rebate"* —
+# Device cost $164,730.35, Device purchase rebates (contra-COGS) −$180,191.91.
+#
+# THE CLASS. A handset's rebate books off `raw_ma_commission`, one row at a time, unconditionally.
+# Its cost books only if the same handset's `sku` can be priced off `raw_ma_fulfillment`, and an
+# ORDER-TYPE ALLOWLIST silently decided which fulfillment rows were allowed to carry a price. A
+# family the distributor opened after the allowlist was written priced NOTHING, so every handset
+# bought under it netted a full rebate against a zero cost. Measured live: 71 of September's 77
+# unpriced handsets, $26,299.29 of cost dropped against $27,449.27 of rebate that booked anyway.
+#
+# THE FIX IS THE MECHANISM, NOT THE FAMILY. A fulfillment row prices a handset when the two feeds
+# AGREE it is one: its `product_name` is a `sku` a handset actually activated under. Evidence, not
+# vocabulary — no distributor name in code (RULE TWO), and the next family prices itself.
+_DCG = SRCS[BASIS_HOME]
+DC = device_cogs
+from app.modules.account import ma_store_pnl as MSP                              # noqa: E402
+
+# I1 — the live shape, as the two feeds actually carry it. Two order-type families of handsets, a
+# SIM kit and a cable; the second handset family is the one the allowlist never knew.
+_I_FUL = [
+    {"product_name": "Phone A", "order_type": "Branded Handset", "number_ordered": 2, "price": 600.0},
+    {"product_name": "Phone B", "order_type": "Second Family",   "number_ordered": 2, "price": 350.0},
+    {"product_name": "SIM Kit", "order_type": "Marketplace SIMs", "number_ordered": 10, "price": 3.0},
+    {"product_name": "Cable",   "order_type": "Accessory Vendor", "number_ordered": 5, "price": 1.0},
+]
+_I_COMM = [
+    {"imei": "A1", "sku": "Phone A"}, {"imei": "A2", "sku": "Phone A"},
+    {"imei": "B1", "sku": "Phone B"}, {"imei": "B2", "sku": "Phone B"},
+    {"imei": "Z1", "sku": "Product Not Available"},          # SIM-only / BYOD line, never a handset
+]
+_I_NAMES = DC.ma_device_product_names(_I_COMM)
+_I_BEFORE = DC.ma_sold_cost_from_rows(_I_COMM, DC.ma_unit_price_from_rows(_I_FUL))
+_I_AFTER = DC.ma_sold_cost_from_rows(_I_COMM, DC.ma_unit_price_from_rows(_I_FUL, _I_NAMES))
+
+check("I1  THE REGRESSION: on the allowlist alone the second family's handsets cost $0.00 while "
+      "their rebate books in full",
+      _I_BEFORE["cost"] == 1200.0 and _I_BEFORE["meta"]["unpriced_sku"] == 2,
+      "cost=%s unpriced=%s" % (_I_BEFORE["cost"], _I_BEFORE["meta"]["unpriced_sku"]))
+check("I2  the two feeds' agreement prices them — $1,200.00 + $700.00, nothing unpriced",
+      _I_AFTER["cost"] == 1900.0 and _I_AFTER["meta"]["unpriced_sku"] == 0,
+      "cost=%s" % _I_AFTER["cost"])
+check("I3  the SIM kit and the cable are still NOT device cost — no handset activated under them",
+      "sim kit" not in DC.ma_unit_price_from_rows(_I_FUL, _I_NAMES)
+      and "cable" not in DC.ma_unit_price_from_rows(_I_FUL, _I_NAMES))
+check("I4  'Product Not Available' can never licence a price (it is the distributor's own "
+      "'we could not name it', and it is a SIM-only line)",
+      "product not available" not in _I_NAMES)
+check("I5  evidence only ever ADDS: every price the allowlist produced survives it",
+      all(DC.ma_unit_price_from_rows(_I_FUL, _I_NAMES).get(k) == v
+          for k, v in DC.ma_unit_price_from_rows(_I_FUL).items()))
+check("I6  omitting the evidence is byte-identical to the pre-2026-10-19 behaviour",
+      DC.ma_unit_price_from_rows(_I_FUL) == DC.ma_unit_price_from_rows(_I_FUL, None)
+      == DC.ma_unit_price_from_rows(_I_FUL, ()))
+
+# I7–I9 — the COVERAGE read-out: every family named, and a family nobody ruled on is REPORTED.
+_I_COV = DC.ma_fulfillment_coverage(_I_FUL, _I_NAMES)
+check("I7  every order-type family is named, device or not — none is silently absent",
+      sorted(f["order_type"] for f in _I_COV["families"])
+      == ["Accessory Vendor", "Branded Handset", "Marketplace SIMs", "Second Family"])
+check("I8  a family that prices nothing and carries no stated reason is REPORTED, never papered "
+      "over — and with the SAME literal the daily-tx coverage uses",
+      _I_COV["unruled"] == ["Accessory Vendor", "Marketplace SIMs"]
+      and all(f["reason"] == MSP.NO_RULE_REASON for f in _I_COV["families"]
+              if f["order_type"] in _I_COV["unruled"])
+      and DC._NO_RULE_REASON is MSP.NO_RULE_REASON)
+check("I9  the org's own stated reason retires it from `unruled` — CONFIG, never code",
+      DC.ma_fulfillment_coverage(
+          _I_FUL, _I_NAMES, {"accessory vendor": "cables, booked as accessory cost"}
+      )["unruled"] == ["Marketplace SIMs"])
+
+# I10–I12 — THE LOCK. `meta` alone never reaches a reader, so a dropped handset has to be SAID on
+# the statement, in the one passthrough, through the one home.
+check("I10 an unpriced handset produces a note that says the rebate booked and the cost did not",
+      "rebate" in (DC.unpriced_handsets_note({"ma": _I_BEFORE["meta"]}) or "")
+      and "NOT on the distributor's fulfillment sheet"
+          in (DC.unpriced_handsets_note({"ma": _I_BEFORE["meta"]}) or ""))
+check("I11 nothing unpriced means NO note — an invented reassurance is as bad as a silence",
+      DC.unpriced_handsets_note({"ma": _I_AFTER["meta"]}) is None)
+check("I12 the models are NAMED, not just counted — a bare count cannot be acted on",
+      _I_BEFORE["meta"]["unpriced_sku_detail"] == {"Phone B": 2})
+_coa_i = SRCS["coa.py"]
+check("I13 `coa.build_inputs` dereferences the note home and APPENDS it, so the honest zero and "
+      "the §70 restatement survive beside it",
+      "unpriced_handsets_note" in _coa_i
+      and 'L["device_cost"].get("note")' in _coa_i)
+check("I14 the note home is the ONLY place that sentence is written — one fact, one home",
+      _DCG.count("NOT on the distributor's fulfillment sheet") == 1
+      and "NOT on the distributor's fulfillment sheet" not in _coa_i)
+
+# I15 — THE UN-WIRE LOCK. The order-type test lives in ONE function; a second copy of the literal
+# membership test is the divergence this whole section exists to stop.
+check("I15 `order_type` is tested in exactly ONE function (`_ma_row_prices_a_device`); no caller "
+      "re-implements the test",
+      _DCG.count("_MA_DEVICE_ORDER_TYPES") == 2             # the definition and the one test
+      and _DCG.count("_ma_row_prices_a_device(r, names)") == 2)  # price map + coverage, no third
+
+# I16 — THE SIBLING, FOUND AND FIXED IN THE SAME CHANGE (CLAUDE.md 2026-09-20). The takeover
+# evaluation prices a PROSPECT's handsets through this same home and had the same defect.
+_pe = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "app/modules/commcalc/prospect_eval.py")).read()
+check("I16 the prospect evaluation passes the SAME evidence — the sibling is fixed, not excused",
+      'homes["ma_device_product_names"](comm_rows)' in _pe)
+
+# I17 — RULE TWO on the new surface.
+check("I17 no distributor, carrier or tenant name decides whether a row prices a handset",
+      not [w for w in BANNED
+           if w in _fn_source(_DCG, "_ma_row_prices_a_device").lower()
+           or w in _fn_source(_DCG, "ma_device_product_names").lower()])
+
+
 print("\n%s\n%d passed, %d failed" % ("=" * 78, P, F))
 sys.exit(1 if F else 0)
