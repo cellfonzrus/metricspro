@@ -29474,6 +29474,57 @@ Neighbours: §CORE-07 (the login/person link, the other `app_users` write-path f
 platform-authority rungs), §14w (people visibility — the other question answered off a role row).
 
 
+## §CORE-13. ONE PALETTE, DEREFERENCED — the side menu's alternating colour (owner ask 2026-10-19)
+
+Owner, verbatim: *"make the colors of the side menu alternate and different colors swicth between
+logo colors so it stands out and it can show the different items on teh menu"*.
+
+### §CORE-13.1 DUPLICATE CHECK (build gate)
+
+Searched this index for an existing mechanism that colours, themes or labels the sidebar rows before
+building anything. What exists and was NOT duplicated:
+
+| Found | What it owns | Why it is not this |
+| --- | --- | --- |
+| `(platform)/layout.tsx` + `.mp-*` in `globals.css` (§W2.1) | the sidebar's structure and its hover/active STATES | extended in place — no second nav component, no second stylesheet |
+| `/admin/menu` nav layout, `/admin/labels` (`navCfg.labels`) | what the rows are CALLED and in which group/order | a different fact; untouched |
+| §23q white-on-near-white | a table-cell contrast defect | same *class* of risk (colour costing legibility), which is why the contrast bar here is computed, not eyeballed |
+| `TrendChart.TREND_COLORS` | the chart series palette | a chart is not the chrome; the nav palette is declared where the nav is styled |
+
+### §CORE-13.2 THE MECHANISM
+
+One fact — *which colour is slot N* — with one home, dereferenced by every caller:
+
+| Link | Where |
+| --- | --- |
+| the palette (ONE home) | `frontend/src/app/globals.css` → `.mp-sidebar { --nav-accent-1 … --nav-accent-6 }`, every value a light variant of a colour the brand already uses (`--accent` / `--accent2` logo blues, `--green`, `--amber`, `--red`, the chart violet) |
+| the rotation | `(platform)/layout.tsx` → `accentStyle(i)` sets `--mp-accent: var(--nav-accent-N)`; it names **no colour**, so a colour cannot be changed in two places |
+| how many slots | `NAV_ACCENT_SLOTS` in `layout.tsx`, asserted **equal** to the count declared in the CSS |
+| what carries the colour | the row's icon at full strength, a 2px left edge bar, and a label mixed only 40% toward the accent from white |
+| the ACTIVE row | the only row with a filled background (26%), a 3px full-strength bar and pure-white bold text |
+| the index a row gets | its position in its OWN group's render order (loose items, then each sub), so neighbours never share a colour and a row keeps its colour whatever else is open |
+
+Readability is a computed property, not a judgement: every slot's label clears **WCAG AA 4.5:1** on
+both ends of the navy gradient in all three states (measured 6.8:1 – 9.5:1). The coloured rules sit
+inside `@supports (color: color-mix(…))`, with the old white-on-navy declarations still above them, so
+a browser without `color-mix()` keeps today's nav rather than rendering something broken.
+
+### §CORE-13.3 LOCKED SO IT CANNOT UN-WIRE
+
+| Lock | What fails the build |
+| --- | --- |
+| `frontend/prove_nav_accents.mjs` (**51 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot; the label mix is capped at 50% toward the accent; **per-slot contrast computed** for resting / hover / active plus the active row's separation from the rail; the `@supports` fallback is intact; six negative controls (a gap in the palette, a count disagreement, a literal colour, a label turned up to 90%, two adjacent rows sharing a slot, a one-colour palette) |
+
+### §CORE-13.4 WHAT IS NOT DONE HERE
+
+The **operator console** (`(operator)/operator/layout.tsx`) has its own internal rail on its own `OPS`
+palette and is deliberately untouched — it is not the tenant app's side menu the owner is looking at,
+and giving it this palette would make an internal console look like the product. It is excused, not
+forgotten.
+
+Files: `frontend/src/app/globals.css`, `frontend/src/app/(platform)/layout.tsx`,
+`frontend/prove_nav_accents.mjs` (**new**), `.github/workflows/carrier-vocab-guard.yml`.
+
 ## §COMMCALC-11. AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15)
 
 Owner, in his own words, after declaring the UPS reporting-portal login: *"it has been over 5 minutes
