@@ -1429,7 +1429,7 @@ reads as "gross profit".
 | term | Sept | which report | why |
 |---|---|---|---|
 | `accessory_rev` | 53,639.38 | P&L only, BEFORE the fix | the archive-only sales read (§4 bullet) — **FIXED** |
-| `plan_gp` | 20,211.46 | GP only | `(blank)`-department lines booked at `gp`. The P&L's classifier claims nothing AND its `_unbooked_sales` tally is gated on `ext_price`, so 1,709 lines carrying 20,658.11 of `gp` against 0.09 of ext are neither booked NOR reported — the silent-zero class inside the hole-reporting itself. **REPORTED, not coded around** |
+| `plan_gp` | 20,211.46 | GP only | `(blank)`-department lines booked at `gp`. The P&L's classifier claims nothing AND its `_unbooked_sales` tally is gated on `ext_price`, so the blank department's lines are neither booked NOR reported — the silent-zero class inside the hole-reporting itself. **REPORTED, not coded around**. (This cell first read "1,709 lines carrying 20,658.11 of `gp` against 0.09 of ext"; **CORRECTED 2026-10-19 to 1,891 lines / 20,211.46 / 0.10** — re-measured on the same month, see §4a.4. The original prose contradicted this very row's own `plan_gp`, which has read 20,211.46 since it was written) |
 | `other_gp` | 5,571.53 | GP only | the `System` department. The P&L reports 47,549.90 of it on `_unbooked_sales`; the GP report reports it on `unmapped_departments`. Both say so; only GP books it. A config hole (`pl_sales_line_map` / `gp_category_map`), never code |
 | `device_rev` | 18.00 | P&L only, net | GP's `phone_sales` 17,434.65 is cancelled dollar-for-dollar by `net_phone_cost` (= `phone_sales + reimb`), so the device leg contributes **0.00** to GP net profit by construction — deliberate, not a double count |
 | the whole COGS section | −6,112.84 | P&L only | GP has no `accessory_cost` (10,729.60), `device_cost` (222,525.36) or `device_rebate` (−239,367.80) term at all. The rebate EXCEEDS the device cost, which is why the P&L's COGS is negative and its gross profit exceeds its revenue |
@@ -1539,10 +1539,22 @@ POS stage and that is reported, not hidden.
 `pl_sales_line_map` / `gp_category_map`, never code) and the blank department's **$0.10**. That last
 one is the silent-zero class inside the hole-reporting itself: the blank department's **1,891 lines
 carry $20,211.46 of `gp` against $0.10 of `ext_price`**, and the unbooked tally is gated on
-`ext_price`, so it can only see a dime of it. (§4a.3 reported 1,709 lines / $20,658.11 for the same
-month; re-measured 2026-10-19 the live feed holds 1,891 lines / $20,211.46 — the feed grew after that
-measurement, and $20,211.46 is the figure that reconciles to the GP report's own `Plan GP` to the
-cent, so it is the right one.)
+`ext_price`, so it can only see a dime of it.
+
+**THE §4a.3 BLANK-DEPARTMENT FIGURE, RECONCILED — and it was wrong when written, not stale.** §4a.3's
+prose said *"1,709 lines carrying 20,658.11 of `gp` against 0.09 of ext"*. Re-measured live on
+2026-10-19, September 2026, the blank department holds **1,891 lines / $20,211.46 of `gp` / $0.10 of
+`ext_price`** — and **no** population reproduces 20,658.11: not all lines (1,891 / 20,211.46), not
+non-voided only (1,740 / 20,211.46 — the 151 voided lines carry $0.00 of `gp`), and not the P&L's
+`trans_id`-deduped union (1,891 / 20,211.46; nothing is dropped). The decisive evidence is internal:
+§4a.3's own `plan_gp` cell has read **20,211.46** since the day it was written, and `plan_gp` IS the
+sum of the blank department's `gp` — so the two figures contradicted each other in one document. A
+late-arriving feed cannot explain it either: a feed that had grown by 31 lines and −446.65 of `gp`
+since 2026-10-17 would have moved `plan_gp` too, and it has not. **$20,211.46 on 1,891 lines is the
+right figure**, it reconciles to the GP report's `Plan GP` to the cent, and §4a.3's cell is corrected
+rather than left to be re-derived. (The feed DOES receive late rows in general — the stored October
+snapshot is already $128.24 of gross profit behind a fresh recompute on unchanged code — which is why
+this was tested rather than assumed.)
 
 **NOT CHANGED, and why.** The box COUNT (`router._sales_cell_agg`, the product mix, the handset
 watchdog, `multi_handset_day`) reads the `box_departments` declaration directly and does **not**

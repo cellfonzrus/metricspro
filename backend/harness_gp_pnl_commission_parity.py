@@ -663,6 +663,18 @@ def run():
           "pl_sales_line_map / gp_category_map, never code)",
           round(SEP_UNBOOKED_AFTER["(blank)"], 2) < 1.0
           and SEP_GP_AFTER["plan_gp"] == 20211.46)
+    # K27 — THE §4a.3 PROSE FIGURE, RECONCILED. It said 1,709 lines / 20,658.11 of `gp` / 0.09 of
+    # ext. Re-measured live 2026-10-19 the month holds 1,891 / 20,211.46 / 0.10, and no population
+    # reproduces 20,658.11 (all lines, non-voided only, and the P&L's trans_id-deduped union all
+    # give 20,211.46). The decisive evidence is arithmetic, not a re-read: `plan_gp` IS the sum of
+    # the blank department's `gp`, and §4a.3's own `plan_gp` cell has read 20,211.46 from the day it
+    # was written — so the prose contradicted its own table and a late-arriving feed cannot explain
+    # it, because a feed that grew would have moved `plan_gp` too. The index cell is corrected.
+    check("K27 the blank department's `gp` IS the GP report's Plan GP, to the cent — which is what "
+          "makes 20,211.46 the right figure and 20,658.11 reproducible from nothing",
+          SEP_GP_AFTER["plan_gp"], 20211.46)
+    truth("K27a …and the figure §4a.3's prose carried is not any population of that month",
+          20658.11 != SEP_GP_AFTER["plan_gp"])
 
     # ── report ───────────────────────────────────────────────────────────────────────────────────
     print("\n" + "=" * 78)
