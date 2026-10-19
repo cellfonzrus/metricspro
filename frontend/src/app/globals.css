@@ -180,19 +180,28 @@ tr:hover td { background: var(--surface2); }
    at full accent strength and pure-white bold text. */
 @supports (color: color-mix(in srgb, red 50%, white)) {
   .mp-nav-item {
-    color: color-mix(in srgb, var(--mp-accent) 40%, #ffffff);
-    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--mp-accent) 50%, transparent);
+    color: color-mix(in srgb, var(--mp-accent) 85%, #ffffff);
+    box-shadow: inset 3px 0 0 var(--mp-accent);
   }
   .mp-nav-item:hover {
-    background: color-mix(in srgb, var(--mp-accent) 15%, transparent);
+    background: color-mix(in srgb, var(--mp-accent) 18%, transparent);
     color: #ffffff;
   }
   .mp-nav-item.is-active {
     background: color-mix(in srgb, var(--mp-accent) 26%, transparent);
     color: #ffffff;
-    box-shadow: inset 3px 0 0 var(--mp-accent);
+    box-shadow: inset 4px 0 0 var(--mp-accent);
   }
-  .mp-nav-item .mp-nav-icon { color: var(--mp-accent); }
+  /* The ICON is an emoji (NAV carries 🏪, 🛒, 📦 …), and an emoji is painted from its own font's
+     colour table — `color` does nothing to it. That is why tinting the glyph was invisible on the
+     first attempt (owner: "i cold see any difference"). The colour has to be a BOX behind the
+     emoji, so the chip is what carries it. */
+  .mp-nav-item .mp-nav-icon {
+    width: 21px; height: 21px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--mp-accent);
+    font-size: 12px; filter: none;
+  }
 }
 /* Fixed-width icon slot so every label starts on the same x — the single biggest tidiness win. */
 .mp-nav-icon {

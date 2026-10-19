@@ -115,8 +115,12 @@ const HOVER_BG = pct(/:hover\s*\{[\s\S]*?background:\s*color-mix\(in srgb, var\(
 const ACTIVE_BG = pct(/is-active\s*\{[\s\S]*?background:\s*color-mix\(in srgb, var\(--mp-accent\)\s*(\d+)%/)
 ck('the stylesheet states a label mix, a hover background and an active background',
   [LABEL_MIX, HOVER_BG, ACTIVE_BG].every(v => v > 0 && v < 1), { LABEL_MIX, HOVER_BG, ACTIVE_BG })
-ck('the label is mixed mostly toward white, so colour tints it rather than darkens it',
-  LABEL_MIX <= 0.5, LABEL_MIX)
+// The label may be mixed strongly toward the accent — a 40% tint was invisible on the navy rail
+// (owner 2026-10-19: "i cold see any difference") — but never to the point where white stops
+// carrying the text: past 90% the label IS the accent, and the per-slot contrast below is what
+// actually decides. The cap is the guard against someone turning it past that point.
+ck('the label mix stops short of dropping white out of the text entirely',
+  LABEL_MIX <= 0.9, LABEL_MIX)
 
 const AA = 4.5
 for (const s of slots) {
@@ -134,13 +138,32 @@ for (const s of slots) {
   ck(`slot ${s.n} ${s.hex}: active row background separates from the rail (${sep.toFixed(2)}:1 >= 1.2)`,
     sep >= 1.2, sep)
 }
+// THE ICON CHIP is what actually carries the colour. The nav's icons are EMOJI, painted from the
+// font's own colour table, so `color` cannot tint them — the first attempt did exactly that and the
+// owner could see no difference. The chip must therefore be a painted BOX at full accent strength,
+// which is also the most visible colour on the row.
+ck('the icon is a painted chip at full accent strength, not a tinted glyph',
+  /\.mp-nav-icon\s*\{[^}]*background:\s*var\(--mp-accent\)/.test(supportsBlock))
+ck('the chip is a box with a size of its own, so the colour has somewhere to show',
+  /\.mp-nav-icon\s*\{[^}]*width:\s*\d+px;\s*height:\s*\d+px/.test(supportsBlock))
+ck('the chip does not merely recolour the glyph (which an emoji ignores)',
+  !/\.mp-nav-item \.mp-nav-icon\s*\{[^}]*color:\s*var\(--mp-accent\)/.test(supportsBlock))
+for (const s2 of slots) {
+  const sep = Math.min(...NAVY.map(bg => contrast(hex(s2.hex), bg)))
+  ck(`slot ${s2.n} ${s2.hex}: icon chip stands off the rail (${sep.toFixed(2)}:1 >= 3)`, sep >= 3, sep)
+}
+
 // The active row is also the ONLY row with a filled background and a 3px bar, so it stays the
 // unmistakable one however colourful its neighbours are.
 ck('only the active row gets a filled background',
   !/\.mp-nav-item\s*\{[^}]*background:\s*color-mix/.test(supportsBlock))
-ck('the active row keeps a thicker, full-strength edge bar than a resting row',
-  /is-active[\s\S]*?box-shadow:\s*inset 3px 0 0 var\(--mp-accent\)/.test(supportsBlock)
-  && /\.mp-nav-item\s*\{[\s\S]*?box-shadow:\s*inset 2px 0 0 color-mix/.test(supportsBlock))
+// The resting bar is full-strength too (a tinted one was part of what made this invisible), so the
+// active row is told apart by a THICKER bar plus the filled background, not by colour strength.
+const barOf = re => Number((supportsBlock.match(re) || [])[1])
+const restBar = barOf(/\.mp-nav-item \{[\s\S]*?box-shadow:\s*inset (\d+)px 0 0 var\(--mp-accent\)/)
+const activeBar = barOf(/is-active \{[\s\S]*?box-shadow:\s*inset (\d+)px 0 0 var\(--mp-accent\)/)
+ck(`the active row's edge bar (${activeBar}px) is thicker than a resting row's (${restBar}px)`,
+  activeBar > restBar && restBar >= 2, { restBar, activeBar })
 ck('the active row is still bold and pure white', /is-active[\s\S]*?color:\s*#ffffff/.test(supportsBlock))
 
 // ── F. the fallback survives ────────────────────────────────────────────────────────────────────
@@ -167,7 +190,9 @@ const loudLabel = mix(hex('#1d4ed8'), WHITE, 0.9)
 ck('G4 a label turned up to 90% of a mid-dark accent fails the contrast bar',
   Math.min(...NAVY.map(bg => contrast(loudLabel, bg))) < AA,
   Math.min(...NAVY.map(bg => contrast(loudLabel, bg))))
-ck('G4b and the mix cap refuses that mix before contrast is even reached', !(0.9 <= 0.5))
+ck('G4b and the mix cap refuses a label that is pure accent with no white left', !(0.95 <= 0.9))
+ck('G5b a tinted icon chip is rejected — an emoji would ignore it',
+  !/background:\s*var\(--mp-accent\)/.test('.mp-nav-icon { color: var(--mp-accent); }'))
 const sameSlot = [1, 1, 2]
 ck('G5 two adjacent rows sharing a slot is rejected', !sameSlot.every((s, i) => i === 0 || s !== sameSlot[i - 1]))
 ck('G6 a palette of one colour is rejected', !([{ n: 1 }].length >= 2))
