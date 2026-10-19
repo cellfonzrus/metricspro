@@ -7408,7 +7408,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Which spelling is this month STORED under, and which spellings must a filter match?** — one month, one stored row; a reader covers both forms and takes the newest | `account/_period.canonical_period` / `period_keys` | every period-keyed writer and reader dereferences it (`gp_snapshot`, `account_statements`, `payout_config`, `journal_entries`, `calc_status`); `coa.journal_rows` for the journal; lock `harness_period_one_spelling.py` (60) — §19.47. Live 2026-10-06: `gp_snapshot` held September and October TWICE with different net profit, and the journal's replace-per-period could double every hand-entered amount |
 | **Is a zero-row pull the source's own answer, or a question we asked wrong?** (and therefore: has this feed silently stopped arriving?) — `confirmed_empty` is reported as success; `unverified_empty` / `suspect_empty` are REPORTED, name the report, make the connector `partial` and do NOT advance `last_run_at` | the run's own evidence: the registry's `empty_ok` + `controls`, the window asked for vs `report_definitions.arrears_days`, whether the landing table has EVER held a row and how old its newest row is (arrival column dereferenced from `data_lineage_registry.freshness_column`), and `empty_stale_after_days` | ONE home `commcalc/empty_pull_verdict.py` (`classify_empty_pull`, `ControlLedger.defer/control_failed/settle`, `window_days`, `required_window_days`, `SOURCE_REPORTED_EMPTY` — pure); dereferenced by `epay_sweep._defer_empty` / `_empty_cfg_evidence` / `_landing_evidence` / `run_epay_sweep`, `dlar_sweep.pull`, `vidapay_sweep`; success basis in `router._do_epay_sweep`; lock + proof `harness_empty_pull_verdict.py` (56) — §19.41 |
 | **Could this blank-contract-type transaction have been an activation at all?** (and therefore: is the Sales Report's "map them so they count" banner telling the truth?) | the tenant's OWN config, four tests, no code branch: `payout_exclusion_map` (`plan_pay_gate.exclusion_hit`), `accessory_config.billpay_products`, `accessory_config.billpay_fee_product_desc`, and the accessory definition | ONE home for the fee fact `commcalc/epay_fee_recon.py` (`resolve_fee_descs` / `is_fee_desc`, pure) resolved onto `acfg['billpay_fee_descs']` by `router._accessory_config_uncached` and dereferenced by `router._txn_activation_candidate` (the banner / `/sales-report/classification-unmatched`), `router._billpay_fee_tokens` → `_fr.aggregate_fee_cash` (pickup netting), `account/coa.py` (the P&L booking); lock `harness_billpay_fee_one_home_lock.py` (22) + proof `harness_billpay_fee_not_activation.py` (22) — §19.42 |
-| **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile; lock `harness_assign_password_one_home.py` (47) + proof `prove_manage_employees_tile.mjs` (24) — §CORE-09 |
+| **Where does an admin SET an employee's login password, by hand?** (and: which surfaces offer it, from which tile) | no table added — `storeops.app_users` + `must_reset_password`, written only by `core/router.py::admin_set_password` (`POST /core/users/set-password`), gated on `_can_edit_setting(caller, "security")` and re-validated by `validate_password` | ONE card `frontend/src/components/AssignPasswordCard.tsx` (the POST, the `pwErrors` policy echo, the picker, the `can_edit` read), rendered by `/admin/security`, `/admin/roles` 👥 Assign people and `/hr/employee-password` — the last behind the Payroll hub's **Manage Employees** tile AND (owner 2026-10-19, §CORE-09.6) its own `Payroll & HR` side-menu row; lock `harness_assign_password_one_home.py` (48) + proof `prove_manage_employees_tile.mjs` (28) — §CORE-09 |
 | **Was this branch cut from a current base, and is each guard still guarding what it thinks it is?** (and therefore: does a green tick mean anything on this pull request?) | no table — git metadata read at CI time: the TWO-DOT diff `base..head` (lines deleted), commit SUBJECTS on both sides (a squash merge leaves no ancestry to read), and the job names declared by each `.github/workflows/*.yml` on both trees; plus every `backend/harness_*.py` that scans repo source | gate A `scripts/check_branch_base.py` (A2 mass deletion unless `BASE-DELETIONS-ACKNOWLEDGED` is in the PR body, A3 re-proposed merged subjects, A4 a CI job the base runs and the head does not declare; 10 armed controls) run from the BASE branch via `pull_request_target`; gate B `backend/harness_subject_set_lock.py` (+ `harness_subject_set_pending.txt`, 50 pinned, shrink-only) — §CORE-10 |
 | **Which component actually puts this report's cell on the screen, and does it honour a column that draws its own?** (and therefore: is a control an author declared actually there?) | no table — frontend source read at CI time: every file that draws a `<td` whose content it reads off a handed column (`c.get(`), which is the derived subject set | ONE home `ReportShell.bodyCell` + `DataGrid`'s own cell + `crm/reports`' bespoke table, all three honouring `ExportColumn.render`; `lib/export.tsx` excused by name and held to the opposite rule (an export carries the figure, never a control); lock `backend/harness_column_render_lock.py` (32) — §CORE-11 |
 | **Would this administrative write take away the authority that just made it?** (and therefore: can an administrator shut their own door with no screen left to undo it?) | no table — the caller's own `storeops.app_users` membership rows and the tenant's `storeops.roles` permissions, read before and after the proposed write | ONE home `app/modules/core/self_lockout.py` (`can_edit_setting` — MOVED there from `core/router.py`, which now dereferences it — plus `acting_caller` / `lockout_reason` / `rows_with_change` / `rows_without`, all pure); dereferenced by `assign_role`, `bulk_assign`, `create_role`, `update_role`, `deactivate_user`, `revoke_super_admin` and `purge_app_user`; five writers excused by name; lock + proof `harness_self_lockout.py` (45) — §CORE-12. Live 2026-10-16: `ss@1313global.us` demoted its own Vzone membership to `market_manager` and only a hand-written UPDATE could restore it |
@@ -28982,7 +28982,7 @@ holds a copy:
 |---|---|
 | `/admin/security` | where the card used to be written out inline |
 | `/admin/roles` → 👥 Assign people | **"in config"** — the screen where logins are provisioned, resent and revealed |
-| `/hr/employee-password` | the Payroll hub's **Manage Employees** tile, the owner's new door |
+| `/hr/employee-password` | the Payroll hub's **Manage Employees** tile, the owner's new door — **and, since 2026-10-19, its own `Payroll & HR` side-menu row as well (§CORE-09.6)** |
 
 **THE SERVER STAYS THE AUTHORITY.** `can_edit` only decides whether to SHOW the form.
 `admin_set_password` gates independently on `_can_edit_setting(caller, "security")` and re-validates
@@ -28996,7 +28996,7 @@ and the cheap destination was the page that already had the card. It does not wo
 `/admin/security` is `module: 'admin'`. Measured through the shipped gate against the real role rows,
 the owner's new tile would have shown the password door to **a full admin and nobody else** — not to
 Cellfonz HR, not to a district manager. The proof runs that rejected design on purpose so nobody
-"simplifies" it back. The new route is `module: 'hr'`, `scopes: ['all','market']`, `tileOnly: true` —
+"simplifies" it back. The new route is `module: 'hr'`, `scopes: ['all','market']` and SHIPPED `tileOnly: true` —
 the shape of the two tiles it was folded beside — and renders the SAME component.
 
 ### CORE-09.4 THE TILE
@@ -29009,7 +29009,7 @@ single-link tiles. They are now the first two items of **👥 Manage Employees**
 |---|---|
 | Employees & Pay | `/hr?tab=employees` (where pay is SET, §19.40) |
 | Employee Database | `/hr/employee-database` (read-only, exportable, carries no pay column) |
-| Employee Password Reset | `/hr/employee-password` (new) |
+| Employee Password Reset | `/hr/employee-password` (new; **also a side-menu row since 2026-10-19 — §CORE-09.6**) |
 
 **§19.40 IS UNTOUCHED.** That ruling (owner 2026-10-02) was about the SIDE MENU: NAV still carries
 `Employees & Pay → /hr?tab=employees` as its own, non-`tileOnly` row, and the lock still pins it. This
@@ -29021,7 +29021,7 @@ that goes red if the label leaves.
 
 ### CORE-09.5 PROOF
 
-- `backend/harness_assign_password_one_home.py` — **47 passed / 0 failed**, and **armed**: on pristine
+- `backend/harness_assign_password_one_home.py` — **48 passed / 0 failed** (47 as shipped 2026-10-14; §CORE-09.6 re-expressed D7 and added the Z10 control), and **armed**: on pristine
   `origin/main` it reports **29 failed**, so it is a lock and not a description. Static on purpose —
   every failure mode here is a missing or duplicated wire: a surface that re-implements the card
   compiles and looks right, a surface that drops it simply shows nothing, and a tile that loses a door
@@ -29029,8 +29029,8 @@ that goes red if the label leaves.
   §C nobody holds a second copy (not the endpoint call, not the policy echo, not a second `pwErrors`);
   §D the tile holds the owner's three doors and the two folded-in tiles are gone; §E the server gate,
   the server-side policy check and the audit row are intact and the new page carries no client-side
-  role guess; §Z ten armed controls.
-- `frontend/scratchpad/prove_manage_employees_tile.mjs` — **24 passed / 0 failed** (**8 failed** on
+  role guess; §Z eleven armed controls.
+- `frontend/scratchpad/prove_manage_employees_tile.mjs` — **28 passed / 0 failed** (24 as shipped 2026-10-14; §CORE-09.6 re-expressed §5) (**8 failed** on
   pristine `origin/main`). A verbatim re-impl of the shipped `rbac.ts` / `hub-gate.ts` predicates run
   against the REAL NAV parsed out of `rbac.ts`, the REAL tile literal parsed out of the hub, and the
   REAL production role rows. §2 is the load-bearing one: the rejected `/admin/security` design is shown
@@ -29053,6 +29053,60 @@ that goes red if the label leaves.
 
 Same class: §CORE-06 (a tile that did not ask the menu's question), §19.18 (a mechanism written and
 its callers left unwired), §19.40 (the owner could not find the screen that already existed).
+
+
+### CORE-09.6 A SECOND DOOR, NOT A MOVED ONE — the owner reverses `tileOnly` for this one page (owner 2026-10-19)
+
+Owner, verbatim: *"dont drop it from anywhere jsut add a seaprate link under eh manage employee tile
+under Payroll & HR"* — answering his own 2026-10-17 *"just make it a link under the manage employee
+tile"*, after being asked whether he meant dropping the `Employees & Pay` side-menu row.
+
+**The answer read as an instruction: remove NOTHING, ADD one link.** `/hr/employee-password`
+("Employee Password Reset") now has its own visible row in the side menu's **Payroll & HR** group,
+beside the `Employees & Pay` row. The Manage Employees tile keeps **all three** doors, `Employees & Pay`
+keeps its §19.40 row, and `Employee Database` stays `tileOnly` — he named one link, not two.
+
+**This is a deliberate owner reversal of the W2.1 "cleaner look" ruling, for this one page.** W2.1 made
+every non-hub item in `Payroll & HR` `tileOnly` so the group's sidebar would be short, and §CORE-09.3
+shipped the password page inside that ruling. The ruling is not repealed — one page is exempted from it
+on the owner's word, which is now written on the NAV entry itself so the next tidy-up reads the reason
+before deleting the row.
+
+**NOBODY'S ACCESS CHANGED, and the server is still the only authority.** The row carries the same
+`module: 'hr'`, `scopes: ['all','market']` it had as a tile door, and `rbac.ts::canSeeItem` already
+gated the item in both renderings — `tileOnly` is a *sidebar render-skip*, never a gate (W2.1
+precedent). Actually setting a password is still `POST /core/users/set-password` gated on
+`_can_edit_setting(caller, "security")`, so an HR manager without that grant sees the row, opens the
+page and is told in words that they lack the Security grant.
+
+| | before (2026-10-14) | after (2026-10-19) |
+|---|---|---|
+| Manage Employees tile doors | 3 | 3 — unchanged |
+| `Payroll & HR` visible rows | `Payroll Dashboard`, `Employees & Pay` | `Payroll Dashboard`, `Employees & Pay`, **`Employee Password Reset`** |
+| NAV entry `tileOnly` | `true` | *absent* |
+| module / scopes / server gate | `hr` / `['all','market']` / `security` | unchanged |
+
+**THE LOCKS WERE RE-EXPRESSED, NOT RELAXED.** Both pins that encoded `tileOnly` now pin the NEW shape
+and are armed against the old one returning, so the row cannot be tidied away silently:
+
+- `backend/harness_assign_password_one_home.py` **D7** flipped from *"…and tileOnly, because the tile IS
+  its door"* to *"…and NOT tileOnly: it carries its own side-menu row"*, and **tightened**: with **D2**
+  still pinning the tile's three doors, the page must now have BOTH doors rather than either. New
+  armed control **Z10** goes red if `tileOnly: true` is restored on the row. **48 passed / 0 failed.**
+- `frontend/scratchpad/prove_manage_employees_tile.mjs` **§5** asserts the parsed row is non-`tileOnly`,
+  that the tile door is still there, and that the group's visible rows are exactly
+  `/payroll`, `/hr?tab=employees`, `/hr/employee-password` — with its own control for `tileOnly`
+  restored. **28 passed / 0 failed.**
+- Re-run unchanged and green: `harness_nav_deep_link_lock.py` (60, C10/C10b untouched — they pin the
+  HUB door's label, not the sidebar), `harness_hub_viewer_gate.py` (53),
+  `harness_roles_module_catalog.py` (34), `prove_tile_hubs.mjs` (118 — `Payroll & HR` is in its
+  `skip` list, so its "every other item in a converted group is `tileOnly`" rule never applied here),
+  `prove_nav_layout.mjs` (20).
+
+**Duplicate check.** No new route, component, endpoint, table or report — one existing NAV entry lost
+one flag. The sidebar row and the tile door are two renderings of the SAME `rbac.ts` NAV item through
+the SAME `canSeeItem` predicate, which is the no-second-path shape, not a violation of it. No
+migration, no money path.
 
 
 ## §CORE-10. A GATE, NOT A NOTE — the branch's base, and a guard that goes blind (owner 2026-10-14)

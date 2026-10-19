@@ -192,7 +192,17 @@ check("D5 NAV declares the password page", bool(nav_pw))
 check("D6 …as module 'hr' + ['all','market'], the shape of its tile neighbours",
       "module: 'hr'" in nav_pw and "scopes: ['all', 'market']" in nav_pw,
       "an 'admin'-module destination behind an hr tile would be dropped for every HR manager")
-check("D7 …and tileOnly, because the tile IS its door", "tileOnly: true" in nav_pw)
+# D7 — RE-EXPRESSED 2026-10-19 (owner reversal, index §CORE-09.6), not relaxed. It used to pin
+# `tileOnly: true`, which was ONE implementation of "the Manage Employees tile is this page's door".
+# The owner then asked for a side-menu row as well — verbatim: *"dont drop it from anywhere jsut add
+# a seaprate link under eh manage employee tile under Payroll & HR"* — a deliberate reversal of the
+# W2.1 "cleaner look" ruling FOR THIS ONE PAGE. So the pin inverts and TIGHTENS: the page must now
+# carry BOTH doors — its own visible NAV row (here) AND the tile door D2 already pins above. A pin
+# that accepted "either one" is how the row would silently disappear on the next tidy-up.
+check("D7 …and NOT tileOnly: it carries its own side-menu row (owner 2026-10-19, §CORE-09.6)",
+      bool(nav_pw) and "tileOnly" not in nav_pw,
+      "the owner asked for a SEPARATE LINK in the Payroll & HR menu, dropping nothing; "
+      "the tile door is pinned by D2 and stays — line: %s" % nav_pw.strip())
 nav_ep = nav_item(RBAC_SRC, "/hr?tab=employees")
 check("D8 §19.40 UNTOUCHED: Employees & Pay is still its own SIDE-MENU row",
       bool(nav_ep) and "tileOnly" not in nav_ep,
@@ -235,6 +245,10 @@ check("Z7 the password page given the 'admin' module → caught",
       "module: 'hr'" not in nav_pw.replace("module: 'hr'", "module: 'admin'"))
 check("Z8 Employees & Pay hidden from the side menu again → caught",
       "tileOnly" in (nav_ep + ", tileOnly: true"))
+check("Z10 the password row sent back behind the tile (tileOnly restored) → caught",
+      "tileOnly" in nav_pw.replace("scopes: ['all', 'market'] }",
+                                   "scopes: ['all', 'market'], tileOnly: true }"),
+      "arms D7: the owner's 2026-10-19 side-menu row cannot be tidied away silently")
 check("Z9 the server gate dropped → caught",
       '_can_edit_setting(caller, "security")' not in handler.replace(
           '_can_edit_setting(caller, "security")', "True"))
