@@ -61,15 +61,116 @@ per store".)
 import logging
 
 from app.modules.commcalc.calculator import safe_float
+# The SAME literal honest-absence marker the MA daily-tx coverage read-out uses (mig 312 /
+# §COMMCALC-11), for `ma_fulfillment_coverage` below. Dereferenced, never copied: one fact, one
+# home (owner directive 2026-09-20).
+from app.modules.account.ma_store_pnl import NO_RULE_REASON as _NO_RULE_REASON
 
 _log = logging.getLogger(__name__)
 
-# Which `raw_ma_fulfillment.order_type` values are HANDSETS/devices whose price is a device cost.
-# Measured on luxelink: 'Branded Handset' is 401 of 404 rows / $290,854.59 of $290,940.21; the other
-# three rows are a SIM kit and two Alphacomm lines, which are not devices. Kept as a module constant
-# rather than a config knob because it is a VENDOR vocabulary (the distributor's own order-type
-# taxonomy), not a tenant policy — the same reasoning that keeps `source_key` a code table in `coa`.
+# ── WHICH FULFILLMENT ROWS PRICE A HANDSET — THE ONE TEST (owner report 2026-10-19) ─────────────
+# Owner, on LuxeLink September 2026: *"how come the device cost is less than the device rebate"* —
+# Device cost $164,730.35 against Device purchase rebates −$180,191.91 on the Chicago company.
+#
+# THE CLASS, named rather than the instance. A handset's REBATE books off `raw_ma_commission`, one
+# row at a time, unconditionally. Its COST books only when the same handset's `sku` can be priced
+# off `raw_ma_fulfillment` — and an order-type ALLOWLIST decided, silently, which fulfillment rows
+# were allowed to carry a price at all. A vendor order-type family nobody had added to it priced
+# NOTHING, so every handset bought under it booked a rebate against a cost of zero and the
+# contra-COGS overtook the COGS it was meant to net against. Measured on LuxeLink September 2026:
+# 71 of the 77 unpriced handsets were certified-pre-owned iPhones bought under a second order-type
+# family the distributor opened after the allowlist was written — $26,299.29 of real cost dropped,
+# against $27,449.27 of rebate that booked regardless.
+#
+# So the NAME LIST IS NOT THE MECHANISM ANY MORE. A fulfillment row prices a handset when the two
+# feeds AGREE that it is one: its `product_name` is a `sku` that a handset actually ACTIVATED under
+# on `raw_ma_commission`. That is evidence, not vocabulary — it carries no distributor, carrier or
+# tenant name (RULE TWO), it cannot drop a price the cost side would have used (a sku that is not
+# activated is never looked up), and the day the distributor opens a third family it prices itself.
+# Verified on LuxeLink's whole fulfillment sheet, Jun–Oct 2026: the derived test reproduces the
+# allowlist exactly where the allowlist was right (917 'Branded Handset' rows: 24 of 24 product
+# names matched) and supplies the family it had missed (108 rows: 8 of 8 matched), while the SIM
+# kits and the charge cables match nothing and stay out, as they always did.
+#
+# The allowlist stays as the FALLBACK, byte-identical, for the one caller that prices without a
+# commission feed to take evidence from. Evidence only ever ADDS.
 _MA_DEVICE_ORDER_TYPES = {"branded handset"}
+
+
+def ma_device_product_names(comm_rows):
+    """PURE: `raw_ma_commission` rows -> the lowercased set of `sku`s handsets actually activated
+    under. This is the evidence `ma_unit_price_from_rows` prices on; `_MA_UNKNOWN_SKU` (the
+    distributor's own "we could not name it", which is a SIM-only/BYOD line and never a handset)
+    is excluded, so it can never licence a price."""
+    out = set()
+    for r in comm_rows or []:
+        sku = str((r or {}).get("sku") or "").strip().lower()
+        if sku and sku != _MA_UNKNOWN_SKU:
+            out.add(sku)
+    return out
+
+
+def ma_fulfillment_coverage(rows, device_names=None, reasons=None):
+    """PURE: `raw_ma_fulfillment` rows -> every order-type family, named, with what it did.
+
+    The fulfillment-side twin of `ma_store_pnl.ma_tx_coverage` (§COMMCALC-11), and a COVERAGE
+    READ-OUT only: it re-runs the very same test `ma_unit_price_from_rows` runs and reports the
+    result per family. It prices nothing and books nothing.
+
+    `reasons` is the org's own {order_type: stated reason} — the SAME config the daily-tx coverage
+    reads (`ma_store_pnl.load_unbooked_reasons`), dereferenced rather than copied — for the
+    families that are deliberately not handsets. A family that prices nothing and carries no stated
+    reason is the honest-absence case: it is REPORTED, with `NO_RULE_REASON`, never papered over.
+
+    Returns {"families": [ {order_type, rows, qty, ext, device, reason}, ... ] (|ext| desc),
+             "device_ext": float, "unruled_ext": float, "unruled": [order_type, ...]}
+    """
+    names = {str(n).strip().lower() for n in (device_names or ())}
+    reasons = {str(k).strip().lower(): str(v) for k, v in (reasons or {}).items()}
+    fam = {}
+    for r in rows or []:
+        r = r or {}
+        ot = str(r.get("order_type") or "").strip()
+        n = safe_float(r.get("number_ordered")) or 0.0
+        p = safe_float(r.get("price")) or 0.0
+        slot = fam.setdefault(ot.lower(), {"order_type": ot or "(blank)", "rows": 0, "qty": 0.0,
+                                           "ext": 0.0, "priced": 0})
+        slot["rows"] += 1
+        slot["qty"] += n
+        slot["ext"] += n * p
+        if _ma_row_prices_a_device(r, names):
+            slot["priced"] += 1
+    out, unruled = [], []
+    for low, slot in fam.items():
+        slot["qty"], slot["ext"] = round(slot["qty"], 2), round(slot["ext"], 2)
+        slot["device"] = bool(slot.pop("priced"))
+        if slot["device"]:
+            slot["reason"] = "handsets — priced into device cost"
+        elif low in reasons:
+            slot["reason"] = reasons[low]
+        else:
+            slot["reason"] = _NO_RULE_REASON
+            unruled.append(slot["order_type"])
+        out.append(slot)
+    out.sort(key=lambda s: (-abs(s["ext"]), s["order_type"]))
+    return {"families": out,
+            "device_ext": round(sum(s["ext"] for s in out if s["device"]), 2),
+            "unruled_ext": round(sum(s["ext"] for s in out
+                                     if s["reason"] == _NO_RULE_REASON), 2),
+            "unruled": sorted(unruled)}
+
+
+def _ma_row_prices_a_device(r, device_names):
+    """PURE: does this fulfillment row carry a handset's price? Evidence first (the two feeds agree
+    the product is something a handset activated under), the order-type allowlist as the fallback
+    for a caller with no commission feed to take evidence from. ONE test, two readers."""
+    name = str((r or {}).get("product_name") or "").strip().lower()
+    if not name:
+        return False
+    if device_names:
+        return name in device_names
+    return str((r or {}).get("order_type") or "").strip().lower() in _MA_DEVICE_ORDER_TYPES
+
 
 # A `sku` the distributor could not name. These rows are SIM-only / BYOD activations, not handsets:
 # on luxelink July all 160 carry $0 rebate. Excluded from the device count AND reported in `meta`.
@@ -356,18 +457,24 @@ def _page(client, table, select, eqs=None, page=1000, cap=200000):
     return out
 
 
-def ma_unit_price_from_rows(rows):
+def ma_unit_price_from_rows(rows, device_names=None):
     """PURE: handset fulfillment rows → {product_name(lower) -> unit cost}.
 
     FACTORED OUT of `ma_unit_price_map` below (2026-10-12, §COMMCALC-03) so the takeover evaluation
     prices a PROSPECT's handsets with this exact arithmetic instead of a second copy of it. The I/O
     wrapper is the only caller that reads a table; the rule lives here and is proved DB-free
     (`harness_prospect_eval.py` §D asserts the two agree over one fixture).
+
+    `device_names` is the EVIDENCE a caller holds that a product is a handset — the skus its
+    commission feed shows handsets activating under (`ma_device_product_names`). Passing it is how
+    a second order-type family gets priced without anyone naming it in code (2026-10-19). Omitting
+    it is byte-identical to the pre-2026-10-19 behaviour: the order-type allowlist decides.
     """
     qty, ext = {}, {}
+    names = {str(n).strip().lower() for n in (device_names or ())}
     for r in rows or []:
         r = r or {}
-        if (r.get("order_type") or "").strip().lower() not in _MA_DEVICE_ORDER_TYPES:
+        if not _ma_row_prices_a_device(r, names):
             continue
         name = (r.get("product_name") or "").strip().lower()
         if not name:
@@ -381,7 +488,7 @@ def ma_unit_price_from_rows(rows):
     return {k: round(ext[k] / qty[k], 2) for k in qty if qty[k]}
 
 
-def ma_unit_price_map(client, org_id):
+def ma_unit_price_map(client, org_id, device_names=None):
     """{product_name(lower) -> unit cost} from the distributor's handset fulfillment sheet.
 
     ALL dates, deliberately: a device ordered in June and activated in July must still be priced, and
@@ -395,7 +502,7 @@ def ma_unit_price_map(client, org_id):
     """
     return ma_unit_price_from_rows(_page(
         client, "raw_ma_fulfillment",
-        "product_name,number_ordered,price,order_type", {"org_id": org_id}))
+        "product_name,number_ordered,price,order_type", {"org_id": org_id}), device_names)
 
 
 def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
@@ -407,10 +514,31 @@ def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
     (mig 314 — see the module docstring), company-wide for everything else. No index ⇒ all
     company-wide, byte-identical to pre-314.
     """
-    price = ma_unit_price_map(client, org_id)
+    # The COMMISSION rows come first: they carry the evidence of which products are handsets at
+    # all (`ma_device_product_names`), and without it a fulfillment family nobody named prices
+    # nothing while its rebate books in full — the 2026-10-19 defect.
     rows = _page(client, "raw_ma_commission", "imei,sku,activation_type,merchant_account_id",
                  {"org_id": org_id, "period": period_keys})
-    return ma_sold_cost_from_rows(rows, price, ma_acct_index)
+    names = ma_device_product_names(rows)
+    # ONE read of the fulfillment sheet answers BOTH questions — what a model costs, and what each
+    # order-type family did. Reading it twice would let the price list and its coverage read-out
+    # drift, which is the divergence this whole mechanism exists to stop.
+    _ful = _page(client, "raw_ma_fulfillment", "product_name,number_ordered,price,order_type",
+                 {"org_id": org_id})
+    out = ma_sold_cost_from_rows(rows, ma_unit_price_from_rows(_ful, names), ma_acct_index)
+    out["meta"]["fulfillment_coverage"] = ma_fulfillment_coverage(
+        _ful, names, _unbooked_reasons(client, org_id))
+    return out
+
+
+def _unbooked_reasons(client, org_id):
+    """The org's own {order_type: stated reason}, through the daily-tx coverage's ONE loader —
+    never a second copy of the same config read. ADAPTIVE: any failure degrades to {}."""
+    try:
+        from app.modules.account.ma_store_pnl import load_unbooked_reasons
+        return load_unbooked_reasons(client, org_id)
+    except Exception:                                             # pragma: no cover - defensive
+        return {}
 
 
 def ma_sold_cost_from_rows(rows, price, ma_acct_index=None, skip_imeis=None):
@@ -439,7 +567,7 @@ def ma_sold_cost_from_rows(rows, price, ma_acct_index=None, skip_imeis=None):
         by_imei.setdefault(imei, ((r.get("sku") or "").strip(),
                                   str(r.get("merchant_account_id") or "").strip()))
     cost, priced, unknown_sku, unpriced, skipped = 0.0, 0, 0, 0, 0
-    detail, by_store = {}, {}
+    detail, by_store, unpriced_detail = {}, {}, {}
     for imei, (sku, acct) in by_imei.items():
         if imei in skip:
             skipped += 1
@@ -451,6 +579,9 @@ def ma_sold_cost_from_rows(rows, price, ma_acct_index=None, skip_imeis=None):
         unit = price.get(low)
         if unit is None:
             unpriced += 1
+            # NAMED, not just counted (owner report 2026-10-19). A bare count cannot be acted on:
+            # the models are what say whether a price list is missing a family or a month.
+            unpriced_detail[sku] = unpriced_detail.get(sku, 0) + 1
             continue
         cost += unit
         priced += 1
@@ -467,7 +598,7 @@ def ma_sold_cost_from_rows(rows, price, ma_acct_index=None, skip_imeis=None):
                  "rows": len(rows), "distinct_imei": len(by_imei), "dedup_dropped": len(rows) - len(by_imei),
                  "priced": priced, "unknown_sku": unknown_sku, "unpriced_sku": unpriced,
                  "rows_without_imei": no_imei, "price_list_skus": len(price),
-                 "skipped_imeis": skipped,
+                 "skipped_imeis": skipped, "unpriced_sku_detail": unpriced_detail,
                  "store_mapped_accounts": len(idx)},
     }
 
@@ -537,6 +668,38 @@ def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store, activation=
                                                "store_pairs": len(moved["pairs"])},
                  "unmeasured_stayed_put": {"devices": held["devices"], "amount": held["amount"]}},
     }
+
+
+def unpriced_handsets_note(meta):
+    """PURE: the device-cost `meta` -> the sentence a reader needs, or None when nothing was dropped.
+
+    RULING K3(b) GENERALISED (owner directive 2026-09-20, "one fact, one home, dereferenced"). A
+    declared zero already had to say so on the statement because `meta` alone never reaches a
+    reader — `engine._assemble` rebuilds each line from key/label/amount/kind/detail. A handset
+    whose cost could not be priced is the SAME shape and was silent: its REBATE books regardless,
+    so the contra-COGS stands against a cost that is short by exactly the dropped handsets. That is
+    how LuxeLink September 2026 came to show −$180,191.91 of rebates against $164,730.35 of cost.
+
+    Says the count, the money it cannot name (it has no price — that is the point), and the models,
+    so the fix is visible as a missing price list rather than as a negative cost of goods.
+    """
+    ma = (meta or {}).get("ma") or {}
+    n = int(ma.get("unpriced_sku") or 0)
+    if not n:
+        return None
+    det = ma.get("unpriced_sku_detail") or {}
+    models = sorted(det.items(), key=lambda kv: (-kv[1], kv[0]))[:4]
+    named = ", ".join("%s x%d" % (m, c) for m, c in models)
+    more = len(det) - len(models)
+    if named and more > 0:
+        named = " Biggest: %s, and %d more model(s)." % (named, more)
+    elif named:
+        named = " Biggest: %s." % named
+    return ("%s handset(s) activated this period are NOT on the distributor's fulfillment sheet, so "
+            "they book NO device cost while their purchase rebate books in full — device cost is "
+            "understated by whatever those handsets cost, and the rebate line is not short by the "
+            "same amount.%s Upload the fulfillment sheet covering them to measure it."
+            % ("{:,}".format(n), named))
 
 
 def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,

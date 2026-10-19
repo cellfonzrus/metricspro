@@ -133,6 +133,7 @@ Primary code homes:
 | COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
 | COMMCALC-18 | **An accessory line and a rent line both move in dollars** | "Add accessory sales to the Sales Comparison so it compares month over month, and add expenses." Accessory dollars were already tallied — the table had no change column for a metric measured in money, only for units. And what did each store SPEND in those two months, read from the same sheet the P&L books, without an expense ever being added into the revenue beside it? |
 | COMMCALC-19 | **The figures at the top of a report are something you can send** | "The dashboard should give an option to send the snapshot of the top part to the desired people." Sending already had one home; what was missing was a shape for the TILES, shared rather than written into one page. And when the snapshot says a figure is unchanged, is that a measurement or two copies of one carried expense sheet compared with itself? |
+| COMMCALC-20 | **A handset that books a rebate books a cost** | "How come the device cost is less than the device rebate?" The rebate books per commission row, unconditionally; the cost books only if the handset can be PRICED off the fulfillment sheet — and an order-type allowlist silently decided which fulfillment rows were allowed to carry a price at all. A family the distributor opened after the allowlist was written priced nothing, so its handsets netted a full rebate against a zero cost. |
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 
 ---
@@ -25541,6 +25542,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-17 | commcalc |
 | COMMCALC-18 | commcalc |
 | COMMCALC-19 | commcalc |
+| COMMCALC-20 | commcalc |
 | COMMCALC-21 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
@@ -30951,3 +30953,95 @@ the customer paid.
 
 Same class: §COMMCALC-66 (a fallback must not read as evidence), §19.18 (a registry written and its
 callers left unwired is not a fix), §POS-01 (one home for the cart, one client that spells the URLs).
+
+---
+
+## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
+
+Owner, on LuxeLink September 2026: *"how come the device cost is less than the device rebate"* —
+Device cost **$164,730.35** against Device purchase rebates (contra-COGS) **−$180,191.91** on the
+Chicago company. A contra-COGS larger than the COGS it nets against makes device gross profit
+positive out of nothing.
+
+### §COMMCALC-20.1 THE CLASS, not the instance
+
+A handset's **rebate** books off `commcalc.raw_ma_commission`, one row at a time, unconditionally.
+Its **cost** books only when the same handset's `sku` can be priced off `commcalc.raw_ma_fulfillment`
+— and an order-type **allowlist** (`device_cogs._MA_DEVICE_ORDER_TYPES`, `{'branded handset'}`)
+silently decided which fulfillment rows were allowed to carry a price at all.
+
+The allowlist was correct when it was written (404 fulfillment rows, one device family) and wrong
+the day the distributor opened a second one. A family nobody had added priced **nothing**, so every
+handset bought under it booked a full rebate against a cost of zero — and nothing on the statement
+said so, because the drop was counted in `meta` and `engine._assemble` never shows `meta` to a
+reader (the §K3(b) lesson, again).
+
+**Measured live, LuxeLink (org `854f6d7b`), 2026-10-19:**
+
+| period | device cost before | after | delta | rebate | net device COGS after | unpriced handsets |
+|---|---:|---:|---:|---:|---:|---:|
+| June 2026 | 59,529.80 | 59,529.80 | 0.00 | −57,000.46 | 2,529.34 | 8 → 8 |
+| July 2026 | 137,185.10 | 137,185.10 | 0.00 | −126,636.77 | 10,548.33 | 9 → 9 |
+| August 2026 | 260,206.80 | 262,456.74 | +2,249.94 | −251,946.31 | 10,510.43 | 26 → 20 |
+| **September 2026** | **222,525.36** | **248,824.65** | **+26,299.29** | −239,367.80 | **9,456.85** (was −16,842.44) | 77 → 6 |
+| October 2026 | 64,284.95 | 77,534.58 | +13,249.63 | −72,436.31 | 5,098.27 (was −8,151.36) | 39 → 2 |
+| **total** | **743,732.01** | **785,530.87** | **+41,798.86** | −747,387.65 | 38,143.22 | |
+
+71 of September's 77 unpriced handsets were certified-pre-owned iPhones bought under a second
+order-type family; $26,299.29 of real cost was dropped against $27,449.27 of rebate that booked
+regardless. The independent confirmation is the shape of the last column: net device COGS was
+$2.5k–$10.5k in every month the allowlist happened to cover and went **negative** in the two months
+it did not. After the fix every month is positive and in the same band.
+
+### §COMMCALC-20.2 DUPLICATE CHECK (build gate) — WHAT WAS REUSED, NOT REBUILT
+
+| question | existing mechanism | what this change did |
+|---|---|---|
+| what did this handset model cost | `device_cogs.ma_unit_price_from_rows` (§COMMCALC-03) | **EXTENDED** — one new optional argument, no second pricer |
+| what did the devices activated this month cost | `device_cogs.ma_sold_cost_from_rows` | **EXTENDED** — names the unpriced models it already counted |
+| is this fulfillment row a device | two literal `order_type` membership tests | **FACTORED** into `_ma_row_prices_a_device`, the ONE test, read by the price map and the coverage |
+| a vendor order-type family nobody classified | `ma_store_pnl.ma_tx_coverage` + `NO_RULE_REASON` + `load_unbooked_reasons` (daily-tx feed, mig 312) | **REUSED WHOLE** — `ma_fulfillment_coverage` is its fulfillment-side twin and dereferences the same literal and the same config loader |
+| the prospect/takeover evaluation's handset cost | `prospect_eval.evaluate` through the same two homes | **THE SIBLING, FIXED IN THIS PR** — it passes the same evidence |
+| saying on the statement what `meta` knows | `L["device_cost"]["note"]` (§K3(b) honest zero, §70 restatement) | **EXTENDED** — appended, so all three facts can be true at once |
+
+### §COMMCALC-20.3 THE FIX: evidence, not vocabulary
+
+A fulfillment row prices a handset when **the two feeds agree it is one** — its `product_name` is a
+`sku` that a handset actually **activated** under on `raw_ma_commission`
+(`device_cogs.ma_device_product_names`). That is evidence, not a name list: it carries no
+distributor, carrier or tenant name (RULE TWO), it can never remove a price the cost side would
+have used (a sku that is not activated is never looked up), and the next family the distributor
+opens prices itself with no code change.
+
+Verified over LuxeLink's whole fulfillment sheet: the derived test reproduces the allowlist exactly
+where the allowlist was right (917 `Branded Handset` rows, 24 of 24 product names matched) and
+supplies the family it had missed (108 rows, 8 of 8 matched), while the SIM kits (400 units at
+$3.00) and the charge cables match nothing and stay out, as they always did. The allowlist remains
+as the fallback for a caller with no commission feed to take evidence from, so omitting the
+evidence is byte-identical to the pre-2026-10-19 behaviour.
+
+**One home, one reader.** `_ma_row_prices_a_device` is the only place `order_type` is tested;
+`ma_unit_price_from_rows` and `ma_fulfillment_coverage` both read it, and `harness_…` §I15 fails the
+build if a third reader appears or either stops dereferencing it.
+
+**What is still not measured is REPORTED, never coded around.** 6 handsets in September and 2 in
+October are on no fulfillment sheet at all; `device_cogs.unpriced_handsets_note` — the ONE home for
+that sentence — says so on the statement line, names the models, and states plainly that their
+rebate booked while their cost did not. `ma_fulfillment_coverage` reports every order-type family
+with what it did, and a family that prices nothing and carries no stated reason gets
+`NO_RULE_REASON`. LuxeLink's two such families are $1,225.62 of SIM kits and cables; one
+`commission_org_config.pl_ma_unbooked_reasons` row retires each — CONFIG, never code.
+
+| what | where |
+|---|---|
+| **Which fulfillment rows price a handset?** The ones whose `product_name` is a `sku` a handset activated under; the order-type allowlist is the evidence-free fallback | `account/device_cogs._ma_row_prices_a_device` (the ONE test) over `ma_device_product_names`; read by `ma_unit_price_from_rows(rows, device_names)` and `ma_fulfillment_coverage`. Callers: `device_cogs._ma_sold_cost` (live P&L), `commcalc/prospect_eval.evaluate` + `commcalc/router` pl-trend (the takeover evaluation). Lock `harness_device_inventory_cogs.py` §I (**106** checks total; §I1 is the regression, red on the pre-change code) |
+| **What did each fulfillment order-type family do?** Every family named, with its reason; an unruled one reported, never papered over | `account/device_cogs.ma_fulfillment_coverage` → `device_cogs.resolve` `meta.fulfillment_coverage`. Reasons from `commcalc.commission_org_config.pl_ma_unbooked_reasons` through `ma_store_pnl.load_unbooked_reasons` — the SAME config and the SAME `NO_RULE_REASON` literal as the daily-tx coverage (§COMMCALC-11) |
+| **A handset whose cost could not be priced** | `account/device_cogs.unpriced_handsets_note` — the ONE home for the sentence — appended to `L["device_cost"]["note"]` by `coa.build_inputs`. Names the count and the models, and says the rebate booked while the cost did not |
+
+| MONEY IMPACT | **YES, and it is a RESTATEMENT** — LuxeLink device cost rises $41,798.86 across Jun–Oct 2026, almost all of it Sep ($26,299.29) and Oct ($13,249.63). Gross profit falls by the same amount in those months. No other tenant has MA fulfillment rows, so nothing else moves. **A P&L Recompute is required** before the stored statements show it |
+| RULE TWO | no distributor, carrier, tenant or product name decides whether a row prices a handset; the test is the two feeds' own agreement, and the reasons map is per-org config |
+
+Same class: §COMMCALC-66 / §66 (a fallback must not read as evidence), §19.18 (a registry written
+and its callers left unwired is not a fix), §COMMCALC-11 (a vendor order-type family nobody
+classified is reported, never silent), §42.7/§K3(b) (a declared or dropped figure must SAY so on
+the statement, because `meta` never reaches a reader).
