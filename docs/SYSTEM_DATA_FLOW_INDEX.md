@@ -132,6 +132,7 @@ Primary code homes:
 | COMMCALC-16 | **A figure the portal did not send is not a zero** | "The carrier portal's numbers and ours disagree — our stores show 0 activations beside a 66.67% attach rate. Which carrier field feeds which column, what happens when the portal renames one, and how does the platform say so instead of writing the absence down as a measurement?" |
 | COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
 | COMMCALC-18 | **An accessory line and a rent line both move in dollars** | "Add accessory sales to the Sales Comparison so it compares month over month, and add expenses." Accessory dollars were already tallied — the table had no change column for a metric measured in money, only for units. And what did each store SPEND in those two months, read from the same sheet the P&L books, without an expense ever being added into the revenue beside it? |
+| COMMCALC-19 | **The figures at the top of a report are something you can send** | "The dashboard should give an option to send the snapshot of the top part to the desired people." Sending already had one home; what was missing was a shape for the TILES, shared rather than written into one page. And when the snapshot says a figure is unchanged, is that a measurement or two copies of one carried expense sheet compared with itself? |
 
 ---
 
@@ -7058,7 +7059,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
-| `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18) |
+| `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18); the tile row is SENDABLE through `frontend/src/lib/tile-snapshot.tileSnapshotSheet` + the one sender `SendReportButton`, and a change between two copies of ONE carried expense sheet is withheld as `change_measured: false` by `sales_comparison.expense_change_measured` rather than printed as ± 0% (§COMMCALC-19) |
 | `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
 | `GET /storeops/payroll/clock-variances` | `storeops/clock_variance_api.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
 | `POST /storeops/payroll/clock-variances/resolve` | `storeops/clock_variance_api.py` → `storeops.clock_variance_correction` | one human decision about one variance — including the DM's per-row override, which out-ranks the declared rule and is audited to `payroll_change_log` (§14z) |
@@ -25473,6 +25474,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-16 | commcalc |
 | COMMCALC-17 | commcalc |
 | COMMCALC-18 | commcalc |
+| COMMCALC-19 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -30572,6 +30574,108 @@ Files: `commcalc/expenses_effective.py` (`totals_by_store`), `commcalc/sales_com
 `commcalc/router.py` (`sales_comparison` expense read; `expenses_trend` rewired),
 `frontend/…/commcalc/sales-comparison/page.tsx`, `frontend/src/lib/reports.ts`,
 `backend/harness_sales_comparison.py` §E, `backend/harness_expense_one_path.py` §G.
+
+## §COMMCALC-19. THE FIGURES AT THE TOP OF A REPORT ARE SOMETHING YOU CAN SEND (owner ask 2026-10-19)
+
+Owner, verbatim: *"on the sales comparison dashboard it shoudl give an option to send teh snapshot of
+the top part to to the desired people"* — pasted with the live screen, which also carried the defect
+§COMMCALC-19.4 is about.
+
+### §COMMCALC-19.1 WHAT WAS ACTUALLY MISSING, and the class
+
+Sending already had ONE home: `frontend/src/lib/send-report.tsx` (`SendReportButton`). It already does
+everything the ask names — the recipient picker over employees and saved contacts, free-typed email
+addresses and WhatsApp numbers, the channel ladder, an optional message, and delivery through
+`POST /notify/send-file` so the send lands in the Notify history. **Nothing about sending needed
+building.**
+
+What was missing is CONTENT. That button can only send an `ExportPayload`, and `<ReportShell>` only
+ever handed it the **table**. So every report in the house could mail its ROWS and no report could mail
+the FIGURES a manager actually reads — the tile row at the top.
+
+**THE CLASS, not the instance:** *a number on screen that nobody can send is a number that gets retyped
+into an email.* The instance was one dashboard. The fix is therefore a **shared converter** —
+`frontend/src/lib/tile-snapshot.ts` — not a snapshot block inside the Sales Comparison page. The next
+report that wants this calls `tileSnapshotSheet` and gets the same columns, the same ordering and the
+same honesty rule for free. A per-page snapshot builder would have been exactly the sibling derivation
+the duplicate gate forbids.
+
+### §COMMCALC-19.2 DUPLICATE CHECK (build gate) — WHAT WAS REUSED, NOT REBUILT
+
+| The question | Who already answers it | Built here? |
+| --- | --- | --- |
+| who may this go to, over which channel, with what message | `frontend/src/lib/send-report.tsx` `SendReportButton` | **no — reused whole** |
+| how does a file reach a recipient and the Notify history | `POST /notify/send-file` → `notify/digest_delivery` channel ladder | **no** |
+| how is an `ExportPayload` turned into .xlsx / .pdf | `frontend/src/lib/export.tsx` (`renderExcelBase64` / `renderPdfBase64`) | **no** |
+| what shape is a SENT tile row | *nothing — surveyed ~20 tile pages; no path answered it* | **NEW — §COMMCALC-19.3** |
+| can this month-over-month expense change be measured at all | *nothing* | **NEW — §COMMCALC-19.4** |
+
+### §COMMCALC-19.3 ONE FACT, ONE HOME: `tile-snapshot.tileSnapshotSheet`
+
+`frontend/src/lib/tile-snapshot.ts` is THE home for "the tile row as something you can send". It fixes
+the sheet's shape once — **Measure | This period | Compared period | Change | Note** — so a manager
+comparing two reports' snapshots is not re-learning the layout, and it owns two rules a page may not
+restate:
+
+* **money is honoured per ROW**, not per column, because a tile row legitimately mixes units and
+  dollars (487 phones beside $31,298.61 of accessories);
+* **an absent figure is BLANK, never 0.** The same rule `export.money` already applies to a withheld
+  money cell — and it matters MORE here, because a snapshot outlives the screen and carries no small
+  print, so a fabricated `$0.00` in a mailed sheet is read as a measurement (§19.49's class).
+
+The change label is a **tri-state**, and that is the whole reason the module exists rather than a
+one-line formatter: a measured percent; `null` → `new` (no base to divide by); `measured: false` →
+`not measured`, with the reason printed in the Note.
+
+The Sales Comparison page says only WHICH tiles it has and what each one means, and it builds them from
+the SAME `totals_by_category` / `overall` objects the tiles render from — not a second read and not a
+re-derivation — so what lands in someone's inbox cannot say anything the screen does not.
+
+### §COMMCALC-19.4 THE ±0% THAT WAS A LIE: `sales_comparison.expense_change_measured`
+
+The owner's own paste of the screen read **"Store expenses $276,162.69 ± 0% was $276,162.69"**.
+
+Measured: that figure is **August 2026, 288 rows** of one tenant's `store_expenses`, and that tenant's
+sheet **ends at August**. So a base month of October and a compare month of September both inherited
+the SAME carried sheet, and the report divided it by itself. The carry-forward rule (§19.50) was
+behaving exactly as the P&L books it; the **percent** was the lie. "± 0%" reads as *spending held
+steady*, when the truth is that nobody had entered either month.
+
+`expense_change_measured(base_carried_from, compare_carried_from)` is the one home for the question
+*can this change be measured at all*. Both windows inheriting the same month → **False**, and it
+compares the two through `expenses_effective.period_sort_key`, so `2026-08` and `August 2026` are one
+sheet rather than two. The flag then rides the whole way:
+
+| Link | Where |
+| --- | --- |
+| the predicate | `commcalc/sales_comparison.expense_change_measured` |
+| the payload | `expenses_meta.change_measured`, and `pct` / `overall.exp_pct` **withheld as `None`** |
+| each grid row and the total | `rev_pct` / `pct` `None`, `change_measured: False` |
+| the tile | grey **not measured** instead of a percent, plus an amber panel naming the carried month |
+| the SENT row | the same words, and the reason in the Note column |
+
+The FIGURES are untouched — they are what each month books. `rev_delta` stays `0.00` because that IS
+the subtraction. It is the **percent** that is a claim, so the percent is the thing withheld. *An
+absence is reported with its reason, never as a result.*
+
+### §COMMCALC-19.5 LOCKED SO IT CANNOT UN-WIRE
+
+| Lock | What fails the build |
+| --- | --- |
+| `frontend/prove_tile_snapshot.mjs` (**41 checks**) | drives the REAL `tile-snapshot.ts` under Node 22 type-stripping — the fixed column order, all three states of the change label with the owner's own $276,162.69 as the regression, blank-never-zero, money per row, the caller's order preserved, purity, and a negative control for each |
+| `backend/harness_tile_snapshot.py` (**45 checks**) | the WIRING: the page dereferences the converter and declares no snapshot columns of its own; **no other frontend file spells the snapshot's headers**; the page spells no notify endpoint beside `SendReportButton`; the five links of the honesty chain above, each one named; the proof is run by a workflow whose path filter covers every file it reads; registration here |
+| `backend/harness_sales_comparison.py` §F | `expense_change_measured` on its own and through the real `build`: the regression, the withheld percent, the untouched figures, one-side-carried still measured, two DIFFERENT carried months still measured, and the §E5 leak test repeated for this path |
+
+### §COMMCALC-19.6 WHAT IS NOT DONE HERE
+
+The converter is shared, but only this report is wired to it. Rolling the Send button onto the other
+tile pages (Peer Sales Comparison, Spiff Impact, the Manager Report Cards, the Management Overview
+tiles) is a page-by-page wiring job with no new mechanism, and it is offered rather than taken.
+
+Files: `frontend/src/lib/tile-snapshot.ts` (**new**), `frontend/prove_tile_snapshot.mjs` (**new**),
+`backend/harness_tile_snapshot.py` (**new**), `backend/app/modules/commcalc/sales_comparison.py`
+(`expense_change_measured`), `frontend/…/commcalc/sales-comparison/page.tsx`,
+`backend/harness_sales_comparison.py` §F, `.github/workflows/carrier-vocab-guard.yml`.
 
 ## §POS-02. THE RECEIPT AN ADMIN EDITS, PRINTS AND EMAILS (owner ask 2026-10-17)
 

@@ -1,7 +1,9 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
-import { ExportColumn } from '@/lib/export'
+import { ExportColumn, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
+import { tileSnapshotSheet, type SnapshotTile } from '@/lib/tile-snapshot'
 import ReportShell from '@/components/ReportShell'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { MultiSelect } from '@/lib/multiselect'
@@ -23,6 +25,12 @@ function pctLabel(pct: number | null, current: number): string {
   const a = pct > 0 ? '▲' : pct < 0 ? '▼' : '±'
   return `${a} ${pct > 0 ? '+' : ''}${pct}%`
 }
+// A change the backend says CANNOT be measured is labelled, never drawn as a percent. The expense
+// case: when both months inherit the same carried sheet, the figures are one month against itself,
+// and a ± 0% there reads as "expenses held steady" (index §COMMCALC-18.7).
+function changeLabel(pct: number | null, current: number, measured?: boolean): string {
+  return measured === false ? 'not measured' : pctLabel(pct, current)
+}
 function pctColor(pct: number | null, current: number): string {
   if (pct === null || pct === undefined) return current > 0 ? 'var(--green, #16a34a)' : 'var(--text3)'
   if (pct > 0) return 'var(--green, #16a34a)'
@@ -34,13 +42,15 @@ function pctColor(pct: number | null, current: number): string {
 // defined inside the page body is re-created on every render (react-hooks/static-components).
 // `invert` is for a COST: spending more is not the green that selling more is, so the colour of the
 // change is flipped while the number and the sign are untouched.
-function OverTile({ label, cur, prev, pct, money, invert }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean; invert?: boolean }) {
+function OverTile({ label, cur, prev, pct, money, invert, measured }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean; invert?: boolean; measured?: boolean }) {
   return (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150, background: 'var(--surface2)' }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
         <div style={{ fontSize: 22, fontWeight: 700 }}>{money ? fmt(cur) : cur}</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(invert && pct !== null && pct !== undefined ? -pct : pct, cur) }}>{pctLabel(pct, cur)}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: measured === false ? 'var(--text3)' : pctColor(invert && pct !== null && pct !== undefined ? -pct : pct, cur) }}>
+          {changeLabel(pct, cur, measured)}
+        </div>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>was {money ? fmt(prev) : prev}</div>
     </div>
@@ -121,6 +131,62 @@ export default function SalesComparisonPage() {
   const marketOpts: string[] = data?.markets || []
   const filtered = selStores.length > 0 || selMarkets.length > 0
 
+  // THE SNAPSHOT (owner ask 2026-10-19). Built from the SAME `totals_by_category` / `overall` objects
+  // the tiles below render from — not a second read and not a re-derivation — so what lands in
+  // someone's inbox cannot say anything the screen does not. `tileSnapshotSheet` is the one home for
+  // the shape; this page only says WHICH tiles it has and what each one means.
+  const snapshotTiles = useMemo<SnapshotTile[]>(() => {
+    const t: SnapshotTile[] = []
+    for (const c of (data?.totals_by_category || [])) {
+      const dollars = c.metric === 'dollars'
+      const both = c.metric === 'both'
+      if (c.expense) {
+        t.push({
+          label: c.label, money: true,
+          value: c.current_rev, previous: c.previous_rev,
+          changePct: c.rev_pct, measured: c.change_measured !== false,
+          note: c.change_measured === false
+            ? `Both months carry the same entered sheet, so the change cannot be measured`
+            : '',
+        })
+        continue
+      }
+      t.push({
+        label: c.label, money: dollars,
+        value: dollars ? c.current_rev : c.current,
+        previous: dollars ? c.previous_rev : c.previous,
+        changePct: dollars ? c.rev_pct : c.pct,
+        note: dollars ? `${c.current} units`
+          : both ? `${fmt(c.current_rev || 0)} financed`
+            : c.current_rev ? fmt(c.current_rev) : '',
+      })
+    }
+    if (data?.overall) {
+      t.push({ label: 'Transactions', value: data.overall.current_txns, previous: data.overall.previous_txns, changePct: data.overall.txns_pct })
+      t.push({ label: 'Revenue', money: true, value: data.overall.current_rev, previous: data.overall.previous_rev, changePct: data.overall.rev_pct })
+      if (data?.expenses_meta?.measured) {
+        const measured = data.expenses_meta.change_measured !== false
+        t.push({
+          label: 'Store expenses', money: true,
+          value: data.overall.current_exp, previous: data.overall.previous_exp,
+          changePct: data.overall.exp_pct, measured,
+          note: measured
+            ? (data.expenses_meta.base_carried_from ? `${baseLbl} carries ${data.expenses_meta.base_carried_from}` : '')
+            : `Both months carry ${data.expenses_meta.base_carried_from || 'the same sheet'}`,
+        })
+      }
+    }
+    return t
+  }, [data, baseLbl])
+
+  const snapshotPayload = useCallback((): ExportPayload => ({
+    title: `Sales Comparison — ${baseLbl} vs ${cmpLbl}`,
+    subtitle: `${data?.window_label || ''}${filtered ? ' · filtered' : ' · all stores'}`,
+    filename: `sales-comparison-snapshot-${baseLbl}-vs-${cmpLbl}`,
+    sheets: [tileSnapshotSheet(snapshotTiles)],
+  }), [baseLbl, cmpLbl, data, filtered, snapshotTiles])
+
+
   const Tile = ({ c }: { c: any }) => {
     // Metric-aware per the owner spec: units rows headline the count; Accessories headlines $; Financing
     // shows BOTH the financed-unit count and the financed $.
@@ -169,6 +235,7 @@ export default function SalesComparisonPage() {
           dollars. <b>Store expenses</b> are shown per store on the same two months — the same figures the
           P&amp;L books, never added into the revenue beside them.
           The Financing line reflects only the active carrier’s financing.
+          <b> 📤 Send snapshot</b> emails these tiles to anyone you pick.
         </p>
       </div>
 
@@ -202,9 +269,22 @@ export default function SalesComparisonPage() {
       </div>
 
       {data && !data.error &&
-        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 14 }}>
-          Comparing <b>{baseLbl}</b> vs <b>{cmpLbl}</b> · <b>{data.window_label}</b>
-          {data?.source_meta && <span style={{ color: 'var(--text3)' }}> · {data.source_meta.base_rows} base / {data.source_meta.compare_rows} compare sale lines</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+            Comparing <b>{baseLbl}</b> vs <b>{cmpLbl}</b> · <b>{data.window_label}</b>
+            {data?.source_meta && <span style={{ color: 'var(--text3)' }}> · {data.source_meta.base_rows} base / {data.source_meta.compare_rows} compare sale lines</span>}
+          </div>
+          {/* SEND THE SNAPSHOT (owner ask 2026-10-19). Sending has ONE home — `SendReportButton`
+              already owns the recipient picker, the channels, the message and the Notify history —
+              so this adds only the CONTENT: the tiles, through `tile-snapshot`'s shared converter.
+              It sits HERE, with the tiles it sends; the table's own Send stays on the table. */}
+          {snapshotTiles.length > 0 &&
+            <SendReportButton
+              title={`Sales Comparison snapshot — ${baseLbl} vs ${cmpLbl}`}
+              label="📤 Send snapshot"
+              exportPayload={snapshotPayload}
+              filters={{ period: baseLbl, compare: cmpLbl, window: data?.window_label }}
+              compact />}
         </div>}
 
       {data?.error &&
@@ -226,20 +306,28 @@ export default function SalesComparisonPage() {
           <OverTile label="Revenue" cur={data.overall.current_rev} prev={data.overall.previous_rev} pct={data.overall.rev_pct} money />
           {data?.expenses_meta?.measured &&
             <OverTile label="Store expenses" cur={data.overall.current_exp || 0} prev={data.overall.previous_exp || 0}
-                      pct={data.overall.exp_pct} money invert />}
+                      pct={data.overall.exp_pct} money invert
+                      measured={data.expenses_meta.change_measured !== false} />}
         </div>}
 
       {/* An expense month the tenant has not re-entered is CARRIED FORWARD — the same rule the P&L
           books. Say which month it came from rather than let the reader assume it was entered. */}
       {!loading && !data?.error && data?.expenses_meta?.measured &&
         (data.expenses_meta.base_carried_from || data.expenses_meta.compare_carried_from) &&
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12, color: 'var(--text2)' }}>
-          ℹ︎ Store expenses carried forward — {baseLbl} {data.expenses_meta.base_carried_from
-            ? <>uses <b>{data.expenses_meta.base_carried_from}</b></> : <>has its own entered expenses</>}
-          {' · '}{cmpLbl} {data.expenses_meta.compare_carried_from
-            ? <>uses <b>{data.expenses_meta.compare_carried_from}</b></> : <>has its own entered expenses</>}.
-          {' '}A month with no saved expenses inherits the latest earlier month, exactly as the P&amp;L books it —
-          enter that month on the Expenses sheet to compare the real figures.
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12,
+                                       color: data.expenses_meta.change_measured === false ? '#92400e' : 'var(--text2)',
+                                       background: data.expenses_meta.change_measured === false ? '#fffbeb' : undefined }}>
+          {data.expenses_meta.change_measured === false
+            ? <>⚠︎ <b>The store-expense change cannot be measured.</b> Neither {baseLbl} nor {cmpLbl} has its own
+                entered expenses, so both inherit <b>{data.expenses_meta.base_carried_from}</b> — the two figures are
+                that one sheet compared with itself, which is why no percentage is shown. Enter {cmpLbl} and {baseLbl}
+                on the Expenses sheet and the comparison becomes real.</>
+            : <>ℹ︎ Store expenses carried forward — {baseLbl} {data.expenses_meta.base_carried_from
+                ? <>uses <b>{data.expenses_meta.base_carried_from}</b></> : <>has its own entered expenses</>}
+              {' · '}{cmpLbl} {data.expenses_meta.compare_carried_from
+                ? <>uses <b>{data.expenses_meta.compare_carried_from}</b></> : <>has its own entered expenses</>}.
+              {' '}A month with no saved expenses inherits the latest earlier month, exactly as the P&amp;L books it —
+              enter that month on the Expenses sheet to compare the real figures.</>}
         </div>}
 
       {!loading && !data?.error && data && !data.expenses_meta?.measured &&
