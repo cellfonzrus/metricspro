@@ -1504,7 +1504,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     n_dedup = n_mrc_unresolved = n_mrc_ambiguous = 0
     total_amt = 0.0
     cat_counts, cat_excluded, cat_sources = {}, {}, set()
-    # `unknown` exclusions are kept apart from the device-category ones (§COMMCALC-20) so an
+    # `unknown` exclusions are kept apart from the device-category ones (§COMMCALC-21) so an
     # unclassifiable activation is reported once, by its own warning, and not twice.
     cat_excluded_unknown = {}
     n_cat_excluded = n_cat_unknown = 0
@@ -1802,7 +1802,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             # withheld flag — it is not held pending residual, it simply does not qualify. It is
             # NEVER silent: every excluded chain is counted with its dollars in `category_guard` and
             # summarised in `warnings`, which is what the operator reads after Run Calculation.
-            # The per-category BASIS comes back with the verdict (§COMMCALC-20): the figures are
+            # The per-category BASIS comes back with the verdict (§COMMCALC-21): the figures are
             # identical to `qualification_for`'s, and the engine now knows WHICH layer excluded each
             # category, so a decision the operator already made is never re-reported as a finding.
             if qual_override is not None:
@@ -2262,7 +2262,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             "detail": f"Device {_ser} has {len(_rs)} month-{_mi} installments in {pay_period}: {_why}"})
 
     # SUMMARY warnings — appended AFTER the per-chain cap so a big month can never hide the headline.
-    # A DECISION IS NOT A FINDING (§COMMCALC-20). An exclusion somebody chose is reported as
+    # A DECISION IS NOT A FINDING (§COMMCALC-21). An exclusion somebody chose is reported as
     # `category_excluded_decided` -- the chains and the dollars are still there, so nothing is hidden --
     # while `category_excluded` now carries ONLY the exclusions that need a human. The reason sentence
     # comes from the one home and names the real layer; no caller composes it.
@@ -2382,7 +2382,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             "category_guard": {"excluded_chains": n_cat_excluded,
                                "excluded_amount": round(cat_excluded_amt, 2),
                                "unknown_chains": n_cat_unknown,
-                               # §COMMCALC-20: `excluded` keeps every device category it always did,
+                               # §COMMCALC-21: `excluded` keeps every device category it always did,
                                # each now carrying its `basis`; `excluded_unknown` is the
                                # unclassifiable bucket, split out so it is not reported twice.
                                "excluded_unknown": cat_excluded_unknown,

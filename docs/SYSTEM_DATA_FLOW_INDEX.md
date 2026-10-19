@@ -133,7 +133,7 @@ Primary code homes:
 | COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
 | COMMCALC-18 | **An accessory line and a rent line both move in dollars** | "Add accessory sales to the Sales Comparison so it compares month over month, and add expenses." Accessory dollars were already tallied — the table had no change column for a metric measured in money, only for units. And what did each store SPEND in those two months, read from the same sheet the P&L books, without an expense ever being added into the revenue beside it? |
 | COMMCALC-19 | **The figures at the top of a report are something you can send** | "The dashboard should give an option to send the snapshot of the top part to the desired people." Sending already had one home; what was missing was a shape for the TILES, shared rather than written into one page. And when the snapshot says a figure is unchanged, is that a measurement or two copies of one carried expense sheet compared with itself? |
-| COMMCALC-20 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
+| COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 
 ---
 
@@ -25541,7 +25541,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-17 | commcalc |
 | COMMCALC-18 | commcalc |
 | COMMCALC-19 | commcalc |
-| COMMCALC-20 | commcalc |
+| COMMCALC-21 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -28548,14 +28548,14 @@ column. `frontend/tools/rep-incentive-range-proof.mjs` grew 7 checks (17 total) 
 
 
 
-## §COMMCALC-20. A NON-PAYMENT SOMEBODY CHOSE IS NOT A FINDING (owner report 2026-10-19)
+## §COMMCALC-21. A NON-PAYMENT SOMEBODY CHOSE IS NOT A FINDING (owner report 2026-10-19)
 
 OWNER, verbatim: *"if home internet is not required to pay the multi month as defined inte h incentive
 struture it shoud not appear as not paid and create confusion for teh user"*, following *"rep incentive
 report ... check for all such things ... so everywhere the same data is visible"* and his root-cause ask
 that device categories come from the carrier's own data rather than a checklist.
 
-### COMMCALC-20.1 What was actually wrong — and what was NOT
+### COMMCALC-21.1 What was actually wrong — and what was NOT
 
 Measured read-only on the owner's own tenant before any change, because the notice's wording invited the
 wrong diagnosis:
@@ -28580,7 +28580,7 @@ uploaded no catalog. That is a data gap, reported. And the carrier statement's c
 this dollar commission or rebate"* — not *"is this a phone or a tablet"*. Wiring one to the other would
 invent a link the data does not support, so it was not wired; it was put to the owner instead.
 
-### COMMCALC-20.2 Duplicate check (the build gate)
+### COMMCALC-21.2 Duplicate check (the build gate)
 
 Searched the index for an existing home for "why did this not pay". Three near-neighbours, each the SAME
 posture on a different subject, so the posture was reused and no sibling built:
@@ -28595,7 +28595,7 @@ category is this" and "does it qualify", so `commcalc/installment_category.py` w
 than joined by a sibling. Both callers dereference it; neither writes a reason or names a basis
 (harness §F9).
 
-### COMMCALC-20.3 The four bases, and the allowlist direction
+### COMMCALC-21.3 The four bases, and the allowlist direction
 
 `BASIS_TENANT_SETTING` · `BASIS_SCHEDULE_OVERRIDE` · `BASIS_PLATFORM_DEFAULT` · `BASIS_UNSTATED`.
 
@@ -28610,7 +28610,7 @@ omissions as *"that category is unchecked"* — a sentence nobody had earned. Th
 (the list still means what it meant); only the basis, and therefore whether it is a finding, is now
 honest. The owner's tenant stores the dict shape, so it is not affected today; the code path is live.
 
-### COMMCALC-20.4 What moved, and what did not
+### COMMCALC-21.4 What moved, and what did not
 
 | surface | before | now |
 | --- | --- | --- |
@@ -28623,7 +28623,7 @@ honest. The owner's tenant stores the dict shape, so it is not affected today; t
 **No figure moves and no payout changes.** A notice with no `severity` reads as open, so an older server
 renders exactly as before.
 
-### COMMCALC-20.5 Reported, never repaired
+### COMMCALC-21.5 Reported, never repaired
 
 - **4 devices were paid TWO installments for the same month** — real money paid twice, pointing at a
   duplicate active schedule. Surfaced, not silenced; its own job.
@@ -28631,7 +28631,7 @@ renders exactly as before.
 - All three schedule lines read `mrc_source: product_catalog` against an empty catalog, which is why
   several per-rep figures in the notice were $0.00.
 
-### COMMCALC-20.6 Locks
+### COMMCALC-21.6 Locks
 
 `harness_installment_exclusion_basis.py` — **68 checks, 0 failures; verified 27 named failures and no
 traceback against pre-fix `main`** in a clean worktree. §A the basis ladder, §B the allowlist direction
@@ -28640,7 +28640,7 @@ dead assertion gone, §G the screen reads `severity`, §H RULE TWO, §Z armed co
 paths filter and its own step. `core/module_graph.py` fact `installment_exclusion_basis`, callers
 AST-derived (73 facts / 305 edges / 1563 checks).
 
-### COMMCALC-20.7 Cross-references
+### COMMCALC-21.7 Cross-references
 
 §6n (the one device classifier), §66 (`component_is_evidence`), §COMMCALC-09 (`payout_slice_evidence`),
 §19.28 (`kpi_failing`), §19.18 (a mechanism written, callers left unwired), §50 (the module graph).

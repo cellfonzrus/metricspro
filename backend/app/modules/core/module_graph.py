@@ -1104,7 +1104,7 @@ FACTS: dict[str, dict] = {
         "question": 'WHY did this device category pay no multi-month installment -- did somebody '
                     'decide that, or did nobody?',
         "homes": ('app/modules/commcalc/installment_category.py',),
-        "index": ('COMMCALC-20',),
+        "index": ('COMMCALC-21',),
         "locks": ('harness_installment_exclusion_basis.py',),
         # SNAPSHOT — hand-written (--bless strips per-caller comments, §COMMCALC-01); the derived
         # edges were verified by RUNNING the guard afterwards.

@@ -16582,7 +16582,7 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
             # device paid twice in one month — is stated here with its dollars. Never a silent zero.
             if notices is not None:
                 _cg = sr.get("category_guard") or {}
-                # A DECISION IS NOT A FINDING (owner 2026-10-19, §COMMCALC-20). An exclusion the
+                # A DECISION IS NOT A FINDING (owner 2026-10-19, §COMMCALC-21). An exclusion the
                 # operator (or the shipped default) already decided is not listed among the things
                 # this calculation "did not pay" -- it is one quiet `severity: "decided"` line with
                 # its chains and dollars, so the money stays visible without reading as a defect.
@@ -23095,7 +23095,7 @@ def _pse_mod():
 
 
 def _icat_mod():
-    """The one home for the multi-month device-category ladder and -- since §COMMCALC-20 -- for WHY a
+    """The one home for the multi-month device-category ladder and -- since §COMMCALC-21 -- for WHY a
     category did not qualify. One accessor, so no surface in this router re-derives which layer
     excluded a category or writes its own sentence about it."""
     from app.modules.commcalc import installment_category as _icat

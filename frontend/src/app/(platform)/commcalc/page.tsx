@@ -21,7 +21,7 @@ interface RepRow {
   acima_comm: number
 }
 
-// WHAT A RUN DID NOT PAY (§COMMCALC-20). The server already separates a non-payment somebody CHOSE
+// WHAT A RUN DID NOT PAY (§COMMCALC-21). The server already separates a non-payment somebody CHOSE
 // from one that needs a human, by `severity`: a decision arrives as 'decided'. This screen reads that
 // field and never re-derives the test from a notice's `type` or its wording — the engine owns which
 // exclusions are decisions (commcalc/installment_category), and a notice with no severity reads as
@@ -235,7 +235,7 @@ export default function CommCalcDashboard() {
         </div>
       )}
 
-      {/* EXCLUDED BY YOUR SETTINGS (owner 2026-10-19, §COMMCALC-20). The owner: "if home internet is
+      {/* EXCLUDED BY YOUR SETTINGS (owner 2026-10-19, §COMMCALC-21). The owner: "if home internet is
           not required to pay the multi month as defined inte h incentive struture it shoud not appear
           as not paid and create confusion for teh user". A non-payment somebody CHOSE is not a
           finding, so it leaves the amber list above — but the money stays on screen, stated plainly,

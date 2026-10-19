@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A DECISION IS NOT A FINDING — the multi-month exclusion basis (§COMMCALC-20).
+"""A DECISION IS NOT A FINDING — the multi-month exclusion basis (§COMMCALC-21).
 
 OWNER, verbatim (2026-10-19): *"if home internet is not required to pay the multi month as defined inte
 h incentive struture it shoud not appear as not paid and create confusion for teh user"*.
