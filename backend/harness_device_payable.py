@@ -481,11 +481,16 @@ check("D2 …and the collapse is visible month by month: the pruned months are j
       all(m["covered"] is False for m in COV["months"] if m["month"] in ("2024-11", "2024-12"))
       and all(m["covered"] for m in COV["months"] if m["month"] == "2025-06"),
       [(m["month"], m["ratio"], m["covered"]) for m in COV["months"]])
+# Each of these shapes carries a month AFTER the one being asserted, because the month holding the
+# ledger's newest row is the one still arriving and is deliberately never judged (D13-D16). A
+# two-month fixture would be asserting against the leading edge itself.
 check("D3 the boundary is NOT a hard-coded year: give the same shape a ledger that only collapses "
       "in 2021 and the window opens in 2022",
       dpay.coverage_scan(
-          [{"acquired_date": "2021-06-01"}] * 3 + [{"acquired_date": "2022-01-05"}] * 95,
+          [{"acquired_date": "2021-06-01"}] * 3 + [{"acquired_date": "2022-01-05"}] * 95
+          + [{"acquired_date": "2022-02-05"}] * 90,
           [{"created_on": "2021-06-02"}] * 100 + [{"created_on": "2022-01-06"}] * 100
+          + [{"created_on": "2022-02-06"}] * 100
       )["start_month"] == "2022-01")
 
 OUT = run(as_at="2024-06-30")
@@ -514,9 +519,62 @@ check("D11 a date beyond the ledger's last month is still measured, but flagged 
       "(feed freshness, which is not the same defect as pruning)",
       run(as_at="2027-06-30")["coverage"]["stale_tail"] is True)
 check("D12 a month with too few invoiced units is NOT judged — noise cannot move the boundary",
-      dpay.coverage_scan([{"acquired_date": "2025-02-01"}] * 40,
+      dpay.coverage_scan([{"acquired_date": "2025-02-01"}] * 40
+                         + [{"acquired_date": "2025-03-01"}] * 40,
                          [{"created_on": "2025-01-02"}] * 3
-                         + [{"created_on": "2025-02-02"}] * 40)["start_month"] == "2025-02")
+                         + [{"created_on": "2025-02-02"}] * 40
+                         + [{"created_on": "2025-03-02"}] * 40)["start_month"] == "2025-02")
+
+# ── THE 2026-10-19 DEFECT, AND THE LOCK THAT STOPS IT COMING BACK ───────────────────────────────
+# Owner, 2026-10-19: *"Device Payable as at a date — VidaPay / T-CETRA is not showing anything as of
+# today"*. The report was returning 'not_measured' for EVERY date, the owner's own 2025-12-31
+# year-end included. Reproduced from the live shape below: dense, demonstrably covered history, and
+# ONE part-arrived current month — the ledger snapshot had reached the 8th while the invoice feed
+# held the whole month to the 15th, so the current month's ratio read 0.555, was judged a COLLAPSE,
+# became the last gap, and `start_month` collapsed to None because no covered month can follow the
+# newest month there is.
+_LIVE_SHAPE_LEDGER = ([{"acquired_date": "2024-11-05"}] * 165            # genuinely pruned
+                      + [{"acquired_date": "2025-%02d-05" % m} for m in range(1, 13)
+                         for _ in range(1000)]                           # demonstrably covered
+                      + [{"acquired_date": "2026-01-05"}] * 1000
+                      + [{"acquired_date": "2026-02-08"}] * 222)         # part-arrived leading edge
+_LIVE_SHAPE_DEVICES = ([{"created_on": "2024-11-06"}] * 1858
+                       + [{"created_on": "2025-%02d-06" % m} for m in range(1, 13)
+                          for _ in range(1000)]
+                       + [{"created_on": "2026-01-06"}] * 1000
+                       + [{"created_on": "2026-02-15"}] * 400)
+_LIVE = dpay.coverage_scan(_LIVE_SHAPE_LEDGER, _LIVE_SHAPE_DEVICES)
+check("D13 REGRESSION (owner 2026-10-19): a part-arrived CURRENT month no longer wipes out the "
+      "whole window — the boundary is the real prune, not the leading edge",
+      _LIVE["start_month"] == "2025-01", _LIVE["start_month"])
+check("D14 …because the month holding the ledger's newest row is never JUDGED: a ratio only "
+      "measures a prune over a period both feeds have finished",
+      all(m["judged"] is False and m["covered"] is None
+          for m in _LIVE["months"] if m["month"] == _LIVE["leading_edge_month"]),
+      [(m["month"], m["ratio"], m["judged"]) for m in _LIVE["months"][-2:]])
+check("D15 …and `leading_edge_month` is that ONE named fact, so no caller re-derives which month "
+      "the ledger is still filling",
+      _LIVE["leading_edge_month"] == _LIVE["end_month"] == "2026-02", _LIVE["leading_edge_month"])
+check("D16 …so a date INSIDE the leading-edge month is measured AND flagged as a stale tail — the "
+      "freshness gap is declared rather than used to refuse the answer",
+      dpay.coverage_state(_LIVE, "2026-02-19") == ("measured", None, True)
+      and dpay.coverage_state(_LIVE, "2025-12-31") == ("measured", None, False),
+      dpay.coverage_state(_LIVE, "2026-02-19"))
+# THE LOCK, as a property rather than one example: whatever the shape, the leading-edge month is
+# never judged. This is what fails the build if the comparison is relaxed back to `<=`.
+_PROP = []
+for _tail in (1, 50, 222, 400, 2000):
+    for _ratio_break in (True, False):
+        _led = ([{"acquired_date": "2025-%02d-05" % m} for m in range(1, 13) for _ in range(500)]
+                + [{"acquired_date": "2026-01-05"}] * (_tail if not _ratio_break else 1))
+        _dev = ([{"created_on": "2025-%02d-06" % m} for m in range(1, 13) for _ in range(500)]
+                + [{"created_on": "2026-01-06"}] * 500)
+        _c = dpay.coverage_scan(_led, _dev)
+        _PROP.append((_tail, _ratio_break, _c["start_month"],
+                      [m["judged"] for m in _c["months"] if m["month"] == _c["leading_edge_month"]]))
+check("D17 THE LOCK: across ten shapes — leading edge thin, fat, above and below the ratio — the "
+      "leading-edge month is judged in NONE of them, and the window still opens at 2025-01",
+      all(p[2] == "2025-01" and p[3] == [False] for p in _PROP), _PROP)
 
 # ══ §E — THE LICENCE FOR `payg_date`, AS A LIVE CONTRACT ═════════════════════════════════════════
 section("§E  WHAT LICENSES `payg_date` AS THE PAYMENT DATE — measured on every run, not claimed once")
@@ -617,6 +675,39 @@ check("G7 the ledger's own health is published — key count, duplicate keys, no
       "rows — so a feed that starts drifting is visible on the page",
       set(R["meta"]["ledger"]) == {"keys", "duplicate_keys", "non_serial_rows", "blank_key_rows"},
       R["meta"]["ledger"])
+
+_SRC = open(os.path.join(HERE, "app/modules/account/device_payable.py"), encoding="utf-8").read()
+
+# ── THE SECOND SILENT ZERO, found while fixing the first (live, house org, 2026-10-19) ──────────
+# Every one of the 1,027 units unpaid AS AT TODAY carries `owed_to_vip` 0: the distributor states no
+# amount while a unit sits inside its reimbursement window and books one when that window closes.
+# So "payable at today" is honestly $0.00 on a thousand devices — a figure that, printed alone,
+# reads exactly like the blank report the owner reported. The count is DECLARED beside it. The feed
+# does carry a device `Price`, and this report does not use it: the licence (§E) is for
+# `owed_to_vip` against the distributor's settled batches, and nothing licenses a price as a debt.
+_ZL = [{"org_id": ORG, "id": "LZ%d" % i, "esn_imei": "35199999999%04d" % i, "payg_date": None,
+        "owed_to_vip": 0.0, "acquired_date": "2025-06-05", "store": "10 Alpha Ave",
+        "status": "Open", "device_model": PHONE} for i in range(5)]
+_ZD = [{"org_id": ORG, "id": "DZ%d" % i, "invoice_number": "INV-Z", "location": "10 Alpha Ave",
+        "serial": "35199999999%04d" % i, "imei": "08912399999999%04d" % i,
+        "product_name": PHONE, "created_on": "2025-06-06T04:00:00+00:00",
+        "period_year": 2025, "period_month": 6} for i in range(5)]
+_RZ = run(tables={"commcalc.asset_ledger": LEDGER + _ZL,
+                  "commcalc.vip_invoice_devices": DEVICES + _ZD})
+check("G8 a payable unit the feed puts NO MONEY on is counted and DECLARED, so a $0.00 payable "
+      "beside a large device count is the feed's own position rather than a broken report",
+      _RZ["totals"]["payable_devices_without_amount"]
+      == T["payable_devices_without_amount"] + 5,
+      (_RZ["totals"]["payable_devices_without_amount"],
+       T["payable_devices_without_amount"]))
+check("G9 …and those units still count as payable DEVICES — a unit with no amount is unpaid, not "
+      "absent",
+      _RZ["totals"]["payable_devices"] == T["payable_devices"] + 5
+      and _RZ["totals"]["payable_amount"] == T["payable_amount"],
+      (_RZ["totals"]["payable_devices"], _RZ["totals"]["payable_amount"]))
+check("G10 …and no price column is read as a debt: the licence in §E is for `owed_to_vip`, and "
+      "nothing licenses an invoice price as money owed",
+      "selling_price" not in _SRC and "'Price'" not in _SRC and '"Price"' not in _SRC)
 
 # ══ §H — MULTI-TENANT ════════════════════════════════════════════════════════════════════════════
 section("§H  MULTI-TENANT: every read org-scoped, and a foreign row can never arrive")
@@ -835,6 +926,14 @@ check("J10 …and every setter is guarded by it — data, error and loading alik
       and "if (alive) setLoading" in pcode)
 check("J11 …and the exact shape of the shipped defect, a bare `.then(setData)`, is ABSENT",
       ".then(setData)" not in pcode, ".then(setData) is present")
+check("J12 the page DECLARES the unpaid devices the feed puts no money on, so a $0.00 payable "
+      "beside a thousand devices never reads as the blank report the owner reported",
+      "payable_devices_without_amount" in pcode
+      and "reimbursement window" in pcode, "declaration absent from the page")
+check("J13 …and the stale-tail note says IN OR AFTER the month the ledger is still filling, "
+      "because a date inside that month has the same freshness gap as one beyond it",
+      "leading_edge_month" in pcode and "still filling" in pcode,
+      "page still describes the tail as only AFTER the last month held")
 
 print()
 print("=" * 78)

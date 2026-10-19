@@ -1038,6 +1038,11 @@ FACTS: dict[str, dict] = {
             # `carrier_comm_source_line()` — which line it divides from THIS home, rather than
             # typing a second line beside the first.
             'app/modules/account/coa.py': ('_MA_COMPONENTS', '_msp', '_msp_spec', '_rs', '_rs_mi', '_rs_mi_idx'),
+            # `_NO_RULE_REASON` added 2026-10-19 (§COMMCALC-20): the fulfillment-side coverage
+            # read-out reports an unruled order-type family with the SAME honest-absence literal the
+            # daily-tx coverage uses, and reads the org's stated reasons through THIS home's
+            # `load_unbooked_reasons` rather than keeping a second copy of either.
+            'app/modules/account/device_cogs.py': ('_NO_RULE_REASON', 'load_unbooked_reasons'),
             'app/modules/account/ledger_pnl.py': ('_msp',),
             'app/modules/account/router.py': ('_msp', 'residual_subs'),
             'app/modules/account/statement_engine.py': ('_msp',),
@@ -1566,6 +1571,10 @@ FACTS: dict[str, dict] = {
             # §COMMCALC-03 — the takeover evaluation dereferences this home; it never queries
             # the table or re-derives the rule.
             'app/modules/commcalc/prospect_eval.py': ('period_sort_key',),
+            # §COMMCALC-19 — "can this month-over-month expense change be measured at all" compares the
+            # two carried periods through THIS home's spelling rule, so `2026-08` and `August 2026`
+            # are one sheet rather than two. It dereferences `period_sort_key`; it does not re-spell it.
+            'app/modules/commcalc/sales_comparison.py': ('_period_key',),
         },
     },
     'gated_detector_verdict': {

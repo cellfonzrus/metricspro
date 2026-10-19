@@ -240,10 +240,27 @@ export default function DevicePayablePage() {
             <StatTile label="Non-device items billed (separate basis)" value={narrowed ? '—' : money(nd?.amount)} />
           </div>
 
+          {/* A $0.00 PAYABLE BESIDE A LARGE DEVICE COUNT IS THE FEED'S OWN POSITION, NOT A BLANK
+              REPORT. The distributor states nothing owed while a unit sits inside its reimbursement
+              window and books the amount when that window closes, so a payable asked for TODAY is
+              legitimately a count with little money against it. Printing the count without saying
+              so is how a correct figure reads as a broken one. */}
+          {!narrowed && (T.payable_devices_without_amount ?? 0) > 0 && (
+            <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12.5, color: 'var(--text2)' }}>
+              <strong>{num(T.payable_devices_without_amount)}</strong> of the{' '}
+              <strong>{num(payableDevices)}</strong> unpaid devices carry <strong>no amount</strong> in the
+              unit ledger &mdash; the {data?.distributor_label ?? 'distributor'} states nothing owed while a
+              unit is still inside its reimbursement window, and books the amount when that window closes.
+              They are counted as unpaid devices and add $0.00 to the payable. The nearer your as-at date is
+              to today, the more of them there are; a year-end date has almost none.
+            </div>
+          )}
+
           {cov?.stale_tail && (
             <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12.5, color: 'var(--text2)' }}>
-              Your date is <strong>after</strong> the last month the unit ledger currently holds
-              ({cov.end_month}). Units billed since then have no ledger row yet, so they count in
+              Your date is <strong>in or after</strong> the month the unit ledger is still filling
+              ({cov.leading_edge_month ?? cov.end_month}). Units billed since the ledger&rsquo;s newest
+              row have no ledger row yet, so they count in
               &ldquo;not in the unit ledger&rdquo; below rather than in the payable. That is a feed-freshness
               gap, not a payment.
             </div>

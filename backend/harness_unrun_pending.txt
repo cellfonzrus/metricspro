@@ -256,7 +256,6 @@ harness_rule4_pii_export.py
 harness_salary_expense.py
 harness_salary_owed.py
 harness_salary_owed_router_integration.py
-harness_sales_comparison.py
 harness_sales_comparison_periods.py
 harness_sales_leak_placement.py
 harness_scan_truncation.py

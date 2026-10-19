@@ -2000,7 +2000,8 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
     `homes`  the dereferenced one-homes, injected so this function stays DB-free AND so the harness
              can prove the prospect books through the same code the live P&L books through:
                  ma_commission_bookings, ma_tx_bookings, ma_unit_price_from_rows,
-                 ma_sold_cost_from_rows, route_expense_line, spec, pl_section,
+                 ma_device_product_names, ma_sold_cost_from_rows, route_expense_line, spec,
+                 pl_section,
                  ma_pnl_config, ma_cfg
     `expense_matrix` the AVERAGED expense matrix, BEFORE any rent override. The override is applied
              here, once per column (`apply_rent_override`), so a store's own declared rent replaces
@@ -2044,7 +2045,8 @@ def evaluate(feeds, cfg, homes, expense_matrix=None, rent_meta=None, period=None
     drop_ids, drop_imeis = flagged_line_ids(flagged), flagged_imeis(flagged)
 
     price = (price_list if price_list is not None
-             else homes["ma_unit_price_from_rows"](ful_rows))
+             else homes["ma_unit_price_from_rows"](
+                 ful_rows, homes["ma_device_product_names"](comm_rows)))
     # THE RENT, RESOLVED ONCE PER COLUMN off the AVERAGED matrix. `_exp_for` is the only place a
     # column's expense bookings are built, so the whole-prospect column and a store column cannot be
     # costed by two different routines, and neither can be overridden twice.
