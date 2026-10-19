@@ -49036,6 +49036,7 @@ def _prospect_homes(client, org_id):
         "ma_commission_bookings": _msp.ma_commission_bookings,
         "ma_tx_bookings": _msp.ma_tx_bookings,
         "ma_unit_price_from_rows": _dcg.ma_unit_price_from_rows,
+        "ma_device_product_names": _dcg.ma_device_product_names,
         "ma_sold_cost_from_rows": _dcg.ma_sold_cost_from_rows,
         "route_expense_line": _coa.route_expense_line,
         "accrue_detail": _coa.accrue_detail,
@@ -49377,7 +49378,12 @@ def prospect_pl_trend(prospect_id: str, period: str = "", period_to: str = "", m
     # ONE PRICE LIST for every month, built with the company's own home — a handset ordered in June
     # and activated in July must be costed the same way in both columns, and rebuilding the same
     # 65,000-row list once per month is work for no answer.
-    price = homes["ma_unit_price_from_rows"](every_month.get("ma_marketplace_orders") or [])
+    # The EVIDENCE of which products are handsets comes from the commission feed, for the same
+    # reason the live device-costing home takes it there (2026-10-19): an order-type family nobody
+    # named must still price, or its handsets book a rebate against no cost.
+    price = homes["ma_unit_price_from_rows"](
+        every_month.get("ma_marketplace_orders") or [],
+        homes["ma_device_product_names"](every_month.get("ma_commission") or []))
     months = _pev.uploaded_months(every_month)
 
     def _book(window_months, ref_period, expense_months):
