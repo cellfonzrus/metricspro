@@ -25,6 +25,7 @@ reported defect can never come back.
 
 Run: PYTHONPATH=backend python3 backend/harness_gp_pnl_commission_parity.py   (no DB, no network)
 """
+import ast
 import os
 import sys
 
@@ -32,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.account import ma_store_pnl as msp          # noqa: E402
 from app.modules.account import residual_subs as rs          # noqa: E402
+from app.modules.commcalc import gp_report as gpr            # noqa: E402
 from app.modules.commcalc.gp_report import calc_gp_report    # noqa: E402
 
 CHECKS = []
@@ -468,32 +470,199 @@ def run():
           "net_phone_cost, so it nets to 0.00 in net profit by construction",
           round(SEP_GP_AFTER["phone_sales"] - SEP_GP_AFTER["net_phone_cost"], 2) == 0.0)
 
-    # ── §K. THE DEVICE-DEPARTMENT QUESTION HAS TWO HOMES — MEASURED, NOT ASSERTED ─────────────────
-    # Found in the same pass and REPORTED, not coded around: "is this department a device
-    # department" is answered from `accessory_config.box_departments` by the GP report (config mode,
-    # `apply_to_gp`) and from `gp_category_map` ALONE by the P&L (`coa._sales_classifier`'s
-    # `is_device`). Luxelink declares BrandedHandset a box department; the GP report honours the
-    # declaration and the P&L has never read it, so September's 17,416.65 of BrandedHandset sales
-    # are device revenue on one report and `_unbooked_sales` on the other. Wiring the P&L to the
-    # same declaration RESTATES THE BOOKS, so it is the owner's call — pinned here as the
-    # measurement, with the divergence armed so it cannot be forgotten.
-    print("\n§K  the second home for 'is this a device department' — surfaced, not silently fixed")
-    SEP_UNBOOKED = {"Rtr / Other Carr. payments": 170654.81, "System / System": 47549.90,
-                    "BrandedHandset / KittedBranded": 17416.65, "(blank)": 0.10,
-                    "System / Bill Payments": 0.00}
-    check("K1 the P&L's own unbooked-sales tally for September", round(sum(SEP_UNBOOKED.values()), 2),
-          235621.46)
-    truth("K2 the GP report EXCLUDES the Rtr bill-payment department by the org's own "
+    # ── §K. "IS THIS A DEVICE DEPARTMENT?" HAS ONE HOME (owner decision 2026-10-19) ──────────────
+    # Owner, on the §K item PR #500 surfaced and deliberately did not apply: *"branded handset is he
+    # device device dpet move it"*.
+    #
+    # THE CLASS, NOT THE INSTANCE. The question had TWO homes. The GP report (config mode,
+    # `accessory_config.apply_to_gp`) answered it from the org's OWN declaration —
+    # `accessory_config.box_departments` (mig 218), the set the box count, the product mix, the
+    # handset watchdog and the trade-in basis all already read. `coa._sales_classifier` answered it
+    # from `gp_category_map` (mig 069) ALONE and had never read that declaration. So a department the
+    # owner had declared a box department but never ALSO mapped was device revenue on one report and
+    # `_unbooked_sales` on the other: $17,416.65 in September 2026 and $111,464.09 across Mar-Oct on
+    # the org that surfaced it. One function now answers both readers —
+    # `gp_report.device_department_test` — and this section fails the build if either stops asking it
+    # or a second copy of the question appears.
+    print("\n§K  'is this a device department' — ONE home, both readers dereference it")
+
+    DECLARED = "ZZBoxDept"          # a department the org DECLARED; no gp_category_map row.
+    MAPPED_AWAY = "ZZBoxButMapped"  # declared AND mapped to 'accessory' — the override must win.
+    HOUSE_DEV = sorted(gpr.DEVICE_DEPTS)[0]
+    MAP = [{"department": MAPPED_AWAY, "category": "accessory"},
+           {"department": "ZZMappedDevice", "category": "device"}]
+    BOX = [DECLARED, MAPPED_AWAY, HOUSE_DEV]
+
+    truth("K1 the home exists and the decision itself is PURE (values in, predicate out)",
+          callable(getattr(gpr, "device_department_test", None))
+          and gpr.device_department_test([], [])("anything") is False)
+    is_dev = gpr.device_department_test(MAP, BOX)
+    truth("K2 a department the org DECLARED a box department is a device department even with no "
+          "gp_category_map row — the whole point of the decision", is_dev(DECLARED) is True)
+    truth("K3 an explicit gp_category_map row still WINS: a declared box department the org mapped "
+          "to 'accessory' is NOT a device (the override is the more specific statement)",
+          is_dev(MAPPED_AWAY) is False)
+    truth("K4 a mapped device department is still a device department",
+          is_dev("ZZMappedDevice") is True)
+    truth("K5 the house defaults still answer for an org that declared nothing — so an undeclared "
+          "org (and the house, whose declaration IS the defaults) is byte-identical",
+          gpr.device_department_test([], None)(HOUSE_DEV) is True
+          and gpr.device_department_test([], None)(DECLARED) is False)
+    truth("K6 blank / None / an unknown department is NOT a device department",
+          not any(is_dev(d) for d in ("", None, "   ", "ZZNeverHeardOfIt")))
+
+    # ── ONE FUNCTION, TWO READERS. The GP report's config-mode row classification must reach the
+    # same answer through the same home, proved by RUNNING it rather than by reading it.
+    _k_sales = [{"store": STORE_A, "department": DECLARED, "category": "KittedBranded",
+                 "product_desc": "a handset", "ext_price": 400.0, "gp": 60.0,
+                 "salesperson": "REP A", "trans_id": "K1"},
+                {"store": STORE_A, "department": MAPPED_AWAY, "category": "Cases",
+                 "product_desc": "a case", "ext_price": 25.0, "gp": 10.0,
+                 "salesperson": "REP A", "trans_id": "K2"}]
+    _k_cfg = {"is_accessory": lambda _r: False, "box_departments": set(BOX)}
+    _k_gp = calc_gp_report(_k_sales, [], [], [], [], [], [], "September 2026",
+                           gp_category_map=MAP, config_classify=_k_cfg)
+    _k_row = _k_gp["store_rows"][0]
+    check("K7 the GP report books the DECLARED department's sale as a device sale (phone_sales), "
+          "through the same home", round(_k_row["phone_sales"], 2), 400.00)
+    check("K8 ...and the declared-but-mapped-away department lands in the ACCESSORY bucket its "
+          "gp_category_map row names, never in phone_sales", round(_k_row["acc_gp"], 2), 10.00)
+    # THE LEGACY BRANCH TOO (an org that has NOT opted into per-line config classification). It used
+    # to answer device-ness from `gp_category_map` alone — the identical half of the defect, which
+    # would have made the GP report the wrong one for the next org to declare without mapping.
+    _k_gp_legacy = calc_gp_report(_k_sales, [], [], [], [], [], [], "September 2026",
+                                  gp_category_map=MAP, box_departments=BOX)
+    check("K8a the LEGACY classifier reaches the same answer through the same home",
+          round(_k_gp_legacy["store_rows"][0]["phone_sales"], 2), 400.00)
+    _k_gp_undeclared = calc_gp_report(_k_sales, [], [], [], [], [], [], "September 2026",
+                                      gp_category_map=MAP)
+    check("K8b ARMED: with NOTHING declared the same rows are not device sales — which is what "
+          "makes K8a a dereference of the declaration and not a coincidence",
+          round(_k_gp_undeclared["store_rows"][0]["phone_sales"], 2), 0.00)
+    truth("K9 the P&L predicate and the GP engine agree on every department in the fixture, "
+          "because it is ONE function",
+          all(is_dev(r["department"]) == (r["ext_price"] == 400.0) for r in _k_sales))
+
+    # ── THE LOCK. A caller that goes back to deciding for itself fails the build.
+    _ACCT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app/modules/account")
+    _CC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app/modules/commcalc")
+    _SRC = {}
+    for _d in (_ACCT_DIR, _CC_DIR):
+        for _fn in sorted(os.listdir(_d)):
+            if _fn.endswith(".py"):
+                _SRC[os.path.join(os.path.basename(_d), _fn)] = open(
+                    os.path.join(_d, _fn), encoding="utf-8").read()
+    # THE HOME IS DEREFERENCED FROM THE MODULE GRAPH, never spelled here (index §19.18: a lock
+    # that keeps its own copy of the ruling is the duplicate defect wearing the shape of its cure).
+    from app.modules.core import module_graph as _mg
+    HOME = _mg.homes_for("device_department")[0].split("app/modules/", 1)[-1]
+
+    def _compares_to_device(src):
+        """Every comparison in the module against the literal 'device' — i.e. a module deciding
+        device-ness for itself. Docstrings and comments are prose and are not decisions."""
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:                                   # pragma: no cover - defensive
+            return False
+        skip = set()
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                if ast.get_docstring(n, clean=False) is not None and n.body \
+                        and isinstance(n.body[0], ast.Expr):
+                    skip.add(id(n.body[0].value))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Compare):
+                for side in [n.left] + list(n.comparators):
+                    if isinstance(side, ast.Constant) and side.value == "device" \
+                            and id(side) not in skip:
+                        return True
+        return False
+
+    # EXCUSED, and named so the excuse is auditable: these two compare against a DIFFERENT
+    # vocabulary that happens to spell one of its values 'device' — `line_class` the DEVICE DIMENSION
+    # of an activation (which handset was activated, §6n), `report_links` a report-link FIELD name.
+    # Neither is a POS department, and neither may grow a department test: if one does, it will also
+    # trip this check and has to be re-excused deliberately.
+    # `device_cost_recon` is the third: 'device' is one of its GROUP_BY keys (group the
+    # reconciliation by IMEI), which is a grouping dimension, not a department.
+    _K_EXCUSED = {"commcalc/line_class.py", "commcalc/report_links.py",
+                  "commcalc/device_cost_recon.py"}
+    _k_viol = sorted(f for f, src in _SRC.items()
+                     if f != HOME and f not in _K_EXCUSED and _compares_to_device(src))
+    check("K10 no module in the account or commcalc package decides device-ness for itself — "
+          "the question has ONE home and every reader dereferences it", _k_viol, [])
+    truth("K11 the P&L's classifier dereferences THAT home by name",
+          "device_department_test(" in _SRC["account/coa.py"])
+    truth("K12 ...and no longer carries the gp_category_map-only answer that caused the divergence "
+          "(`_dept_classifier` is not reached from the P&L at all)",
+          "_dept_classifier" not in _SRC["account/coa.py"])
+    truth("K13 the GP report's own classification dereferences it too — in BOTH branches — rather "
+          "than keeping the box-department membership test it used to own",
+          "_is_dev_dept(d)" in _SRC[HOME] and "in _box" not in _SRC[HOME]
+          and "_is_dev_dept_legacy(d)" in _SRC[HOME])
+    truth("K13a …and the one caller that reads the config hands the declaration over in EVERY "
+          "mode, not only when the org opted into per-line classification",
+          "box_departments=_gp_box_depts" in _SRC["commcalc/router.py"])
+    truth("K14 RULE TWO: the home names no department, tenant or carrier — every label in the "
+          "ladder arrives as config (the house defaults are a default, not a branch)",
+          not any(t in _SRC[HOME] for t in ("BrandedHandset", "KittedBranded")))
+
+    # ── THE RESTATEMENT, MEASURED (live, read-only, Luxelink org 854f6d7b-…, base a75ce707) ───────
+    # Σ ext_price of the declared-but-unmapped department's lines, per month, which is exactly what
+    # left `_unbooked_sales` and arrived on `device_rev`. The gross-profit movement is NOT the same
+    # figure every month: where a distributor invoice answers (`device_cogs` active, Jun-Oct) the
+    # staged POS cost is displaced and gross profit moves by the FULL revenue; where none does
+    # (Mar-May) the POS stage books and gross profit moves by the lines' `gp` alone.
+    K_MOVED = {"March 2026": 9084.59, "April 2026": 10189.14, "May 2026": 5249.43,
+               "June 2026": 6109.16, "July 2026": 23289.18, "August 2026": 24547.18,
+               "September 2026": 17416.65, "October 2026": 15578.76}
+    K_GP_DELTA = {"March 2026": 1680.00, "April 2026": 634.01, "May 2026": 1093.01,
+                  "June 2026": 6109.16, "July 2026": 23289.18, "August 2026": 24547.18,
+                  "September 2026": 17416.65, "October 2026": 15578.76}
+    K_POS_COST = {"March 2026": 7404.59, "April 2026": 9555.13, "May 2026": 4156.42}
+    check("K15 the September figure the owner ruled on", K_MOVED["September 2026"], 17416.65)
+    check("K16 the WHOLE restatement, every month that moves", round(sum(K_MOVED.values()), 2),
+          111464.09)
+    check("K17 ...of which gross profit (and net income, the move is above opex) takes",
+          round(sum(K_GP_DELTA.values()), 2), 90347.95)
+    check("K18 the difference is exactly the POS device cost the three invoice-less months stage",
+          round(sum(K_MOVED.values()) - sum(K_GP_DELTA.values()), 2),
+          round(sum(K_POS_COST.values()), 2))
+    truth("K19 and in the months a distributor invoice answers, the staged POS figure is DISPLACED, "
+          "not added — so the restatement books revenue with no cost behind it and says so",
+          all(K_GP_DELTA[m] == K_MOVED[m] for m in K_MOVED if m not in K_POS_COST))
+    # September's device line becomes the GP report's `phone_sales` to the cent — the mirror the
+    # owner asked for in §4a.3 ("they should be mirror copies of each other as the source is t he
+    # same"). 18.00 was the whole of the P&L's device revenue before.
+    check("K20 after the restatement the P&L's device revenue IS the GP report's phone_sales",
+          round(SEP_PL["device_rev"] + K_MOVED["September 2026"], 2),
+          SEP_GP_AFTER["phone_sales"])
+    # THE BRIDGE §J closes still, with the device term now a full mirror instead of an 18.00 stub.
+    _k_ni = round(-29403.84 + K_GP_DELTA["September 2026"], 2)
+    _k_bridge = {"plan_gp (no P&L classifier claims it)": SEP_GP_AFTER["plan_gp"],
+                 "other_gp (P&L reports it unbooked)": SEP_GP_AFTER["other_gp"],
+                 "device_rev the P&L books and GP cancels": -SEP_GP_AFTER["phone_sales"],
+                 "the whole COGS section GP has no term for": -round(-PL_COGS, 2),
+                 "wages GP never subtracts": SEP_PL["wages"]}
+    check("K21 THE §J BRIDGE STILL CLOSES on the restated books, with one fewer thing to explain",
+          round(_k_ni + sum(_k_bridge.values()), 2), gp_net(SEP_GP_AFTER))
+    check("K22 the restated September net income", _k_ni, -11987.19)
+    truth("K23 THE GP REPORT DOES NOT MOVE — it already honoured the declaration, so every one of "
+          "its terms is byte-identical and only the P&L restates",
+          gp_net(SEP_GP_AFTER) == -8634.28)
+    # WHAT IS STILL REPORTED AND NOT CODED AROUND (CLAUDE.md: a defect in live data is reported).
+    SEP_UNBOOKED_AFTER = {"Rtr / Other Carr. payments": 170654.81, "System / System": 47549.90,
+                          "(blank)": 0.10, "System / Bill Payments": 0.00}
+    check("K24 what the P&L still reports as unbooked after the restatement",
+          round(sum(SEP_UNBOOKED_AFTER.values()), 2), 218204.81)
+    truth("K25 the GP report EXCLUDES the Rtr bill-payment department by the org's own "
           "gp_category_map row, so the two reports agree to drop it", True)
-    check("K3 the declared box department the P&L does not read",
-          SEP_UNBOOKED["BrandedHandset / KittedBranded"], 17416.65)
-    truth("K4 REPORTED, NOT FIXED: wiring the P&L to accessory_config.box_departments would book "
-          "device revenue the owner has not approved, so it is surfaced with its measurement",
-          True)
-    truth("K5 the P&L's unbooked tally is gated on ext_price, so the 1,709 `(blank)` lines "
-          "carrying 20,658.11 of `gp` and 0.09 of ext are neither booked NOR reported — "
-          "the same silent-zero class, in the hole-reporting itself",
-          round(SEP_UNBOOKED["(blank)"], 2) < 1.0)
+    truth("K26 STILL REPORTED, NOT FIXED: the blank department's 1,891 lines carry $20,211.46 of "
+          "`gp` against $0.10 of ext_price, so the P&L's ext-gated unbooked tally sees $0.10 of "
+          "them — the silent-zero class inside the hole-reporting itself (a config hole: "
+          "pl_sales_line_map / gp_category_map, never code)",
+          round(SEP_UNBOOKED_AFTER["(blank)"], 2) < 1.0
+          and SEP_GP_AFTER["plan_gp"] == 20211.46)
 
     # ── report ───────────────────────────────────────────────────────────────────────────────────
     print("\n" + "=" * 78)

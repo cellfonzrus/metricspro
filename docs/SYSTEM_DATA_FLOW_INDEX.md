@@ -1440,15 +1440,136 @@ P&L net income −29,403.84 **−** accessory 53,639.38 **−** device_rev 18.00
 −29,403.84 **+** plan_gp 20,211.46 **+** other_gp 5,571.53 **−** device_rev 18.00 **−** COGS benefit
 6,112.84 **+** wages 1,117.41 = **−8,634.28** (gap +20,769.56).
 
-**SURFACED FOR OWNER APPROVAL, NOT APPLIED — the SECOND HOME for "is this a device department".**
-The GP report (config mode, `accessory_config.apply_to_gp`) honours `accessory_config.box_departments`;
-the P&L's `coa._sales_classifier`'s `is_device` reads `gp_report._dept_classifier(gp_category_map)`
-ALONE and has never read that declaration. Luxelink declares `BrandedHandset` a box department, so
-September's **17,416.65** of BrandedHandset sales are device revenue on the GP report and
-`_unbooked_sales` on the P&L. This is exactly the §58.7 duplicate-derivation shape, returned in the
-CLASSIFICATION the profit arithmetic rests on. Wiring the P&L to the same declaration RESTATES THE
-BOOKS (+17,416.65 revenue plus a POS device-cost stage), so it is money and therefore the owner's
-call. Armed in §K of the same harness so it cannot be forgotten.
+**THE SECOND HOME for "is this a device department" — SURFACED here on 2026-10-17, RULED ON and
+FIXED on 2026-10-19. See §4a.4.** The GP report (config mode, `accessory_config.apply_to_gp`)
+honoured `accessory_config.box_departments`; the P&L's `coa._sales_classifier`'s `is_device` read
+`gp_report._dept_classifier(gp_category_map)` ALONE and had never read that declaration. Luxelink
+declares `BrandedHandset` a box department, so September's **17,416.65** of BrandedHandset sales were
+device revenue on the GP report and `_unbooked_sales` on the P&L. Exactly the §58.7
+duplicate-derivation shape, returned in the CLASSIFICATION the profit arithmetic rests on.
+
+### 4a.4 "IS THIS A DEVICE DEPARTMENT?" HAS ONE HOME — the owner's own declaration, read by every reader (owner decision 2026-10-19)
+
+Owner, verbatim, on the §4a.3 item: *"branded handset is he device device dpet move it"*.
+
+**THE CLASS, not the instance.** The question had TWO homes and they disagreed:
+
+| reader | asked | and therefore |
+|---|---|---|
+| the GP report, config mode | `accessory_config.box_departments` (mig 218) — the org's own declaration | a declared department was a device sale (`phone_sales`) |
+| the GP report, LEGACY mode | `gp_category_map` (mig 069) alone | the SAME declaration was invisible — the identical defect, with the GP report as the wrong one |
+| the P&L (`coa._sales_classifier`) | `gp_category_map` alone | the same lines were `_unbooked_sales` |
+| the GP Category Map screen | `gp_category_map` alone | it told the owner 'other' about a department his books called a device |
+
+`BrandedHandset` is the instance he noticed. The class is **a department the org DECLARED a box
+department without ALSO mapping it in the category map**, and the measurement below is of every org,
+not of his month.
+
+**THE ONE HOME.** `gp_report.device_department_test(gp_category_map, box_departments, gp_categories)`
+— PURE, values in, predicate out — and the ladder is stated once there:
+
+1. an explicit `gp_category_map` row WINS, whatever it says (a declared box department mapped to
+   `accessory` is NOT a device — the override is the more specific statement of intent, and it is
+   allowed to say "not device");
+2. else the org's own `box_departments` DECLARATION makes it a device department;
+3. else the house defaults (`DEVICE_DEPTS`) — what an org that declared nothing has always had.
+
+Every reader dereferences it: `coa._sales_classifier` (the P&L), BOTH branches of
+`gp_report.calc_gp_report`'s row classification, and the `GET /commcalc/gp-departments` /
+`GET /commcalc/gp-department-items` screens, which now carry `source: 'declaration'` so the owner can
+see WHY a department he never mapped classifies as a device. `router._compute_gp` hands the
+declaration over in **every** mode, not only when the org opted into per-line config classification.
+
+**RULE TWO.** No department, tenant or carrier name appears in the ladder; `box_departments` is a
+config row (`router._accessory_config` already falls back to the house labels, which ARE
+`DEVICE_DEPTS`, so an org that declared nothing is byte-identical by construction).
+
+**THE CLASS, MEASURED ON EVERY ORG** (live, read-only, every department in `raw_sales` ∪
+`daily_sales_feed`, 377,003 rows):
+
+| org | rows | departments | declared box departments | declared-but-unmapped and not a house default | departments whose answer CHANGES |
+|---|---|---|---|---|---|
+| house `00000000-…` | 271,717 | 17 | the three house labels | none | **none** |
+| `854f6d7b-…` (LuxeLink) | 56,411 | 9 | the three + `Handset` (mapped `device`) + `BrandedHandset` | **`BrandedHandset`** | **`BrandedHandset`, 6,568 rows** |
+| `f4f1c16e-…` | 48,875 | 1 | the three house labels | none | **none** |
+| `ba084e25-…` | 0 | 0 | none declared → the house labels | none | **none** |
+
+One department on one org moves. Every other org is byte-identical — not by assertion, by scan.
+
+**THE RESTATEMENT — measured against base commit `a75ce707`, consolidated, read-only.** `device_rev`
+rises by Σ `ext_price` of the moved lines and `_unbooked_sales` falls by exactly the same figure.
+Whether a COST comes with it depends on the month's device-cost basis, which is why the gross-profit
+movement is NOT the revenue figure every month: this org is on `device_cogs_mode='auto'`, so where a
+distributor invoice answers (Jun–Oct) the staged POS figure is DISPLACED and gross profit moves by the
+whole revenue; where none does (Mar–May) the POS stage books and gross profit moves by the lines' `gp`.
+
+| month | revenue added (`device_rev`) | POS device cost staged | of which BOOKS | gross profit / net income Δ | `_unbooked_sales` before → after |
+|---|---|---|---|---|---|
+| February 2026 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 → 0.00 |
+| March 2026 | 9,084.59 | 7,404.59 | 7,404.59 | **+1,680.00** | 20,953.56 → 11,868.97 |
+| April 2026 | 10,189.14 | 9,555.13 | 9,555.13 | **+634.01** | 33,253.90 → 23,064.76 |
+| May 2026 | 5,249.43 | 4,156.42 | 4,156.42 | **+1,093.01** | 29,345.61 → 24,096.18 |
+| June 2026 | 6,109.16 | −7,984.84 | 0.00 (displaced) | **+6,109.16** | 49,391.98 → 43,282.82 |
+| July 2026 | 23,289.18 | −2,102.33 | 0.00 (displaced) | **+23,289.18** | 233,066.55 → 209,777.37 |
+| August 2026 | 24,547.18 | 16,346.86 | 0.00 (displaced) | **+24,547.18** | 252,831.16 → 228,283.98 |
+| September 2026 | 17,416.65 | 12,311.72 | 0.00 (displaced) | **+17,416.65** | 235,621.46 → 218,204.81 |
+| October 2026 | 15,578.76 | 13,290.08 | 0.00 (displaced) | **+15,578.76** | 152,195.62 → 136,616.86 |
+| **total** | **111,464.09** | — | **21,116.14** | **+90,347.95** | — |
+
+September's restated net income is **−11,987.19** (from −29,403.84), and the P&L's device revenue
+becomes **17,434.65** — the GP report's `phone_sales` **to the cent**, which is the mirror the owner
+asked for in §4a.3. The §4a.3 bridge still closes with one fewer term to explain (§K21).
+
+**THE GP REPORT DOES NOT MOVE — $0.00, every month, every org.** It already honoured the declaration;
+only the P&L restates. The legacy-branch wiring is byte-identical too, because both config-mode orgs
+and the house declare the three house labels, so step 3 can never fire where step 2 did not.
+
+**A negative POS cost is why Jun–Oct book revenue with no cost behind it.** On a subsidised handset
+`ext − gp` is NEGATIVE (June −7,984.84, July −2,102.33 on these very lines) — ruling K3's reason for
+refusing the POS as a source. Those months take their device cost from the distributor invoice, which
+already covers these handsets, so nothing is missing; the three invoice-less months fall back to the
+POS stage and that is reported, not hidden.
+
+**STILL REPORTED, NOT CODED AROUND.** After the restatement LuxeLink September still carries
+**218,204.81** of `_unbooked_sales`: `Rtr` 170,654.81 (which the GP report EXCLUDES by the org's own
+`gp_category_map` row, so the two agree to drop it), `System` 47,549.90 (a config hole —
+`pl_sales_line_map` / `gp_category_map`, never code) and the blank department's **$0.10**. That last
+one is the silent-zero class inside the hole-reporting itself: the blank department's **1,891 lines
+carry $20,211.46 of `gp` against $0.10 of `ext_price`**, and the unbooked tally is gated on
+`ext_price`, so it can only see a dime of it. (§4a.3 reported 1,709 lines / $20,658.11 for the same
+month; re-measured 2026-10-19 the live feed holds 1,891 lines / $20,211.46 — the feed grew after that
+measurement, and $20,211.46 is the figure that reconciles to the GP report's own `Plan GP` to the
+cent, so it is the right one.)
+
+**NOT CHANGED, and why.** The box COUNT (`router._sales_cell_agg`, the product mix, the handset
+watchdog, `multi_handset_day`) reads the `box_departments` declaration directly and does **not**
+consult `gp_category_map`, so an org that declared a box department and then mapped it to `accessory`
+would still have it counted as a box. That is the same class pointing the other way; today it is
+worth **$0.00 on every org** (no org maps any declared box department away), and repairing it moves
+box counts, conversion rates, targets and therefore PAY on every tenant, so it wants its own
+measurement and its own decision. Named here so it is not re-derived. Case folding is likewise
+unchanged: `box_departments` matching is case-SENSITIVE (§59.8) and this home inherits that
+deliberately rather than repairing it in a change about one department.
+
+**DUPLICATE CHECK (the build gate) — what was searched and what was reused.** Searched §4, §4a,
+§4a.3, §58, §58.7 (the same duplicate-derivation shape in carrier classification), §59.5/§59.8 and
+§COMMCALC-01 (the `box_departments` readers), §37.4 (`_unbooked_sales`), §42.5 (the device-cost
+basis), §70. REUSED and not re-derived: `gp_report._dept_classifier` / `_gp_overrides` /
+`bucket_map` (the four-bucket classifier the ladder's last step delegates to),
+`router._accessory_config`'s already-resolved `box_departments` (mig 218 — no new column, no new
+table, no new migration), `coa._sales_classifier`'s accessory-FIRST call-site precedence, the
+`_unbooked_sales` tally and `engine._assemble`'s note passthrough. NO new table, endpoint, feed or
+report — so nothing to register in `data_lineage_registry.py` or migration 925, and no migration is
+needed at all: the declaration the fix reads is a row the owner has already saved.
+
+**THE LOCK.** §K of `backend/harness_gp_pnl_commission_parity.py` (122 checks, 0 failed, DB-free):
+the ladder, both readers reaching the same answer through the same function, an ARMED control that
+the same rows are NOT device sales with nothing declared, the whole restatement arithmetic, and a
+source scan that FAILS THE BUILD if any module in the account or commcalc package compares a
+classification to `'device'` itself (three excused by name, each a different vocabulary), if the P&L
+stops dereferencing the home or reaches `_dept_classifier` again, or if either GP branch grows its own
+membership test back. Registered in `core/module_graph.py` as the fact `device_department`, whose
+home the lock DEREFERENCES rather than spelling (§19.18), and run in CI by `data-qa-guard.yml`.
 
 ## 4b. THE P&L COMMISSION SOURCE — the Commission Ledger books the P&L when the org says so (owner 2026-09-21, mig 1013)
 
@@ -6988,7 +7109,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
-| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1046` `billpay_fee_charged`** — DOES this org charge a bill-payment fee (`yes`/`no`/`unknown`, default unanswered), read by `_billpay_fee_policy` over `metric_recon.resolve_fee_policy`; it changes no arithmetic, only whether the POS basis may be compared against a declaration and whose problem it is when it may not (§47.15), **`1045` `billpay_fee_product_desc`** — the per-org product_desc vocabulary for the customer bill-payment SERVICE FEE, read by `_billpay_fee_tokens` over `epay_fee_recon.resolve_fee_descs` (empty default ⇒ the house `HOUSE_FEE_DESCS` tuple ⇒ byte-identical; §47.12), **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`_billpay_fee_tokens` (mig `1045` — the SERVICE-FEE product vocabulary, same defensive whole-row posture, default `epay_fee_recon.HOUSE_FEE_DESCS`; the ONE reader, consumed only by the ONE producer `_billpay_sales_by_store_day`, §47.12)**; **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
+| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1046` `billpay_fee_charged`** — DOES this org charge a bill-payment fee (`yes`/`no`/`unknown`, default unanswered), read by `_billpay_fee_policy` over `metric_recon.resolve_fee_policy`; it changes no arithmetic, only whether the POS basis may be compared against a declaration and whose problem it is when it may not (§47.15), **`1045` `billpay_fee_product_desc`** — the per-org product_desc vocabulary for the customer bill-payment SERVICE FEE, read by `_billpay_fee_tokens` over `epay_fee_recon.resolve_fee_descs` (empty default ⇒ the house `HOUSE_FEE_DESCS` tuple ⇒ byte-identical; §47.12), **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`_billpay_fee_tokens` (mig `1045` — the SERVICE-FEE product vocabulary, same defensive whole-row posture, default `epay_fee_recon.HOUSE_FEE_DESCS`; the ONE reader, consumed only by the ONE producer `_billpay_sales_by_store_day`, §47.12)**; **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit ; **`box_departments` (mig `218`) is THE declaration of "which POS departments are DEVICE departments" since 2026-10-19 (§4a.4)** — read by `gp_report.device_department_test` and through it by the P&L's `coa._sales_classifier`, BOTH GP classification branches and the GP Category Map screens, as well as by the box COUNT it has always driven; editing it now moves device REVENUE on the P&L as well as box counts |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` (since 2026-09-21 also `category_contains` / `department_contains`, additive — the intake's 2.5a step writes them through `PUT /exec-metric-config` for a bucket that matched nothing; the `activation` bucket's byod/upgrade/port tokens are RETIRED as a home — read only as a legacy layer by `line_class.resolve_rules` for a tenant-authored row; the Metric-definitions panel no longer offers it) |
@@ -7337,6 +7458,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
+| `GET /commcalc/gp-departments` · `GET /commcalc/gp-department-items?department=` — every POS department / every item inside one, with the category it classifies as TODAY and `source` saying WHY: `item` / `department` / **`declaration`** (the org's own `accessory_config.box_departments`, mig 218) / `default`. Read-only; dereferences `gp_report.device_department_test`, so this screen cannot say 'other' about a department the P&L and the GP report both book as a device | `commcalc/router.py` (`get_gp_departments` / `get_gp_department_items`) | §4a.4 |
 | `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`** (the full run's own functions) → `_rows_for_rep` → update-in-place / insert of THAT rep's row only | §6k — the full path's row for ONE rep, written alone; no delete, no other rep, no installment-ledger write. **Broken (NameError `_id_map`) on every call 2026-09-17 → 2026-09-27; locked by `harness_recompute_rep_e2e.py` + `harness_undefined_names_lock.py`.** §6c history — **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
 | `GET/PUT /commcalc/setup-fee/config` | `commcalc/router.py` (`get_setup_fee_config`/`save_setup_fee_config`) | §6a — the per-org set-up-fee economics: `default` / `by_carrier` / **`by_market`** / **`all_markets`** (the owner's all-markets checkbox). MONEY-TOUCHING: it applies on the next Calculate, nothing is recalculated on save |
 | `GET /commcalc/setup-fee/candidates/{period}` | `commcalc/router.py` (`setup_fee_candidates`) → `setup_fee_pay.candidates` | §6a — PICK-DON'T-TYPE: the tenant's own product descriptions that could BE the fee, ranked by the money they carry, each flagged `mapped_now`. **Use this before editing `setup_fee_keywords`** |
@@ -7599,6 +7721,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Royalty vs daily sales variance** (per line / per center) | royalty sales lines vs `raw_sales_product` (or `raw_sales`) Σ month through `royalty_line_def.daily_categories` | `royalty.reconcile` ← `GET /account/royalty/recon/{period}`; tile `GET /account/royalty/summary`. §37.5 |
 | **Royalty months on file** (per center, over the lookback window) | `commcalc.royalty_report` (org-scoped, both period spellings) over `royalty.lookback_window(this month, royalty_config.lookback_months)` | `royalty.coverage` ← `GET /account/royalty/coverage` (+ returned by the batch preview / import); the coverage strip on `/accounts/royalty` → "Upload several months". §37.10 |
 | **Unbooked sales** (POS lines no P&L classifier claims — every tenant) | `raw_sales` ∪ `daily_sales_feed` lines passed over by every classifier | `coa.build_inputs` → `sales_line_map.Tally` → statement `meta.unbooked_sales` / `GET /account/pl-sales-map?period=`. §37.4 |
+| **Is this POS department a DEVICE department?** — asked by the P&L's device/accessory classifier, by BOTH of the GP report's classification branches and by the GP Category Map screens. Answered by the org's OWN `accessory_config.box_departments` declaration (mig 218), with a `gp_category_map` row (mig 069) allowed to override it and the house labels as the default for an org that declared nothing | `commcalc.accessory_config` × `commcalc.gp_category_map` | ONE home `gp_report.device_department_test`, dereferenced by `coa._sales_classifier`, `gp_report.calc_gp_report` (both branches, the declaration passed by `router._compute_gp` in every mode) and the two `gp-department*` endpoints. It had two homes until 2026-10-19 and they disagreed by **$111,464.09 across Mar-Oct 2026** on one department of one org | §4a.3, §4a.4 — fact `device_department` in `core/module_graph.py`; lock §K of `harness_gp_pnl_commission_parity.py` |
 | **P&L per profit center / per cost center** | the statement engine's own statement | profit center = scope `profit_center:<code>` (`statement_engine._scopes` ← `centers.profit_center_scopes`); cost center = `centers.cost_center_view` over the assembled P&L (ties to the cent). §37.1 |
 | Distributor payable — WHICH derivation and WHICH line (mig `954`) | `account_config.distributor_payable_basis` / `.distributor_payable_line` / `.asset_ledger_open_statuses`, else the house carrier preset (`ui_label_override` scope `finance_basis:<carrier>`, key `distributor_payable`) over the org's `commcalc.carrier` rows | `balance_sheet.resolve_payable_basis`/`resolve_payable_line` (org > carrier preset > declared mig-933 family > off; target line defaults `asset_ledger`→`owed_vip`, `marketplace_due`→`handset_payable`) → `statement_engine.build_inputs_full` + `GET /account/liabilities-due`; proof `harness_balance_sheet_truths.py` §G |
 | **Device purchases from the distributor** (what we were BILLED in a period, by company × store) | `commcalc.vip_invoice_lines.total` on lines whose `btrim(name)` is a `btrim(product_name)` in `commcalc.vip_invoice_devices` (i.e. the product actually arrived SERIALISED — no product-name matching, RULE TWO). Recognised on the INVOICE date. Invoice-level shipping/other/tax excluded (already `vip_fees`). Tablets INCLUDED and shown at product grain | `account/device_purchases.aggregate` (pure) → `GET /account/device-purchases` → `/accounts/device-purchases`. Store = `coa.store_resolver` (§13/§13a) **unchanged**, company = `coa.build_company_matcher` **unchanged** (called with `default_id=None` so "unassigned" stays distinguishable from "the default"); a codeless `store_mapping` row (a distributor master/dealer ACCOUNT) is not a store; unresolved rows keep their money in `(store not mapped)` / `(company not mapped)`. Proof `harness_device_purchases.py` (67), incl. §B2/§B3 pinning `coa.py` byte-identical. **Deliberately will NOT tie to `account/device_cogs`** — that is cost of units SOLD, IMEI-deduped, recognised at sale |

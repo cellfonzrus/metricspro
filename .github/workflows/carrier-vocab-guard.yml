@@ -807,6 +807,12 @@ on:
       # wiring of it (_compute_gp and both commission-leg endpoints), the module graph and the
       # index, so a change to any of them must run it.
       - "backend/harness_gp_carrier_class_dereference.py"
+      # index §4a.3 / §4a.4 — the GP report and the P&L book the SAME MA commission dollars, and
+      # since 2026-10-19 they answer "is this a device department" out of the one home. The lock
+      # reads that home (`commcalc/gp_report.py`), the P&L classifier (`account/coa.py`), the GP
+      # Category Map screens in `commcalc/router.py` and the module graph, so a change to any of
+      # them must run it.
+      - "backend/harness_gp_pnl_commission_parity.py"
       # index §66 — a component reached on a FALLBACK BASIS is a placement of last resort, not
       # evidence about the dollar, so a keyword guess never overrides the org's own declaration.
       # The lock reads the home, both GP paths, the router's trend wiring, the P&L caller it
@@ -1344,6 +1350,9 @@ jobs:
       - name: Run the prospect feed-tally lock (a cheap answer is never held hostage by an expensive decoration — the evaluations list reads no feed rows and the per-feed, per-month tally loads beside it; the database's own grouping and the row-by-row fallback produce one identical shape through one accumulator; the evaluation's month pick dereferences the same tally instead of paging 137,374 rows to read two columns; and an uncounted prospect reports as UNREAD rather than as a prospect with nothing uploaded, so no cell prints a confident zero over 202,865 rows — owner report 2026-10-16, index §COMMCALC-TALLY)
         working-directory: backend
         run: python3 harness_prospect_feed_tally.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the GP/P&L device-department lock ("is this a device department" has ONE home — the org's own `accessory_config.box_departments` declaration, read by the P&L's classifier, by BOTH GP classification branches and by the GP Category Map screens; a module that compares a classification to 'device' itself fails the build, and the $111,464.09 Mar-Oct 2026 restatement rides along as the regression — owner decision 2026-10-19, index §4a.4)
+        working-directory: backend
+        run: python3 harness_gp_pnl_commission_parity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the GP carrier-classification dereference lock (the Gross Profit report classifies no carrier dollar of its own — the comp-report keyword guess and the four pay-category literal compares are gone, the trend's self-declared COPY of them is gone, and $418,922.21 of August 2026 declared reimbursement no longer renders as commission while gross profit itself moves $0.00 — owner 2026-10-08, index §58.7)
         working-directory: backend
         run: python3 harness_gp_carrier_class_dereference.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
