@@ -115,6 +115,7 @@ Primary code homes:
 | CORE-10 | **A gate, not a note** | "This is a very critical finding — don't just write it down, make a gate so nothing can pass through unknowingly; you were smart, maybe the other might not be as smart. What checks that a branch was cut from a current base, and what checks that a guard is still guarding what it thinks it is?" |
 | CORE-11 | **A column that draws its own cell is drawn** | "It did not let me enter. Which component actually puts a report's cell on the screen, do both of them honour a column that draws its own, and what else was silently blank because one of them did not?" |
 | CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
+| CORE-13 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25548,6 +25549,7 @@ status word rather than a blank that reads as nil.
 | CORE-10 | core |
 | CORE-11 | core |
 | CORE-12 | core |
+| CORE-13 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 <!-- SECTION-REGISTER:END -->
