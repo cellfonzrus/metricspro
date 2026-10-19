@@ -735,6 +735,10 @@ on:
       - "backend/harness_trade_in_basis.py"
       - "backend/app/modules/commcalc/trade_in_basis.py"
       - "database/migrations/1075_trade_in_basis_config.sql"
+      - "backend/harness_installment_exclusion_basis.py"
+      - "backend/app/modules/commcalc/installment_category.py"
+      - "backend/app/modules/commcalc/sale_installment_engine.py"
+      - "frontend/src/app/(platform)/commcalc/page.tsx"
       - "backend/harness_payout_slice_evidence.py"
       - "backend/app/modules/commcalc/payout_slice_evidence.py"
       - "backend/app/modules/commcalc/rep_incentive_range.py"
@@ -1275,6 +1279,9 @@ jobs:
       - name: Run the stored-pay-slice evidence proof (a named slice of a stored pay row is a figure only when something computed it; a plan-mode row that says the plan paid while the subtotal of that pay is zero was never itemised, so its breakdown reads as UNKNOWN and never as $0.00 earned; no caller spells the test itself and neither plan-mode writer may stop itemising — owner report 2026-10-15, index §COMMCALC-09)
         working-directory: backend
         run: python3 harness_payout_slice_evidence.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the multi-month exclusion-basis proof (a device category that paid nothing says WHICH layer excluded it; a non-payment somebody CHOSE leaves the "did not pay" list while its money stays on screen; a list-shaped config states nothing about a category it omits, so that reads as a finding and never as "you unchecked it"; an unclassifiable activation is reported once, not twice; no caller writes the reason or names a basis — owner 2026-10-19, index §COMMCALC-21)
+        working-directory: backend
+        run: python3 harness_installment_exclusion_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Run the attach-qualifier proof (a condition measured over the WHOLE SALE decides which DECLARED rate a line earns; the accessory test and the rule matcher are INJECTED so the module owns no classifier and reads no classifying column; an unmeasurable sale pays the FULL rate and is reported; a flat fallback on a percentage rule is refused; the plan save round-trips all eight columns or it would wipe them — owner 2026-10-12, index §COMMCALC-06)
         working-directory: backend

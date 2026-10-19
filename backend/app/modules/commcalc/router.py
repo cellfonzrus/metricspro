@@ -16582,15 +16582,41 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
             # device paid twice in one month — is stated here with its dollars. Never a silent zero.
             if notices is not None:
                 _cg = sr.get("category_guard") or {}
+                # A DECISION IS NOT A FINDING (owner 2026-10-19, §COMMCALC-21). An exclusion the
+                # operator (or the shipped default) already decided is not listed among the things
+                # this calculation "did not pay" -- it is one quiet `severity: "decided"` line with
+                # its chains and dollars, so the money stays visible without reading as a defect.
+                # Only an exclusion NOBODY decided keeps its warning, and the sentence comes from
+                # commcalc/installment_category, which names the layer instead of asserting one.
+                _icat = _icat_mod()
+                _decided_chains, _decided_amount, _decided_cats = 0, 0.0, []
                 for _k, _v in sorted((_cg.get("excluded") or {}).items()):
+                    _b = _v.get("basis") or _icat.BASIS_UNSTATED
+                    if _icat.is_decided(_b):
+                        _decided_chains += int(_v.get("chains") or 0)
+                        _decided_amount = round(_decided_amount + safe_float(_v.get("amount")), 2)
+                        _decided_cats.append(_icat.CATEGORY_LABELS.get(_k, _k))
+                        continue
                     notices.append({
-                        "type": "category_excluded", "severity": "info", "category": _k,
+                        "type": "category_excluded", "severity": "warning", "category": _k,
+                        "basis": _b,
                         "chains": _v.get("chains"), "amount": _v.get("amount"),
-                        "message": (f"{_v.get('chains')} {_k.replace('_', ' ')} activation(s) did not pay a "
-                                    f"multi-month installment (${safe_float(_v.get('amount')):,.2f}) — "
-                                    f"that category is unchecked under Plan Installments → Qualifying "
-                                    f"device categories."),
+                        "message": (_icat.exclusion_reason(_k, _b)
+                                    + f" {_v.get('chains')} activation(s), "
+                                      f"${safe_float(_v.get('amount')):,.2f}. Decide it under Plan "
+                                      f"Installments → Qualifying device categories."),
                         "by_rep": _v.get("reps") or {}})
+                if _decided_chains:
+                    notices.append({
+                        "type": "category_excluded_decided", "severity": "decided",
+                        "chains": _decided_chains, "amount": _decided_amount,
+                        "categories": _decided_cats,
+                        "message": (f"{_decided_chains} activation(s) (${_decided_amount:,.2f}) paid no "
+                                    f"multi-month installment because "
+                                    f"{', '.join(_decided_cats)} "
+                                    + ("is" if len(_decided_cats) == 1 else "are")
+                                    + " excluded by your Plan Installments settings. This is the "
+                                      "configured behaviour, not a problem.")})
                 if _cg.get("unknown_chains"):
                     notices.append({
                         "type": "category_unknown", "severity": "warning",
@@ -23066,6 +23092,14 @@ def _pse_mod():
     through one accessor so no surface in this 48,000-line router grows its own copy of the predicate."""
     from app.modules.commcalc import payout_slice_evidence as _pse
     return _pse
+
+
+def _icat_mod():
+    """The one home for the multi-month device-category ladder and -- since §COMMCALC-21 -- for WHY a
+    category did not qualify. One accessor, so no surface in this router re-derives which layer
+    excluded a category or writes its own sentence about it."""
+    from app.modules.commcalc import installment_category as _icat
+    return _icat
 
 
 def _override_plan_by_rep_with_mtd(plan_by_rep, mtd_plan_names, mtd_by_plan):

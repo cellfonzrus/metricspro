@@ -21,6 +21,20 @@ interface RepRow {
   acima_comm: number
 }
 
+// WHAT A RUN DID NOT PAY (§COMMCALC-21). The server already separates a non-payment somebody CHOSE
+// from one that needs a human, by `severity`: a decision arrives as 'decided'. This screen reads that
+// field and never re-derives the test from a notice's `type` or its wording — the engine owns which
+// exclusions are decisions (commcalc/installment_category), and a notice with no severity reads as
+// open, so an older server shows exactly what it always did.
+interface CalcNotice {
+  message: string
+  severity?: string | null
+  by_rep?: Record<string, number> | null
+}
+
+const decidedNotice = (n: CalcNotice): boolean => String(n?.severity ?? '') === 'decided'
+const openNotice = (n: CalcNotice): boolean => !decidedNotice(n)
+
 // Badge colour per job-run phase. The PHASES are owned by job-run.ts; only their colour is local.
 const BADGE_COLOR: Record<string, string> = {
   idle: 'var(--text3)',
@@ -42,7 +56,7 @@ export default function CommCalcDashboard() {
   // plan rules have no exclusivity and the multi-month engine has its own trigger, so a rule that stops
   // matching does not hand its lines to anything else. Read-only; never blocks anything.
   const [calcWarn, setCalcWarn] = useState<any>(null)
-  const [calcNotices, setCalcNotices] = useState<any[]>([])   // mig 247 — what the calc did NOT pay
+  const [calcNotices, setCalcNotices] = useState<CalcNotice[]>([])   // mig 247 — what the calc did NOT pay
   // WHEN THIS PAGE STARTED A RUN (owner report 2026-10-06, index §6q). `job-run.ts` is the ONE home
   // for what the control shows; this ref is only the local fact it needs — the epoch ms of OUR press,
   // so a status read that PREDATES the press cannot downgrade it back to "not calculated yet". That
@@ -200,16 +214,16 @@ export default function CommCalcDashboard() {
       {/* WHAT THIS CALCULATION DID NOT PAY (mig 247) — excluded device categories, unclassifiable
           activations, unresolved monthly charges, duplicate device-months. Shown after a SUCCESSFUL
           run: a deliberate non-payment must be as visible as a failure. */}
-      {calcNotices.length > 0 && (
+      {calcNotices.filter(openNotice).length > 0 && (
         <div className="card" style={{ borderLeft: '4px solid var(--amber)', background: 'var(--surface2)', marginBottom: 24 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>What this calculation did not pay</div>
           <ul style={{ margin: '0 0 6px 18px', padding: 0, fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
-            {calcNotices.map((n: any, i: number) => (
+            {calcNotices.filter(openNotice).map((n: CalcNotice, i: number) => (
               <li key={i}>
                 {n.message}
                 {n.by_rep && Object.keys(n.by_rep).length > 0 && (
                   <span style={{ color: 'var(--text3)' }}>
-                    {' '}({Object.entries(n.by_rep).map(([r, v]: any) => `${r} ${fmt(v)}`).join(' · ')})
+                    {' '}({Object.entries(n.by_rep).map(([r, v]) => `${r} ${fmt(v as number)}`).join(' · ')})
                   </span>
                 )}
               </li>
@@ -217,6 +231,26 @@ export default function CommCalcDashboard() {
           </ul>
           <a href="/commcalc/plan-installments#categories" style={{ color: 'var(--accent)', fontSize: 13 }}>
             Review qualifying device categories →
+          </a>
+        </div>
+      )}
+
+      {/* EXCLUDED BY YOUR SETTINGS (owner 2026-10-19, §COMMCALC-21). The owner: "if home internet is
+          not required to pay the multi month as defined inte h incentive struture it shoud not appear
+          as not paid and create confusion for teh user". A non-payment somebody CHOSE is not a
+          finding, so it leaves the amber list above — but the money stays on screen, stated plainly,
+          because a figure nobody can see is how a wrong setting survives a year. The server decides
+          which notices are decisions; this screen only reads `severity`. */}
+      {calcNotices.filter(decidedNotice).length > 0 && (
+        <div className="card" style={{ background: 'var(--surface2)', marginBottom: 24 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>Excluded by your settings</div>
+          <ul style={{ margin: '0 0 6px 18px', padding: 0, fontSize: 13, color: 'var(--text3)', lineHeight: 1.6 }}>
+            {calcNotices.filter(decidedNotice).map((n: CalcNotice, i: number) => (
+              <li key={i}>{n.message}</li>
+            ))}
+          </ul>
+          <a href="/commcalc/plan-installments#categories" style={{ color: 'var(--accent)', fontSize: 13 }}>
+            Change which device categories qualify →
           </a>
         </div>
       )}
