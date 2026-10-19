@@ -1039,28 +1039,36 @@ def _sales_classifier(client, org_id):
         Matches on DEPARTMENT **or** CATEGORY **or** product keyword — CATEGORY is the discriminator
         where a department is ambiguous (luxelink: dept 'BrandedHandset' holds the 'KittedBranded' phone
         AND the 'HandsetBranded' accessory; dept 'Handset' holds 'SimMarketplace' + 'Accessories').
-      • device    ← commcalc `gp_report._dept_classifier` over commcalc.gp_category_map (mig 069):
-        `classify(dept) == 'device'`. For a tenant whose device rows sit in an otherwise-accessory-shared
-        department, map that DEPARTMENT → 'device' in gp_category_map — the accessory-FIRST precedence at
-        the call site lets CATEGORY peel the accessory lines off before the department is treated as device.
+      • device    ← THE ONE HOME for "is this a device department": commcalc
+        `gp_report.device_department_test` over the org's `gp_category_map` (mig 069) AND its own
+        `accessory_config.box_departments` DECLARATION (mig 218). Owner decision 2026-10-19
+        ("branded handset is he device device dpet move it"), index §4a.4. Before it, this read the
+        category map ALONE and never the declaration, so a department the owner had declared a box
+        department but not also mapped was device revenue on the GP report and `_unbooked_sales` here
+        — $111,464.09 across Mar-Oct 2026 on the org that surfaced it. A `gp_category_map` row still
+        WINS (it may say a declared box department is 'accessory'), and the accessory-FIRST
+        precedence at the call site still lets CATEGORY peel the accessory lines off a shared
+        department before the department is treated as device.
 
     BOOST BYTE-IDENTICAL: an empty accessory_config falls back to department 'Ondigo' and an empty
     gp_category_map falls back to the built-in DEVICE_DEPTS — so with NO tenant config the two resolvers
     reproduce the old `dept == 'Ondigo'` / `dept in DEVICE_DEPTS` buckets exactly (the accessory match is
-    case-insensitive, a superset that never *loses* a Boost 'Ondigo' row). NEVER raises: any failure
-    degrades to the hard-coded Boost taxonomy so classification can never regress."""
+    case-insensitive, a superset that never *loses* a Boost 'Ondigo' row). `box_departments` resolves to
+    the house labels for an org that has declared none (`router._accessory_config`), which are the same
+    labels `DEVICE_DEPTS` holds — so the declaration cannot move an undeclared org either. NEVER raises:
+    any failure degrades to the hard-coded Boost taxonomy so classification can never regress."""
     try:
         from app.modules.commcalc.router import _accessory_config, _is_accessory
-        from app.modules.commcalc.gp_report import _dept_classifier
+        from app.modules.commcalc.gp_report import device_department_test
         acfg = _accessory_config(client, org_id)
         try:
             gp_map = (client.schema("commcalc").table("gp_category_map")
                       .select("department,category").eq("org_id", org_id).limit(1000).execute().data) or []
         except Exception:
             gp_map = []
-        classify_dept = _dept_classifier(gp_map)
+        is_device_dept = device_department_test(gp_map, acfg.get("box_departments"))
         return (lambda dept, category, product: _is_accessory(dept, category, product, acfg),
-                lambda dept: classify_dept(dept) == "device")
+                is_device_dept)
     except Exception:
         # Hard fallback — the historical Boost taxonomy, so a resolver/import failure never regresses P&L.
         return (lambda dept, category, product: (dept or "").strip() == ACCESSORY_DEPT,

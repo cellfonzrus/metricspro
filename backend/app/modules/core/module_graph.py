@@ -203,6 +203,60 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/pos_report_sweep.py': ('feed',),
         },
     },
+    # ── §4a.4 (owner decision 2026-10-19) — which POS departments are DEVICE departments ────────
+    'device_department': {
+        "question": 'Is this POS department a DEVICE department? Asked by the Gross Profit report '
+                    '(both classification branches), by the P&L\'s sales classifier, and by the GP '
+                    'Category Map screen that tells the owner what each department IS. The answer is '
+                    'the org\'s OWN declared box-department set, with an explicit GP category '
+                    'override allowed to beat it and the house labels as the default for an org that '
+                    'declared nothing. It had TWO homes: the GP report read the declaration and the '
+                    'P&L read the category overrides ALONE, so a department the owner declared but '
+                    'never overrode was device revenue on one report and unbooked sales on the '
+                    'other ($111,464.09 across Mar-Oct 2026). Where each side is configured: '
+                    'index 4a.4.',
+        "homes": ('app/modules/commcalc/gp_report.py',),
+        "index": ('4a.4',),
+        "locks": ('harness_gp_pnl_commission_parity.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04).
+        #
+        # READ THIS LIST CORRECTLY. The home is the GP ENGINE module, which also owns the VOID-TOKEN
+        # vocabulary (`VOID_TOKENS` / `is_voided` / `countable_sale_skip_reason`) that half the
+        # commcalc package dereferences. The derivation is per-MODULE, so every importer of that
+        # engine lands here whatever it reads. The bindings that read THIS fact are
+        # `device_department_test` and `_dept_classifier`; a caller binding only a void-token name
+        # is listed because it imports the home, not because it classifies a department. What the
+        # A-check buys even so: a NEW importer cannot land silently, and the next author is told
+        # that this file answers the device-department question before they touch it.
+        "callers": {
+            # ── THE READERS OF THIS FACT ────────────────────────────────────────────────────────
+            # The P&L's sales classifier (`_sales_classifier.is_device`) — the reader that had its
+            # own answer until 2026-10-19 and now dereferences this one.
+            'app/modules/account/coa.py': ('device_department_test',),
+            # The GP report's one caller (`_compute_gp`, which hands over the org's declaration in
+            # EVERY mode) and the GP Category Map screens, which must tell the owner the same thing
+            # the books do about each department.
+            'app/modules/commcalc/router.py': ('DEVICE_DEPTS', 'GP_CATEGORIES', 'ONDIGO_DEPT',
+                                               '_GP_CATEGORIES_SET', '_GP_CATS_DEFAULT',
+                                               '_GP_VOID_TOKENS', '_dept_classifier', '_gp',
+                                               '_gp_is_voided', '_gp_skip_reason', '_ik',
+                                               'bucket_map', 'calc_gp_report',
+                                               'device_department_test'),
+            # ── IMPORTERS OF THE VOID-TOKEN VOCABULARY IN THE SAME MODULE (not of this fact) ────
+            'app/modules/commcalc/calculator.py': ('_VOID_TOKENS', '_is_voided'),
+            'app/modules/commcalc/commission_drilldown.py': ('_is_voided',),
+            'app/modules/commcalc/commission_engine.py': ('_VOID_TOKENS', '_is_voided'),
+            'app/modules/commcalc/flags.py': ('_is_voided',),
+            'app/modules/commcalc/ma_recon.py': ('_is_voided',),
+            'app/modules/commcalc/plan_impact.py': ('_is_voided',),
+            'app/modules/commcalc/sale_installment_engine.py': ('_VOID_TOKENS', '_is_voided'),
+            'app/modules/commcalc/tax_collected.py': ('VOID_TOKENS', 'is_voided', 'safe_float'),
+            'app/modules/commcalc/void_watchdog.py': ('_skip',),
+            'app/modules/commcalc/watchdog_router.py': ('is_voided',),
+            'app/modules/marketing/event_sales.py': ('is_voided',),
+        },
+    },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
     'multi_handset_one_buyer': {
         "question": 'Which buyers took more handsets in one day at one store than a family plausibly '

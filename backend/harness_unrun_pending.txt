@@ -139,7 +139,6 @@ harness_flag_store_resolver.py
 harness_gp_acc_basis.py
 harness_gp_item_category.py
 harness_gp_luxelink_columns.py
-harness_gp_pnl_commission_parity.py
 harness_gp_totals_reconcile.py
 harness_grant_model.py
 harness_helpdesk_export.py

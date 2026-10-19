@@ -24432,8 +24432,10 @@ def _compute_gp(client, org_id, period, market=""):
     # discriminator) and device lines via the org's BOX departments. Default false / pre-mig-250 →
     # config_classify None → the legacy department-only classifier, byte-identical.
     config_classify = None
+    _gp_box_depts = None
     try:
         _acfg = _accessory_config(client, org_id)
+        _gp_box_depts = _acfg.get('box_departments') or None
         if _acfg.get('apply_to_gp'):
             config_classify = {
                 'is_accessory': (lambda r, _a=_acfg: _is_accessory(
@@ -24519,7 +24521,12 @@ def _compute_gp(client, org_id, period, market=""):
                             acc_basis=_acc_basis, commission_suppression_names=_lc_comm,
                             pay_category_map=pay_cat_map,
                             carrier_declarations=_gp_cc_decl, carrier_rules=_gp_cc_rules,
-                            carrier_class_config=_gp_cc_cfg)
+                            carrier_class_config=_gp_cc_cfg,
+                            # The org's own box-department DECLARATION, passed in EVERY mode (§4a.4)
+                            # — not only when it opted into per-line config classification, because
+                            # "is this a device department" is one question with one home and the
+                            # P&L reads the same declaration whatever this report's mode is.
+                            box_departments=_gp_box_depts)
     result['expenses_carried_from'] = _exp_carried_from
     # WHERE THIS REPORT'S SALES CAME FROM — stated on the payload, never inferred from an empty column.
     # The failure this replaces was SILENT: five columns read $0.00 and nothing on screen said the
@@ -24909,7 +24916,7 @@ def get_gp_departments(period: str = "", org_id: str = ORG_ID):
     """Distinct POS department labels in raw_sales (optionally for a period) with their line count and
     CURRENT GP category — so the tenant can see + map every real label. Drives the GP Category Map UI."""
     from collections import Counter
-    from app.modules.commcalc.gp_report import _dept_classifier
+    from app.modules.commcalc.gp_report import _dept_classifier, device_department_test
     sc = sb().schema('commcalc')
     q = sc.table('raw_sales').select('department').eq('org_id', org_id)
     if period:
@@ -24922,8 +24929,25 @@ def get_gp_departments(period: str = "", org_id: str = ORG_ID):
         omap = []
     mapped_keys = {str(r.get('department') or '').strip() for r in omap}
     classify = _dept_classifier(omap)
-    out = [{"department": d, "count": n, "category": classify(d), "mapped": d in mapped_keys}
-           for d, n in sorted(cnt.items(), key=lambda kv: -kv[1])]
+    # THE SAME device-department home the reports book through (§4a.4, owner decision 2026-10-19).
+    # This screen says what each department IS today, so it must answer from the same place the
+    # money does: a department the org declared in `accessory_config.box_departments` but never
+    # mapped here reads 'device' with `source` 'declaration', instead of showing 'other' while both
+    # reports book it as a device. `declared` is what makes the difference visible — the owner can
+    # see WHY a department he never mapped classifies as a device.
+    _box = (_accessory_config(sb(), org_id) or {}).get('box_departments') or set()
+    _is_dev_dept = device_department_test(omap, _box)
+    # The same home asked with NO declaration — so "the declaration is the only reason this is a
+    # device department" is answered by the home too, instead of by a literal bucket name here.
+    _is_dev_without_declaration = device_department_test(omap, ())
+    out = []
+    for d, n in sorted(cnt.items(), key=lambda kv: -kv[1]):
+        mapped = d in mapped_keys
+        declared = (not mapped) and _is_dev_dept(d) and not _is_dev_without_declaration(d)
+        out.append({"department": d, "count": n,
+                    "category": 'device' if _is_dev_dept(d) else classify(d),
+                    "mapped": mapped, "declared_box": declared,
+                    "source": 'department' if mapped else ('declaration' if declared else 'default')})
     return {"departments": out}
 
 
@@ -24936,10 +24960,12 @@ def get_gp_department_items(department: str = "", period: str = "", org_id: str 
     `department` is matched exactly after strip; pass "" for the BLANK department, which is the case
     that prompted this (2,447 lines on one tenant, 20 products, four different meanings, all counted
     as 'plan'). Read-only. The `source` on each row says WHY it currently classifies as it does —
-    'item' (an explicit override), 'department' (a gp_category_map row) or 'default' (a built-in
-    rule) — so the reader can tell a deliberate assignment from an accident."""
+    'item' (an explicit override), 'department' (a gp_category_map row), 'declaration' (the org's
+    own `accessory_config.box_departments` box-department declaration, mig 218 — §4a.4) or
+    'default' (a built-in rule) — so the reader can tell a deliberate assignment from an accident."""
     from collections import defaultdict
-    from app.modules.commcalc.gp_report import _dept_classifier, bucket_map, item_key as _ik
+    from app.modules.commcalc.gp_report import (_dept_classifier, bucket_map, item_key as _ik,
+                                                 device_department_test)
     require_org(org_id)
     sc = sb().schema('commcalc')
     dept = str(department or '').strip()
@@ -24964,8 +24990,16 @@ def get_gp_department_items(department: str = "", period: str = "", org_id: str 
                 for r in imap_rows if r.get('item_key')}
     buckets = bucket_map(cats)
     dept_classify = _dept_classifier(omap, cats)
-    dept_answer = dept_classify(dept)
     dept_mapped = any(str(r.get('department') or '').strip() == dept for r in omap)
+    # The department's answer comes from THE ONE device-department home (§4a.4) before it falls back
+    # to the four-bucket classifier, so this drill-down cannot tell the owner a department is
+    # 'other' while the P&L and the GP report both book it as a device. `dept_declared` is the
+    # third `source` value: the org DECLARED this department a box department (mig 218) without
+    # mapping it here.
+    _is_dev_dept = device_department_test(omap, (_accessory_config(sb(), org_id) or {}).get('box_departments'), cats)
+    _is_dev_without_declaration = device_department_test(omap, (), cats)
+    dept_answer = 'device' if _is_dev_dept(dept) else dept_classify(dept)
+    dept_declared = (not dept_mapped) and _is_dev_dept(dept) and not _is_dev_without_declaration(dept)
 
     agg = defaultdict(lambda: {'lines': 0, 'gp': 0.0, 'ext_price': 0.0, 'returns': 0})
     for r in rows:
@@ -24989,13 +25023,15 @@ def get_gp_department_items(department: str = "", period: str = "", org_id: str 
             # what it is TODAY, and why
             'category': assigned if assigned in buckets else dept_answer,
             'bucket': buckets.get(assigned, dept_answer) if assigned in buckets else dept_answer,
-            'source': 'item' if assigned in buckets else ('department' if dept_mapped else 'default'),
+            'source': 'item' if assigned in buckets else (
+                'department' if dept_mapped else ('declaration' if dept_declared else 'default')),
             'mapped': assigned in buckets,
         })
     out.sort(key=lambda r: -r['lines'])
     return {'department': dept, 'items': out, 'item_count': len(out),
             'line_count': sum(r['lines'] for r in out),
             'department_category': dept_answer, 'department_mapped': dept_mapped,
+            'department_declared_box': dept_declared,
             'categories': cats, 'buckets': sorted(_GP_CATEGORIES_SET)}
 
 

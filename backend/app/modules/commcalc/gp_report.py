@@ -134,6 +134,52 @@ def _dept_classifier(gp_category_map, gp_categories=None):
         return 'other'
     return classify
 
+
+def device_department_test(gp_category_map, box_departments=None, gp_categories=None):
+    """THE one home for **"is this POS department a DEVICE department?"** — owner decision
+    2026-10-19, *"branded handset is he device device dpet move it"*. PURE: values in, predicate out.
+
+    THE CLASS, not the instance. That question had TWO homes. The GP report (config mode,
+    `accessory_config.apply_to_gp`) answered it from the org's OWN declaration — the
+    `accessory_config.box_departments` set (mig 218) the box count, the product mix, the handset
+    watchdog and the trade-in basis all already read. The P&L's `coa._sales_classifier` answered it
+    from `gp_category_map` (mig 069) ALONE and had never read that declaration, so a department the
+    owner had declared a box department but never ALSO mapped in the GP category map was device
+    revenue on one report and `_unbooked_sales` on the other. Measured on the org that surfaced it
+    (September 2026): $17,416.65 on one department, and $111,464.09 across Mar-Oct 2026.
+
+    THE LADDER, stated once so no caller re-derives it:
+
+      1. an explicit `gp_category_map` row WINS, whatever it says. It is the tenant pointing at one
+         department and naming it, so a department declared a box AND mapped to 'accessory' is NOT a
+         device — the override is the more specific statement and it is allowed to say "not device".
+      2. else the org's own `box_departments` DECLARATION makes it a device department.
+      3. else the house defaults (`DEVICE_DEPTS`), which is what an org that has declared nothing has
+         always got.
+
+    `box_departments` is the resolved per-org set (`router._accessory_config(...)['box_departments']`,
+    which already falls back to the house labels when an org declares none) — injected, never read
+    here, so this stays DB-free and provable. None/empty ⇒ step 2 never fires ⇒ byte-identical to
+    `_dept_classifier(...) == 'device'` for every org that declares nothing.
+
+    RULE TWO: no department, tenant or carrier name appears in this ladder. Every label in it comes
+    from a config row; `DEVICE_DEPTS` is the house default, not a branch.
+
+    Locked by §K of `harness_gp_pnl_commission_parity.py`, which fails the build if a caller stops
+    dereferencing this home or a second copy of the question appears."""
+    overrides = _gp_overrides(gp_category_map, bucket_map(gp_categories))
+    declared = {str(b).strip() for b in (box_departments or ()) if str(b).strip()}
+    classify = _dept_classifier(gp_category_map, gp_categories)
+
+    def is_device_department(dept) -> bool:
+        d = str(dept or '').strip()
+        if d in overrides:
+            return overrides[d] == 'device'
+        if d in declared:
+            return True
+        return classify(d) == 'device'
+    return is_device_department
+
 # ── VOIDED: the ONE token set shared by the pay path and every display surface ────────────────────
 # Owner-approved 2026-07-25. The money path used to skip a line only when voided == 'YES' (upper/strip),
 # while every display surface (Sales Report / GP / the shared aggregation / sales-recon / what-if) already
@@ -244,6 +290,7 @@ def calc_gp_report(
     carrier_declarations: dict = None,
     carrier_rules: list = None,
     carrier_class_config: dict = None,
+    box_departments=None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -253,6 +300,13 @@ def calc_gp_report(
     expenses (keyed by the org's storeops store_code) when the store_mapping street-number join yields no
     store_code — i.e. a tenant with no commcalc.store_mapping. Gated on an empty derived store_code so the
     house (store_mapping populated) is byte-identical. None = disabled (pre-existing behavior).
+    box_departments (owner decision 2026-10-19, index §4a.4): the org's own declared box-department
+    set (`accessory_config.box_departments`, mig 218), injected. It is the ONE declaration of "which
+    POS departments are device departments" — the same set the box count, the product mix and the
+    handset watchdog read, and since this decision the P&L's classifier too. Read through
+    `device_department_test`, in BOTH classification branches, so this report and the P&L cannot
+    state two different things about one department. None = nothing declared = byte-identical to the
+    pre-2026-10-19 `gp_category_map`-only answer.
     config_classify (mig 250, per-org OPT-IN): {'is_accessory': fn(row)->bool, 'box_departments': set}.
     When given, per-LINE classification runs accessory-first through the org's Sales-Report accessory rule
     (department+category+keyword+catalog — POS feeds like luxelink's are ambiguous by department alone),
@@ -331,17 +385,35 @@ def calc_gp_report(
     _items = _item_overrides(item_gp_map, _buckets)
     def _item_hit(r):
         return _items.get(item_key(r.get('sku'), r.get('product_desc'))) if _items else None
+    # THE SAME DEVICE-DEPARTMENT HOME IN BOTH BRANCHES (§4a.4). The legacy branch used to answer
+    # device-ness from `gp_category_map` alone — the identical half of the two-home defect the P&L
+    # had — so an org on the legacy classifier that DECLARED a box department without also mapping
+    # it would have been the next instance, this time with the GP report as the one that was wrong.
+    # `box_departments` None (every caller before this) ⇒ the home falls back to exactly
+    # `classify(dept) == 'device'` ⇒ byte-identical.
+    _is_dev_dept_legacy = device_department_test(gp_category_map, box_departments, gp_categories)
     if config_classify is None:
         def classify_row(r) -> str:
-            return _item_hit(r) or classify(r.get('department'))
+            hit = _item_hit(r)
+            if hit:
+                return hit
+            d = r.get('department')
+            return 'device' if _is_dev_dept_legacy(d) else classify(d)
     else:
         _is_acc = config_classify.get('is_accessory') or (lambda _r: False)
-        _box = {str(b).strip() for b in (config_classify.get('box_departments') or ())}
+        # DEVICE-NESS IS DEREFERENCED, NEVER DECIDED HERE (owner decision 2026-10-19). This branch
+        # used to carry its own `d in box_departments => 'device'` membership test, which is the
+        # second half of the two-home defect §4a.4 names: the P&L read `gp_category_map` alone and
+        # this read the declaration alone. Both now ask `device_department_test`, so the GP report
+        # and the P&L cannot state two different things about one department again.
+        _is_dev_dept = device_department_test(
+            gp_category_map, config_classify.get('box_departments') or box_departments,
+            gp_categories)
         _ovr = _gp_overrides(gp_category_map, _buckets)
         def classify_row(r) -> str:
             # Item override FIRST -- the most specific statement of intent there is. Then accessory
             # (category-level discrimination the dept map can't express), then the tenant's explicit
-            # department overrides, then box departments = device, blank = plan.
+            # department overrides, then the one device-department home, blank = plan.
             hit = _item_hit(r)
             if hit:
                 return hit
@@ -350,7 +422,7 @@ def calc_gp_report(
             d = str(r.get('department') or '').strip()
             if d in _ovr:
                 return _ovr[d]
-            if d in _box:
+            if _is_dev_dept(d):
                 return 'device'
             if d == '':
                 return 'plan'
