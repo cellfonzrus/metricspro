@@ -37,6 +37,9 @@ import {
 // THE receipt (lib/pos-receipt) — rendered on the server so the till copy, the reprint and the
 // emailed copy are one thing; this screen prints what it is handed (§POS-02).
 import { emailSaleReceipt, fetchSaleReceipt, printReceiptHtml } from '@/lib/pos-receipt'
+import type { PrintChoice, SaleReceipt } from '@/lib/pos-receipt'
+// THE format picker — one home, shared with the Sale Log reprint (§POS-03).
+import { PrintFormatPicker } from '@/components/pos/PrintFormatPicker'
 
 interface Product {
   id: string
@@ -221,6 +224,15 @@ export default function PosSalesPage() {
   const [emailFromName, setEmailFromName] = useState('')
   const [emailSending, setEmailSending] = useState(false)
   const [emailSentTo, setEmailSentTo] = useState('')
+  // THE PRINT FORMAT (§POS-03, owner 2026-10-19). What the server says this sale can print as and
+  // what it resolved to, plus what the cashier asked for FOR THIS PRINT. Nothing is saved: the
+  // store's own declared setting is where the next receipt starts from again.
+  const [receiptView, setReceiptView] = useState<SaleReceipt | null>(null)
+  const [printChoice, setPrintChoice] = useState<PrintChoice>({})
+  // The same two, for a Sale Log reprint of a sale rung up on another day or at another counter.
+  const [reprintSaleId, setReprintSaleId] = useState<string | null>(null)
+  const [reprintView, setReprintView] = useState<SaleReceipt | null>(null)
+  const [reprintChoice, setReprintChoice] = useState<PrintChoice>({})
 
   // POS Configuration — start from the code-side defaults so nothing flashes
   // blocked/hidden before the effective config loads.
@@ -377,10 +389,12 @@ export default function PosSalesPage() {
   // THE print path (§POS-02): the receipt is rendered on the server — one home for the till copy,
   // the reprint and the emailed copy — and the register prints what it is handed. It used to build
   // the HTML here, which is why an admin's template edits reached this screen and nothing else.
-  async function printSaleReceipt(saleId: string | null): Promise<boolean> {
+  async function printSaleReceipt(saleId: string | null, choice?: PrintChoice): Promise<boolean> {
     if (!saleId) { alert('That sale has not been saved yet.'); return false }
     try {
-      const rec = await fetchSaleReceipt(saleId)
+      // The choice rides the SAME request that renders the receipt, so what prints is what was
+      // picked — the screen never re-lays anything out itself.
+      const rec = await fetchSaleReceipt(saleId, choice)
       printReceiptHtml(rec.html)
       return true
     } catch (err: any) {
@@ -393,17 +407,21 @@ export default function PosSalesPage() {
   // address (the customer's own) rather than an empty box the cashier has to guess at. Called where
   // the modal is OPENED rather than from an effect watching it: opening the modal is the event, and
   // an effect would re-ask on every unrelated re-render while the modal is up.
-  async function loadReceiptEmailView(saleId: string) {
+  async function loadReceiptEmailView(saleId: string, choice?: PrintChoice) {
     setEmailSentTo('')
     setEmailTo('')
     setEmailFromName('')
     try {
-      const rec = await fetchSaleReceipt(saleId)
+      const rec = await fetchSaleReceipt(saleId, choice)
       setEmailTo(rec.email.to)
       setEmailFromName(rec.email.from_name)
+      // The same answer carries the formats this store may print in and which one it resolved to,
+      // so the modal shows the real choice rather than a guess at it.
+      setReceiptView(rec)
     } catch {
-      // The receipt box simply stays empty — the cashier can still type an address, and printing
-      // (which asks the server for the receipt itself) reports its own failure.
+      // The receipt box simply stays empty and the format picker stays hidden — the cashier can
+      // still type an address and still print (which asks the server for the receipt itself and
+      // reports its own failure), on whatever the store declared.
     }
   }
 
@@ -411,7 +429,8 @@ export default function PosSalesPage() {
     if (!lastSaleId) return
     setEmailSending(true)
     try {
-      const res = await emailSaleReceipt(lastSaleId, emailTo)
+      // The printed choice goes with it, so the customer's copy is the one that was handed over.
+      const res = await emailSaleReceipt(lastSaleId, emailTo, printChoice)
       setEmailSentTo(res.to)
       // An address the customer gave at the till is worth keeping on their profile, which is what
       // the capture prompt (receipt_prompt_email) was asking for anyway.
@@ -433,14 +452,25 @@ export default function PosSalesPage() {
     if (!showReceipt || !lastReceipt || !lastSaleId || cfg.receipt_auto_print !== true) return
     if (autoPrintedTxn.current === lastReceipt.transactionId) return
     autoPrintedTxn.current = lastReceipt.transactionId
+    // No request: an auto-print prints on whatever this store declared, which is the whole
+    // point of the store declaration. A cashier's one-off pick belongs to the button.
     printSaleReceipt(lastSaleId)
     setReceiptPrinted(true)
   }, [showReceipt, lastReceipt, lastSaleId, cfg.receipt_auto_print])
 
   async function printSelectedSale() {
     if (!selectedSale) { alert('Select a transaction in the list first.'); return }
-    // The same one home as the till copy, so a reprint cannot differ from what was handed over.
-    await printSaleReceipt(selectedSale.id)
+    // A reprint gets the SAME choice of format the till does (owner 2026-10-19): the counter asking
+    // for it is often not the one that rang the sale up, and the paper in the printer differs.
+    setReprintSaleId(selectedSale.id)
+    setReprintChoice({})
+    setReprintView(null)
+    try {
+      setReprintView(await fetchSaleReceipt(selectedSale.id))
+    } catch (err) {
+      setReprintSaleId(null)
+      alert(`Could not read that receipt: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   async function loadProducts() {
@@ -919,6 +949,9 @@ export default function PosSalesPage() {
     // Fresh sale → the print-tracking flag resets (receipt_mandatory_print), and a customer with
     // no email on file triggers the capture prompt (receipt_prompt_email).
     setReceiptPrinted(false)
+    // A fresh sale starts from the store's own declared format again, never the last cashier's pick.
+    setPrintChoice({})
+    setReceiptView(null)
     setEmailPromptCustomer(
       cfg.receipt_prompt_email === true && selectedCustomer && !(selectedCustomer.email || '').trim()
         ? selectedCustomer.id : null
@@ -1293,7 +1326,7 @@ export default function PosSalesPage() {
         <div>
           {/* Action bar */}
           <div style={{ ...panel, marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={printSelectedSale}>🖨️ Print Preview</button>
+            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={printSelectedSale}>🖨️ Print Receipt</button>
             <button onClick={voidSale} disabled={voiding} style={{ background: 'var(--red)', border: 'none', color: 'white', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: voiding ? 'wait' : 'pointer', opacity: voiding ? 0.7 : 1 }}>✗ Void Sale Receipt</button>
             <button className="btn btn-secondary" style={{ fontSize: 12, marginLeft: 'auto' }} onClick={() => setActiveView('home')}>← Back to POS</button>
           </div>
@@ -1716,8 +1749,16 @@ export default function PosSalesPage() {
                   📱 Continue to Activation →
                 </a>
               )}
+              {/* WHAT IT PRINTS AS (§POS-03) — every store, every sale, above the button that
+                  prints it. Changing it re-reads the receipt so the note and the resolved width are
+                  the ones that will actually come out. */}
+              <PrintFormatPicker view={receiptView} choice={printChoice}
+                onChange={next => {
+                  setPrintChoice(next)
+                  if (lastSaleId) loadReceiptEmailView(lastSaleId, next)
+                }} />
               <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginBottom: 8 }}
-                onClick={async () => { if (await printSaleReceipt(lastSaleId)) setReceiptPrinted(true) }}>
+                onClick={async () => { if (await printSaleReceipt(lastSaleId, printChoice)) setReceiptPrinted(true) }}>
                 🖨️ Print Receipt
               </button>
               <button onClick={() => { setShowReceipt(false); setActiveView('home') }} disabled={mustPrint} title={mustPrint ? mustPrintTitle : undefined}
@@ -1727,6 +1768,36 @@ export default function PosSalesPage() {
               <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: 8, cursor: mustPrint ? 'not-allowed' : 'pointer', opacity: mustPrint ? 0.5 : 1 }}
                 onClick={() => { setShowReceipt(false); setActiveView('salelog'); loadSales() }} disabled={mustPrint} title={mustPrint ? mustPrintTitle : undefined}>
                 View Sale Log
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* THE REPRINT SCREEN (§POS-03) — a Sale Log reprint picks its format the same way the till
+          does, because the counter reprinting it may have different paper in the printer. */}
+      {reprintSaleId && (
+        <div style={modalOverlay}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 420, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+              <b style={{ fontSize: 14 }}>🖨️ Print receipt</b>
+            </div>
+            <div style={{ padding: 20 }}>
+              {reprintView
+                ? <PrintFormatPicker view={reprintView} choice={reprintChoice}
+                    onChange={async next => {
+                      setReprintChoice(next)
+                      try { setReprintView(await fetchSaleReceipt(reprintSaleId, next)) } catch { /* the picker keeps the last answer */ }
+                    }} />
+                : <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}>Reading the receipt…</div>}
+              <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
+                disabled={!reprintView}
+                onClick={async () => { if (await printSaleReceipt(reprintSaleId, reprintChoice)) setReprintSaleId(null) }}>
+                🖨️ Print
+              </button>
+              <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
+                onClick={() => setReprintSaleId(null)}>
+                Cancel
               </button>
             </div>
           </div>

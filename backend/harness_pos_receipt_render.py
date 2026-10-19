@@ -358,8 +358,9 @@ check("H10 and when the layout column is not there yet it says so through the ON
                if "migration" in ln.lower() and not ln.strip().startswith("//")
                and "detail=" not in ln])
 client = read(CLIENT)
-check("H11 the client home spells the receipt URLs once each",
-      client.count("/receipt`") == 1 and client.count("/email-receipt`") == 1)
+check("H11 the client home spells the receipt URLs once each (the print choice rides the SAME url, "
+      "it does not get a second endpoint)",
+      client.count("/sales/${saleId}/receipt") == 1 and client.count("/sales/${saleId}/email-receipt") == 1)
 
 print("\n§I  endpoint wiring + registration")
 router = read(ROUTER)
@@ -400,6 +401,68 @@ check("I16 the endpoints are in the index",
 check("I17 the one homes are registered",
       "sale_receipt" in idx and "pos_config_effective" in idx and "tenant_identity" in idx)
 
+print("\n§K  what THIS print uses — the format chosen at the counter (§POS-03)")
+# Owner 2026-10-19: "all stores should have the option to print the print in the required format
+# from the print receipt screen as there are receipts from the thermal printer also". The class that
+# was wrong: the layout was ONE stored per-org value, so a counter printing on a thermal roll and on
+# an office printer could only ever produce whichever the org had stored.
+T_ORG = sr.template_view({"paper_width_mm": 80, "layout": sr.LAYOUT_THERMAL})
+check("K1 what the screen asked for wins over the store and the org",
+      sr.print_choice(T_ORG, want_layout=sr.LAYOUT_POS_FORMAT, want_paper="58",
+                      store_layout=sr.LAYOUT_THERMAL, store_paper="80")
+      == {"layout": sr.LAYOUT_POS_FORMAT, "layout_note": "", "layout_source": "request",
+          "paper_width_mm": 58, "paper_source": "request"})
+check("K2 no request falls to what THIS STORE declared, not to the org",
+      (lambda c: c["paper_width_mm"] == 58 and c["paper_source"] == "store")(
+          sr.print_choice(T_ORG, store_paper="58")))
+check("K3 a store that declared nothing reads the company template",
+      (lambda c: c["paper_width_mm"] == 80 and c["paper_source"] == "org"
+       and c["layout_source"] == "org")(sr.print_choice(T_ORG, store_paper="", store_layout="")))
+check("K4 a request for a layout the tenant cannot print resolves AND SAYS SO (never silently)",
+      (lambda c: c["layout"] == sr.LAYOUT_THERMAL and "no POS is declared" in c["layout_note"])(
+          sr.print_choice(T_ORG, want_layout=sr.LAYOUT_POS_FORMAT, format_available=False)))
+check("K5 a nonsense width does not stop the store printing — it reads the template's own width",
+      sr.clean_paper("112", 80) == 80 and sr.clean_paper("", 58) == 58 and sr.clean_paper(None) == sr.DEFAULT_PAPER_MM
+      and sr.print_choice(T_ORG, want_paper="112")["paper_width_mm"] == 80)
+check("K6 the widths offered are DERIVED from the renderer's own, never a second list",
+      [o["value"] for o in sr.paper_options()] == sorted(sr.PAPER_PX))
+check("K7 one print's choice is a copy — it cannot leak into the next receipt",
+      (lambda t, c: sr.with_choice(t, c)["layout"] == sr.LAYOUT_POS_FORMAT
+       and t["layout"] == sr.LAYOUT_THERMAL)(
+          dict(T_ORG), sr.print_choice(T_ORG, want_layout=sr.LAYOUT_POS_FORMAT)))
+check("K8 the per-store printer declaration is three keys, each blank = accept the company default",
+      all(pc.SERVER_DEFAULTS.get(k) == "" for k in
+          ("receipt_printer_label", "receipt_paper_width_mm", "receipt_layout")))
+check("K9 a store that said nothing reads BLANK, not a guessed width (the difference between "
+      "honouring a declaration and inventing one)",
+      pc.printer([], "S1") == {"label": "", "paper_width_mm": "", "layout": ""}
+      and pc.printer([{"store_code": "S1", "key": "receipt_paper_width_mm", "value": "58"}],
+                     "S1")["paper_width_mm"] == "58")
+check("K10 RULE TWO — no printer make is branched on anywhere in code",
+      not re.search(r"(?i)\b(epson|citizen|star\s*micronics|bixolon)\b",
+                    code_only(read("backend/app/modules/pos/pos_config_effective.py"))
+                    + code_only(read("backend/app/modules/pos/sale_receipt.py"))
+                    + code_only(router)))
+check("K11 the GET takes the choice and resolves it through the one resolver",
+      "def sale_receipt(sale_id: str" in router and "layout: str" in ep and "paper_width_mm: str" in ep
+      and "want_layout=layout" in ep and "_sr.print_choice(" in router)
+check("K12 the answer carries what this store may print, what it resolved to and its printer",
+      all(k in router for k in ('"layout_options"', '"paper_options"', '"printer_label"',
+                                '"layout_source"', '"paper_source"'))) 
+check("K13 the emailed copy is the copy that was PRINTED (the same choice rides it)",
+      "want_layout=body.get" in mail and "want_paper=body.get" in mail)
+cl = read(CLIENT)
+check("K14 the client spells the choice ONCE for both the print and the email path",
+      cl.count("function choiceParams") == 1 and cl.count("choiceParams(choice)") == 2)
+check("K15 the till and the Sale Log reprint share ONE picker, which offers only the server's own "
+      "formats (a second copy is how one counter gets a format the other does not)",
+      read("frontend/src/components/pos/PrintFormatPicker.tsx").count("view.layout_options") == 1
+      and reg.count("<PrintFormatPicker") == 2
+      and not re.search(r"['\"](thermal|pos_format)['\"]",
+                        read("frontend/src/components/pos/PrintFormatPicker.tsx")))
+check("K16 §POS-03 is registered in the index with its keys",
+      "POS-03" in idx and "receipt_printer_label" in idx and "print_choice" in idx)
+
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
       ts_default("brand_company_name")[1] == pc.SERVER_DEFAULTS["brand_company_name"]
@@ -415,9 +478,16 @@ check("neg-G a renderer that recomputed the total would be RED",
 check("neg-H a register that still built its own html would be RED",
       "buildReceiptHtml" not in reg and "buildReceiptHtml" in reg.replace("printSaleReceipt", "buildReceiptHtml"))
 
+check("neg-K a resolver that honoured any requested width would be RED",
+      112 not in sr.PAPER_PX and sr.print_choice(T_ORG, want_paper="112")["paper_width_mm"] != 112)
+check("neg-K2 a store override that leaked to every store would be RED",
+      pc.printer([{"store_code": "S1", "key": "receipt_layout", "value": sr.LAYOUT_POS_FORMAT}],
+                 "S2")["layout"] == "")
+
 print(f"\n{_pass} passed, {_fail} failed")
 if _fail:
     sys.exit(1)
 print("OK — one renderer for the till copy, the reprint, the preview and the emailed copy; the layout "
-      "is a declared per-org choice with its fallback spoken aloud; the From name is the tenant's own; "
+      "is a declared per-org choice with its fallback spoken aloud, pickable per print and per store; "
+      "the From name is the tenant's own; "
       "and the server's POS-setting defaults are pinned to the browser's.")
