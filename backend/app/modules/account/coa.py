@@ -1801,6 +1801,15 @@ def build_inputs(client, org_id, period):
             "measurement. The point-of-sale figure is deliberately not used as a fallback because it "
             "records cost AFTER the carrier subsidy and is negative on a subsidised handset. Upload the "
             "distributor's commission/fulfillment sheets for this period to measure it.")
+    # A handset whose cost could not be priced books its REBATE anyway, so the contra-COGS stands
+    # against a cost that is short by exactly those handsets — the LuxeLink September 2026 report
+    # ("how come the device cost is less than the device rebate"). `meta` alone never reaches a
+    # reader, so it is said on the line, in the one passthrough, through the one home
+    # (`device_cogs.unpriced_handsets_note`). APPENDED, never replacing: the honest zero and the
+    # §70 restatement are separate facts and all of them are true at once.
+    _unpriced_note = _device_cogs.unpriced_handsets_note(_dev.get("meta") or {})
+    if _unpriced_note:
+        L["device_cost"]["note"] = ((L["device_cost"].get("note") or "") + " " + _unpriced_note).strip()
 
     # asset_ledger — the distributor's reimbursement CLAIM, VIP fees (COGS), inventory value (BS),
     # owed-to-VIP (BS). One scan, multiple lines.
