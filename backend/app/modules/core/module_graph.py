@@ -1100,6 +1100,30 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/plan_options.py': ('_aq',),
         },
     },
+    'installment_exclusion_basis': {
+        "question": 'WHY did this device category pay no multi-month installment -- did somebody '
+                    'decide that, or did nobody?',
+        "homes": ('app/modules/commcalc/installment_category.py',),
+        "index": ('COMMCALC-20',),
+        "locks": ('harness_installment_exclusion_basis.py',),
+        # SNAPSHOT — hand-written (--bless strips per-caller comments, §COMMCALC-01); the derived
+        # edges were verified by RUNNING the guard afterwards.
+        "callers": {
+            # The engine resolves the qualification and now gets the per-category basis with it, so a
+            # category excluded BY A DECISION is reported apart from one nobody ruled on.
+            'app/modules/commcalc/sale_installment_engine.py': ('icat',),
+            # The notice list the owner reads after Run Calculation. `_icat_mod()` is the one accessor;
+            # the bindings below are the AST import aliases, not the accessor's name.
+            'app/modules/commcalc/router.py': ('CATEGORY_KEYS', '_icat', '_icat_dev', 'icat'),
+            # The per-category FLAT payout (mig 256) shares this category vocabulary.
+            'app/modules/commcalc/installment_category_payout.py': ('icat',),
+            # Executive-MTD pay prices a TABLET / WATCH event through the same one classifier (§6n),
+            # so these three share the category vocabulary without touching the exclusion basis.
+            'app/modules/commcalc/line_class.py': ('_icat',),
+            'app/modules/commcalc/plan_pay_gate.py': ('_icat',),
+            'app/modules/commcalc/sales_comparison.py': ('_icat',),
+        },
+    },
     'payout_slice_evidence': {
         "question": 'Is this stored pay breakdown a figure at all, or a blank that prints as $0.00?',
         "homes": ('app/modules/commcalc/payout_slice_evidence.py',),

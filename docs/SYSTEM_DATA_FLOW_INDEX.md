@@ -133,6 +133,7 @@ Primary code homes:
 | COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
 | COMMCALC-18 | **An accessory line and a rent line both move in dollars** | "Add accessory sales to the Sales Comparison so it compares month over month, and add expenses." Accessory dollars were already tallied — the table had no change column for a metric measured in money, only for units. And what did each store SPEND in those two months, read from the same sheet the P&L books, without an expense ever being added into the revenue beside it? |
 | COMMCALC-19 | **The figures at the top of a report are something you can send** | "The dashboard should give an option to send the snapshot of the top part to the desired people." Sending already had one home; what was missing was a shape for the TILES, shared rather than written into one page. And when the snapshot says a figure is unchanged, is that a measurement or two copies of one carried expense sheet compared with itself? |
+| COMMCALC-20 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 
 ---
 
@@ -25540,6 +25541,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-17 | commcalc |
 | COMMCALC-18 | commcalc |
 | COMMCALC-19 | commcalc |
+| COMMCALC-20 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -28544,6 +28546,104 @@ column. `frontend/tools/rep-incentive-range-proof.mjs` grew 7 checks (17 total) 
 
 ---
 
+
+
+## §COMMCALC-20. A NON-PAYMENT SOMEBODY CHOSE IS NOT A FINDING (owner report 2026-10-19)
+
+OWNER, verbatim: *"if home internet is not required to pay the multi month as defined inte h incentive
+struture it shoud not appear as not paid and create confusion for teh user"*, following *"rep incentive
+report ... check for all such things ... so everywhere the same data is visible"* and his root-cause ask
+that device categories come from the carrier's own data rather than a checklist.
+
+### COMMCALC-20.1 What was actually wrong — and what was NOT
+
+Measured read-only on the owner's own tenant before any change, because the notice's wording invited the
+wrong diagnosis:
+
+| | count | verdict |
+| --- | --- | --- |
+| multi-month activations in the period | 409 | — |
+| classified correctly and then EXCLUDED BY A STORED SETTING | 405 | not a defect |
+| genuinely unclassifiable (`unknown`) | 4 | the real gap |
+| products in `raw_catalog` for this tenant | **0** | the automatic rung is empty |
+| rows in `installment_category_rule` | 0 | built-in rules only |
+| rows in `carrier_category_map` | 0 | the commission/rebate registry is empty |
+
+**Classification was not the problem.** The ladder (§6n) identified 115 home-internet boxes and 290
+tablets correctly; the stored `installment_category_qualification` then said `home_internet: false`,
+`tablet: false`, `sim: false`, `accessory: false`, `unknown: false`, `phone: true`. The engine obeyed,
+and the notice reported the owner's own decision back to him every month as a shortfall.
+
+**Reported, not built.** The automatic path the owner asked for already exists and is EMPTY: the ladder
+prefers the product catalog's Department / Category over any hand-typed rule, and this tenant has
+uploaded no catalog. That is a data gap, reported. And the carrier statement's categories answer *"is
+this dollar commission or rebate"* — not *"is this a phone or a tablet"*. Wiring one to the other would
+invent a link the data does not support, so it was not wired; it was put to the owner instead.
+
+### COMMCALC-20.2 Duplicate check (the build gate)
+
+Searched the index for an existing home for "why did this not pay". Three near-neighbours, each the SAME
+posture on a different subject, so the posture was reused and no sibling built:
+
+- **§66 `carrier_dollar_class.component_is_evidence(basis)`** — the allowlist shape is copied exactly.
+- **§COMMCALC-09 `payout_slice_evidence`** — a blank is not a measurement; here, a decision is not a
+  finding. Different subject (a stored pay column vs a qualification layer), no shared helper.
+- **§19.28 `kpi_failing`** — no-data is not a 0% failure.
+
+The question "which layer excluded this category" belongs to the module that already owns "which
+category is this" and "does it qualify", so `commcalc/installment_category.py` was **extended** rather
+than joined by a sibling. Both callers dereference it; neither writes a reason or names a basis
+(harness §F9).
+
+### COMMCALC-20.3 The four bases, and the allowlist direction
+
+`BASIS_TENANT_SETTING` · `BASIS_SCHEDULE_OVERRIDE` · `BASIS_PLATFORM_DEFAULT` · `BASIS_UNSTATED`.
+
+`_DECIDED_BASES` is an **allowlist** of the first three, so `is_decided` is false for any basis a later
+migration invents and does not rule on, and `is_actionable` is its exact complement. The unknown case
+shouts; it never hides. `exclusion_reason(category, basis)` is the only place the sentence lives, and an
+unrecognised basis yields *"the reason it is excluded could not be established"* rather than a guess.
+
+`BASIS_UNSTATED` is the latent bug made visible: a `qualifying_categories` stored as a LIST of included
+categories says nothing whatsoever about a category it omits, and the engine used to report those
+omissions as *"that category is unchecked"* — a sentence nobody had earned. The verdict is unchanged
+(the list still means what it meant); only the basis, and therefore whether it is a finding, is now
+honest. The owner's tenant stores the dict shape, so it is not affected today; the code path is live.
+
+### COMMCALC-20.4 What moved, and what did not
+
+| surface | before | now |
+| --- | --- | --- |
+| `installment_category.qualification_with_basis` | — | the same verdict and source as `qualification_for`, plus a basis per category (harness §C proves equality over all ten config shapes) |
+| `sale_installment_engine` | one `category_excluded` warning per category, one asserted reason | `category_excluded_decided` vs `category_excluded`, reason from the one home |
+| `sale_installment_engine` (`unknown`) | counted in the excluded bucket AND warned about separately | `excluded_unknown`, reported once by its own warning |
+| `router` calc notices | every exclusion in "What this calculation did not pay" | only the actionable ones; decisions get one `severity: "decided"` line with chains and dollars |
+| `commcalc/page.tsx` | one amber list | the amber list plus a quiet "Excluded by your settings" block; the screen reads `severity` and decides nothing |
+
+**No figure moves and no payout changes.** A notice with no `severity` reads as open, so an older server
+renders exactly as before.
+
+### COMMCALC-20.5 Reported, never repaired
+
+- **4 devices were paid TWO installments for the same month** — real money paid twice, pointing at a
+  duplicate active schedule. Surfaced, not silenced; its own job.
+- **200 transactions matched no rule and paid nothing** — a separate cause, its own job.
+- All three schedule lines read `mrc_source: product_catalog` against an empty catalog, which is why
+  several per-rep figures in the notice were $0.00.
+
+### COMMCALC-20.6 Locks
+
+`harness_installment_exclusion_basis.py` — **68 checks, 0 failures; verified 27 named failures and no
+traceback against pre-fix `main`** in a clean worktree. §A the basis ladder, §B the allowlist direction
+(an unruled basis is a finding), §C no figure moves, §D one sentence per basis, §E/§F the wiring and the
+dead assertion gone, §G the screen reads `severity`, §H RULE TWO, §Z armed controls. CI: the lock job's
+paths filter and its own step. `core/module_graph.py` fact `installment_exclusion_basis`, callers
+AST-derived (73 facts / 305 edges / 1563 checks).
+
+### COMMCALC-20.7 Cross-references
+
+§6n (the one device classifier), §66 (`component_is_evidence`), §COMMCALC-09 (`payout_slice_evidence`),
+§19.28 (`kpi_failing`), §19.18 (a mechanism written, callers left unwired), §50 (the module graph).
 
 ## §COMMCALC-10. A LIVE LOGIN THAT STOPS MAKING PROGRESS MUST SAY SO (owner report 2026-10-15)
 
