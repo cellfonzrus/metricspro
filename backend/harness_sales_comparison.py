@@ -274,4 +274,83 @@ sa = [r for r in out3["store_summary"] if r["store"] == "Store A"][0]
 assert sa["current_exp"] == 5000.0 and sa["exp_pct"] == 66.7, sa
 
 print("§E accessory $ + store expenses month-over-month: PASSED ✅")
+
+# ══ §F THE ±0% THAT WAS A LIE: a change between two CARRIED months is NOT MEASURED ════════════════
+# THE DEFECT, from the live screen (owner, 2026-10-19): "Store expenses $276,162.69 ± 0% was
+# $276,162.69". Both October and September had no entered expenses of their own, so both inherited
+# the SAME sheet (August). The report then divided that sheet by itself and printed "± 0%", which a
+# reader takes as "spending held steady" — when in truth nobody had entered either month.
+# THE CLASS (§19.49): an ABSENCE is reported with its reason, never as a result. The figures stay —
+# they are what each month books — but the PERCENT is the claim, so the percent is what is withheld.
+
+# §F1 the predicate itself, on its own, before any report is built
+assert sc.expense_change_measured("2026-08", "2026-08") is False      # one sheet against itself
+assert sc.expense_change_measured("2026-08", "2026-07") is True       # two real months
+assert sc.expense_change_measured(None, "2026-07") is True            # base is entered: a real pair
+assert sc.expense_change_measured("2026-08", None) is True            # compare is entered
+assert sc.expense_change_measured(None, None) is True                 # both entered — the normal case
+assert sc.expense_change_measured("", "") is True                     # blank is "not carried", not equal
+assert sc.expense_change_measured("2026-08", "August 2026") is False, \
+    "the same month spelled two ways is still one sheet"              # period_sort_key, not string ==
+assert sc.expense_change_measured("August 2026", "august 2026") is False  # ...nor does case
+assert sc.expense_change_measured("opening", "opening") is False      # unparseable: fall back to text
+assert sc.expense_change_measured("opening", "closing") is True
+
+# §F2 THE REGRESSION — the exact shape of the reported screen, through the real `build`
+exp_both_carried = {"base": base_tot, "compare": dict(base_tot),
+                    "base_carried_from": "2026-06", "compare_carried_from": "2026-06"}
+outf = sc.build(base, comp, rules, is_acc, vendors,
+                base_period="2026-08", compare_period="2026-07", mode="mom",
+                window_label="Full month", resolve_market=resolve_market,
+                expenses=exp_both_carried, store_key_of=fold)
+mf = outf["expenses_meta"]
+assert mf["measured"] is True, "the FIGURES were read — that part was never in doubt"
+assert mf["change_measured"] is False, "two carried copies of one sheet is not a measured change"
+assert mf["pct"] is None, mf["pct"]                            # the ± 0% the screen used to print
+assert outf["overall"]["exp_pct"] is None, outf["overall"]["exp_pct"]
+# the FIGURES are untouched: withholding the percent must not blank the money
+assert mf["current_total"] == mf["previous_total"] == 7500.0, (mf["current_total"], mf["previous_total"])
+assert outf["overall"]["current_exp"] == 7500.0 and outf["overall"]["previous_exp"] == 7500.0
+tf = {t["key"]: t for t in outf["totals_by_category"]}[sc.EXPENSE_KEY]
+assert tf["rev_pct"] is None and tf["pct"] is None, (tf["rev_pct"], tf["pct"])
+assert tf["change_measured"] is False
+assert tf["current_rev"] == 7500.0 and tf["previous_rev"] == 7500.0
+assert tf["rev_delta"] == 0.0, "nought IS the subtraction; it is the percent that is a claim"
+
+# §F3 ...per store too — a grid row may not print a percent its total refuses to
+ef = [r for r in outf["rows"] if r["category_key"] == sc.EXPENSE_KEY]
+assert ef and all(r["change_measured"] is False for r in ef), ef
+assert all(r["rev_pct"] is None and r["pct"] is None for r in ef)
+assert all(r["current_rev"] == r["previous_rev"] for r in ef)      # same sheet on both sides
+
+# §F4 ONE SIDE CARRIED IS STILL A REAL COMPARISON — the carry rule is the P&L's own, not an estimate.
+# This is the case the existing §E fixture already is, and it must keep its percent.
+assert oute["expenses_meta"]["change_measured"] is True
+assert oute["expenses_meta"]["pct"] == 50.0 and oute["overall"]["exp_pct"] == 50.0
+assert all(r.get("change_measured") is not False
+           for r in oute["rows"] if r["category_key"] == sc.EXPENSE_KEY)
+
+# §F5 TWO DIFFERENT CARRIED MONTHS ARE TWO MONTHS — carried on both sides is not the test; SAME is.
+exp_two_carries = dict(exp_both_carried, base_carried_from="2026-06", compare_carried_from="2026-05")
+outg = sc.build(base, comp, rules, is_acc, vendors,
+                base_period="2026-08", compare_period="2026-07", mode="mom",
+                window_label="Full month", resolve_market=resolve_market,
+                expenses=exp_two_carries, store_key_of=fold)
+assert outg["expenses_meta"]["change_measured"] is True
+assert outg["expenses_meta"]["pct"] == 0.0, "0% between two DIFFERENT months is a real finding"
+
+# §F6 NEGATIVE CONTROLS — each rule is red when broken
+assert sc.expense_change_measured("2026-08", "2026-08") is not True, \
+    "a predicate that compared only object identity would pass this and still be wrong"
+# an implementation that string-compared would call these two the same month and must not
+assert sc.expense_change_measured("2026-6", "2026-06") is False, \
+    "period_sort_key normalises the spelling; a raw == would wrongly report a measured change"
+# ...and the sales side is untouched by any of it (the §E5 leak test, repeated for this path)
+t_f = {t["key"]: t for t in outf["totals_by_category"]}
+for k, v in {t["key"]: t for t in out["totals_by_category"]}.items():
+    assert t_f[k] == v, ("a withheld expense percent moved an item total", k)
+assert outf["overall"]["current_rev"] == out["overall"]["current_rev"]
+assert outf["overall"]["rev_pct"] == out["overall"]["rev_pct"]
+
+print("§F a change between two carried sheets is NOT MEASURED: PASSED ✅")
 print("\nALL ASSERTIONS PASSED ✅")

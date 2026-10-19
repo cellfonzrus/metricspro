@@ -43,6 +43,9 @@ from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import line_class as _lc   # THE activation-event count unit (2026-09-25)
 from app.modules.commcalc import installment_category as _icat
 from app.modules.commcalc import financing_registry as _finreg
+# THE period parser (§19.50's home), so 'August 2026' and '2026-08' are one month to this report
+# exactly as they are to the carry-forward rule itself — dereferenced, never re-spelled.
+from app.modules.commcalc.expenses_effective import period_sort_key as _period_key
 
 VOID_TOKENS = ("true", "yes", "1", "voided", "void")
 
@@ -294,6 +297,34 @@ def _combine(cur_m, prev_m):
     }
 
 
+def expense_change_measured(base_carried_from, compare_carried_from):
+    """PURE: can a month-over-month EXPENSE change be measured at all?
+
+    THE DEFECT THIS NAMES (owner report 2026-10-19, looking at the live screen). An expense month a
+    tenant has not entered inherits the latest earlier month — the P&L's own carry-forward rule
+    (§19.50), and the right answer for what that month BOOKS. But when BOTH windows inherit the SAME
+    month, the two figures are one sheet compared with itself, and the report printed `± 0%`. A
+    reader acts on that: it says "expenses held steady month over month", when what actually happened
+    is that nobody has entered either month. Measured live: one tenant's `store_expenses` ends at
+    **August 2026**, so October vs September showed $276,162.69 vs $276,162.69 and ± 0% — August
+    against August.
+
+    THE CLASS, the one this house keeps re-learning: *an absence is reported with its reason, never
+    as a result* (§19.49). A zero change is a claim about two months; it may only be made when two
+    months were actually measured.
+
+    False when both windows carried from the same sheet; True otherwise — including when only ONE
+    side carried, because then the two figures really are different months and the change is real."""
+    b = str(base_carried_from or "").strip()
+    c = str(compare_carried_from or "").strip()
+    if not b or not c:
+        return True
+    kb, kc = _period_key(b), _period_key(c)
+    if kb == (0, 0) or kc == (0, 0):
+        return b.lower() != c.lower()
+    return kb != kc
+
+
 def _expense_cell(cur, prev):
     """PURE: one store's base-vs-compare EXPENSE dollars in the same row shape every other row uses,
     with the unit fields pinned at 0 — an expense has no unit, and a 0 there is the honest answer, not
@@ -385,6 +416,9 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
     # ── STORE EXPENSES, folded on the store-identity key, reported ONCE per store ─────────────────
     exp_rows, exp_merges = [], {}
     exp_cur_tot = exp_prev_tot = 0.0
+    # None = no expenses were handed in at all; True/False = the verdict below, computed ONCE and
+    # read by the rows, the category total and the payload meta so the three cannot disagree.
+    exp_measured = None
     if expenses is not None:
         fold = store_key_of or (lambda v: str(v or "").strip())
         exp_base = {str(k): float(v or 0.0) for k, v in (expenses.get("base") or {}).items()}
@@ -392,6 +426,8 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
         groups = {}
         for store in stores:
             groups.setdefault(fold(store), []).append(store)
+        exp_measured = expense_change_measured(expenses.get("base_carried_from"),
+                                               expenses.get("compare_carried_from"))
         label_of, market_of = {}, {}
         for ckey, spellings in groups.items():
             uniq = sorted(set(spellings))
@@ -405,6 +441,14 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
         for ckey in sorted(set(exp_base) | set(exp_cmp)):
             cur, prev = exp_base.get(ckey, 0.0), exp_cmp.get(ckey, 0.0)
             cell = _expense_cell(cur, prev)
+            if not exp_measured:
+                # The two figures are ONE carried sheet compared with itself. They stay — they are
+                # what each month books — but the change is NOT MEASURED, never a ± 0% that reads as
+                # "steady". `rev_delta` stays 0.00 because that IS the arithmetic; the percent is the
+                # claim, so the percent is the thing withheld.
+                cell["rev_pct"] = None
+                cell["pct"] = None
+                cell["change_measured"] = False
             cell.update({
                 "store": label_of.get(ckey) or ckey or "—",
                 "market": market_of.get(ckey) or (resolve_market(ckey) if resolve_market else "") or "",
@@ -437,6 +481,10 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
         k = c["key"]
         if c.get("expense"):
             m = _expense_cell(exp_cur_tot, exp_prev_tot)
+            if expenses is not None and not exp_measured:
+                m["rev_pct"] = None
+                m["pct"] = None
+                m["change_measured"] = False
         else:
             m = _combine(cat_tot[k]["cur"], cat_tot[k]["prev"])
         m.update({"key": k, "label": c["label"], "metric": c.get("metric", "units"),
@@ -470,11 +518,16 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
     # The expense side says out loud what it measured and whether either month was CARRIED FORWARD —
     # a carried month is the P&L's own rule, not an estimate, but the reader is told which month it
     # came from rather than left to assume the sheet was re-entered.
+    _exp_change_measured = (None if expenses is None else exp_measured)
     out["expenses_meta"] = (None if expenses is None else {
         "measured": True,
+        # measured = the expense FIGURES were read. change_measured = the two figures are two
+        # different months, so a change between them is a claim worth printing. The second can be
+        # False while the first is True, and that is exactly the case this report used to misreport.
+        "change_measured": bool(_exp_change_measured),
         "current_total": round(exp_cur_tot, 2),
         "previous_total": round(exp_prev_tot, 2),
-        "pct": _pct(round(exp_cur_tot, 2), round(exp_prev_tot, 2)),
+        "pct": (_pct(round(exp_cur_tot, 2), round(exp_prev_tot, 2)) if _exp_change_measured else None),
         "base_carried_from": expenses.get("base_carried_from"),
         "compare_carried_from": expenses.get("compare_carried_from"),
         "stores": len(exp_rows),
@@ -483,5 +536,5 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
     out["overall"]["current_exp"] = round(exp_cur_tot, 2) if expenses is not None else None
     out["overall"]["previous_exp"] = round(exp_prev_tot, 2) if expenses is not None else None
     out["overall"]["exp_pct"] = (_pct(round(exp_cur_tot, 2), round(exp_prev_tot, 2))
-                                 if expenses is not None else None)
+                                 if (expenses is not None and _exp_change_measured) else None)
     return out
