@@ -208,12 +208,13 @@ FACTS: dict[str, dict] = {
         "question": 'Is this POS department a DEVICE department? Asked by the Gross Profit report '
                     '(both classification branches), by the P&L\'s sales classifier, and by the GP '
                     'Category Map screen that tells the owner what each department IS. The answer is '
-                    'the org\'s OWN declaration — `accessory_config.box_departments` (mig 218) — '
-                    'with an explicit `gp_category_map` row (mig 069) allowed to override it and the '
-                    'house labels as the default for an org that declared nothing. It had TWO homes: '
-                    'the GP report read the declaration and the P&L read the category map ALONE, so '
-                    'a department the owner declared but never mapped was device revenue on one '
-                    'report and unbooked sales on the other ($111,464.09 across Mar-Oct 2026).',
+                    'the org\'s OWN declared box-department set, with an explicit GP category '
+                    'override allowed to beat it and the house labels as the default for an org that '
+                    'declared nothing. It had TWO homes: the GP report read the declaration and the '
+                    'P&L read the category overrides ALONE, so a department the owner declared but '
+                    'never overrode was device revenue on one report and unbooked sales on the '
+                    'other ($111,464.09 across Mar-Oct 2026). Where each side is configured: '
+                    'index 4a.4.',
         "homes": ('app/modules/commcalc/gp_report.py',),
         "index": ('4a.4',),
         "locks": ('harness_gp_pnl_commission_parity.py',),
@@ -234,7 +235,7 @@ FACTS: dict[str, dict] = {
             # own answer until 2026-10-19 and now dereferences this one.
             'app/modules/account/coa.py': ('device_department_test',),
             # The GP report's one caller (`_compute_gp`, which hands over the org's declaration in
-            # EVERY mode) and the GP Category Map screen, which must tell the owner the same thing
+            # EVERY mode) and the GP Category Map screens, which must tell the owner the same thing
             # the books do about each department.
             'app/modules/commcalc/router.py': ('DEVICE_DEPTS', 'GP_CATEGORIES', 'ONDIGO_DEPT',
                                                '_GP_CATEGORIES_SET', '_GP_CATS_DEFAULT',
