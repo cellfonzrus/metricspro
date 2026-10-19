@@ -1512,6 +1512,10 @@ FACTS: dict[str, dict] = {
             # §COMMCALC-03 — the takeover evaluation dereferences this home; it never queries
             # the table or re-derives the rule.
             'app/modules/commcalc/prospect_eval.py': ('period_sort_key',),
+            # §COMMCALC-19 — "can this month-over-month expense change be measured at all" compares the
+            # two carried periods through THIS home's spelling rule, so `2026-08` and `August 2026`
+            # are one sheet rather than two. It dereferences `period_sort_key`; it does not re-spell it.
+            'app/modules/commcalc/sales_comparison.py': ('_period_key',),
         },
     },
     'gated_detector_verdict': {

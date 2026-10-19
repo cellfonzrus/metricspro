@@ -864,6 +864,15 @@ on:
       - "backend/harness_statement_crosscheck_earned.py"
       - "backend/app/modules/account/analysis.py"
       - "backend/harness_expense_one_path.py"
+      - "backend/harness_sales_comparison.py"
+      - "backend/app/modules/commcalc/sales_comparison.py"
+      - "frontend/src/app/(platform)/commcalc/sales-comparison/page.tsx"
+      # index §COMMCALC-19 — the tile row at the top of a report is SENDABLE through one shared
+      # converter, and a change the report cannot measure is named as unmeasured in the mailed copy.
+      - "backend/harness_tile_snapshot.py"
+      - "frontend/src/lib/tile-snapshot.ts"
+      - "frontend/prove_tile_snapshot.mjs"
+      - "frontend/src/lib/send-report.tsx"
       - "backend/app/modules/commcalc/expenses_effective.py"
       - "backend/app/modules/commcalc/labour_coverage.py"
       - "backend/app/modules/account/statement_filter.py"
@@ -1317,6 +1326,12 @@ jobs:
       - name: Run the one-path expense lock (one question one path — a gated detector reports that it did not measure, a period filter matches every spelling and dedupes, and the expenses trend reads the SAME carry-forward rule as the P&L — owner 2026-10-06, index §19.50)
         working-directory: backend
         run: python3 harness_expense_one_path.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the sales-comparison lock (a period-over-period report carries a change column for every metric it reports on, so accessory DOLLARS compare month over month; and the store-expense line is joined on the store-identity home, reported once per store, and never enters revenue, GP or the transaction count — owner 2026-10-17, index §COMMCALC-18)
+        working-directory: backend
+        run: python3 harness_sales_comparison.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the tile-snapshot lock (the figures at the top of a report can be SENT, through the one sender and one shared shape; and a change between two copies of one carried expense sheet is named NOT MEASURED in the mailed copy exactly as on screen, never printed as ± 0% — owner ask 2026-10-19, index §COMMCALC-19)
+        working-directory: backend
+        run: python3 harness_tile_snapshot.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the device-reimbursement reconciliation lock (the carrier statement and the distributor's reimbursement ledger are the SAME money, so claimed-above-paid is the exception and paid-above-claim is its own bucket, never netted; an absence is reported with its reason and never as a $0.00 difference; and a shortfall against a month whose statement arrived SHORT is withheld as not-measured rather than flagged against the store — owner 2026-10-08, index §19.53)
         working-directory: backend
         run: python3 harness_device_reimb_recon.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1431,6 +1446,22 @@ jobs:
       - name: Run the nav deep-link proof (the real rbac.ts + urlTab.ts; negative controls)
         working-directory: frontend
         run: node prove_nav_deep_link.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE TILE-SNAPSHOT PROOF (index §COMMCALC-19, owner ask 2026-10-19) drives the REAL
+  # src/lib/tile-snapshot.ts under Node 22 (type stripping; its only import is a `type`, so no npm
+  # install): the sheet a manager mails has one fixed shape, and its change label is a TRI-STATE —
+  # a measured percent, `new` where there is no base to divide by, and `not measured` with the reason
+  # printed, which is the lie the live screen's "± 0%" on two carried expense sheets used to be.
+  tile-snapshot-proof:
+    name: Tile snapshot proof (a sent snapshot claims no change the screen refuses to claim)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the tile-snapshot proof (the real tile-snapshot.ts; the ± 0% regression; negative controls)
+        working-directory: frontend
+        run: node prove_tile_snapshot.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SCOPE DISPLAY-NAME PROOF, frontend half (index §13b.1) drives the REAL
   # accounts/_components/scopeFinancials.ts under Node 22 (type stripping; the module imports nothing, so no
