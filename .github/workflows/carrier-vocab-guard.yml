@@ -412,6 +412,8 @@ on:
       - "frontend/src/lib/pos-config.ts"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
       - "frontend/src/components/pos/PrintFormatPicker.tsx"
+      - "backend/app/modules/pos/receipt_escpos.py"
+      - "tools/pos-print-helper/receipt-helper.js"
       - "database/migrations/1089_pos_receipt_layout.sql"
       - "backend/harness_pos_stock_landing.py"
       - "backend/harness_pos_product_form_lock.py"

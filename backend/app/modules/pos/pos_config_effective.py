@@ -54,6 +54,14 @@ SERVER_DEFAULTS: dict[str, object] = {
     "receipt_paper_width_mm": "",
     # Blank = inherit the org template's layout, i.e. the store accepts the company default.
     "receipt_layout": "",
+    # DIRECT PRINTING (owner 2026-10-20: the receipts print to the thermal printer "only if desired
+    # by the user, there cannot be any harcoded rule"). OFF everywhere until a store turns it on, and
+    # even then it is only this store's DEFAULT: the print screen offers both destinations every
+    # time, and the printer dialog keeps working exactly as it does today.
+    "receipt_direct_print": False,
+    # Where the till helper listens on the counter PC. It is a setting, not a constant in code, so a
+    # store that runs it on another port says so without a release.
+    "receipt_helper_url": "http://127.0.0.1:9100/print",
 }
 
 #: Which disclaimer targets mean "print on a POS receipt" — the browser's own rule, stated once.
@@ -132,6 +140,9 @@ def printer(rows, store_code: str = "") -> dict:
         "label": text(rows, "receipt_printer_label", store_code),
         "paper_width_mm": text(rows, "receipt_paper_width_mm", store_code),
         "layout": text(rows, "receipt_layout", store_code),
+        # Whether THIS store prints straight to the printer by default, and where its helper listens.
+        "direct": flag(rows, "receipt_direct_print", store_code),
+        "helper_url": text(rows, "receipt_helper_url", store_code),
     }
 
 
