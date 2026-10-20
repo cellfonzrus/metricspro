@@ -24742,7 +24742,11 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     carry can only fill a slot that exists.
     """
     require_org(org_id)
-    sc = sb().schema('commcalc')
+    # ONE client for the whole read: the labour actuals below reach `storeops` and `account` through
+    # the same connection this schema handle comes off, so the expense sheet and the payroll that
+    # replaces its carried labour rows cannot be read against two different clients.
+    _cl = sb()
+    sc = _cl.schema('commcalc')
     from app.modules.commcalc import expenses_effective as _expfx
     # `source_key` (mig 206) decides which rows carry — PROBED on its own, so a pre-206 schema still
     # reads (every row manual, exactly as it was then) instead of failing the whole select.
@@ -24766,7 +24770,7 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     # relabelled through `store_identity_index` — the one home for canonical↔code (§64).
     from app.modules.commcalc import labour_vocabulary as _lvoc
     from app.modules.commcalc import labour_actuals as _lact
-    _tr_vocab, _tr_lab, _tr_code = _labour_actuals_code_keyed(client, org_id, kept)
+    _tr_vocab, _tr_lab, _tr_code = _labour_actuals_code_keyed(_cl, org_id, kept)
     eff = _expfx.effective_series(rows, kept, _lvoc.derived_row_names(_tr_vocab))
     _tr_unmeasured = {p: [h for h, ok in ((_tr_lab.get(p) or {}).get('measured') or {}).items()
                           if not ok] for p in kept}
