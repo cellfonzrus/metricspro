@@ -635,9 +635,16 @@ def get_order(po_id: str, org_id: str = ORG_ID):
     if vendor and vendor.get("data_source_id"):
         from app.modules.commcalc import live_login
         st = portal.order_state(org_id, vendor["data_source_id"])
-        sess = live_login.get_session(vendor["data_source_id"], org_id)
+        # §COMMCALC-24 SIBLING. This endpoint is NOT gated to the session host on purpose — it is the
+        # whole PO page, and proxying it to the sweeps worker would make an order unreadable whenever
+        # that worker is down. But it must not report this process's blindness as the owner's answer:
+        # on a split deploy `get_session` here returns None for a session that is alive on the worker.
+        # So liveness is reported only when it is OBSERVABLE, and `observable` says which.
+        observable = live_login.sessions_live_here()
+        sess = live_login.get_session(vendor["data_source_id"], org_id) if observable else None
         alive = bool(sess is not None and not sess.is_terminal())
-        live = {"sid": vendor["data_source_id"], "for_this_order": bool(alive and st and st.get("po_id") == po_id),
+        live = {"sid": vendor["data_source_id"], "observable": observable,
+                "for_this_order": (bool(alive and st and st.get("po_id") == po_id) if observable else None),
                 "mode": (st or {}).get("mode")}
     return {"header": head, "lines": lines, "vendor": _vendor_public(vendor) if vendor else None,
             "recipe": L.recipe_status(rec), "can_submit": bool(rec.get("submit_steps")), "live": live}
@@ -660,8 +667,9 @@ def open_order_session(po_id: str, confirm: bool = False, authorization: str = H
     recipe, opens the review page and captures the vendor's cart total + screenshot onto this PO. It never
     submits. Stream it from the commcalc /data-sources/{sid}/live-login/{frame,input,state,cancel} endpoints."""
     _require_buyer(authorization, org_id)
-    from app.core.service_role import require_browser_service
-    require_browser_service()
+    # §COMMCALC-24 — creates a session in live_login's per-process registry; run it where that lives.
+    from app.modules.commcalc import live_login
+    live_login.require_session_host()
     client = sb()
     try:
         head, lines, vendor = _order_and_vendor(client, org_id, po_id)
@@ -673,7 +681,6 @@ def open_order_session(po_id: str, confirm: bool = False, authorization: str = H
     if not sid:
         raise HTTPException(400, "Save this vendor's portal login first (Supply → Vendors → Login) — or place the "
                                  "order on the vendor's site and type the confirmation number here.")
-    from app.modules.commcalc import live_login
     from app.modules.commcalc import router as cc
     from app.modules.supply import portal
     src = store.login_row_full(client, org_id, sid)
