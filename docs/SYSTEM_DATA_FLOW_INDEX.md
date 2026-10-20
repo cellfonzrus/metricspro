@@ -116,6 +116,7 @@ Primary code homes:
 | CORE-10 | **A gate, not a note** | "This is a very critical finding — don't just write it down, make a gate so nothing can pass through unknowingly; you were smart, maybe the other might not be as smart. What checks that a branch was cut from a current base, and what checks that a guard is still guarding what it thinks it is?" |
 | CORE-11 | **A column that draws its own cell is drawn** | "It did not let me enter. Which component actually puts a report's cell on the screen, do both of them honour a column that draws its own, and what else was silently blank because one of them did not?" |
 | CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
+| CORE-13 | **A migration grants what it creates** | "Supabase says that from 30 October a new table in `public` no longer gets Data API access automatically. Does that break this app, which migrations would break, and what stops the next migration shipping a table the application cannot read?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -7234,6 +7235,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - *(no endpoint added)* — §CORE-10 adds no route and no table: both gates are CI, not product. They run as the workflow jobs **The branch was cut from its base (no re-proposed commits, no lost CI job)** (`.github/workflows/branch-base-guard.yml` → `scripts/check_branch_base.py`) and **A guard that goes blind fails CI (derived subject sets)** (`.github/workflows/security.yml` → `backend/harness_subject_set_lock.py`). The first is the only workflow here triggered by `pull_request_target`, deliberately, and it never checks out or runs PR code (§CORE-10.3).
 - *(no endpoint added)* — §CORE-11 adds no route and no table either. It is a component fix plus a CI gate: `frontend/src/components/ReportShell.tsx` grows ONE `bodyCell(c, r)` home for what a body cell shows (both row paths on it), `crm/reports/page.tsx` dereferences the same rule for its own bespoke table, and the gate runs as the workflow step **Run the column-render lock** (`carrier-vocab-guard.yml` → `backend/harness_column_render_lock.py`). Three already-shipped columns began rendering with no change of their own (§CORE-11.1).
 - *(no endpoint added)* — §CORE-12 adds no route, no table and no migration: the seven existing authority writers (`POST /core/users/assign`, `/users/bulk-assign`, `/users/deactivate`, `POST|PUT /core/roles`, `POST /core/revoke-super-admin`, and `purge_app_user` behind `POST /core/employees/purge` and the StoreOps employee delete/merge) each ask ONE new pure home, `core/self_lockout.py`, whether the write would remove the caller's own `security` authority in the tenant it affects, and refuse it with a 400 if so. `_can_edit_setting` MOVED into that home and `core/router.py` dereferences it. A write that names somebody else's row, or a caller who keeps the authority, is byte-identical to before (§CORE-12).
+- *(no endpoint added)* — §CORE-13 adds no route, no table and no migration. It is a CI gate plus a house convention: `backend/harness_data_api_grant_guard.py`, run as the `security.yml` job **A new table is granted by the migration that creates it (Data API)**, fails the build when a migration newer than its cutoff creates a relation the Data API serves without granting it to `service_role` in the same file. Nothing about the running system changes (§CORE-13).
 - `GET|PUT /storevisit/alerts/config` · `GET /storevisit/visits/{id}/todos` · `POST /storevisit/alerts/run-due` (secret) · `POST /storevisit/alerts/run-now` (dry run by default) — store-visit follow-through alerts, the accessory notification and the draft PO (§47.16).
 
 | Endpoint | Handler line | Section |
@@ -7612,6 +7614,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Was this branch cut from a current base, and is each guard still guarding what it thinks it is?** (and therefore: does a green tick mean anything on this pull request?) | no table — git metadata read at CI time: the TWO-DOT diff `base..head` (lines deleted), commit SUBJECTS on both sides (a squash merge leaves no ancestry to read), and the job names declared by each `.github/workflows/*.yml` on both trees; plus every `backend/harness_*.py` that scans repo source | gate A `scripts/check_branch_base.py` (A2 mass deletion unless `BASE-DELETIONS-ACKNOWLEDGED` is in the PR body, A3 re-proposed merged subjects, A4 a CI job the base runs and the head does not declare; 10 armed controls) run from the BASE branch via `pull_request_target`; gate B `backend/harness_subject_set_lock.py` (+ `harness_subject_set_pending.txt`, 50 pinned, shrink-only) — §CORE-10 |
 | **Which component actually puts this report's cell on the screen, and does it honour a column that draws its own?** (and therefore: is a control an author declared actually there?) | no table — frontend source read at CI time: every file that draws a `<td` whose content it reads off a handed column (`c.get(`), which is the derived subject set | ONE home `ReportShell.bodyCell` + `DataGrid`'s own cell + `crm/reports`' bespoke table, all three honouring `ExportColumn.render`; `lib/export.tsx` excused by name and held to the opposite rule (an export carries the figure, never a control); lock `backend/harness_column_render_lock.py` (32) — §CORE-11 |
 | **Would this administrative write take away the authority that just made it?** (and therefore: can an administrator shut their own door with no screen left to undo it?) | no table — the caller's own `storeops.app_users` membership rows and the tenant's `storeops.roles` permissions, read before and after the proposed write | ONE home `app/modules/core/self_lockout.py` (`can_edit_setting` — MOVED there from `core/router.py`, which now dereferences it — plus `acting_caller` / `lockout_reason` / `rows_with_change` / `rows_without`, all pure); dereferenced by `assign_role`, `bulk_assign`, `create_role`, `update_role`, `deactivate_user`, `revoke_super_admin` and `purge_app_user`; five writers excused by name; lock + proof `harness_self_lockout.py` (45) — §CORE-12. Live 2026-10-16: `ss@1313global.us` demoted its own Vzone membership to `market_manager` and only a hand-written UPDATE could restore it |
+| **Is a table this migration creates reachable by the application at all?** (and therefore: does a migration state what it needs, or inherit it from a setting in somebody else's dashboard?) | no table — `database/migrations/*.sql` read at CI time: every `create table` / `create view` and every `GRANT` in the same file | ONE gate `backend/harness_data_api_grant_guard.py` (`created` / `granted` / `violations`; `DATA_API_SCHEMAS` declared both ways per §CORE-10; `CUTOFF` a shrink-only ratchet at the highest migration on `main` when it shipped), run as the `security.yml` job **A new table is granted by the migration that creates it (Data API)**; the convention it enforces is in `CLAUDE.md` — §CORE-13. Supabase stops auto-granting new `public` tables on 2026-10-30, and every read in `backend/app` is a PostgREST read |
 | **Where is an employee's pay SET?** (and: does a `?tab=` link open the tab it names?) | `storeops.employees.pay_rate` / `pay_basis` / `pay_amount`, edited per row on HR → Employees & Pay (`/hr?tab=employees`) or Roles & Access | menu: NAV `Payroll & HR` → Employees & Pay (deep link, gates as `/hr`); copy: `ScreenLink` `employees_pay`; tab: `lib/useUrlTab.ts` over `lib/urlTab.ts`; lock `harness_nav_deep_link_lock.py` (§19.40) |
 | **Store-days started and not finished** (per store-day) — somebody submitted, the close gate sent them back to recount, and they did not return: `unfinished` / `unfinished_counts` on `GET /closing/rollup`, the `unfinished` block on each `GET /closing/summary` store card, the DM-verify banner. Carries the entered money and the gate's OWN recorded variance (never recomputed). **NOT a money figure**: an unfinished day writes no `commcalc.daily_closing` row, so it reaches no cash, recon or P&L total (owner chose "not until corrected", 2026-10-04). Distinct from **turned away** below (refused before the gate) and from **not submitted** (nobody tried) | `closing/unfinished_day.state_for`/`describe` over `commcalc.closing_attempt` + `commcalc.daily_closing` | §29.12 |
 | **Closings turned away** (per store-day, per rep) — submits that were REFUSED and stored no closing: `refusals` + `last_refusal_code` on `GET /closing/attempts`, rendered on Management Review. Distinct from **attempts** (recounts the rep actually made) and from **auto-accepted** — a refusal is not a try | `closing/submit_refusal.is_real_try` over `commcalc.closing_attempt` | §29.11 |
@@ -25863,6 +25866,7 @@ status word rather than a blank that reads as nil.
 | CORE-10 | core |
 | CORE-11 | core |
 | CORE-12 | core |
+| CORE-13 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -31493,3 +31497,79 @@ Same class: §COMMCALC-66 / §66 (a fallback must not read as evidence), §19.18
 and its callers left unwired is not a fix), §COMMCALC-11 (a vendor order-type family nobody
 classified is reported, never silent), §42.7/§K3(b) (a declared or dropped figure must SAY so on
 the statement, because `meta` never reaches a reader).
+
+---
+
+## §CORE-13. A MIGRATION GRANTS WHAT IT CREATES — Data API reachability stops being inherited (Supabase notice 2026-10-20)
+
+Supabase, forwarded by the owner on 2026-10-20: *"On October 30 … Supabase will stop automatically
+granting Data API access to new tables in the 'public' schema for existing projects. Your existing
+tables are not affected … Any table created in 'public' from that date onwards needs an explicit
+GRANT before supabase-js, PostgREST, or GraphQL can reach it. This includes migrations that recreate
+your schema: new projects, preview branches, and local `supabase db reset`."*
+
+### CORE-13.1 WHAT IT MEANS HERE, MEASURED
+
+Measured against the live project and the 499 migrations on `main`, 2026-10-20:
+
+| Question | Answer | How it was checked |
+|---|---|---|
+| Does the browser read tables through the Data API? | **No.** `@supabase/supabase-js` is used for auth (`signInWithPassword`, `getSession`, `onAuthStateChange`) and realtime channels only. There is no `.from()` or `.rpc()` call site in `frontend/src` or `mobile/src`. | grep of both trees for `supabase.` |
+| Does the **backend** read tables through the Data API? | **Yes — all of it.** `app/core/database.py` builds one PostgREST client per schema and every module chains `.table(...)` on it. There is no direct SQL path. | `app/core/database.py`; 2,369 `.schema("…")` sites across `commcalc` / `storeops` / `pos` / `core` / `notify` |
+| Does any migration create a table in `public`? | **None of 501 created relations.** Every one is schema-qualified (`commcalc` 238, `storeops` 113, `core` 106, `pos` 35, `notify` 6, `assets` 3). | parse of `database/migrations/*.sql` |
+| Is there anything to repair in production? | **No.** Existing tables keep their grants; nothing in the unapplied backlog creates in `public`. No SQL was handed over. | the notice's own wording + the parse above |
+
+So the dated change breaks nothing on 30 October. **The exposure it names is the one worth fixing:**
+366 of those 501 relations carry no grant of their own and are reachable only because
+`ALTER DEFAULT PRIVILEGES` happens to be set for their schema in the live Supabase project — a fact
+that lives in a dashboard, not in `database/migrations/`, and that the vendor is now in the business
+of changing. That is the §19.18 shape: a fact every caller depends on, stored somewhere nobody in
+this repository can read.
+
+### CORE-13.2 THE CLASS, NOT THE INSTANCE
+
+The instance is `public`. The class is **a migration that leaves a relation's reachability to a
+default set outside this repository.** And because this backend speaks only PostgREST, an ungranted
+relation is not "invisible to the browser" — it is invisible to the application, arriving as
+`42501 permission denied for table <x>` from a route that was green on the author's branch and dies
+the first time the migration runs against a project created under the new default: a preview branch,
+a `supabase db reset`, or a new tenant project.
+
+**`service_role` only.** Supabase's example snippet grants `anon` and `authenticated` as well.
+Copying it here would widen exposure for no gain, because nothing signed-in-but-not-the-backend ever
+reads a table. The gate asks for the backend's role and nothing else.
+
+### CORE-13.3 THE GATE
+
+`backend/harness_data_api_grant_guard.py`, run as the `security.yml` job **A new table is granted by
+the migration that creates it (Data API)**. Stdlib only, no DB, no network. It fails the build on:
+
+| | |
+|---|---|
+| **A** | a migration newer than `CUTOFF` creates a relation with no schema qualifier — on Supabase that lands in `public` |
+| **B** | a migration newer than `CUTOFF` creates `<schema>.<rel>` in a Data API schema and does not grant it to `service_role` **below** the create. `GRANT … ON ALL TABLES IN SCHEMA` covers only the tables that exist when it runs, so a create underneath it is not covered — the check is position-aware, not a substring test |
+| **C** | `DATA_API_SCHEMAS` is not exactly the set of schemas the migrations create in, **both ways**. Declared, never derived (§CORE-10): a new schema has to be written down by a human, who then has to say whether the Data API serves it |
+| **D** | `CUTOFF` was raised. It is a shrink-only ratchet pinned at `1089`, the highest migration on `main` the day the gate shipped |
+| **Z** | ten negative controls, each check planted with its own defect — including a create inside a `--` comment, a grant that omits `service_role`, and a grant positioned above its own create |
+
+**Grandfathered deliberately.** Everything at or below `CUTOFF` keeps the reachability it has:
+those tables exist in the live project, the notice does not touch them, and backfilling 366 grants
+would be a production schema change for no live defect. The gate starts green and the debt can only
+shrink, by lowering `CUTOFF`.
+
+The convention itself is in `CLAUDE.md` under house conventions, so it is read before a migration is
+written rather than discovered when CI goes red.
+
+### CORE-13.4 DUPLICATE CHECK (the CLAUDE.md build gate, applied and recorded)
+
+Searched the index and `backend/harness_*` for an existing mechanism answering "is this relation
+reachable": `harness_pos_grants_lock.py` (§30.16) locks four POS PII **functions** *switched off* and
+fails a later migration that re-opens them — the opposite question, and function-scoped; it is left
+alone. `harness_grant_model.py` and `harness_core_grant_universe.py` are about **permission grants to
+people** (market/store scope), not SQL privileges, despite the name. `harness_unique_numbers_lock.py`
+owns migration numbering. No existing gate reads `create table` against `GRANT`, so this is a new
+home rather than a sibling derivation, and no second copy of any of their facts was made.
+
+Same class: §19.18 (a registry written and its callers left unwired is not a fix), §CORE-10 (a
+lesson in a note is enforced by whoever remembers it; a lesson in CI is enforced), §30.16 (a copied
+schema-wide GRANT silently undoing a narrower REVOKE).
