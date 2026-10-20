@@ -219,9 +219,33 @@ check("(g) journal_scope_entries knows the prefix (a profit center never receive
       'scope_key.startswith("profit_center:")' in BE[ACC + "balance_sheet.py"])
 
 # ── (h) the unclaimed sale line ──────────────────────────────────────────────────────────────────────
-check("(h) coa's fallback dereferences sales_line_map: match → royalty suppression → add → tally, side entry attached",
+check("(h) coa's fallback dereferences sales_line_map: money gate → match → royalty suppression → "
+      "basis → add → tally, side entry attached",
       "_slm.match(_slm_idx, dept, cat, prod)" in coa and "_hit[0] in _roy_covered" in coa
-      and "_slm_tally.unclaimed(dept, cat, ext, st)" in coa and "L[_slm.SIDE_KEY] = _slm_tally.side_line()" in coa)
+      and "elif _slm.line_money(ext, gp):" in coa
+      and "_slm.rule_amount(_hit[3], ext, gp)" in coa
+      and "_slm_tally.unclaimed(dept, cat, ext, st, gp)" in coa
+      and "L[_slm.SIDE_KEY] = _slm_tally.side_line()" in coa)
+# ── THE RULING'S LOCK (owner 2026-10-20, index §37.11) — one home for "which figure books" ───────
+_slm_src = BE[ACC + "sales_line_map.py"]
+_acct_rt = BE[ACC + "router.py"]
+check("(h) the basis vocabulary, its default and the blank label live ONLY in sales_line_map — no "
+      "second copy in coa, the router or statement_engine",
+      all(tok not in src for tok in ('AMOUNT_BASES = ', 'DEFAULT_BASIS = ', 'BLANK_VALUE = ')
+          for src in (_acct_rt, coa, se)))
+check("(h) NO caller picks between ext_price and gp for a mapped sale line itself — the choice is "
+      "`rule_amount`'s alone",
+      not re.search("amount_basis\\s*==|basis\\s*==\\s*['\"]gp['\"]",
+                    coa + _acct_rt + se))
+check("(h) the ext-only money gate cannot come back: coa's remainder branch is `line_money`",
+      "elif ext:" not in coa and "elif _slm.line_money(ext, gp):" in coa)
+check("(h) RULE TWO: the basis home names no department, product, carrier or tenant",
+      not any(t in _slm_src for t in ("Rtr", "Wallet Funding", "BrandedHandset", "LuxeLink",
+                                      "Boost", "Total Wireless")))
+check("(h) the unbooked report carries the MARGIN total end to end (tally → side entry → statement "
+      "meta → the map endpoint), so a margin-only department is visible on every surface",
+      '"unbooked_gp_total"' in _slm_src and '"unbooked_gp_total"' in se
+      and '"unbooked_gp_total"' in _acct_rt)
 check("(h) statement meta carries it (side_meta) — the P&L payload never does", "def side_meta(inputs)" in se and '"_unbooked_sales"' in se)
 
 # ── (i) CI + index ───────────────────────────────────────────────────────────────────────────────────

@@ -257,6 +257,32 @@ FACTS: dict[str, dict] = {
             'app/modules/marketing/event_sales.py': ('is_voided',),
         },
     },
+    # ── §37.11 (owner ruling 2026-10-20) — which FIGURE does a mapped sale line book ─────────────
+    'sale_line_booking_basis': {
+        "question": 'A POS sale line no P&L classifier claims is routed to a revenue line by the '
+                    'org own rule map. WHICH FIGURE does that rule book, and does the line carry '
+                    'money at all? Both answers used to be one word, ext_price, written straight '
+                    'into the P&L sales scan: so a wallet refill would have booked the customer '
+                    'pass-through money as income, a plan activation (which rings no gross at all, '
+                    'because the customer pays the carrier) could not be booked or even reported, '
+                    'and the blank department the unbooked report prints as (blank) was the one '
+                    'department a rule could not name. The owner ruling of 2026-10-20 is that '
+                    'commission and margin coming in ARE income, and only money reimbursed toward '
+                    'phone cost is a subsidy, so the figure is a per-rule BASIS: ext (the gross) '
+                    'or gp (the store margin). Where it is configured: index 37.11.',
+        "homes": ('app/modules/account/sales_line_map.py',),
+        "index": ('37.11',),
+        "locks": ('harness_royalty_lock.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04).
+        "callers": {
+            # The P&L sales scan — the one booking path, and the only reader of the money gate.
+            'app/modules/account/coa.py': ('_slm',),
+            # The rule editor endpoint: it offers the vocabulary and validates against it rather
+            # than spelling the fields, the bases or the blank label itself.
+            'app/modules/account/router.py': ('sales_line_map',),
+        },
+    },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
     'multi_handset_one_buyer': {
         "question": 'Which buyers took more handsets in one day at one store than a family plausibly '

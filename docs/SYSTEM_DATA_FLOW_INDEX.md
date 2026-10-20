@@ -82,7 +82,7 @@ Primary code homes:
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
 | 36 | **Supply ordering (vendor setup · price compare · cheapest cart incl. free shipping · assisted order + confirmation)** | "Which vendor should this cart go to once shipping is counted, where is each vendor's free-shipping threshold and delivery time set, how is the order placed at the vendor from here, and where does the vendor's confirmation number land?" |
-| 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)?" |
+| 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)? WHICH FIGURE does a mapped sale line book — the gross the customer paid or the store's margin — and why is a margin-only line (a plan activation) no longer invisible to the unbooked report (§37.11)?" |
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 | 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
 | 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, which origins may the API be called from, what does a production build refuse to ship without (§40.10), what was actually measured during the two 2026-10-03 outages (§40.11 the morning one, §40.12 the afternoon one), what proves a LIVE deployment can actually reach its backend (the §40.12 preventive), and why an unreachable backend must never read as "login not enforced" (§40.13)?" |
@@ -1431,8 +1431,8 @@ reads as "gross profit".
 | term | Sept | which report | why |
 |---|---|---|---|
 | `accessory_rev` | 53,639.38 | P&L only, BEFORE the fix | the archive-only sales read (§4 bullet) — **FIXED** |
-| `plan_gp` | 20,211.46 | GP only | `(blank)`-department lines booked at `gp`. The P&L's classifier claims nothing AND its `_unbooked_sales` tally is gated on `ext_price`, so the blank department's lines are neither booked NOR reported — the silent-zero class inside the hole-reporting itself. **REPORTED, not coded around**. (This cell first read "1,709 lines carrying 20,658.11 of `gp` against 0.09 of ext"; **CORRECTED 2026-10-19 to 1,891 lines / 20,211.46 / 0.10** — re-measured on the same month, see §4a.4. The original prose contradicted this very row's own `plan_gp`, which has read 20,211.46 since it was written) |
-| `other_gp` | 5,571.53 | GP only | the `System` department. The P&L reports 47,549.90 of it on `_unbooked_sales`; the GP report reports it on `unmapped_departments`. Both say so; only GP books it. A config hole (`pl_sales_line_map` / `gp_category_map`), never code |
+| `plan_gp` | 20,211.46 | GP only | `(blank)`-department lines booked at `gp`. The P&L's classifier claims nothing AND its `_unbooked_sales` tally is gated on `ext_price`, so the blank department's lines are neither booked NOR reported — the silent-zero class inside the hole-reporting itself. **The REPORTING half is FIXED on 2026-10-20 (§37.11): the unbooked tally now carries the margin beside the gross, so this 20,211.46 is visible instead of $0.10 of it. The BOOKING half is deliberately NOT done — the per-line `gp` is a quantised per-plan bounty estimate and the carrier's actual activation money already books on `carrier_comm`, so booking it would double count (§37.11's table)**. (This cell first read "1,709 lines carrying 20,658.11 of `gp` against 0.09 of ext"; **CORRECTED 2026-10-19 to 1,891 lines / 20,211.46 / 0.10** — re-measured on the same month, see §4a.4. The original prose contradicted this very row's own `plan_gp`, which has read 20,211.46 since it was written) |
+| `other_gp` | 5,571.53 | GP only | the `System` department. The P&L reports 47,549.90 of it on `_unbooked_sales`; the GP report reports it on `unmapped_departments`. Both say so; only GP books it. A config hole (`pl_sales_line_map` / `gp_category_map`), never code. **Decomposed 2026-10-20 (§37.11): `Wallet Funding` 4,470.20 is ALREADY on the P&L as `ma_merchant_discount` (the carrier's own received margin, of which the POS figure is a 10 % estimate) so it must NOT book; `Access Charge` 1,855.00 is a customer fee with no carrier counterpart and is a product-grain DECISION for the owner; `Activation payment` −753.67 is a cost, not income** |
 | `device_rev` | 18.00 | P&L only, net | GP's `phone_sales` 17,434.65 is cancelled dollar-for-dollar by `net_phone_cost` (= `phone_sales + reimb`), so the device leg contributes **0.00** to GP net profit by construction — deliberate, not a double count |
 | the whole COGS section | −6,112.84 | P&L only | GP has no `accessory_cost` (10,729.60), `device_cost` (222,525.36) or `device_rebate` (−239,367.80) term at all. The rebate EXCEEDS the device cost, which is why the P&L's COGS is negative and its gross profit exceeds its revenue |
 | `wages` | 1,117.41 | P&L only | GP's `−Expenses` reads `store_expenses`; wages is its own P&L line from payroll |
@@ -7078,7 +7078,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.royalty_line_def` (mig `1022`) — THE royalty line vocabulary (house default vertical-scoped + tenant overrides): labels / aliases / section / role, `pl_line_key` / `pl_note`, fee `rate` + `absorbs_remainder`, `daily_categories` | seed (house) · `PUT /account/royalty/lines` (tenant override row) | `royalty.load_vocab` → `merge_vocab` → parse / validate / `pl_bookings` / `reconcile`. Mirror `royalty.HOUSE_ROYALTY_LINES`. §37.2 |
 | `commcalc.royalty_config` (mig `1022`; + `lookback_months` mig `1027`, **NOT applied**) | `PUT /account/royalty/config` (the lookback written only when it changes) | `royalty.load_config` → `resolve_config` (NULL = `CONFIG_DEFAULT`; `lookback_months` house default 24, bounds `LOOKBACK_BOUNDS` 1–120) → the multi-month upload window `royalty.lookback_window`. §37.2, §37.10 |
 | `commcalc.finance_center` · `commcalc.profit_center_store` · `commcalc.pl_line_cost_center` (mig `1022`) — cost + profit centers, store → profit center, P&L line (± detail) → cost center | `PUT/DELETE /account/centers…` | `centers.load_profit_scopes` → `statement_engine._scopes` (`profit_center:<code>`); `statement_filter.scope_predicate`; `centers.store_for_center` (a report's center → store); `centers.cost_center_view`. §37.1 |
-| `commcalc.pl_sales_line_map` (mig `1022`) — routes a POS sale line NO classifier claims to a revenue line (every tenant) | `PUT /account/pl-sales-map` | `coa.build_inputs` sales scan → `sales_line_map.match` / `Tally` → `_unbooked_sales` side entry → statement `meta.unbooked_sales`; `GET /account/pl-sales-map?period=`. §37.4 |
+| `commcalc.pl_sales_line_map` (mig `1022`; **`1090` WRITTEN NOT APPLIED — `amount_basis` (`ext`\|`gp`), WHICH FIGURE a rule books: the gross the customer paid, or the store's MARGIN on otherwise pass-through money (owner ruling 2026-10-20, §37.11). `ADD COLUMN IF NOT EXISTS` + a CHECK mirroring the vocabulary; default `'ext'` = what every rule books today, and the table holds ZERO rows on every org, so nothing moves on apply. The feature works before it is applied: the read is column-tolerant and a missing column resolves to `ext`, while `PUT` refuses a non-default basis naming the migration**) — routes a POS sale line NO classifier claims to a revenue line (every tenant) | `PUT /account/pl-sales-map` (`match_field` · `match_value` — `(blank)` names the label-less department, §37.11 · `pl_line_key` · `amount_basis`) | `coa.build_inputs` sales scan → `sales_line_map.line_money` (the money gate: the gross **or** the margin) → `match` → `rule_amount` → `Tally` (gross **and** margin) → `_unbooked_sales` side entry → statement `meta.unbooked_sales`; `GET /account/pl-sales-map?period=`. §37.4, §37.11 |
 | `commcalc.report_kind.applies_to_vertical` (mig `1022`) — the report-kind registry's VERTICAL axis ('{}' = any) | seed (`royalty_report` by module sub-select) | `report_kinds.applies` / `hidden_kinds` via `tenant_declaration`'s `vertical`; frontend `carrier-scope.kindApplies`. §37.2 |
 | `pos.receipt_imports` + `pos.sales` (mig `864` / `866` / `725`) — a SALE REBUILT FROM THE TWO LANDED SALES REPORTS (§30.14, owner 2026-09-21): one `receipt_imports` row per org × POS × invoice # whose `document` carries `provenance.kind = 'reports'` (the two landings by table + kind, the header row id, the tender + line row ids, who / when, the per-invoice REPORT in words) and one summary `pos.sales` row (`source = 'receipt_import'`, the document's own subtotal / tax / total, `created_at` = the invoice date, the resolved store, the rep's employee_id, the matched customer, `receipt.payments` + `receipt.provenance`). No new column, no migration | `pos/sales_from_reports.rebuild` → `receipt_import.upsert_structured` (a first run → `import_structured`, THE one importer; a re-run → `update_structured_document` + `_sync_sale` — REPLACES, never a second sale); runs on the intake commit of either kind (`router._intake_pos_rebuild_after_landing`, both branches) and on `POST /pos/sales-from-reports/rebuild` | `GET /pos/sales-from-reports` (`sales_from_reports.list_rebuilt`: PostgREST JSON-path filter on the provenance kind), `GET /pos/receipt-imports/{id}/print` (`receipt_formats.render.render_html` — the ONE renderer), the receipt search / edit endpoints like any import |
 | `pos.customer_aliases` (mig `1017`, APPLIED 2026-09-24) — the names a customer ALSO went by: one row per org × customer × `alias_norm` (`customer_identity.norm_name`), `source` `upload` (combined on a shared phone line, §30.16 rule b) / `merge`, first / last seen · **`pos.customers.merged_into` + `merge_record`** (mig `1017`) — the customer a record was merged into, and the list of every row the merge moved (so Un-merge puts exactly those back) · **`pos.activations`** (mig `726`) as THE CUSTOMER'S PHONE LINES — one row per sale × phone number (`cell_number` / `mobile_phone`, `phone_serial` = the paired IMEI, `phone_model`, `plan_description`, `activation_date` = the invoice date, `contract_type`, `store_code`, `status`), notes per row in `pos.activation_notes` | `receipt_import.match_or_create` (the ONE matcher's write half: an alias when a sale is combined) · `customer_master.sync_invoice_lines` (the rebuild's line writer — select then update-empty-fields / insert, keyed org × sale × number) · `customer_master.merge_customers` / `unmerge` / `detach_placeholder` / `dedupe_apply` (`POST /pos/customers/{id}/merge`, `/unmerge`, `/customers/dedupe`) · `PATCH /pos/activations/{id}` + `POST /pos/activations/{id}/notes` (the existing line edit / notes) | `receipt_import._candidates` → `customer_identity.decide` (who a sale's customer is); `customer_master.lines_payload` / `invoices_payload` / `aliases_payload` / `search_ids` (`GET /pos/customers/{id}/lines` / `/invoices` / `/aliases`, `GET /pos/customers?search=`); every reader PROBES mig 1017 per column (`core.column_tolerant`) and says "apply migration 1017" when it is absent |
@@ -7463,7 +7463,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /account/royalty/summary` — the operations-dashboard tiles (latest STR, fees due, recon variance, unmapped lines, flagged) | `royalty_router.royalty_summary` → `royalty.summary` | §37.6 |
 | `POST /account/royalty/batch/preview` (many files, writes nothing) · `POST /account/royalty/batch/import` (the ticked files, per-file results) · `GET /account/royalty/coverage` (the lookback window + months on file per center) — `require_module("royalty")` | `royalty_router._batch_plan` → `_batch_read` (`_parse_input` → `R.parse` / `R.validate`; `_report_key`) + `_on_file` (`R.load_reports`) → `royalty.batch_plan`; import → `_write_report` per ready file; `royalty.coverage` / `batch_outcome` | §37.10 |
 | `GET/PUT /account/centers` · `DELETE /account/centers/{type}/{code}` · `PUT /account/centers/store-map` · `PUT /account/centers/line-tag` · `GET /account/centers/pl/{period}?profit_center=` (→ `statement_engine.statement`, scope `profit_center:<code>`) · `GET /account/centers/cost-view/{period}` (→ `centers.cost_center_view`) | `account/royalty_router.py` | §37.1 |
-| `GET /account/pl-sales-map?period=` · `PUT /account/pl-sales-map` — the unclaimed-sale-line rules and the scan's unbooked / mapped / suppressed tally (every tenant) | `account/router.py` → `coa.build_inputs` side entry `_unbooked_sales` | §37.4 |
+| `GET /account/pl-sales-map?period=` · `PUT /account/pl-sales-map` — the unclaimed-sale-line rules and the scan's unbooked / mapped / suppressed tally (every tenant). Since 2026-10-20 the GET also offers `amount_bases` + `blank_value` and the scan carries `unbooked_gp_total`, so a department whose money IS its margin is visible; the PUT validates the basis against the one vocabulary and refuses a non-default basis before mig `1090` | `account/router.py` → `coa.build_inputs` side entry `_unbooked_sales` | §37.4, §37.11 |
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
@@ -7738,7 +7738,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Royalty due / STR per center per month** (franchise report) | `commcalc.royalty_report` (the report's own `total_str` / `total_adjusted_str` / `total_due`) + `royalty_report_line` | stored as printed; checked by `royalty.validate` → THE rounding rule `royalty.fee_schedule` (total = round(basis × Σ rates), one fee absorbs the remainder); booked by `royalty.pl_bookings` → `royalty_fee` / `marketing_fee` / `ad_fund_fee`. §37.3 |
 | **Royalty vs daily sales variance** (per line / per center) | royalty sales lines vs `raw_sales_product` (or `raw_sales`) Σ month through `royalty_line_def.daily_categories` | `royalty.reconcile` ← `GET /account/royalty/recon/{period}`; tile `GET /account/royalty/summary`. §37.5 |
 | **Royalty months on file** (per center, over the lookback window) | `commcalc.royalty_report` (org-scoped, both period spellings) over `royalty.lookback_window(this month, royalty_config.lookback_months)` | `royalty.coverage` ← `GET /account/royalty/coverage` (+ returned by the batch preview / import); the coverage strip on `/accounts/royalty` → "Upload several months". §37.10 |
-| **Unbooked sales** (POS lines no P&L classifier claims — every tenant) | `raw_sales` ∪ `daily_sales_feed` lines passed over by every classifier | `coa.build_inputs` → `sales_line_map.Tally` → statement `meta.unbooked_sales` / `GET /account/pl-sales-map?period=`. §37.4 |
+| **Unbooked sales** (POS lines no P&L classifier claims — every tenant), reported as the GROSS **and** the MARGIN | `raw_sales` ∪ `daily_sales_feed` lines passed over by every classifier | `coa.build_inputs` → `sales_line_map.Tally` → statement `meta.unbooked_sales` / `GET /account/pl-sales-map?period=`. The gate was `ext_price` alone until 2026-10-20, so a margin-only line (a plan activation, which rings no gross) was neither booked NOR reported: LuxeLink September 2026 showed $0.10 of a department carrying $20,211.46 of `gp`. §37.4, §37.11 |
+| **WHICH FIGURE does a mapped sale line book — the gross or the store's margin?** (owner ruling 2026-10-20: *"commission and anythig like margin which comes in considered as income other than the money reimbursed towards the phone cost as subsidy"*) | `commcalc.pl_sales_line_map.amount_basis` (`ext` house default \| `gp`, mig `1090`) | ONE home `account/sales_line_map.rule_amount` / `resolve_basis` / `AMOUNT_BASES`, with `line_money` answering "does this line carry money at all" and `BLANK_VALUE` spelling the label-less department once for the matcher AND the tally. Dereferenced by `coa.build_inputs`' sales scan and `account/router.py`'s rule editor; no caller compares a basis itself (locked) | §37.4, §37.11 — fact `sale_line_booking_basis` in `core/module_graph.py`; lock (h) of `harness_royalty_lock.py` |
 | **Is this POS department a DEVICE department?** — asked by the P&L's device/accessory classifier, by BOTH of the GP report's classification branches and by the GP Category Map screens. Answered by the org's OWN `accessory_config.box_departments` declaration (mig 218), with a `gp_category_map` row (mig 069) allowed to override it and the house labels as the default for an org that declared nothing | `commcalc.accessory_config` × `commcalc.gp_category_map` | ONE home `gp_report.device_department_test`, dereferenced by `coa._sales_classifier`, `gp_report.calc_gp_report` (both branches, the declaration passed by `router._compute_gp` in every mode) and the two `gp-department*` endpoints. It had two homes until 2026-10-19 and they disagreed by **$111,464.09 across Mar-Oct 2026** on one department of one org | §4a.3, §4a.4 — fact `device_department` in `core/module_graph.py`; lock §K of `harness_gp_pnl_commission_parity.py` |
 | **P&L per profit center / per cost center** | the statement engine's own statement | profit center = scope `profit_center:<code>` (`statement_engine._scopes` ← `centers.profit_center_scopes`); cost center = `centers.cost_center_view` over the assembled P&L (ties to the cent). §37.1 |
 | Distributor payable — WHICH derivation and WHICH line (mig `954`) | `account_config.distributor_payable_basis` / `.distributor_payable_line` / `.asset_ledger_open_statuses`, else the house carrier preset (`ui_label_override` scope `finance_basis:<carrier>`, key `distributor_payable`) over the org's `commcalc.carrier` rows | `balance_sheet.resolve_payable_basis`/`resolve_payable_line` (org > carrier preset > declared mig-933 family > off; target line defaults `asset_ledger`→`owed_vip`, `marketplace_due`→`handset_payable`) → `statement_engine.build_inputs_full` + `GET /account/liabilities-due`; proof `harness_balance_sheet_truths.py` §G |
@@ -18119,6 +18120,179 @@ it. (4) The window includes this month (a report for the current month, if the f
 lookback of 24 reaches 23 closed months back. (5) The header comment of mig `1027` still reads "this month and
 `lookback_months` months before it" — the migration was applied as written (comment only; the column's meaning is
 defined here and by `royalty.lookback_window`).
+
+### 37.11 MARGIN COMING IN IS INCOME — a mapped sale line books its declared BASIS, and a margin-only line is no longer invisible (owner ruling 2026-10-20, mig `1090`)
+
+Owner, verbatim: *"commission and anythig like margin which comes in considered as income other than
+the money reimbursed towards the phone cost as subsidy"*.
+
+**THE CLASS, not the instance.** The instance reported was "plan commission has no P&L line". The
+class is **"the amount a sale line books was one word, `ext_price`, and so was the test for whether
+it carried money at all"**. Three consequences of that one fact, every tenant:
+
+| what was wrong | why it is the same fact |
+|---|---|
+| a wallet / airtime refill rings the CUSTOMER's money as `ext_price` and pays the store its margin in `gp` — a rule on it would have booked pass-through money as income | the map could only book the gross |
+| a plan activation rings `ext_price` ≈ 0 (the customer pays the carrier) and the store's whole earning is `gp` — it could not be booked **at all** | ditto |
+| …and it was not even REPORTED: the remainder branch was `elif ext:`, so `_unbooked_sales` (§37.4, the report built so unbooked money could never be silent) could not see a margin-only line — the silent zero INSIDE the silent-zero report | the same `ext_price` gate |
+| the blank department prints as `(blank)` on that report, but `normalise_rules` REJECTED a rule with an empty `match_value` — the one department the owner could SEE was the one he could not MAP | the blank label had a display spelling and no matching spelling |
+
+**THE ONE HOME.** `account/sales_line_map.py` — PURE, DB-free:
+`AMOUNT_BASES = ("ext", "gp")` / `DEFAULT_BASIS = "ext"` · `resolve_basis(v)` (anything
+unrecognised, incl. a pre-`1090` row with no such column, reads the house default — a rule can never
+book nothing by accident) · **`rule_amount(basis, ext, gp)`** = THE answer to "what does a mapped
+sale line book" · **`line_money(ext, gp)`** = THE answer to "does this line carry money", and money
+is the gross **or** the margin · **`BLANK_VALUE = "(blank)"`** = the blank label spelled ONCE, read
+by `match` **and** by `Tally`, so what the report prints and what a rule may name cannot drift.
+`Tally` carries `gp` beside `amount` in every bucket and `unbooked_gp_total` on the side entry.
+
+Every reader dereferences it: `coa.build_inputs`' sales scan (the gate is `_slm.line_money(ext, gp)`
+and the booked figure is `_slm.rule_amount(_hit[3], ext, gp)` — it picks between the two columns
+nowhere), `statement_engine.side_meta`, `GET /account/pl-sales-map`, and `PUT /account/pl-sales-map`
+(which offers `amount_bases` / `blank_value` and validates against the vocabulary instead of
+spelling it). Registered in `core/module_graph.py` as the fact **`sale_line_booking_basis`**.
+
+**RULE TWO.** No department, product, carrier or tenant name appears in the home or in the
+migration — the basis is a column on the ORG's own rule row, and `ext` is the house default.
+
+**BYTE-IDENTICAL ON APPLY, AND BEFORE IT.** `commcalc.pl_sales_line_map` holds **zero rows on every
+org** (measured live 2026-10-20), and a rule with no basis books the gross exactly as it did before,
+so no P&L figure on any tenant moves when mig `1090` is applied. The code works before the migration
+too: the reader's select is column-tolerant (§4b.1) and a missing column resolves to `ext`, while
+`PUT` refuses a NON-default basis naming `1090` rather than silently saving the gross.
+
+**THE REPORTING HOLE, CLOSED — measured live, read-only, base commit `46b491ba`, 2026-10-20.** Nothing
+books; this is what the unbooked report can now SAY. `_unbooked_sales` gross is unchanged to the cent
+on every org × month (it reconciles to §4a.4's own published figures — LuxeLink September
+`218,204.81`, August `228,283.98`), and the margin column is new:
+
+| org | month | unbooked GROSS (unchanged) | unbooked MARGIN (newly visible) |
+|---|---|---|---|
+| house `00000000-…` | Mar 2026 | 168,869.33 | **6,389.39** |
+| house | Apr 2026 | 419,955.27 | **76,375.20** |
+| house | May 2026 | 407,851.28 | **72,204.54** |
+| house | Jun 2026 | 437,667.62 | **79,976.09** |
+| house | Jul 2026 | 461,470.98 | **93,946.47** |
+| house | Aug 2026 | 412,346.99 | **81,784.21** |
+| house | Sep 2026 | 393,798.67 | **71,753.41** |
+| house | Oct 2026 | 278,837.14 | **45,027.01** |
+| `854f6d7b-…` | Mar 2026 | 11,868.97 | **4,617.24** |
+| `854f6d7b-…` | Apr 2026 | 23,064.76 | **9,465.54** |
+| `854f6d7b-…` | May 2026 | 24,096.18 | **8,162.20** |
+| `854f6d7b-…` | Jun 2026 | 43,282.82 | **9,203.28** |
+| `854f6d7b-…` | Jul 2026 | 209,777.37 | **40,610.64** |
+| `854f6d7b-…` | Aug 2026 | 228,283.98 | **43,032.99** |
+| `854f6d7b-…` | Sep 2026 | 218,204.81 | **40,168.81** |
+| `854f6d7b-…` | Oct 2026 | 142,043.96 | **24,160.13** |
+| `f4f1c16e-…` | Jan–Aug 2026 | 569,174.43 … 147,446.17 | **308,813.23 … 82,328.18** |
+| `ba084e25-…` | — | no sales rows at all | — |
+
+LuxeLink September's **40,168.81** is `Rtr` 14,385.82 + `System` 5,571.53 + the blank department
+20,211.46 — and the blank department's share is the §4a.3 / §4a.4 figure the report could only see
+**$0.10** of. That hole is now closed rather than excused.
+
+**WHAT THE MARGIN IS, DEPARTMENT BY DEPARTMENT — and WHY MOST OF IT MUST NOT BOOK.** The ruling says
+margin coming in is income; it does not authorise counting one dollar twice. Measured live:
+
+| org / family | Sept 2026 margin | verdict | the evidence |
+|---|---|---|---|
+| `854f6d7b` `Rtr` (`Total Wireless RTR Wallet`) | 14,385.82 | **ALREADY BOOKED — do not book** | The POS `gp` is a flat **8.5 % of `ext_price`** (exact on 2,990 of 3,005 lines) — a configured ESTIMATE, not a received dollar. The received dollar is `raw_ma_daily_tx.merchant_discount`, which `ma_tx_bookings` books on **`ma_merchant_discount`** for EVERY row. Σ POS (`Rtr` + `Wallet Funding`) vs Σ `merchant_discount`: Apr 1.04, May 0.85, Jun 1.08, Aug 0.99, **Sep 1.04** — the same money measured twice. The owner's own `accessory_config.billpay_products` DECLARES `Total Wireless RTR Wallet` and `Wallet Funding` to be bill payments, i.e. pass-through |
+| `854f6d7b` `System` / `Wallet Funding` | 4,470.20 | **ALREADY BOOKED — do not book** | same family; the carrier feed's `Activation Order` `retail_cost` 46,669.58 against the POS gross 43,844.90 |
+| `854f6d7b` `(blank)` plan activations | 20,211.46 | **ALREADY BOOKED — do not book** | the per-line `gp` is QUANTISED per plan (27.50 / 20.00 / 15.00 …) — the expected bounty per activation. The carrier's ACTUAL activation money books on `carrier_comm` from the same org's spiff order types (Sept `PostPaid Additional Spiff` 96,738.96 + `Retroactive Postpaid Spiff` 4,532.02). POS-expected vs carrier-paid is the §6d RECONCILIATION, never two incomes |
+| house `(blank)` plan activations | 26,665.39 | **ALREADY BOOKED — do not book** | same shape; the house carrier statement (`raw_payment_detail`, Sept 21,943 rows / 484,639.74) pays it as `New Activation Bounty - Month 1…6` |
+| house `Bill Payments` (`Boost RTR`, `Xfinity Prepaid Refill`) | 0.00 | **NOT income** | `gp` is $0.00 on all 5,465+613 lines; the gross is the customer's money, carved out as the ±43,151.05 `billpay_collected`/`billpay_offset` pair that nets to zero by construction (§4a.3). The fee the store CHARGES is already `service_income` / `epay_fee_income` |
+| house `Trade In` | −4,441.98 | **NOT income** | negative device credits — "money reimbursed towards the phone cost", which the ruling names as the exception |
+| `f4f1c16e` `Activations (Price Sheet)` | 82,328.18 (Aug) | **ALREADY BOOKED — do not book** | that org is on `pl_commission_source='ledger'` and its `commission_ledger` holds 86,970.34 for the same month. Booking the POS copy would double the statement |
+| `854f6d7b` `System` / `Access Charge` + `Activation Fee` + `Convenience fee` | 1,855.00 | **DECISION, not booked** | a customer-paid access fee with **no** carrier-feed counterpart, `gp` exactly 50 % of `ext` on 3,378 lines Mar–Oct (12,662.50 of margin). It sits in the SAME department as the wallet margin, and the department's `Activation payment` lines carry **−51,063.51** of `gp` Mar–Oct, so a department-grain rule would both double-count the wallet and net an activation cost into fee income. It needs a PRODUCT-grain decision from the owner; surfaced, not guessed |
+| house `Dev. Charges or Fees` | 49,530.00 | **BOOK — the one clean hole** | see below |
+
+**THE ONE FAMILY WITH POSITIVE EVIDENCE OF NO DOUBLE COUNT: the house org's device set-up charge.**
+`Dev. Charges or Fees` holds only `Device Setup Charge (non-refundable)` / `… Upgrade` / `… AAL`,
+`One-Time Reactivation Charge` and one sim-swap line — a fee the STORE charges the customer, which is
+why `ext_price == gp` on 357,475.22 of 357,545.22 (99.98 %) of it. It is not on the carrier statement
+(`raw_payment_detail` carries bounties, promos and subsidies — no set-up-charge payment type), it is
+not accessory or device, `service_fee_products` names only `ePay Service Charge` and the ePay matcher
+does not match it, and the P&L has **no set-up-fee branch at all**. The GP report has booked it since
+always (as `setup_gp`, which hard-matches `Device Setup Charge`, plus the reactivation line in
+`other_gp`); the P&L books nothing. That is one more §4a.3 mirror term, and the rule closes it.
+
+**THE RESTATEMENT of that one rule** (`department` = `Dev. Charges or Fees` → `service_income`, basis
+`ext`), measured live against base `46b491ba`, read-only, SURFACED NOT APPLIED. Revenue rises, there
+is no COGS behind a fee, so **gross profit and net income rise by the same figure** and
+`_unbooked_sales` falls by it:
+
+| month | lines | revenue / gross profit / net income Δ | `_unbooked_sales` gross before → after |
+|---|---|---|---|
+| June 2024 | 1,583 | **+48,025.00** | (2024 months; see the note below) |
+| July 2024 | 821 | **+25,145.00** | (2024 months; see the note below) |
+| March 2026 | 14 | **+234.54** | 168,869.33 → 168,634.79 |
+| April 2026 | 1,725 | **+52,487.00** | 419,955.27 → 367,468.27 |
+| May 2026 | 1,691 | **+51,139.00** | 407,851.28 → 356,712.28 |
+| June 2026 | 1,853 | **+55,063.84** | 437,667.62 → 382,603.78 |
+| July 2026 | 2,142 | **+61,592.03** | 461,470.98 → 399,878.95 |
+| August 2026 | 1,894 | **+55,378.92** | 412,346.99 → 356,968.07 |
+| September 2026 | 1,734 | **+49,530.00** | 393,798.67 → 344,268.67 |
+| October 2026 | 1,131 | **+32,049.89** | 278,837.14 → 246,787.25 |
+| **total 2026 (Mar–Oct)** | **12,184** | **+357,475.22** | — |
+| **total incl. the two 2024 months** | **14,588** | **+430,645.22** | — |
+
+**THE TWO 2024 MONTHS MOVE TOO, and they are the reason the basis is `ext` rather than `gp`.** The
+house org's `raw_sales` also holds June 2024 (1,583 lines, 48,025.00) and July 2024 (821 lines,
+25,145.00) of this department — and on those two months `gp` is NOT equal to `ext` (20,375.00 and
+10,340.00): the POS recorded a cost against a fee that has none. `ext` is the fee the store charged,
+on every month, which is the figure that is right in 2024 and 2026 alike. Whether the 2024 P&L is
+restated is the owner's call; nothing forces it, and the recompute instruction names those two months
+separately for that reason. Per company, June 2024: PA PHONE TRADERS LLC 29,825.00 · PASSAIC WIRELESS
+2022 LLC 7,705.00 · NY WIRELESS TRADERS LLC 7,630.00 · Default Company 2,865.00.
+
+Per company (the line books at STORE grain through `coa`'s resolver, so each company's own P&L
+moves), September 2026: PA PHONE TRADERS LLC 21,935.00 · NY WIRELESS TRADERS LLC 9,020.00 · PASSAIC
+WIRELESS 2022 LLC 7,854.00 · WIRELESS 2024 LLC 7,604.00 · Supernova Wireless LLC 1,452.00 · AUREON
+WIRELESS INC 1,020.00 · Default Company 645.00. Every month's split is in the PR body.
+
+**THE GP REPORT DOES NOT MOVE — $0.00, every month, every org.** No line of `commcalc/gp_report.py`
+or `commcalc/router.py`'s GP path is touched, and the rule lives on the P&L side of the sales scan;
+the GP report already booked this department. Only the P&L restates — the same shape as §4a.4.
+
+**A LIVE-DATA DEFECT, REPORTED AND NOT CODED AROUND.** On this department `gp` exceeds `ext_price` by
+**$35.00 in March 2026 and $35.00 in April 2026** ($70.00 of 357,545.22). A fee cannot have a margin
+above its price, so one of the two columns is wrong on two POS lines. The basis is `ext` — the fee
+the store actually charged — rather than the larger number; the two lines are reported here for the
+owner, never silently absorbed.
+
+**WHY NOT `accessory_config.setup_fee_keywords`, which already names these products.** It is §6a's
+home for *"is this line a set-up / activation fee?"* and it drives the GP report's setup column and
+somebody's PAY. Making the P&L book from it would give the BOOKING decision a second home and would
+move money on three tenants at once with no opt-in. The booking question already has one home — this
+map — so the answer is a config row on it. Named here so nobody wires the second path later.
+
+**DUPLICATE CHECK (the build gate) — what was searched and what was reused.** Searched §4, §4a,
+§4a.3 (the both-way line inventory — `plan_gp` / `other_gp` are the two terms this closes), §4a.4
+(the device-department home, the `_unbooked_sales` restatement shape), §4b / §4b.1 (the
+one-source-books-it rule and the column-tolerant read), §6a (`setup_fee_keywords`), §6d (POS-expected
+vs carrier-paid as a RECONCILIATION), §12 / §47.12 (the bill-pay fee vocabulary), §37.4 (this very
+mechanism), §16 `pl_sales_line_map` / `accessory_config` / `commission_org_config`, §17
+`/account/pl-sales-map`, §18 "Unbooked sales". **REUSED and not re-derived:** `pl_sales_line_map`
+(mig 1022) and its whole `match` → royalty-suppression → `add` → `Tally` path, the four `auto_opt`
+generic revenue heads already in `PL_SPEC` (`service_sales` / `shipping_sales` /
+`merchandise_sales` / `commission_income`) — **no new chart line**, `ma_tx_bookings`'
+`ma_merchant_discount` booking as the EVIDENCE that the wallet margin is already on the books,
+`statement_engine.side_meta`'s passthrough, `core.column_tolerant`'s posture for the new column.
+**NOTHING NEW:** no table, no endpoint, no report, no feed — so nothing to register in
+`data_lineage_registry.py` or migration `925`. One additive column (`1090`).
+
+**PROOF + LOCK.** `backend/harness_royalty.py` §I (115 checks, 0 failed — the basis vocabulary, both
+bases, the default on an absent/blank/unrecognised value, `line_money`'s four cases, the blank token
+matching and its negative control) and `backend/harness_royalty_pl.py` §C (96 checks, 0 failed, on
+the REAL `coa.build_inputs`: the margin-only line reported before any rule, booking nothing without
+one, a `gp` rule booking 85.00 + 27.50 and never the 1,000.00 gross, the blank department mappable,
+a basis-less rule and an unrecognised basis both booking the gross, every other house line equal to
+the frozen pre-change ORACLE, and the margin total reaching statement meta).
+`backend/harness_royalty_lock.py` (h) FAILS THE BUILD if the vocabulary, the default or the blank
+label acquires a second copy outside the home, if any caller compares a basis itself instead of
+calling `rule_amount`, if the `elif ext:` money gate comes back, if the home names a department /
+product / carrier / tenant, or if the margin total stops reaching the side entry, the statement meta
+and the endpoint. All three run in CI (`carrier-vocab-guard.yml` / `finance-royalty-proof`).
 
 ## 38. SUPER ADMIN TOOLBOX — every platform-only screen on one tiled page (owner 2026-09-25)
 

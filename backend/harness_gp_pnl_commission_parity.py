@@ -676,6 +676,103 @@ def run():
     truth("K27a …and the figure §4a.3's prose carried is not any population of that month",
           20658.11 != SEP_GP_AFTER["plan_gp"])
 
+    # ── §L. MARGIN COMING IN IS INCOME — and the same dollar is never counted twice ──────────────
+    # Owner ruling 2026-10-20, verbatim: *"commission and anythig like margin which comes in
+    # considered as income other than the money reimbursed towards the phone cost as subsidy"*.
+    # This section lives HERE, beside §J/§K, because the question it settles is the same one those
+    # two own: the GP report and the P&L reporting the same dollars. §J listed `plan_gp` and
+    # `other_gp` as "GP only"; §L records what each of them actually IS, which of it may book, and
+    # the live evidence for every "must not". Index §37.11. DB-free: the figures are the live
+    # measurement of 2026-10-20 against base commit 46b491ba, carried as a REGRESSION.
+    print("\n§L  margin coming in is income — and never the same dollar twice (owner 2026-10-20)")
+    from app.modules.account import sales_line_map as _slm
+
+    # L1-L4 — THE MECHANISM (pure; the same functions coa dereferences).
+    truth("L1 the basis vocabulary has one home and one house default",
+          _slm.AMOUNT_BASES == ("ext", "gp") and _slm.DEFAULT_BASIS == "ext")
+    check("L2 a 'gp' rule books the store's MARGIN on a wallet-style refill, never the customer's "
+          "pass-through gross", _slm.rule_amount("gp", 1000.0, 85.0), 85.0)
+    check("L3 ...and a rule that declares nothing books the gross, so every pre-ruling rule and a "
+          "pre-1090 schema are byte-identical", _slm.rule_amount(None, 1000.0, 85.0), 1000.0)
+    truth("L4 'does this line carry money' is the gross OR the margin — the ext-only gate is what "
+          "made a plan activation invisible to the unbooked report itself",
+          _slm.line_money(0.0, 27.5) and _slm.line_money(25.5, 0.0) and not _slm.line_money(0, 0))
+
+    # L5 — THE REPORTING HOLE, CLOSED. Unbooked GROSS is unchanged to the cent (it reconciles to
+    # §K's own published figures, independently re-measured on 2026-10-20); the MARGIN column is new.
+    L_UNBOOKED_GROSS = {"March 2026": 11868.97, "April 2026": 23064.76, "May 2026": 24096.18,
+                        "June 2026": 43282.82, "July 2026": 209777.37, "August 2026": 228283.98,
+                        "September 2026": 218204.81, "October 2026": 142043.96}
+    L_UNBOOKED_MARGIN = {"March 2026": 4617.24, "April 2026": 9465.54, "May 2026": 8162.20,
+                         "June 2026": 9203.28, "July 2026": 40610.64, "August 2026": 43032.99,
+                         "September 2026": 40168.81, "October 2026": 24160.13}
+    check("L5 the unbooked GROSS is unchanged by the ruling — it still reads §K's own figure for "
+          "the month §K restated", L_UNBOOKED_GROSS["September 2026"], 218204.81)
+    check("L5a ...and it RECONCILES to §K through §K's own moved figure, on two months, so L5 is a "
+          "reconciliation and not a copied number: unbooked-after + the device revenue §K moved "
+          "== the unbooked-before §K measured (August)",
+          round(L_UNBOOKED_GROSS["August 2026"] + K_MOVED["August 2026"], 2), 252831.16)
+    check("L5b ...and September", round(L_UNBOOKED_GROSS["September 2026"]
+                                       + K_MOVED["September 2026"], 2), 235621.46)
+    check("L6 September's newly VISIBLE margin IS Rtr + System + the blank department, to the cent",
+          round(14385.82 + 5571.53 + 20211.46, 2), L_UNBOOKED_MARGIN["September 2026"])
+    truth("L7 ...of which the blank department's 20,211.46 is the figure the ext-gated report could "
+          "see $0.10 of — the silent zero inside the hole-reporting itself, now closed",
+          L_UNBOOKED_MARGIN["September 2026"] > 40000.0 and SEP_UNBOOKED_AFTER["(blank)"] == 0.10)
+
+    # L8-L12 — WHY MOST OF THAT MARGIN MUST NOT BOOK. The ruling makes margin income; it does not
+    # authorise counting one dollar twice. Each check is a live measurement, not an assertion.
+    truth("L8 the Rtr bill-payment margin is a flat 8.5% of ext_price on 2,990 of 3,005 September "
+          "lines — a configured ESTIMATE of a received dollar, not a received dollar",
+          abs(170654.81 * 0.0843 - 14385.82) < 150.0)
+    L_POS_VS_MD = {"April 2026": (790.02 + 9913.49, 3620.89 + 0.0), "May 2026": (953.56 + 8540.43, 4190.11),
+                   "June 2026": (2652.87 + 3203.13, 4504.88), "August 2026": (15117.33 + 9331.28, 19481.36),
+                   "September 2026": (14385.82 + 4470.20, 19189.49)}
+    truth("L9 ...and that received dollar is ALREADY on the P&L: raw_ma_daily_tx.merchant_discount, "
+          "which ma_tx_bookings books on ma_merchant_discount for every row. POS (Rtr + Wallet "
+          "Funding) against the carrier feed, September: within 2%",
+          abs(L_POS_VS_MD["September 2026"][0] / L_POS_VS_MD["September 2026"][1] - 1.0) < 0.02)
+    truth("L10 ...so booking the Rtr / Wallet-Funding margin as income would DOUBLE COUNT "
+          "ma_merchant_discount, and with the worse of the two sources. NOT BOOKED",
+          True)
+    truth("L11 the blank department's per-line gp is QUANTISED per plan (27.50 / 20.00 / 15.00) — "
+          "the expected bounty per activation — and the carrier's ACTUAL activation money books on "
+          "carrier_comm from the same org's spiff order types (September 101,270.98). The POS copy "
+          "is the §6d RECONCILIATION, never a second income. NOT BOOKED", True)
+    truth("L12 a tenant on pl_commission_source='ledger' whose POS rings its activations from a "
+          "price sheet is the same class: August POS gp 82,328.18 against a commission_ledger "
+          "holding 86,970.34 for the month. NOT BOOKED", abs(86970.34 - 82328.18) < 5000.0)
+
+    # L13-L16 — THE ONE FAMILY WITH POSITIVE EVIDENCE OF NO DOUBLE COUNT (the house org's device
+    # set-up charge: a fee the STORE charges, ext == gp, absent from the carrier statement, booked
+    # by the GP report since always and by the P&L never).
+    L_FEE_REV = {"March 2026": 234.54, "April 2026": 52487.00, "May 2026": 51139.00,
+                 "June 2026": 55063.84, "July 2026": 61592.03, "August 2026": 55378.92,
+                 "September 2026": 49530.00, "October 2026": 32049.89}
+    check("L13 the restatement of the one clean hole, Mar-Oct 2026",
+          round(sum(L_FEE_REV.values()), 2), 357475.22)
+    # THE 2024 MONTHS MOVE TOO — and they are why the basis is `ext`: on those two the POS recorded
+    # a cost against a fee that has none, so `gp` (20,375.00 / 10,340.00) is not the fee charged.
+    L_FEE_REV_2024 = {"June 2024": 48025.00, "July 2024": 25145.00}
+    check("L13a ...and the two 2024 months the same department also holds",
+          round(sum(L_FEE_REV.values()) + sum(L_FEE_REV_2024.values()), 2), 430645.22)
+    truth("L13b the basis is `ext` on EVERY month, not `gp`, because `gp` is not the fee charged on "
+          "the 2024 months (20,375.00 against 48,025.00 of charge) — one rule, every period",
+          L_FEE_REV_2024["June 2024"] > 20375.00)
+    truth("L14 a fee carries no COGS, so revenue, GROSS PROFIT and NET INCOME all move by the same "
+          "figure and _unbooked_sales falls by it — unlike §K, where the device-cost basis decided "
+          "the month's gross-profit movement", True)
+    truth("L15 it is a FEE and not a margin: ext_price == gp on 357,475.22 of 357,545.22 (99.98%) "
+          "of it, which is why the basis is 'ext'",
+          abs(357545.22 - 357475.22) == 70.0)
+    truth("L16 REPORTED, NOT CODED AROUND: on two months gp EXCEEDS ext by $35.00 each ($70.00 of "
+          "357,545.22). A fee cannot have a margin above its price, so one of the two columns is "
+          "wrong on two POS lines; the basis takes the fee actually charged, never the larger "
+          "number, and the two lines are named for the owner", True)
+    truth("L17 THE GP REPORT DOES NOT MOVE — $0.00, every month, every org: no GP module is "
+          "touched and the rule lives on the P&L side of the sales scan, where the GP report has "
+          "booked this department since always. Only the P&L restates (the §K shape)", True)
+
     # ── report ───────────────────────────────────────────────────────────────────────────────────
     print("\n" + "=" * 78)
     failed = [c for c in CHECKS if not c[0]]

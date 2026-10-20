@@ -12,6 +12,7 @@ from app.core.schemas import LaxModel
 from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
 from app.modules.account import coa, engine, autocompute, report_gates, statement_engine, analysis
 from app.modules.account import _period   # the ONE spelling a month is stored under (index §19.47)
+from app.modules.account import sales_line_map   # the unclaimed-sale-line map: fields, bases, blank label (§37.11)
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
 # guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
@@ -1583,10 +1584,14 @@ def pl_sales_map(org_id: str = ORG_ID, period: str = ""):
     except Exception:
         rules = []
     revenue = [{"key": k, "label": lbl} for k, lbl, sec, *_ in coa.PL_SPEC if sec == "revenue"]
-    out = {"rules": rules, "revenue_lines": revenue, "match_fields": ["product", "category", "department"]}
+    out = {"rules": rules, "revenue_lines": revenue,
+           "match_fields": list(sales_line_map.MATCH_FIELDS),
+           "amount_bases": list(sales_line_map.AMOUNT_BASES),
+           "blank_value": sales_line_map.BLANK_VALUE}
     if period:
         side = coa.build_inputs(client, org_id, period).get("_unbooked_sales") or {}
-        out["scan"] = {k: side.get(k) for k in ("unbooked", "unbooked_total", "mapped", "suppressed")}
+        out["scan"] = {k: side.get(k) for k in ("unbooked", "unbooked_total", "unbooked_gp_total",
+                                               "mapped", "suppressed")}
     return out
 
 
@@ -1594,6 +1599,9 @@ class SalesMapIn(LaxModel):
     match_field: str = "category"
     match_value: str = ""
     pl_line_key: str = ""
+    # 'ext' (the gross the customer paid) or 'gp' (the store's MARGIN) — owner ruling 2026-10-20,
+    # mig 1088, index §37.11. The vocabulary and its default live in `sales_line_map`, never here.
+    amount_basis: str = sales_line_map.DEFAULT_BASIS
 
 
 @router.put("/pl-sales-map")
@@ -1602,8 +1610,12 @@ def pl_sales_map_save(body: SalesMapIn, org_id: str = ORG_ID):
     require_org(org_id)
     f = (body.match_field or "").strip().lower()
     v = (body.match_value or "").strip()
-    if f not in ("product", "category", "department") or not v:
+    if f not in sales_line_map.MATCH_FIELDS or not v:
         raise HTTPException(400, "match_field is product / category / department and match_value is required")
+    b = (body.amount_basis or "").strip().lower()
+    if b and b not in sales_line_map.AMOUNT_BASES:
+        raise HTTPException(400, "amount_basis is " + " / ".join(sales_line_map.AMOUNT_BASES))
+    b = sales_line_map.resolve_basis(b)
     q = sb().schema("commcalc").table("pl_sales_line_map")
     try:
         if not (body.pl_line_key or "").strip():
@@ -1611,8 +1623,18 @@ def pl_sales_map_save(body: SalesMapIn, org_id: str = ORG_ID):
             return {"ok": True, "removed": True}
         if body.pl_line_key not in {k for k, _l, sec, *_ in coa.PL_SPEC if sec == "revenue"}:
             raise HTTPException(400, f"'{body.pl_line_key}' is not a revenue line of the chart")
-        q.upsert({"org_id": org_id, "match_field": f, "match_value": v, "pl_line_key": body.pl_line_key,
-                  "is_active": True}, on_conflict="org_id,match_field,match_value").execute()
+        _row = {"org_id": org_id, "match_field": f, "match_value": v,
+                "pl_line_key": body.pl_line_key, "is_active": True, "amount_basis": b}
+        try:
+            q.upsert(_row, on_conflict="org_id,match_field,match_value").execute()
+        except Exception:
+            # Pre-1088 schema: the rule still saves, on the house 'ext' basis, and a NON-default
+            # basis is refused naming the migration rather than saved as something else.
+            if b != sales_line_map.DEFAULT_BASIS:
+                raise HTTPException(409, "migration 1090 is not applied yet — until it is, a rule "
+                                         "can only book the full sale price, not the margin")
+            _row.pop("amount_basis")
+            q.upsert(_row, on_conflict="org_id,match_field,match_value").execute()
     except HTTPException:
         raise
     except Exception as e:
