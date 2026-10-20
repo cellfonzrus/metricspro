@@ -49112,12 +49112,30 @@ def _labour_actuals_code_keyed(client, org_id, periods):
     """
     from app.modules.commcalc import labour_actuals as _lact
     from app.modules.account import coa as _coa_lk
-    vocab = (_coa_lk._account_config(client, org_id) or {}).get('labour_vocabulary') or {}
-    resolve = _coa_lk.store_resolver(client, org_id)
-    idx = _store_identity.store_identity_index(
-        _coa_lk._fetch_all(client, 'store_mapping',
-                           'store_code,store_address,market,salesforce_id,is_active',
-                           {'org_id': org_id}), resolve)
+    try:
+        vocab = (_coa_lk._account_config(client, org_id) or {}).get('labour_vocabulary') or {}
+    except Exception as e:                                         # pragma: no cover - I/O guard
+        # An unreadable config is not a licence to guess which rows the platform fills in: an empty
+        # vocabulary excludes nothing from the carry and adds nothing back, which is exactly the
+        # behaviour that shipped before this rule existed.
+        print(f"WARN labour vocabulary unavailable: {type(e).__name__}: {e}")
+        vocab = {}
+    try:
+        resolve = _coa_lk.store_resolver(client, org_id)
+        idx = _store_identity.store_identity_index(
+            _coa_lk._fetch_all(client, 'store_mapping',
+                               'store_code,store_address,market,salesforce_id,is_active',
+                               {'org_id': org_id}), resolve)
+    except Exception as e:                                         # pragma: no cover - I/O guard
+        # WITHOUT THE IDENTITY HOME THE LABOUR IS UNKEYABLE, AND UNKEYABLE IS NOT ZERO (§19.49).
+        # Keying a canonical address into a code-keyed sheet would put real money on a store that
+        # does not exist, so every half is reported UNMEASURED instead and the surface says so. The
+        # caller is never taken down by it: a report that cannot key its payroll still shows the rent.
+        print(f"WARN labour actuals unkeyable (store identity unavailable): {type(e).__name__}: {e}")
+        _halves = _lact.wanted_halves(vocab)
+        return vocab, {p: {'period': p, 'by_half_store': {}, 'by_half': {}, 'by_store': {},
+                           'measured': {h: False for h in _halves}, 'halves': _halves}
+                       for p in (periods or [])}, (lambda k: k)
     key_as = lambda k: (idx.get(k) or {}).get('store_code') or k                          # noqa: E731
     lab = _lact.series(client, org_id, list(periods or []), vocab,
                        lambda v: _store_identity.store_key(resolve, v))

@@ -185,6 +185,12 @@ STORE = {
     "commcalc.commission_org_config": [],
     "account.account_config": [],
     "commcalc.account_config": [],
+    # The expense window's labour replacement (index §COMMCALC-22) reads the store-identity home and
+    # the commission table. Present and EMPTY on purpose: both months here have their own expense
+    # rows, so nothing is excluded from a carry, and an empty commission set adds nothing back — the
+    # matrix below is byte-identical, while the real keying path is exercised rather than skipped.
+    "commcalc.store_mapping": [],
+    "commcalc.rep_commissions": [],
 }
 
 import app.modules.commcalc.router as R                                          # noqa: E402
