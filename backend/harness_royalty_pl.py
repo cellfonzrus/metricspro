@@ -292,11 +292,14 @@ _mut2["store_expenses"][0]["expense_name"] = "Rent and rates"
 check("NEGATIVE CONTROL: a renamed CONSOLIDATED drill row still breaks it (detail is not excused everywhere)",
       without_store_detail(payload(coa.build_inputs(Client(_mut2), HOUSE, PER), coa.PL_SPEC, [A, B]))
       != ORACLE_NO_STORE_DETAIL)
-check("the unclaimed sale lines (voids excluded) are REPORTED in the side entry, not booked",
+check("the unclaimed sale lines (voids excluded) are REPORTED in the side entry, not booked — "
+      "with the GROSS **and** the MARGIN, so a margin-only department cannot read as a rounding "
+      "error on the very report built to make unbooked money visible (owner ruling 2026-10-20)",
       L_empty["_unbooked_sales"]["unbooked"] == [
-          {"department": "Shipping", "category": "UPS Ground", "amount": 25.5, "rows": 1, "stores": [B]},
-          {"department": "Services", "category": "Notary", "amount": 10.0, "rows": 1, "stores": [A]}]
-      and L_empty["_unbooked_sales"]["unbooked_total"] == 35.5, L_empty["_unbooked_sales"])
+          {"department": "Shipping", "category": "UPS Ground", "amount": 25.5, "gp": 25.5, "rows": 1, "stores": [B]},
+          {"department": "Services", "category": "Notary", "amount": 10.0, "gp": 10.0, "rows": 1, "stores": [A]}]
+      and L_empty["_unbooked_sales"]["unbooked_total"] == 35.5
+      and L_empty["_unbooked_sales"]["unbooked_gp_total"] == 35.5, L_empty["_unbooked_sales"])
 check("an org with no royalty rows carries no royalty side entry", "_royalty_coverage" not in L_empty)
 check("side entries carry no dollars on by_store / company_wide (no reader can book them)",
       L_empty["_unbooked_sales"]["by_store"] == {} and L_empty["_unbooked_sales"]["company_wide"] == 0.0)
@@ -381,6 +384,55 @@ both = Client({**base_tables(FR), **fr_royalty, "pl_sales_line_map": [
 L_both = coa.build_inputs(both, FR, PER)
 check("a POS line mapped to a head the royalty report books this period is SUPPRESSED and reported (never both)",
       L_both["shipping_sales"]["by_store"] == {A: 10000.0} and L_both["_unbooked_sales"]["suppressed"][0]["amount"] == 25.5)
+
+# ── THE OWNER'S RULING, ON THE REAL ENGINE (2026-10-20, mig 1090, index §37.11) ──────────────────
+# "commission and anythig like margin which comes in considered as income other than the money
+# reimbursed towards the phone cost as subsidy". Two halves: a rule may book the MARGIN instead of
+# the gross, and a line whose only money IS its margin is no longer invisible.
+_marg = base_tables(HOUSE)
+# a wallet-style pass-through: the customer's money is the gross, the store's is the margin.
+_marg["raw_sales"] = _marg["raw_sales"] + [
+    {"org_id": HOUSE, "period": PER, "trans_id": "T-W1", "store": A, "department": "Wallet",
+     "category": "Refill", "product_desc": "Wallet Funding", "ext_price": 1000.0, "gp": 85.0},
+    # a plan activation: the customer pays the carrier, so there is NO gross at all.
+    {"org_id": HOUSE, "period": PER, "trans_id": "T-P1", "store": A, "department": "",
+     "category": "", "product_desc": "Plan $55", "ext_price": 0.0, "gp": 27.5}]
+L_pre = coa.build_inputs(Client(_marg), HOUSE, PER)
+check("BEFORE any rule: the margin-only line is now REPORTED under the one blank label with its "
+      "margin — the silent zero inside the hole-reporting itself is closed",
+      [(u["department"], u["amount"], u["gp"]) for u in L_pre["_unbooked_sales"]["unbooked"]
+       if u["department"] == "(blank)"] == [("(blank)", 0.0, 27.5)],
+      L_pre["_unbooked_sales"]["unbooked"])
+check("…and it books NOTHING without a rule (the ruling is config, never code)",
+      not L_pre["commission_income"]["by_store"] and not L_pre["commission_income"]["company_wide"])
+_mb = Client({**_marg, "pl_sales_line_map": [
+    {"org_id": HOUSE, "match_field": "department", "match_value": "Wallet",
+     "pl_line_key": "commission_income", "amount_basis": "gp"},
+    {"org_id": HOUSE, "match_field": "department", "match_value": "(blank)",
+     "pl_line_key": "commission_income", "amount_basis": "gp"}]})
+L_mb = coa.build_inputs(_mb, HOUSE, PER)
+check("a 'gp' rule books the store's MARGIN and never the customer's pass-through gross "
+      "(85.00 + 27.50, not 1,000.00)", L_mb["commission_income"]["by_store"], {A: 112.5})
+check("the BLANK department is mappable under the same label the report prints, so the one "
+      "department the owner could see was no longer the one he could not map",
+      L_mb["commission_income"]["detail"].get("(blank)"), 27.5)
+_me = Client({**_marg, "pl_sales_line_map": [
+    {"org_id": HOUSE, "match_field": "department", "match_value": "Wallet",
+     "pl_line_key": "commission_income"}]})
+L_me = coa.build_inputs(_me, HOUSE, PER)
+check("A RULE WITH NO BASIS IS THE GROSS — the house default, so every pre-ruling rule and a "
+      "pre-1090 schema book exactly what they booked before", L_me["commission_income"]["by_store"], {A: 1000.0})
+_mx = Client({**_marg, "pl_sales_line_map": [
+    {"org_id": HOUSE, "match_field": "department", "match_value": "Wallet",
+     "pl_line_key": "commission_income", "amount_basis": "MARGIN?"}]})
+check("NEGATIVE CONTROL: an unrecognised basis reads the house default, never nothing",
+      coa.build_inputs(_mx, HOUSE, PER)["commission_income"]["by_store"], {A: 1000.0})
+check("every OTHER line of the house P&L is unchanged by the margin rules",
+      all(payload(L_mb, coa.PL_SPEC, [A])["consolidated"]["sections"][i]["lines"]
+          == ORACLE["consolidated"]["sections"][i]["lines"] for i in (1, 2, 3)))
+check("statement meta carries the unbooked MARGIN total beside the gross",
+      SE.side_meta(L_pre)["unbooked_sales"]["unbooked_gp_total"] == round(35.5 + 85.0 + 27.5, 2),
+      True)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("D. THE CHART — the new heads")

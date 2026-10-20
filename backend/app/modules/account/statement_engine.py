@@ -611,7 +611,8 @@ def side_meta(inputs):
     out = {}
     u = inputs.get("_unbooked_sales") or {}
     if u.get("unbooked") or u.get("suppressed") or u.get("mapped"):
-        out["unbooked_sales"] = {k: u.get(k) for k in ("unbooked", "unbooked_total", "suppressed", "mapped")}
+        out["unbooked_sales"] = {k: u.get(k) for k in ("unbooked", "unbooked_total",
+                                                       "unbooked_gp_total", "suppressed", "mapped")}
     r = inputs.get("_royalty_coverage")
     if r:
         out["royalty"] = {k: r.get(k) for k in ("reports", "book_pl", "booked", "excluded", "unmapped")}

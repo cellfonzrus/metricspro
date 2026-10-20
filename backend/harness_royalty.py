@@ -411,16 +411,39 @@ check("precedence: product > category > department; case-insensitive",
 check("no rule matches → None (the caller tallies it as unbooked); an inactive rule never matches",
       S.match(ix, "Other", "Old", "") is None)
 t = S.Tally()
-t.unclaimed("Shipping Dept", "UPS Ground", 10.0, "S1")
-t.unclaimed("Shipping Dept", "UPS Ground", 5.5, "S2")
+t.unclaimed("Shipping Dept", "UPS Ground", 10.0, "S1", 4.0)
+t.unclaimed("Shipping Dept", "UPS Ground", 5.5, "S2", 2.0)
 t.suppressed_by_royalty("shipping_sales", "Shipping Dept", "Shipping", 99.0, "S1")
 t.booked_by_map("service_sales", "department", "Services", 20.0, "S1")
 side = t.side_line()
 check("the tally is line-shaped (no dollars on by_store / company_wide — no reader can book it)",
       side["by_store"] == {} and side["company_wide"] == 0.0 and side["detail"] == {})
-check("unbooked lines are grouped by department × category with amount, rows and stores",
-      side["unbooked"] == [{"department": "Shipping Dept", "category": "UPS Ground", "amount": 15.5, "rows": 2, "stores": ["S1", "S2"]}]
-      and side["unbooked_total"] == 15.5)
+check("unbooked lines are grouped by department × category with the GROSS, the MARGIN, rows and stores",
+      side["unbooked"] == [{"department": "Shipping Dept", "category": "UPS Ground", "amount": 15.5,
+                           "gp": 6.0, "rows": 2, "stores": ["S1", "S2"]}]
+      and side["unbooked_total"] == 15.5 and side["unbooked_gp_total"] == 6.0)
+
+# ── THE OWNER'S RULING, PURE (2026-10-20, mig 1090, index §37.11) — margin is income ─────────────
+check("the basis vocabulary has ONE home and ONE default: 'ext' (the gross) and 'gp' (the margin)",
+      S.AMOUNT_BASES == ("ext", "gp") and S.DEFAULT_BASIS == "ext")
+check("rule_amount IS the decision: 'gp' books the store's margin, 'ext' the customer's gross",
+      (S.rule_amount("gp", 1000.0, 85.0), S.rule_amount("ext", 1000.0, 85.0)) == (85.0, 1000.0))
+check("an absent / blank / unrecognised basis reads the house default, so a pre-1090 rule row and "
+      "a pre-1090 schema book exactly the gross they always booked",
+      [S.resolve_basis(v) for v in (None, "", "  ", "GP ", "margin", "EXT")]
+      == ["ext", "ext", "ext", "gp", "ext", "ext"])
+check("line_money is 'does this line carry money', and money is the gross OR the margin — the "
+      "ext-only gate is what made a plan activation invisible to the hole report itself",
+      [S.line_money(*a) for a in ((0, 0), (0.10, 20211.46), (25.5, 0), (None, None))]
+      == [False, True, True, False])
+_bix, _ = S.normalise_rules([{"match_field": "department", "match_value": "(blank)",
+                              "pl_line_key": "service_sales", "amount_basis": "gp"}], REV)
+check("THE BLANK LABEL IS ONE TOKEN: the department the tally prints as '(blank)' is the department "
+      "a rule may name, and it resolves to the margin basis",
+      S.match(_bix, "", None, None) == ("service_sales", "department", "(blank)", "gp")
+      and S.Tally.__init__ is not None and S.BLANK_VALUE == "(blank)")
+check("NEGATIVE CONTROL: a non-blank department does NOT fall into the blank rule",
+      S.match(_bix, "Rtr", None, None) is None)
 check("a line suppressed because the royalty report books its target is reported, not booked",
       side["suppressed"][0]["pl_line_key"] == "shipping_sales" and side["suppressed"][0]["amount"] == 99.0)
 check("rule-booked lines are listed too (what the map did is visible)", side["mapped"][0]["pl_line_key"] == "service_sales")

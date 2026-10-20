@@ -1666,17 +1666,26 @@ def build_inputs(client, org_id, period):
     # Per-org config (commcalc.pl_sales_line_map) may route it to a revenue line; whatever still books nothing
     # is TALLIED and carried on the `_unbooked_sales` side entry (statement meta `unbooked_sales`). No map rows
     # ⇒ nothing is booked that was not booked before ⇒ byte-identical for every tenant.
+    # THE BASIS a rule books on (owner ruling 2026-10-20, mig 1088, index §37.11) rides on the rule
+    # row. The select is COLUMN-TOLERANT for the same reason every other P&L config read is (§4b.1):
+    # a pre-1088 schema must keep working, and it does — a missing column resolves to the house
+    # 'ext' default through `sales_line_map.resolve_basis`, which is byte-identical to before.
     from app.modules.account import sales_line_map as _slm
     _slm_tally = _slm.Tally()
     _slm_idx = {}
-    try:
-        _slm_rows = _fetch_all(client, "pl_sales_line_map", "match_field,match_value,pl_line_key,is_active",
-                               {"org_id": org_id})
-        if _slm_rows:
-            _slm_idx, _ = _slm.normalise_rules(
-                _slm_rows, {k for k, _l, sec, *_ in PL_SPEC if sec == "revenue"})
-    except Exception:
-        _slm_idx = {}
+    for _slm_cols in ("match_field,match_value,pl_line_key,is_active,amount_basis",
+                      "match_field,match_value,pl_line_key,is_active"):
+        try:
+            _slm_rows = _fetch_all(client, "pl_sales_line_map", _slm_cols, {"org_id": org_id})
+        except Exception:
+            continue
+        try:
+            if _slm_rows:
+                _slm_idx, _ = _slm.normalise_rules(
+                    _slm_rows, {k for k, _l, sec, *_ in PL_SPEC if sec == "revenue"})
+        except Exception:
+            _slm_idx = {}
+        break
 
     is_accessory, is_device = _sales_classifier(client, org_id)
     pos_device_cost = {}          # staged POS device cost — settled after the scan (ruling K3)
@@ -1718,18 +1727,27 @@ def build_inputs(client, org_id, period):
                 # is a last resort, not a source. With device_cogs_mode='off' (the default) this stages
                 # and then books the identical figure ⇒ byte-identical to pre-621 for every tenant.
                 pos_device_cost[st] = round(pos_device_cost.get(st, 0.0) + (ext - gp), 2)
-            elif ext:
+            elif _slm.line_money(ext, gp):
                 # No classifier claimed this line (index §37.4). The org's map may route it; what it does not
                 # is reported, never silently dropped. A target the royalty report already books this period
                 # is suppressed (the report is the revenue of record — never both).
+                #
+                # MONEY IS THE GROSS **OR** THE MARGIN (owner ruling 2026-10-20, index §37.11). This gate
+                # gated on ext_price ALONE, so a line whose only money is its `gp` — a plan activation the customer
+                # pays the carrier for — was neither booked nor even tallied. And what a rule books is now
+                # the rule's own declared BASIS, dereferenced from `sales_line_map.rule_amount`: a wallet
+                # refill's gross is the customer's pass-through money and only its `gp` is the store's.
+                # Both amounts go to the tally either way, so the report says what it passed over in full.
                 _hit = _slm.match(_slm_idx, dept, cat, prod) if _slm_idx else None
                 if _hit and _hit[0] in _roy_covered:
-                    _slm_tally.suppressed_by_royalty(_hit[0], dept, cat, ext, st)
+                    _slm_tally.suppressed_by_royalty(
+                        _hit[0], dept, cat, _slm.rule_amount(_hit[3], ext, gp), st, gp)
                 elif _hit:
-                    add(_hit[0], st, ext, detail_label=_hit[2])
-                    _slm_tally.booked_by_map(_hit[0], _hit[1], _hit[2], ext, st)
+                    _slm_amt = _slm.rule_amount(_hit[3], ext, gp)
+                    add(_hit[0], st, _slm_amt, detail_label=_hit[2])
+                    _slm_tally.booked_by_map(_hit[0], _hit[1], _hit[2], _slm_amt, st, gp)
                 else:
-                    _slm_tally.unclaimed(dept, cat, ext, st)
+                    _slm_tally.unclaimed(dept, cat, ext, st, gp)
     except Exception:
         pass
     L[_slm.SIDE_KEY] = _slm_tally.side_line()
