@@ -934,6 +934,9 @@ on:
       # index §19.40 — the nav deep-link lock reads every page, NAV, ScreenLink, backend notices and the help docs
       - "backend/harness_nav_deep_link_lock.py"
       - "frontend/prove_nav_deep_link.mjs"
+      # the sidebar colour rotation lock — the palette's ONE home (globals.css) and the rows that
+      # dereference it (the platform layout) are both under frontend/src/**, but the proof itself is not
+      - "frontend/prove_nav_accents.mjs"
       - "frontend/src/**"
       - "backend/app/**/*.py"
       - "backend/app/data/support_docs_seed.json"
@@ -1476,6 +1479,23 @@ jobs:
       - name: Run the one-domain proof (canonical host 308; previews / localhost untouched; rewrites; CSP; the one home; negative controls)
         working-directory: frontend
         run: node prove_one_domain.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SIDEBAR COLOUR-ROTATION PROOF (index §CORE-14, owner ask 2026-10-19 "make the colors of the side
+  # menu alternate ... switch between logo colors so it stands out"). Reads the REAL globals.css and the
+  # REAL platform layout.tsx as text (no npm install, no React): the palette has ONE home, the rows only
+  # dereference it, the two sides agree on how many colours there are, neighbours never share one, and
+  # every state's label contrast is COMPUTED against the navy rail rather than eyeballed — so the next
+  # change cannot buy "stands out" with unreadable text or quietly grow a second copy of the palette.
+  nav-accent-proof:
+    name: Sidebar colour proof (one palette, dereferenced, and every row readable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the sidebar colour proof (palette one home; slot count agreement; WCAG AA per state; negative controls)
+        working-directory: frontend
+        run: node prove_nav_accents.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE NAV DEEP-LINK PROOF (index §19.40) drives the REAL rbac.ts and urlTab.ts under Node 22 (type stripping; neither
   # imports anything, so no npm install): a deep-link menu entry (/hr?tab=employees) is visible exactly when its page is,

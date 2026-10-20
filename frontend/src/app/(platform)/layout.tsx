@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, type CSSProperties } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
@@ -31,6 +31,11 @@ import { rank as rankSearch } from '@/lib/search-rank'
 import { REPORT_CATEGORIES as REPORT_DEFS } from '@/lib/reports'
 import { searchableRoutes } from '@/lib/route-index'
 import { SCREENS } from '@/components/ScreenLink'
+
+// How many colours the sidebar rotation cycles through. The colours themselves live in
+// globals.css (.mp-sidebar --nav-accent-1..6); this must match how many are declared there,
+// and prove_nav_accents.mjs fails the build if the two ever disagree.
+const NAV_ACCENT_SLOTS = 6
 
 
 // Reports-directory category names ('Reports · Sales', …). tileOnly filtering (below) never applies
@@ -270,6 +275,14 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 
   // Accordion: keep every module group collapsed and open only the one holding the current page
   // (so the user is never lost) — clicking another header opens that one and closes the rest.
+  // ALTERNATING ROW COLOUR (owner 2026-10-19: "make the colors of the side menu alternate ... switch
+  // between logo colors so it stands out"). This names no colour: it only picks which slot of the
+  // palette a row uses, and globals.css (.mp-sidebar) is the one home for what those slots are.
+  // The index is the row's position in its OWN group's render order, so neighbours never share a
+  // colour and a row keeps its colour whatever else is open.
+  const accentStyle = (i: number): CSSProperties =>
+    ({ ['--mp-accent']: `var(--nav-accent-${(i % NAV_ACCENT_SLOTS) + 1})` } as CSSProperties)
+
   // Pick the group owning the MOST SPECIFIC (longest-href) matching nav item, not merely the FIRST
   // group with any prefix match. The Commissions "Dashboard" item (/commcalc) is a prefix of every
   // /commcalc/* page, so a first-match would always resolve Asset/Distributor/Targets/Mapping/
@@ -477,7 +490,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             ) : results.map((r, i) => (
               <button key={r.href} onClick={() => go(r.href)} onMouseEnter={() => setHi(i)}
                 className={'mp-nav-item' + (i === hi ? ' is-active' : '')}
-                style={{ width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer' }}>
+                style={{ ...accentStyle(i), width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer' }}>
                 <span className="mp-nav-icon">{r.icon}</span>
                 <span style={{ minWidth: 0, flex: 1 }}>
                   <span style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</span>
@@ -508,13 +521,18 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             // Everything tileOnly (possible only via a tenant layout that regrouped hidden items):
             // drop the group entirely rather than render a header over nothing.
             if (loose.length === 0 && shownSubs.length === 0) return null
+            // Render order of this group's rows (loose first, then each sub in order) — the same
+            // order they appear on screen below, so the colour rotation reads as alternating.
+            const rowOrder = new Map<string, number>(
+              [...loose, ...shownSubs.flatMap(sub => sub.items)].map((it, i) => [it.href, i]))
             const renderItem = ({ href, label, icon }: NavItem, inSub = false) => {
               const active = pathname === href || pathname.startsWith(href + '/')
+              const accent = accentStyle(rowOrder.get(href) ?? 0)
               return (
                 <Link key={href} href={href} title={collapsed ? labelOf(href, label) : undefined}
                   className={'mp-nav-item' + (active ? ' is-active' : '')}
-                  style={collapsed ? { justifyContent: 'center', padding: '9px 0' }
-                                   : (inSub ? { paddingLeft: 30 } : undefined)}>
+                  style={collapsed ? { ...accent, justifyContent: 'center', padding: '9px 0' }
+                                   : (inSub ? { ...accent, paddingLeft: 30 } : accent)}>
                   <span className="mp-nav-icon">{icon}</span>
                   {!collapsed && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap' }}>{labelOf(href, label)}</span>}

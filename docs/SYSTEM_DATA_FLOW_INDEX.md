@@ -119,6 +119,7 @@ Primary code homes:
 | CORE-11 | **A column that draws its own cell is drawn** | "It did not let me enter. Which component actually puts a report's cell on the screen, do both of them honour a column that draws its own, and what else was silently blank because one of them did not?" |
 | CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
 | CORE-13 | **A migration grants what it creates** | "Supabase says that from 30 October a new table in `public` no longer gets Data API access automatically. Does that break this app, which migrations would break, and what stops the next migration shipping a table the application cannot read?" |
+| CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25889,6 +25890,7 @@ status word rather than a blank that reads as nil.
 | CORE-11 | core |
 | CORE-12 | core |
 | CORE-13 | core |
+| CORE-14 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -30109,6 +30111,65 @@ own author** (`.github/workflows/org-scope-guard.yml`).
 Neighbours: §CORE-07 (the login/person link, the other `app_users` write-path fix), §38.6 (the two
 platform-authority rungs), §14w (people visibility — the other question answered off a role row).
 
+
+## §CORE-14. ONE PALETTE, DEREFERENCED — the side menu's alternating colour (owner ask 2026-10-19)
+
+Owner, verbatim: *"make the colors of the side menu alternate and different colors swicth between
+logo colors so it stands out and it can show the different items on teh menu"*.
+
+### §CORE-14.1 DUPLICATE CHECK (build gate)
+
+Searched this index for an existing mechanism that colours, themes or labels the sidebar rows before
+building anything. What exists and was NOT duplicated:
+
+| Found | What it owns | Why it is not this |
+| --- | --- | --- |
+| `(platform)/layout.tsx` + `.mp-*` in `globals.css` (§W2.1) | the sidebar's structure and its hover/active STATES | extended in place — no second nav component, no second stylesheet |
+| `/admin/menu` nav layout, `/admin/labels` (`navCfg.labels`) | what the rows are CALLED and in which group/order | a different fact; untouched |
+| §23q white-on-near-white | a table-cell contrast defect | same *class* of risk (colour costing legibility), which is why the contrast bar here is computed, not eyeballed |
+| `TrendChart.TREND_COLORS` | the chart series palette | a chart is not the chrome; the nav palette is declared where the nav is styled |
+
+### §CORE-14.2 THE MECHANISM
+
+One fact — *which colour is slot N* — with one home, dereferenced by every caller:
+
+| Link | Where |
+| --- | --- |
+| the palette (ONE home) | `frontend/src/app/globals.css` → `.mp-sidebar { --nav-accent-1 … --nav-accent-6 }`, every value a light variant of a colour the brand already uses (`--accent` / `--accent2` logo blues, `--green`, `--amber`, `--red`, the chart violet) |
+| the rotation | `(platform)/layout.tsx` → `accentStyle(i)` sets `--mp-accent: var(--nav-accent-N)`; it names **no colour**, so a colour cannot be changed in two places |
+| how many slots | `NAV_ACCENT_SLOTS` in `layout.tsx`, asserted **equal** to the count declared in the CSS |
+| what carries the colour | a painted CHIP behind the row's icon (full accent strength), a 3px left edge bar, and a label mixed 85% toward the accent from white |
+| the ACTIVE row | the only row with a filled background (26%), a 3px full-strength bar and pure-white bold text |
+| the index a row gets | its position in its OWN group's render order (loose items, then each sub), so neighbours never share a colour and a row keeps its colour whatever else is open |
+
+**Why the chip, and not the glyph.** The first attempt tinted the icon with `color` and the owner
+reported *"i cold see any difference"*. The nav's icons are EMOJI (`NAV` carries 🏪, 🛒, 📦 …) and an
+emoji is painted from its own font's colour table, so `color` does nothing to it; with a 40% label
+tint as the only other signal, the change was invisible on the navy rail. The colour has to be a
+painted BOX, so the icon chip is what carries it — and the lesson generalises: **a colour applied to
+an emoji is not applied at all.**
+
+Readability is a computed property, not a judgement: every slot's label clears **WCAG AA 4.5:1** on
+both ends of the navy gradient in all three states (measured 5.0:1 – 7.4:1 resting), and every chip
+stands at least 3:1 off the rail. The coloured rules sit
+inside `@supports (color: color-mix(…))`, with the old white-on-navy declarations still above them, so
+a browser without `color-mix()` keeps today's nav rather than rendering something broken.
+
+### §CORE-14.3 LOCKED SO IT CANNOT UN-WIRE
+
+| Lock | What fails the build |
+| --- | --- |
+| `frontend/prove_nav_accents.mjs` (**61 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot; the icon chip is a painted BOX with a size of its own and **not** a `color` on the glyph (the invisible-change regression); **per-slot contrast computed** for resting / hover / active, the chip's standoff from the rail, and the active row's filled background and thicker bar; the `@supports` fallback is intact; seven negative controls (a gap in the palette, a count disagreement, a literal colour, a label with no white left, a tinted chip, two adjacent rows sharing a slot, a one-colour palette) |
+
+### §CORE-14.4 WHAT IS NOT DONE HERE
+
+The **operator console** (`(operator)/operator/layout.tsx`) has its own internal rail on its own `OPS`
+palette and is deliberately untouched — it is not the tenant app's side menu the owner is looking at,
+and giving it this palette would make an internal console look like the product. It is excused, not
+forgotten.
+
+Files: `frontend/src/app/globals.css`, `frontend/src/app/(platform)/layout.tsx`,
+`frontend/prove_nav_accents.mjs` (**new**), `.github/workflows/carrier-vocab-guard.yml`.
 
 ## §COMMCALC-11. AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15)
 
