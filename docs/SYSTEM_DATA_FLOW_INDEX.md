@@ -18294,8 +18294,11 @@ the frozen pre-change ORACLE, and the margin total reaching statement meta).
 `backend/harness_royalty_lock.py` (h) FAILS THE BUILD if the vocabulary, the default or the blank
 label acquires a second copy outside the home, if any caller compares a basis itself instead of
 calling `rule_amount`, if the `elif ext:` money gate comes back, if the home names a department /
-product / carrier / tenant, or if the margin total stops reaching the side entry, the statement meta
-and the endpoint. All three run in CI (`carrier-vocab-guard.yml` / `finance-royalty-proof`).
+product / carrier / tenant, if the margin total stops reaching the side entry, the statement meta
+and the endpoint, **or if the COLUMN TOLERANCE is removed** — the two-select fallback in `coa` and
+the endpoint's degrade-to-`ext` path are what make the ruling work before mig `1090` is applied, so
+dropping either would silently leave a pre-`1090` org reading NO rules instead of reading them all on
+the house basis. All three run in CI (`carrier-vocab-guard.yml` / `finance-royalty-proof`).
 
 ## 38. SUPER ADMIN TOOLBOX — every platform-only screen on one tiled page (owner 2026-09-25)
 

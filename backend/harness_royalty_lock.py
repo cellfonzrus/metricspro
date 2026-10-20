@@ -239,6 +239,14 @@ check("(h) NO caller picks between ext_price and gp for a mapped sale line itsel
                     coa + _acct_rt + se))
 check("(h) the ext-only money gate cannot come back: coa's remainder branch is `line_money`",
       "elif ext:" not in coa and "elif _slm.line_money(ext, gp):" in coa)
+check("(h) the rule read is COLUMN-TOLERANT, which is WHY the ruling works before mig 1090 is "
+      "applied: coa tries the select WITH amount_basis and falls back to the one without, so a "
+      "pre-1090 schema reads every rule on the house 'ext' basis instead of reading none",
+      '"match_field,match_value,pl_line_key,is_active,amount_basis",' in coa
+      and '"match_field,match_value,pl_line_key,is_active")' in coa
+      and "for _slm_cols in (" in coa)
+check("(h) ...and the endpoint degrades the same way rather than refusing a default-basis rule "
+      "before the migration", "_row.pop(\"amount_basis\")" in _acct_rt)
 check("(h) RULE TWO: the basis home names no department, product, carrier or tenant",
       not any(t in _slm_src for t in ("Rtr", "Wallet Funding", "BrandedHandset", "LuxeLink",
                                       "Boost", "Total Wireless")))
