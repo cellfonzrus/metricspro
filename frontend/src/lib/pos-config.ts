@@ -250,6 +250,21 @@ export const POS_SETTING_SECTIONS: PosSettingSection[] = [
           { value: '80', label: '80 mm roll' },
         ],
       },
+      // DIRECT PRINTING (owner 2026-10-20, §POS-04). Off everywhere until a store turns it on,
+      // and even then it is only this store's DEFAULT destination: the print screen offers both
+      // every time, so nothing is hardcoded and the printer dialog keeps working as it does today.
+      {
+        key: 'receipt_direct_print',
+        label: 'Print straight to the receipt printer at this store',
+        hint: 'Sends the receipt to the printer with no print dialog and cuts the slip. Needs the till helper running on this counter\u2019s PC; staff can still choose the print dialog for any receipt.',
+        type: 'boolean', default: false,
+      },
+      {
+        key: 'receipt_helper_url',
+        label: 'Till helper address',
+        hint: 'Where the helper listens on the counter PC. Leave it as it is unless you were told otherwise when the helper was installed.',
+        type: 'text', default: 'http://127.0.0.1:9100/print',
+      },
       {
         key: 'receipt_layout',
         label: 'Receipt layout at this store',

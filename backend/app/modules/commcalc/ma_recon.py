@@ -58,6 +58,10 @@ from app.modules.commcalc.sale_installment_engine import (
     _read_ma_commission, _read_ma_tx, _load_gate_source_rows, _resolve_gate_cfg,
 )
 from app.modules.commcalc.data_lineage_registry import SALES_DISPLAY_SOURCES
+# THE one home for "is this non-payment a claim, and what is it worth" (§COMMCALC-22). This engine
+# composes no reason sentence and sizes no claim itself — it dereferences, so the rate-card engine and
+# this one can never disagree about either.
+from app.modules.commcalc import carrier_claim_value as ccv
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 
@@ -224,6 +228,61 @@ def match_rules(sale_row, rules):
     return None
 
 
+def _month1_value_columns(cfg):
+    """The statement columns that prove — and therefore SIZE — a month-1 activation payout, and the
+    direction a payout points in. CONFIG, never a branch (RULE TWO): the same
+    `ma_month_field_prefix` + `ma_month1_extra_fields` + `ma_payout_sign` ladder the paid gate itself
+    reads, so a comparable can never be built from a different definition of money than the test that
+    decided the activation was unpaid. PURE."""
+    prefix = str((cfg or {}).get("ma_month_field_prefix") or "spiff_m").strip() or "spiff_m"
+    cols = ["{}1".format(prefix)]
+    cols += [str(c).strip() for c in ((cfg or {}).get("ma_month1_extra_fields") or []) if str(c).strip()]
+    raw_sign = safe_float((cfg or {}).get("ma_payout_sign"))
+    return cols, (1.0 if raw_sign > 0 else -1.0)
+
+
+def build_claim_context(ma_rows, period, cfg=None):
+    """Everything §COMMCALC-22 needs to tell a claim from a feed gap, built from the statement rows
+    this period already loaded. PURE — no second read, no new table.
+
+    Returns {'comparable_index', 'statement_days', 'statement_last_day', 'value_columns'}:
+
+      comparable_index    what the carrier ITSELF paid, median per (period, contract family) — built
+                          by the one home from the activations that carry money in the payout
+                          direction. The contract family of a STATEMENT row is its own
+                          `activation_type`, which is the carrier's word for the same thing the sold
+                          row calls `contract_type`.
+      statement_days      {'YYYY-MM-DD': rows} — how much statement there is for each day. A day with
+                          none explains its own silence (`statement_day_missing`).
+      statement_last_day  the latest day the statement reaches. A sale beyond it is not yet due.
+
+    An empty statement yields an empty index and a blank last day, which the classifier reads as "no
+    statement to compare against" — it never reads as "the carrier refused to pay"."""
+    rows = list(ma_rows or [])
+    cols, sign = _month1_value_columns(cfg)
+
+    def _directed(row):
+        return sum(safe_float(row.get(c)) for c in cols) * sign
+
+    days = {}
+    last = ""
+    for r in rows:
+        day = str(r.get("tx_date") or "")[:10]
+        if len(day) == 10:
+            days[day] = days.get(day, 0) + 1
+            if day > last:
+                last = day
+    paid_rows = [r for r in rows if _directed(r) > 0]
+    index = ccv.build_comparable_index(
+        paid_rows,
+        period_of=lambda r: str(r.get("period") or period or ""),
+        type_of=lambda r: r.get("activation_type") or r.get("activation_type2") or "",
+        amount_of=_directed,
+    )
+    return {"comparable_index": index, "statement_days": days, "statement_last_day": last,
+            "value_columns": cols}
+
+
 # ── PURE: the reconciliation itself ────────────────────────────────────────────────────────────────
 def _evidence_for(sale, serial, paid_idx, gate_ev):
     """EVIDENCE dict naming exactly which source had / lacked this activation — never a guessed
@@ -250,17 +309,27 @@ def _evidence_for(sale, serial, paid_idx, gate_ev):
     }
 
 
-def reconcile_ma_activations(sold_idx, paid_idx, rules, period, cfg=None):
+def reconcile_ma_activations(sold_idx, paid_idx, rules, period, cfg, claim_ctx):
     """The Phase-C reconciliation: every sold activation (sold_idx from build_sold_index) is tested
     against the MA paid evidence (paid_idx from build_paid_index) with the mig-308 union gate at
     month 1; unpaid ones are attributed through the business rules (match_rules).
+
+    `claim_ctx` is `build_claim_context(...)` — the ONE home's verdict on whether an unpaid activation
+    is a claim at all and what it is worth (§COMMCALC-22). It is a REQUIRED argument with no default,
+    so this engine cannot quietly go back to writing a hardcoded $0.00 on every row: forgetting it is
+    a TypeError at the call site, not a zero in a carrier's letter (§19.18).
 
     Returns (rows, summary). Each row is discrepancy_results-shaped (minus org_id — the persist
     stamps it) with the mig-312 attribution columns; statuses per the module docstring. 'ok' rows are
     returned (so a caller can display full coverage) but persist_results drops them, mirroring the
     Boost engine. Deterministic: devices walked in sorted serial order. PURE."""
     cfg = cfg or {}
+    claim_ctx = claim_ctx or {}
+    comparable = claim_ctx.get("comparable_index") or {}
+    statement_days = claim_ctx.get("statement_days") or {}
+    statement_last_day = claim_ctx.get("statement_last_day") or ""
     rows = []
+    claim_entries = []
     n_ok = n_open = n_info = n_lagged = 0
     tx_indexes = {"link": (paid_idx or {}).get("link", {}), "tx": (paid_idx or {}).get("tx", {})}
     spiff_idx = (paid_idx or {}).get("spiff", {})
@@ -269,22 +338,55 @@ def reconcile_ma_activations(sold_idx, paid_idx, rules, period, cfg=None):
         met, gate_ev = _gate_met_ma_tx(sale, spiff_idx, tx_indexes, 1, cfg)
         evidence = _evidence_for(sale, serial, paid_idx, gate_ev)
         rule = None
+        claim_state = None
+        expected = None
+        claim_basis = ccv.BASIS_NOT_MEASURED
+        claim_sample = 0
         if met:
             status, notes = "ok", "paid"
             n_ok += 1
         else:
             rule = match_rules(sale, rules)
-            if rule is None:
-                status, notes = "open", NO_RULE_REASON
+            sale_day = str(sale.get("trans_date") or "")[:10]
+            # WHICH SHAPE OF NON-PAYMENT — the one home decides, from the statement's own coverage.
+            # A sale past the statement's reach, or on a day the statement has no rows for, is a fact
+            # about the FEED and must never be filed as a claim against the carrier.
+            claim_state = ccv.classify_non_payment(
+                sale_day, statement_last_day, statement_days, rule)
+            # WHAT IT IS WORTH — withheld as None unless a real comparable backs it (§COMMCALC-22).
+            expected, claim_basis, claim_sample = ccv.claim_value(
+                comparable, period, sale.get("contract_type"))
+            notes = ccv.non_payment_reason(claim_state, rule)
+            if claim_state == ccv.STATE_OPEN_CLAIM:
+                status = "open"
+                # The literal marker the appeals hub counts as "no business rule configured" is kept
+                # EXACTLY when that is why this row is open, so `summarize_appeals.no_rule_count`
+                # reads the same as it always did (evidence-first, never inferred).
+                if rule is None:
+                    notes = NO_RULE_REASON
                 n_open += 1
+            elif claim_state == ccv.STATE_NOT_YET_STATEMENTED:
+                # 'pending' is the existing vocabulary for "too early to call", used by the Boost
+                # engine for a month-1 activation inside its grace window. Same meaning here.
+                status = "pending"
+                n_info += 1
+            elif claim_state == ccv.STATE_STATEMENT_DAY_MISSING:
+                status = "info"
+                n_info += 1
             else:
-                outcome = str(rule.get("expected_outcome") or "not_paid").strip().lower()
+                outcome = str((rule or {}).get("expected_outcome") or "not_paid").strip().lower()
                 status = OUTCOME_STATUS.get(outcome, "info")
-                notes = str(rule.get("description") or "").strip() or str(rule.get("rule_key") or "")
                 if status == "lagged":
                     n_lagged += 1
                 else:
                     n_info += 1
+            # The claim verdict rides in `evidence` (jsonb the engine already composes) so the precise
+            # state is queryable with NO new column and NO migration.
+            evidence["claim"] = {"state": claim_state, "claimable": ccv.is_claimable(claim_state),
+                                 "basis": claim_basis, "comparable_sample": claim_sample,
+                                 "value_caveat": ccv.CLAIM_VALUE_CAVEAT}
+            claim_entries.append({"state": claim_state, "expected_amount": expected,
+                                  "claim_basis": claim_basis})
         # received: the month-1 MA TX net in the payout direction, when the evidence carries one.
         tx_net = safe_float((evidence.get("ma_tx") or {}).get("month_net"))
         rows.append({
@@ -297,12 +399,17 @@ def reconcile_ma_activations(sold_idx, paid_idx, rules, period, cfg=None):
             "activation_type": str(sale.get("contract_type") or "").strip(),
             "device_model": str(sale.get("product_desc") or "")[:200],
             "customer_plan": str(sale.get("plan") or sale.get("product_desc") or "")[:200],
-            "commissionable_mrc": 0.0,
+            # A commissionable MRC is not something this feed reports, so it stays absent rather than
+            # being asserted as $0.00 — the same reason `expected_amount` is now nullable below.
+            "commissionable_mrc": None,
             "bounty_month": 1,
             "comp_type": MA_COMP_TYPE,
-            "expected_amount": 0.0,
+            # THE FIX (§COMMCALC-22). Both of these were the literal 0.0 on every row, which is why
+            # the hub's open-$ card summed to nothing and no claim could be filed. They are now the
+            # one home's figures, and NULL — never zero — where no comparable backs them.
+            "expected_amount": expected,
             "received_amount": round(abs(tx_net), 2) if met else 0.0,
-            "gap": 0.0,
+            "gap": ccv.claim_gap(expected, round(abs(tx_net), 2) if met else 0.0),
             "status": status,
             "notes": notes,
             # mig-312 attribution (adaptive persist drops these when the migration hasn't run):
@@ -315,6 +422,9 @@ def reconcile_ma_activations(sold_idx, paid_idx, rules, period, cfg=None):
         })
     summary = {"sold_activations": len(sold_idx or {}), "paid_ok": n_ok, "open_no_rule": n_open,
                "explained_info": n_info, "explained_lagged": n_lagged}
+    # The claim totals come from the one home, so the report and the hub can never disagree about
+    # what is filable or about how much of it is unpriced.
+    summary["claims"] = ccv.summarize(claim_entries)
     return rows, summary
 
 
@@ -453,7 +563,8 @@ def run_ma_discrepancy(client, period, org_id):
     rules = load_rules(client, org_id)
     sold_idx, no_serial = build_sold_index(sold_rows)
     paid_idx = build_paid_index(ma_rows, tx_rows, cfg)
-    rows, summary = reconcile_ma_activations(sold_idx, paid_idx, rules, period, cfg)
+    claim_ctx = build_claim_context(ma_rows, period, cfg)
+    rows, summary = reconcile_ma_activations(sold_idx, paid_idx, rules, period, cfg, claim_ctx)
     saved = persist_results(client, org_id, period, rows)
     summary.update({
         "period": period,
@@ -462,6 +573,10 @@ def run_ma_discrepancy(client, period, org_id):
         "ma_commission_rows": len(ma_rows),
         "ma_tx_rows": len(tx_rows),
         "rules_loaded": len(rules),
+        # What the claim figures were built from, stated so a reader can judge them (§COMMCALC-22).
+        "statement_last_day": claim_ctx.get("statement_last_day") or None,
+        "statement_days_loaded": len(claim_ctx.get("statement_days") or {}),
+        "comparables_built": len(claim_ctx.get("comparable_index") or {}),
         "rows_saved": saved.get("saved", 0),
         "attribution_columns_written": saved.get("wide", False),
     })

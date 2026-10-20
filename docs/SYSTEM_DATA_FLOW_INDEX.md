@@ -78,6 +78,7 @@ Primary code homes:
 | POS-01 | **The register enters a product it does not have, and never loses a cart** | "A customer brings something the catalog has never heard of — how do I create it at the till, put it in this store's inventory and ring it up without leaving the register? How do I fix a line's description, or the product itself? And when someone walks away mid-sale, why is the cart still there when the next person comes back?" |
 | POS-02 | **The receipt an admin edits, prints and emails** | "I want to edit the receipt my stores hand out, and for the tenant whose receipts come from its own POS I want the till slip to look the same as the ones we upload. When I email a receipt, which address is it going to, can I change it, and does the customer see it from my company's name or from the platform's?" |
 | POS-03 | **The format a receipt prints in, chosen at the counter** | "Every store should be able to print a receipt in the format it needs from the print receipt screen — some of these receipts come off a thermal printer. And the system should know about the thermal printer at each store." |
+| POS-04 | **Straight to the receipt printer, when a store asks for it** | "The receipts print to the thermal printer only if the user wants it — there can be no hardcoded rule, so we need a helper. How does a web page reach the printer at all, what gets installed, and what happens on a counter that has not got it?" |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -138,6 +139,7 @@ Primary code homes:
 | COMMCALC-22 | **A fact the platform MEASURES per month may not be inherited from another month** | "September and October expenses will be carried forward but salary and commission should be derived from the actuals." Rent repeats; payroll does not. The carry-forward rule was right about the rent and wrong about the two rows the platform fills in itself — and because the result is a plausible number rather than a blank, no screen said so. Which rows is a carried month allowed to inherit, where do the ones it may not inherit come from instead, and what does a surface say when that month's payroll cannot be read? |
 | COMMCALC-20 | **A handset that books a rebate books a cost** | "How come the device cost is less than the device rebate?" The rebate books per commission row, unconditionally; the cost books only if the handset can be PRICED off the fulfillment sheet — and an order-type allowlist silently decided which fulfillment rows were allowed to carry a price at all. A family the distributor opened after the allowlist was written priced nothing, so its handsets netted a full rebate against a zero cost. |
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
+| COMMCALC-22 | **A claim with no amount cannot be filed** | "Trace the 4 devices paid twice and the 200 sales that matched no commission — they should be part of the discrepancies to be filed with the carrier if we did not get paid." The discrepancy report already held them, and wrote $0.00 on every single one, so the hub's open-$ card summed to nothing. Which non-payments are claims against the carrier at all, which are facts about our own feed, and what is a claim worth? |
 
 ---
 
@@ -7181,7 +7183,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.daily_sales_feed.uploaded_at` · `vip_paygo_payments.swept_at` · `vip_credit_memos.swept_at` — the ARRIVAL columns (as opposed to each table's DATA date) | the ingest that lands the row | `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column(table)` is the ONE declaration; `router._table_feed_freshness` dereferences it to fill `last_ingest_at`, and `account/autocompute._PERIOD_SOURCES` must agree with it. Consumed by `_data_freshness_monitor` to tell **"the report email stopped arriving"** (old ingest) from **"the file arrives, its CONTENT is frozen"** (recent ingest, old data date) — a distinction that was structurally impossible for every table-backed feed until 2026-09-20, see §19.18. Proof `harness_ingest_freshness.py` (31 checks) |
 | `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
 | `pos.held_sales` (mig `1088`, **WRITTEN NOT APPLIED** — surfaced for owner approval; additive, idempotent, carries its REVERT) — THE suspended sale: ONE held cart per register, keyed `(org_id, store_code, register_number)`, the SAME triple `pos.register_sessions` is keyed on, so "the next session" is literal. Not a sale: no transaction number, no stock movement, no money, which is why the register may save it automatically without asking | `PUT /pos/held-sale` (the register's debounced autosave) · `DELETE /pos/held-sale` (discard, or a completed checkout) | **ONE home** `pos/held_sale.py` behind `GET/PUT/DELETE /pos/held-sale`; one client home `frontend/src/lib/pos-held-sale.ts`. ADAPTIVE — a database without mig 1088 answers `available: false` and the register behaves exactly as it did before the feature existed. Proof `harness_pos_held_sale.py` (68) — §POS-01 |
-| `pos.receipt_templates.layout` (mig `1089`, **WRITTEN NOT APPLIED** — surfaced for owner approval; additive, idempotent, `CHECK (layout IN ('thermal','pos_format'))`, carries its REVERT) — WHICH LAYOUT this org's receipts print in: `thermal` = the 58/80 mm till slip (the default, byte-identical to what every tenant prints today), `pos_format` = the layout of the POS this org DECLARED, i.e. the same one its own uploaded receipts are parsed from and reprinted in. The only new fact in §POS-02; every other field the admin edits was already on this table | `PATCH /pos/receipt-template` (validated against `pos/sale_receipt.LAYOUTS`) | **ONE renderer** `pos/sale_receipt.py` for the till copy, the reprint, the admin preview and the emailed copy. ADAPTIVE — a database without mig 1089 reads as `thermal`, `GET /pos/receipt-template` answers `layout_column_ready: false` and a PATCH naming the layout answers with the file to run. RULE TWO: `pos_format` means "the POS this org declared", resolved through `pos/sales_from_reports.resolve_format` → `receipt_formats.registry`, so no POS, carrier or tenant is named in code. Proof `harness_pos_receipt_render.py` (127) — §POS-02 |
+| `pos.receipt_templates.layout` (mig `1089`, **WRITTEN NOT APPLIED** — surfaced for owner approval; additive, idempotent, `CHECK (layout IN ('thermal','pos_format'))`, carries its REVERT) — WHICH LAYOUT this org's receipts print in: `thermal` = the 58/80 mm till slip (the default, byte-identical to what every tenant prints today), `pos_format` = the layout of the POS this org DECLARED, i.e. the same one its own uploaded receipts are parsed from and reprinted in. The only new fact in §POS-02; every other field the admin edits was already on this table | `PATCH /pos/receipt-template` (validated against `pos/sale_receipt.LAYOUTS`) | **ONE renderer** `pos/sale_receipt.py` for the till copy, the reprint, the admin preview and the emailed copy. ADAPTIVE — a database without mig 1089 reads as `thermal`, `GET /pos/receipt-template` answers `layout_column_ready: false` and a PATCH naming the layout answers with the file to run. RULE TWO: `pos_format` means "the POS this org declared", resolved through `pos/sales_from_reports.resolve_format` → `receipt_formats.registry`, so no POS, carrier or tenant is named in code. Proof `harness_pos_receipt_render.py` (149) — §POS-02 |
 | `pos.products` (mig `724`; `system_category` free per-org since `745`) · read with `pos.inventory_serial` (`status = 'in_stock'`) + `pos.inventory_standard` (`qty_on_hand > 0`) (mig `725`) for "in stock" | `POST /pos/products` · `PATCH /pos/products/{id}` (the catalog page, the wizard) — unchanged | **THE product filters (§33):** `GET /pos/products` → `pos/product_filters.list_rows` (`clean` / `apply` over `EQ_FILTERS`, `search_clause`, `in_stock_product_ids`); `GET /pos/products/manufacturers` → `product_filters.manufacturers`; the special-order catalog's search → `product_filters.search_clause` |
 | `commcalc.vendor_catalog_price` (mig `1021`, **NOT applied**, §36; **+`min_order_qty`, +`order_multiple` mig `1032`, written NOT applied** — the vendor's order rules per item, probed per column by `land_catalog`) — THE vendor price snapshot: org, vendor_id → po_vendor, run_id (one per read), source `upload`\|`portal`, item_key (`s:<item #>` / `u:<hash link+name>`), sku, name, price (> 0), list_price, pack_qty, availability (in_stock\|backorder\|out_of_stock\|unknown), stock_qty, stock_text, url, description, seen_at; RLS on, service-role only | ONLY `supply/store.land_catalog` — from `POST /supply/catalog/upload` (the kit's products file) and `supply/portal.catalog_pull_on_page` (live `live_login` pull / scheduled `_SOURCE_SCRAPERS[SUPPLY_PROCESSOR]`) | `store.latest_rows` (newest run per vendor) → `GET /supply/compare`, `GET /supply/vendors/{id}/catalog`; `store.catalog_rows_by_ids` → `POST /supply/cart/optimize|place`; `store.latest_run` → vendor attention / `GET /supply/summary`. Locked: harness_supply_ordering §L1–L3 |
 | `commcalc.supply_favorite` (mig `1032`, written NOT applied, §36.f) — a starred supply item per company: vendor_id → po_vendor (ON DELETE CASCADE), item_key (the catalog's stable identity), label, reorder_qty, created_by; UNIQUE (org, vendor, item_key); RLS on, service-role only | `supply/store.add_favorites` / `remove_favorites` / `set_favorite_qty` / `remove_vendor` (`POST /supply/favorites`, `/favorites/remove`, `/favorites/qty`, `DELETE /supply/vendors/{id}`) | `store.load_favorites` → `ordering_logic.mark_favorites` inside `GET /supply/compare` (the favourites list IS the comparison filtered, `?favorites=true`). Locked: harness_supply_favorites_moq §D/§G |
@@ -7519,7 +7521,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /core/platform-notice` (tenant-facing status banner — any signed-in user; org from the VERIFIED membership) · `GET /core/tenant-operator-access` (a TENANT admin's "who from the platform was in my company", gated by the existing `_require_setting(..., 'security')`) | `core/operator_api.py` `public_router` (mounted WITHOUT the /operator prefix) | §22 tenant-facing transparency |
 | `POST /pos/inventory/standard` — put standard (qty-tracked) stock on hand at ONE store: `{product_id, store_code, qty, mode?: add|set, qty_on_order?, qty_reserved?, bin_location?}`. `mode` DECLARES which fact is being recorded — `add` (default) is a receipt and adds to on hand, `set` is a count and replaces it; the writer never guesses from whether a row happened to exist. The first single-row write path this table has ever had (before it, qty arrived only via the CSV count importer or an inter-store transfer). Refuses a serial-tracked product — those land through `POST /pos/inventory/serial`, behind the duplicate-IMEI guard (§11b). Gated `pos_inventory_adjust`, org-scoped, store-span checked; answers `before` AND `after` so a double entry is visible | `pos.router.receive_inventory_standard` → `pos/stock_landing.plan` | §POS-01 |
 | `GET /pos/held-sale?store_code=&register_number=` · `PUT /pos/held-sale` · `DELETE /pos/held-sale` — the cart left on this register, suspend it, drop it. Restored VERBATIM (the agreed price, the override it overrode, the discount and the serial), with `held_at` so the screen can say how old the prices are; `held_by` is the CALLER's employee id, never a body field. An EMPTY cart with no customer CLEARS the hold instead of storing a row, so an idle register leaves nothing behind. All three org-scoped and store-span checked; all three answer `available: false` rather than erroring before mig `1088` | `pos.router.get_held_sale` / `put_held_sale` / `delete_held_sale` → `pos/held_sale.py` | §POS-01 |
-| `GET /pos/sales/{sale_id}/receipt` — THE receipt of one sale, rendered server-side. Query `layout` / `paper_width_mm` are FOR THIS PRINT ONLY (§POS-03): nothing is stored, and both are resolved through `pos/sale_receipt.print_choice`, so a request cannot reach a layout or a width a stored setting could not. Answers `html` (print it as given), `layout`, `layout_note` (set when the stored choice is not what will actually print, e.g. the POS layout asked for with no POS declared — the fallback is said out loud, never silent), `email` (`to`, `to_source`, `valid`, `from_name`, `subject`) `layout_source` / `paper_source` (request | store | org — which of the three won), `paper_width_mm`, `layout_options`, `paper_options` (both DERIVED from the renderer's own `LAYOUTS` / `PAPER_PX`, never a second list) and `printer_label` (what the store declared it prints on), and `company_name`. Refuses a sale with no stored `pos.sales.receipt` snapshot rather than re-pricing it from the sale row. Org-scoped | `pos.router.get_sale_receipt` → `pos/sale_receipt.print_choice` → `pos/sale_receipt.html` (× `pos_config_effective`, `core/tenant_identity`) | §POS-02, §POS-03 |
+| `GET /pos/sales/{sale_id}/receipt` — THE receipt of one sale, rendered server-side. Query `layout` / `paper_width_mm` / `destination` are FOR THIS PRINT ONLY (§POS-03, §POS-04): nothing is stored, and both are resolved through `pos/sale_receipt.print_choice`, so a request cannot reach a layout or a width a stored setting could not. Answers `html` (print it as given), `layout`, `layout_note` (set when the stored choice is not what will actually print, e.g. the POS layout asked for with no POS declared — the fallback is said out loud, never silent), `email` (`to`, `to_source`, `valid`, `from_name`, `subject`) `layout_source` / `paper_source` (request | store | org — which of the three won), `paper_width_mm`, `layout_options`, `paper_options` (both DERIVED from the renderer's own `LAYOUTS` / `PAPER_PX`, never a second list) and `printer_label` (what the store declared it prints on); `destination` / `destination_source` / `destination_options` / `helper_url` and `escpos_base64` — the printer's own bytes, present ONLY when this copy is going to the printer (§POS-04); and `company_name`. Refuses a sale with no stored `pos.sales.receipt` snapshot rather than re-pricing it from the sale row. Org-scoped | `pos.router.get_sale_receipt` → `pos/sale_receipt.print_choice` → `pos/sale_receipt.html` (× `pos_config_effective`, `core/tenant_identity`) | §POS-02, §POS-03 |
 | `POST /pos/sales/{sale_id}/email-receipt` — email that receipt. Body `{to?, layout?, paper_width_mm?}`: blank `to` = the address the GET already showed (the customer's own); the print choice rides with it so the emailed copy is the copy that was handed over (§POS-03). 400 with no address and 400 on a broken one (refused before the provider sees it), 503 when no email provider is configured, 502 on a provider refusal — each a plain sentence, never a 500. Sends with `from_name` = the tenant's company name, so the customer sees the business, not the platform. Answers what it sent and to whom. Org-scoped | `pos.router.email_sale_receipt` → `pos/sale_receipt.email_view` → `notify/channels/email_resend.send_email(from_name=…)` | §POS-02 |
 | `POST /pos/receipt-template/preview` — the admin editor's live preview: the UNSAVED form rendered by the SAME renderer a real receipt goes through, over a sample sale that names no tenant, carrier, store or product (RULE TWO). Replaced the editor's hand-drawn imitation of a receipt, which was a third answer to "what does this org's receipt look like" | `pos.router.preview_receipt_template` → `pos/sale_receipt.html` over `PREVIEW_SNAPSHOT` | §POS-02 |
 | `GET /pos/products` — the org's products newest first, capped at 500; optional filters (blank = any) `department_id`, `category_id`, `system_category`, `manufacturer` (exact), `inventory_type` (`standard` / `serial`, else 400), `in_stock` (+ `store_code`: a serial unit `in_stock` or standard `qty_on_hand > 0` at that store, else any store), combined (AND) with `search` (name / full name / UPC); `active_only` as before. **No new param = the query and answer it always gave** (§33) | `pos.router.list_products` → `pos/product_filters.list_rows` | §33 |
@@ -7794,8 +7796,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"A single-row entry puts standard stock on hand at this store"** (the register's opening stock; owner 2026-10-16) | `pos.inventory_standard` keyed `(org, product, store)` | **ONE home** `pos/stock_landing.py` (`plan`, `clean_qty`, `existing_row`, `MODE_ADD` / `MODE_SET`, `sentence`) behind `POST /pos/inventory/standard`. Siblings: the CSV count importer (deliberately SKIPS a duplicate — folding it in would double a re-uploaded count file) and mig 726's in-database `pos.receive_transfer` (PL/pgSQL, cannot dereference Python — its ON CONFLICT is PINNED to mean ADD). Proof `harness_pos_stock_landing.py` (46) — §POS-01 |
 | **"What is still in this register's cart"** (the suspended sale; owner 2026-10-16) | `pos.held_sales` keyed `(org, store_code, register_number)` — the `pos.register_sessions` triple | **ONE home** `pos/held_sale.py` (`terminal`, `clean_cart`, `hold_row`, `restore`, `is_empty`, `sentence`); ONE client `frontend/src/lib/pos-held-sale.ts` (`fetchHeldSale` / `suspendSale` / `clearHeldSale` / `AUTOSAVE_MS`) — the register spells no held-sale URL and keeps no cart in browser storage. Proof `harness_pos_held_sale.py` (68), lock `harness_pos_product_form_lock.py` §f — §POS-01 |
 | **Which products match the POS product filters — and which are in stock at this store** (the register's product picker and the product catalog; owner 2026-09-24) | `pos.products.department_id / category_id / system_category / manufacturer / inventory_type` + `pos.inventory_serial.status = 'in_stock'` / `pos.inventory_standard.qty_on_hand > 0` | **ONE home** `pos/product_filters.py` (`list_rows`, `apply`, `EQ_FILTERS`, `in_stock_product_ids`) behind `GET /pos/products`; ONE component `frontend …/pos/product-filters.tsx` (`ProductFilters`, `productFilterParams`) on both pages — §33 |
-| **"What does this org's receipt look like"** (the till copy, the reprint, the admin preview and the emailed copy; owner 2026-10-17) | `pos.receipt_templates` (+ `layout`, mig `1089`) × `pos.pos_settings` × `pos.sales.receipt` | **ONE home** `backend/app/modules/pos/sale_receipt.py` (`html`, `document`, `thermal_html`, `template_view`, `snapshot_view`, `clean_layout`, `layout_note`, `email_view`, `company_name`, `customer_display`); ONE client `frontend/src/lib/pos-receipt.ts` (`fetchSaleReceipt` / `emailSaleReceipt` / `printReceiptHtml`) — the register builds NO receipt HTML and the editor draws no imitation of one. Was TWO answers (the browser-built till slip vs `pos/receipt_formats/render.render_html` for an imported receipt) plus the editor's third, which is also WHY emailing a receipt had never been built: nothing could render one where there is no browser. Proof `harness_pos_receipt_render.py` (127) — §POS-02 |
-| **"What format and paper does THIS print use"** (the till copy, the Sale Log reprint, the emailed copy; owner 2026-10-19) | request → `pos.pos_settings` store override (`receipt_layout`, `receipt_paper_width_mm`, `receipt_printer_label`) → `pos.receipt_templates` | **ONE resolver** `backend/app/modules/pos/sale_receipt.print_choice` (+ `paper_options`, `clean_paper`, `with_choice`) and **ONE store declaration** `pos_config_effective.printer`; ONE picker `frontend/src/components/pos/PrintFormatPicker.tsx`, shared by the till's completion modal and the Sale Log reprint, offering only the server's own `layout_options` / `paper_options`. Was ONE stored per-org layout, so a counter printing on a thermal roll and on an office printer could only produce whichever the org had stored. A blank store setting means "accept the company default" and is kept DISTINCT from a width the store chose. RULE TWO: the printer make is free text the store types, never branched on. Proof `harness_pos_receipt_render.py` §K (127) — §POS-03 |
+| **"What does this org's receipt look like"** (the till copy, the reprint, the admin preview and the emailed copy; owner 2026-10-17) | `pos.receipt_templates` (+ `layout`, mig `1089`) × `pos.pos_settings` × `pos.sales.receipt` | **ONE home** `backend/app/modules/pos/sale_receipt.py` (`html`, `document`, `thermal_html`, `template_view`, `snapshot_view`, `clean_layout`, `layout_note`, `email_view`, `company_name`, `customer_display`); ONE client `frontend/src/lib/pos-receipt.ts` (`fetchSaleReceipt` / `emailSaleReceipt` / `printReceiptHtml`) — the register builds NO receipt HTML and the editor draws no imitation of one. Was TWO answers (the browser-built till slip vs `pos/receipt_formats/render.render_html` for an imported receipt) plus the editor's third, which is also WHY emailing a receipt had never been built: nothing could render one where there is no browser. Proof `harness_pos_receipt_render.py` (149) — §POS-02 |
+| **"What format and paper does THIS print use"** (the till copy, the Sale Log reprint, the emailed copy; owner 2026-10-19) | request → `pos.pos_settings` store override (`receipt_layout`, `receipt_paper_width_mm`, `receipt_printer_label`) → `pos.receipt_templates` | **ONE resolver** `backend/app/modules/pos/sale_receipt.print_choice` (+ `paper_options`, `clean_paper`, `with_choice`) and **ONE store declaration** `pos_config_effective.printer`; ONE picker `frontend/src/components/pos/PrintFormatPicker.tsx`, shared by the till's completion modal and the Sale Log reprint, offering only the server's own `layout_options` / `paper_options`. Was ONE stored per-org layout, so a counter printing on a thermal roll and on an office printer could only produce whichever the org had stored. A blank store setting means "accept the company default" and is kept DISTINCT from a width the store chose. RULE TWO: the printer make is free text the store types, never branched on. Proof `harness_pos_receipt_render.py` §K (149) — §POS-03 |
+| **"What does a till slip SAY"** (the paper copy, the emailed copy and the bytes the printer cuts; owner 2026-10-20) | `pos.sales.receipt` × `pos.receipt_templates` × `pos.pos_settings` | **ONE content home** `backend/app/modules/pos/sale_receipt.slip_model` — which lines print, in what order, with which figures, and the discount arithmetic done ONCE. Two renderers of it and no third: `sale_receipt.thermal_html` (a browser prints and an email carries it) and `backend/app/modules/pos/receipt_escpos.py` (`lines`, `payload`, `payload_base64`, `wrap`, `two_col` — the printer's own command stream, handed over by `tools/pos-print-helper/`). Proved byte-identical on 8 slip variants when the HTML renderer was moved onto the model. A browser cannot speak to a USB printer or install a driver, so the driver stays with the operating system and the helper is the only thing that touches the device. RULE TWO: no printer make is branched on anywhere; the make is free text a store declares. Proof `harness_pos_receipt_render.py` §L (149) — §POS-04 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -25698,6 +25701,7 @@ status word rather than a blank that reads as nil.
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
+| POS-04 | pos |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -28791,6 +28795,146 @@ AST-derived (73 facts / 305 edges / 1563 checks).
 §6n (the one device classifier), §66 (`component_is_evidence`), §COMMCALC-09 (`payout_slice_evidence`),
 §19.28 (`kpi_failing`), §19.18 (a mechanism written, callers left unwired), §50 (the module graph).
 
+## §COMMCALC-22. A CLAIM WITH NO AMOUNT CANNOT BE FILED (owner report 2026-10-20)
+
+Owner, verbatim: *"trace teh 4 devices which were aid twice , 200 sales which matched no commision ,
+it could be a part of the discrepancies to be filed with the carrier and as a matter of fact they
+shoudl be a part of the discrepancies if we did not get paid"*.
+
+### COMMCALC-22.1 What was actually wrong
+
+What he asked for already existed and could not be used. The B2B-sold / carrier-paid recon (§15)
+resolves every sold activation against the statement and writes the unpaid ones to
+`commcalc.discrepancy_results`. Measured read-only 2026-10-20: **every row it has ever written
+carries `expected_amount` $0.00, `commissionable_mrc` $0.00 and `gap` $0.00** — the literal `0.0` at
+the write site (`ma_recon.py`) — so `discrepancy_appeals.summarize_appeals`' open-$ card sums to
+$0.00 for the whole tenant. A claim the platform says is worth nothing is a claim nobody can file.
+
+Luxelink, June–October 2026, every activation matched to `raw_ma_commission` on digit-normalized
+`serial_1` ∪ `sim` (the recon's own sold basis):
+
+| | activations | comparable value | verdict |
+| --- | --- | --- | --- |
+| carrier paid | 3,642 | — | — |
+| sold after the last day that period's statement reaches | 285 | ~$55,824 | not yet due — **not a claim** |
+| all on **28 July**, a day the statement holds ZERO rows for | 33 | ~$5,914 | our feed gap — **not a claim** |
+| explained by the tenant's own `ma_payment_rule` rows | 206 | ~$11,025 | a decision (§COMMCALC-21) |
+| **nothing explains them** | **298** | **~$55,946** | **the claims** (July 230 / ~$40,505) |
+
+Before this change all four shapes were written as `open` or `info` with a $0.00 value — so filing
+from the report would have invoiced the carrier for money not yet owed and for a statement day
+nobody uploaded, and every real claim would have been worth nothing.
+
+**The class, not the instance.** The instance is "the carrier-statement recon writes zero". The class
+is **two writers answering one question, one wired and the other left hardcoded** — the sibling
+defect the index rules already forbid. One table has two authors: the rate-card engine
+(`discrepancy_engine`) SIZES each claim; the recon wrote `0.0`. And a hardcoded `0.0` is the same
+shape §19.28 (`kpi_failing`), §66 (`component_is_evidence`), §COMMCALC-09 (`payout_slice_evidence`)
+and §COMMCALC-21 each already outlawed on a different subject: a figure nobody measured, printed as a
+measurement.
+
+### COMMCALC-22.2 Duplicate check (the build gate)
+
+Searched the index for an existing home for "what should this activation have paid". Four
+near-neighbours, each the same posture or the same table on a different question — posture reused, no
+sibling built:
+
+- **§15 `ma_recon`** owns *whether* the carrier paid, through the mig-308 gate. It keeps that job
+  entirely; this section adds only *is it a claim, and what is it worth*.
+- **`discrepancy_engine`** owns the Boost rate card. It is not a general estimator (it needs an MI
+  line or a parseable MRC), so it could not price this feed — but it is the SIBLING, and it is fixed
+  in the same change rather than excused: its unsizeable `SOLD_NOT_IN_MI` claim now writes NULL.
+- **§66 `component_is_evidence`** — the allowlist shape, copied exactly, twice.
+- **§COMMCALC-21 `installment_category`** — a decision is not a finding; here a decision and a feed
+  gap are both not *claims*.
+
+### COMMCALC-22.3 The one home
+
+`backend/app/modules/commcalc/carrier_claim_value.py`. Pure: no I/O, no `from app`, no table, and no
+carrier, tenant, market or product name (RULE TWO) — the contract family is whatever string the
+caller's own rows carry, and the money columns come from the gate's existing
+`ma_month_field_prefix` / `ma_month1_extra_fields` / `ma_payout_sign` config ladder, so a comparable
+can never be built from a different definition of money than the test that decided the activation was
+unpaid.
+
+**Four states, one claim.** `STATE_OPEN_CLAIM` · `STATE_NOT_YET_STATEMENTED` ·
+`STATE_STATEMENT_DAY_MISSING` · `STATE_EXPLAINED_BY_RULE`. `is_claimable` is an **allowlist** of the
+first alone, so a state a later migration invents — or one missing entirely — is never filed.
+`classify_non_payment` applies them in order of evidence strength: past the statement's reach wins
+over everything, a day the statement demonstrably skipped explains its own silence before any rule
+does, and a rule speaks only about an activation the statement really did cover and really did skip.
+
+**Absence of coverage is not a gap.** `statement_day_missing` may be asserted only when the day-level
+coverage is actually known (`statement_days` non-empty). A statement whose rows carry no usable dates
+says nothing about any particular day, and claiming a gap from that would be the very defect this
+section exists to remove. Caught by §D of the lock, which was written after the first draft got this
+wrong.
+
+**One figure, one basis.** `claim_value` returns `(amount, basis, sample_n)`. The amount is the
+median the carrier ITSELF paid for the same contract family in the same period;
+`MIN_COMPARABLE_SAMPLE` is 3, the smallest sample whose median is not simply an endpoint, and below
+it the figure is **withheld as None with the `not_measured` basis — never rounded down to 0.00**.
+`value_is_measured` is the second allowlist. `CLAIM_VALUE_CAVEAT` is the only place the limit is
+worded ("a comparable, not an invoice"), so no surface can overstate it. `claim_gap` returns None
+when the expected side was not measured, because a subtraction cannot exist where one side does not.
+
+### COMMCALC-22.4 What moved
+
+| surface | before | now |
+| --- | --- | --- |
+| `ma_recon` row | `expected_amount` 0.0, `gap` 0.0, `commissionable_mrc` 0.0 | the one home's figure, or **NULL** with the basis in `evidence.claim` |
+| `ma_recon` status | `open` for every unexplained non-payment | `open` only for a real claim; `pending` for not-yet-due, `info` for a missing statement day |
+| `ma_recon` notes | the rule's text, or the no-rule literal | the one home's sentence; the `'no business rule configured'` literal is kept EXACTLY where that is why the row is open, so `summarize_appeals.no_rule_count` reads as it always did |
+| `ma_recon` summary | counts only | plus `claims` from `ccv.summarize` — claimable count, claimable amount over MEASURED values only, and how many claims are unpriced |
+| `discrepancy_engine` `SOLD_NOT_IN_MI` | `expected_amount` 0.00, filed | NULL, still `open` — a real finding whose value is unmeasured |
+| `/discrepancy/run` response | — | `statement_last_day`, `statement_days_loaded`, `comparables_built` |
+
+No migration: `expected_amount`, `commissionable_mrc` and `gap` are nullable `NUMERIC` (mig 312 DDL),
+and the precise state rides in the existing `evidence` jsonb rather than taking a new column. **No
+priced figure moves** — the rate-card engine rounds a sized claim exactly as before (§F of the lock),
+and nothing here decides whether the carrier paid.
+
+### COMMCALC-22.5 Reported, never repaired
+
+Per the house rule, found in live data and handed to the owner rather than coded around:
+
+- **The recon last ran 2026-09-02.** Nothing for September or October. 806 Luxelink rows exist, 717
+  of them under the period spelling `2026-07` and 89 under `August 2026` — two spellings in one
+  table (the §COMMCALC-07 class).
+- **28 July has no statement rows at all.** Needs re-pulling from the portal.
+- **The tenant's two Upgrade rules contradict the statement.** Both say Total pays no activation
+  bounty on Upgrades, and they hold 206 activations off the claim list — yet **the carrier paid 121
+  Upgrades at a median $75.00**. Worth ~$15,000 if the rule is wrong. A config row, and the owner's
+  call; nothing was changed.
+- **Re-rings pay per ring** (traced the same day): all 19 duplicated device-months use ONE schedule,
+  so the engine's "two schedules" wording is wrong for every live case. $17.25 overpaid, but 100
+  Luxelink and 63 Cellfonz activations are OVER-COUNTED, and 83 of 117 re-rings carry no signal in
+  the feed at all. Its own job, awaiting the owner's answer on whether to retire the unambiguous ones.
+
+### COMMCALC-22.6 Locks
+
+- `backend/harness_carrier_claim_value.py` — **99 passed / 0 failed**. Verified against pre-fix
+  `main` in a clean worktree WITH the new module and graph fact staged, so only the wiring could
+  fail: **19 named failures, no traceback** — it catches "registry written, callers unwired" (§19.18)
+  rather than merely "module absent".
+- `reconcile_ma_activations(..., cfg, claim_ctx)` — `claim_ctx` is **required with no default**, so
+  forgetting it is a TypeError at the call site, not a zero in a letter to a carrier.
+- §J asserts the hardcoded zeros are gone from BOTH writers and that no second copy of the state or
+  basis vocabulary exists outside the one home.
+- CI: the lock job's paths filter (4 paths) and its own step — jobs 33, steps 296 → 297, verified
+  with `yaml.safe_load`.
+- `core/module_graph.py` fact `carrier_claim_value`, both callers AST-derived.
+
+### COMMCALC-22.7 Cross-references
+
+- §15 — the recon that decides whether the carrier paid; unchanged, and the only owner of that test.
+- §66 / §COMMCALC-09 / §COMMCALC-21 / §19.28 — the allowlist posture this reuses, now four subjects deep.
+- §COMMCALC-07 — the two-period-spelling class, found again here.
+- Reports: Pay Discrepancy, Commission Discrepancy hub (`/discrepancy-appeals`), `carrier_vs_pay`
+  (reads the recon rows' `status`; `pending` falls in its `explained` bucket).
+
+---
+
 ## §COMMCALC-10. A LIVE LOGIN THAT STOPS MAKING PROGRESS MUST SAY SO (owner report 2026-10-15)
 
 Owner, verbatim, minutes after declaring his first `pos_report` login (§12a.2a): *"it has been over 5
@@ -31377,6 +31521,74 @@ store types into a config row and is **never branched on in code** — locked by
 | MONEY IMPACT | **NONE** — a receipt restates a sale already rung |
 
 Same class: §POS-02 (one renderer), §COMMCALC-66 (a fallback must not read as evidence).
+
+---
+
+## §POS-04. STRAIGHT TO THE RECEIPT PRINTER, WHEN A STORE ASKS FOR IT (owner ask 2026-10-20)
+
+Owner, verbatim: *"the receipts will print to the thermal printer only if desired by the user, there
+cannot be any harcoded rule so we need have a helper"*.
+
+### POS-04.1 Duplicate check (the build gate)
+
+`pos/sale_receipt.py` (§POS-02) is already the one renderer and `print_choice` (§POS-03) is already
+the one resolver for what a print uses, so the destination was ADDED to that resolver rather than
+answered a second time, and the printer's byte stream renders the SAME content model as the paper
+copy. `pos_config_effective` already resolves a per-store setting, so the opt-in and the helper
+address are two more rows in `pos.pos_settings`. **No new endpoint, no new table, no migration.**
+
+### POS-04.2 What a browser cannot do, stated plainly
+
+A browser hands a page to the operating system's print dialog. It cannot speak to a USB till
+printer and it cannot install a driver — so "add the Epson or Citizen driver" is, in software, two
+different things. The driver belongs to Windows / macOS / CUPS and stays there. What the platform
+can own is the *content* and the *route*: it renders the slip as the printer's own commands and a
+small helper on the counter PC (`tools/pos-print-helper/receipt-helper.js`, Node, no dependencies)
+hands them over. The helper binds `127.0.0.1` only, accepts exactly one request — *print these
+bytes* — runs no command its caller names, and holds no credential.
+
+### POS-04.3 The class that was fixed, and the trap avoided
+
+A byte stream for the printer is a second **medium**, not a second receipt. Had it read the sale and
+the template for itself, "what does this slip say" would have had two answers and they would have
+drifted — the duplicate defect the index rules forbid. So `sale_receipt.slip_model` was extracted as
+the ONE content home (which lines, in what order, with which figures, and the discount arithmetic
+done once), and `thermal_html` was moved onto it: its output was proved **byte-identical on eight
+slip variants** (80 and 58 mm, discounts folded and separate, completed and voided), so no tenant's
+paper receipt changed. `receipt_escpos` renders the same model for the printer.
+
+### POS-04.4 Nothing is hardcoded
+
+| Decision | Where it lives |
+| --- | --- |
+| Does this store print straight to the printer? | `receipt_direct_print` per store, **false everywhere** until someone turns it on |
+| Where does its helper listen? | `receipt_helper_url` per store (default the loopback address, so a different port needs no release) |
+| Where does THIS receipt go? | the cashier's own choice on the print screen — both routes are offered on every print, and the store's setting only decides which is selected first |
+| What if the helper is not running? | the receipt prints through the dialog and the cashier is **told** which route it took; a closed helper window never costs a customer their receipt |
+| An unknown destination? | reads as the dialog — never a silent no-print |
+
+### POS-04.5 Siblings checked
+
+| Path | Done |
+| --- | --- |
+| The till's completion modal, the Sale Log reprint | The same picker, now with a *Send to* choice; both go through `print_choice` |
+| `receipt_auto_print` | Prints with no request, i.e. on the store's declared destination — direct where the store asked for it |
+| The emailed copy | Unchanged: an email has no destination, and the bytes are built only for a print that is going to the printer |
+| The admin preview | EXCUSED: it previews the org template, which has no counter and no helper |
+| Admin toggles (serials, tax breakdown, discounts, disclaimers, signature line) | Proved to reach the PRINTED slip, not only the paper one (§L8) |
+
+### POS-04.6 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `backend/app/modules/pos/receipt_escpos.py` (pure, stdlib) · `sale_receipt.slip_model` / `PAPER_COLS` / `DESTINATIONS` / `clean_destination` / `destination_options` · `pos_config_effective.printer` + 2 keys · `tools/pos-print-helper/` (helper + step-by-step install guide) · `harness_pos_receipt_render.py` §L |
+| Endpoints | NO new route — `GET /pos/sales/{sale_id}/receipt` gains a `destination` query param and five answer fields |
+| Migration | **NONE** |
+| Locks | §L (one content home, both media, the wrapping, the cut, the opt-in default, the dialog fallback, the helper's own limits, RULE TWO), §B (the two new defaults pinned key-by-key to the browser registry) |
+| MONEY IMPACT | **NONE** — a receipt restates a sale already rung |
+
+Same class: §POS-02 (one renderer), §POS-03 (one resolver for what a print uses), §19.18 (a registry
+written and its callers left unwired is not a fix).
 
 ---
 
