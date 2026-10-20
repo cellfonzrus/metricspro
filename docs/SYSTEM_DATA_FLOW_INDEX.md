@@ -135,6 +135,7 @@ Primary code homes:
 | COMMCALC-17 | **The first month and the trailing months are reported on different feeds** | "The first month’s commission reads far too low — 100 activations at $50 MRC should be about $2,500, not a few hundred. Which feed states the first month, which states M2–M12, and why can a switch that picks ONE feed for ALL rungs never state the month correctly either way? How do I report the first month when EARNED and keep the trailing months on cash, without the retroactive first-month cash booking twice?" |
 | COMMCALC-18 | **An accessory line and a rent line both move in dollars** | "Add accessory sales to the Sales Comparison so it compares month over month, and add expenses." Accessory dollars were already tallied — the table had no change column for a metric measured in money, only for units. And what did each store SPEND in those two months, read from the same sheet the P&L books, without an expense ever being added into the revenue beside it? |
 | COMMCALC-19 | **The figures at the top of a report are something you can send** | "The dashboard should give an option to send the snapshot of the top part to the desired people." Sending already had one home; what was missing was a shape for the TILES, shared rather than written into one page. And when the snapshot says a figure is unchanged, is that a measurement or two copies of one carried expense sheet compared with itself? |
+| COMMCALC-22 | **A fact the platform MEASURES per month may not be inherited from another month** | "September and October expenses will be carried forward but salary and commission should be derived from the actuals." Rent repeats; payroll does not. The carry-forward rule was right about the rent and wrong about the two rows the platform fills in itself — and because the result is a plausible number rather than a blank, no screen said so. Which rows is a carried month allowed to inherit, where do the ones it may not inherit come from instead, and what does a surface say when that month's payroll cannot be read? |
 | COMMCALC-20 | **A handset that books a rebate books a cost** | "How come the device cost is less than the device rebate?" The rebate books per commission row, unconditionally; the cost books only if the handset can be PRICED off the fulfillment sheet — and an order-type allowlist silently decided which fulfillment rows were allowed to carry a price at all. A family the distributor opened after the allowlist was written priced nothing, so its handsets netted a full rebate against a zero cost. |
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 
@@ -7196,7 +7197,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
-| `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18); the tile row is SENDABLE through `frontend/src/lib/tile-snapshot.tileSnapshotSheet` + the one sender `SendReportButton`, and a change between two copies of ONE carried expense sheet is withheld as `change_measured: false` by `sales_comparison.expense_change_measured` rather than printed as ± 0% (§COMMCALC-19) |
+| `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18); the tile row is SENDABLE through `frontend/src/lib/tile-snapshot.tileSnapshotSheet` + the one sender `SendReportButton`, and a change between two copies of ONE carried expense sheet is withheld as `change_measured: false` by `sales_comparison.expense_change_measured` rather than printed as ± 0% (§COMMCALC-19); a CARRIED month inherits the rent and never the platform's own labour — salary and rep commission come from that month's own actuals through `commcalc/labour_actuals`, with `labour_measured` saying when a month's payroll could not be read (§COMMCALC-22) |
 | `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
 | `GET /storeops/payroll/clock-variances` | `storeops/clock_variance_api.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
 | `POST /storeops/payroll/clock-variances/resolve` | `storeops/clock_variance_api.py` → `storeops.clock_variance_correction` | one human decision about one variance — including the DM's per-row override, which out-ranks the declared rule and is audited to `payroll_change_log` (§14z) |
@@ -25684,6 +25685,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-19 | commcalc |
 | COMMCALC-20 | commcalc |
 | COMMCALC-21 | commcalc |
+| COMMCALC-22 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -31039,6 +31041,150 @@ Files: `frontend/src/lib/tile-snapshot.ts` (**new**), `frontend/prove_tile_snaps
 `backend/harness_tile_snapshot.py` (**new**), `backend/app/modules/commcalc/sales_comparison.py`
 (`expense_change_measured`), `frontend/…/commcalc/sales-comparison/page.tsx`,
 `backend/harness_sales_comparison.py` §F, `.github/workflows/carrier-vocab-guard.yml`.
+
+## §COMMCALC-22. A FACT THE PLATFORM MEASURES PER MONTH MAY NOT BE INHERITED FROM ANOTHER MONTH (owner directive 2026-10-20)
+
+Owner, verbatim: *"sepatember and october expeses wll be carried forward but salary and commisson
+shoudl be derived from the actuals"*.
+
+### §COMMCALC-22.1 THE CLASS, stated once so nobody re-derives it
+
+**A fact the platform MEASURES per month was being inherited from another month by a rule written for
+facts that genuinely repeat.** Rent repeats. A lease, a utility, an insurance premium: entering them
+once and carrying them forward is right, and that is what the carry-forward rule (§19.50) is for.
+Payroll does not repeat — it is measured, every month, from hours and from calculated commission.
+
+The dangerous half is that the result is a PLAUSIBLE NUMBER rather than a blank. A missing figure gets
+noticed; a wrong figure of the right size does not. This is the same class as §19.49 (*an absence is
+reported with its reason, never as a result*), seen from the other side: here an absence was reported
+as **another month's measurement**.
+
+### §COMMCALC-22.2 MEASURED LIVE, 2026-10-20, before the fix
+
+Every one of the **3,724** `store_expenses` rows in the house is `source_key` NULL — i.e. hand-entered
+— so every one of them carries. What that meant per tenant:
+
+| Tenant | What a carried month showed | Of which was another month's payroll |
+| --- | --- | --- |
+| Luxelink Wireless LLC | September **and** October both read **$276,162.69** (its sheet ends at August 2026) | **$159,512.55** — Employee Salaries $133,460.00, DM Salaries $25,500.01, Employee Commission $552.54 |
+| Cellfonz R Us | October read **$381,345.94** (carried from September) | **$143,735.94** — Employee Salaries $127,289.93, Employee Commission $16,446.01 |
+| Vzone | September and October read **$12,605.00** (carried from July 2026) | **$7,000.00** |
+| NY LOGISTICS | $6,493.00 | **$0.00** — it enters no labour on the sheet, so nothing changes for it |
+
+Luxelink's $276,162.69 is the very figure on the screen the owner pasted the day before — **58% of it
+was last August's payroll**, which is also why its `± 0%` (§COMMCALC-19.4) was two copies of one sheet.
+
+### §COMMCALC-22.3 DUPLICATE CHECK (build gate) — WHAT WAS REUSED, NOT REBUILT
+
+| The question | Who already answers it | Built here? |
+| --- | --- | --- |
+| which expense rows are labour the platform derives and books elsewhere | `commcalc/labour_vocabulary.resolve` (§4e) | **no — extended with a narrow exact-name test, `derived_row_names` / `is_derived_row`** |
+| what does this store spend in a month it never saved | `commcalc/expenses_effective.effective_series` (§19.50) | **no — given a `derived_names` parameter; the rule itself is unchanged** |
+| what did this month's hours cost, per store | `account/coa.wages_by_store` → `derive_wage_cells` (§14y) | **no — dereferenced** |
+| what rep commission does this month owe | `commcalc.rep_commissions.total_payout`, the figure the P&L books on `rep_comm` | **no — dereferenced** |
+| which store is this address | `account/store_identity.store_key` / `store_identity_index` (§64) | **no — injected** |
+| how do those two figures become expense-sheet rows for ONE month, per store | *nothing* | **NEW — §COMMCALC-22.4** |
+
+### §COMMCALC-22.4 ONE FACT, ONE HOME: `commcalc/labour_actuals`
+
+`backend/app/modules/commcalc/labour_actuals.py` is THE home for *"what did this month's
+platform-derived labour actually cost, per store"*. **It derives no dollars of its own** — no rate
+times hours, no feed read. It assembles the figures the platform already derives, and its only new
+decision is the SHAPE: `as_expense_rows` emits rows that look like `store_expenses` rows, so a reader
+that already sums an expense sheet picks up the month's own labour with no arithmetic change.
+
+Three rules it owns, and the reason each one is a rule rather than a convenience:
+
+* **The halves stay apart.** `fold` returns salary and commission separately. The first draft returned
+  a blended per-store total and split it by ratio where only one half was wanted — an invented
+  per-store number, which is the kind of plausible arithmetic this house treats as a defect.
+* **The CALLER chooses the halves, because the right answer differs per surface and the difference is
+  money.** A surface whose only labour figure is the expense sheet takes BOTH. The GP report takes
+  **salary only** — `net_profit` already subtracts `rep_pay` from `rep_commissions`, so a commission
+  row here would subtract the same dollars twice. The P&L takes **neither**: it derives `wages` and
+  `rep_comm` from these very sources itself, so it needs the carried rows gone and nothing put back.
+* **An unmeasured half is reported, never shipped as a zero.** `measured` is per half, and a half that
+  could not be read contributes no rows at all. A zero labour cost makes every store look profitable,
+  which is the dangerous direction.
+
+Rows are stamped `source_key='labour_actual'`, so the carry rule can never take a measurement of ONE
+month into another: they are system rows, and system rows have never carried.
+
+### §COMMCALC-22.5 THE FIVE READERS, AND WHY THE P&L IS NOT ONE OF THEM
+
+| Reader | Gets back |
+| --- | --- |
+| the live P&L (`account/coa`) | **nothing** — the carried labour rows are gone and it derives both halves itself |
+| the GP report (`/commcalc/gp-report`) | **salary only** (commission is already on `rep_pay`) |
+| the expenses trend (`/commcalc/expenses-trend`) | both halves, per month, plus `labour_unmeasured` |
+| the Sales Comparison expense line (`/commcalc/sales-comparison`) | both halves, per month, plus `labour_measured` and what the carried sheet was not allowed to hand over |
+| the takeover evaluation's cost benchmark (`_prospect_expense_window`) | both halves, per month in the averaging window |
+
+The plumbing those readers share — resolve the vocabulary, resolve the store identity, read the month's
+actuals, relabel canonical → store code — has ONE home too, `router._labour_actuals_code_keyed`. Four
+steps written out four times is how one of them later gets a filter the others never got.
+
+### §COMMCALC-22.6 WHAT THE NUMBERS BECOME
+
+| Tenant / month | Before | After |
+| --- | --- | --- |
+| Luxelink, September 2026 | $276,162.69 (all August) | **$242,305.37** = August rent $116,650.14 + September's own salary $112,951.52 + commission $12,703.71 |
+| Luxelink, October 2026 | $276,162.69 (all August) | **$198,299.57** = $116,650.14 + salary $79,504.18 + commission $2,145.25 |
+| Cellfonz R Us, October 2026 | $381,345.94 (all September) | **$239,728.48 and INCOMPLETE** — $237,610.00 carried + commission $2,118.48, with the **salary stated as not measured** |
+| Cellfonz R Us, September 2026 | $381,345.94 | **unchanged** — it has its own sheet, and the rule only ever concerns a CARRIED month |
+
+The Cellfonz October row is the point of the honesty rule. `coa.wages_by_store` REFUSES that month:
+only **49.38%** of its 403 scheduled employee-days carry a punch or a correction, and 204 of them have
+neither, so paying it would pay those days nothing (§14y's interlock). Before this change that refusal
+was invisible, because September's payroll was sitting in the figure. Now the report says the salary is
+unknown — **which is a missing-clock-data defect to fix, not an expense figure to read.**
+
+### §COMMCALC-22.7 THE ± 0% GETS ITS PERCENT BACK, FOR A REASON
+
+`sales_comparison.expense_change_measured` (§COMMCALC-19.4) withheld the percent when both windows
+carried the SAME sheet. Once each month supplies its own labour that is no longer one sheet compared
+with itself — the labour half of each figure is that month's own measurement — so the predicate now
+takes `base_month_labour` / `compare_month_labour` and reports the change as measured, with the screen
+saying that the rest still comes from one inherited sheet. **§19.49 cuts both ways: a measurement must
+not be suppressed any more than an absence may be asserted.**
+
+### §COMMCALC-22.8 LOCKED SO IT CANNOT UN-WIRE
+
+A registry written and its callers left reading past it has happened three times here (§19.18), so the
+wiring is what the build checks:
+
+| Lock | What fails the build |
+| --- | --- |
+| `backend/harness_expense_one_path.py` §H (**11 checks**) | **every live caller of the carry rule passes the labour vocabulary** — the scanner reads each call's balanced argument text, and has a negative control proving it can see an un-wired call; the five readers are counted; no caller spells the row names; the keying plumbing is one helper, not a copy per reader |
+| `backend/harness_labour_actuals.py` (**90 checks**) | the halves match the vocabulary exactly; `fold` is pure, total and keeps the halves apart; the row shape, naming and `source_key`; an unmeasured half contributes nothing; **the regression** — the $276,162.69 month reproduced and closed over the real carry rule; the I/O shell's `measured` verdict, including a failed read; RULE TWO and purity |
+| `backend/harness_sales_comparison.py` §G | a carried month's own labour makes the change measurable again, and a month that measured nothing is back to one sheet |
+| `backend/harness_labour_vocabulary.py` §G4 | still no second copy of the vocabulary — it caught this PR spelling the house row names in `labour_actuals` |
+| `app/modules/core/module_graph.py` | `derived_labour_actuals` — the fact, its home, its callers and its locks, added BY HAND (§50) |
+
+### §COMMCALC-22.9 WHAT IS NOT DONE HERE
+
+* **No migration and no money moved on its own.** Nothing is written; every figure above is a READ.
+  The live P&L is unchanged because it never read the carried labour rows. The GP report and the
+  Sales Comparison are live reads, so they restate on deploy; the **stored** consolidated P&L
+  snapshots only restate when the owner presses Recompute.
+* **A hand-typed labour row nobody derives still carries.** The membership test is the vocabulary's
+  EXACT names, not its broad cross-month protection tokens, so `Owner / Mgmt Salaries` and
+  `Dm Salary` (a Cellfonz spelling nothing fills in) keep carrying forward. That is the safe default:
+  the platform has no actual for them, so withholding them would understate the month. A tenant that
+  wants one of them treated as derived names it in its own vocabulary — a config row, not code.
+* **`GET /commcalc/commission-by-store` still bridges store vocabularies by leading street number**,
+  the join §64 replaced. It is an auto-fill for a sheet a human then edits, and it belongs to another
+  owner's feature, so it is named here rather than quietly rewritten.
+
+Files: `backend/app/modules/commcalc/labour_actuals.py` (**new**),
+`backend/harness_labour_actuals.py` (**new**),
+`backend/app/modules/commcalc/labour_vocabulary.py` (`derived_row_names`, `is_derived_row`),
+`backend/app/modules/commcalc/expenses_effective.py` (`carryable_rows`, `excluded_summary`,
+`derived_names`), `backend/app/modules/account/coa.py`,
+`backend/app/modules/commcalc/router.py` (`_labour_actuals_code_keyed` + the four readers),
+`backend/app/modules/commcalc/sales_comparison.py`, `backend/app/modules/core/module_graph.py`,
+`backend/harness_expense_one_path.py` §H, `backend/harness_sales_comparison.py` §G,
+`frontend/…/commcalc/sales-comparison/page.tsx`, `.github/workflows/carrier-vocab-guard.yml`.
 
 ## §POS-02. THE RECEIPT AN ADMIN EDITS, PRINTS AND EMAILS (owner ask 2026-10-17)
 

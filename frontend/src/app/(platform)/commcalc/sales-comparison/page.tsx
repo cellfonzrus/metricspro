@@ -330,6 +330,32 @@ export default function SalesComparisonPage() {
               enter that month on the Expenses sheet to compare the real figures.</>}
         </div>}
 
+      {/* SALARY AND COMMISSION COME FROM THE MONTH'S OWN ACTUALS (owner directive 2026-10-20).
+          A carried month inherits the rent and not the payroll, so this says where the labour in the
+          figure came from — and, when a half could not be measured, says THAT instead of letting a
+          missing payroll read as a cheaper month (§19.49). */}
+      {!loading && !data?.error && data?.expenses_meta?.measured &&
+        (Object.keys(data.expenses_meta.base_excluded || {}).length > 0 ||
+         Object.keys(data.expenses_meta.compare_excluded || {}).length > 0 ||
+         data.expenses_meta.labour_measured === false) &&
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12,
+                                       color: data.expenses_meta.labour_measured === false ? '#92400e' : 'var(--text2)',
+                                       background: data.expenses_meta.labour_measured === false ? '#fffbeb' : undefined }}>
+          {data.expenses_meta.labour_measured === false
+            ? <>⚠︎ <b>Part of the labour in this figure could not be measured.</b> Salary and commission are taken
+                from each month&apos;s own payroll rather than from the carried sheet, and for at least one month here
+                the payroll could not be read — so that month&apos;s expense total is INCOMPLETE, not lower. Check the
+                month&apos;s time clock and shifts before comparing.</>
+            : <>ℹ︎ <b>Salary and commission come from each month&apos;s own actuals.</b> A carried month inherits the
+                rent and the utilities, never last month&apos;s payroll — so the labour in these figures is the hours
+                and the rep commission recorded for that month itself.
+                {data.expenses_meta.base_carried_from && data.expenses_meta.compare_carried_from &&
+                 data.expenses_meta.base_carried_from === data.expenses_meta.compare_carried_from &&
+                  <> Both months still inherit <b>{data.expenses_meta.base_carried_from}</b> for everything else, so
+                    the change shown is the change in <b>labour</b> — enter each month on the Expenses sheet and the
+                    rest of the comparison becomes real too.</>}</>}
+        </div>}
+
       {!loading && !data?.error && data && !data.expenses_meta?.measured &&
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12, color: 'var(--text2)' }}>
           ℹ︎ <b>Store expenses not measured</b> for this selection — the expense sheet could not be read, so the

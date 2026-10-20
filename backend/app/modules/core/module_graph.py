@@ -1439,6 +1439,29 @@ FACTS: dict[str, dict] = {
             # strings, which is what let one slicer serve the month report and the month-over-month
             # P&L. The spelling home is unchanged and still has every other caller it had.
             'app/modules/commcalc/router.py': ('_pd',),
+            # §COMMCALC-22 (owner directive 2026-10-20) — the derived-labour actuals read
+            # `rep_commissions` for ONE month and must match both of its stored spellings, so the
+            # month is expanded by THIS home. Added BY HAND, not blessed (§50).
+            'app/modules/commcalc/labour_actuals.py': ('_pk',),
+        },
+    },
+    'derived_labour_actuals': {
+        "question": 'What did the platform\'s OWN labour rows (salary, rep commission) actually cost '
+                    'in this month, per store — as opposed to what some other month cost?',
+        "homes": ('app/modules/commcalc/labour_actuals.py',),
+        "index": ('COMMCALC-22',),
+        "locks": ('harness_labour_actuals.py', 'harness_expense_one_path.py'),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04 and still strips the per-caller comments). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # Four surfaces whose only labour figure is an expense sheet, and which therefore may not
+            # inherit another month's payroll: the GP report (SALARY only — `net_profit` already
+            # subtracts `rep_pay`), the expenses trend, the Sales Comparison expense line and the
+            # takeover evaluation's cost benchmark. The P&L is deliberately NOT here: it derives
+            # `wages` and `rep_comm` from these same sources itself, so it needs the carried rows
+            # gone and nothing put back.
+            'app/modules/commcalc/router.py': ('_lact',),
         },
     },
     'statement_crosscheck_verdict': {
