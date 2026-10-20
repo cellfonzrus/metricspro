@@ -232,9 +232,9 @@ def _mount_prefixes(main_text):
 
 
 def gate_function_names():
-    """The gate's accepted function names, READ from app/core/service_role.py (§COMMCALC-22).
+    """The gate's accepted function names, READ from app/core/service_role.py (§COMMCALC-24).
 
-    Until 2026-10-20 this file matched the single literal `require_browser_service`. §COMMCALC-22
+    Until 2026-10-20 this file matched the single literal `require_browser_service`. §COMMCALC-24
     renamed the gate at its home, and this scan went BLIND rather than red: eight endpoints dropped
     out of the set below, taking their DIRECT_ROUTES coverage assertion with them. Only the
     non-vacuity bound caught it. So the vocabulary is dereferenced, and an empty or missing
@@ -247,7 +247,7 @@ def gate_function_names():
             if not names:
                 raise SystemExit("service_role.GATE_FUNCTION_NAMES is empty — the gate has no name")
             return names
-    raise SystemExit("service_role.py no longer declares GATE_FUNCTION_NAMES (§COMMCALC-22)")
+    raise SystemExit("service_role.py no longer declares GATE_FUNCTION_NAMES (§COMMCALC-24)")
 
 
 def _calls_gate(fn, names):

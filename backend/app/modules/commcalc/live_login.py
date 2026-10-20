@@ -75,7 +75,7 @@ _SESSIONS = {}
 _SESSIONS_LOCK = threading.Lock()
 
 
-# ── WHERE THE SESSIONS LIVE (§COMMCALC-22) ───────────────────────────────────────────────────────
+# ── WHERE THE SESSIONS LIVE (§COMMCALC-24) ───────────────────────────────────────────────────────
 # `_SESSIONS` is a dict in THIS process's memory. Asking it a question therefore answers for this
 # process ONLY, and on a split deploy (`SERVICE_ROLE=api` + `BROWSER_SERVICE_URL`, §41) the API host
 # holds no sessions at all: `get_session` there returns None for a session that is alive and running

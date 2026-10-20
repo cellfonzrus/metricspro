@@ -237,7 +237,7 @@ _LAUNCH_RE = re.compile(r"from\s+playwright|import\s+playwright|sync_playwright|
 # the ones that do not reach a browser must NOT (they would 503 for nothing).
 _BROWSER_CALLS = ("start_session(", "live_login_start(", "_live_pull(")
 def _gate_vocabulary():
-    """The gate's accepted call spellings, READ from the role module (§COMMCALC-22) — never a copy.
+    """The gate's accepted call spellings, READ from the role module (§COMMCALC-24) — never a copy.
 
     Parsed out of the source rather than imported so this harness stays DB-free and import-free of
     the app package. A missing or empty declaration is a hard error: silently falling back to one
@@ -251,10 +251,10 @@ def _gate_vocabulary():
             if not names:
                 raise SystemExit("service_role.GATE_FUNCTION_NAMES is empty — the gate has no name")
             return tuple("%s()" % n for n in names)
-    raise SystemExit("service_role.py no longer declares GATE_FUNCTION_NAMES (§COMMCALC-22)")
+    raise SystemExit("service_role.py no longer declares GATE_FUNCTION_NAMES (§COMMCALC-24)")
 
 
-# TWO SPELLINGS, ONE REQUIREMENT (§COMMCALC-22, 2026-10-20). The gate was renamed at its home to
+# TWO SPELLINGS, ONE REQUIREMENT (§COMMCALC-24, 2026-10-20). The gate was renamed at its home to
 # `live_login.require_session_host()` because the old name asked "does this endpoint launch a
 # browser?" and the question that matters is "does it touch the per-process session registry?" —
 # /live-login/frame launches nothing, reads a dict, and was left ungated for five days on that
@@ -337,7 +337,7 @@ def _browser_modules_elsewhere():
         (reach if any(c in eff for c in _BROWSER_CALLS) else plain).append(name)
     eq(set(reach), SUPPLY_BROWSER_ENDPOINTS,
        "the supply endpoints that reach a live browser are exactly the declared set")
-    # THE ALIAS IS PROVED, NOT ASSUMED (§COMMCALC-22). `_GATE_CALLS` accepts the renamed gate only
+    # THE ALIAS IS PROVED, NOT ASSUMED (§COMMCALC-24). `_GATE_CALLS` accepts the renamed gate only
     # because it dereferences the role module. If someone makes `require_session_host` decide the
     # role itself — or deletes it — this file must stop accepting that spelling, so check it here
     # rather than trusting the name.

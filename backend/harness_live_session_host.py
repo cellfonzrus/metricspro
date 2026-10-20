@@ -1,4 +1,4 @@
-"""Proof harness: A LIVE SESSION IS READ WHERE IT LIVES (index §COMMCALC-22).
+"""Proof harness: A LIVE SESSION IS READ WHERE IT LIVES (index §COMMCALC-24).
 
 FOUND 2026-10-20, owner: *"ups portla live login does not work i hvae tried again today"*. He was
 right, and the row proved he had been right for five days. His 17:47 attempt reached the real UPS

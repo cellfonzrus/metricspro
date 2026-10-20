@@ -338,8 +338,9 @@ check("H1 the register builds NO receipt html of its own",
       "buildReceiptHtml" not in reg and "<!doctype html" not in reg.lower())
 check("H2 it asks the one client home instead",
       "fetchSaleReceipt(" in reg and "from '@/lib/pos-receipt'" in reg)
-check("H3 the till copy, the reprint and the auto-print all go through that one call",
-      reg.count("printSaleReceipt(") >= 4)
+check("H3 the till copy, the reprint and the auto-print all go through that one call, declared once",
+      reg.count("const printSaleReceipt = useCallback(") == 1
+      and reg.count("printSaleReceipt(") >= 3)
 check("H4 the emailed copy is sent through the one client home too", "emailSaleReceipt(" in reg)
 check("H5 the register still SHOWS the address and lets it be edited",
       "Email the receipt to" in reg and "setEmailTo(" in reg)
@@ -408,10 +409,11 @@ print("\n§K  what THIS print uses — the format chosen at the counter (§POS-0
 # an office printer could only ever produce whichever the org had stored.
 T_ORG = sr.template_view({"paper_width_mm": 80, "layout": sr.LAYOUT_THERMAL})
 check("K1 what the screen asked for wins over the store and the org",
-      sr.print_choice(T_ORG, want_layout=sr.LAYOUT_POS_FORMAT, want_paper="58",
-                      store_layout=sr.LAYOUT_THERMAL, store_paper="80")
-      == {"layout": sr.LAYOUT_POS_FORMAT, "layout_note": "", "layout_source": "request",
-          "paper_width_mm": 58, "paper_source": "request"})
+      (lambda c: [c[k] for k in ("layout", "layout_note", "layout_source", "paper_width_mm",
+                                 "paper_source")]
+       == [sr.LAYOUT_POS_FORMAT, "", "request", 58, "request"])(
+          sr.print_choice(T_ORG, want_layout=sr.LAYOUT_POS_FORMAT, want_paper="58",
+                          store_layout=sr.LAYOUT_THERMAL, store_paper="80")))
 check("K2 no request falls to what THIS STORE declared, not to the org",
       (lambda c: c["paper_width_mm"] == 58 and c["paper_source"] == "store")(
           sr.print_choice(T_ORG, store_paper="58")))
@@ -435,7 +437,7 @@ check("K8 the per-store printer declaration is three keys, each blank = accept t
           ("receipt_printer_label", "receipt_paper_width_mm", "receipt_layout")))
 check("K9 a store that said nothing reads BLANK, not a guessed width (the difference between "
       "honouring a declaration and inventing one)",
-      pc.printer([], "S1") == {"label": "", "paper_width_mm": "", "layout": ""}
+      [pc.printer([], "S1")[k] for k in ("label", "paper_width_mm", "layout")] == ["", "", ""]
       and pc.printer([{"store_code": "S1", "key": "receipt_paper_width_mm", "value": "58"}],
                      "S1")["paper_width_mm"] == "58")
 check("K10 RULE TWO — no printer make is branched on anywhere in code",
@@ -463,6 +465,106 @@ check("K15 the till and the Sale Log reprint share ONE picker, which offers only
 check("K16 §POS-03 is registered in the index with its keys",
       "POS-03" in idx and "receipt_printer_label" in idx and "print_choice" in idx)
 
+print("\n§L  straight to the printer — one slip, two media (§POS-04)")
+# Owner 2026-10-20: "the receipts will print to the thermal printer only if desired by the user,
+# there cannot be any harcoded rule so we need have a helper". A byte stream for the printer is a
+# second MEDIUM, never a second receipt: both render sale_receipt.slip_model.
+from app.modules.pos import receipt_escpos as esc  # noqa: E402
+
+SR_SRC = read("backend/app/modules/pos/sale_receipt.py")
+ESC_SRC = read("backend/app/modules/pos/receipt_escpos.py")
+HELPER = read("tools/pos-print-helper/receipt-helper.js")
+MODEL = sr.slip_model(SNAP, ALL_ON, brand=BRAND, store_name="STORE 1",
+                      disclaimer_blocks=[{"text": "Return policy", "signature": True}],
+                      tenant_name="Tenant", employee_name="A. Rep")
+ESC_LINES = [l["text"] for l in esc.lines(MODEL)]
+
+check("L1 the slip's CONTENT has ONE home, and the router hands BOTH media the same inputs",
+      "def slip_model(" in SR_SRC and SR_SRC.count("def slip_model(") == 1
+      and "_sr.slip_model(snap, template, brand=brand, disclaimer_blocks=blocks" in router
+      and "disclaimer_blocks=blocks" in router and router.count("blocks = _poscfg.disclaimers(") == 1)
+check("L1b and it renders the model, not the snapshot: the bytes module never reads a template "
+      "toggle or a snapshot total for itself",
+      not re.search(r'model\[.(show_|subtotal|tax_total|discount_total)', ESC_SRC)
+      and not re.search(r'(snap|template_v)\[', code_only(ESC_SRC)))
+check("L1c the HTML renderer reads the same model (the discount arithmetic is computed once)",
+      SR_SRC.count("display_subtotal") == 2
+      and "m = slip_model(" in SR_SRC and 'm["totals"]' in SR_SRC)
+check("L2 the printed slip still adds up: Subtotal − Discounts + Tax = the total paid",
+      round(MODEL["totals"][0]["value"] - MODEL["totals"][1]["value"]
+            + MODEL["totals"][2]["value"], 2) == SNAP["total"])
+check("L3 every item, the grand total and the footer reach the paper",
+      all(any(it["description"][:20] in ln for ln in ESC_LINES) for it in MODEL["items"])
+      and any(ln.startswith("TOTAL") and "1,076.75" in ln for ln in ESC_LINES)
+      and any("No refunds" in ln for ln in ESC_LINES))
+check("L4 no line is wider than the roll, not even a word longer than the roll itself",
+      max(len(ln) for ln in ESC_LINES) <= sr.PAPER_COLS[80]
+      and esc.wrap("A" * 99, 32) == ["A" * 32, "A" * 32, "A" * 32, "A" * 3]
+      and max(len(ln) for ln in esc.wrap("word " * 40, 32)) <= 32)
+check("L5 a figure sits hard against the right edge, and the label gives way before it does",
+      esc.two_col("Total", "9.99", 20) == "Total" + " " * 11 + "9.99"
+      and len(esc.two_col("Total", "9.99", 20)) == 20
+      and esc.two_col("A" * 30, "9.99", 10) == "AAAAA 9.99")
+check("L6 the stream resets the printer first and cuts the slip last (a slip nobody can tear off is "
+      "not printed)",
+      esc.payload(MODEL).startswith(esc.INIT) and esc.payload(MODEL).endswith(esc.FEED_CUT))
+check("L7 the roll's width decides the line length, from ONE declared map",
+      len(esc.lines(sr.slip_model(SNAP, sr.template_view({"paper_width_mm": 58})))[-1]["text"])
+      <= sr.PAPER_COLS[58] and sorted(sr.PAPER_COLS) == sorted(sr.PAPER_PX))
+OFF = sr.template_view({"show_serials": False, "show_tax_breakdown": False, "show_discounts": False,
+                        "paper_width_mm": 80})
+OFF_LINES = [l["text"] for l in esc.lines(sr.slip_model(SNAP, OFF))]
+check("L8 an admin's toggles reach the PRINTED slip too, not only the paper one",
+      not any("S/N" in ln for ln in OFF_LINES) and not any(ln.startswith("Tax") for ln in OFF_LINES)
+      and any("S/N" in ln for ln in ESC_LINES) and any(ln.startswith("Tax") for ln in ESC_LINES))
+check("L9 direct printing is OFF until a store turns it on, the cashier can still choose either way, "
+      "and an unknown destination reads as the dialog (never a silent no-print)",
+      sr.print_choice(T_ORG)["destination"] == sr.DEST_DIALOG
+      and sr.print_choice(T_ORG, store_direct=True)["destination"] == sr.DEST_DIRECT
+      and sr.print_choice(T_ORG, want_destination=sr.DEST_DIALOG,
+                          store_direct=True)["destination"] == sr.DEST_DIALOG
+      and sr.print_choice(T_ORG, want_destination="usb")["destination"] == sr.DEST_DIALOG
+      and sr.print_choice(T_ORG, want_destination=sr.DEST_DIRECT)["destination_source"] == "request")
+check("L10 the opt-in and the helper address are per-store SETTINGS, not constants in code",
+      pc.SERVER_DEFAULTS["receipt_direct_print"] is False
+      and pc.SERVER_DEFAULTS["receipt_helper_url"].startswith("http://127.0.0.1")
+      and pc.printer([{"store_code": "S1", "key": "receipt_direct_print", "value": True}],
+                     "S1")["direct"] is True
+      and pc.printer([], "S1")["direct"] is False)
+check("L11 the screen is offered BOTH destinations every time, the store's printer named in the one "
+      "that goes to it",
+      [o["value"] for o in sr.destination_options("EXAMPLE TM-1")] == list(sr.DESTINATIONS)
+      and "EXAMPLE TM-1" in sr.destination_options("EXAMPLE TM-1")[1]["label"]
+      and "no helper address" in sr.destination_options("", helper_ready=False)[1]["label"])
+check("L12 the bytes are built ONLY for a print that is going to the printer",
+      '_sr.DEST_DIRECT else ""' in router and "_escpos.payload_base64(" in router
+      and router.count("_escpos.") == 1)
+check("L13 the GET carries the destination and answers with it, the helper address and the bytes",
+      "destination: str" in router and "want_destination=destination" in router
+      and all(k in router for k in ('"destination"', '"destination_source"',
+                                    '"destination_options"', '"helper_url"', '"escpos_base64"')))
+check("L14 the register is the helper's COURIER, not a second renderer: only the client home spells "
+      "the helper call, and it builds no receipt of its own",
+      cl.count("fetch(helperUrl") == 1 and "printViaHelper" in reg
+      and "escpos" not in reg.lower().replace("escpos_base64", "x")
+      and reg.count("helper_url") == 1)
+check("L15 a helper that is not running costs nobody their receipt — the dialog is the fallback and "
+      "the cashier is told",
+      "Printing through the print dialog instead" in reg
+      and "Could not reach the receipt printer helper" in cl)
+check("L16 the helper listens on this PC ONLY, runs no command its caller names, and refuses to "
+      "start without being told which printer",
+      "'127.0.0.1'" in HELPER and "0.0.0.0" not in HELPER
+      and "execFile(" in HELPER and "exec(" not in HELPER.replace("execFile(", "")
+      and "Which printer?" in HELPER and "process.exit(1)" in HELPER)
+check("L17 RULE TWO — no printer make is branched on in any of it",
+      not re.search(r"(?i)\b(epson|citizen|star\s*micronics|bixolon)\b",
+                    code_only(ESC_SRC) + code_only(SR_SRC) + code_only(router)
+                    + read("frontend/src/components/pos/PrintFormatPicker.tsx") + cl))
+check("L18 §POS-04 is registered in the index with its one homes",
+      "POS-04" in idx and "receipt_escpos" in idx and "slip_model" in idx
+      and "pos-print-helper" in idx)
+
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
       ts_default("brand_company_name")[1] == pc.SERVER_DEFAULTS["brand_company_name"]
@@ -484,10 +586,16 @@ check("neg-K2 a store override that leaked to every store would be RED",
       pc.printer([{"store_code": "S1", "key": "receipt_layout", "value": sr.LAYOUT_POS_FORMAT}],
                  "S2")["layout"] == "")
 
+check("neg-L a byte stream that re-read the sale would be RED (it takes the model, and nothing else)",
+      esc.payload(MODEL) == esc.payload(dict(MODEL)) and "snapshot_view" not in ESC_SRC)
+check("neg-L2 a store that never opted in printing straight to the printer would be RED",
+      sr.print_choice(T_ORG, store_direct=False)["destination"] == sr.DEST_DIALOG)
+
 print(f"\n{_pass} passed, {_fail} failed")
 if _fail:
     sys.exit(1)
 print("OK — one renderer for the till copy, the reprint, the preview and the emailed copy; the layout "
       "is a declared per-org choice with its fallback spoken aloud, pickable per print and per store; "
-      "the From name is the tenant's own; "
+      "the From name is the tenant's own; the printer gets the SAME slip as the paper, only when a "
+      "store asked for it; "
       "and the server's POS-setting defaults are pinned to the browser's.")

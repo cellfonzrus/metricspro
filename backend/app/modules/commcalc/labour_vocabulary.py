@@ -245,3 +245,56 @@ def _tokens_for(name):
             if stem not in out:
                 out.append(stem)
     return out
+
+
+# ── IS THIS ROW A FIGURE THE PLATFORM DERIVES FOR ITS OWN MONTH? ─────────────────────────────────
+# OWNER DIRECTIVE 2026-10-20, verbatim: *"sepatember and october expeses wll be carried forward but
+# salary and commisson shoudl be derived from the actuals"*.
+#
+# The carry-forward rule (`commcalc/expenses_effective`, §19.50) carries a month's MANUAL rows into a
+# month that has none of its own. That is right for rent, electric and insurance: they are what the
+# tenant typed and they do not change on their own. It is WRONG for the two rows the platform fills
+# in itself, because those are measurements of THEIR month — carrying them states August's payroll as
+# September's. `commcalc/labour_coverage`'s module docstring has named this defect since 2026-09-08
+# (point 3, "MONTH GRAIN") and only ever REPORTED it; the figures below are what let the carry rule
+# fix it.
+#
+# WHY THIS IS A SECOND, NARROWER TEST THAN `apply_protection_tokens` ABOVE, and not a duplicate of it.
+# The two answer different questions and the answers must differ:
+#
+#   · `apply_protection_tokens` — "may a PERSON copy this row across months?" Substring, and
+#     deliberately broad: copying ANY salary row into another month is wrong whoever typed it, and the
+#     user is right there to notice a row that did not copy.
+#   · `derived_row_names` — "will the platform SUPPLY this row for a month of its own?" EXACT name,
+#     and deliberately narrow: a carried row that is dropped and NOT replaced is money deleted from a
+#     report with nobody watching. So only the rows the platform itself derives qualify — the same
+#     membership test, and the same list, that confers payroll authority and suppresses the P&L's
+#     double count. A tenant's hand-typed `Dm Salary` or the shipped-but-never-filled
+#     `Owner / Mgmt Salaries` have no derivation behind them, so they keep carrying, exactly as
+#     `suppression_plan` already refuses to drop a cost `rep_commissions` cannot replace.
+#
+# Both tests read the SAME resolved vocabulary, so a tenant that renames its payroll row moves both
+# at once and neither can drift from the other.
+
+
+def derived_row_names(resolved):
+    """PURE: the resolved vocabulary → the expense row names the PLATFORM derives for each month.
+
+    `resolved` is a `resolve(...)` result (or any mapping with `payroll_names` / `commission_names`).
+    Returns the names in their stored spelling, payroll first, de-duplicated case-insensitively.
+    `mode='off'` resolves to empty lists, so a tenant that switched labour handling off carries
+    everything exactly as before — the opt-out stays one decision in one place."""
+    r = resolved if isinstance(resolved, dict) else {}
+    return _clean(list(r.get("payroll_names") or ()) + list(r.get("commission_names") or ()))
+
+
+def is_derived_row(name, derived_names):
+    """PURE: is this expense row one of `derived_names`?
+
+    EXACT match on the row name, case-insensitive and whitespace-normalised — the same comparison
+    `labour_coverage` makes when it decides a row is payroll-authoritative. Not a substring test: see
+    the block above for why the narrow test is the one a carry rule may use."""
+    low = " ".join(str(name or "").strip().split()).lower()
+    if not low:
+        return False
+    return low in {" ".join(str(n or "").strip().split()).lower() for n in (derived_names or ())}

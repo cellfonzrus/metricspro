@@ -635,7 +635,7 @@ def get_order(po_id: str, org_id: str = ORG_ID):
     if vendor and vendor.get("data_source_id"):
         from app.modules.commcalc import live_login
         st = portal.order_state(org_id, vendor["data_source_id"])
-        # §COMMCALC-22 SIBLING. This endpoint is NOT gated to the session host on purpose — it is the
+        # §COMMCALC-24 SIBLING. This endpoint is NOT gated to the session host on purpose — it is the
         # whole PO page, and proxying it to the sweeps worker would make an order unreadable whenever
         # that worker is down. But it must not report this process's blindness as the owner's answer:
         # on a split deploy `get_session` here returns None for a session that is alive on the worker.
@@ -667,7 +667,7 @@ def open_order_session(po_id: str, confirm: bool = False, authorization: str = H
     recipe, opens the review page and captures the vendor's cart total + screenshot onto this PO. It never
     submits. Stream it from the commcalc /data-sources/{sid}/live-login/{frame,input,state,cancel} endpoints."""
     _require_buyer(authorization, org_id)
-    # §COMMCALC-22 — creates a session in live_login's per-process registry; run it where that lives.
+    # §COMMCALC-24 — creates a session in live_login's per-process registry; run it where that lives.
     from app.modules.commcalc import live_login
     live_login.require_session_host()
     client = sb()

@@ -24354,8 +24354,21 @@ def _compute_gp(client, org_id, period, market=""):
     # an entered payroll figure from a flat allocation and spot a commission row booked twice. The
     # GP engine reads `store_code` and `amount` and nothing else from these rows (gp_report.py
     # "Expenses by store_code"), so every money column is byte-identical with the wider select.
+    #
+    # SALARY COMES FROM THE MONTH'S OWN ACTUALS (owner directive 2026-10-20). The carry rule takes the
+    # org's labour vocabulary, so a carried month no longer inherits last month's payroll; this report
+    # has no wage derivation of its own, so `labour_actuals` supplies the SALARY half for it — and
+    # ONLY the salary half, because `net_profit` already subtracts `rep_pay` from `rep_commissions`
+    # and a commission row here would subtract the same dollars twice. Keyed back to store CODE
+    # through `store_identity_index`, the one home for canonical↔code (§64), never a second join.
+    from app.modules.commcalc import labour_vocabulary as _lvoc
+    from app.modules.commcalc import labour_actuals as _lact
+    _gp_vocab, _gp_lab, _gp_code = _labour_actuals_code_keyed(client, org_id, [period])
     expenses, _exp_carried_from = _expfx.effective_expense_rows(
-        client, org_id, period, pv, 'store_code,amount,expense_name')
+        client, org_id, period, pv, 'store_code,amount,expense_name',
+        _lvoc.derived_row_names(_gp_vocab))
+    expenses = list(expenses) + _lact.as_expense_rows(
+        _gp_lab.get(period) or {}, _gp_vocab, halves=[_lact.SALARY], key_as=_gp_code)
     # Wide select so the cost map can key on the TOTAL variant's UPC/SKU/desc (migs 230/231); high limit so
     # a multi-thousand-row catalog isn't truncated at the PostgREST default. Falls back to the legacy
     # product_id,cost select when the TOTAL columns don't exist yet (pre-230) → house byte-identical.
@@ -24729,7 +24742,11 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     carry can only fill a slot that exists.
     """
     require_org(org_id)
-    sc = sb().schema('commcalc')
+    # ONE client for the whole read: the labour actuals below reach `storeops` and `account` through
+    # the same connection this schema handle comes off, so the expense sheet and the payroll that
+    # replaces its carried labour rows cannot be read against two different clients.
+    _cl = sb()
+    sc = _cl.schema('commcalc')
     from app.modules.commcalc import expenses_effective as _expfx
     # `source_key` (mig 206) decides which rows carry — PROBED on its own, so a pre-206 schema still
     # reads (every row manual, exactly as it was then) instead of failing the whole select.
@@ -24745,7 +24762,19 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
         _stp = []
     mkt = _trend_market_by_code(org_id)
     kept = _tperiods({r.get('period') for r in rows} | {r.get('period') for r in _stp}, months)
-    eff = _expfx.effective_series(rows, kept)
+    # SALARY AND COMMISSION PER MONTH, FROM EACH MONTH'S OWN ACTUALS (owner directive 2026-10-20).
+    # The carry rule takes the org's labour vocabulary, so a month with no sheet of its own inherits
+    # the rent and not the payroll; `labour_actuals.series` then supplies both halves for every month
+    # in the window, because this trend's only labour figure is the expense total it charts. The
+    # figures arrive keyed on the canonical store and this series is keyed on store CODE, so they are
+    # relabelled through `store_identity_index` — the one home for canonical↔code (§64).
+    from app.modules.commcalc import labour_vocabulary as _lvoc
+    from app.modules.commcalc import labour_actuals as _lact
+    _tr_vocab, _tr_lab, _tr_code = _labour_actuals_code_keyed(_cl, org_id, kept)
+    eff = _expfx.effective_series(rows, kept, _lvoc.derived_row_names(_tr_vocab))
+    _tr_unmeasured = {p: [h for h, ok in ((_tr_lab.get(p) or {}).get('measured') or {}).items()
+                          if not ok] for p in kept}
+    _tr_unmeasured = {p: v for p, v in _tr_unmeasured.items() if v}
     by, comp = {}, {p: {'total': 0.0} for p in kept}
     carried = {}
     for p in kept:
@@ -24756,14 +24785,20 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
         # home the Sales Comparison's expense columns read, so the two can never fold a month's rows
         # into different stores. Keyed on the raw store CODE here, byte-identical to the loop it
         # replaced — this trend is already code-keyed and `_trend_market_by_code` expects codes.
-        for code, amt in _expfx.totals_by_store(cell['rows']).items():
+        _month_rows = list(cell['rows']) + _lact.as_expense_rows(
+            _tr_lab.get(p) or {}, _tr_vocab, period=p, key_as=_tr_code)
+        for code, amt in _expfx.totals_by_store(_month_rows).items():
             by.setdefault(code, {}).setdefault(p, {'total': 0.0})
             by[code][p]['total'] += amt
             comp[p]['total'] += amt
     stores, company = _trend_shape(kept, by, comp, mkt, ['total'])
     return {'months': kept, 'company': company, 'stores': stores,
             'markets': _trend_markets(org_id, stores), 'money': True,
-            'carried_from': carried}
+            'carried_from': carried,
+            # Each month's labour, from its own actuals, and the halves a month could NOT measure —
+            # a month missing its payroll is an incomplete month, never a cheaper one (§19.49).
+            'labour_by_month': {p: (_tr_lab.get(p) or {}).get('by_half') or {} for p in kept},
+            'labour_unmeasured': _tr_unmeasured}
 
 
 @router.get("/commission-trend")
@@ -26907,7 +26942,20 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
             lambda: _esc.table('store_expenses').select(_ecols).eq('org_id', org_id))
         _resolve = _coa.store_resolver(client, org_id)
         exp_fold = lambda v: _store_identity.store_key(_resolve, v)                        # noqa: E731
-        _eff = _expfx.effective_series(_erows, [base_p, cmp_p])
+        # SALARY AND COMMISSION COME FROM THE MONTH'S OWN ACTUALS (owner directive 2026-10-20,
+        # verbatim: *"sepatember and october expeses wll be carried forward but salary and commisson
+        # shoudl be derived from the actuals"*). The carry rule is handed the org's labour vocabulary,
+        # so a month with no sheet of its own inherits the rent and the utilities and NOT the two rows
+        # the platform fills in itself; `labour_actuals` then supplies those two from the homes that
+        # derive them (StoreOps hours → `coa.wages_by_store`, `rep_commissions` → the figure the P&L
+        # books as `rep_comm`). BOTH halves here: this report's only labour figure is this expense
+        # line, so leaving either out would understate the store (the GP report takes salary only —
+        # see `labour_actuals.as_expense_rows`).
+        from app.modules.commcalc import labour_vocabulary as _lvoc
+        from app.modules.commcalc import labour_actuals as _lact
+        _vocab = (_coa._account_config(client, org_id) or {}).get('labour_vocabulary') or {}
+        _eff = _expfx.effective_series(_erows, [base_p, cmp_p],
+                                       _lvoc.derived_row_names(_vocab))
         _kept_ckeys = {exp_fold(st) for st in
                        {str(r.get("store")) for r in (brows + crows) if r.get("store")}}
 
@@ -26926,15 +26974,31 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
                 return False
             return True
 
+        # The month's own labour, read once per month through the one home. It is keyed on the
+        # canonical store already (`exp_fold` injected), so it folds beside the sheet's rows with no
+        # second join — and a half the read could not measure contributes nothing rather than a zero.
+        _lab = {p: _lact.by_store(client, org_id, p, _vocab, exp_fold) for p in (base_p, cmp_p)}
+
         def _fold_period(label):
-            cell = _eff.get(label) or {'rows': [], 'carried_from': None}
-            keep = [r for r in cell['rows'] if _keep_exp(r.get('store_code'))]
+            cell = _eff.get(label) or {'rows': [], 'carried_from': None, 'carried_excluded': {}}
+            rows = list(cell['rows'])
+            rows.extend(_lact.as_expense_rows(_lab.get(label) or {}, _vocab, period=label))
+            keep = [r for r in rows if _keep_exp(r.get('store_code'))]
             return _expfx.totals_by_store(keep, exp_fold), cell.get('carried_from')
 
         _b_tot, _b_carried = _fold_period(base_p)
         _c_tot, _c_carried = _fold_period(cmp_p)
         expenses_arg = {'base': _b_tot, 'compare': _c_tot,
-                        'base_carried_from': _b_carried, 'compare_carried_from': _c_carried}
+                        'base_carried_from': _b_carried, 'compare_carried_from': _c_carried,
+                        # WHAT THE FIGURE IS MADE OF, said out loud: which labour halves were
+                        # measured for each month, and what the carried sheet was NOT allowed to
+                        # supply. A carried month whose labour could not be measured must read as
+                        # incomplete rather than as a smaller month.
+                        'labour': {p: {'by_half': (_lab.get(p) or {}).get('by_half') or {},
+                                       'measured': (_lab.get(p) or {}).get('measured') or {}}
+                                   for p in (base_p, cmp_p)},
+                        'base_excluded': (_eff.get(base_p) or {}).get('carried_excluded') or {},
+                        'compare_excluded': (_eff.get(cmp_p) or {}).get('carried_excluded') or {}}
     except Exception as e:
         # An expense read that fails leaves the report WITHOUT an expense line rather than showing
         # $0.00 — a zero expense makes every store look profitable (the §COMMCALC-03.28 lesson).
@@ -28987,8 +29051,12 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, authorization: str 
     sold_idx, sold_without_serial = ma_recon.build_sold_index(sold_rows)
     ma_rows, tx_rows = ma_recon.load_ma_paid_rows(client, org_id, period)
     paid_idx = ma_recon.build_paid_index(ma_rows, tx_rows, cfg)
+    # The claim context is built from the SAME statement rows loaded just above — the one home for
+    # "is this a claim, and what is it worth" (§COMMCALC-22), handed in rather than defaulted so this
+    # caller cannot drift back to a $0.00 claim.
     recon_rows, recon_summary = ma_recon.reconcile_ma_activations(
-        sold_idx, paid_idx, rules, period, cfg)
+        sold_idx, paid_idx, rules, period, cfg,
+        ma_recon.build_claim_context(ma_rows, period, cfg))
 
     # ── the statement MONEY — the mig-308 netted index over the SAME rows ma_recon loaded ────────
     money_idx = _ma_gate_index(ma_rows)
@@ -40952,7 +41020,7 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
     COOLDOWN (mig 244): if the portal has temporarily blocked us, this returns blocked/requires_confirm
     instead of pulling. A human MAY override with ?confirm=true — the UI asks first, because another
     attempt during an active block typically extends it."""
-    # §COMMCALC-22 — launches Chromium AND reuses a live session out of _SESSIONS (see the PREFER THE
+    # §COMMCALC-24 — launches Chromium AND reuses a live session out of _SESSIONS (see the PREFER THE
     # LIVE AUTHENTICATED BROWSER note below), so it must run in the process that holds them.
     from app.modules.commcalc import live_login
     live_login.require_session_host()
@@ -42157,7 +42225,7 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     post-login pull stays suppressed for the whole cooldown regardless of the confirm (auto_pull_gate),
     so a human look at the login screen never turns into 5 reports x N months of traffic."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — launches Chromium AND owns the session
+    live_login.require_session_host()   # §COMMCALC-24 — launches Chromium AND owns the session
     require_org(org_id)
     client = sb()
     s = _live_source_row(client, sid, org_id)
@@ -42211,7 +42279,7 @@ def live_login_submit_totp(sid: str, org_id: str = ORG_ID):
     Reuses the existing live-session submit queue verbatim — the worker fills the code into the SAME
     open page that requested it, exactly as it does for a human-typed code."""
     from app.modules.commcalc import live_login, portal_totp
-    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    live_login.require_session_host()   # §COMMCALC-24 — run where _SESSIONS is
     require_org(org_id)
     client = sb()
     row = _live_source_row(client, sid, org_id)
@@ -42332,7 +42400,7 @@ def live_login_state(sid: str, org_id: str = ORG_ID):
     """The live session's phase + human message + the LATEST screenshot (data-uri JPEG). Polled ~1s by
     the UI. Screenshot is served ONLY here (never in the polled data-sources list)."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — answer from the process that HAS the session
+    live_login.require_session_host()   # §COMMCALC-24 — answer from the process that HAS the session
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
@@ -42346,7 +42414,7 @@ def live_login_submit(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Enqueue the operator's 2FA code into the LIVE session. The worker thread fills it into the same
     open page, selects the trust radio and clicks Verify — the UI polls /state for the outcome."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    live_login.require_session_host()   # §COMMCALC-24 — run where _SESSIONS is
     require_org(org_id)
     code = str(body.code or "").strip()
     if not code:
@@ -42362,7 +42430,7 @@ def live_login_submit(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
 def live_login_resend(sid: str, org_id: str = ORG_ID):
     """Click the LIVE page's resend / send-code control — no re-login, no re-navigation."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    live_login.require_session_host()   # §COMMCALC-24 — run where _SESSIONS is
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
@@ -42381,7 +42449,7 @@ def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
     live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    live_login.require_session_host()   # §COMMCALC-24 — run where _SESSIONS is
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
@@ -42410,7 +42478,7 @@ def live_login_input(sid: str, body: LiveLoginInputIn, org_id: str = ORG_ID):
     streamed image) and multiplied by the live viewport size server-side (DPR-proof — the img is rendered
     smaller than the real viewport). The first human input pauses auto-driving for the rest of pre-auth."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    live_login.require_session_host()   # §COMMCALC-24 — run where _SESSIONS is
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
@@ -42444,7 +42512,7 @@ def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
     while the modal is open without shipping a frame every time. phase + message are always included so the
     status line stays fresh. No live session → an idle payload (the panel stops polling)."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — answer from the process that HAS the session
+    live_login.require_session_host()   # §COMMCALC-24 — answer from the process that HAS the session
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
@@ -42456,7 +42524,7 @@ def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
 def live_login_cancel(sid: str, org_id: str = ORG_ID):
     """Cancel + close the live session (frees the headless browser)."""
     from app.modules.commcalc import live_login
-    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    live_login.require_session_host()   # §COMMCALC-24 — run where _SESSIONS is
     require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if sess:
@@ -49044,7 +49112,51 @@ def _prospect_feed_rows(client, org_id, prospect_id, period):
     return feeds, every_month
 
 
-def _prospect_expense_window(client, org_id, cfg, period, today=None, expense_rows=None):
+def _labour_actuals_code_keyed(client, org_id, periods):
+    """THE plumbing for "this month's derived labour, keyed the way an expense sheet is keyed".
+
+    Three readers need the IDENTICAL four steps — resolve the org's labour vocabulary, resolve the
+    store-identity home, read each month's actuals, relabel canonical -> store CODE — and the same
+    four steps written out three times is the divergence the house rules forbid: one of them would
+    later be given a filter or a fallback the others never got. `labour_actuals` stays the one home
+    for the DOLLARS; this is the one home for keying them the way `store_expenses` is keyed.
+
+    Returns `(vocab, {period: a `labour_actuals.by_store` result}, key_as)`.
+    """
+    from app.modules.commcalc import labour_actuals as _lact
+    from app.modules.account import coa as _coa_lk
+    try:
+        vocab = (_coa_lk._account_config(client, org_id) or {}).get('labour_vocabulary') or {}
+    except Exception as e:                                         # pragma: no cover - I/O guard
+        # An unreadable config is not a licence to guess which rows the platform fills in: an empty
+        # vocabulary excludes nothing from the carry and adds nothing back, which is exactly the
+        # behaviour that shipped before this rule existed.
+        print(f"WARN labour vocabulary unavailable: {type(e).__name__}: {e}")
+        vocab = {}
+    try:
+        resolve = _coa_lk.store_resolver(client, org_id)
+        idx = _store_identity.store_identity_index(
+            _coa_lk._fetch_all(client, 'store_mapping',
+                               'store_code,store_address,market,salesforce_id,is_active',
+                               {'org_id': org_id}), resolve)
+    except Exception as e:                                         # pragma: no cover - I/O guard
+        # WITHOUT THE IDENTITY HOME THE LABOUR IS UNKEYABLE, AND UNKEYABLE IS NOT ZERO (§19.49).
+        # Keying a canonical address into a code-keyed sheet would put real money on a store that
+        # does not exist, so every half is reported UNMEASURED instead and the surface says so. The
+        # caller is never taken down by it: a report that cannot key its payroll still shows the rent.
+        print(f"WARN labour actuals unkeyable (store identity unavailable): {type(e).__name__}: {e}")
+        _halves = _lact.wanted_halves(vocab)
+        return vocab, {p: {'period': p, 'by_half_store': {}, 'by_half': {}, 'by_store': {},
+                           'measured': {h: False for h in _halves}, 'halves': _halves}
+                       for p in (periods or [])}, (lambda k: k)
+    key_as = lambda k: (idx.get(k) or {}).get('store_code') or k                          # noqa: E731
+    lab = _lact.series(client, org_id, list(periods or []), vocab,
+                       lambda v: _store_identity.store_key(resolve, v))
+    return vocab, lab, key_as
+
+
+def _prospect_expense_window(client, org_id, cfg, period, today=None, expense_rows=None,
+                             labour_inputs=None):
     """OUR OWN average expenses, read through the ONE carry-forward home.
 
     The months come from `_pev.expense_window` — the one home for "which of our own expense months
@@ -49059,7 +49171,16 @@ def _prospect_expense_window(client, org_id, cfg, period, today=None, expense_ro
     `today` is the caller's date, so a month still in progress is never averaged (purity: the pure
     home reads no clock). `expense_rows` lets a caller that already read the sheet pass it in — the
     month-over-month trend needs a window per month and must not re-read the same table once per
-    month.
+    month. `labour_inputs` is the same courtesy for `_labour_actuals_code_keyed`'s reads.
+
+    SALARY AND COMMISSION COME FROM EACH MONTH'S OWN ACTUALS (owner directive 2026-10-20, verbatim:
+    *"sepatember and october expeses wll be carried forward but salary and commisson shoudl be
+    derived from the actuals"*). The carry rule is handed the org's labour vocabulary, so a month
+    with no sheet of its own inherits the rent and NOT the two rows the platform fills in itself,
+    and `labour_actuals` supplies those two from the homes that derive them. BOTH halves, because
+    the only labour figure in a takeover evaluation is the expense matrix it averages — a benchmark
+    missing its payroll would make every prospect look affordable, which is the dangerous direction
+    the §COMMCALC-03.28 report already named once.
     """
     from app.modules.commcalc.expenses_effective import effective_series
     rows = expense_rows
@@ -49082,8 +49203,15 @@ def _prospect_expense_window(client, org_id, cfg, period, today=None, expense_ro
         # NOT MEASURED, SAID OUT LOUD — never a silent zero. A zero expense line makes every
         # takeover look profitable, which is the dangerous half of the owner's 2026-10-16 report.
         return {}, [], dict(win, error=win["basis"])
-    series = effective_series(rows, months)
-    by_period = {p: (series.get(p) or {}).get("rows") or [] for p in months}
+    from app.modules.commcalc import labour_vocabulary as _lvoc
+    from app.modules.commcalc import labour_actuals as _lact
+    _vocab, _lab, _code_of = (labour_inputs if labour_inputs is not None
+                              else _labour_actuals_code_keyed(client, org_id, months))
+    series = effective_series(rows, months, _lvoc.derived_row_names(_vocab))
+    by_period = {p: (list((series.get(p) or {}).get("rows") or [])
+                     + _lact.as_expense_rows(_lab.get(p) or {}, _vocab, period=p,
+                                             key_as=_code_of))
+                 for p in months}
     carried = {p: (series.get(p) or {}).get("carried_from") for p in months
                if (series.get(p) or {}).get("carried_from")}
     matrix = _pev.average_expense_matrix(by_period, cfg["expense_average_basis"])
@@ -49464,12 +49592,21 @@ def prospect_pl_trend(prospect_id: str, period: str = "", period_to: str = "", m
         every_month.get("ma_marketplace_orders") or [],
         homes["ma_device_product_names"](every_month.get("ma_commission") or []))
     months = _pev.uploaded_months(every_month)
+    # EACH MONTH'S OWN LABOUR, ALSO READ ONCE (owner directive 2026-10-20). Every column's window is
+    # taken off this one pass, for the same reason the expense sheet above is read once. The months
+    # asked for are the sheet's own plus the uploaded ones, because a window may reach either side of
+    # the month on screen (§COMMCALC-03.28) and a month with no labour comes back SAYING so rather
+    # than as a cheaper month.
+    _lab_inputs = _labour_actuals_code_keyed(
+        client, org_id,
+        sorted({str(r.get("period")) for r in (expense_rows or []) if r.get("period")}
+               | set(months or [])))
 
     def _book(window_months, ref_period, expense_months):
         """One statement for a set of months — the SAME evaluate and the SAME assembler the month
         report uses, so a column here and that month's report are one number."""
         matrix, _mo, notes = _prospect_expense_window(
-            client, org_id, cfg, ref_period, today, expense_rows)
+            client, org_id, cfg, ref_period, today, expense_rows, _lab_inputs)
         ev = _pev.evaluate(_pev.feeds_for_months(every_month, window_months), cfg, homes, matrix,
                            None, ref_period, mode, store_inputs=store_inputs,
                            prospect_rent=prospect.get("actual_rent_monthly"),

@@ -99,9 +99,9 @@ def role_banner() -> str:
     return "SERVICE_ROLE=%s (browser sweeps %s)" % (role, state)
 
 
-# ── WHAT THE GATE IS CALLED (§COMMCALC-22) ──────────────────────────────────────────────────────
+# ── WHAT THE GATE IS CALLED (§COMMCALC-24) ──────────────────────────────────────────────────────
 # Three separate CI locks scan source for "is this endpoint gated to the browser/session host", and
-# until 2026-10-20 each matched the literal name `require_browser_service`. When §COMMCALC-22 renamed
+# until 2026-10-20 each matched the literal name `require_browser_service`. When §COMMCALC-24 renamed
 # the gate at its own home — to `require_session_host`, because the old name asked "does this launch a
 # browser?" and the question that matters is "does this touch the per-process session registry?" —
 # two of those locks failed a CORRECTLY gated endpoint and the third went BLIND, silently dropping

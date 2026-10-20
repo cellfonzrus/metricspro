@@ -172,7 +172,7 @@ on:
       - "frontend/prove_one_domain.mjs"
       - "frontend/package-lock.json"
       - "backend/harness_one_domain_lock.py"
-      # §COMMCALC-22 — the gate's NAME-LIST lives here and three locks dereference it, so a change
+      # §COMMCALC-24 — the gate's NAME-LIST lives here and three locks dereference it, so a change
       # to it must re-run all of them.
       - "backend/app/core/service_role.py"
       # index §40.12 — rule 8 locks these two, so a change to either must run the lock that guards it
@@ -266,7 +266,7 @@ on:
       # (named further down from §COMMCALC-10) and the one reader is the data_source row decorator in
       # commcalc/router.py (already named above for §12a.2a), so both re-run this job.
       - "backend/harness_terminal_status.py"
-      # §COMMCALC-22 — a live session is read where it LIVES. Same home (live_login, named
+      # §COMMCALC-24 — a live session is read where it LIVES. Same home (live_login, named
       # further down from §COMMCALC-10) and the callers are the two routers already named above,
       # so both re-run this job; app/main.py carries the forwarder the gate depends on.
       - "backend/harness_live_session_host.py"
@@ -420,6 +420,8 @@ on:
       - "frontend/src/lib/pos-config.ts"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
       - "frontend/src/components/pos/PrintFormatPicker.tsx"
+      - "backend/app/modules/pos/receipt_escpos.py"
+      - "tools/pos-print-helper/receipt-helper.js"
       - "database/migrations/1089_pos_receipt_layout.sql"
       - "backend/harness_pos_stock_landing.py"
       - "backend/harness_pos_product_form_lock.py"
@@ -744,6 +746,10 @@ on:
       - "backend/app/modules/commcalc/trade_in_basis.py"
       - "database/migrations/1075_trade_in_basis_config.sql"
       - "backend/harness_installment_exclusion_basis.py"
+      - "backend/harness_carrier_claim_value.py"
+      - "backend/app/modules/commcalc/carrier_claim_value.py"
+      - "backend/app/modules/commcalc/ma_recon.py"
+      - "backend/app/modules/commcalc/discrepancy_engine.py"
       - "backend/app/modules/commcalc/installment_category.py"
       - "backend/app/modules/commcalc/sale_installment_engine.py"
       - "frontend/src/app/(platform)/commcalc/page.tsx"
@@ -891,6 +897,12 @@ on:
       - "backend/harness_tile_snapshot.py"
       - "frontend/src/lib/tile-snapshot.ts"
       - "frontend/prove_tile_snapshot.mjs"
+      # index §COMMCALC-23 — a CARRIED expense month never inherits the platform's own labour rows;
+      # salary and rep commission come from the month's own actuals, on every surface that reads an
+      # expense sheet. The lock fails the build if a reader stops passing the labour vocabulary.
+      - "backend/harness_labour_actuals.py"
+      - "backend/app/modules/commcalc/labour_actuals.py"
+      - "backend/app/modules/commcalc/expenses_effective.py"
       - "frontend/src/lib/send-report.tsx"
       - "backend/app/modules/commcalc/expenses_effective.py"
       - "backend/app/modules/commcalc/labour_coverage.py"
@@ -1025,7 +1037,7 @@ jobs:
       - name: Run the terminal-status lock (a session that ends restores the row's real status; an in-flight claim cannot outlive its worker - index COMMCALC-13)
         working-directory: backend
         run: python3 harness_terminal_status.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the live-session-host lock (an endpoint that touches the session registry runs in the process that HAS it - index COMMCALC-22)
+      - name: Run the live-session-host lock (an endpoint that touches the session registry runs in the process that HAS it - index COMMCALC-24)
         working-directory: backend
         run: python3 harness_live_session_host.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
@@ -1299,6 +1311,9 @@ jobs:
       - name: Run the multi-month exclusion-basis proof (a device category that paid nothing says WHICH layer excluded it; a non-payment somebody CHOSE leaves the "did not pay" list while its money stays on screen; a list-shaped config states nothing about a category it omits, so that reads as a finding and never as "you unchecked it"; an unclassifiable activation is reported once, not twice; no caller writes the reason or names a basis — owner 2026-10-19, index §COMMCALC-21)
         working-directory: backend
         run: python3 harness_installment_exclusion_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the carrier-claim value proof (an unpaid activation is a CLAIM only when the statement covered its day and no declared rule explains it; a sale past the statement's reach and a day the statement skipped are FEED facts and are never filed; a claim is priced from what the carrier itself paid for the same contract family, with its sample size, and reads NOT MEASURED rather than $0.00 when no comparable backs it; an empty coverage map means unknown coverage, never a missing day; both writers of the discrepancy table dereference the one home and neither may write a hardcoded zero again - owner 2026-10-20, index §COMMCALC-22)
+        working-directory: backend
+        run: python3 harness_carrier_claim_value.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Run the attach-qualifier proof (a condition measured over the WHOLE SALE decides which DECLARED rate a line earns; the accessory test and the rule matcher are INJECTED so the module owns no classifier and reads no classifying column; an unmeasurable sale pays the FULL rate and is reported; a flat fallback on a percentage rule is refused; the plan save round-trips all eight columns or it would wipe them — owner 2026-10-12, index §COMMCALC-06)
         working-directory: backend
@@ -1357,6 +1372,9 @@ jobs:
       - name: Run the tile-snapshot lock (the figures at the top of a report can be SENT, through the one sender and one shared shape; and a change between two copies of one carried expense sheet is named NOT MEASURED in the mailed copy exactly as on screen, never printed as ± 0% — owner ask 2026-10-19, index §COMMCALC-19)
         working-directory: backend
         run: python3 harness_tile_snapshot.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the derived-labour actuals lock (a carried expense month inherits the rent and NOT the two rows the platform fills in itself; salary and rep commission come from the month's OWN actuals through one home that derives no dollars of its own, and an unmeasured half is reported as unknown rather than as a zero — owner directive 2026-10-20, index §COMMCALC-23)
+        working-directory: backend
+        run: python3 harness_labour_actuals.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the device-reimbursement reconciliation lock (the carrier statement and the distributor's reimbursement ledger are the SAME money, so claimed-above-paid is the exception and paid-above-claim is its own bucket, never netted; an absence is reported with its reason and never as a $0.00 difference; and a shortfall against a month whose statement arrived SHORT is withheld as not-measured rather than flagged against the store — owner 2026-10-08, index §19.53)
         working-directory: backend
         run: python3 harness_device_reimb_recon.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
