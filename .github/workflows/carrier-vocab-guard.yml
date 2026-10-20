@@ -889,7 +889,7 @@ on:
       - "backend/harness_tile_snapshot.py"
       - "frontend/src/lib/tile-snapshot.ts"
       - "frontend/prove_tile_snapshot.mjs"
-      # index §COMMCALC-22 — a CARRIED expense month never inherits the platform's own labour rows;
+      # index §COMMCALC-23 — a CARRIED expense month never inherits the platform's own labour rows;
       # salary and rep commission come from the month's own actuals, on every surface that reads an
       # expense sheet. The lock fails the build if a reader stops passing the labour vocabulary.
       - "backend/harness_labour_actuals.py"
@@ -1361,7 +1361,7 @@ jobs:
       - name: Run the tile-snapshot lock (the figures at the top of a report can be SENT, through the one sender and one shared shape; and a change between two copies of one carried expense sheet is named NOT MEASURED in the mailed copy exactly as on screen, never printed as ± 0% — owner ask 2026-10-19, index §COMMCALC-19)
         working-directory: backend
         run: python3 harness_tile_snapshot.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the derived-labour actuals lock (a carried expense month inherits the rent and NOT the two rows the platform fills in itself; salary and rep commission come from the month's OWN actuals through one home that derives no dollars of its own, and an unmeasured half is reported as unknown rather than as a zero — owner directive 2026-10-20, index §COMMCALC-22)
+      - name: Run the derived-labour actuals lock (a carried expense month inherits the rent and NOT the two rows the platform fills in itself; salary and rep commission come from the month's OWN actuals through one home that derives no dollars of its own, and an unmeasured half is reported as unknown rather than as a zero — owner directive 2026-10-20, index §COMMCALC-23)
         working-directory: backend
         run: python3 harness_labour_actuals.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the device-reimbursement reconciliation lock (the carrier statement and the distributor's reimbursement ledger are the SAME money, so claimed-above-paid is the exception and paid-above-claim is its own bucket, never netted; an absence is reported with its reason and never as a $0.00 difference; and a shortfall against a month whose statement arrived SHORT is withheld as not-measured rather than flagged against the store — owner 2026-10-08, index §19.53)

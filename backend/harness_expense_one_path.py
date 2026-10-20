@@ -425,7 +425,7 @@ ok("G8 G7's scanner is armed (it finds the retired loop in a control string)",
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 print("\n§H A CARRIED MONTH NEVER INHERITS THE PLATFORM'S OWN LABOUR "
-      "(owner directive 2026-10-20, index §COMMCALC-22)")
+      "(owner directive 2026-10-20, index §COMMCALC-23)")
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # Owner, verbatim: *"sepatember and october expeses wll be carried forward but salary and commisson
 # shoudl be derived from the actuals"*. The carry rule now takes the org's labour vocabulary and

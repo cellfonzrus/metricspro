@@ -319,7 +319,7 @@ def expense_change_measured(base_carried_from, compare_carried_from,
     really are different months and the change is real.
 
     `base_month_labour` / `compare_month_labour` say whether that month's SALARY OR COMMISSION was
-    measured from its own payroll rather than inherited (owner directive 2026-10-20, §COMMCALC-22).
+    measured from its own payroll rather than inherited (owner directive 2026-10-20, §COMMCALC-23).
     Once they are, two carried months are no longer one sheet compared with itself: the labour half
     of each figure is that month's own measurement, and a change between them is a real claim. The
     non-labour half may still be one sheet, which the surface says — a partly-measured change is

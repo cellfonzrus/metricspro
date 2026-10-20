@@ -354,7 +354,7 @@ assert outf["overall"]["rev_pct"] == out["overall"]["rev_pct"]
 
 print("§F a change between two carried sheets is NOT MEASURED: PASSED ✅")
 
-# ══ §G A CARRIED MONTH'S OWN LABOUR MAKES THE CHANGE REAL AGAIN (owner 2026-10-20, §COMMCALC-22) ══
+# ══ §G A CARRIED MONTH'S OWN LABOUR MAKES THE CHANGE REAL AGAIN (owner 2026-10-20, §COMMCALC-23) ══
 # Once salary and rep commission come from each month's OWN payroll, two months that carry the same
 # rent are no longer one sheet compared with itself: the labour half of each figure is that month's
 # own measurement. Withholding the percent then would suppress a measurement, which is the same

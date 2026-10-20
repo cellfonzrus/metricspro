@@ -39,7 +39,7 @@ vocabulary names, so a tenant with `mode='off'` (nothing excluded from the carry
 back, and the two decisions cannot disagree.
 
 Pure core (`fold`) is DB-free; proof + lock: `backend/harness_labour_actuals.py`.
-Registered in `docs/SYSTEM_DATA_FLOW_INDEX.md` §COMMCALC-22.
+Registered in `docs/SYSTEM_DATA_FLOW_INDEX.md` §COMMCALC-23.
 """
 from app.modules.commcalc import labour_vocabulary as _lv
 
