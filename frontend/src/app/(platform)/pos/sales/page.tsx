@@ -11,7 +11,7 @@
 //   * Identity: stores are store_code TEXT, employees are employee_id TEXT; the BACKEND stamps the
 //     sale's employee_id from the login (never trusted from the client).
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, addDays, localToday } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
@@ -36,7 +36,7 @@ import {
 } from '@/lib/pos-held-sale'
 // THE receipt (lib/pos-receipt) — rendered on the server so the till copy, the reprint and the
 // emailed copy are one thing; this screen prints what it is handed (§POS-02).
-import { emailSaleReceipt, fetchSaleReceipt, printReceiptHtml } from '@/lib/pos-receipt'
+import { emailSaleReceipt, fetchSaleReceipt, printReceiptHtml, printViaHelper } from '@/lib/pos-receipt'
 import type { PrintChoice, SaleReceipt } from '@/lib/pos-receipt'
 // THE format picker — one home, shared with the Sale Log reprint (§POS-03).
 import { PrintFormatPicker } from '@/components/pos/PrintFormatPicker'
@@ -389,19 +389,43 @@ export default function PosSalesPage() {
   // THE print path (§POS-02): the receipt is rendered on the server — one home for the till copy,
   // the reprint and the emailed copy — and the register prints what it is handed. It used to build
   // the HTML here, which is why an admin's template edits reached this screen and nothing else.
-  async function printSaleReceipt(saleId: string | null, choice?: PrintChoice): Promise<boolean> {
+  // What went wrong, in the words whoever threw it chose — a cashier reads these.
+  function message(err: unknown): string {
+    return err instanceof Error ? err.message : String(err)
+  }
+
+  // Stable, because the auto-print effect depends on it: it reads nothing from this component,
+  // every input arrives as an argument or from the server's own answer.
+  const printSaleReceipt = useCallback(async (saleId: string | null, choice?: PrintChoice): Promise<boolean> => {
     if (!saleId) { alert('That sale has not been saved yet.'); return false }
+    let rec: SaleReceipt
     try {
       // The choice rides the SAME request that renders the receipt, so what prints is what was
       // picked — the screen never re-lays anything out itself.
-      const rec = await fetchSaleReceipt(saleId, choice)
-      printReceiptHtml(rec.html)
-      return true
-    } catch (err: any) {
-      alert(`Could not print the receipt: ${err?.message || err}`)
+      rec = await fetchSaleReceipt(saleId, choice)
+    } catch (err) {
+      alert(`Could not print the receipt: ${message(err)}`)
       return false
     }
-  }
+    // STRAIGHT TO THE PRINTER (§POS-04), where this store asked for it or the cashier just chose it.
+    // A helper that is not running must never cost the customer their receipt, so the dialog is the
+    // fallback and the cashier is TOLD which route the slip took rather than left guessing.
+    if (rec.destination === 'direct' && rec.escpos_base64) {
+      try {
+        await printViaHelper(rec.helper_url, rec.escpos_base64)
+        return true
+      } catch (err) {
+        alert(`${message(err)}\n\nPrinting through the print dialog instead.`)
+      }
+    }
+    try {
+      printReceiptHtml(rec.html)
+      return true
+    } catch (err) {
+      alert(`Could not print the receipt: ${message(err)}`)
+      return false
+    }
+  }, [])
 
   // The completion modal asks the server who the receipt would go to, so the screen shows the real
   // address (the customer's own) rather than an empty box the cashier has to guess at. Called where
@@ -456,7 +480,7 @@ export default function PosSalesPage() {
     // point of the store declaration. A cashier's one-off pick belongs to the button.
     printSaleReceipt(lastSaleId)
     setReceiptPrinted(true)
-  }, [showReceipt, lastReceipt, lastSaleId, cfg.receipt_auto_print])
+  }, [showReceipt, lastReceipt, lastSaleId, cfg.receipt_auto_print, printSaleReceipt])
 
   async function printSelectedSale() {
     if (!selectedSale) { alert('Select a transaction in the list first.'); return }
